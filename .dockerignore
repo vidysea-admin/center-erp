@@ -1,0 +1,9 @@
+node_modules
+.next
+.git
+.goal
+uploads
+.env*
+!.env.example
+*.log
+.playwright-mcp

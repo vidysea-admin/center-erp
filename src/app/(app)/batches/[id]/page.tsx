@@ -1,0 +1,600 @@
+"use client";
+import { use, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { api, fmtDate, toInputDate } from "@/lib/client";
+import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
+import { Activity } from "@/components/activity";
+import { flushQueue, getQueue, uploadWithRetry } from "@/lib/upload";
+
+const TABS = ["Overview", "Candidates", "Enrollment", "Daily Execution", "Closure", "Costs", "Activity"];
+
+export default function BatchDetail({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params);
+  const sp = useSearchParams();
+  const [tab, setTab] = useState(sp.get("tab") && TABS.includes(sp.get("tab")!) ? sp.get("tab")! : "Overview");
+  const [data, setData] = useState<any>(null);
+  const [error, setError] = useState("");
+
+  const load = () => api(`/api/batches/${id}`).then(setData).catch((e) => setError(e.message));
+  useEffect(() => { load(); }, [id]);
+
+  if (!data) return <div className="p-8 text-center text-gray-400">{error || "Loading…"}</div>;
+  const b = data.item;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <h1 className="text-xl font-semibold">{b.code}</h1>
+        <Chip value={b.status} />
+        <span className="text-sm text-gray-500">{b.program?.name} · {fmtDate(b.planned_start)} → {fmtDate(b.planned_end)}</span>
+      </div>
+      <ErrorBanner msg={error} onDismiss={() => setError("")} />
+      <Tabs tabs={TABS} active={tab} onChange={setTab} />
+      {tab === "Overview" && <Overview data={data} onChanged={load} setError={setError} />}
+      {tab === "Candidates" && <Roster batchId={id} batch={b} setError={setError} onChanged={load} />}
+      {tab === "Enrollment" && <Enrollment batchId={id} setError={setError} />}
+      {tab === "Daily Execution" && <DailyExecution batchId={id} batch={b} setError={setError} />}
+      {tab === "Closure" && <ClosureTab batchId={id} setError={setError} onChanged={load} />}
+      {tab === "Costs" && <CostsTab batchId={id} batch={b} setError={setError} />}
+      {tab === "Activity" && <Activity entity="Batch" id={id} />}
+    </div>
+  );
+}
+
+// ---------- Overview: readiness checklist (Rule 16) + transitions ----------
+function Overview({ data, onChanged, setError }: any) {
+  const b = data.item;
+  const r = data.readiness;
+  const [reason, setReason] = useState("");
+  const [confirmCancel, setConfirmCancel] = useState(false);
+
+  async function transition(target: string) {
+    try {
+      await api(`/api/batches/${b._id}/transition`, { method: "POST", json: { target, reason } });
+      setConfirmCancel(false); setReason(""); onChanged();
+    } catch (e: any) { setError(e.message); }
+  }
+
+  const CHECKS: [string, string, boolean][] = [
+    ["location_approved", "Location approved", r.checks.location_approved],
+    ["room_assigned", "Room assigned (Lab if required)", r.checks.room_assigned],
+    ["trainer_ready", "Trainer assigned & available", r.checks.trainer_ready],
+    ["roster_80pct", `Roster ≥ 80% of target (${r.roster_count}/${b.target_size})`, r.checks.roster_80pct],
+  ];
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      <Section title={`Readiness checklist (${CHECKS.filter(([, , v]) => v).length}/4)`}>
+        <ul className="space-y-2 text-sm">
+          {CHECKS.map(([k, label, ok]) => (
+            <li key={k} className="flex items-center gap-2">
+              <span className={`flex h-5 w-5 items-center justify-center rounded-full text-xs ${ok ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-400"}`}>{ok ? "✓" : "○"}</span>
+              {label}
+            </li>
+          ))}
+          <li className="flex items-center gap-2 border-t pt-2">
+            <span className={`flex h-5 w-5 items-center justify-center rounded-full text-xs ${r.enrollment_ok ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-400"}`}>{r.enrollment_ok ? "✓" : "○"}</span>
+            Enrolled ≥ threshold for start ({r.enrolled_count}/{r.enrollment_threshold})
+          </li>
+        </ul>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {b.status === "Planning" && <Btn onClick={() => transition("Ready")} disabled={!r.ready}>Mark Ready</Btn>}
+          {b.status === "Ready" && <Btn onClick={() => transition("Active")}>Start Batch</Btn>}
+          {b.status === "Ready" && <Btn kind="ghost" onClick={() => transition("Planning")}>Back to Planning</Btn>}
+          {b.status === "Active" && <Btn onClick={() => transition("Closing")}>Move to Closing</Btn>}
+          {b.status === "Closing" && <Btn onClick={() => transition("Completed")}>Complete Batch</Btn>}
+          {["Planning", "Ready", "Active"].includes(b.status) && <Btn kind="danger" onClick={() => setConfirmCancel(true)}>Cancel Batch</Btn>}
+        </div>
+      </Section>
+      <Section title="Details">
+        <EditDetails b={b} onChanged={onChanged} setError={setError} />
+      </Section>
+      <Drawer open={confirmCancel} onClose={() => setConfirmCancel(false)} title={`Cancel batch ${b.code}?`}>
+        <div className="space-y-3">
+          <p className="text-sm text-gray-600">This is destructive. Rule 19: a batch with daily logs can only be force-closed by Admin. Provide a reason.</p>
+          <Field label="Reason" required><input className={inputCls} value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
+          <Btn kind="danger" onClick={() => transition("Cancelled")} disabled={!reason}>Confirm Cancel</Btn>
+        </div>
+      </Drawer>
+    </div>
+  );
+}
+
+function EditDetails({ b, onChanged, setError }: any) {
+  const [trainers, setTrainers] = useState<any[]>([]);
+  const [rooms, setRooms] = useState<any[]>([]);
+  const [form, setForm] = useState<any>({
+    trainer: b.trainer?._id ?? "", room: b.room?._id ?? "", session: b.session,
+    planned_start: toInputDate(b.planned_start), planned_end: toInputDate(b.planned_end), target_size: b.target_size,
+  });
+  useEffect(() => {
+    api("/api/trainers?limit=200").then((d) => setTrainers(d.items)).catch(() => {});
+    const locId = b.location?._id ?? b.location;
+    api(`/api/locations/${locId}/rooms`).then((d) => setRooms(d.items)).catch(() => {});
+  }, [b]);
+
+  async function save() {
+    try {
+      await api(`/api/batches/${b._id}`, { method: "PATCH", json: { ...form, trainer: form.trainer || null, room: form.room || null } });
+      onChanged();
+    } catch (e: any) { setError(e.message); }
+  }
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Trainer">
+          <select className={inputCls} value={form.trainer} onChange={(e) => setForm({ ...form, trainer: e.target.value })}>
+            <option value="">—</option>
+            {trainers.map((t) => <option key={t._id} value={t._id}>{t.name}</option>)}
+          </select>
+        </Field>
+        <Field label="Room">
+          <select className={inputCls} value={form.room} onChange={(e) => setForm({ ...form, room: e.target.value })}>
+            <option value="">—</option>
+            {rooms.map((r) => <option key={r._id} value={r._id}>{r.name} ({r.type})</option>)}
+          </select>
+        </Field>
+        <Field label="Planned start"><input type="date" className={inputCls} value={form.planned_start} onChange={(e) => setForm({ ...form, planned_start: e.target.value })} /></Field>
+        <Field label="Planned end"><input type="date" className={inputCls} value={form.planned_end} onChange={(e) => setForm({ ...form, planned_end: e.target.value })} /></Field>
+        <Field label="Session">
+          <select className={inputCls} value={form.session} onChange={(e) => setForm({ ...form, session: e.target.value })}>
+            {["Full Day", "Morning", "Afternoon"].map((s) => <option key={s}>{s}</option>)}
+          </select>
+        </Field>
+        <Field label="Target size"><input type="number" className={inputCls} value={form.target_size} onChange={(e) => setForm({ ...form, target_size: +e.target.value })} /></Field>
+      </div>
+      <div className="text-xs text-gray-500">Actual: {fmtDate(b.actual_start)} → {fmtDate(b.actual_end)}</div>
+      <Btn onClick={save}>Save details</Btn>
+    </div>
+  );
+}
+
+// ---------- Candidates tab: roster ----------
+function Roster({ batchId, batch, setError, onChanged }: any) {
+  const [members, setMembers] = useState<any[]>([]);
+  const [pool, setPool] = useState<any[]>([]);
+  const [showPool, setShowPool] = useState(false);
+  const [dropTarget, setDropTarget] = useState<any>(null);
+  const [dropForm, setDropForm] = useState<any>({});
+  const [dropReasons, setDropReasons] = useState<any[]>([]);
+
+  const load = () => Promise.all([
+    api(`/api/batches/${batchId}/members`).then((d) => setMembers(d.items)),
+    api(`/api/candidates?location=${batch.location?._id ?? batch.location}&limit=200`).then((d) =>
+      setPool(d.items.filter((c: any) => ["Unassigned", "Dropped"].includes(c.lifecycle_status)))),
+    api("/api/master-lists/drop-reasons").then((d) => setDropReasons(d.items)),
+  ]).catch((e: any) => setError(e.message));
+  useEffect(() => { load(); }, [batchId]);
+
+  async function add(candidateId: string) {
+    try { await api(`/api/batches/${batchId}/members`, { method: "POST", json: { candidate: candidateId } }); load(); onChanged(); }
+    catch (e: any) { setError(e.message); }
+  }
+  async function drop() {
+    try {
+      await api(`/api/members/${dropTarget._id}/drop`, { method: "POST", json: dropForm });
+      setDropTarget(null); setDropForm({}); load(); onChanged();
+    } catch (e: any) { setError(e.message); }
+  }
+
+  const active = members.filter((m) => !m.left_on);
+  return (
+    <div className="space-y-4">
+      <Section title={`Roster (${active.length} active / ${members.length} total)`} actions={<Btn small onClick={() => setShowPool(true)}>Add from pool</Btn>}>
+        <DataTable rows={members}
+          cardTitle={(r: any) => r.candidate?.name}
+          columns={[
+            { key: "candidate", label: "Candidate", render: (r: any) => r.candidate?.name },
+            { key: "phone", label: "Phone", render: (r: any) => r.candidate?.phone, mobile: false },
+            { key: "joined_on", label: "Joined", render: (r: any) => fmtDate(r.joined_on) },
+            { key: "enrollment_status", label: "Enrollment", render: (r: any) => <Chip value={r.enrollment_status} /> },
+            { key: "left_on", label: "Left", render: (r: any) => r.left_on ? `${fmtDate(r.left_on)} (${r.drop_reason})` : "—" },
+            { key: "_act", label: "", render: (r: any) => !r.left_on ? <Btn small kind="ghost" onClick={() => setDropTarget(r)}>Drop</Btn> : null },
+          ]} empty="No members yet — add from the candidate pool." />
+      </Section>
+
+      <Drawer open={showPool} onClose={() => setShowPool(false)} title="Candidate pool (this location)">
+        <div className="space-y-2">
+          {pool.map((c) => (
+            <div key={c._id} className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm">
+              <span>{c.name} <span className="text-gray-400">· {c.phone}</span></span>
+              <Btn small onClick={() => add(c._id)}>Add</Btn>
+            </div>
+          ))}
+          {pool.length === 0 && <p className="text-sm text-gray-400">No unassigned candidates at this location.</p>}
+        </div>
+      </Drawer>
+
+      <Drawer open={!!dropTarget} onClose={() => setDropTarget(null)} title={`Drop ${dropTarget?.candidate?.name}?`}>
+        <div className="space-y-3">
+          <Field label="Left on" required><input type="date" className={inputCls} value={dropForm.left_on ?? ""} onChange={(e) => setDropForm({ ...dropForm, left_on: e.target.value })} /></Field>
+          <Field label="Drop reason" required>
+            <select className={inputCls} value={dropForm.drop_reason ?? ""} onChange={(e) => setDropForm({ ...dropForm, drop_reason: e.target.value })}>
+              <option value="">Select…</option>
+              {dropReasons.map((r) => <option key={r._id}>{r.name}</option>)}
+            </select>
+          </Field>
+          <Btn kind="danger" onClick={drop} disabled={!dropForm.left_on || !dropForm.drop_reason}>Confirm Drop</Btn>
+        </div>
+      </Drawer>
+    </div>
+  );
+}
+
+// ---------- Enrollment worklist (phone-first; Rules 22–24) ----------
+function Enrollment({ batchId, setError }: any) {
+  const [members, setMembers] = useState<any[]>([]);
+  const [idx, setIdx] = useState(0);
+
+  const load = () => api(`/api/batches/${batchId}/members`).then((d) => setMembers(d.items.filter((m: any) => !m.left_on))).catch((e: any) => setError(e.message));
+  useEffect(() => { load(); }, [batchId]);
+
+  async function update(m: any, patch: any) {
+    try {
+      const res = await api(`/api/members/${m._id}`, { method: "PATCH", json: patch });
+      setMembers((ms) => ms.map((x) => (x._id === m._id ? { ...x, ...res.item } : x)));
+    } catch (e: any) { setError(e.message); }
+  }
+
+  const StepToggle = ({ m, field, label }: any) => (
+    <button onClick={() => update(m, { [field]: !m[field] })}
+      className={`rounded-lg border px-3 py-2 text-sm font-medium ${m[field] ? "border-green-300 bg-green-50 text-green-700" : "border-gray-300 bg-white text-gray-500"}`}>
+      {m[field] ? "✓ " : ""}{label}
+    </button>
+  );
+
+  const Card = ({ m }: any) => (
+    <div className="space-y-3 rounded-xl border bg-white p-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="font-semibold">{m.candidate?.name}</div>
+          <div className="text-sm text-gray-500">{m.candidate?.phone}</div>
+        </div>
+        <Chip value={m.enrollment_status} />
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <StepToggle m={m} field="reg_done" label="Registration" />
+        <StepToggle m={m} field="kyc_done" label="e-KYC" />
+        <StepToggle m={m} field="accept_done" label="Batch Accept" />
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <select className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm" value={m.issue ?? ""}
+          onChange={(e) => e.target.value ? update(m, { failed: true, issue: e.target.value }) : update(m, { failed: false, issue: null })}>
+          <option value="">No issue</option>
+          {["OTP not received", "Already registered", "KYC failed", "Portal error", "Duplicate", "Other"].map((i) => <option key={i}>{i}</option>)}
+        </select>
+        {m.enrollment_status === "Failed" && <Btn small kind="ghost" onClick={() => update(m, { failed: false, issue: null })}>Clear failure</Btn>}
+        <span className="ml-auto text-xs text-gray-400">{m.source}</span>
+      </div>
+    </div>
+  );
+
+  if (!members.length) return <p className="p-6 text-center text-sm text-gray-400">No active members to enroll.</p>;
+  const done = members.filter((m) => m.enrollment_status === "Completed").length;
+
+  return (
+    <div className="space-y-3">
+      <div className="text-sm text-gray-600">{done}/{members.length} enrolled · Failed: {members.filter((m) => m.enrollment_status === "Failed").length}</div>
+      {/* Desktop: all cards. Mobile: one at a time with prev/next (spec §0 Rule B) */}
+      <div className="hidden gap-3 md:grid md:grid-cols-2 xl:grid-cols-3">
+        {members.map((m) => <Card key={m._id} m={m} />)}
+      </div>
+      <div className="md:hidden">
+        <Card m={members[Math.min(idx, members.length - 1)]} />
+        <div className="mt-3 flex items-center justify-between">
+          <Btn kind="ghost" onClick={() => setIdx((i) => Math.max(0, i - 1))} disabled={idx === 0}>← Prev</Btn>
+          <span className="text-sm text-gray-500">{idx + 1} / {members.length}</span>
+          <Btn kind="ghost" onClick={() => setIdx((i) => Math.min(members.length - 1, i + 1))} disabled={idx >= members.length - 1}>Next →</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------- Daily Execution (phone-first; Rules 26–33) ----------
+function DailyExecution({ batchId, batch, setError }: any) {
+  const [logs, setLogs] = useState<any[]>([]);
+  const [members, setMembers] = useState<any[]>([]);
+  const [form, setForm] = useState<any>({ log_date: toInputDate(new Date()), present: new Set<string>(), photos: [] });
+  const [busy, setBusy] = useState(false);
+  const [queued, setQueued] = useState(0);
+  const [editLog, setEditLog] = useState<any>(null);
+
+  const load = () => Promise.all([
+    api(`/api/batches/${batchId}/logs`).then((d) => setLogs(d.items)),
+    api(`/api/batches/${batchId}/members`).then((d) => setMembers(d.items.filter((m: any) => !m.left_on))),
+  ]).catch((e: any) => setError(e.message));
+  useEffect(() => { load(); setQueued(getQueue().length); }, [batchId]);
+
+  function togglePresent(id: string) {
+    const s = new Set<string>(form.present);
+    if (s.has(id)) s.delete(id); else s.add(id);
+    setForm({ ...form, present: s });
+  }
+
+  async function uploadFile(file: File, kind: "photos" | "govt_screenshot") {
+    try {
+      const url = await uploadWithRetry(file, kind); // compressed + 3 retries + offline queue
+      if (kind === "photos") setForm((f: any) => ({ ...f, photos: [...f.photos, url] }));
+      else setForm((f: any) => ({ ...f, govt_screenshot: url }));
+    } catch (e: any) { setError(e.message); setQueued(getQueue().length); }
+  }
+
+  async function retryQueued() {
+    const done = await flushQueue();
+    for (const d of done) {
+      if (d.kind === "photos") setForm((f: any) => ({ ...f, photos: [...f.photos, d.url] }));
+      else setForm((f: any) => ({ ...f, govt_screenshot: d.url }));
+    }
+    setQueued(getQueue().length);
+  }
+
+  async function save() {
+    setBusy(true);
+    try {
+      await api(`/api/batches/${batchId}/logs`, {
+        method: "POST",
+        json: {
+          log_date: form.log_date,
+          planned_topic: form.planned_topic, actual_topic: form.actual_topic,
+          present_member_ids: [...form.present],
+          govt_present: form.govt_present === "" || form.govt_present == null ? null : +form.govt_present,
+          govt_screenshot: form.govt_screenshot,
+          photos: form.photos, note: form.note,
+        },
+      });
+      setForm({ log_date: toInputDate(new Date()), present: new Set(), photos: [] });
+      load();
+    } catch (e: any) { setError(e.message); }
+    setBusy(false);
+  }
+
+  if (!["Active", "Closing"].includes(batch.status)) {
+    return <p className="p-6 text-center text-sm text-gray-400">Daily logs open once the batch is Active.</p>;
+  }
+
+  return (
+    <div className="space-y-4">
+      <Section title="Today's entry">
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Date" required><input type="date" className={inputCls} value={form.log_date} onChange={(e) => setForm({ ...form, log_date: e.target.value })} /></Field>
+            <Field label="Govt portal present (blank = not verified)"><input type="number" className={inputCls} value={form.govt_present ?? ""} onChange={(e) => setForm({ ...form, govt_present: e.target.value })} /></Field>
+            <Field label="Planned topic"><input className={inputCls} value={form.planned_topic ?? ""} onChange={(e) => setForm({ ...form, planned_topic: e.target.value })} /></Field>
+            <Field label="Actual topic"><input className={inputCls} value={form.actual_topic ?? ""} onChange={(e) => setForm({ ...form, actual_topic: e.target.value })} /></Field>
+          </div>
+          <div>
+            <div className="mb-1.5 text-xs font-medium text-gray-600">Attendance — tap present ({form.present.size}/{members.length})</div>
+            <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 md:grid-cols-4">
+              {members.map((m) => (
+                <button key={m._id} onClick={() => togglePresent(m._id)}
+                  className={`rounded-lg border px-2 py-2.5 text-left text-sm ${form.present.has(m._id) ? "border-green-300 bg-green-50 text-green-800" : "border-gray-200 bg-white text-gray-500"}`}>
+                  {form.present.has(m._id) ? "✓ " : ""}{m.candidate?.name}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <Field label={`Photos (${form.photos.length})`}>
+              <input type="file" accept="image/*" capture="environment" className={inputCls} onChange={(e) => e.target.files?.[0] && uploadFile(e.target.files[0], "photos")} />
+            </Field>
+            <Field label={`Govt attendance screenshot${form.govt_screenshot ? " ✓" : ""}`}>
+              <input type="file" accept="image/*" className={inputCls} onChange={(e) => e.target.files?.[0] && uploadFile(e.target.files[0], "govt_screenshot")} />
+            </Field>
+          </div>
+          <Field label="Note"><input className={inputCls} value={form.note ?? ""} onChange={(e) => setForm({ ...form, note: e.target.value })} /></Field>
+          <div className="flex items-center gap-3">
+            <Btn onClick={save} disabled={busy}>{busy ? "Saving…" : "Save Daily Log"}</Btn>
+            {queued > 0 && (
+              <button onClick={retryQueued} className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
+                {queued} upload{queued > 1 ? "s" : ""} pending — Retry now
+              </button>
+            )}
+          </div>
+        </div>
+      </Section>
+
+      <Section title="History">
+        <DataTable rows={logs}
+          cardTitle={(r: any) => fmtDate(r.log_date)}
+          columns={[
+            { key: "log_date", label: "Date", render: (r: any) => fmtDate(r.log_date) },
+            { key: "internal_present", label: "Internal", render: (r: any) => `${r.internal_present}/${r.roster_count} (${r.roster_count ? Math.round((100 * r.internal_present) / r.roster_count) : 0}%)` },
+            { key: "govt_present", label: "Govt", render: (r: any) => r.govt_present == null ? <span className="text-gray-400">Not verified</span> : `${r.govt_present}/${r.roster_count} (${Math.round((100 * r.govt_present) / r.roster_count)}%)` },
+            { key: "gap", label: "Gap", render: (r: any) => <Gap r={r} /> },
+            { key: "actual_topic", label: "Topic", render: (r: any) => r.actual_topic ?? r.planned_topic ?? "—", mobile: false },
+            { key: "photos", label: "Media", render: (r: any) => `${(r.photos ?? []).length} photo${(r.photos ?? []).length === 1 ? "" : "s"}${r.govt_screenshot ? " · proof" : ""}` },
+            { key: "_edit", label: "", render: (r: any) => <Btn small kind="ghost" onClick={() => setEditLog(r)}>Edit</Btn> },
+          ]} empty="No logs yet." />
+      </Section>
+      <LogEditDrawer log={editLog} members={members} onClose={() => setEditLog(null)} onSaved={() => { setEditLog(null); load(); }} setError={setError} />
+    </div>
+  );
+}
+
+// Rule 27: 48h window for enterer, anytime for Ops/Admin — server enforces; UI just offers the form.
+function LogEditDrawer({ log, members, onClose, onSaved, setError }: any) {
+  const [form, setForm] = useState<any>(null);
+  useEffect(() => {
+    if (log) setForm({
+      planned_topic: log.planned_topic ?? "", actual_topic: log.actual_topic ?? "",
+      govt_present: log.govt_present ?? "", note: log.note ?? "",
+      present: new Set((log.present_member_ids ?? []).map(String)),
+    });
+  }, [log]);
+  if (!log || !form) return null;
+
+  const toggle = (id: string) => {
+    const s = new Set<string>(form.present);
+    if (s.has(id)) s.delete(id); else s.add(id);
+    setForm({ ...form, present: s });
+  };
+
+  async function save() {
+    try {
+      await api(`/api/logs/${log._id}`, {
+        method: "PATCH",
+        json: {
+          planned_topic: form.planned_topic, actual_topic: form.actual_topic,
+          present_member_ids: [...form.present],
+          govt_present: form.govt_present === "" ? null : +form.govt_present,
+          note: form.note,
+        },
+      });
+      onSaved();
+    } catch (e: any) { setError(e.message); onClose(); }
+  }
+
+  return (
+    <Drawer open onClose={onClose} title={`Edit log — ${fmtDate(log.log_date)}`} wide>
+      <div className="space-y-4">
+        <p className="text-xs text-gray-500">Edits allowed 48h by the person who entered it, anytime by Operations/Admin. Every change is audited (Rule 27). Roster count stays frozen at {log.roster_count} (Rule 28).</p>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Planned topic"><input className={inputCls} value={form.planned_topic} onChange={(e) => setForm({ ...form, planned_topic: e.target.value })} /></Field>
+          <Field label="Actual topic"><input className={inputCls} value={form.actual_topic} onChange={(e) => setForm({ ...form, actual_topic: e.target.value })} /></Field>
+          <Field label="Govt present (blank = not verified)"><input type="number" className={inputCls} value={form.govt_present} onChange={(e) => setForm({ ...form, govt_present: e.target.value })} /></Field>
+          <Field label="Note"><input className={inputCls} value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} /></Field>
+        </div>
+        <div>
+          <div className="mb-1.5 text-xs font-medium text-gray-600">Present ({form.present.size})</div>
+          <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
+            {members.map((m: any) => (
+              <button key={m._id} onClick={() => toggle(String(m._id))}
+                className={`rounded-lg border px-2 py-2 text-left text-sm ${form.present.has(String(m._id)) ? "border-green-300 bg-green-50 text-green-800" : "border-gray-200 bg-white text-gray-500"}`}>
+                {form.present.has(String(m._id)) ? "✓ " : ""}{m.candidate?.name}
+              </button>
+            ))}
+          </div>
+        </div>
+        <Btn onClick={save}>Save changes</Btn>
+      </div>
+    </Drawer>
+  );
+}
+
+function Gap({ r }: any) {
+  if (r.govt_present == null || !r.roster_count) return <span className="text-gray-400">—</span>;
+  const gap = Math.round((100 * r.internal_present) / r.roster_count) - Math.round((100 * r.govt_present) / r.roster_count);
+  const cls = gap > 10 ? "text-red-600 font-semibold" : gap >= 5 ? "text-amber-600 font-semibold" : "text-gray-600";
+  return <span className={cls}>{gap > 0 ? `−${gap}` : gap} pts</span>;
+}
+
+// ---------- Closure tab (Rules 34–36) ----------
+function ClosureTab({ batchId, setError, onChanged }: any) {
+  const [closure, setClosure] = useState<any>(null);
+  const [invoice, setInvoice] = useState<any>(null);
+  const [form, setForm] = useState<any>({});
+  const [invForm, setInvForm] = useState<any>({});
+
+  const load = () => api(`/api/batches/${batchId}/closure`).then((d) => {
+    setClosure(d.closure); setInvoice(d.invoice);
+    setForm(d.closure ?? {}); setInvForm(d.invoice ?? {});
+  }).catch((e: any) => setError(e.message));
+  useEffect(() => { load(); }, [batchId]);
+
+  async function saveClosure(patch: any) {
+    try { await api(`/api/batches/${batchId}/closure`, { method: "PUT", json: patch }); load(); onChanged(); }
+    catch (e: any) { setError(e.message); }
+  }
+  async function saveInvoice(patch: any) {
+    try { await api(`/api/batches/${batchId}/invoice`, { method: "PATCH", json: patch }); load(); }
+    catch (e: any) { setError(e.message); }
+  }
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      <Section title={`Assessment — ${closure?.assessment_status ?? "Pending"}`}>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Assessment date"><input type="date" className={inputCls} value={toInputDate(form.assessment_date)} onChange={(e) => setForm({ ...form, assessment_date: e.target.value })} /></Field>
+          <div />
+          <Field label="Appeared"><input type="number" className={inputCls} value={form.appeared ?? ""} onChange={(e) => setForm({ ...form, appeared: +e.target.value })} /></Field>
+          <Field label="Passed"><input type="number" className={inputCls} value={form.passed ?? ""} onChange={(e) => setForm({ ...form, passed: +e.target.value })} /></Field>
+        </div>
+        <div className="mt-3 flex gap-2">
+          <Btn small kind="ghost" onClick={() => saveClosure({ assessment_date: form.assessment_date, appeared: form.appeared, passed: form.passed })}>Save</Btn>
+          <Btn small onClick={() => saveClosure({ assessment_status: "Completed", assessment_date: form.assessment_date ?? new Date(), appeared: form.appeared, passed: form.passed })} disabled={closure?.assessment_status === "Completed"}>Mark Completed</Btn>
+        </div>
+      </Section>
+      <Section title={`Certification — ${closure?.certification_status ?? "Pending"}`}>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Certification date"><input type="date" className={inputCls} value={toInputDate(form.certification_date)} onChange={(e) => setForm({ ...form, certification_date: e.target.value })} /></Field>
+          <Field label="Certificates issued"><input type="number" className={inputCls} value={form.certificates_issued ?? ""} onChange={(e) => setForm({ ...form, certificates_issued: +e.target.value })} /></Field>
+        </div>
+        <div className="mt-3 flex gap-2">
+          <Btn small kind="ghost" onClick={() => saveClosure({ certification_date: form.certification_date, certificates_issued: form.certificates_issued })}>Save</Btn>
+          <Btn small onClick={() => saveClosure({ certification_status: "Completed", certification_date: form.certification_date ?? new Date(), certificates_issued: form.certificates_issued })} disabled={closure?.certification_status === "Completed"}>Mark Completed</Btn>
+        </div>
+      </Section>
+      <Section title={`Invoice — ${invoice?.status ?? "Not Ready"}`}>
+        <div className="space-y-3">
+          {!closure?.ready_for_invoice && (
+            <Btn onClick={() => saveClosure({ ready_for_invoice: true })} disabled={closure?.certification_status !== "Completed"}>
+              Mark Ready for Invoice {closure?.certification_status !== "Completed" && "(needs certification)"}
+            </Btn>
+          )}
+          {invoice && (
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Amount (₹)"><input type="number" className={inputCls} value={invForm.amount ?? ""} onChange={(e) => setInvForm({ ...invForm, amount: +e.target.value })} /></Field>
+              <Field label="Invoice no"><input className={inputCls} value={invForm.invoice_no ?? ""} onChange={(e) => setInvForm({ ...invForm, invoice_no: e.target.value })} /></Field>
+              <Field label="Raised on"><input type="date" className={inputCls} value={toInputDate(invForm.raised_on)} onChange={(e) => setInvForm({ ...invForm, raised_on: e.target.value })} /></Field>
+              <Field label="Paid on"><input type="date" className={inputCls} value={toInputDate(invForm.paid_on)} onChange={(e) => setInvForm({ ...invForm, paid_on: e.target.value })} /></Field>
+            </div>
+          )}
+          {invoice && (
+            <div className="flex gap-2">
+              <Btn small onClick={() => saveInvoice({ ...invForm, status: "Raised" })} disabled={invoice.status !== "Ready"}>Mark Raised</Btn>
+              <Btn small onClick={() => saveInvoice({ ...invForm, status: "Paid" })} disabled={invoice.status !== "Raised"}>Mark Paid</Btn>
+            </div>
+          )}
+        </div>
+      </Section>
+    </div>
+  );
+}
+
+// ---------- Costs tab ----------
+function CostsTab({ batchId, batch, setError }: any) {
+  const [items, setItems] = useState<any[]>([]);
+  const [cats, setCats] = useState<any[]>([]);
+  const [form, setForm] = useState<any>({ entry_date: toInputDate(new Date()) });
+
+  const load = () => Promise.all([
+    api(`/api/costs?batch=${batchId}`).then((d) => setItems(d.items)),
+    api("/api/master-lists/cost-categories").then((d) => setCats(d.items)),
+  ]).catch((e: any) => setError(e.message));
+  useEffect(() => { load(); }, [batchId]);
+
+  async function save() {
+    try {
+      await api("/api/costs", { method: "POST", json: { ...form, batch: batchId, location: batch.location?._id ?? batch.location } });
+      setForm({ entry_date: toInputDate(new Date()) }); load();
+    } catch (e: any) { setError(e.message); }
+  }
+  const total = items.reduce((s, i) => s + (i.amount ?? 0), 0);
+
+  return (
+    <Section title={`Cost entries — total ₹${total.toLocaleString("en-IN")}`}>
+      <DataTable rows={items}
+        cardTitle={(r: any) => `₹${r.amount} · ${r.category?.name}`}
+        columns={[
+          { key: "entry_date", label: "Date", render: (r: any) => fmtDate(r.entry_date) },
+          { key: "category", label: "Category", render: (r: any) => r.category?.name },
+          { key: "amount", label: "Amount", render: (r: any) => `₹${(r.amount ?? 0).toLocaleString("en-IN")}` },
+          { key: "note", label: "Note" },
+          { key: "entered_by", label: "By", render: (r: any) => r.entered_by?.name, mobile: false },
+        ]} empty="No costs recorded." />
+      <div className="mt-3 grid gap-3 md:grid-cols-5">
+        <Field label="Date"><input type="date" className={inputCls} value={form.entry_date} onChange={(e) => setForm({ ...form, entry_date: e.target.value })} /></Field>
+        <Field label="Category" required>
+          <select className={inputCls} value={form.category ?? ""} onChange={(e) => setForm({ ...form, category: e.target.value })}>
+            <option value="">Select…</option>
+            {cats.map((c) => <option key={c._id} value={c._id}>{c.name}</option>)}
+          </select>
+        </Field>
+        <Field label="Amount (₹)" required><input type="number" className={inputCls} value={form.amount ?? ""} onChange={(e) => setForm({ ...form, amount: +e.target.value })} /></Field>
+        <Field label="Note"><input className={inputCls} value={form.note ?? ""} onChange={(e) => setForm({ ...form, note: e.target.value })} /></Field>
+        <div className="flex items-end"><Btn onClick={save} disabled={!form.category || !form.amount}>Add Cost</Btn></div>
+      </div>
+    </Section>
+  );
+}

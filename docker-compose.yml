@@ -1,0 +1,27 @@
+# Center Management ERP — production compose.
+# All variables come from a `.env` file next to this compose file (never commit it).
+# Copy .env.example → .env and fill the values.
+services:
+  erp:
+    build: .
+    image: vidysea/center-erp:latest
+    container_name: center-erp
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    environment:
+      MONGODB_URL: ${MONGODB_URL}          # e.g. mongodb://user:pass@host:27017/center_erp?authSource=center_erp
+      MONGODB_DB: ${MONGODB_DB:-center_erp}
+      AUTH_SECRET: ${AUTH_SECRET}          # openssl rand -base64 32
+      AUTH_TRUST_HOST: "true"
+      AUTH_URL: ${AUTH_URL:-}              # public URL when behind a domain, e.g. https://erp.vidysea.com
+    volumes:
+      - erp_uploads:/app/uploads           # photos/screenshots persist across deploys
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/login"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  erp_uploads:

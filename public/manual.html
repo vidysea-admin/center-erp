@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>User Manual — Center Management ERP</title>
+<style>
+  :root { --blue:#2563eb; --bg:#f7f8fa; --border:#e5e7eb; --text:#111827; --muted:#6b7280; }
+  * { box-sizing:border-box; margin:0; }
+  body { font-family:system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); line-height:1.65; }
+  .layout { display:flex; max-width:1280px; margin:0 auto; }
+  nav.toc { position:sticky; top:0; height:100vh; overflow-y:auto; width:250px; flex-shrink:0; background:#fff; border-right:1px solid var(--border); padding:16px; }
+  nav.toc h2 { font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:14px 0 6px; }
+  nav.toc a { display:block; padding:5px 10px; border-radius:8px; color:#374151; text-decoration:none; font-size:13.5px; }
+  nav.toc a:hover { background:#eff6ff; color:var(--blue); }
+  main { flex:1; min-width:0; padding:24px 32px 80px; }
+  .searchbar { position:sticky; top:0; z-index:10; background:var(--bg); padding:12px 0; }
+  .searchbar input { width:100%; padding:11px 16px; font-size:15px; border:1.5px solid var(--border); border-radius:12px; outline:none; }
+  .searchbar input:focus { border-color:var(--blue); }
+  section.screen { background:#fff; border:1px solid var(--border); border-radius:14px; padding:22px 26px; margin:18px 0; scroll-margin-top:70px; }
+  section.screen h2 { font-size:20px; margin-bottom:2px; }
+  section.screen .sub { color:var(--muted); font-size:13.5px; margin-bottom:14px; }
+  section.screen img { width:100%; border:1px solid var(--border); border-radius:10px; margin:10px 0 16px; }
+  ol.steps { padding-left:0; list-style:none; counter-reset:st; }
+  ol.steps li { counter-increment:st; position:relative; padding:7px 0 7px 44px; border-bottom:1px dashed #f0f0f0; font-size:14.5px; }
+  ol.steps li::before { content:counter(st); position:absolute; left:0; top:8px; width:26px; height:26px; border-radius:50%; background:#eff6ff; color:var(--blue); font-weight:700; font-size:13px; display:flex; align-items:center; justify-content:center; }
+  .btn { display:inline-block; background:var(--blue); color:#fff; padding:1px 9px; border-radius:6px; font-size:12.5px; font-weight:600; }
+  .chip { display:inline-block; background:#f3f4f6; border:1px solid var(--border); padding:0 8px; border-radius:99px; font-size:12px; font-weight:600; }
+  .warn { background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:10px 14px; font-size:13.5px; margin:10px 0; }
+  .tip  { background:#eff6ff; border:1px solid #bfdbfe; border-radius:10px; padding:10px 14px; font-size:13.5px; margin:10px 0; }
+  table { width:100%; border-collapse:collapse; font-size:13.5px; margin:10px 0; }
+  th,td { border:1px solid var(--border); padding:7px 10px; text-align:left; vertical-align:top; }
+  th { background:#f9fafb; }
+  .hero { background:linear-gradient(120deg,#1d4ed8,#3b82f6); color:#fff; border-radius:16px; padding:26px 30px; margin-bottom:8px; }
+  .hero h1 { font-size:26px; } .hero p { opacity:.9; margin-top:4px; font-size:14.5px; }
+  mark { background:#fef08a; }
+  @media(max-width:900px){ nav.toc{display:none;} main{padding:16px;} }
+</style>
+</head>
+<body>
+<div class="layout">
+<nav class="toc">
+  <h2>Shuru karein</h2>
+  <a href="#overview">Product Overview</a>
+  <a href="#login">Login</a>
+  <a href="#roles">Roles &amp; Access</a>
+  <h2>Screens</h2>
+  <a href="#home">Home (Action Center)</a>
+  <a href="#sync">Sync Inbox</a>
+  <a href="#locations">Locations</a>
+  <a href="#location-detail">Location Detail</a>
+  <a href="#trainers">Trainers</a>
+  <a href="#candidates">Candidates</a>
+  <a href="#batches">Batches</a>
+  <a href="#batch-detail">Batch Detail</a>
+  <a href="#enrollment">Enrollment Worklist</a>
+  <a href="#daily">Daily Execution</a>
+  <a href="#closure">Closure &amp; Invoice</a>
+  <a href="#costs">Costs</a>
+  <a href="#admin">Admin</a>
+  <h2>Madad</h2>
+  <a href="#faq">FAQ / Common sawaal</a>
+</nav>
+<main>
+  <div class="searchbar"><input id="search" type="search" placeholder="🔍  Kuch bhi dhundo… (jaise: attendance, trainer, invoice, import)"></div>
+
+  <div class="hero">
+    <h1>Center Management ERP — User Manual</h1>
+    <p>Puri operational journey ek system mein: Location &amp; Target → Trainer → Batch → Candidate → Enrollment → Daily Attendance → Assessment → Certificate → Invoice → Cost. Har screen ka step-by-step tarika neeche hai. Upar search box se kuch bhi dhundo.</p>
+  </div>
+
+  <section class="screen" id="overview">
+    <h2>📋 Product Overview — system kya karta hai</h2>
+    <p class="sub">Meeting mein tay hua poora flow, feature-by-feature</p>
+    <table>
+      <tr><th>Feature</th><th>Kya hota hai</th><th>Kahan milega</th></tr>
+      <tr><td>Location &amp; Target Planning</td><td>AVPL/SDP sheet se locations ki approval + target roz sync hota hai; koi change aaye to review karke action lete hain (start/stop/close location, target update)</td><td>Sync Inbox + Locations</td></tr>
+      <tr><td>Capacity Math</td><td>Target daalte hi system khud batata hai: kitne batch banenge, kitne trainer chahiye (jaise 210 target → 7 batch × 20 din → 2 trainer, 90 din mein)</td><td>Location Detail → Capacity &amp; Target</td></tr>
+      <tr><td>Trainer Planning</td><td>Trainer available hai ya nahi, kab se hai; nahi hai to Request banao — hiring date, TOT date, expected availability track hoti hai. Ek trainer do overlapping batch nahi le sakta (system rok dega)</td><td>Trainers + Requests tab</td></tr>
+      <tr><td>Infra Planning</td><td>Har location ke Classroom/Lab rooms; ek room ek time pe ek hi batch (Morning/Afternoon/Full Day) — clash system rok deta hai</td><td>Location Detail → Trainers &amp; Infra</td></tr>
+      <tr><td>Candidate Pool</td><td>Mobilize kiye students ka pool — location-wise; Excel se bulk import; batch mein assign</td><td>Candidates</td></tr>
+      <tr><td>Enrollment (govt portal)</td><td>Har student ke 3 step tick karo: Registration → e-KYC → Batch Accept. Fail hua to reason mark karo (OTP nahi aaya, pehle se registered…) — student kharab nahi hota, dobara try/dusre batch mein ja sakta hai</td><td>Batch Detail → Enrollment</td></tr>
+      <tr><td>Daily Execution</td><td>Roz attendance (naam pe tap karo), topic, photo, aur govt portal ka attendance + screenshot. Internal vs Govt ka gap system khud dikhata hai (amber/red)</td><td>Batch Detail → Daily Execution</td></tr>
+      <tr><td>Assessment → Certificate → Invoice</td><td>Assessment complete → certification → "Ready for Invoice" → invoice Raised → Paid — sab states system enforce karta hai</td><td>Batch Detail → Closure</td></tr>
+      <tr><td>Cost Capture</td><td>Har stage pe kharcha: trainer fee, incentive, TOT, rent, materials — location/batch/trainer se juda</td><td>Costs + Batch Detail → Costs</td></tr>
+      <tr><td>Roles</td><td>Admin sab; Operations sab operational; Location (SPOC/Principal) sirf apni location; Enrollment sirf enrollment. Server pe enforced — chhupana nahi, block hota hai</td><td>Admin → Users &amp; Access</td></tr>
+    </table>
+    <div class="tip">💡 Har kaam ka <b>audit trail</b> hai — kisne, kab, kya badla — har detail page ke <span class="chip">Activity</span> tab mein.</div>
+  </section>
+
+  <section class="screen" id="login">
+    <h2>🔐 Login</h2>
+    <p class="sub">Sabse pehla step</p>
+    <img src="/manual/m01-login.png" alt="Login screen">
+    <ol class="steps">
+      <li>Browser mein ERP ka link kholo (jo aapko diya gaya hai)</li>
+      <li>Apna <b>email</b> aur <b>password</b> daalo (admin se mila hoga)</li>
+      <li><span class="btn">Sign in</span> dabao — aap Home pe pahunch jaoge</li>
+    </ol>
+    <div class="warn">⚠️ Password galat bola to laal patti dikhegi.
+Password bhool gaye? Admin se reset karwao (Admin → Users &amp; Access).</div>
+  </section>
+
+  <section class="screen" id="roles">
+    <h2>👥 Roles &amp; Access — kisko kya dikhega</h2>
+    <table>
+      <tr><th>Role</th><th>Kya kar sakta hai</th></tr>
+      <tr><td><b>Admin</b></td><td>Sab kuch — Admin panel, users, programs, sync source, force-close</td></tr>
+      <tr><td><b>Operations</b></td><td>Sab operational kaam: locations, batches, sync inbox, costs, invoices</td></tr>
+      <tr><td><b>Location (SPOC)</b></td><td>Sirf apni location — uske batches, candidates, daily log, rooms, trainer request</td></tr>
+      <tr><td><b>Location (Principal, view-only)</b></td><td>Apni location sirf dekh sakta hai, kuch badal nahi sakta</td></tr>
+      <tr><td><b>Enrollment</b></td><td>Enrollment worklist + candidates — registration/KYC/accept tick karna</td></tr>
+    </table>
+    <div class="tip">💡 Jo cheez aapke role mein nahi hai wo screen pe dikhegi hi nahi, ya "Forbidden" bolegi — ye bug nahi, access control hai.</div>
+  </section>
+
+  <section class="screen" id="home">
+    <h2>🏠 Home — Action Center</h2>
+    <p class="sub">Login ke baad ki pehli screen. Yahan sirf wo cheezein dikhti hain jinpe AAJ action chahiye.</p>
+    <img src="/manual/m02-home.png" alt="Home Action Center">
+    <ol class="steps">
+      <li>Upar 5 <b>cards</b> — Active Locations, Active Batches, Enrolled Students, Trainer Requests, Follow-ups. <mark>Kisi bhi card pe click karo</mark> — wahi list khul jayegi</li>
+      <li><b>Missing Daily Logs</b> — jis batch ka kal ka log nahi bhara, wo yahan dikhega owner ke naam ke saath. Row pe click karo → seedha us batch ka Daily Execution form khulega</li>
+      <li><b>Sheet Changes Pending Review</b> — AVPL sheet mein jo badla hai. Click → Sync Inbox</li>
+      <li><b>Government Attendance Gap</b> — jahan hamari attendance aur govt portal ki attendance mein fark hai (−8 pts amber, zyada to red). Click → us din ka log</li>
+      <li><b>Enrollment Failures</b> — jin students ka enrollment fail hua (OTP etc.). Click → us batch ki enrollment list</li>
+      <li><b>Invoices Pending</b> — jo invoice банe/raise hone baaki hain. Click → us batch ka Closure tab</li>
+    </ol>
+    <div class="tip">💡 Din ki shuruaat Home se karo — jo yahan khali hai, wo kaam poora hai.</div>
+  </section>
+
+  <section class="screen" id="sync">
+    <h2>🔄 Sync Inbox — AVPL/SDP sheet ke changes</h2>
+    <p class="sub">Sirf Admin &amp; Operations. External sheet roz crawl hoti hai; jo badla, wo yahan aata hai — kuch bhi apne aap nahi badalta.</p>
+    <img src="/manual/m03-sync.png" alt="Sync Inbox with review panel">
+    <ol class="steps">
+      <li>Sidebar mein <span class="btn">Sync Inbox</span> pe jao (neela badge = kitne change pending)</li>
+      <li>Kisi bhi <b>Open</b> row pe click karo — right side review panel khulega</li>
+      <li>Panel mein dikhega: <b>kya badla</b> (purana → naya) aur <b>Impact</b> — is location pe kitne active batch, trainer, candidate lagenge</li>
+      <li><b>Action</b> chuno: <span class="chip">No action</span> <span class="chip">Update target</span> <span class="chip">Start location</span> <span class="chip">Put on hold</span> <span class="chip">Stop location</span> <span class="chip">Close location</span></li>
+      <li>Stop/Close pe <b>reason likhna zaroori</b> hai</li>
+      <li><span class="btn">Apply &amp; Acknowledge</span> dabao</li>
+    </ol>
+    <div class="warn">⚠️ <b>Stop/Close location</b> karne pe system khud <b>follow-up tasks</b> banata hai (batch roko, trainer chhodo, candidates pool mein wapas) — ye Home pe dikhte hain aur jab tak sab resolve nahi hote, change "Open" hi rahega. Kuch bhi chupchaap band nahi hota.</div>
+    <ol class="steps">
+      <li>Ek saath kai changes ignore karne ho: checkboxes select karo → <span class="btn">Bulk Ignore</span></li>
+    </ol>
+  </section>
+
+  <section class="screen" id="locations">
+    <h2>📍 Locations — saare centers ki list</h2>
+    <img src="/manual/m04-locations.png" alt="Locations list">
+    <ol class="steps">
+      <li>Sidebar → <span class="btn">Locations</span></li>
+      <li>Har row mein: Code, Naam, City, <b>Approval</b> (AVPL se — Pending/Approved/Rejected) aur <b>Operational</b> (hamara — Active/On Hold/Stopped/Closed), SPOC</li>
+      <li>Naya center jodna ho: <span class="btn">New Location</span> → form bharo → Create. <b>External ID</b> wahi daalo jo AVPL sheet mein us center ka ID hai — isi se sheet match hoti hai</li>
+      <li>Kisi bhi row pe click karo → us location ka detail khulega</li>
+    </ol>
+  </section>
+
+  <section class="screen" id="location-detail">
+    <h2>🏫 Location Detail — 5 tabs</h2>
+    <img src="/manual/m05-location-detail.png" alt="Location detail overview">
+    <ol class="steps">
+      <li><b>Overview</b> — naam, city, SPOC/Principal ke naam-number yahan update karo → <span class="btn">Save</span>. Operational status badloge to <b>reason likhna zaroori</b> hai</li>
+      <li><b>Capacity &amp; Target</b> — niche dekho 👇</li>
+      <li><b>Trainers &amp; Infra</b> — rooms jodo (Classroom 1, Lab 1 — naam ke saath, taaki clash pakda ja sake) aur <b>Trainer Request</b> raise karo</li>
+      <li><b>Batches</b> — is location ke saare batch</li>
+      <li><b>Activity</b> — kisne kya badla, poora record</li>
+    </ol>
+    <h2 style="margin-top:18px">🎯 Capacity &amp; Target</h2>
+    <img src="/manual/m06-capacity.png" alt="Capacity and targets">
+    <ol class="steps">
+      <li>Har program ka <b>Approved target</b> (AVPL se) aur <b>Allocated</b> (hum kitna commit kar rahe) dikhega</li>
+      <li>Saamne <b>Capacity math</b> apne aap: <mark>"Target 210 → 7 batches × 20 days = 140 trainer-days → 2 trainers required within 90 days"</mark> — yahi se pata chalta hai kitne trainer chahiye</li>
+      <li>Naya target: Program chuno → numbers daalo → <span class="btn">Save target</span></li>
+    </ol>
+  </section>
+
+  <section class="screen" id="trainers">
+    <h2>🧑‍🏫 Trainers — pool aur requests</h2>
+    <img src="/manual/m07-trainers.png" alt="Trainers list">
+    <ol class="steps">
+      <li>Sidebar → <span class="btn">Trainers</span>. Status khud set hota hai: batch mila to <span class="chip">Assigned</span>, warna <span class="chip">Available</span></li>
+      <li>Naya trainer: <span class="btn">Add Trainer</span> → naam, phone, <b>skills</b> (program ke skill se match hona chahiye — jaise "Mathematics"), day rate, kab se available</li>
+      <li>Kisi trainer pe click karo → edit drawer (chhutti pe hai to status "Unavailable" karo)</li>
+      <li><b>Requests tab</b> — jahan trainer nahi hai wahan ki requests: location, program, kab tak chahiye, TOT kab hua, status yahin dropdown se badlo (Open → In Progress → Fulfilled)</li>
+    </ol>
+    <div class="warn">⚠️ Ek trainer ko do <b>overlapping</b> batch doge to system saaf mana kar dega — konsa batch takra raha hai, naam ke saath batayega. Ye galti ho hi nahi sakti.</div>
+  </section>
+
+  <section class="screen" id="candidates">
+    <h2>🧑‍🎓 Candidates — student pool</h2>
+    <img src="/manual/m08-candidates.png" alt="Candidates list">
+    <ol class="steps">
+      <li>Sidebar → <span class="btn">Candidates</span>. Filter: location, status (Unassigned/Assigned/Enrolled/Dropped/Completed)</li>
+      <li>Ek student: <span class="btn">Add Candidate</span> → naam, phone, location, program, source (mobiliser/campaign)</li>
+      <li><b>Excel se bulk import:</b> <span class="btn">Import Excel</span> → pehle <mark>"Download sample sheet format"</mark> se blank format lo → bharo → upload karo → columns map karo (kaunsa column = naam, kaunsa = phone) → Preview → Import</li>
+      <li><b>Batch mein daalna:</b> students ke checkbox ✔ karo → <span class="btn">Assign to Batch</span> → batch chuno — ho gaya</li>
+    </ol>
+    <div class="tip">💡 Ek student ek waqt pe sirf ek batch mein ho sakta hai. Dobara daaloge to system batayega ki wo already kis batch mein hai.</div>
+  </section>
+
+  <section class="screen" id="batches">
+    <h2>🎓 Batches — planning se completion tak</h2>
+    <img src="/manual/m09-batches.png" alt="Batches list">
+    <ol class="steps">
+      <li>Sidebar → <span class="btn">Batches</span>. Har row: code, location, status, <b>Enrolled/Roster/Target</b>, trainer, start date</li>
+      <li>Naya batch: <span class="btn">New Batch</span> → Location + Program + Start date chuno → Trainer (sirf matching skill wale dikhenge) → Room → <span class="btn">Create Batch</span></li>
+      <li>Drawer mein hi <b>"Earliest possible start"</b> dikh jayega (mobilisation + trainer availability ke hisaab se)</li>
+      <li>End date khud lagti hai: start + course din + buffer</li>
+    </ol>
+    <div class="tip">💡 Batch ka safar: <span class="chip">Planning</span> → <span class="chip">Ready</span> → <span class="chip">Active</span> → <span class="chip">Closing</span> → <span class="chip">Completed</span>. Har agla step tabhi khulta hai jab pichhli conditions poori hon.</div>
+  </section>
+
+  <section class="screen" id="batch-detail">
+    <h2>📊 Batch Detail — Overview &amp; readiness</h2>
+    <img src="/manual/m10-batch-overview.png" alt="Batch overview with readiness checklist">
+    <ol class="steps">
+      <li>Batch pe click karte hi <b>Readiness checklist</b> dikhti hai: ✓ Location approved, ✓ Room, ✓ Trainer, ✓ Roster ≥ 80%</li>
+      <li>Chaaron ✓ hue to <span class="btn">Mark Ready</span> dabao</li>
+      <li><span class="btn">Start Batch</span> tabhi chalega jab <b>enough students enrolled</b> hon (80%, configurable) aur start date aa gayi ho</li>
+      <li>Details side mein trainer/room/dates badal sakte ho — clash hua to system rok dega</li>
+      <li>Cancel karna ho to reason likhna padega; log ban chuke hain to sirf Admin force-close kar sakta hai</li>
+    </ol>
+    <p>Tabs: <span class="chip">Candidates</span> (roster + drop) · <span class="chip">Enrollment</span> · <span class="chip">Daily Execution</span> · <span class="chip">Closure</span> · <span class="chip">Costs</span> · <span class="chip">Activity</span></p>
+  </section>
+
+  <section class="screen" id="enrollment">
+    <h2>✅ Enrollment Worklist — govt portal ke 3 step</h2>
+    <p class="sub">Batch Detail → Enrollment tab. Phone pe bhi aaram se chalta hai (ek card ek baar mein).</p>
+    <img src="/manual/m11-enrollment.png" alt="Enrollment worklist">
+    <ol class="steps">
+      <li>Har student ka card — portal pe kaam karte jao, yahan tick karte jao: <span class="chip">Registration</span> → <span class="chip">e-KYC</span> → <span class="chip">Batch Accept</span></li>
+      <li>Teeno ✓ = student <b>Completed</b> (Enrolled) — status khud lagta hai</li>
+      <li>Dikkat aayi? Dropdown se reason chuno: <mark>OTP not received / Already registered / KYC failed / Portal error / Duplicate</mark> — card <b>Failed</b> ho jayega</li>
+      <li>Failed hone se student kharab NahiN hota — issue theek karke "Clear failure" karo ya use dusre batch mein daal do</li>
+    </ol>
+  </section>
+
+  <section class="screen" id="daily">
+    <h2>📅 Daily Execution — roz ka log</h2>
+    <p class="sub">Batch Detail → Daily Execution. SPOC/trainer phone se bhi bhar sakta hai.</p>
+    <img src="/manual/m12-daily.png" alt="Daily execution form and history">
+    <ol class="steps">
+      <li>Date chuno (aaj ki khud aati hai)</li>
+      <li><b>Attendance:</b> jo student aaya uske naam pe <mark>tap karo</mark> — hara ✓ ho jayega</li>
+      <li>Topic likho (kya padhaya), photo lo (camera se seedha; system khud compress karta hai — slow network pe bhi chalega, fail hua to "Retry" queue mein aa jata hai)</li>
+      <li><b>Govt portal present:</b> portal pe jitne present dikh rahe wo number daalo + <b>screenshot</b> upload karo. Blank chhoda = "Not verified" (0 nahi)</li>
+      <li><span class="btn">Save Daily Log</span></li>
+      <li>Neeche <b>History</b>: har din ka Internal% vs Govt% aur <b>Gap</b> — <span style="color:#d97706;font-weight:700">amber (5–10 pts)</span> / <span style="color:#dc2626;font-weight:700">red (10+ pts)</span>. Gap dikhe to biometric verify karwao</li>
+      <li>Galti hui? <span class="btn">Edit</span> — apna log 48 ghante tak, Operations/Admin kabhi bhi. Har edit record hota hai</li>
+    </ol>
+    <div class="warn">⚠️ Attendance ka denominator us din ka roster hota hai aur <b>save hote hi freeze</b> — baad mein koi student drop ho to purani % nahi badalti.</div>
+  </section>
+
+  <section class="screen" id="closure">
+    <h2>🏁 Closure — Assessment → Certificate → Invoice</h2>
+    <p class="sub">Batch Detail → Closure tab</p>
+    <img src="/manual/m13-closure.png" alt="Closure tab">
+    <ol class="steps">
+      <li><b>Assessment:</b> date, kitne baithe (appeared), kitne pass — <span class="btn">Mark Completed</span>. (Appeared roster se zyada nahi ho sakta)</li>
+      <li>Ab batch ko <span class="btn">Move to Closing</span> kar sakte ho (Overview tab se)</li>
+      <li><b>Certification:</b> date + kitne certificate mile — <span class="btn">Mark Completed</span></li>
+      <li><span class="btn">Mark Ready for Invoice</span> — invoice apne aap "Ready" ho jayega</li>
+      <li>Invoice number + date + amount daal ke <span class="btn">Mark Raised</span>; paisa aane pe <span class="btn">Mark Paid</span></li>
+      <li>Ant mein batch <span class="btn">Complete</span> karo — bache students khud "Completed" ho jayenge, trainer free ho jayega</li>
+    </ol>
+  </section>
+
+  <section class="screen" id="costs">
+    <h2>💰 Costs &amp; Invoices</h2>
+    <p class="sub">Sirf Admin &amp; Operations</p>
+    <img src="/manual/m14-costs.png" alt="Costs page">
+    <ol class="steps">
+      <li>Sidebar → <span class="btn">Costs</span>. <b>Costs tab:</b> entry jodo — date, location/trainer, category (Trainer Fee, Incentive, TOT, Rent, Materials…), amount</li>
+      <li>Batch ka kharcha us batch ke <b>Costs tab</b> se daalo — wahan total bhi dikhta hai</li>
+      <li><b>Invoices tab:</b> saare invoices ek jagah — status, amount, dates. Raise/Paid batch ke Closure tab se hota hai</li>
+    </ol>
+  </section>
+
+  <section class="screen" id="admin">
+    <h2>⚙️ Admin — sirf Admin ke liye</h2>
+    <img src="/manual/m15-admin.png" alt="Admin panel">
+    <ol class="steps">
+      <li><b>Programs:</b> courses ki master list — duration, buffer, batch size, deadline, trainer skill. <mark>Saara capacity math inhi numbers se chalta hai</mark></li>
+      <li><b>Users &amp; Access:</b> naya user banao — role chuno; Location role pe <b>location scope</b> set karo (kaunse centers dikhein) aur <b>Can edit</b> (off = sirf dekh sakta hai). Password bhi yahin reset hota hai</li>
+      <li><b>Sync Source:</b> AVPL sheet ka CSV link + <b>column mapping</b> (sheet ka column ↔ system ka field). <mark>Sheet mein naya column aaye ya badle to yahin mapping update karo</mark>. "Sync Now" se turant chala ke dekh lo. Column mismatch pe sync khud ruk jata hai — galat data kabhi import nahi hota</li>
+      <li><b>Master Lists:</b> cost categories, drop reasons</li>
+      <li><b>Defaults:</b> batch size 30, duration 15+5, deadline 90 din, attendance gap amber/red, enrollment threshold 80% — sab yahin se badalta hai, code nahi</li>
+    </ol>
+  </section>
+
+  <section class="screen" id="faq">
+    <h2>❓ FAQ — Common sawaal</h2>
+    <table>
+      <tr><th>Sawaal</th><th>Jawaab</th></tr>
+      <tr><td>Trainer nahi hai, batch kaise planning karun?</td><td>Batch bana lo bina trainer ke (Planning mein rahega). Location Detail → Trainers &amp; Infra se <b>Trainer Request</b> raise karo. Request Home pe aur Trainers → Requests mein highlight hoti rahegi jab tak Fulfilled na ho.</td></tr>
+      <tr><td>Student ka enrollment fail ho gaya — ab?</td><td>Reason mark karo (OTP/KYC…). Student pool mein zinda rehta hai — issue fix karke Clear karo ya kal dusre batch mein daal do.</td></tr>
+      <tr><td>Attendance gap red kyun dikh raha hai?</td><td>Hamari attendance aur govt portal ki attendance mein 10+ points ka fark hai. Center pe biometric verify karwao, portal wala number sahi daala hai ye check karo.</td></tr>
+      <tr><td>AVPL sheet mein naya column aa gaya?</td><td>Admin → Sync Source → Field Mappings mein naya column jodo. Jab tak nahi jodoge, sync "Partial" bolke rukega — kabhi galat import nahi karega.</td></tr>
+      <tr><td>Location band karni hai — kya karna hoga?</td><td>Sync Inbox se (sheet change pe) ya Location Detail → Overview se status "Closed" + reason. System follow-ups dega: batch roko, trainer release, students wapas pool mein — sab resolve karo tabhi kaam poora maana jayega.</td></tr>
+      <tr><td>Mujhe koi location/batch dikh hi nahi raha</td><td>Aapka role Location-scoped hai — aapko sirf apne center dikhte hain. Aur chahiye to Admin se scope badhwao.</td></tr>
+      <tr><td>Galat entry save ho gayi</td><td>Har cheez edit ho sakti hai apne rules ke saath (daily log 48h). Har badlav Activity tab mein record hota hai.</td></tr>
+      <tr><td>Photo upload nahi ho rahi (slow network)</td><td>System khud 3 baar retry karta hai, phir "pending uploads — Retry" button aata hai. Network aane pe Retry dabao — photo wapas nahi kheenchni padti.</td></tr>
+    </table>
+  </section>
+
+  <p style="text-align:center;color:var(--muted);font-size:12.5px;margin-top:24px">Center Management ERP · User Manual v1 · Har screen ke upar-right <b>? Help</b> button se ye manual usi section pe khulta hai</p>
+</main>
+</div>
+<script>
+  // live search: filter sections + highlight
+  const input = document.getElementById("search");
+  const sections = [...document.querySelectorAll("section.screen")];
+  input.addEventListener("input", () => {
+    const q = input.value.trim().toLowerCase();
+    sections.forEach((s) => {
+      const hit = !q || s.textContent.toLowerCase().includes(q);
+      s.style.display = hit ? "" : "none";
+    });
+  });
+  // open at hash section if provided
+  if (location.hash) {
+    const el = document.querySelector(location.hash);
+    if (el) setTimeout(() => el.scrollIntoView({ behavior: "smooth" }), 100);
+  }
+</script>
+</body>
+</html>
