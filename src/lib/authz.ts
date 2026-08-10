@@ -29,13 +29,20 @@ export function requireEdit(user: SessionUser) {
 }
 
 // Rule 38: Location-role users see only rows in location_scope — enforced per query.
+// Enrollment users are scoped the same way when a location_scope is set; an empty
+// scope means a central enrollment operator working across all locations.
+function isScoped(user: SessionUser): boolean {
+  if (user.role === "Location") return true;
+  return user.role === "Enrollment" && (user.location_scope?.length ?? 0) > 0;
+}
+
 export function locationFilter(user: SessionUser, field = "location"): Record<string, unknown> {
-  if (user.role === "Location") return { [field]: { $in: user.location_scope } };
+  if (isScoped(user)) return { [field]: { $in: user.location_scope } };
   return {};
 }
 
 export function assertLocationInScope(user: SessionUser, locationId: string) {
-  if (user.role === "Location" && !user.location_scope.map(String).includes(String(locationId))) {
+  if (isScoped(user) && !user.location_scope.map(String).includes(String(locationId))) {
     throw new HttpError(403, "Location out of scope");
   }
 }

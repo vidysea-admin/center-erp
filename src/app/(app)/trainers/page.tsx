@@ -1,7 +1,7 @@
 "use client";
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { api, fmtDate } from "@/lib/client";
+import { api, fmtDate, toInputDate } from "@/lib/client";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, NameCell, Tabs, inputCls } from "@/components/ui";
 
 export default function TrainersPage() {
@@ -20,6 +20,9 @@ function TrainersInner() {
   const [edit, setEdit] = useState<any>(null);
   const [form, setForm] = useState<any>({ max_concurrent_batches: 1, status: "Available" });
   const set = (k: string, v: unknown) => setForm((f: any) => ({ ...f, [k]: v }));
+  const [reqEdit, setReqEdit] = useState<any>(null);
+  const [reqForm, setReqForm] = useState<any>({});
+  const setReq = (k: string, v: unknown) => setReqForm((f: any) => ({ ...f, [k]: v }));
 
   const load = () => Promise.all([
     api(`/api/trainers?q=${encodeURIComponent(q)}&limit=200`).then((d) => setItems(d.items)),
@@ -40,6 +43,23 @@ function TrainersInner() {
       if (edit) await api(`/api/trainers/${edit._id}`, { method: "PATCH", json });
       else await api("/api/trainers", { method: "POST", json });
       setDrawer(false); setEdit(null); setForm({ max_concurrent_batches: 1, status: "Available" }); load();
+    } catch (e: any) { setError(e.message); }
+  }
+
+  function openReqEdit(r: any) {
+    setReqForm({
+      status: r.status,
+      hiring_target_date: toInputDate(r.hiring_target_date), tot_scheduled_on: toInputDate(r.tot_scheduled_on),
+      tot_done_on: toInputDate(r.tot_done_on), expected_available_from: toInputDate(r.expected_available_from),
+      fulfilled_by_trainer: r.fulfilled_by_trainer?._id ?? "", note: r.note ?? "",
+    });
+    setReqEdit(r);
+  }
+
+  async function saveReq() {
+    try {
+      await api(`/api/trainer-requests/${reqEdit._id}`, { method: "PATCH", json: { ...reqForm, fulfilled_by_trainer: reqForm.fulfilled_by_trainer || null } });
+      setReqEdit(null); setReqForm({}); load();
     } catch (e: any) { setError(e.message); }
   }
 
@@ -66,14 +86,15 @@ function TrainersInner() {
             { key: "max_concurrent_batches", label: "Max batches" },
           ]} empty="No trainers yet." />
       ) : (
-        <DataTable rows={requests}
+        <DataTable rows={requests} onRowClick={openReqEdit}
           cardTitle={(r: any) => `${r.location?.name} · ${r.program?.name}`}
           columns={[
             { key: "location", label: "Location", render: (r: any) => r.location?.name },
             { key: "program", label: "Program", render: (r: any) => r.program?.name },
             { key: "required_by_date", label: "Required by", render: (r: any) => fmtDate(r.required_by_date) },
-            { key: "status", label: "Status", render: (r: any) => <RequestStatus r={r} onChanged={load} setError={setError} /> },
-            { key: "tot_done_on", label: "TOT done", render: (r: any) => fmtDate(r.tot_done_on) },
+            { key: "status", label: "Status", render: (r: any) => <Chip value={r.status} /> },
+            { key: "hiring_target_date", label: "Hiring by", render: (r: any) => fmtDate(r.hiring_target_date), mobile: false },
+            { key: "tot_done_on", label: "TOT", render: (r: any) => r.tot_done_on ? `Done ${fmtDate(r.tot_done_on)}` : r.tot_scheduled_on ? `Sched ${fmtDate(r.tot_scheduled_on)}` : "—" },
             { key: "fulfilled_by_trainer", label: "Fulfilled by", render: (r: any) => r.fulfilled_by_trainer?.name ?? "—" },
           ]} empty="No trainer requests." />
       )}
@@ -106,21 +127,35 @@ function TrainersInner() {
             <Field label="Day rate (₹)"><input type="number" className={inputCls} value={form.day_rate ?? ""} onChange={(e) => set("day_rate", +e.target.value)} /></Field>
             <Field label="Max concurrent batches"><input type="number" className={inputCls} value={form.max_concurrent_batches ?? 1} onChange={(e) => set("max_concurrent_batches", +e.target.value)} /></Field>
           </div>
+          <Field label="Incentive note"><input className={inputCls} placeholder="e.g. ₹500/batch completion bonus" value={form.incentive_note ?? ""} onChange={(e) => set("incentive_note", e.target.value)} /></Field>
           <Btn onClick={save} disabled={!form.name || !form.phone}>{edit ? "Save changes" : "Add Trainer"}</Btn>
         </div>
       </Drawer>
-    </div>
-  );
-}
 
-function RequestStatus({ r, onChanged, setError }: any) {
-  async function update(status: string) {
-    try { await api(`/api/trainer-requests/${r._id}`, { method: "PATCH", json: { status } }); onChanged(); }
-    catch (e: any) { setError(e.message); }
-  }
-  return (
-    <select className="rounded border border-gray-200 bg-white px-1.5 py-0.5 text-xs" value={r.status} onChange={(e) => update(e.target.value)}>
-      {["Open", "In Progress", "Fulfilled", "Cancelled"].map((s) => <option key={s}>{s}</option>)}
-    </select>
+      {/* Backward planning per transcript 10:03–11:17: hiring date → TOT → expected availability */}
+      <Drawer open={!!reqEdit} onClose={() => setReqEdit(null)} title={reqEdit ? `Request — ${reqEdit.location?.name} · ${reqEdit.program?.name}` : ""}>
+        <div className="space-y-3">
+          <Field label="Status">
+            <select className={inputCls} value={reqForm.status ?? "Open"} onChange={(e) => setReq("status", e.target.value)}>
+              {["Open", "In Progress", "Fulfilled", "Cancelled"].map((s) => <option key={s}>{s}</option>)}
+            </select>
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Hiring target date"><input type="date" className={inputCls} value={reqForm.hiring_target_date ?? ""} onChange={(e) => setReq("hiring_target_date", e.target.value)} /></Field>
+            <Field label="TOT scheduled on"><input type="date" className={inputCls} value={reqForm.tot_scheduled_on ?? ""} onChange={(e) => setReq("tot_scheduled_on", e.target.value)} /></Field>
+            <Field label="TOT done on"><input type="date" className={inputCls} value={reqForm.tot_done_on ?? ""} onChange={(e) => setReq("tot_done_on", e.target.value)} /></Field>
+            <Field label="Expected available from"><input type="date" className={inputCls} value={reqForm.expected_available_from ?? ""} onChange={(e) => setReq("expected_available_from", e.target.value)} /></Field>
+          </div>
+          <Field label="Fulfilled by trainer">
+            <select className={inputCls} value={reqForm.fulfilled_by_trainer ?? ""} onChange={(e) => setReq("fulfilled_by_trainer", e.target.value)}>
+              <option value="">—</option>
+              {items.map((t) => <option key={t._id} value={t._id}>{t.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Note"><input className={inputCls} value={reqForm.note ?? ""} onChange={(e) => setReq("note", e.target.value)} /></Field>
+          <Btn onClick={saveReq}>Save request</Btn>
+        </div>
+      </Drawer>
+    </div>
   );
 }

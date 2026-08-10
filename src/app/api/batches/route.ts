@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, locationFilter, assertLocationInScope, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, requireRole, locationFilter, assertLocationInScope, HttpError } from "@/lib/authz";
 import { Batch, BatchMember, Program } from "@/models";
 import { assertRoomFreeForBatch, assertTrainerAvailableForBatch, computePlannedEnd, deriveTrainerStatus, nextBatchCode } from "@/lib/rules";
 import { audit } from "@/lib/audit";
@@ -39,6 +39,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
 export const POST = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
+  requireRole(user, "Admin", "Operations", "Location"); // batch planning is not an Enrollment action (§6)
   requireEdit(user);
   const body = await req.json();
   const { location, program: programId, trainer, room, session = "Full Day", planned_start } = body;

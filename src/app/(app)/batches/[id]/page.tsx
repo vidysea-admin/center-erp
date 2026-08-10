@@ -295,7 +295,7 @@ function Enrollment({ batchId, setError }: any) {
 function DailyExecution({ batchId, batch, setError }: any) {
   const [logs, setLogs] = useState<any[]>([]);
   const [members, setMembers] = useState<any[]>([]);
-  const [form, setForm] = useState<any>({ log_date: toInputDate(new Date()), present: new Set<string>(), photos: [] });
+  const [form, setForm] = useState<any>({ log_date: toInputDate(new Date()), present: new Set<string>(), photos: [], videos: [] });
   const [busy, setBusy] = useState(false);
   const [queued, setQueued] = useState(0);
   const [editLog, setEditLog] = useState<any>(null);
@@ -312,10 +312,11 @@ function DailyExecution({ batchId, batch, setError }: any) {
     setForm({ ...form, present: s });
   }
 
-  async function uploadFile(file: File, kind: "photos" | "govt_screenshot") {
+  async function uploadFile(file: File, kind: "photos" | "videos" | "govt_screenshot") {
     try {
       const url = await uploadWithRetry(file, kind); // compressed + 3 retries + offline queue
       if (kind === "photos") setForm((f: any) => ({ ...f, photos: [...f.photos, url] }));
+      else if (kind === "videos") setForm((f: any) => ({ ...f, videos: [...f.videos, url] }));
       else setForm((f: any) => ({ ...f, govt_screenshot: url }));
     } catch (e: any) { setError(e.message); setQueued(getQueue().length); }
   }
@@ -324,6 +325,7 @@ function DailyExecution({ batchId, batch, setError }: any) {
     const done = await flushQueue();
     for (const d of done) {
       if (d.kind === "photos") setForm((f: any) => ({ ...f, photos: [...f.photos, d.url] }));
+      else if (d.kind === "videos") setForm((f: any) => ({ ...f, videos: [...f.videos, d.url] }));
       else setForm((f: any) => ({ ...f, govt_screenshot: d.url }));
     }
     setQueued(getQueue().length);
@@ -340,10 +342,10 @@ function DailyExecution({ batchId, batch, setError }: any) {
           present_member_ids: [...form.present],
           govt_present: form.govt_present === "" || form.govt_present == null ? null : +form.govt_present,
           govt_screenshot: form.govt_screenshot,
-          photos: form.photos, note: form.note,
+          photos: form.photos, videos: form.videos, note: form.note,
         },
       });
-      setForm({ log_date: toInputDate(new Date()), present: new Set(), photos: [] });
+      setForm({ log_date: toInputDate(new Date()), present: new Set(), photos: [], videos: [] });
       load();
     } catch (e: any) { setError(e.message); }
     setBusy(false);
@@ -374,9 +376,12 @@ function DailyExecution({ batchId, batch, setError }: any) {
               ))}
             </div>
           </div>
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid gap-3 md:grid-cols-3">
             <Field label={`Photos (${form.photos.length})`}>
               <input type="file" accept="image/*" capture="environment" className={inputCls} onChange={(e) => e.target.files?.[0] && uploadFile(e.target.files[0], "photos")} />
+            </Field>
+            <Field label={`Videos (${form.videos.length})`}>
+              <input type="file" accept="video/mp4,video/*" capture="environment" className={inputCls} onChange={(e) => e.target.files?.[0] && uploadFile(e.target.files[0], "videos")} />
             </Field>
             <Field label={`Govt attendance screenshot${form.govt_screenshot ? " ✓" : ""}`}>
               <input type="file" accept="image/*" className={inputCls} onChange={(e) => e.target.files?.[0] && uploadFile(e.target.files[0], "govt_screenshot")} />
@@ -403,7 +408,7 @@ function DailyExecution({ batchId, batch, setError }: any) {
             { key: "govt_present", label: "Govt", render: (r: any) => r.govt_present == null ? <span className="text-gray-400">Not verified</span> : `${r.govt_present}/${r.roster_count} (${Math.round((100 * r.govt_present) / r.roster_count)}%)` },
             { key: "gap", label: "Gap", render: (r: any) => <Gap r={r} /> },
             { key: "actual_topic", label: "Topic", render: (r: any) => r.actual_topic ?? r.planned_topic ?? "—", mobile: false },
-            { key: "photos", label: "Media", render: (r: any) => `${(r.photos ?? []).length} photo${(r.photos ?? []).length === 1 ? "" : "s"}${r.govt_screenshot ? " · proof" : ""}` },
+            { key: "photos", label: "Media", render: (r: any) => <MediaCell r={r} /> },
             { key: "_edit", label: "", render: (r: any) => <Btn small kind="ghost" onClick={() => setEditLog(r)}>Edit</Btn> },
           ]} empty="No logs yet." />
       </Section>
@@ -469,6 +474,31 @@ function LogEditDrawer({ log, members, onClose, onSaved, setError }: any) {
         <Btn onClick={save}>Save changes</Btn>
       </div>
     </Drawer>
+  );
+}
+
+// Evidence must be viewable, not just counted — the daily verification loop depends on
+// someone opening the govt screenshot (transcript 13:12–14:33).
+function MediaCell({ r }: any) {
+  const photos: string[] = r.photos ?? [];
+  const videos: string[] = r.videos ?? [];
+  if (!photos.length && !videos.length && !r.govt_screenshot) return <span className="text-gray-400">—</span>;
+  return (
+    <span className="flex flex-wrap items-center gap-1">
+      {photos.map((p, i) => (
+        <a key={p} href={p} target="_blank" rel="noreferrer" title={`Photo ${i + 1}`}>
+          <img src={p} alt={`Photo ${i + 1}`} className="h-8 w-8 rounded border border-gray-200 object-cover" />
+        </a>
+      ))}
+      {videos.map((v, i) => (
+        <a key={v} href={v} target="_blank" rel="noreferrer" title={`Video ${i + 1}`}
+          className="rounded border border-gray-200 bg-gray-50 px-1.5 py-1 text-xs text-gray-600">▶ {i + 1}</a>
+      ))}
+      {r.govt_screenshot && (
+        <a href={r.govt_screenshot} target="_blank" rel="noreferrer" title="Govt attendance proof"
+          className="rounded border border-amber-300 bg-amber-50 px-1.5 py-1 text-xs font-medium text-amber-700">proof</a>
+      )}
+    </span>
   );
 }
 
@@ -557,12 +587,43 @@ function CostsTab({ batchId, batch, setError }: any) {
   const [items, setItems] = useState<any[]>([]);
   const [cats, setCats] = useState<any[]>([]);
   const [form, setForm] = useState<any>({ entry_date: toInputDate(new Date()) });
+  const [suggest, setSuggest] = useState<any>(null);
 
   const load = () => Promise.all([
     api(`/api/costs?batch=${batchId}`).then((d) => setItems(d.items)),
     api("/api/master-lists/cost-categories").then((d) => setCats(d.items)),
   ]).catch((e: any) => setError(e.message));
   useEffect(() => { load(); }, [batchId]);
+
+  // Trainer fee suggestion: day_rate × distinct training days (DailyLog dates).
+  // Suggestion only — nothing is written until the user adds it.
+  useEffect(() => {
+    const trainerId = batch.trainer?._id ?? batch.trainer;
+    if (!trainerId) return;
+    Promise.all([api(`/api/trainers/${trainerId}`), api(`/api/batches/${batchId}/logs`)])
+      .then(([t, l]) => {
+        const rate = t.item?.day_rate;
+        const days = l.items?.length ?? 0;
+        if (rate > 0 && days > 0) setSuggest({ trainer: trainerId, name: t.item.name, rate, days, amount: rate * days });
+      })
+      .catch(() => {});
+  }, [batchId, batch]);
+
+  async function addSuggested() {
+    const cat = cats.find((c: any) => c.name === "Trainer Fee");
+    if (!cat) { setError('Cost category "Trainer Fee" not found — add it in Admin → Master Lists.'); return; }
+    try {
+      await api("/api/costs", {
+        method: "POST",
+        json: {
+          entry_date: toInputDate(new Date()), batch: batchId, location: batch.location?._id ?? batch.location,
+          trainer: suggest.trainer, category: cat._id, amount: suggest.amount,
+          note: `Auto-suggested: ₹${suggest.rate}/day × ${suggest.days} training days (${suggest.name})`,
+        },
+      });
+      setSuggest(null); load();
+    } catch (e: any) { setError(e.message); }
+  }
 
   async function save() {
     try {
@@ -572,8 +633,16 @@ function CostsTab({ batchId, batch, setError }: any) {
   }
   const total = items.reduce((s, i) => s + (i.amount ?? 0), 0);
 
+  const hasTrainerFee = items.some((i) => i.category?.name === "Trainer Fee");
+
   return (
     <Section title={`Cost entries — total ₹${total.toLocaleString("en-IN")}`}>
+      {suggest && !hasTrainerFee && (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+          <span>Trainer fee suggestion: <b>₹{suggest.amount.toLocaleString("en-IN")}</b> — ₹{suggest.rate}/day × {suggest.days} training day{suggest.days === 1 ? "" : "s"} ({suggest.name})</span>
+          <Btn small onClick={addSuggested}>Add as cost entry</Btn>
+        </div>
+      )}
       <DataTable rows={items}
         cardTitle={(r: any) => `₹${r.amount} · ${r.category?.name}`}
         columns={[

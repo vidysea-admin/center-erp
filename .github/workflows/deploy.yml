@@ -1,0 +1,55 @@
+name: Deploy
+# Push-to-deploy: fills the server's .env from GitHub Secrets and restarts docker compose.
+# Required repo secrets (Settings → Secrets and variables → Actions):
+#   EC2_HOST      server IP/hostname
+#   EC2_USER      ssh user (e.g. ubuntu)
+#   EC2_SSH_KEY   private key with access to the server
+#   MONGODB_URL   e.g. mongodb://center_erp_app:PASS@localhost:27017/center_erp?authSource=center_erp
+#   AUTH_SECRET   session secret (openssl rand -base64 32)
+# Optional: AUTH_URL (public https URL when behind a domain)
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency: deploy
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check deploy secrets
+        id: gate
+        env:
+          HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          if [ -z "$HOST" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "EC2 secrets not configured yet — skipping deploy (CI still ran)."
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy over SSH
+        if: steps.gate.outputs.enabled == 'true'
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+            mkdir -p /opt/center-erp
+            cd /opt/center-erp
+            if [ ! -d .git ]; then git clone https://github.com/vidysea-admin/center-erp.git .; fi
+            git fetch origin master && git reset --hard origin/master
+            cat > .env <<EOF
+            MONGODB_URL=${{ secrets.MONGODB_URL }}
+            MONGODB_DB=center_erp
+            AUTH_SECRET=${{ secrets.AUTH_SECRET }}
+            AUTH_TRUST_HOST=true
+            AUTH_URL=${{ secrets.AUTH_URL }}
+            APP_PORT=3000
+            EOF
+            docker compose up -d --build
+            docker image prune -f

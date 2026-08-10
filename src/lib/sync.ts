@@ -131,19 +131,25 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
   return { created, status: "OK" };
 }
 
-// Rule 8: generate follow-ups for Stop/Close
-async function generateFollowUps(changeId: unknown, locationId: unknown) {
+// Rule 8: generate follow-ups for Stop/Close. Each must land with an owner —
+// the location's SPOC user when linked, otherwise the Admin/Ops actor who applied
+// the action — and a due date, so nothing sits unowned in the queue.
+async function generateFollowUps(changeId: unknown, location: any, actorId: string) {
+  const locationId = location._id;
+  const owner = location.spoc_user ?? actorId;
+  const due_date = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  const base = { source_change: changeId, owner, due_date };
   const batches = await Batch.find({ location: locationId, status: { $in: ACTIVE_BATCH_STATUSES } }).lean<any[]>();
   const fups: any[] = [];
   for (const b of batches) {
-    fups.push({ source_change: changeId, type: "Stop batch", target_entity: "Batch", target_id: b._id });
-    if (b.trainer) fups.push({ source_change: changeId, type: "Release trainer", target_entity: "Trainer", target_id: b.trainer });
+    fups.push({ ...base, type: "Stop batch", target_entity: "Batch", target_id: b._id });
+    if (b.trainer) fups.push({ ...base, type: "Release trainer", target_entity: "Trainer", target_id: b.trainer });
     const members = await BatchMember.countDocuments({ batch: b._id, left_on: null });
-    if (members > 0) fups.push({ source_change: changeId, type: "Return candidates to pool", target_entity: "Batch", target_id: b._id });
+    if (members > 0) fups.push({ ...base, type: "Return candidates to pool", target_entity: "Batch", target_id: b._id });
   }
   const requests = await TrainerRequest.find({ location: locationId, status: { $in: ["Open", "In Progress"] } }).lean<any[]>();
   for (const r of requests) {
-    fups.push({ source_change: changeId, type: "Cancel trainer request", target_entity: "TrainerRequest", target_id: r._id });
+    fups.push({ ...base, type: "Cancel trainer request", target_entity: "TrainerRequest", target_id: r._id });
   }
   if (fups.length) await FollowUpAction.insertMany(fups);
   return fups.length;
@@ -203,7 +209,7 @@ export async function applySheetChange(changeId: string, action: string, note: s
       loc.status_changed_on = new Date();
       await loc.save();
       if (action !== "Put on hold") {
-        followUps = await generateFollowUps(change._id, loc._id); // Rule 8
+        followUps = await generateFollowUps(change._id, loc, actorId); // Rule 8
       }
       break;
     }
