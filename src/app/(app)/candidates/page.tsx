@@ -244,6 +244,21 @@ function CandidatesInner() {
             </Field>
             <Field label="Last govt training (if any)"><input type="date" className={inputCls} value={form.last_training_date ?? ""} onChange={(e) => set("last_training_date", e.target.value)} /></Field>
           </div>
+          {/* 2026-08-11: "कौन से program में interested… कौन-कौन सी location में" — for fast shortlisting later */}
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Interested programs (Ctrl-click for many)">
+              <select multiple className={inputCls + " h-20"} value={form.interested_programs ?? []}
+                onChange={(e) => set("interested_programs", Array.from(e.target.selectedOptions).map((o) => o.value))}>
+                {programs.map((p) => <option key={p._id} value={p._id}>{p.name}</option>)}
+              </select>
+            </Field>
+            <Field label="Interested locations">
+              <select multiple className={inputCls + " h-20"} value={form.interested_locations ?? []}
+                onChange={(e) => set("interested_locations", Array.from(e.target.selectedOptions).map((o) => o.value))}>
+                {locations.map((l) => <option key={l._id} value={l._id}>{l.name}</option>)}
+              </select>
+            </Field>
+          </div>
           <Field label="Source (mobiliser / campaign)"><input className={inputCls} value={form.source ?? ""} onChange={(e) => set("source", e.target.value)} /></Field>
           <Btn onClick={saveCandidate} disabled={!form.name || !form.phone || !form.location || !form.program}>Add</Btn>
         </div>

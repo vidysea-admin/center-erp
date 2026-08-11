@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { Batch, Program } from "@/models";
-import { assertBatchInScope, assertRoomFreeForBatch, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, batchReadiness, planBatchBackward, trainerPipelineWarning } from "@/lib/rules";
+import { assertBatchInScope, assertRoomFreeForBatch, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, batchReadiness, planBatchBackward, trainerBookingWarnings } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { auditDiff } from "@/lib/audit";
 
@@ -68,6 +68,6 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   await auditDiff("Batch", batch._id, before, patch, user.id);
   if (oldTrainer && oldTrainer !== String(batch.trainer ?? "")) await deriveTrainerStatus(oldTrainer);
   if (batch.trainer) await deriveTrainerStatus(String(batch.trainer)); // Rule 12
-  const warning = patch.trainer && batch.trainer ? await trainerPipelineWarning(String(batch.trainer)) : null;
-  return NextResponse.json({ item: batch, ...(warning ? { warning } : {}) });
+  const warnings = patch.trainer && batch.trainer ? await trainerBookingWarnings(String(batch.trainer), batch.location) : [];
+  return NextResponse.json({ item: batch, ...(warnings.length ? { warning: warnings.join(" ") } : {}) });
 });

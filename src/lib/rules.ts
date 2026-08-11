@@ -131,14 +131,27 @@ export async function assertTrainerAvailableForBatch(
 
 // 2026-08-11: a trainer still in the hiring pipeline can be booked ahead, but the operator
 // must see it. Warn, never block — the availability/TOT date rules (Rule 11) hard-gate the
-// actual start.
-export async function trainerPipelineWarning(trainerId: string): Promise<string | null> {
-  const t = await Trainer.findById(trainerId).select("name pipeline_status").lean<any>();
-  if (!t) return null;
+// actual start. Same for location capability ("trainer कहाँ-कहाँ training ले सकता है"):
+// an empty list means "anywhere"; a non-empty list that excludes the batch's location warns.
+export async function trainerBookingWarnings(trainerId: string, locationId?: unknown): Promise<string[]> {
+  const t = await Trainer.findById(trainerId).select("name pipeline_status capable_locations").lean<any>();
+  if (!t) return [];
+  const warnings: string[] = [];
   if (t.pipeline_status && t.pipeline_status !== "Ready to Train") {
-    return `Trainer ${t.name} is still "${t.pipeline_status}" — not yet Ready to Train.`;
+    warnings.push(`Trainer ${t.name} is still "${t.pipeline_status}" — not yet Ready to Train.`);
   }
-  return null;
+  if (locationId && t.capable_locations?.length &&
+      !t.capable_locations.map(String).includes(String(locationId))) {
+    const loc = await Location.findById(locationId).select("name").lean<any>();
+    warnings.push(`Trainer ${t.name} is not listed as able to train at ${loc?.name ?? "this location"} — check travel/availability.`);
+  }
+  return warnings;
+}
+
+// Back-compat wrapper (kept for existing callers/tests).
+export async function trainerPipelineWarning(trainerId: string): Promise<string | null> {
+  const w = await trainerBookingWarnings(trainerId);
+  return w[0] ?? null;
 }
 
 // Rule 12: Trainer.status is derived.

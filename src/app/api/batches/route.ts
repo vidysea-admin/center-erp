@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, requireRole, locationFilter, assertLocationInScope, HttpError } from "@/lib/authz";
 import { Batch, BatchMember, Program } from "@/models";
-import { assertLocationOperational, assertRoomFreeForBatch, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, nextBatchCode, planBatchBackward, trainerPipelineWarning } from "@/lib/rules";
+import { assertLocationOperational, assertRoomFreeForBatch, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, nextBatchCode, planBatchBackward, trainerBookingWarnings } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
 
@@ -75,8 +75,9 @@ export const POST = apiHandler(async (req: NextRequest) => {
     created_by: user.id,
   });
   if (trainer) await deriveTrainerStatus(trainer); // Rule 12
-  // 2026-08-11: booking a not-yet-Ready trainer warns but does not block (Rule 11 gates the start).
-  const warning = trainer ? await trainerPipelineWarning(trainer) : null;
+  // 2026-08-11: booking a not-yet-Ready trainer, or one not capable at this location,
+  // warns but does not block (Rule 11 gates the actual start).
+  const warnings = trainer ? await trainerBookingWarnings(trainer, location) : [];
   await audit({ entity: "Batch", entityId: doc._id, newValue: "created " + doc.code, actor: user.id });
-  return NextResponse.json({ item: doc, ...(warning ? { warning } : {}) }, { status: 201 });
+  return NextResponse.json({ item: doc, ...(warnings.length ? { warning: warnings.join(" ") } : {}) }, { status: 201 });
 });

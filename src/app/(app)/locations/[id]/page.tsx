@@ -153,16 +153,25 @@ function ContactsNotes({ loc, onSaved, setError }: any) {
         </div>
         <div className="space-y-2">
           {notes.length === 0 && <p className="py-6 text-center text-sm text-gray-400">No meeting notes yet.</p>}
-          {notes.map((n) => (
-            <div key={n._id} className="rounded-lg border border-gray-100 bg-gray-50 px-4 py-3">
-              <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
-                <span className="font-medium text-gray-800">{fmtDate(n.meeting_date)}</span>
-                {n.met_with && <span>· with <b>{n.met_with}</b></span>}
-                <span className="ml-auto">logged by {n.logged_by?.name ?? "—"}</span>
+          {notes.map((n) => {
+            const shareText = `Meeting note — ${loc.name} (${fmtDate(n.meeting_date)})${n.met_with ? ` with ${n.met_with}` : ""}:\n${n.note}`;
+            return (
+              <div key={n._id} className="rounded-lg border border-gray-100 bg-gray-50 px-4 py-3">
+                <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
+                  <span className="font-medium text-gray-800">{fmtDate(n.meeting_date)}</span>
+                  {n.met_with && <span>· with <b>{n.met_with}</b></span>}
+                  <span className="ml-auto flex items-center gap-2">
+                    {/* 2026-08-11: "उनको notes भेज पाऊं" */}
+                    <button className="font-medium text-blue-700 hover:underline" onClick={() => navigator.clipboard.writeText(shareText)}>Copy</button>
+                    <a className="font-medium text-green-700 hover:underline" target="_blank" rel="noreferrer"
+                      href={`https://wa.me/?text=${encodeURIComponent(shareText)}`}>WhatsApp</a>
+                    <span>logged by {n.logged_by?.name ?? "—"}</span>
+                  </span>
+                </div>
+                <p className="mt-1 whitespace-pre-wrap text-sm text-gray-800">{n.note}</p>
               </div>
-              <p className="mt-1 whitespace-pre-wrap text-sm text-gray-800">{n.note}</p>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </Section>
     </div>
