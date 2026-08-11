@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
 import { api } from "@/lib/client";
+import { BASE_PATH } from "@/lib/base-path";
 import {
   IconHome, IconSync, IconPin, IconUser, IconUsers, IconCap, IconWallet, IconGear,
   IconSearch, IconMenu, IconLogout, IconChevronDown, IconBuilding,
@@ -147,7 +148,7 @@ function HelpButton() {
   return (
     <button
       title="User Manual — is screen ki help"
-      onClick={() => window.open(`/manual.html#${manualAnchor(pathname, window.location.search)}`, "_blank")}
+      onClick={() => window.open(`${BASE_PATH}/manual.html#${manualAnchor(pathname, window.location.search)}`, "_blank")}
       className="flex h-9 items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 text-sm font-semibold text-gray-500 hover:border-blue-300 hover:text-blue-600">
       <span className="flex h-5 w-5 items-center justify-center rounded-full border-[1.5px] border-current text-[11px]">?</span>
       <span className="hidden lg:block">Help</span>

@@ -1,6 +1,6 @@
 // Role-wise access verification — Rules 38 (location scoping), 39 (can_edit), 40 (role gates).
 // Requires sample data (seed-sample.mjs). Run: node scripts/e2e-roles.mjs
-const BASE = process.env.BASE_URL || "http://localhost:3000";
+const BASE = process.env.BASE_URL || "http://localhost:3000/erp";
 let pass = 0, fail = 0;
 const ok = (n, c, x = "") => { if (c) { pass++; console.log("PASS  " + n); } else { fail++; console.log("FAIL  " + n + " " + x); } };
 

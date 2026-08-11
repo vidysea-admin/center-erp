@@ -3,7 +3,10 @@ import type { NextRequest } from "next/server";
 import { getToken } from "next-auth/jwt";
 
 export async function proxy(req: NextRequest) {
-  const { pathname } = req.nextUrl;
+  // With basePath configured, nextUrl.pathname is normally reported without the
+  // prefix — strip defensively so both shapes behave identically.
+  const pathname = req.nextUrl.pathname.replace(/^\/erp(?=\/|$)/, "") || "/";
+  if (process.env.PROXY_DEBUG) console.log("[proxy]", JSON.stringify(req.nextUrl.pathname), "->", JSON.stringify(pathname));
   if (
     pathname.startsWith("/login") ||
     pathname.startsWith("/api/auth") ||
@@ -28,5 +31,7 @@ export async function proxy(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  // "/" listed explicitly — the pattern below does not match the bare root path,
+  // which left the Home route unguarded under basePath (verified 2026-08-10).
+  matcher: ["/", "/((?!_next/static|_next/image|favicon.ico).*)"],
 };

@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "fs/promises";
 import path from "path";
 import crypto from "crypto";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { BASE_PATH } from "@/lib/base-path";
 
 const MAX_BYTES = 25 * 1024 * 1024;
 const ALLOWED = new Set([".jpg", ".jpeg", ".png", ".webp", ".pdf", ".mp4", ".xlsx", ".xls", ".csv"]);
@@ -22,5 +23,6 @@ export const POST = apiHandler(async (req: NextRequest) => {
   await mkdir(dir, { recursive: true });
   await writeFile(path.join(dir, name), Buffer.from(await file.arrayBuffer()));
   // Served via /api/files/[name] — public/ is not writable at runtime in production builds.
-  return NextResponse.json({ url: "/api/files/" + name, name: file.name });
+  // URL is stored in the DB, so it carries the basePath prefix explicitly.
+  return NextResponse.json({ url: `${BASE_PATH}/api/files/` + name, name: file.name });
 });

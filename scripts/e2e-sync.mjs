@@ -1,5 +1,5 @@
 // Sync engine E2E: serves a CSV via /api/upload, syncs it, verifies Rules 1,2,3,5,7,8.
-const BASE = process.env.BASE_URL || "http://localhost:3000";
+const BASE = process.env.BASE_URL || "http://localhost:3000/erp";
 let cookie = "";
 let pass = 0, fail = 0;
 const ok = (n, c, x = "") => { if (c) { pass++; console.log("PASS  " + n); } else { fail++; console.log("FAIL  " + n + " " + x); } };
@@ -53,7 +53,7 @@ const up = (await req("POST", "/api/upload", fd, 200)).data;
 // sync source with mappings
 const src = (await req("POST", "/api/sync-sources", {
   name: "Test sheet " + stamp,
-  source_url: BASE + up.url,
+  source_url: new URL(up.url, BASE).href,
   field_mappings: { "Center ID": "external_id", "Status": "approval_status", "City": "city", "Target": `approved_target:P${stamp}` },
 }, 201)).data.item;
 
@@ -96,7 +96,7 @@ const badCsv = `Center ID,City\n${stamp},Udaipur\n`;
 const fd2 = new FormData();
 fd2.append("file", new File([badCsv], "bad.csv", { type: "text/csv" }));
 const up2 = (await req("POST", "/api/upload", fd2, 200)).data;
-await req("PATCH", `/api/sync-sources/${src._id}`, { source_url: BASE + up2.url }, 200);
+await req("PATCH", `/api/sync-sources/${src._id}`, { source_url: new URL(up2.url, BASE).href }, 200);
 const run3 = (await req("POST", `/api/sync-sources/${src._id}/run`, undefined, 200)).data;
 ok("Rule 2: missing columns → Partial, zero changes", run3.status === "Partial" && run3.created === 0, JSON.stringify(run3));
 

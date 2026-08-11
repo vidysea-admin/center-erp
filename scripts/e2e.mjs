@@ -1,6 +1,6 @@
 // End-to-end walkthrough + rule assertions against a running server (default http://localhost:3000).
 // Run: node scripts/e2e.mjs
-const BASE = process.env.BASE_URL || "http://localhost:3000";
+const BASE = process.env.BASE_URL || "http://localhost:3000/erp";
 let cookie = "";
 let pass = 0, fail = 0;
 

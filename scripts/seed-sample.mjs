@@ -3,7 +3,7 @@
 // Idempotent: aborts if JPR03 already exists.
 import mongoose from "mongoose";
 
-const BASE = process.env.BASE_URL || "http://localhost:3000";
+const BASE = process.env.BASE_URL || "http://localhost:3000/erp";
 let cookie = "";
 
 async function req(method, path, body) {

@@ -1,9 +1,11 @@
 "use client";
+import { BASE_PATH } from "@/lib/base-path";
 
 // Tiny fetch wrapper — throws Error with server's message on non-2xx.
+// Prefixes the app's basePath (next/link does this automatically; raw fetch does not).
 export async function api<T = any>(path: string, opts: RequestInit & { json?: unknown } = {}): Promise<T> {
   const { json, ...rest } = opts;
-  const res = await fetch(path, {
+  const res = await fetch(path.startsWith("/") ? BASE_PATH + path : path, {
     ...rest,
     headers: json ? { "Content-Type": "application/json", ...(rest.headers || {}) } : rest.headers,
     body: json ? JSON.stringify(json) : rest.body,

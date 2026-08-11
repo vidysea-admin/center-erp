@@ -4,6 +4,7 @@ import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/client";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, NameCell, inputCls } from "@/components/ui";
 import { useLocationCtx } from "@/components/shell";
+import { BASE_PATH } from "@/lib/base-path";
 
 export default function CandidatesPage() {
   return <Suspense><CandidatesInner /></Suspense>;
@@ -176,7 +177,7 @@ function CandidatesInner() {
               </select>
             </Field>
           </div>
-          <a href="/api/candidates/template" className="inline-block text-sm font-medium text-blue-700 hover:underline">⬇ Download sample sheet format</a>
+          <a href={`${BASE_PATH}/api/candidates/template`} className="inline-block text-sm font-medium text-blue-700 hover:underline">⬇ Download sample sheet format</a>
           {importState.location && importState.program && !importState.columns && (
             <Field label="Excel file (.xlsx)" required>
               <input type="file" accept=".xlsx,.xls,.csv" className={inputCls} onChange={(e) => e.target.files?.[0] && importUpload(e.target.files[0])} />

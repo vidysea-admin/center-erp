@@ -13,6 +13,9 @@ export type SessionUser = {
   can_edit: boolean;
 };
 
+// NOTE: no `basePath` override here — Next strips the app basePath before the
+// route handler runs, so Auth.js sees /api/auth/* (its default). The CLIENT side
+// does need the prefix (SessionProvider basePath in components/providers.tsx).
 export const { handlers, auth, signIn, signOut } = NextAuth({
   session: { strategy: "jwt" },
   pages: { signIn: "/login" },
