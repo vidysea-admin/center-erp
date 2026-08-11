@@ -58,6 +58,8 @@
   <a href="#closure">Closure &amp; Invoice</a>
   <a href="#costs">Costs</a>
   <a href="#admin">Admin</a>
+  <a href="#alerts">Alerts</a>
+  <a href="#approvals">Approvals</a>
   <h2>Help</h2>
   <a href="#faq">FAQ / Common Questions</a>
 </nav>
@@ -257,6 +259,7 @@
     <h2>🏁 Closure — Assessment → Certificate → Invoice</h2>
     <p class="sub">Batch Detail → Closure tab</p>
     <img src="/erp/manual/m13-closure.png" alt="Closure tab">
+    <div class="tip">💡 <b>Per-candidate marking (new):</b> click <span class="btn">Start per-candidate marking</span> to record a result for every student instead of just totals. Tap Pass / Fail / Absent on each card (Fail asks for a reason), add scores, then use <b>Issue certificates</b> to enter numbers in bulk. Appeared and Passed are then calculated for you and shown as "derived" — you never type them again. A batch cannot be marked assessment-complete while anyone is still Pending, and no certificate can be issued without a Pass. Older batches keep their existing totals exactly as they were.</div>
     <ol class="steps">
       <li><b>Assessment:</b> date, how many appeared, how many passed — <span class="btn">Mark Completed</span>. (Appeared cannot exceed the roster)</li>
       <li>The batch can now be moved to <span class="btn">Move to Closing</span> (from the Overview tab)</li>
@@ -288,6 +291,32 @@
       <li><b>Master Lists:</b> cost categories, drop reasons</li>
       <li><b>Defaults:</b> batch size 30, duration 15+5, 90-day deadline, attendance gap amber/red thresholds, 80% enrollment threshold — all configurable here, no code changes needed</li>
     </ol>
+  </section>
+
+  <section class="screen" id="alerts">
+    <h2>🔔 Alerts</h2>
+    <p class="sub">The bell in the header — conditions the system watches for you, raised automatically</p>
+    <ol class="steps">
+      <li>The bell shows a red count when something needs attention. Click it to open the Alerts page</li>
+      <li>Each alert says exactly what is wrong and where — for example <mark>"B011 at Kota 02 has no daily log for 3 operating days"</mark></li>
+      <li>Colour shows urgency: red is critical, amber is a warning</li>
+      <li><span class="btn">Open</span> jumps straight to the screen where you can fix it</li>
+      <li><span class="btn">Acknowledge</span> means "I have seen this"; <span class="btn">Resolve</span> means "this is handled"</li>
+    </ol>
+    <div class="tip">💡 Alerts <b>clear themselves</b> once the condition stops being true — enter the missing daily log and the alert disappears on its own. The system watches for: sheet changes unreviewed for 48 hours, trainer requests coming due, missing daily logs, government attendance gaps, assessments past their date, invoices ready but unraised, and batches stuck past their start date.</div>
+  </section>
+
+  <section class="screen" id="approvals">
+    <h2>✅ Approvals (optional)</h2>
+    <p class="sub">Admin → Approvals — require a second person to sign off on critical actions</p>
+    <ol class="steps">
+      <li><b>Everything is switched OFF by default</b> — the system behaves exactly as before until an Admin turns something on</li>
+      <li>Admin → <span class="btn">Approvals</span> lists the six gateable actions: close/stop a location, cancel/complete a batch, mark an invoice raised/paid</li>
+      <li>Tick one and choose who approves it (Admin or Operations)</li>
+      <li>From then on, when someone performs that action it is <b>not applied</b> — it is parked and the approver is notified</li>
+      <li>The approver opens Admin → Approvals, reviews the request, and clicks <span class="btn">Approve &amp; apply</span> or <span class="btn">Reject</span></li>
+    </ol>
+    <div class="warn">⚠️ Nobody can approve their own request — that is the whole point of the control. Turn a switch back off at any time and that action becomes immediate again.</div>
   </section>
 
   <section class="screen" id="faq">
