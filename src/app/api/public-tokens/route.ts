@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireRole, requireEdit, assertLocationInScope, HttpError } from "@/lib/authz";
-import { BatchMember, PublicToken } from "@/models";
+import { apiHandler, requireUser, requireRole, requireEdit, assertLocationInScope, isScoped, HttpError } from "@/lib/authz";
+import { Batch, BatchMember, PublicToken } from "@/models";
 import { assertBatchInScope } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
@@ -19,6 +19,18 @@ export const GET = apiHandler(async (req: NextRequest) => {
   const filter: Record<string, unknown> = {};
   if (sp.get("purpose")) filter.purpose = sp.get("purpose");
   if (sp.get("location")) { assertLocationInScope(user, sp.get("location")!); filter.location = sp.get("location"); }
+  // Rule 38: tokens ARE the credential — a scoped user must never see another location's
+  // links. Register tokens carry a location; feedback tokens are reached via their batch,
+  // so both paths are constrained to the caller's scope.
+  if (isScoped(user)) {
+    const locIds = user.location_scope;
+    const batchIds = await Batch.find({ location: { $in: locIds } }).distinct("_id");
+    const memberIds = await BatchMember.find({ batch: { $in: batchIds } }).distinct("_id");
+    filter.$or = [
+      { location: { $in: locIds } },
+      { batch_member: { $in: memberIds } },
+    ];
+  }
   const items = await PublicToken.find(filter)
     .sort({ createdAt: -1 }).limit(200)
     .populate("location", "name code")

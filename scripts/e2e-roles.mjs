@@ -156,6 +156,13 @@ ok("SPOC cannot read another location's notes", (await req(spoc, "GET", `/api/lo
 ok("view-only principal cannot add notes", (await req(principal, "POST", `/api/locations/${ownLocId}/notes`, { note: "nope" })).status === 403);
 // Public-token creation is scoped too
 ok("SPOC cannot mint a register link for a foreign location", (await req(spoc, "POST", "/api/public-tokens", { purpose: "register", location: otherLoc._id })).status === 403);
+// …and so is the token LIST — tokens are credentials, a foreign location's must never leak
+const foreignToken = (await req(admin, "POST", "/api/public-tokens", { purpose: "register", location: otherLoc._id })).data.item;
+const spocTokens = (await req(spoc, "GET", "/api/public-tokens")).data.items ?? [];
+ok("token list scoped: SPOC never sees a foreign location's links",
+  spocTokens.every((t) => !t.location || t.location.code === "JPR03"),
+  JSON.stringify(spocTokens.map((t) => t.location?.code)));
+if (foreignToken?._id) await req(admin, "PATCH", `/api/public-tokens/${foreignToken._id}`, { active: false });
 // Backward-plan calculator is any-authenticated read
 ok("planner endpoint readable by SPOC", (await req(spoc, "GET", "/api/plan-batch?start=2026-12-01")).status === 200);
 
