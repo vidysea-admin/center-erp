@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { requirePerm } from "@/lib/permissions";
 import { decideApproval } from "@/lib/approvals";
 import { transitionBatch, updateInvoiceChecked } from "@/lib/rules";
 import { Location } from "@/models";
@@ -12,6 +13,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   await dbConnect();
   const user = await requireUser();
   requireEdit(user);
+  await requirePerm(user, "approvals.decide"); // togglable (2026-08-11)
   const { id } = await ctx.params;
   const { decision, note } = await req.json();
   if (!["Approved", "Rejected"].includes(decision)) throw new HttpError(400, "decision must be Approved or Rejected");

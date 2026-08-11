@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError } from "@/lib/authz";
+import { requirePerm } from "@/lib/permissions";
 import { Candidate } from "@/models";
 import { audit } from "@/lib/audit";
 import { findDuplicateCandidates, normalizePhone } from "@/lib/duplicates";
@@ -12,6 +13,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
   requireEdit(user);
+  await requirePerm(user, "candidates.manage"); // togglable (2026-08-11)
   const form = await req.formData();
   const file = form.get("file") as File | null;
   const location = String(form.get("location") || "");

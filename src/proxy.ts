@@ -9,6 +9,7 @@ export async function proxy(req: NextRequest) {
   if (process.env.PROXY_DEBUG) console.log("[proxy]", JSON.stringify(req.nextUrl.pathname), "->", JSON.stringify(pathname));
   if (
     pathname.startsWith("/login") ||
+    pathname.startsWith("/signup") ||
     pathname.startsWith("/api/auth") ||
     pathname.startsWith("/api/files") ||
     // Public capability-URL pages (2026-08-11): candidate self-registration + feedback.

@@ -4,5 +4,7 @@ import { SyncSource } from "@/models";
 export const { GET, POST } = collectionRoutes({
   model: SyncSource, entity: "SyncSource", scopeField: null,
   fields: ["name", "source_url", "sync_time", "frequency", "field_mappings", "mode", "interval_minutes", "key_columns"],
-  writeRoles: ["Admin"], readRoles: ["Admin", "Operations"], // Rule 40
+  writeRoles: ["Admin"],
+  permission: "sheet.sources", // 2026-08-11 togglable right (writeRoles = fallback only)
+  readRoles: ["Admin", "Operations"], // Rule 40
 });

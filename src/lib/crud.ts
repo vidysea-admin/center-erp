@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { Model } from "mongoose";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, requireRole, locationFilter, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, requireRole, locationFilter, isScoped, HttpError } from "@/lib/authz";
+import { requirePerm } from "@/lib/permissions";
 import type { SessionUser } from "@/auth";
 import { audit, auditDiff } from "@/lib/audit";
 
@@ -15,6 +16,10 @@ export type CrudConfig = {
   scopeField?: string | null; // Rule 38 — null disables location scoping
   writeRoles?: Role[]; // roles allowed to create/update (edit flag still applies)
   readRoles?: Role[]; // optional read restriction (Rule 40)
+  // 2026-08-11 (CEO, AWS-style toggles): when set, writes are gated by this togglable
+  // permission INSTEAD of the static writeRoles list — an Admin can grant it to anyone
+  // or revoke it from a whole role. writeRoles remains the fallback when absent.
+  permission?: string;
   populate?: { path: string; select?: string }[];
   defaultSort?: Record<string, 1 | -1>;
   beforeCreate?: (body: Record<string, unknown>, user: SessionUser) => Promise<void> | void;
@@ -30,8 +35,12 @@ export function pick(body: Record<string, unknown>, fields: string[]) {
   return out;
 }
 
-function checkWrite(user: SessionUser, cfg: CrudConfig) {
+async function checkWrite(user: SessionUser, cfg: CrudConfig) {
   requireEdit(user); // Rule 39
+  if (cfg.permission) {
+    await requirePerm(user, cfg.permission);
+    return;
+  }
   if (cfg.writeRoles && !cfg.writeRoles.includes(user.role)) {
     throw new HttpError(403, `Only ${cfg.writeRoles.join("/")} may modify ${cfg.entity}.`);
   }
@@ -66,7 +75,7 @@ export function collectionRoutes(cfg: CrudConfig) {
   const POST = apiHandler(async (req: NextRequest) => {
     await dbConnect();
     const user = await requireUser();
-    checkWrite(user, cfg);
+    await checkWrite(user, cfg);
     const body = await req.json();
     const data = pick(body, cfg.fields);
     if (cfg.beforeCreate) await cfg.beforeCreate(data, user);
@@ -89,7 +98,7 @@ export function itemRoutes(cfg: CrudConfig) {
     for (const p of cfg.populate ?? []) query = query.populate(p.path, p.select);
     let item = await query.lean<any>();
     if (!item) throw new HttpError(404, cfg.entity + " not found");
-    if (cfg.scopeField !== null && user.role === "Location") {
+    if (cfg.scopeField !== null && isScoped(user)) {
       const locVal = item[cfg.scopeField ?? "location"];
       const locId = typeof locVal === "object" && locVal?._id ? locVal._id : locVal;
       if (locId && !user.location_scope.map(String).includes(String(locId))) {
@@ -103,11 +112,11 @@ export function itemRoutes(cfg: CrudConfig) {
   const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
     await dbConnect();
     const user = await requireUser();
-    checkWrite(user, cfg);
+    await checkWrite(user, cfg);
     const { id } = await ctx.params;
     const existing = await cfg.model.findById(id);
     if (!existing) throw new HttpError(404, cfg.entity + " not found");
-    if (cfg.scopeField !== null && user.role === "Location") {
+    if (cfg.scopeField !== null && isScoped(user)) {
       const locId = existing[cfg.scopeField ?? "location"]; // Rule 38 on by-ID writes
       if (locId && !user.location_scope.map(String).includes(String(locId))) {
         throw new HttpError(403, "Out of scope");

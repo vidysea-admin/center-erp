@@ -166,6 +166,21 @@ if (foreignToken?._id) await req(admin, "PATCH", `/api/public-tokens/${foreignTo
 // Backward-plan calculator is any-authenticated read
 ok("planner endpoint readable by SPOC", (await req(spoc, "GET", "/api/plan-batch?start=2026-12-01")).status === 200);
 
+// 2026-08-11 evening (CEO): togglable role permissions — revoke a right from a whole role
+// and the gate closes for that role; restore it and it reopens. No re-login either way.
+const permsBefore = (await req(admin, "GET", "/api/permissions")).data;
+const opsSet = permsBefore.roles.find((r) => r.role === "Operations")?.permissions ?? [];
+ok("permission matrix lists roles + catalog", permsBefore.catalog?.length >= 10 && opsSet.includes("sheet.approve"));
+await req(admin, "PUT", "/api/permissions", { role: "Operations", permissions: opsSet.filter((p) => p !== "sheet.approve") });
+await new Promise((r) => setTimeout(r, 5200)); // permission cache TTL
+ok("revoking sheet.approve from Operations closes Sheet Watch", (await req(ops, "GET", "/api/workbook-changes")).status === 403);
+ok("…and the Sync Inbox", (await req(ops, "GET", "/api/sheet-changes")).status === 403);
+await req(admin, "PUT", "/api/permissions", { role: "Operations", permissions: opsSet });
+await new Promise((r) => setTimeout(r, 5200));
+ok("restoring the right reopens it", (await req(ops, "GET", "/api/workbook-changes")).status === 200);
+ok("Admin role toggles are refused (lockout-proof)", (await req(admin, "PUT", "/api/permissions", { role: "Admin", permissions: [] })).status === 400);
+ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permissions")).status === 403);
+
 // unauthenticated → 401
 const anon = await fetch(BASE + "/api/locations");
 ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}`);

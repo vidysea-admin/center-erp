@@ -7,6 +7,7 @@ export const { GET, PATCH } = itemRoutes({
   model: Candidate, entity: "Candidate",
   fields: ["name", "phone", "alt_phone", "gender", "dob", "id_reference", "location", "program", "source", "education", "last_training_date", "interested_programs", "interested_locations", "sidh_status", "sidh_link_sent_at", "sidh_registered_on"],
   writeRoles: ["Admin", "Operations", "Location", "Enrollment"],
+  permission: "candidates.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
   populate: [
     { path: "location", select: "name code" },
     { path: "program", select: "name code" },

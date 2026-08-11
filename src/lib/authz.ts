@@ -31,8 +31,10 @@ export function requireEdit(user: SessionUser) {
 // Rule 38: Location-role users see only rows in location_scope — enforced per query.
 // Enrollment users are scoped the same way when a location_scope is set; an empty
 // scope means a central enrollment operator working across all locations.
+// Trainer users (2026-08-11 self-signup) are ALWAYS scoped: Admin sets their
+// location_scope at approval; until then an empty scope means they see nothing scoped.
 export function isScoped(user: SessionUser): boolean {
-  if (user.role === "Location") return true;
+  if (user.role === "Location" || user.role === "Trainer") return true;
   return user.role === "Enrollment" && (user.location_scope?.length ?? 0) > 0;
 }
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireRole } from "@/lib/authz";
+import { requirePerm } from "@/lib/permissions";
 import { updateInvoiceChecked } from "@/lib/rules";
 import { requireApproval } from "@/lib/approvals";
 import { Batch } from "@/models";
@@ -10,7 +11,7 @@ import { audit } from "@/lib/audit";
 export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   await dbConnect();
   const user = await requireUser();
-  requireRole(user, "Admin", "Operations");
+  await requirePerm(user, "invoices.manage"); // togglable (2026-08-11); default set matches the old Admin/Ops gate
   const { id } = await ctx.params;
   const body = await req.json();
   const patch: Record<string, unknown> = {};

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError, assertLocationInScope } from "@/lib/authz";
+import { requirePerm } from "@/lib/permissions";
 import { Batch, Candidate } from "@/models";
 import { addMemberChecked, candidateEligibility } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
@@ -11,6 +12,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
   requireEdit(user);
+  await requirePerm(user, "candidates.assign"); // togglable (2026-08-11)
   const body = await req.json();
   const { batch: batchId, candidate_ids, joined_on } = body;
   if (!batchId || !Array.isArray(candidate_ids) || !candidate_ids.length) {

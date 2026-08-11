@@ -2,13 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireRole, HttpError } from "@/lib/authz";
+import { requirePerm } from "@/lib/permissions";
 import { User } from "@/models";
 import { audit } from "@/lib/audit";
 
 export const GET = apiHandler(async () => {
   await dbConnect();
   const user = await requireUser();
-  requireRole(user, "Admin"); // Rule 40
+  await requirePerm(user, "users.manage"); // togglable (2026-08-11); Admin-only by default (Rule 40)
   const items = await User.find({}, "-password_hash").populate("location_scope", "name code").lean();
   return NextResponse.json({ items });
 });
@@ -16,7 +17,7 @@ export const GET = apiHandler(async () => {
 export const POST = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
-  requireRole(user, "Admin");
+  await requirePerm(user, "users.manage"); // togglable (2026-08-11)
   const body = await req.json();
   if (!body.name || !body.email || !body.password || !body.role) {
     throw new HttpError(400, "name, email, password, role are required");

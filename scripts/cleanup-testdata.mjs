@@ -42,6 +42,9 @@ r.syncsources = (await db.collection("syncsources").deleteMany({ _id: { $in: ids
 r.locations = (await db.collection("locations").deleteMany({ _id: { $in: ids(testLocs) } })).deletedCount;
 r.programs = (await db.collection("programs").deleteMany({ _id: { $in: ids(testProgs) } })).deletedCount;
 
+// signup-flow test users (e2e uses @test.local emails)
+r.users = (await db.collection("users").deleteMany({ email: { $regex: "@test\\.local$" } })).deletedCount;
+
 console.log("Deleted:", JSON.stringify(r));
 
 if (process.env.ADMIN_NEW_PASSWORD) {

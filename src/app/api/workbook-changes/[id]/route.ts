@@ -1,15 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireRole, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { requirePerm } from "@/lib/permissions";
 import { WorkbookChange, WORKBOOK_CHANGE_STATUS } from "@/models";
 import { audit } from "@/lib/audit";
 
 // PATCH { status: "Seen" | "Accepted" } — review state only. Accepting a workbook change
 // never writes to ERP entities; the mapped sync and manual edits stay the only write paths.
+// 2026-08-11 (CEO): reviewing is the Admin-assignable "sheet.approve" right.
 export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   await dbConnect();
   const user = await requireUser();
-  requireRole(user, "Admin", "Operations");
+  await requirePerm(user, "sheet.approve");
   requireEdit(user);
   const { id } = await ctx.params;
   const body = await req.json();

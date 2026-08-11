@@ -504,5 +504,88 @@ ok("rating outside 1–5 → 400", fbBadRating.status === 400, `status=${fbBadRa
 const fbList = (await req("GET", `/api/batches/${batch._id}/feedback`, undefined, 200)).data;
 ok("batch feedback tab lists responses with average", fbList.count === 1 && fbList.average === 5, JSON.stringify({ count: fbList.count, avg: fbList.average }));
 
+// ============================================================================
+// 2026-08-11 evening (CEO): signup→approval, permission toggles, validate→add
+// ============================================================================
+
+async function loginAs(email, password) {
+  const csrfRes2 = await fetch(BASE + "/api/auth/csrf");
+  const { csrfToken: tok } = await csrfRes2.json();
+  const cc = csrfRes2.headers.get("set-cookie").split(";")[0];
+  const r = await fetch(BASE + "/api/auth/callback/credentials", {
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", cookie: cc },
+    body: new URLSearchParams({ csrfToken: tok, email, password }), redirect: "manual",
+  });
+  const sess = (r.headers.getSetCookie?.() ?? [r.headers.get("set-cookie")]).flat().filter(Boolean).map((c) => c.split(";")[0]).find((c) => c.includes("session-token"));
+  return sess ? [cc, sess].join("; ") : null;
+}
+
+// ---- self-signup → pending → approve → login ----
+const signupEmail = `trainer${stamp}@test.local`;
+const su = await fetch(BASE + "/api/public/signup", {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ name: "Signup Trainer " + stamp, email: signupEmail, password: "Test@12345", role: "Trainer", location: loc._id }),
+});
+ok("public signup creates a pending account", su.status === 201, `status=${su.status}`);
+ok("pending account cannot log in", (await loginAs(signupEmail, "Test@12345")) === null);
+const dupSignup = await fetch(BASE + "/api/public/signup", {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ name: "Dup", email: signupEmail, password: "Test@12345", role: "Trainer" }),
+});
+ok("duplicate email signup → 409", dupSignup.status === 409, `status=${dupSignup.status}`);
+const adminNotifs = (await req("GET", "/api/notifications?status=all")).data.items ?? [];
+ok("admin notified of pending signup", adminNotifs.some((n) => n.type === "signup_pending" && n.message.includes(signupEmail)));
+const allUsers = (await req("GET", "/api/users")).data.items;
+const pendingUser = allUsers.find((u) => u.email === signupEmail);
+ok("signup appears in users list as Pending", pendingUser?.approval_status === "Pending" && pendingUser?.active === false);
+await req("PATCH", `/api/users/${pendingUser._id}`, { approval: "approve" }, 200);
+const trainerCookie = await loginAs(signupEmail, "Test@12345");
+ok("approved account can log in", !!trainerCookie);
+// Trainer role: scoped + no batch-manage right
+const trBatches = await fetch(BASE + "/api/batches", { headers: { cookie: trainerCookie } });
+ok("trainer sees only scoped batches", trBatches.status === 200);
+const trCreate = await fetch(BASE + "/api/batches", {
+  method: "POST", headers: { "Content-Type": "application/json", cookie: trainerCookie },
+  body: JSON.stringify({ location: loc._id, program: prog._id, planned_start: "2028-01-01" }),
+});
+ok("trainer cannot create batches (no batches.manage)", trCreate.status === 403, `status=${trCreate.status}`);
+
+// ---- special grant: give the trainer sheet.approve → Sheet Watch opens up ----
+const trWatch1 = await fetch(BASE + "/api/workbook-changes", { headers: { cookie: trainerCookie } });
+ok("trainer blocked from Sheet Watch by default", trWatch1.status === 403, `status=${trWatch1.status}`);
+await req("PATCH", `/api/users/${pendingUser._id}`, { extra_permissions: ["sheet.approve"] }, 200);
+const trWatch2 = await fetch(BASE + "/api/workbook-changes", { headers: { cookie: trainerCookie } });
+ok("special grant opens Sheet Watch for the same user (no re-login)", trWatch2.status === 200, `status=${trWatch2.status}`);
+await req("PATCH", `/api/users/${pendingUser._id}`, { extra_permissions: [] }, 200);
+
+// ---- validate → add: a new sheet row becomes a Location only after human review ----
+const vwUrl1 = wbDataUrl({ Master: [
+  ["Institution Name", "Job role", "State", "District", "SPOC Name", "TC ID"],
+  ["Existing Inst " + stamp, "Drone Tech", "UP", "Agra", "S One", "TC1" + stamp.slice(0, 4)],
+] });
+const vwSrc = (await req("POST", "/api/sync-sources", { name: "Watch Source V" + stamp, source_url: vwUrl1, mode: "watch", key_columns: ["Institution Name", "Job role"] }, 201)).data.item;
+await req("POST", `/api/sync-sources/${vwSrc._id}/run`, {}, 200); // baseline
+const vwUrl2 = wbDataUrl({ Master: [
+  ["Institution Name", "Job role", "State", "District", "SPOC Name", "TC ID"],
+  ["Existing Inst " + stamp, "Drone Tech", "UP", "Agra", "S One", "TC1" + stamp.slice(0, 4)],
+  ["Test Location New ITI " + stamp, "Solar Tech", "HR", "Sirsa", "S Two", "TC2" + stamp.slice(0, 4)],
+] });
+await req("PATCH", `/api/sync-sources/${vwSrc._id}`, { source_url: vwUrl2 }, 200);
+await req("POST", `/api/sync-sources/${vwSrc._id}/run`, {}, 200);
+const vwChanges = (await req("GET", "/api/workbook-changes?status=New")).data.items ?? [];
+const addedRow = vwChanges.find((c) => c.change_type === "Added" && c.row_key.startsWith("Test Location New ITI " + stamp));
+ok("new sheet row lands as a PENDING change, not in the DB", !!addedRow);
+const locBefore = (await req("GET", `/api/locations?q=${encodeURIComponent("Test Location New ITI " + stamp)}`)).data.items;
+ok("no location auto-created", locBefore.length === 0, `found ${locBefore.length}`);
+const prefill = (await req("GET", `/api/workbook-changes/${addedRow._id}/create-location`, undefined, 200)).data;
+ok("prefill maps sheet columns (name/state/city/SPOC/TC ID)",
+  prefill.suggested?.name === "Test Location New ITI " + stamp && prefill.suggested?.state === "HR" &&
+  prefill.suggested?.city === "Sirsa" && prefill.suggested?.external_id?.startsWith("TC2"), JSON.stringify(prefill.suggested));
+// the human edits a value before adding — the edit must win
+const created = await req("POST", `/api/workbook-changes/${addedRow._id}/create-location`, { ...prefill.suggested, city: "Sirsa (edited)" }, 201);
+ok("human-validated location created with edited value", created.data.item?.city === "Sirsa (edited)");
+const afterApply = (await req("GET", "/api/workbook-changes?status=New")).data.items ?? [];
+ok("row's pending changes auto-accepted after validation", !afterApply.some((c) => c.row_key === addedRow.row_key));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

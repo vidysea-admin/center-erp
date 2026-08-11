@@ -8,7 +8,7 @@ export type SessionUser = {
   id: string;
   name: string;
   email: string;
-  role: "Admin" | "Operations" | "Location" | "Enrollment";
+  role: "Admin" | "Operations" | "Location" | "Enrollment" | "Trainer";
   location_scope: string[];
   can_edit: boolean;
 };
@@ -27,10 +27,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const password = String(credentials?.password || "");
         if (!email || !password) return null;
         await dbConnect();
-        const user = await User.findOne({ email, active: true }).lean<any>();
+        const user = await User.findOne({ email }).lean<any>();
         if (!user) return null;
         const ok = await bcrypt.compare(password, user.password_hash);
         if (!ok) return null;
+        // 2026-08-11 (CEO): self-signups wait for Admin approval; deactivated users stay out.
+        // Password is checked FIRST so this message never leaks account state to guessers.
+        if (user.approval_status === "Pending") throw new Error("Your account is awaiting Admin approval.");
+        if (user.approval_status === "Rejected" || !user.active) throw new Error("This account is not active. Contact an Admin.");
         return {
           id: String(user._id),
           name: user.name,

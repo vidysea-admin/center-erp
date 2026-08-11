@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireRole } from "@/lib/authz";
+import { apiHandler, requireUser } from "@/lib/authz";
+import { requirePerm } from "@/lib/permissions";
 import { FollowUpAction, SheetChange } from "@/models";
 
 export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
-  requireRole(user, "Admin", "Operations"); // Rule 40
+  await requirePerm(user, "sheet.approve"); // 2026-08-11: Admin-assignable reviewer right (Rule 40 baseline unchanged)
   const status = req.nextUrl.searchParams.get("status") || "Open";
   // The sidebar badge only needs the number — fetching every row to read .length was wasteful.
   if (req.nextUrl.searchParams.get("count") === "1") {

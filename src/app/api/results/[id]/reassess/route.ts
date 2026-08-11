@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { requirePerm } from "@/lib/permissions";
 import { assertResultInScope, startReassessment } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
@@ -9,6 +10,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   await dbConnect();
   const user = await requireUser();
   requireEdit(user);
+  await requirePerm(user, "closure.manage"); // togglable (2026-08-11)
   const { id } = await ctx.params;
   await assertResultInScope(user, id); // Rule 38
   const { reassessment_date } = await req.json();

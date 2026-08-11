@@ -29,7 +29,10 @@ export const SHEET_CHANGE_STATUS = ["Open", "Actioned", "Ignored"] as const;
 export const SHEET_CHANGE_ACTION = ["No action", "Update target", "Start location", "Put on hold", "Stop location", "Close location"] as const;
 export const FOLLOWUP_TYPE = ["Stop batch", "Release trainer", "Cancel trainer request", "Return candidates to pool", "Review target"] as const;
 export const FOLLOWUP_STATUS = ["Pending", "Done", "Skipped"] as const;
-export const USER_ROLE = ["Admin", "Operations", "Location", "Enrollment"] as const;
+// "Trainer" added 2026-08-11 (CEO): trainers sign up themselves, choose the role, and wait
+// for Admin approval. A trainer login is scoped to the batches they teach.
+export const USER_ROLE = ["Admin", "Operations", "Location", "Enrollment", "Trainer"] as const;
+export const USER_APPROVAL = ["Pending", "Approved", "Rejected"] as const;
 export const ACTOR_TYPE = ["USER", "SYSTEM", "AUTOMATION", "EXTERNAL_SYNC"] as const;
 
 const oid = (ref: string, required = false) => ({ type: Schema.Types.ObjectId, ref, required });
@@ -114,6 +117,7 @@ const TrainerSchema = new Schema({
   // Ready to Train so nothing operational changes for them.
   pipeline_status: { type: String, enum: TRAINER_PIPELINE, default: "Ready to Train" },
   tr_id: String, // NSDC TR ID, assigned after TOT certification
+  user: oid("User"), // linked login (2026-08-11: trainers sign up and get approved)
   capable_locations: [{ type: Schema.Types.ObjectId, ref: "Location" }], // "कहां-कहां training ले सकता है" — 1, 2 or 10
   programs_applied: [{ type: Schema.Types.ObjectId, ref: "Program" }],
   available_from: Date,
@@ -457,11 +461,28 @@ FeedbackSchema.index({ batch_member: 1 }, { unique: true }); // one response per
 const UserSchema = new Schema({
   name: { type: String, required: true },
   email: { type: String, required: true, unique: true, lowercase: true },
+  phone: String,
   password_hash: { type: String, required: true },
   role: { type: String, enum: USER_ROLE, required: true },
   location_scope: [{ type: Schema.Types.ObjectId, ref: "Location" }],
   can_edit: { type: Boolean, default: false },
   active: { type: Boolean, default: true },
+  // 2026-08-11 (CEO): self-signup lands here as Pending with a requested role; only an
+  // Admin approval activates the account. Existing users default to Approved.
+  approval_status: { type: String, enum: USER_APPROVAL, default: "Approved" },
+  requested_role: { type: String, enum: USER_ROLE },
+  approved_by: oid("User"), approved_at: Date,
+  // 2026-08-11 (CEO): special per-user grants on top of the role's toggled set —
+  // "किसी को special देने तो admin दे पाएगा"
+  extra_permissions: { type: [String], default: [] },
+}, { timestamps: true });
+
+// ---------- RolePermission (2026-08-11, CEO: AWS-style group toggles) ----------
+// One document per role = the "group". Admin toggles which feature-rights the role carries;
+// enforcement = role's toggled set ∪ the user's extra_permissions (Admin bypasses all).
+const RolePermissionSchema = new Schema({
+  role: { type: String, enum: USER_ROLE, required: true, unique: true },
+  permissions: { type: [String], default: [] },
 }, { timestamps: true });
 
 // ---------- AuditLog ----------
@@ -535,6 +556,7 @@ export const PublicToken = models.PublicToken || model("PublicToken", PublicToke
 export const Feedback = models.Feedback || model("Feedback", FeedbackSchema);
 export const FollowUpAction = models.FollowUpAction || model("FollowUpAction", FollowUpActionSchema);
 export const User = models.User || model("User", UserSchema);
+export const RolePermission = models.RolePermission || model("RolePermission", RolePermissionSchema);
 export const Notification = models.Notification || model("Notification", NotificationSchema);
 export const ApprovalRule = models.ApprovalRule || model("ApprovalRule", ApprovalRuleSchema);
 export const ApprovalRequest = models.ApprovalRequest || model("ApprovalRequest", ApprovalRequestSchema);

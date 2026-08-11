@@ -17,7 +17,7 @@ function LoginForm() {
     setBusy(true); setError("");
     const res = await signIn("credentials", { email, password, redirect: false });
     setBusy(false);
-    if (res?.error) setError("Invalid email or password.");
+    if (res?.error) setError("Sign-in failed — wrong email/password, or your account is still awaiting Admin approval.");
     else router.push(sp.get("callbackUrl") || "/");
   }
 
@@ -38,6 +38,10 @@ function LoginForm() {
         <input className={inputCls} type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
       </Field>
       <Btn type="submit" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</Btn>
+      {/* 2026-08-11 (CEO): single login — new trainers/SPOCs sign themselves up, Admin approves */}
+      <p className="text-center text-xs text-gray-500">
+        New here? <a href="signup" className="font-medium text-blue-700 hover:underline">Create an account</a> — an Admin approves it before first login.
+      </p>
     </form>
   );
 }

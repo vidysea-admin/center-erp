@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireRole, requireEdit, assertLocationInScope, isScoped, HttpError } from "@/lib/authz";
+import { requirePerm } from "@/lib/permissions";
 import { Batch, BatchMember, PublicToken } from "@/models";
 import { assertBatchInScope } from "@/lib/rules";
 import { audit } from "@/lib/audit";
@@ -45,6 +46,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const user = await requireUser();
   requireRole(user, "Admin", "Operations", "Location");
   requireEdit(user);
+  await requirePerm(user, "feedback.links"); // togglable (2026-08-11)
   const body = await req.json();
   const purpose = String(body.purpose ?? "");
 

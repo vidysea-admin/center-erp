@@ -5,7 +5,7 @@
 // writes to ERP records.
 import { useEffect, useState } from "react";
 import { api, fmtDate } from "@/lib/client";
-import { Btn, Chip, DataTable, ErrorBanner, inputCls } from "@/components/ui";
+import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, inputCls } from "@/components/ui";
 
 const TYPE_STYLE: Record<string, string> = {
   Added: "bg-green-50 text-green-700 border-green-200",
@@ -39,6 +39,28 @@ export default function SheetWatchPage() {
     try {
       for (const id of ids) await api(`/api/workbook-changes/${id}`, { method: "PATCH", json: { status: newStatus } });
       load();
+    } catch (e: any) { setError(e.message); }
+    setBusy(false);
+  }
+
+  // 2026-08-11 (CEO): a new sheet row never auto-enters the DB — a human opens it here,
+  // edits the prefilled values, and only then the Location is created.
+  const [createDrawer, setCreateDrawer] = useState<any>(null); // { change, suggested, cells, existing }
+  const [locForm, setLocForm] = useState<any>({});
+
+  async function openCreate(change: any) {
+    try {
+      const d = await api(`/api/workbook-changes/${change._id}/create-location`);
+      setLocForm(d.suggested ?? {});
+      setCreateDrawer({ change, ...d });
+    } catch (e: any) { setError(e.message); }
+  }
+
+  async function createLocation() {
+    setBusy(true);
+    try {
+      await api(`/api/workbook-changes/${createDrawer.change._id}/create-location`, { method: "POST", json: locForm });
+      setCreateDrawer(null); setLocForm({}); load();
     } catch (e: any) { setError(e.message); }
     setBusy(false);
   }
@@ -88,16 +110,47 @@ export default function SheetWatchPage() {
           { key: "detected_at", label: "Detected", render: (r: any) => fmtDate(r.detected_at), mobile: false },
           { key: "status", label: "Status", render: (r: any) => <Chip value={r.status} /> },
           {
-            key: "_act", label: "", render: (r: any) => r.status === "New" ? (
+            key: "_act", label: "", render: (r: any) => (
               <span className="flex gap-1">
-                <Btn small kind="ghost" disabled={busy} onClick={() => mark("Seen", [r._id])}>Seen</Btn>
-                <Btn small disabled={busy} onClick={() => mark("Accepted", [r._id])}>Accept</Btn>
+                {r.change_type === "Added" && r.status !== "Accepted" && (
+                  <Btn small kind="ghost" disabled={busy} onClick={() => openCreate(r)}>Create location…</Btn>
+                )}
+                {r.status === "New" && <Btn small kind="ghost" disabled={busy} onClick={() => mark("Seen", [r._id])}>Seen</Btn>}
+                {r.status !== "Accepted" && <Btn small disabled={busy} onClick={() => mark("Accepted", [r._id])}>Accept</Btn>}
               </span>
-            ) : r.status === "Seen" ? (
-              <Btn small disabled={busy} onClick={() => mark("Accepted", [r._id])}>Accept</Btn>
-            ) : null,
+            ),
           },
         ]} empty="No workbook changes detected — the client's sheet matches the last snapshot." />
+
+      <Drawer open={!!createDrawer} onClose={() => setCreateDrawer(null)} title="Validate & add location">
+        {createDrawer && (
+          <div className="space-y-3">
+            <div className="rounded-lg bg-gray-50 p-3 text-xs text-gray-600">
+              Sheet row: <b>{createDrawer.change.row_key}</b> — review the values, edit anything that is wrong, then add. Nothing enters the system without this step.
+            </div>
+            {createDrawer.existing && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                ⚠ A location like this may already exist: <b>{createDrawer.existing.name}</b> ({createDrawer.existing.code}). Check before creating a duplicate.
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Name" required><input className={inputCls} value={locForm.name ?? ""} onChange={(e) => setLocForm({ ...locForm, name: e.target.value })} /></Field>
+              <Field label="Code" required><input className={inputCls} value={locForm.code ?? ""} onChange={(e) => setLocForm({ ...locForm, code: e.target.value })} /></Field>
+              <Field label="City / District"><input className={inputCls} value={locForm.city ?? ""} onChange={(e) => setLocForm({ ...locForm, city: e.target.value })} /></Field>
+              <Field label="State"><input className={inputCls} value={locForm.state ?? ""} onChange={(e) => setLocForm({ ...locForm, state: e.target.value })} /></Field>
+              <Field label="SPOC name"><input className={inputCls} value={locForm.spoc_name ?? ""} onChange={(e) => setLocForm({ ...locForm, spoc_name: e.target.value })} /></Field>
+              <Field label="SPOC phone"><input className={inputCls} value={locForm.spoc_phone ?? ""} onChange={(e) => setLocForm({ ...locForm, spoc_phone: e.target.value })} /></Field>
+              <Field label="External ID (TC ID)"><input className={inputCls} value={locForm.external_id ?? ""} onChange={(e) => setLocForm({ ...locForm, external_id: e.target.value })} /></Field>
+              <Field label="Approval status">
+                <select className={inputCls} value={locForm.approval_status ?? "Pending"} onChange={(e) => setLocForm({ ...locForm, approval_status: e.target.value })}>
+                  <option>Pending</option><option>Approved</option>
+                </select>
+              </Field>
+            </div>
+            <Btn onClick={createLocation} disabled={busy || !locForm.name || !locForm.code}>Validate & add location</Btn>
+          </div>
+        )}
+      </Drawer>
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireRole } from "@/lib/authz";
+import { requirePerm } from "@/lib/permissions";
 import { Defaults } from "@/models";
 import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
@@ -14,7 +15,7 @@ export const GET = apiHandler(async () => {
 export const PUT = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
-  requireRole(user, "Admin"); // Rule 40
+  await requirePerm(user, "defaults.manage"); // togglable (2026-08-11); Admin-only by default (Rule 40)
   const body = await req.json();
   const set: Record<string, unknown> = {};
   for (const f of [

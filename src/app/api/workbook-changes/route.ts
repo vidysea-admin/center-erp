@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireRole } from "@/lib/authz";
+import { apiHandler, requireUser } from "@/lib/authz";
+import { requirePerm } from "@/lib/permissions";
 import { WorkbookChange } from "@/models";
 
 // Columns whose values are credentials in the client sheet — only Admin sees them in clear.
@@ -9,7 +10,7 @@ const SENSITIVE_COLUMNS = new Set(["TC Password", "Password"]);
 export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
-  requireRole(user, "Admin", "Operations");
+  await requirePerm(user, "sheet.approve"); // 2026-08-11: Admin-assignable reviewer right
   const status = req.nextUrl.searchParams.get("status") || "New";
   const tab = req.nextUrl.searchParams.get("tab") || "";
   const filter: Record<string, unknown> = {};

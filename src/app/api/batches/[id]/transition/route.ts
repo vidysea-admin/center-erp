@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit } from "@/lib/authz";
+import { requirePerm } from "@/lib/permissions";
 import { assertBatchInScope, transitionBatch } from "@/lib/rules";
 import { requireApproval } from "@/lib/approvals";
 import { Batch } from "@/models";
@@ -11,6 +12,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   await dbConnect();
   const user = await requireUser();
   requireEdit(user);
+  await requirePerm(user, "batches.manage"); // togglable (2026-08-11)
   const { id } = await ctx.params;
   await assertBatchInScope(user, id); // Rule 38
   const { target, reason } = await req.json();

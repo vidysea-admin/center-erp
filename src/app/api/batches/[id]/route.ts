@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { requirePerm } from "@/lib/permissions";
 import { Batch, Program } from "@/models";
 import { assertBatchInScope, assertRoomFreeForBatch, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, batchReadiness, planBatchBackward, trainerBookingWarnings } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
@@ -20,6 +21,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   await dbConnect();
   const user = await requireUser();
   requireEdit(user);
+  await requirePerm(user, "batches.manage"); // togglable (2026-08-11)
   const { id } = await ctx.params;
   await assertBatchInScope(user, id); // Rule 38
   const batch = await Batch.findById(id);

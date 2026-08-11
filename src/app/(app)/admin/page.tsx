@@ -1,9 +1,9 @@
 "use client";
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { api, fmtDate } from "@/lib/client";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
 
-const TABS = ["Programs", "Users & Access", "Sync Source", "Approvals", "Master Lists", "Defaults"];
+const TABS = ["Programs", "Users & Access", "Permissions", "Sync Source", "Approvals", "Master Lists", "Defaults"];
 
 const APPROVAL_LABELS: Record<string, string> = {
   "location.close": "Close a location",
@@ -24,6 +24,7 @@ export default function AdminPage() {
       <Tabs tabs={TABS} active={tab} onChange={setTab} />
       {tab === "Programs" && <Programs setError={setError} />}
       {tab === "Users & Access" && <Users setError={setError} />}
+      {tab === "Permissions" && <Permissions setError={setError} />}
       {tab === "Sync Source" && <SyncSources setError={setError} />}
       {tab === "Approvals" && <Approvals setError={setError} />}
       {tab === "Master Lists" && <MasterLists setError={setError} />}
@@ -121,17 +122,48 @@ function Users({ setError }: any) {
     } catch (e: any) { setError(e.message); }
   }
 
+  // 2026-08-11 (CEO): self-signups queue here until an Admin approves them.
+  const pending = items.filter((u) => u.approval_status === "Pending");
+  async function decide(u: any, approval: "approve" | "reject") {
+    try {
+      await api(`/api/users/${u._id}`, { method: "PATCH", json: { approval } });
+      load();
+    } catch (e: any) { setError(e.message); }
+  }
+
   return (
     <Section title="Users & Access" actions={<Btn small onClick={() => open()}>Add User</Btn>}>
-      <DataTable rows={items} onRowClick={open}
+      {pending.length > 0 && (
+        <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+          <div className="mb-2 text-sm font-semibold text-amber-800">🔔 {pending.length} signup{pending.length > 1 ? "s" : ""} awaiting approval</div>
+          <ul className="space-y-2">
+            {pending.map((u) => (
+              <li key={u._id} className="flex flex-wrap items-center gap-2 rounded-lg bg-white px-3 py-2 text-sm">
+                <span className="font-medium">{u.name}</span>
+                <span className="text-gray-500">{u.email}{u.phone ? ` · ${u.phone}` : ""}</span>
+                <Chip value={u.requested_role ?? u.role} />
+                {(u.location_scope ?? []).length > 0 && <span className="text-xs text-gray-500">wants: {(u.location_scope ?? []).map((l: any) => l.name ?? l.code).join(", ")}</span>}
+                <span className="ml-auto flex gap-1.5">
+                  <Btn small kind="ghost" onClick={() => open(u)}>Review & edit…</Btn>
+                  <Btn small onClick={() => decide(u, "approve")}>Approve</Btn>
+                  <Btn small kind="danger" onClick={() => decide(u, "reject")}>Reject</Btn>
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs text-amber-700">"Review &amp; edit…" lets you correct the role/scope before approving. Approval activates the account; the role's toggled rights (Permissions tab) apply immediately.</p>
+        </div>
+      )}
+      <DataTable rows={items.filter((u) => u.approval_status !== "Pending")} onRowClick={open}
         cardTitle={(r: any) => r.name}
         columns={[
           { key: "name", label: "Name" },
           { key: "email", label: "Email" },
           { key: "role", label: "Role", render: (r: any) => <Chip value={r.role} /> },
-          { key: "location_scope", label: "Scope", render: (r: any) => r.role === "Location" ? (r.location_scope ?? []).map((l: any) => l.name ?? l.code).join(", ") || "none" : "All" },
+          { key: "location_scope", label: "Scope", render: (r: any) => ["Location", "Trainer"].includes(r.role) ? (r.location_scope ?? []).map((l: any) => l.name ?? l.code).join(", ") || "none" : "All" },
           { key: "can_edit", label: "Can edit", render: (r: any) => (r.can_edit ? "Yes" : "View only") },
-          { key: "active", label: "Active", render: (r: any) => (r.active ? "Yes" : "No") },
+          { key: "extra_permissions", label: "Special rights", render: (r: any) => (r.extra_permissions ?? []).length ? `${r.extra_permissions.length} extra` : "—", mobile: false },
+          { key: "active", label: "Active", render: (r: any) => (r.active ? "Yes" : r.approval_status === "Rejected" ? "Rejected" : "No") },
         ]} empty="No users." />
       <Drawer open={drawer} onClose={() => setDrawer(false)} title={edit ? `Edit ${edit.name}` : "Add User"}>
         <div className="space-y-3">
@@ -142,10 +174,10 @@ function Users({ setError }: any) {
           </Field>
           <Field label="Role">
             <select className={inputCls} value={form.role} onChange={(e) => set("role", e.target.value)}>
-              {["Admin", "Operations", "Location", "Enrollment"].map((r) => <option key={r}>{r}</option>)}
+              {["Admin", "Operations", "Location", "Enrollment", "Trainer"].map((r) => <option key={r}>{r}</option>)}
             </select>
           </Field>
-          {form.role === "Location" && (
+          {["Location", "Trainer"].includes(form.role) && (
             <Field label="Location scope (Rule 38 — server-enforced)">
               <select multiple className={inputCls + " h-32"} value={form.location_scope ?? []}
                 onChange={(e) => set("location_scope", [...e.target.selectedOptions].map((o) => o.value))}>
@@ -155,9 +187,105 @@ function Users({ setError }: any) {
           )}
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!form.can_edit} onChange={(e) => set("can_edit", e.target.checked)} /> Can edit (off = view only, Rule 39)</label>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.active ?? true} onChange={(e) => set("active", e.target.checked)} /> Active</label>
+          {/* 2026-08-11 (CEO): "किसी को special देने तो admin दे पाएगा" */}
+          {edit && <SpecialGrants form={form} set={set} />}
+          {edit?.approval_status === "Pending" && (
+            <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
+              <Btn onClick={async () => { try { await api(`/api/users/${edit._id}`, { method: "PATCH", json: { ...form, password: form.password || undefined, approval: "approve" } }); setDrawer(false); load(); } catch (e: any) { setError(e.message); } }}>Approve with these settings</Btn>
+              <Btn kind="danger" onClick={async () => { try { await api(`/api/users/${edit._id}`, { method: "PATCH", json: { approval: "reject" } }); setDrawer(false); load(); } catch (e: any) { setError(e.message); } }}>Reject</Btn>
+            </div>
+          )}
           <Btn onClick={save} disabled={!form.name || !form.email || (!edit && !form.password)}>{edit ? "Save" : "Add User"}</Btn>
         </div>
       </Drawer>
+    </Section>
+  );
+}
+
+// Per-user special grants on top of the role's toggled set (2026-08-11, CEO).
+function SpecialGrants({ form, set }: any) {
+  const [catalog, setCatalog] = useState<any[]>([]);
+  useEffect(() => { api("/api/permissions").then((d) => setCatalog(d.catalog)).catch(() => {}); }, []);
+  if (!catalog.length) return null;
+  const extra: string[] = form.extra_permissions ?? [];
+  const toggle = (key: string) =>
+    set("extra_permissions", extra.includes(key) ? extra.filter((k) => k !== key) : [...extra, key]);
+  return (
+    <details className="rounded-lg border border-gray-200 p-3">
+      <summary className="cursor-pointer text-sm font-medium">Special rights ({extra.length} granted) — on top of the role's set</summary>
+      <div className="mt-2 grid gap-1.5 md:grid-cols-2">
+        {catalog.map((p) => (
+          <label key={p.key} className="flex items-center gap-2 text-xs">
+            <input type="checkbox" checked={extra.includes(p.key)} onChange={() => toggle(p.key)} />
+            <span><b>{p.group}</b> · {p.label}</span>
+          </label>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+// Permission matrix (2026-08-11, CEO — AWS-style group toggles): each role is a group;
+// tick which feature-rights it carries. Applies within seconds, no re-login needed.
+function Permissions({ setError }: any) {
+  const [catalog, setCatalog] = useState<any[]>([]);
+  const [roles, setRoles] = useState<any[]>([]);
+  const [saving, setSaving] = useState("");
+
+  const load = () => api("/api/permissions").then((d) => { setCatalog(d.catalog); setRoles(d.roles); }).catch((e: any) => setError(e.message));
+  useEffect(() => { load(); }, []);
+
+  async function toggle(role: string, key: string) {
+    const r = roles.find((x) => x.role === role);
+    if (!r) return;
+    const next = r.permissions.includes(key) ? r.permissions.filter((k: string) => k !== key) : [...r.permissions, key];
+    setSaving(role + key);
+    try {
+      await api("/api/permissions", { method: "PUT", json: { role, permissions: next } });
+      load();
+    } catch (e: any) { setError(e.message); }
+    setSaving("");
+  }
+
+  const groups = [...new Set(catalog.map((p) => p.group))];
+  const editableRoles = roles.filter((r) => r.role !== "Admin");
+
+  return (
+    <Section title="Role permissions — what each role's group can do">
+      <p className="mb-3 text-sm text-gray-500">
+        Tick a box to grant that right to everyone in the role; untick to revoke. Admin always has everything.
+        Individual users can get <b>special rights</b> on top via Users &amp; Access → open the user.
+        The key control the CEO asked for — <b>who approves sheet changes</b> — is the first row.
+      </p>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[640px] text-sm">
+          <thead>
+            <tr className="border-b text-left text-xs text-gray-500">
+              <th className="py-2 pr-3">Right</th>
+              {editableRoles.map((r) => <th key={r.role} className="px-2 py-2 text-center">{r.role}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {groups.map((g) => (
+              <Fragment key={g}>
+                <tr className="bg-gray-50"><td colSpan={1 + editableRoles.length} className="px-2 py-1.5 text-xs font-semibold text-gray-600">{g}</td></tr>
+                {catalog.filter((p) => p.group === g).map((p) => (
+                  <tr key={p.key} className="border-b border-gray-100">
+                    <td className="py-1.5 pr-3">{p.label}</td>
+                    {editableRoles.map((r) => (
+                      <td key={r.role} className="px-2 py-1.5 text-center">
+                        <input type="checkbox" disabled={saving === r.role + p.key}
+                          checked={r.permissions.includes(p.key)}
+                          onChange={() => toggle(r.role, p.key)} />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </Section>
   );
 }

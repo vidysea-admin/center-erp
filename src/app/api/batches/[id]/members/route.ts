@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError, assertLocationInScope } from "@/lib/authz";
+import { requirePerm } from "@/lib/permissions";
 import { Batch, BatchMember, Candidate } from "@/models";
 import { addMemberChecked, assertBatchInScope, assertLocationOperational } from "@/lib/rules";
 import { audit } from "@/lib/audit";
@@ -19,6 +20,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   await dbConnect();
   const user = await requireUser();
   requireEdit(user);
+  await requirePerm(user, "candidates.assign"); // togglable (2026-08-11)
   const { id } = await ctx.params;
   await assertBatchInScope(user, id); // Rule 38
   const batch = await Batch.findById(id).select("status location").lean<any>();
