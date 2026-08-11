@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, HttpError, assertLocationInScope } from "@/lib/authz";
 import { Notification } from "@/models";
 import { audit } from "@/lib/audit";
 
@@ -19,6 +19,9 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   const n = await Notification.findById(id);
   if (!n) throw new HttpError(404, "Notification not found");
   if (!n.role_target.includes(user.role as any)) throw new HttpError(403, "Not addressed to your role");
+  // Rule 38: the list route scopes by location, so the by-ID route must too — otherwise a
+  // scoped user could act on another centre's alert by guessing its id.
+  if (n.location) assertLocationInScope(user, String(n.location));
 
   n.status = status;
   n.acknowledged_by = user.id as any;

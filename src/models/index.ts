@@ -282,6 +282,34 @@ const FollowUpActionSchema = new Schema({
   completed_by: oid("User"), completed_at: Date,
 }, { timestamps: true });
 
+// ---------- Approval matrix (RPL M24 cross-cutting) ----------
+// One reusable pair of entities referenced by every gated action, rather than an approval
+// flow rebuilt per module. Ships switched OFF: with no enabled rule nothing changes.
+export const APPROVAL_ACTIONS = [
+  "location.close", "location.stop", "batch.cancel", "invoice.raise", "invoice.paid", "batch.complete",
+] as const;
+export const APPROVAL_REQUEST_STATUS = ["Pending", "Approved", "Rejected", "Cancelled"] as const;
+
+const ApprovalRuleSchema = new Schema({
+  action: { type: String, enum: APPROVAL_ACTIONS, required: true, unique: true },
+  enabled: { type: Boolean, default: false },
+  approver_role: { type: String, enum: USER_ROLE, default: "Admin" },
+  note: String,
+}, { timestamps: true });
+
+const ApprovalRequestSchema = new Schema({
+  action: { type: String, enum: APPROVAL_ACTIONS, required: true },
+  entity: String, entity_id: Schema.Types.ObjectId,
+  summary: { type: String, required: true },   // human-readable "what is being asked"
+  payload: Schema.Types.Mixed,                 // replayed verbatim once approved
+  location: oid("Location"),
+  initiator: oid("User", true),
+  approver_role: { type: String, enum: USER_ROLE, required: true },
+  status: { type: String, enum: APPROVAL_REQUEST_STATUS, required: true, default: "Pending" },
+  decided_by: oid("User"), decided_at: Date, decision_note: String,
+}, { timestamps: true });
+ApprovalRequestSchema.index({ status: 1, approver_role: 1, createdAt: -1 });
+
 // ---------- Notification (RPL M22) ----------
 export const NOTIFICATION_STATUS = ["New", "Acknowledged", "Resolved"] as const;
 export const NOTIFICATION_SEVERITY = ["info", "warning", "critical"] as const;
@@ -369,6 +397,8 @@ export const SheetChange = models.SheetChange || model("SheetChange", SheetChang
 export const FollowUpAction = models.FollowUpAction || model("FollowUpAction", FollowUpActionSchema);
 export const User = models.User || model("User", UserSchema);
 export const Notification = models.Notification || model("Notification", NotificationSchema);
+export const ApprovalRule = models.ApprovalRule || model("ApprovalRule", ApprovalRuleSchema);
+export const ApprovalRequest = models.ApprovalRequest || model("ApprovalRequest", ApprovalRequestSchema);
 export const AuditLog = models.AuditLog || model("AuditLog", AuditLogSchema);
 export const CostCategory = models.CostCategory || model("CostCategory", NamedActiveSchema);
 export const DropReason = models.DropReason || model("DropReason", (NamedActiveSchema as any).clone?.() ?? NamedActiveSchema);

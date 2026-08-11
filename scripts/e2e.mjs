@@ -287,6 +287,29 @@ ok("health on every batch list row", listHealth.every((b) => b.health?.score), "
 const amberOrRed = listHealth.find((b) => b.health.score !== "Green");
 ok("non-green batches always name a reason", !amberOrRed || amberOrRed.health.reasons.length > 0, JSON.stringify(amberOrRed?.health));
 
+// ---- Approval matrix (RPL M24) — engine on, all actions off by default ----
+const apr0 = (await req("GET", "/api/approvals", undefined, 200)).data;
+ok("approval actions ship disabled", apr0.config?.every((c) => c.enabled === false), JSON.stringify(apr0.config?.map((c) => c.enabled)));
+
+// With the gate off, cancelling stays immediate (no behaviour change).
+const gateBatch1 = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, planned_start: today, target_size: 2 }, 201)).data.item;
+await req("POST", `/api/batches/${gateBatch1._id}/transition`, { target: "Cancelled", reason: "no gate" }, 200);
+
+// Turn the gate on: the same action is parked instead of applied.
+await req("PUT", "/api/approvals", { action: "batch.cancel", enabled: true, approver_role: "Operations" }, 200);
+const gateBatch2 = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, planned_start: today, target_size: 2 }, 201)).data.item;
+const parked = await req("POST", `/api/batches/${gateBatch2._id}/transition`, { target: "Cancelled", reason: "needs approval" }, 202);
+ok("gated action is parked, not applied", parked.data.pending_approval === true, JSON.stringify(parked.data).slice(0, 100));
+const stillOpen = (await req("GET", `/api/batches/${gateBatch2._id}`)).data.item;
+ok("batch untouched while approval pending", stillOpen.status !== "Cancelled", stillOpen.status);
+
+const pendingReq = (await req("GET", "/api/approvals?status=Pending")).data.items.find((r) => String(r.entity_id) === String(gateBatch2._id));
+ok("request appears in the approval queue", !!pendingReq);
+await req("POST", `/api/approvals/${pendingReq._id}`, { decision: "Approved" }, 403); // initiator cannot self-approve
+await req("PUT", "/api/approvals", { action: "batch.cancel", enabled: false }, 200); // restore default OFF
+const afterOff = (await req("GET", "/api/approvals")).data.config.find((c) => c.action === "batch.cancel");
+ok("approval switch can be turned back off", afterOff.enabled === false);
+
 // ---- Alerts (RPL M22) ----
 const alerts = (await req("GET", "/api/notifications", undefined, 200)).data;
 ok("alerts endpoint returns a list", Array.isArray(alerts.items), JSON.stringify(alerts).slice(0, 80));

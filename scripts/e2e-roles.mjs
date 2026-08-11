@@ -125,6 +125,15 @@ if (ownActive) {
   ok("view-only principal cannot mark results", (await req(principal, "PUT", `/api/batches/${ownActive._id}/results`, { rows: [{ member: "000000000000000000000000", result: "Pass" }] })).status === 403);
 }
 
+// Alerts: the by-ID action route must be location-scoped exactly like the list
+const adminAlerts = (await req(admin, "GET", "/api/notifications?status=all")).data.items ?? [];
+const foreignAlert = adminAlerts.find((n) => n.location && n.location.code !== "JPR03");
+if (foreignAlert) {
+  ok("IDOR: SPOC cannot act on another location's alert", (await req(spoc, "POST", `/api/notifications/${foreignAlert._id}`, { status: "Resolved" })).status === 403);
+}
+const spocAlerts = (await req(spoc, "GET", "/api/notifications?status=all")).data.items ?? [];
+ok("alerts list scoped to SPOC's location", spocAlerts.every((n) => !n.location || n.location.code === "JPR03"), JSON.stringify(spocAlerts.map((n) => n.location?.code)));
+
 // Home queues must be scoped for Location users (no cross-location leakage)
 const spocHome = await req(spoc, "GET", "/api/home");
 const homeQueues = spocHome.data.queues ?? {};

@@ -3,7 +3,16 @@ import { useEffect, useState } from "react";
 import { api, fmtDate } from "@/lib/client";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
 
-const TABS = ["Programs", "Users & Access", "Sync Source", "Master Lists", "Defaults"];
+const TABS = ["Programs", "Users & Access", "Sync Source", "Approvals", "Master Lists", "Defaults"];
+
+const APPROVAL_LABELS: Record<string, string> = {
+  "location.close": "Close a location",
+  "location.stop": "Stop a location",
+  "batch.cancel": "Cancel a batch",
+  "batch.complete": "Complete a batch",
+  "invoice.raise": "Mark an invoice raised",
+  "invoice.paid": "Mark an invoice paid",
+};
 
 export default function AdminPage() {
   const [tab, setTab] = useState("Programs");
@@ -16,6 +25,7 @@ export default function AdminPage() {
       {tab === "Programs" && <Programs setError={setError} />}
       {tab === "Users & Access" && <Users setError={setError} />}
       {tab === "Sync Source" && <SyncSources setError={setError} />}
+      {tab === "Approvals" && <Approvals setError={setError} />}
       {tab === "Master Lists" && <MasterLists setError={setError} />}
       {tab === "Defaults" && <DefaultsTab setError={setError} />}
     </div>
@@ -221,6 +231,89 @@ function SyncSources({ setError }: any) {
           <Btn onClick={save} disabled={!form.name || !form.source_url}>{edit ? "Save" : "Add source"}</Btn>
           {edit && <Btn kind="ghost" onClick={() => open()}>New</Btn>}
         </div>
+      </Section>
+    </div>
+  );
+}
+
+// RPL M24 — which actions need a second person, and the queue of requests waiting.
+// Everything ships OFF: with no switch enabled the app behaves exactly as before.
+function Approvals({ setError }: any) {
+  const [config, setConfig] = useState<any[]>([]);
+  const [items, setItems] = useState<any[]>([]);
+  const [status, setStatus] = useState("Pending");
+  const [note, setNote] = useState<Record<string, string>>({});
+
+  const load = () => api(`/api/approvals?status=${status}`).then((d) => { setConfig(d.config); setItems(d.items); })
+    .catch((e: any) => setError(e.message));
+  useEffect(() => { load(); }, [status]);
+
+  async function toggle(action: string, enabled: boolean, approver_role?: string) {
+    try { await api("/api/approvals", { method: "PUT", json: { action, enabled, approver_role } }); load(); }
+    catch (e: any) { setError(e.message); }
+  }
+  async function decide(id: string, decision: string) {
+    try { await api(`/api/approvals/${id}`, { method: "POST", json: { decision, note: note[id] } }); load(); }
+    catch (e: any) { setError(e.message); }
+  }
+
+  return (
+    <div className="space-y-4">
+      <Section title="Which actions need a second person's approval">
+        <p className="mb-3 text-sm text-gray-500">
+          All off by default. Turn one on and that action stops applying immediately — it is parked
+          for the chosen role to approve. An initiator can never approve their own request.
+        </p>
+        <ul className="divide-y">
+          {config.map((c) => (
+            <li key={c.action} className="flex flex-wrap items-center justify-between gap-3 py-2.5">
+              <span className="text-sm font-medium">{APPROVAL_LABELS[c.action] ?? c.action}</span>
+              <div className="flex items-center gap-3">
+                <select className="rounded-lg border border-gray-300 px-2 py-1 text-sm" value={c.approver_role}
+                  onChange={(e) => toggle(c.action, c.enabled, e.target.value)}>
+                  {["Admin", "Operations"].map((r) => <option key={r}>{r}</option>)}
+                </select>
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={c.enabled} onChange={(e) => toggle(c.action, e.target.checked, c.approver_role)} />
+                  {c.enabled ? "Approval required" : "Off"}
+                </label>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </Section>
+
+      <Section title={`Requests — ${items.length}`} actions={
+        <select className="rounded-lg border border-gray-300 px-2 py-1 text-sm" value={status} onChange={(e) => setStatus(e.target.value)}>
+          {["Pending", "Approved", "Rejected", "all"].map((s) => <option key={s}>{s}</option>)}
+        </select>
+      }>
+        {items.length === 0 ? <p className="text-sm text-gray-400">Nothing waiting.</p> : (
+          <ul className="space-y-2">
+            {items.map((r) => (
+              <li key={r._id} className="rounded-lg border px-4 py-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="text-sm font-medium">{r.summary}</div>
+                    <div className="text-xs text-gray-500">
+                      {r.location?.name ? `${r.location.name} · ` : ""}requested by {r.initiator?.name} · {new Date(r.createdAt).toLocaleString("en-IN")}
+                      {r.decided_by?.name ? ` · decided by ${r.decided_by.name}` : ""}
+                    </div>
+                  </div>
+                  <Chip value={r.status} />
+                </div>
+                {r.status === "Pending" && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <input className={inputCls + " max-w-72"} placeholder="Note (optional)"
+                      value={note[r._id] ?? ""} onChange={(e) => setNote({ ...note, [r._id]: e.target.value })} />
+                    <Btn small onClick={() => decide(r._id, "Approved")}>Approve &amp; apply</Btn>
+                    <Btn small kind="danger" onClick={() => decide(r._id, "Rejected")}>Reject</Btn>
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
       </Section>
     </div>
   );
