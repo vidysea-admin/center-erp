@@ -558,6 +558,36 @@ const trWatch2 = await fetch(BASE + "/api/workbook-changes", { headers: { cookie
 ok("special grant opens Sheet Watch for the same user (no re-login)", trWatch2.status === 200, `status=${trWatch2.status}`);
 await req("PATCH", `/api/users/${pendingUser._id}`, { extra_permissions: [] }, 200);
 
+// ---- privilege-escalation guards (security review) ----
+// Give the trainer users.manage — they still must NOT be able to raise privileges.
+await req("PATCH", `/api/users/${pendingUser._id}`, { extra_permissions: ["users.manage"] }, 200);
+const esc1 = await fetch(BASE + `/api/users/${pendingUser._id}`, {
+  method: "PATCH", headers: { "Content-Type": "application/json", cookie: trainerCookie },
+  body: JSON.stringify({ role: "Admin" }),
+});
+ok("users.manage holder cannot self-escalate to Admin", esc1.status === 403, `status=${esc1.status}`);
+const esc2 = await fetch(BASE + `/api/users/${pendingUser._id}`, {
+  method: "PATCH", headers: { "Content-Type": "application/json", cookie: trainerCookie },
+  body: JSON.stringify({ extra_permissions: ["defaults.manage"] }),
+});
+ok("…nor grant themselves extra rights", esc2.status === 403, `status=${esc2.status}`);
+const esc3 = await fetch(BASE + `/api/users`, {
+  method: "POST", headers: { "Content-Type": "application/json", cookie: trainerCookie },
+  body: JSON.stringify({ name: "Evil", email: `evil${stamp}@test.local`, password: "Test@12345", role: "Admin" }),
+});
+ok("…nor create an Admin account", esc3.status === 403, `status=${esc3.status}`);
+const esc4 = await fetch(BASE + `/api/permissions`, {
+  method: "PUT", headers: { "Content-Type": "application/json", cookie: trainerCookie },
+  body: JSON.stringify({ role: "Trainer", permissions: ["users.manage", "defaults.manage", "batches.manage"] }),
+});
+ok("…nor inflate their own role's rights in the matrix", esc4.status === 403, `status=${esc4.status}`);
+const esc5 = await fetch(BASE + `/api/users/${pendingUser._id}`, {
+  method: "PATCH", headers: { "Content-Type": "application/json", cookie: trainerCookie },
+  body: JSON.stringify({ name: "Renamed OK" }),
+});
+ok("non-privilege edits still work for users.manage holder", esc5.status === 200, `status=${esc5.status}`);
+await req("PATCH", `/api/users/${pendingUser._id}`, { extra_permissions: [] }, 200);
+
 // ---- validate → add: a new sheet row becomes a Location only after human review ----
 const vwUrl1 = wbDataUrl({ Master: [
   ["Institution Name", "Job role", "State", "District", "SPOC Name", "TC ID"],

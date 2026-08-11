@@ -22,6 +22,11 @@ export const POST = apiHandler(async (req: NextRequest) => {
   if (!body.name || !body.email || !body.password || !body.role) {
     throw new HttpError(400, "name, email, password, role are required");
   }
+  // Security review 2026-08-11: users.manage is grantable — creating an Admin (or a user
+  // with pre-granted special rights) stays an Admin-only act.
+  if ((body.role === "Admin" || (body.extra_permissions?.length ?? 0) > 0) && user.role !== "Admin") {
+    throw new HttpError(403, "Only an Admin may create Admin accounts or grant special rights.");
+  }
   const doc = await User.create({
     name: body.name, email: body.email,
     password_hash: await bcrypt.hash(body.password, 10),

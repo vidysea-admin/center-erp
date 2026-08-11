@@ -27,7 +27,9 @@ export const GET = apiHandler(async () => {
 export const PUT = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
-  await requirePerm(user, "users.manage");
+  // Security review 2026-08-11: editing the matrix is Admin-only, full stop — a granted
+  // users.manage holder could otherwise inflate their OWN role's rights.
+  if (user.role !== "Admin") throw new HttpError(403, "Only an Admin may change role permissions.");
   const body = await req.json();
   const role = String(body.role ?? "");
   if (!USER_ROLE.includes(role as any)) throw new HttpError(400, "Unknown role");

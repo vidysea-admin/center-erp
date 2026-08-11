@@ -14,6 +14,20 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   const doc = await User.findById(id);
   if (!doc) throw new HttpError(404, "User not found");
   const body = await req.json();
+
+  // Privilege escalation guards (security review 2026-08-11): users.manage is a GRANTABLE
+  // right, so a non-Admin holder must never be able to raise anyone's privileges — role,
+  // rights, edit flag, activation and approvals stay Admin-only. And nobody, Admin
+  // included, edits their own privileges.
+  const PRIV_FIELDS = ["role", "location_scope", "can_edit", "active", "extra_permissions"];
+  const changingPriv = PRIV_FIELDS.some((f) => body[f] !== undefined) || body.approval !== undefined;
+  if (changingPriv && user.role !== "Admin") {
+    throw new HttpError(403, "Only an Admin may change roles, rights or account status.");
+  }
+  if (changingPriv && String(doc._id) === String(user.id)) {
+    throw new HttpError(400, "You cannot change your own role, rights or account status.");
+  }
+
   for (const f of ["name", "email", "role", "location_scope", "can_edit", "active", "extra_permissions"]) {
     if (body[f] !== undefined) (doc as any)[f] = body[f];
   }
