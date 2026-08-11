@@ -91,8 +91,21 @@ function batchRange(b: { planned_start: Date; planned_end?: Date | null; actual_
   return [new Date(start), new Date(end)];
 }
 
+// 2026-08-11: "HH:mm" time-slot pair on a batch. Two slots clash when both are fully
+// defined and the times overlap. Batches without slots do NOT clash by time (backward
+// compatible — the concurrency cap alone governs them, as before).
+function slotsClash(aStart?: string | null, aEnd?: string | null, bStart?: string | null, bEnd?: string | null): boolean {
+  if (!aStart || !aEnd || !bStart || !bEnd) return false;
+  return aStart < bEnd && bStart < aEnd;
+}
+
 // Rule 10: hard block if trainer would exceed max_concurrent_batches on overlapping ranges.
-export async function assertTrainerAvailableForBatch(trainerId: string, batchId: string | null, planned_start: Date, planned_end: Date) {
+// 2026-08-11 addition: when both batches carry a time slot, a same-time overlap is blocked
+// outright — a trainer cannot teach two rooms at 9:00 no matter how low the count is.
+export async function assertTrainerAvailableForBatch(
+  trainerId: string, batchId: string | null, planned_start: Date, planned_end: Date,
+  slot?: { slot_start?: string | null; slot_end?: string | null },
+) {
   const trainer = await Trainer.findById(trainerId).lean<any>();
   if (!trainer) throw new HttpError(400, "Trainer not found");
   const others = await Batch.find({
@@ -104,11 +117,28 @@ export async function assertTrainerAvailableForBatch(trainerId: string, batchId:
     const [s, e] = batchRange(b);
     return rangesOverlap(new Date(planned_start), new Date(planned_end), s, e);
   });
+  const clash = overlapping.find((b) => slotsClash(slot?.slot_start, slot?.slot_end, b.slot_start, b.slot_end));
+  if (clash) {
+    throw new HttpError(409,
+      `Time slot clash: Trainer ${trainer.name} already teaches batch ${clash.code} at ${clash.location?.name ?? "?"} during ${clash.slot_start}–${clash.slot_end}.`);
+  }
   if (overlapping.length + 1 > (trainer.max_concurrent_batches ?? 1)) {
     const c = overlapping[0];
     throw new HttpError(409,
       `Rule 10: Trainer ${trainer.name} already assigned to batch ${c.code} at ${c.location?.name ?? "?"} (${new Date(batchRange(c)[0]).toDateString()} – ${new Date(batchRange(c)[1]).toDateString()}); max concurrent = ${trainer.max_concurrent_batches}.`);
   }
+}
+
+// 2026-08-11: a trainer still in the hiring pipeline can be booked ahead, but the operator
+// must see it. Warn, never block — the availability/TOT date rules (Rule 11) hard-gate the
+// actual start.
+export async function trainerPipelineWarning(trainerId: string): Promise<string | null> {
+  const t = await Trainer.findById(trainerId).select("name pipeline_status").lean<any>();
+  if (!t) return null;
+  if (t.pipeline_status && t.pipeline_status !== "Ready to Train") {
+    return `Trainer ${t.name} is still "${t.pipeline_status}" — not yet Ready to Train.`;
+  }
+  return null;
 }
 
 // Rule 12: Trainer.status is derived.
@@ -221,6 +251,15 @@ export async function updateEnrollment(memberId: string, patch: {
     });
     if (batch && enrolled + 1 > batch.target_size) {
       throw new HttpError(409, `Rule 48: batch capacity is ${batch.target_size} and ${enrolled} are already enrolled. Raise the target size or drop a member first.`);
+    }
+    // 2026-08-11: eligibility hard-gates enrollment completion (assignment only warns).
+    // Only definitive failures block — unknown DOB/education never do.
+    const cand = await Candidate.findById(m.candidate).select("name dob education last_training_date").lean<any>();
+    if (cand) {
+      const elig = candidateEligibility(cand, await getDefaults());
+      if (!elig.eligible) {
+        throw new HttpError(409, `Candidate ${cand.name} is not eligible: ${elig.reasons.join("; ")}`);
+      }
     }
   }
   await m.save();
@@ -799,6 +838,66 @@ export function assertCostEntryValid(e: { location?: unknown; batch?: unknown; t
   if (!e.location && !e.batch && !e.trainer) {
     throw new HttpError(400, "Rule 37: cost entry needs at least a location, batch, or trainer.");
   }
+}
+
+// ---------- Candidate eligibility (2026-08-11 meeting) ----------
+// "Age 18 से 40 के बीच… 10th pass नहीं है तो ineligible… पिछले 6 महीने में training ले रखी
+// है तो ineligible।" All thresholds live in Defaults. Advisory on assignment (eligibility
+// flips month to month as the cooldown lapses), hard information for the operator either way.
+export function candidateEligibility(
+  c: { dob?: Date | string | null; education?: string | null; last_training_date?: Date | string | null },
+  defaults: { min_age: number; max_age: number; training_cooldown_months: number },
+  asOf: Date = new Date(),
+): { eligible: boolean; reasons: string[]; unknown: string[] } {
+  const reasons: string[] = [];
+  const unknown: string[] = [];
+
+  if (c.dob) {
+    const dob = new Date(c.dob);
+    let age = asOf.getFullYear() - dob.getFullYear();
+    const m = asOf.getMonth() - dob.getMonth();
+    if (m < 0 || (m === 0 && asOf.getDate() < dob.getDate())) age--;
+    if (age < defaults.min_age) reasons.push(`Age ${age} is below ${defaults.min_age}`);
+    if (age > defaults.max_age) reasons.push(`Age ${age} is above ${defaults.max_age}`);
+  } else unknown.push("Date of birth not recorded");
+
+  if (c.education) {
+    if (c.education === "Below 10th") reasons.push("Not 10th pass");
+  } else unknown.push("Education not recorded");
+
+  if (c.last_training_date) {
+    const eligibleFrom = new Date(c.last_training_date);
+    eligibleFrom.setMonth(eligibleFrom.getMonth() + defaults.training_cooldown_months);
+    if (eligibleFrom > asOf) {
+      reasons.push(`Trained within the last ${defaults.training_cooldown_months} months — eligible from ${eligibleFrom.toLocaleDateString("en-IN")}`);
+    }
+  } // absence of a last-training date is the normal case, not an unknown
+
+  return { eligible: reasons.length === 0, reasons, unknown };
+}
+
+// ---------- Backward batch planner (2026-08-11 meeting) ----------
+// "Batch date अगर 20 अगस्त है, तो registration+enrollment 19 तक, mobilization उसके दो दिन
+// पहले, trainer एक दिन पहले trained, TOT done at least three days before" — each lead time
+// configurable in Defaults, the whole plan shareable as a checklist.
+export type Milestone = { key: string; label: string; due_date: Date };
+
+export function planBatchBackward(
+  planned_start: Date,
+  defaults: {
+    lead_enrollment_days: number; lead_mobilization_days: number; lead_trainer_ready_days: number;
+    lead_tot_done_days: number; lead_trainer_found_days: number;
+  },
+): Milestone[] {
+  const start = dayStart(planned_start);
+  const plan: Milestone[] = [
+    { key: "trainer_found", label: "Trainer identified", due_date: addDays(start, -defaults.lead_trainer_found_days) },
+    { key: "tot_done", label: "Trainer TOT completed", due_date: addDays(start, -defaults.lead_tot_done_days) },
+    { key: "mobilization", label: "Candidate mobilization complete", due_date: addDays(start, -defaults.lead_mobilization_days) },
+    { key: "trainer_ready", label: "Trainer finalized & ready", due_date: addDays(start, -defaults.lead_trainer_ready_days) },
+    { key: "enrollment_done", label: "Registration & enrollment done", due_date: addDays(start, -defaults.lead_enrollment_days) },
+  ];
+  return plan.sort((a, b) => a.due_date.getTime() - b.due_date.getTime());
 }
 
 // ---------- Batch code (auto: B + serial) ----------

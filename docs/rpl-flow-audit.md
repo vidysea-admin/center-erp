@@ -3,6 +3,11 @@
 Source: `RPL_ERP_Process_Flow.docx.pdf` (Manish, 2026-08-11).
 First audited 2026-08-11; **closed out 2026-08-11** — see "What changed" at the bottom.
 
+> **2026-08-11 evening meeting supersedes parts of this doc** — see
+> [meeting-2026-08-11.md](meeting-2026-08-11.md). Notably: trainer concurrency is now **4**
+> (this doc's M5 said 5), and the OneDrive client workbook is tracked cell-by-cell by the
+> new Sheet Watch engine.
+
 Verdict: ✅ built & tested · 🟡 partial (core works, doc adds detail we chose not to build yet).
 
 | # | Module | Verdict | Notes |

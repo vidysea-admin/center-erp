@@ -20,6 +20,8 @@ export type CrudConfig = {
   beforeCreate?: (body: Record<string, unknown>, user: SessionUser) => Promise<void> | void;
   beforeUpdate?: (id: string, body: Record<string, unknown>, existing: any, user: SessionUser) => Promise<void> | void;
   afterWrite?: (doc: any, user: SessionUser) => Promise<void> | void;
+  // Optional read-side decorator: attach computed fields to items before they leave the API.
+  mapItems?: (items: any[], user: SessionUser) => Promise<any[]> | any[];
 };
 
 export function pick(body: Record<string, unknown>, fields: string[]) {
@@ -56,7 +58,8 @@ export function collectionRoutes(cfg: CrudConfig) {
     const limit = Math.min(200, parseInt(sp.get("limit") || "50", 10));
     let query = cfg.model.find(filter).sort(cfg.defaultSort ?? { createdAt: -1 }).skip((page - 1) * limit).limit(limit);
     for (const p of cfg.populate ?? []) query = query.populate(p.path, p.select);
-    const [items, total] = await Promise.all([query.lean(), cfg.model.countDocuments(filter)]);
+    let [items, total] = await Promise.all([query.lean(), cfg.model.countDocuments(filter)]);
+    if (cfg.mapItems) items = await cfg.mapItems(items as any[], user);
     return NextResponse.json({ items, total, page, limit });
   });
 
@@ -84,7 +87,7 @@ export function itemRoutes(cfg: CrudConfig) {
     const { id } = await ctx.params;
     let query = cfg.model.findById(id);
     for (const p of cfg.populate ?? []) query = query.populate(p.path, p.select);
-    const item = await query.lean<any>();
+    let item = await query.lean<any>();
     if (!item) throw new HttpError(404, cfg.entity + " not found");
     if (cfg.scopeField !== null && user.role === "Location") {
       const locVal = item[cfg.scopeField ?? "location"];
@@ -93,6 +96,7 @@ export function itemRoutes(cfg: CrudConfig) {
         throw new HttpError(403, "Out of scope");
       }
     }
+    if (cfg.mapItems) item = (await cfg.mapItems([item], user))[0];
     return NextResponse.json({ item });
   });
 

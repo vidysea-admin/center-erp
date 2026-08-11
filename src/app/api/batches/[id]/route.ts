@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { Batch, Program } from "@/models";
-import { assertBatchInScope, assertRoomFreeForBatch, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, batchReadiness } from "@/lib/rules";
+import { assertBatchInScope, assertRoomFreeForBatch, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, batchReadiness, planBatchBackward, trainerPipelineWarning } from "@/lib/rules";
+import { getDefaults } from "@/lib/defaults";
 import { auditDiff } from "@/lib/audit";
 
 export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
@@ -28,7 +29,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   const before = batch.toObject();
 
   const patch: Record<string, unknown> = {};
-  for (const f of ["trainer", "room", "session", "target_size", "planned_start", "planned_end"]) {
+  for (const f of ["trainer", "room", "session", "target_size", "planned_start", "planned_end", "slot_start", "slot_end"]) {
     if (body[f] !== undefined) patch[f] = body[f];
   }
 
@@ -43,8 +44,23 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   const session = (patch.session as string) ?? batch.session;
   const trainer = patch.trainer !== undefined ? patch.trainer : batch.trainer;
   const room = patch.room !== undefined ? patch.room : batch.room;
-  if (trainer) await assertTrainerAvailableForBatch(String(trainer), id, newStart, newEnd ?? newStart, ); // Rule 10
+  const slot = {
+    slot_start: (patch.slot_start as string | undefined) ?? batch.slot_start,
+    slot_end: (patch.slot_end as string | undefined) ?? batch.slot_end,
+  };
+  if (trainer) await assertTrainerAvailableForBatch(String(trainer), id, newStart, newEnd ?? newStart, slot); // Rule 10 + slot clash
   if (room) await assertRoomFreeForBatch(String(room), id, newStart, newEnd ?? newStart, session); // Rule 13
+
+  // Backward plan follows the start date while the batch is still being planned; once
+  // Ready/Active the dates are history and stay put.
+  if (patch.planned_start && batch.status === "Planning") {
+    const doneByKey = new Map((batch.milestones ?? []).map((m: any) => [m.key, m]));
+    patch.milestones = planBatchBackward(newStart, await getDefaults()).map((m) => ({
+      ...m,
+      done_on: (doneByKey.get(m.key) as any)?.done_on,
+      done_by: (doneByKey.get(m.key) as any)?.done_by,
+    }));
+  }
 
   const oldTrainer = batch.trainer ? String(batch.trainer) : null;
   Object.assign(batch, patch);
@@ -52,5 +68,6 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   await auditDiff("Batch", batch._id, before, patch, user.id);
   if (oldTrainer && oldTrainer !== String(batch.trainer ?? "")) await deriveTrainerStatus(oldTrainer);
   if (batch.trainer) await deriveTrainerStatus(String(batch.trainer)); // Rule 12
-  return NextResponse.json({ item: batch });
+  const warning = patch.trainer && batch.trainer ? await trainerPipelineWarning(String(batch.trainer)) : null;
+  return NextResponse.json({ item: batch, ...(warning ? { warning } : {}) });
 });

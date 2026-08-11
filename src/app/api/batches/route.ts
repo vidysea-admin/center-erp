@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, requireRole, locationFilter, assertLocationInScope, HttpError } from "@/lib/authz";
 import { Batch, BatchMember, Program } from "@/models";
-import { assertLocationOperational, assertRoomFreeForBatch, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, nextBatchCode } from "@/lib/rules";
+import { assertLocationOperational, assertRoomFreeForBatch, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, nextBatchCode, planBatchBackward, trainerPipelineWarning } from "@/lib/rules";
+import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
 
 export const GET = apiHandler(async (req: NextRequest) => {
@@ -57,18 +58,25 @@ export const POST = apiHandler(async (req: NextRequest) => {
 
   const start = new Date(planned_start);
   const end = computePlannedEnd(start, program); // Rule 15
-  if (trainer) await assertTrainerAvailableForBatch(trainer, null, start, end); // Rule 10
+  const slot = { slot_start: body.slot_start || null, slot_end: body.slot_end || null };
+  if (trainer) await assertTrainerAvailableForBatch(trainer, null, start, end, slot); // Rule 10 + slot clash
   if (room) await assertRoomFreeForBatch(room, null, start, end, session); // Rule 13
 
+  const defaults = await getDefaults();
   const doc = await Batch.create({
     code: await nextBatchCode(),
     location, program: programId, trainer: trainer || undefined, room: room || undefined,
     session,
+    slot_start: slot.slot_start || undefined, slot_end: slot.slot_end || undefined,
     target_size: body.target_size ?? program.default_batch_size,
     planned_start: start, planned_end: end,
+    // 2026-08-11: backward plan generated at creation — the checklist the boss hands out.
+    milestones: planBatchBackward(start, defaults),
     created_by: user.id,
   });
   if (trainer) await deriveTrainerStatus(trainer); // Rule 12
+  // 2026-08-11: booking a not-yet-Ready trainer warns but does not block (Rule 11 gates the start).
+  const warning = trainer ? await trainerPipelineWarning(trainer) : null;
   await audit({ entity: "Batch", entityId: doc._id, newValue: "created " + doc.code, actor: user.id });
-  return NextResponse.json({ item: doc }, { status: 201 });
+  return NextResponse.json({ item: doc, ...(warning ? { warning } : {}) }, { status: 201 });
 });

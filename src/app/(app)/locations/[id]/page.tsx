@@ -5,7 +5,7 @@ import { Btn, Chip, DataTable, ErrorBanner, Field, Section, Tabs, inputCls } fro
 import { Activity } from "@/components/activity";
 import Link from "next/link";
 
-const TABS = ["Overview", "Capacity & Target", "Trainers & Infra", "Batches", "Activity"];
+const TABS = ["Overview", "Contacts & Notes", "Capacity & Target", "Trainers & Infra", "Batches", "Activity"];
 
 export default function LocationDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -28,6 +28,7 @@ export default function LocationDetail({ params }: { params: Promise<{ id: strin
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
       <Tabs tabs={TABS} active={tab} onChange={setTab} />
       {tab === "Overview" && <Overview loc={loc} onSaved={load} setError={setError} />}
+      {tab === "Contacts & Notes" && <ContactsNotes loc={loc} onSaved={load} setError={setError} />}
       {tab === "Capacity & Target" && <Targets locationId={id} setError={setError} />}
       {tab === "Trainers & Infra" && <TrainersInfra locationId={id} setError={setError} />}
       {tab === "Batches" && <LocBatches locationId={id} />}
@@ -81,6 +82,90 @@ function Overview({ loc, onSaved, setError }: any) {
         <Field label="Address"><input className={inputCls} value={form.address ?? ""} onChange={(e) => set("address", e.target.value)} /></Field>
       </div>
     </Section>
+  );
+}
+
+// 2026-08-11 meeting: multiple SPOCs/contact persons per location, plus dated meeting notes
+// so Admin and Ops both know who was spoken to, where, and when.
+function ContactsNotes({ loc, onSaved, setError }: any) {
+  const [contacts, setContacts] = useState<any[]>(loc.contacts ?? []);
+  const [cForm, setCForm] = useState<any>({ role_label: "Contact" });
+  const [notes, setNotes] = useState<any[]>([]);
+  const [nForm, setNForm] = useState<any>({ meeting_date: new Date().toISOString().slice(0, 10) });
+
+  const loadNotes = () => api(`/api/locations/${loc._id}/notes`).then((d) => setNotes(d.items)).catch((e) => setError(e.message));
+  useEffect(() => { loadNotes(); }, [loc._id]);
+
+  async function saveContacts(next: any[]) {
+    try {
+      await api(`/api/locations/${loc._id}`, { method: "PATCH", json: { contacts: next.map(({ name, phone, role_label, user }) => ({ name, phone, role_label, user })) } });
+      setContacts(next); onSaved();
+    } catch (e: any) { setError(e.message); }
+  }
+
+  async function addContact() {
+    if (!cForm.name?.trim()) { setError("Contact name is required."); return; }
+    await saveContacts([...contacts, { ...cForm, name: cForm.name.trim() }]);
+    setCForm({ role_label: "Contact" });
+  }
+
+  async function addNote() {
+    try {
+      await api(`/api/locations/${loc._id}/notes`, { method: "POST", json: nForm });
+      setNForm({ meeting_date: new Date().toISOString().slice(0, 10) });
+      loadNotes();
+    } catch (e: any) { setError(e.message); }
+  }
+
+  return (
+    <div className="space-y-4">
+      <Section title="Contact persons">
+        <div className="mb-3 grid gap-3 md:grid-cols-4">
+          <Field label="Name" required><input className={inputCls} value={cForm.name ?? ""} onChange={(e) => setCForm({ ...cForm, name: e.target.value })} /></Field>
+          <Field label="Phone"><input className={inputCls} value={cForm.phone ?? ""} onChange={(e) => setCForm({ ...cForm, phone: e.target.value })} /></Field>
+          <Field label="Role">
+            <select className={inputCls} value={cForm.role_label} onChange={(e) => setCForm({ ...cForm, role_label: e.target.value })}>
+              {["SPOC", "Principal", "Cluster Head", "Contact"].map((r) => <option key={r}>{r}</option>)}
+            </select>
+          </Field>
+          <div className="flex items-end"><Btn onClick={addContact}>Add contact</Btn></div>
+        </div>
+        <DataTable rows={[
+          ...(loc.spoc_name ? [{ _id: "_spoc", name: loc.spoc_name, phone: loc.spoc_phone, role_label: "SPOC (primary)", legacy: true }] : []),
+          ...(loc.principal_name ? [{ _id: "_principal", name: loc.principal_name, phone: loc.principal_phone, role_label: "Principal (primary)", legacy: true }] : []),
+          ...contacts.map((c, i) => ({ ...c, _id: c._id ?? `c${i}`, _idx: i })),
+        ]}
+          cardTitle={(r: any) => r.name}
+          columns={[
+            { key: "name", label: "Name" },
+            { key: "role_label", label: "Role" },
+            { key: "phone", label: "Phone", render: (r: any) => r.phone || "—" },
+            { key: "_rm", label: "", render: (r: any) => r.legacy ? <span className="text-[11px] text-gray-400">from master fields</span> : <Btn small kind="ghost" onClick={() => saveContacts(contacts.filter((_, i) => i !== r._idx))}>Remove</Btn> },
+          ]} empty="No contacts yet — add SPOCs and location contacts here." />
+      </Section>
+
+      <Section title="Meeting notes">
+        <div className="mb-3 grid gap-3 md:grid-cols-4">
+          <Field label="Date"><input type="date" className={inputCls} value={nForm.meeting_date} onChange={(e) => setNForm({ ...nForm, meeting_date: e.target.value })} /></Field>
+          <Field label="Met with"><input className={inputCls} value={nForm.met_with ?? ""} onChange={(e) => setNForm({ ...nForm, met_with: e.target.value })} placeholder="Principal, SPOC…" /></Field>
+          <Field label="Notes" required><input className={inputCls} value={nForm.note ?? ""} onChange={(e) => setNForm({ ...nForm, note: e.target.value })} placeholder="What was discussed / agreed" /></Field>
+          <div className="flex items-end"><Btn onClick={addNote} disabled={!nForm.note?.trim()}>Add note</Btn></div>
+        </div>
+        <div className="space-y-2">
+          {notes.length === 0 && <p className="py-6 text-center text-sm text-gray-400">No meeting notes yet.</p>}
+          {notes.map((n) => (
+            <div key={n._id} className="rounded-lg border border-gray-100 bg-gray-50 px-4 py-3">
+              <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
+                <span className="font-medium text-gray-800">{fmtDate(n.meeting_date)}</span>
+                {n.met_with && <span>· with <b>{n.met_with}</b></span>}
+                <span className="ml-auto">logged by {n.logged_by?.name ?? "—"}</span>
+              </div>
+              <p className="mt-1 whitespace-pre-wrap text-sm text-gray-800">{n.note}</p>
+            </div>
+          ))}
+        </div>
+      </Section>
+    </div>
   );
 }
 

@@ -11,6 +11,10 @@ export async function proxy(req: NextRequest) {
     pathname.startsWith("/login") ||
     pathname.startsWith("/api/auth") ||
     pathname.startsWith("/api/files") ||
+    // Public capability-URL pages (2026-08-11): candidate self-registration + feedback.
+    // The random token in the path is the credential; the handlers validate it.
+    pathname.startsWith("/p/") ||
+    pathname.startsWith("/api/public/") ||
     pathname.startsWith("/_next") ||
     pathname === "/favicon.ico"
   ) {

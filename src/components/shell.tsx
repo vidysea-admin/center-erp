@@ -13,7 +13,8 @@ import {
 // Locked navigation (§1)
 const NAV = [
   { href: "/", label: "Home", Icon: IconHome },
-  { href: "/sync", label: "Sync Inbox", Icon: IconSync, badge: true, roles: ["Admin", "Operations"] },
+  { href: "/sync", label: "Sync Inbox", Icon: IconSync, badge: "sync" as string | undefined, roles: ["Admin", "Operations"] },
+  { href: "/sheet-watch", label: "Sheet Watch", Icon: IconSync, badge: "watch" as string | undefined, roles: ["Admin", "Operations"] },
   { href: "/locations", label: "Locations", Icon: IconPin },
   { href: "/trainers", label: "Trainers", Icon: IconUser },
   { href: "/candidates", label: "Candidates", Icon: IconUsers },
@@ -125,7 +126,9 @@ function GlobalSearch() {
 // Context-aware Help: opens the user manual at the section for the current screen.
 function manualAnchor(pathname: string, search: string): string {
   if (pathname === "/") return "home";
+  if (pathname.startsWith("/sheet-watch")) return "sheet-watch";
   if (pathname.startsWith("/sync")) return "sync";
+  if (pathname.startsWith("/notifications")) return "alerts";
   if (/^\/locations\/[^/]+/.test(pathname)) return "location-detail";
   if (pathname.startsWith("/locations")) return "locations";
   if (pathname.startsWith("/trainers")) return "trainers";
@@ -135,6 +138,7 @@ function manualAnchor(pathname: string, search: string): string {
     if (tab === "Enrollment") return "enrollment";
     if (tab === "Daily Execution") return "daily";
     if (tab === "Closure") return "closure";
+    if (tab === "Feedback") return "feedback";
     return "batch-detail";
   }
   if (pathname.startsWith("/batches")) return "batches";
@@ -172,12 +176,14 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [userMenu, setUserMenu] = useState(false);
   const [syncCount, setSyncCount] = useState(0);
+  const [watchCount, setWatchCount] = useState(0);
   const [alertCount, setAlertCount] = useState(0);
 
   useEffect(() => {
     if (!user) return;
     if (["Admin", "Operations"].includes(user.role)) {
       api("/api/sheet-changes?count=1").then((d) => setSyncCount(d.count ?? 0)).catch(() => {});
+      api("/api/workbook-changes?count=1").then((d) => setWatchCount(d.count ?? 0)).catch(() => {});
     }
     api("/api/notifications?count=1").then((d) => setAlertCount(d.count ?? 0)).catch(() => {});
   }, [pathname, user]);
@@ -188,13 +194,14 @@ export function AppShell({ children }: { children: ReactNode }) {
     <nav className="flex flex-col gap-0.5 p-3">
       {nav.map(({ href, label, Icon, badge }) => {
         const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
+        const count = badge === "sync" ? syncCount : badge === "watch" ? watchCount : 0;
         return (
           <Link key={href} href={href} onClick={() => setOpen(false)}
             className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13.5px] font-medium transition-colors ${active ? "bg-blue-50 text-blue-700" : "text-gray-500 hover:bg-gray-50 hover:text-gray-800"}`}>
             <Icon size={18} className={active ? "text-blue-600" : "text-gray-400"} />
             <span>{label}</span>
-            {badge && syncCount > 0 && (
-              <span className="ml-auto rounded-full bg-blue-600 px-2 py-0.5 text-[10px] font-bold text-white">{syncCount}</span>
+            {count > 0 && (
+              <span className="ml-auto rounded-full bg-blue-600 px-2 py-0.5 text-[10px] font-bold text-white">{count}</span>
             )}
           </Link>
         );

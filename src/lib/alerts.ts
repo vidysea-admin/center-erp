@@ -3,7 +3,7 @@
 // reads them. Every rule is deduped by (type, entity_id) so a standing condition raises
 // once, not once per tick.
 import {
-  Batch, Closure, DailyLog, Invoice, Notification, SheetChange, TrainerRequest,
+  Batch, Closure, DailyLog, Invoice, Notification, SheetChange, TrainerRequest, WorkbookChange,
 } from "@/models";
 import { getDefaults } from "@/lib/defaults";
 import { addDays, assessmentCompleteness, dayStart, missingLogStreak } from "@/lib/rules";
@@ -62,6 +62,24 @@ export async function evaluateAlerts(): Promise<{ raised: number; checked: strin
   }
   await clear("sheet_change_stale", staleChanges.map((c) => c._id));
 
+  // 1b. Workbook Watch change unreviewed for more than 48 hours (2026-08-11 meeting) —
+  // one alert per source+tab, not per cell, so a big client edit doesn't flood the bell.
+  checked.push("workbook_change_stale");
+  const staleWatch = await WorkbookChange.aggregate([
+    { $match: { status: "New", detected_at: { $lt: new Date(now.getTime() - 48 * 3600e3) } } },
+    { $group: { _id: { source: "$sync_source", tab: "$tab" }, count: { $sum: 1 }, oldest: { $min: "$detected_at" } } },
+  ]);
+  const staleWatchIds: unknown[] = [];
+  for (const g of staleWatch) {
+    staleWatchIds.push(g._id.source);
+    if (await raise({
+      type: "workbook_change_stale", severity: "warning",
+      message: `${g.count} workbook change(s) on tab "${g._id.tab}" have been awaiting review for over 48 hours`,
+      entity: "SyncSource", entity_id: g._id.source, link: "/sheet-watch",
+    })) raised++;
+  }
+  await clear("workbook_change_stale", staleWatchIds);
+
   // 2. Trainer request whose required-by date is near with no fulfilment (doc M7).
   checked.push("trainer_request_due");
   const dueRequests = await TrainerRequest.find({
@@ -118,6 +136,47 @@ export async function evaluateAlerts(): Promise<{ raised: number; checked: strin
     }
   }
   await clear("attendance_mismatch", gapBatches);
+
+  // 4b. Daily evidence below the minimum (2026-08-11: "दिन में दो बार कम से कम… photos,
+  // videos"). Checks yesterday's log for Active batches.
+  checked.push("evidence_low");
+  const yesterday = addDays(dayStart(now), -1);
+  const evLow: unknown[] = [];
+  for (const b of activeBatches) {
+    const operating: number[] = b.program?.operating_days?.length ? b.program.operating_days : [1, 2, 3, 4, 5, 6];
+    if (!operating.includes(yesterday.getDay())) continue;
+    const log = await DailyLog.findOne({ batch: b._id, log_date: yesterday }).select("photos videos").lean<any>();
+    const count = (log?.photos?.length ?? 0) + (log?.videos?.length ?? 0);
+    if (log && count < (defaults.min_daily_evidence ?? 2)) {
+      evLow.push(b._id);
+      if (await raise({
+        type: "evidence_low", severity: "warning",
+        message: `${b.code} at ${b.location?.name}: only ${count} photo/video upload(s) yesterday — minimum is ${defaults.min_daily_evidence}`,
+        entity: "Batch", entity_id: b._id, link: `/batches/${b._id}?tab=Daily Execution`,
+        location: b.location?._id, role_target: ["Admin", "Operations", "Location"],
+      })) raised++;
+    }
+  }
+  await clear("evidence_low", evLow);
+
+  // 4c. Backward-plan milestone overdue and not ticked off (2026-08-11 planner).
+  checked.push("milestone_overdue");
+  const planned = await Batch.find({ status: { $in: ["Planning", "Ready"] }, "milestones.0": { $exists: true } })
+    .populate("location", "name").lean<any[]>();
+  const msLate: unknown[] = [];
+  for (const b of planned) {
+    const overdue = (b.milestones ?? []).filter((m: any) => !m.done_on && m.due_date && new Date(m.due_date) < dayStart(now));
+    if (overdue.length) {
+      msLate.push(b._id);
+      if (await raise({
+        type: "milestone_overdue", severity: "warning",
+        message: `${b.code} at ${b.location?.name}: ${overdue.length} plan milestone(s) overdue — next: "${overdue[0].label}" was due ${new Date(overdue[0].due_date).toLocaleDateString("en-IN")}`,
+        entity: "Batch", entity_id: b._id, link: `/batches/${b._id}`,
+        location: b.location?._id,
+      })) raised++;
+    }
+  }
+  await clear("milestone_overdue", msLate);
 
   // 5. Assessment date has passed but results are incomplete (doc M17).
   checked.push("assessment_overdue");

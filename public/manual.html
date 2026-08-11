@@ -60,6 +60,12 @@
   <a href="#admin">Admin</a>
   <a href="#alerts">Alerts</a>
   <a href="#approvals">Approvals</a>
+  <h2>New (Aug 2026)</h2>
+  <a href="#sheet-watch">Sheet Watch</a>
+  <a href="#contacts-notes">Contacts &amp; Notes</a>
+  <a href="#planner">Batch Planner</a>
+  <a href="#eligibility-sidh">Eligibility &amp; SIDH</a>
+  <a href="#feedback">Candidate Feedback</a>
   <h2>Help</h2>
   <a href="#faq">FAQ / Common Questions</a>
 </nav>
@@ -317,6 +323,68 @@
       <li>The approver opens Admin → Approvals, reviews the request, and clicks <span class="btn">Approve &amp; apply</span> or <span class="btn">Reject</span></li>
     </ol>
     <div class="warn">⚠️ Nobody can approve their own request — that is the whole point of the control. Turn a switch back off at any time and that action becomes immediate again.</div>
+  </section>
+
+  <section class="screen" id="sheet-watch">
+    <h2>👁️ Sheet Watch</h2>
+    <p class="sub">Sidebar → Sheet Watch — every change the client makes in the shared workbook, caught automatically</p>
+    <ol class="steps">
+      <li>The client's OneDrive workbook is downloaded automatically <b>every 30 minutes</b> — every tab, every column</li>
+      <li>Any difference from the previous copy becomes a row here: which <b>tab</b>, which <b>row</b> (institution + job role), which <b>column</b>, and <mark>old value → new value</mark></li>
+      <li>Green = a row was added, red = a row was removed, amber = a cell was modified</li>
+      <li>Click <span class="btn">Seen</span> once you have read it, <span class="btn">Accept</span> once it has been handled — select many rows to act in bulk</li>
+      <li>The sidebar badge counts unreviewed changes; anything unreviewed for 48 hours raises an alert</li>
+    </ol>
+    <div class="tip">💡 Accepting a change here does <b>not</b> change any ERP record — it only marks the change as reviewed. Location/target updates still go through the Sync Inbox or the record itself, so nothing is ever overwritten blindly.</div>
+    <div class="warn">⚠️ The sheet's TC Password column is masked for everyone except Admin.</div>
+  </section>
+
+  <section class="screen" id="contacts-notes">
+    <h2>👥 Location Contacts &amp; Meeting Notes</h2>
+    <p class="sub">Location Detail → Contacts &amp; Notes — any number of contacts, and a diary of every conversation</p>
+    <ol class="steps">
+      <li>Add as many contact persons as a location needs — a second SPOC, the Cluster Head, any local contact — with name, phone and role</li>
+      <li>The original SPOC/Principal from the master fields still show at the top, labelled "from master fields"</li>
+      <li>Below that, <b>Meeting notes</b>: date, who you met, and what was discussed — press <span class="btn">Add note</span></li>
+      <li>Every note records who logged it, so Admin and Operations always see the same history of "who spoke to whom, when, about what"</li>
+    </ol>
+  </section>
+
+  <section class="screen" id="planner">
+    <h2>📅 Backward Batch Planner &amp; Time Slots</h2>
+    <p class="sub">Batches → Plan a batch — pick a start date, get the full countdown checklist</p>
+    <ol class="steps">
+      <li>Click <span class="btn">Plan a batch</span> on the Batches page and choose a start date</li>
+      <li>The system counts <b>backwards</b>: trainer identified → TOT done (at least 3 days before) → mobilization → trainer ready → registration &amp; enrollment done (day before) — each with its due date</li>
+      <li><span class="btn">Copy as text</span> or <span class="btn">Print</span> to hand the checklist to anyone: <mark>"तेरे को batch start करना है तो ये-ये काम इस-इस date तक"</mark></li>
+      <li>Every new batch stores this checklist on its Overview tab — tick milestones off as they finish; overdue ones turn red and raise an alert</li>
+      <li>All lead times are configurable in Admin → Defaults</li>
+      <li><b>Time slots:</b> a trainer may run up to <b>4 parallel batches</b> when the day is divided by time. Give each batch a slot (e.g. 09:00–13:00) — the system hard-blocks the same trainer being in two places at the same time</li>
+    </ol>
+  </section>
+
+  <section class="screen" id="eligibility-sidh">
+    <h2>🎯 Candidate Eligibility &amp; SIDH Registration</h2>
+    <p class="sub">Candidates page — who qualifies, and getting them onto the Skill India portal</p>
+    <ol class="steps">
+      <li>Each candidate row shows an eligibility badge: <b>Eligible</b> (green), <b>Not eligible</b> (red — hover to see why), or <b>Unverified</b> (DOB/education not recorded yet)</li>
+      <li>The rules: age 18–40, 10th pass, and no government training in the last 6 months — record the <b>last training date</b> and the system knows exactly when they become eligible again. Thresholds live in Admin → Defaults</li>
+      <li>Assigning an ineligible candidate to a batch <b>warns</b> you; completing their enrollment is <b>blocked</b></li>
+      <li><b>SIDH column:</b> <span class="btn">Send link</span> opens WhatsApp with the Skill India registration link pre-filled — the candidate registers themselves. Click <span class="btn">✓ Reg.</span> once they are registered on the portal</li>
+      <li><span class="btn">Export for SIDH CRM</span> downloads an Excel in the assisted-registration tool's format, for candidates who need an agent's help on the call (the Aadhaar column is left blank on purpose — the agent fills it during the call; the ERP never stores Aadhaar)</li>
+      <li><span class="btn">Self-reg link</span> creates a public link for a location — share it on WhatsApp and candidates fill in their own details, which land straight in your pool marked "Self Registration"</li>
+    </ol>
+  </section>
+
+  <section class="screen" id="feedback">
+    <h2>⭐ Candidate Feedback</h2>
+    <p class="sub">Batch Detail → Feedback — every candidate rates their training</p>
+    <ol class="steps">
+      <li>Open a batch → <b>Feedback</b> tab → <span class="btn">Get feedback links</span> — one private link per candidate on the roster</li>
+      <li>Send each link on WhatsApp with one click (the message is pre-written)</li>
+      <li>The candidate opens it on their phone — no login — gives 1–5 stars, what they liked, and suggestions. Each link works exactly once</li>
+      <li>Responses and the batch average appear on the tab for Admin, Operations and the SPOC</li>
+    </ol>
   </section>
 
   <section class="screen" id="faq">

@@ -1,0 +1,227 @@
+// Workbook Watch engine (2026-08-11 meeting): fetch the client's live workbook, snapshot
+// every tab/column, and turn each difference into a reviewable WorkbookChange.
+// The client edits the sheet directly and tells nobody — this is the tracking that replaces
+// the manual "किसने क्या बदला" hunt. Advisory only: nothing here writes to ERP entities.
+import * as XLSX from "xlsx";
+import { SyncSource, WorkbookChange, WorkbookSnapshot } from "@/models";
+import { HttpError } from "@/lib/authz";
+
+// Content hash for change detection only (not security) — cyrb53, dependency-free so the
+// Edge instrumentation trace stays clean (node:crypto is not Edge-safe).
+function contentHash(str: string): string {
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (h2 >>> 0).toString(16).padStart(8, "0") + (h1 >>> 0).toString(16).padStart(8, "0");
+}
+
+const BROWSER_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
+
+// Public appId of the OneDrive web client — not a secret. Anonymous share links reject
+// non-browser fetches (403), but the badger token flow the web client itself uses works
+// without any credentials. Verified against the real Vidysea-RPL share on 2026-08-11.
+const ONEDRIVE_BADGER_APP_ID = "5cbed6ac-a083-4e14-b191-b4ba07653de2";
+
+let badgerToken: { token: string; fetched_at: number } | null = null;
+
+async function getBadgerToken(): Promise<string> {
+  // Tokens live ~1h; refresh after 45 min.
+  if (badgerToken && Date.now() - badgerToken.fetched_at < 45 * 60_000) return badgerToken.token;
+  const res = await fetch("https://api-badgerp.svc.ms/v1.0/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "User-Agent": BROWSER_UA },
+    body: JSON.stringify({ appId: ONEDRIVE_BADGER_APP_ID }),
+  });
+  if (!res.ok) throw new Error(`Badger token request failed: HTTP ${res.status}`);
+  const data = await res.json();
+  if (!data?.token) throw new Error("Badger token response had no token");
+  badgerToken = { token: data.token, fetched_at: Date.now() };
+  return data.token;
+}
+
+function isOneDriveShare(url: string): boolean {
+  return /^(https:\/\/)(onedrive\.live\.com|1drv\.ms)\//i.test(url);
+}
+
+async function fetchOneDriveShare(url: string): Promise<Buffer> {
+  // Strip query params (rtime etc.) — the share id is in the path.
+  const clean = url.split("?")[0];
+  const b64 = Buffer.from(clean, "utf8").toString("base64").replace(/=+$/, "").replace(/\//g, "_").replace(/\+/g, "-");
+  const token = await getBadgerToken();
+  const meta = await fetch(
+    `https://my.microsoftpersonalcontent.com/_api/v2.0/shares/u!${b64}/driveitem?%24select=id,name,size,%40content.downloadUrl`,
+    { headers: { Authorization: `Badger ${token}`, Prefer: "autoredeem", "User-Agent": BROWSER_UA } },
+  );
+  if (!meta.ok) throw new Error(`OneDrive share lookup failed: HTTP ${meta.status}`);
+  const item = await meta.json();
+  const dl = item?.["@content.downloadUrl"];
+  if (!dl) throw new Error("OneDrive share returned no download URL");
+  const file = await fetch(dl, { headers: { "User-Agent": BROWSER_UA } });
+  if (!file.ok) throw new Error(`OneDrive download failed: HTTP ${file.status}`);
+  return Buffer.from(await file.arrayBuffer());
+}
+
+export async function fetchWorkbook(url: string): Promise<XLSX.WorkBook> {
+  const buf = isOneDriveShare(url)
+    ? await fetchOneDriveShare(url)
+    : await (async () => {
+        const res = await fetch(url, { redirect: "follow", headers: { "User-Agent": BROWSER_UA } });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return Buffer.from(await res.arrayBuffer());
+      })();
+  // Auth walls serve HTML with a spreadsheet content-type — catch it before XLSX guesses.
+  const head = buf.subarray(0, 64).toString("utf8").trimStart().toLowerCase();
+  if (head.startsWith("<!doctype") || head.startsWith("<html")) {
+    throw new Error("Source returned an HTML page instead of a spreadsheet (login wall?)");
+  }
+  return XLSX.read(buf, { type: "buffer" }); // handles xlsx, xls and csv alike
+}
+
+// ---- snapshot shape ----
+type SnapRow = { key: string; cells: Record<string, string> };
+type TabSnap = { header: string[]; header_row: number; rows: SnapRow[]; hash: string };
+
+// The header row is the one that contains the configured key columns; failing that, the
+// densest of the first 10 rows (the real Vidysea-RPL sheet has a totals row ABOVE the header).
+function detectHeaderRow(rows: string[][], keyColumns: string[]): number {
+  const limit = Math.min(rows.length, 10);
+  if (keyColumns.length) {
+    for (let i = 0; i < limit; i++) {
+      const cells = rows[i].map((c) => c.trim());
+      if (keyColumns.every((k) => cells.includes(k))) return i;
+    }
+  }
+  let best = 0, bestCount = -1;
+  for (let i = 0; i < limit; i++) {
+    const count = rows[i].filter((c) => typeof c === "string" && c.trim() !== "").length;
+    if (count > bestCount) { best = i; bestCount = count; }
+  }
+  return best;
+}
+
+export function snapshotTab(sheet: XLSX.WorkSheet, keyColumns: string[]): TabSnap {
+  const raw: string[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false }) as string[][];
+  const headerRow = detectHeaderRow(raw, keyColumns);
+  const header = (raw[headerRow] ?? []).map((h) => String(h).trim());
+  const keyIdx = keyColumns.map((k) => header.indexOf(k)).filter((i) => i >= 0);
+  const rows: SnapRow[] = [];
+  const seen = new Map<string, number>();
+  for (let r = headerRow + 1; r < raw.length; r++) {
+    const line = raw[r] ?? [];
+    if (line.every((c) => String(c).trim() === "")) continue;
+    const cells: Record<string, string> = {};
+    for (let c = 0; c < header.length; c++) {
+      if (!header[c]) continue;
+      cells[header[c]] = String(line[c] ?? "").trim();
+    }
+    let key = keyIdx.length
+      ? keyIdx.map((i) => String(line[i] ?? "").trim()).join(" · ")
+      : Object.values(cells).find((v) => v !== "") ?? "";
+    if (!key.trim()) key = `row ${r + 1}`;
+    // Duplicate keys (two rows for the same institution+role) get a stable ordinal suffix.
+    const n = (seen.get(key) ?? 0) + 1;
+    seen.set(key, n);
+    if (n > 1) key = `${key} (#${n})`;
+    rows.push({ key, cells });
+  }
+  const hash = contentHash(JSON.stringify({ header, rows }));
+  return { header, header_row: headerRow, rows, hash };
+}
+
+export type WatchResult = { status: "OK" | "Failed"; tabs: number; changes: number; error?: string };
+
+// Fetch → per-tab snapshot → diff against the previous snapshot → persist changes.
+// First run of a tab stores the baseline silently (no "everything added" flood).
+export async function runWatch(sourceId: string): Promise<WatchResult> {
+  const src = await SyncSource.findById(sourceId);
+  if (!src) throw new HttpError(404, "Sync source not found");
+  if (src.mode !== "watch") throw new HttpError(400, "Source is not in watch mode");
+  const keyColumns: string[] = src.key_columns ?? [];
+
+  let wb: XLSX.WorkBook;
+  try {
+    wb = await fetchWorkbook(src.source_url);
+  } catch (e) {
+    src.last_status = "Failed";
+    src.last_error = e instanceof Error ? e.message : String(e);
+    src.last_synced_at = new Date();
+    await src.save();
+    return { status: "Failed", tabs: 0, changes: 0, error: src.last_error ?? undefined };
+  }
+
+  let totalChanges = 0;
+  for (const tab of wb.SheetNames) {
+    const snap = snapshotTab(wb.Sheets[tab], keyColumns);
+    const prev = await WorkbookSnapshot.findOne({ sync_source: src._id, tab }).sort({ taken_at: -1 }).lean<any>();
+
+    if (prev && prev.hash === snap.hash) continue; // unchanged tab — keep the old snapshot
+
+    if (prev) {
+      const prevRows = new Map<string, SnapRow>((prev.rows as SnapRow[]).map((r) => [r.key, r]));
+      const currRows = new Map<string, SnapRow>(snap.rows.map((r) => [r.key, r]));
+
+      for (const [key, curr] of currRows) {
+        const old = prevRows.get(key);
+        if (!old) {
+          totalChanges += await recordChange(src._id, tab, key, null, "", summarizeRow(curr), "Added");
+          continue;
+        }
+        const columns = new Set([...Object.keys(old.cells), ...Object.keys(curr.cells)]);
+        for (const col of columns) {
+          const before = old.cells[col] ?? "";
+          const after = curr.cells[col] ?? "";
+          if (before !== after) {
+            totalChanges += await recordChange(src._id, tab, key, col, before, after, "Modified");
+          }
+        }
+      }
+      for (const [key, old] of prevRows) {
+        if (!currRows.has(key)) {
+          totalChanges += await recordChange(src._id, tab, key, null, summarizeRow(old), "", "Removed");
+        }
+      }
+    }
+
+    await WorkbookSnapshot.create({ sync_source: src._id, tab, ...snap, taken_at: new Date() });
+    // Retention: last 10 snapshots per tab.
+    const stale = await WorkbookSnapshot.find({ sync_source: src._id, tab })
+      .sort({ taken_at: -1 }).skip(10).select("_id").lean<any[]>();
+    if (stale.length) await WorkbookSnapshot.deleteMany({ _id: { $in: stale.map((s) => s._id) } });
+  }
+
+  src.last_status = "OK";
+  src.last_error = undefined;
+  src.last_synced_at = new Date();
+  await src.save();
+  return { status: "OK", tabs: wb.SheetNames.length, changes: totalChanges };
+}
+
+function summarizeRow(row: SnapRow): string {
+  const parts = Object.entries(row.cells).filter(([, v]) => v !== "").slice(0, 6)
+    .map(([k, v]) => `${k}: ${v}`);
+  return parts.join(", ").slice(0, 500);
+}
+
+// Skip when an identical unreviewed change already exists — the poller re-runs every
+// interval and a standing difference must raise once, not once per tick.
+async function recordChange(
+  sourceId: unknown, tab: string, rowKey: string, column: string | null,
+  oldValue: string, newValue: string, type: "Added" | "Removed" | "Modified",
+): Promise<number> {
+  const dup = await WorkbookChange.findOne({
+    sync_source: sourceId, tab, row_key: rowKey, column, new_value: newValue,
+    change_type: type, status: { $in: ["New", "Seen"] },
+  }).select("_id").lean();
+  if (dup) return 0;
+  await WorkbookChange.create({
+    sync_source: sourceId, tab, row_key: rowKey, column,
+    old_value: oldValue, new_value: newValue, change_type: type,
+  });
+  return 1;
+}

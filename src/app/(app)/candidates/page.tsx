@@ -69,8 +69,44 @@ function CandidatesInner() {
     try {
       const res = await api("/api/candidates/assign", { method: "POST", json: { batch: batchId, candidate_ids: [...selected] } });
       const failed = res.results.filter((r: any) => !r.ok);
-      if (failed.length) setError(`${res.assigned} assigned; ${failed.length} failed: ${failed[0].error}`);
+      const notes: string[] = [];
+      if (failed.length) notes.push(`${failed.length} failed: ${failed[0].error}`);
+      if (res.warnings?.length) notes.push(`Eligibility warnings — ${res.warnings.join(" · ")}`);
+      if (notes.length) setError(`${res.assigned} assigned. ${notes.join(" | ")}`);
       setSelected(new Set()); setDrawer(""); load();
+    } catch (e: any) { setError(e.message); }
+  }
+
+  // 2026-08-11: SIDH registration link per candidate — WhatsApp deep link + status flip.
+  async function sendSidhLink(c: any) {
+    try {
+      const d = await api("/api/defaults");
+      const url = d.item?.sidh_url || "https://www.skillindiadigital.gov.in/";
+      const msg = encodeURIComponent(`Namaste ${c.name}! Please register for your training on the Skill India portal: ${url}`);
+      const phone = String(c.phone ?? "").replace(/\D/g, "").slice(-10);
+      window.open(`https://wa.me/91${phone}?text=${msg}`, "_blank");
+      await api(`/api/candidates/${c._id}`, { method: "PATCH", json: { sidh_status: "Link Sent", sidh_link_sent_at: new Date().toISOString() } });
+      load();
+    } catch (e: any) { setError(e.message); }
+  }
+
+  async function markSidhRegistered(c: any) {
+    try {
+      await api(`/api/candidates/${c._id}`, { method: "PATCH", json: { sidh_status: "Registered", sidh_registered_on: new Date().toISOString() } });
+      load();
+    } catch (e: any) { setError(e.message); }
+  }
+
+  // 2026-08-11: per-location public self-registration link.
+  async function shareRegistrationLink() {
+    if (!fLoc) { setError("Pick a location filter first — the link is per location."); return; }
+    try {
+      const existing = await api(`/api/public-tokens?purpose=register&location=${fLoc}`);
+      const active = existing.items?.find((t: any) => t.active);
+      const t = active ?? (await api("/api/public-tokens", { method: "POST", json: { purpose: "register", location: fLoc } })).item;
+      const link = `${window.location.origin}${BASE_PATH}/p/register/${t.token}`;
+      await navigator.clipboard.writeText(link);
+      setError(""); alert(`Self-registration link copied:\n${link}\n\nShare it on WhatsApp — candidates fill their own details.`);
     } catch (e: any) { setError(e.message); }
   }
 
@@ -110,6 +146,12 @@ function CandidatesInner() {
             {["Unassigned", "Assigned", "Enrolled", "Dropped", "Completed"].map((s) => <option key={s}>{s}</option>)}
           </select>
           <Btn kind="ghost" onClick={() => { setImportState({}); setDrawer("import"); }}>Import Excel</Btn>
+          <Btn kind="ghost" onClick={shareRegistrationLink}>Self-reg link</Btn>
+          <a href={`${BASE_PATH}/api/candidates/export-sidh${fLoc ? `?location=${fLoc}` : ""}`}
+            className="flex h-9 items-center rounded-lg border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 hover:border-blue-300 hover:text-blue-700"
+            title="Excel in the SIDH CRM's format — upload it in the assisted-registration console">
+            Export for SIDH CRM
+          </a>
           <Btn onClick={() => setDrawer("add")}>Add Candidate</Btn>
         </div>
       </div>
@@ -130,7 +172,31 @@ function CandidatesInner() {
           { key: "location", label: "Location", render: (r: any) => r.location?.name },
           { key: "program", label: "Program", render: (r: any) => r.program?.name },
           { key: "lifecycle_status", label: "Status", render: (r: any) => <Chip value={r.lifecycle_status} /> },
-          { key: "source", label: "Source" },
+          {
+            key: "eligibility", label: "Eligible", render: (r: any) => r.eligibility ? (
+              r.eligibility.eligible
+                ? (r.eligibility.unknown?.length
+                  ? <span className="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] text-gray-500" title={r.eligibility.unknown.join("; ")}>Unverified</span>
+                  : <span className="rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-[11px] font-semibold text-green-700">Eligible</span>)
+                : <span className="rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] font-semibold text-red-700" title={r.eligibility.reasons.join("; ")}>Not eligible</span>
+            ) : null,
+          },
+          {
+            key: "sidh_status", label: "SIDH", render: (r: any) => (
+              <span className="flex items-center gap-1.5">
+                <Chip value={r.sidh_status ?? "Not Registered"} />
+                {r.sidh_status !== "Registered" && (
+                  <>
+                    <button className="text-[11px] font-medium text-blue-700 hover:underline" title="Send registration link on WhatsApp"
+                      onClick={(e) => { e.stopPropagation(); sendSidhLink(r); }}>Send link</button>
+                    <button className="text-[11px] font-medium text-green-700 hover:underline" title="Mark as registered on the SIDH portal"
+                      onClick={(e) => { e.stopPropagation(); markSidhRegistered(r); }}>✓ Reg.</button>
+                  </>
+                )}
+              </span>
+            ),
+          },
+          { key: "source", label: "Source", mobile: false },
         ]} empty="No candidates — add or import." />
 
       <Drawer open={drawer === "add"} onClose={() => setDrawer("")} title="Add Candidate">
@@ -169,6 +235,15 @@ function CandidatesInner() {
               {programs.map((p) => <option key={p._id} value={p._id}>{p.name}</option>)}
             </select>
           </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Education">
+              <select className={inputCls} value={form.education ?? ""} onChange={(e) => set("education", e.target.value)}>
+                <option value="">—</option>
+                {["Below 10th", "10th Pass", "12th Pass", "Graduate", "Post Graduate"].map((l) => <option key={l}>{l}</option>)}
+              </select>
+            </Field>
+            <Field label="Last govt training (if any)"><input type="date" className={inputCls} value={form.last_training_date ?? ""} onChange={(e) => set("last_training_date", e.target.value)} /></Field>
+          </div>
           <Field label="Source (mobiliser / campaign)"><input className={inputCls} value={form.source ?? ""} onChange={(e) => set("source", e.target.value)} /></Field>
           <Btn onClick={saveCandidate} disabled={!form.name || !form.phone || !form.location || !form.program}>Add</Btn>
         </div>

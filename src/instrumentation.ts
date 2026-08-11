@@ -8,6 +8,7 @@ export async function register() {
   const { dbConnect } = await import("@/lib/db");
   const { SyncSource, mongoose } = await import("@/models");
   const { runSync } = await import("@/lib/sync");
+  const { runWatch } = await import("@/lib/workbook");
   const { evaluateAlerts } = await import("@/lib/alerts");
 
   // Identifies this container for lock ownership; uniqueness per boot is all that matters.
@@ -30,7 +31,7 @@ export async function register() {
       if (!(await takeLock("sync", 5 * 60_000))) return;
       const now = new Date();
       const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-      const sources = await SyncSource.find({ frequency: "Daily" }).lean<any[]>();
+      const sources = await SyncSource.find({ frequency: "Daily", mode: { $ne: "watch" } }).lean<any[]>();
       for (const s of sources) {
         if (!s.sync_time) continue;
         const due = s.sync_time.slice(0, 5) <= hhmm;
@@ -40,6 +41,14 @@ export async function register() {
           const res = await runSync(String(s._id)).catch((e) => ({ status: "Failed", error: String(e), created: 0 }));
           console.log(`[sync-scheduler] ${s.name}: ${res.status}, ${res.created} changes`);
         }
+      }
+      // Watch-mode sources (2026-08-11): poll every interval_minutes, not once a day.
+      const watches = await SyncSource.find({ mode: "watch" }).lean<any[]>();
+      for (const s of watches) {
+        const intervalMs = Math.max(5, s.interval_minutes ?? 30) * 60_000;
+        if (s.last_synced_at && now.getTime() - new Date(s.last_synced_at).getTime() < intervalMs) continue;
+        const res = await runWatch(String(s._id)).catch((e) => ({ status: "Failed", tabs: 0, changes: 0, error: String(e) }));
+        console.log(`[workbook-watch] ${s.name}: ${res.status}, ${res.changes} change(s) across ${res.tabs} tab(s)${res.error ? " — " + res.error : ""}`);
       }
     } catch (e) {
       console.error("[sync-scheduler] tick failed:", e);

@@ -1,12 +1,18 @@
 import { itemRoutes } from "@/lib/crud";
 import { Candidate } from "@/models";
+import { candidateEligibility } from "@/lib/rules";
+import { getDefaults } from "@/lib/defaults";
 
 export const { GET, PATCH } = itemRoutes({
   model: Candidate, entity: "Candidate",
-  fields: ["name", "phone", "alt_phone", "gender", "location", "program", "source"],
+  fields: ["name", "phone", "alt_phone", "gender", "dob", "id_reference", "location", "program", "source", "education", "last_training_date", "interested_programs", "interested_locations", "sidh_status", "sidh_link_sent_at", "sidh_registered_on"],
   writeRoles: ["Admin", "Operations", "Location", "Enrollment"],
   populate: [
     { path: "location", select: "name code" },
     { path: "program", select: "name code" },
   ],
+  async mapItems(items) {
+    const defaults = await getDefaults();
+    return items.map((c) => ({ ...c, eligibility: candidateEligibility(c, defaults) }));
+  },
 });

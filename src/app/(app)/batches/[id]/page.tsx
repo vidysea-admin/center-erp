@@ -5,8 +5,9 @@ import { api, fmtDate, toInputDate } from "@/lib/client";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, HealthBanner, NameCell, Section, Tabs, inputCls } from "@/components/ui";
 import { Activity } from "@/components/activity";
 import { flushQueue, getQueue, uploadWithRetry } from "@/lib/upload";
+import { BASE_PATH } from "@/lib/base-path";
 
-const TABS = ["Overview", "Candidates", "Enrollment", "Daily Execution", "Closure", "Costs", "Activity"];
+const TABS = ["Overview", "Candidates", "Enrollment", "Daily Execution", "Closure", "Feedback", "Costs", "Activity"];
 
 export default function BatchDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -36,6 +37,7 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
       {tab === "Enrollment" && <Enrollment batchId={id} setError={setError} />}
       {tab === "Daily Execution" && <DailyExecution batchId={id} batch={b} setError={setError} />}
       {tab === "Closure" && <ClosureTab batchId={id} batch={b} setError={setError} onChanged={load} />}
+      {tab === "Feedback" && <FeedbackTab batchId={id} setError={setError} />}
       {tab === "Costs" && <CostsTab batchId={id} batch={b} setError={setError} />}
       {tab === "Activity" && <Activity entity="Batch" id={id} />}
     </div>
@@ -90,6 +92,34 @@ function Overview({ data, onChanged, setError }: any) {
       <Section title="Details">
         <EditDetails b={b} onChanged={onChanged} setError={setError} />
       </Section>
+      {(b.milestones?.length ?? 0) > 0 && (
+        <Section title="Backward plan (2026-08-11)" actions={b.status === "Planning" ? (
+          <Btn small kind="ghost" onClick={async () => {
+            try { await api(`/api/batches/${b._id}/milestones`, { method: "PATCH", json: { regenerate: true } }); onChanged(); }
+            catch (e: any) { setError(e.message); }
+          }}>Regenerate</Btn>
+        ) : undefined}>
+          <ul className="space-y-2 text-sm">
+            {b.milestones.map((m: any) => {
+              const overdue = !m.done_on && m.due_date && new Date(m.due_date) < new Date(new Date().toDateString());
+              return (
+                <li key={m.key} className="flex items-center gap-2">
+                  <input type="checkbox" checked={!!m.done_on}
+                    disabled={["Completed", "Cancelled"].includes(b.status)}
+                    onChange={async (e) => {
+                      try { await api(`/api/batches/${b._id}/milestones`, { method: "PATCH", json: { key: m.key, done: e.target.checked } }); onChanged(); }
+                      catch (err: any) { setError(err.message); }
+                    }} />
+                  <span className={m.done_on ? "text-gray-400 line-through" : ""}>{m.label}</span>
+                  <span className={`ml-auto text-xs ${overdue ? "font-semibold text-red-600" : "text-gray-500"}`}>
+                    due {fmtDate(m.due_date)}{overdue ? " — overdue" : ""}{m.done_on ? ` · done ${fmtDate(m.done_on)}` : ""}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </Section>
+      )}
       <Drawer open={confirmCancel} onClose={() => setConfirmCancel(false)} title={`Cancel batch ${b.code}?`}>
         <div className="space-y-3">
           <p className="text-sm text-gray-600">This is destructive. Rule 19: a batch with daily logs can only be force-closed by Admin. Provide a reason.</p>
@@ -107,6 +137,7 @@ function EditDetails({ b, onChanged, setError }: any) {
   const [form, setForm] = useState<any>({
     trainer: b.trainer?._id ?? "", room: b.room?._id ?? "", session: b.session,
     planned_start: toInputDate(b.planned_start), planned_end: toInputDate(b.planned_end), target_size: b.target_size,
+    slot_start: b.slot_start ?? "", slot_end: b.slot_end ?? "",
   });
   useEffect(() => {
     api("/api/trainers?limit=200").then((d) => setTrainers(d.items)).catch(() => {});
@@ -143,6 +174,8 @@ function EditDetails({ b, onChanged, setError }: any) {
           </select>
         </Field>
         <Field label="Target size"><input type="number" className={inputCls} value={form.target_size} onChange={(e) => setForm({ ...form, target_size: +e.target.value })} /></Field>
+        <Field label="Time slot start"><input type="time" className={inputCls} value={form.slot_start} onChange={(e) => setForm({ ...form, slot_start: e.target.value })} /></Field>
+        <Field label="Time slot end"><input type="time" className={inputCls} value={form.slot_end} onChange={(e) => setForm({ ...form, slot_end: e.target.value })} /></Field>
       </div>
       <div className="text-xs text-gray-500">Actual: {fmtDate(b.actual_start)} → {fmtDate(b.actual_end)}</div>
       <Btn onClick={save}>Save details</Btn>
@@ -809,6 +842,64 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
 }
 
 // ---------- Costs tab ----------
+// ---------- Feedback tab (2026-08-11: "हर बच्चा… feedback दे पाए") ----------
+function FeedbackTab({ batchId, setError }: any) {
+  const [data, setData] = useState<any>(null);
+  const [links, setLinks] = useState<any[] | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = () => api(`/api/batches/${batchId}/feedback`).then(setData).catch((e: any) => setError(e.message));
+  useEffect(() => { load(); }, [batchId]);
+
+  async function generateLinks() {
+    setBusy(true);
+    try {
+      const res = await api("/api/public-tokens", { method: "POST", json: { purpose: "feedback", batch: batchId } });
+      setLinks(res.items);
+    } catch (e: any) { setError(e.message); }
+    setBusy(false);
+  }
+
+  const linkFor = (t: any) => `${window.location.origin}${BASE_PATH}/p/feedback/${t.token}`;
+
+  return (
+    <div className="space-y-4">
+      <Section title={`Feedback${data?.count ? ` — ${data.count} response${data.count === 1 ? "" : "s"}, average ${data.average}★` : ""}`}
+        actions={<Btn small kind="ghost" disabled={busy} onClick={generateLinks}>Get feedback links</Btn>}>
+        {links && (
+          <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm">
+            <div className="mb-2 font-medium text-blue-800">One link per candidate — send on WhatsApp:</div>
+            <ul className="max-h-56 space-y-1 overflow-y-auto text-xs">
+              {links.map((t: any) => {
+                const name = t.batch_member?.candidate?.name ?? "?";
+                const phone = String(t.batch_member?.candidate?.phone ?? "").replace(/\D/g, "").slice(-10);
+                const url = linkFor(t);
+                const wa = `https://wa.me/91${phone}?text=${encodeURIComponent(`Namaste ${name}! Please share your training feedback: ${url}`)}`;
+                return (
+                  <li key={t._id ?? t.token} className="flex items-center gap-2">
+                    <span className="font-medium">{name}</span>
+                    <button className="text-blue-700 hover:underline" onClick={() => navigator.clipboard.writeText(url)}>copy link</button>
+                    <a className="text-green-700 hover:underline" href={wa} target="_blank" rel="noreferrer">WhatsApp</a>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+        <DataTable rows={data?.items ?? []}
+          cardTitle={(r: any) => r.batch_member?.candidate?.name ?? "?"}
+          columns={[
+            { key: "candidate", label: "Candidate", render: (r: any) => r.batch_member?.candidate?.name ?? "?" },
+            { key: "rating", label: "Rating", render: (r: any) => "⭐".repeat(r.rating) },
+            { key: "liked", label: "Liked", render: (r: any) => <span className="text-xs">{r.liked || "—"}</span> },
+            { key: "suggestions", label: "Suggestions", render: (r: any) => <span className="text-xs">{r.suggestions || "—"}</span> },
+            { key: "submitted_at", label: "When", render: (r: any) => fmtDate(r.submitted_at), mobile: false },
+          ]} empty="No feedback yet — generate links and share them with the candidates." />
+      </Section>
+    </div>
+  );
+}
+
 function CostsTab({ batchId, batch, setError }: any) {
   const [items, setItems] = useState<any[]>([]);
   const [cats, setCats] = useState<any[]>([]);

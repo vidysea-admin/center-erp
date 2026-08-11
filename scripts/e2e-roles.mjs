@@ -145,6 +145,20 @@ const leaks = [
 ];
 ok("Home queues leak nothing outside SPOC scope", leaks.length === 0, `leaked ${leaks.length}`);
 
+// 2026-08-11 routes — scoping and role gates
+// Sheet Watch is Admin/Operations only
+ok("SPOC cannot read workbook changes", (await req(spoc, "GET", "/api/workbook-changes")).status === 403);
+ok("Ops can read workbook changes", (await req(ops, "GET", "/api/workbook-changes")).status === 200);
+// Meeting notes follow location scope; view-only principal cannot write
+const ownLocId = spocLocs.data.items[0]._id;
+ok("SPOC can add a meeting note at own location", (await req(spoc, "POST", `/api/locations/${ownLocId}/notes`, { note: "role-test note" })).status === 201);
+ok("SPOC cannot read another location's notes", (await req(spoc, "GET", `/api/locations/${otherLoc._id}/notes`)).status === 403);
+ok("view-only principal cannot add notes", (await req(principal, "POST", `/api/locations/${ownLocId}/notes`, { note: "nope" })).status === 403);
+// Public-token creation is scoped too
+ok("SPOC cannot mint a register link for a foreign location", (await req(spoc, "POST", "/api/public-tokens", { purpose: "register", location: otherLoc._id })).status === 403);
+// Backward-plan calculator is any-authenticated read
+ok("planner endpoint readable by SPOC", (await req(spoc, "GET", "/api/plan-batch?start=2026-12-01")).status === 200);
+
 // unauthenticated → 401
 const anon = await fetch(BASE + "/api/locations");
 ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}`);

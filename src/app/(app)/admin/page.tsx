@@ -180,7 +180,13 @@ function SyncSources({ setError }: any) {
   }
   async function save() {
     try {
-      const json = { ...form, field_mappings: JSON.parse(mapping) };
+      const json = {
+        ...form,
+        field_mappings: form.mode === "watch" ? {} : JSON.parse(mapping),
+        key_columns: typeof form.key_columns === "string"
+          ? form.key_columns.split(",").map((s: string) => s.trim()).filter(Boolean)
+          : form.key_columns,
+      };
       if (edit) await api(`/api/sync-sources/${edit._id}`, { method: "PATCH", json });
       else await api("/api/sync-sources", { method: "POST", json });
       setEdit(null); setForm({ frequency: "Manual only" }); load();
@@ -190,7 +196,9 @@ function SyncSources({ setError }: any) {
     setRunning(id); setResult("");
     try {
       const r = await api(`/api/sync-sources/${id}/run`, { method: "POST" });
-      setResult(`Status ${r.status}: ${r.created} changes detected${r.error ? " — " + r.error : ""}`);
+      setResult(r.tabs !== undefined
+        ? `Status ${r.status}: ${r.changes} cell change(s) across ${r.tabs} tab(s)${r.error ? " — " + r.error : ""}`
+        : `Status ${r.status}: ${r.created} changes detected${r.error ? " — " + r.error : ""}`);
       load();
     } catch (e: any) { setError(e.message); }
     setRunning("");
@@ -204,8 +212,9 @@ function SyncSources({ setError }: any) {
           cardTitle={(r: any) => r.name}
           columns={[
             { key: "name", label: "Name" },
+            { key: "mode", label: "Mode", render: (r: any) => r.mode === "watch" ? <span className="rounded-full border border-purple-200 bg-purple-50 px-2 py-0.5 text-[11px] font-semibold text-purple-700">Watch · {r.interval_minutes ?? 30}m</span> : <span className="text-xs text-gray-500">Mapped</span> },
             { key: "source_url", label: "URL", render: (r: any) => <span className="block max-w-64 truncate text-xs">{r.source_url}</span> },
-            { key: "frequency", label: "Frequency" },
+            { key: "frequency", label: "Frequency", mobile: false },
             { key: "last_synced_at", label: "Last sync", render: (r: any) => fmtDate(r.last_synced_at) },
             { key: "last_status", label: "Status", render: (r: any) => <Chip value={r.last_status} /> },
             { key: "_run", label: "", render: (r: any) => <Btn small disabled={running === r._id} onClick={() => run(r._id)}>{running === r._id ? "Syncing…" : "Sync Now"}</Btn> },
@@ -217,16 +226,40 @@ function SyncSources({ setError }: any) {
       <Section title={edit ? `Edit ${edit.name}` : "Add sync source"}>
         <div className="grid gap-3 md:grid-cols-3">
           <Field label="Name" required><input className={inputCls} value={form.name ?? ""} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
-          <Field label="CSV URL (Google Sheet export link)" required><input className={inputCls} value={form.source_url ?? ""} onChange={(e) => setForm({ ...form, source_url: e.target.value })} placeholder="https://docs.google.com/spreadsheets/d/…/export?format=csv&gid=…" /></Field>
-          <Field label="Frequency">
-            <select className={inputCls} value={form.frequency} onChange={(e) => setForm({ ...form, frequency: e.target.value })}>
-              <option>Manual only</option><option>Daily</option>
+          <Field label="URL (CSV export, xlsx, or OneDrive share link)" required><input className={inputCls} value={form.source_url ?? ""} onChange={(e) => setForm({ ...form, source_url: e.target.value })} placeholder="https://… (OneDrive share links work as-is)" /></Field>
+          <Field label="Mode">
+            <select className={inputCls} value={form.mode ?? "mapped"} onChange={(e) => setForm({ ...form, mode: e.target.value })}>
+              <option value="mapped">Mapped (writes review queue for Location fields)</option>
+              <option value="watch">Watch (track every tab & cell — Sheet Watch)</option>
             </select>
           </Field>
         </div>
-        <Field label='Field mappings (JSON: "Sheet Column" → erp_field; one column must map to external_id; targets as "approved_target:<PROGRAM_CODE>")'>
-          <textarea className={inputCls + " mt-1 h-40 font-mono text-xs"} value={mapping} onChange={(e) => setMapping(e.target.value)} />
-        </Field>
+        {form.mode === "watch" ? (
+          <div className="mt-3 grid gap-3 md:grid-cols-3">
+            <Field label="Poll every (minutes)">
+              <input type="number" className={inputCls} value={form.interval_minutes ?? 30} onChange={(e) => setForm({ ...form, interval_minutes: +e.target.value })} />
+            </Field>
+            <Field label="Row identity columns (comma-separated)">
+              <input className={inputCls}
+                value={Array.isArray(form.key_columns) ? form.key_columns.join(", ") : form.key_columns ?? ""}
+                onChange={(e) => setForm({ ...form, key_columns: e.target.value })}
+                placeholder="Institution Name, Job role" />
+            </Field>
+          </div>
+        ) : (
+          <>
+            <div className="mt-3 grid gap-3 md:grid-cols-3">
+              <Field label="Frequency">
+                <select className={inputCls} value={form.frequency} onChange={(e) => setForm({ ...form, frequency: e.target.value })}>
+                  <option>Manual only</option><option>Daily</option>
+                </select>
+              </Field>
+            </div>
+            <Field label='Field mappings (JSON: "Sheet Column" → erp_field; one column must map to external_id; targets as "approved_target:<PROGRAM_CODE>")'>
+              <textarea className={inputCls + " mt-1 h-40 font-mono text-xs"} value={mapping} onChange={(e) => setMapping(e.target.value)} />
+            </Field>
+          </>
+        )}
         <div className="mt-2 flex gap-2">
           <Btn onClick={save} disabled={!form.name || !form.source_url}>{edit ? "Save" : "Add source"}</Btn>
           {edit && <Btn kind="ghost" onClick={() => open()}>New</Btn>}
@@ -365,15 +398,52 @@ function DefaultsTab({ setError }: any) {
     ["daily_log_edit_window_hours", "Daily log edit window (hrs)"], ["max_concurrent_batches", "Max concurrent batches"],
     ["enrollment_threshold_pct", "Enrollment threshold for start (%)"],
   ];
+  // 2026-08-11 meeting tunables
+  const ELIGIBILITY: [string, string][] = [
+    ["min_age", "Minimum age"], ["max_age", "Maximum age"], ["training_cooldown_months", "Training cooldown (months)"],
+  ];
+  const LEADS: [string, string][] = [
+    ["lead_trainer_found_days", "Trainer identified (days before start)"],
+    ["lead_tot_done_days", "TOT done (days before start)"],
+    ["lead_mobilization_days", "Mobilization done (days before start)"],
+    ["lead_trainer_ready_days", "Trainer ready (days before start)"],
+    ["lead_enrollment_days", "Registration & enrollment done (days before start)"],
+  ];
   return (
-    <Section title="Planning defaults (§8)" actions={<Btn small onClick={save}>Save</Btn>}>
-      <div className="grid gap-3 md:grid-cols-3">
-        {FIELDS.map(([k, label]) => (
-          <Field key={k} label={label}>
-            <input type="number" className={inputCls} value={form[k] ?? ""} onChange={(e) => setForm({ ...form, [k]: +e.target.value })} />
+    <div className="space-y-4">
+      <Section title="Planning defaults (§8)" actions={<Btn small onClick={save}>Save</Btn>}>
+        <div className="grid gap-3 md:grid-cols-3">
+          {FIELDS.map(([k, label]) => (
+            <Field key={k} label={label}>
+              <input type="number" className={inputCls} value={form[k] ?? ""} onChange={(e) => setForm({ ...form, [k]: +e.target.value })} />
+            </Field>
+          ))}
+        </div>
+      </Section>
+      <Section title="Candidate eligibility (2026-08-11)" actions={<Btn small onClick={save}>Save</Btn>}>
+        <div className="grid gap-3 md:grid-cols-3">
+          {ELIGIBILITY.map(([k, label]) => (
+            <Field key={k} label={label}>
+              <input type="number" className={inputCls} value={form[k] ?? ""} onChange={(e) => setForm({ ...form, [k]: +e.target.value })} />
+            </Field>
+          ))}
+          <Field label="Min daily photo/video uploads">
+            <input type="number" className={inputCls} value={form.min_daily_evidence ?? ""} onChange={(e) => setForm({ ...form, min_daily_evidence: +e.target.value })} />
           </Field>
-        ))}
-      </div>
-    </Section>
+          <Field label="SIDH portal URL">
+            <input className={inputCls} value={form.sidh_url ?? ""} onChange={(e) => setForm({ ...form, sidh_url: e.target.value })} />
+          </Field>
+        </div>
+      </Section>
+      <Section title="Backward batch plan — lead times (2026-08-11)" actions={<Btn small onClick={save}>Save</Btn>}>
+        <div className="grid gap-3 md:grid-cols-3">
+          {LEADS.map(([k, label]) => (
+            <Field key={k} label={label}>
+              <input type="number" className={inputCls} value={form[k] ?? ""} onChange={(e) => setForm({ ...form, [k]: +e.target.value })} />
+            </Field>
+          ))}
+        </div>
+      </Section>
+    </div>
   );
 }

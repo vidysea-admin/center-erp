@@ -96,15 +96,24 @@ ok("Rule 21: candidate lifecycle Enrolled", c0.lifecycle_status === "Enrolled", 
 await req("POST", `/api/batches/${batch._id}/transition`, { target: "Active" }, 200);
 
 // ---- trainer / room conflicts ----
-// Rule 10 (2026-08 policy: a trainer may hold up to max_concurrent_batches overlapping batches).
-// The 2nd–5th overlapping batch is allowed; the 6th is blocked.
+// Rule 10 (2026-08-11 meeting: "up to four batches का provision" — cap is 4 now, was 5).
+// The 2nd–4th overlapping batch is allowed; the 5th is blocked.
 const extraBatches = [];
-for (let i = 0; i < 4; i++) {
+for (let i = 0; i < 3; i++) {
   const r = await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, planned_start: today, target_size: 3 }, 201);
   extraBatches.push(r.data.item?._id);
 }
-ok("Rule 10: trainer may hold 5 concurrent batches", extraBatches.every(Boolean));
+ok("Rule 10: trainer may hold 4 concurrent batches", extraBatches.every(Boolean));
 await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, planned_start: today, target_size: 3 }, 409);
+// 2026-08-11 slot clash: same trainer, same dates, overlapping time slots → 409 outright…
+await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, planned_start: today, target_size: 3, slot_start: "09:00", slot_end: "13:00" }, 409); // cap already hit
+// (cancel one so the cap has room, then prove the slot logic itself)
+await req("POST", `/api/batches/${extraBatches[2]}/transition`, { target: "Cancelled", reason: "slot test" }, 200);
+const s1 = await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, planned_start: today, target_size: 3, slot_start: "09:00", slot_end: "13:00" }, 201);
+extraBatches[2] = s1.data.item?._id;
+// same time window → blocked even though cap (4) is not exceeded after this fails
+await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, planned_start: today, target_size: 3, slot_start: "12:00", slot_end: "16:00" }, 409);
+ok("Slot clash: overlapping trainer time slots hard-blocked", true);
 // Rule 13: same room, overlapping, same session → 409
 await req("POST", "/api/batches", { location: loc._id, program: prog._id, room: room._id, planned_start: today, target_size: 3 }, 409);
 // different session (Morning vs Full Day) still conflicts per rule
@@ -326,6 +335,174 @@ ok("sheet-changes count endpoint (badge no longer fetches all rows)", typeof syn
 // ---- audit trail exists ----
 const audit = (await req("GET", `/api/audit/Batch/${batch._id}`)).data.items;
 ok("AuditLog rows written for batch", audit.length >= 3, `count=${audit.length}`);
+
+// ============================================================================
+// 2026-08-11 meeting features
+// ============================================================================
+
+// ---- Workbook Watch (all tabs, all columns, cell-level diff) ----
+const XLSX = (await import("xlsx")).default ?? await import("xlsx");
+function wbDataUrl(tabs) {
+  const wb = XLSX.utils.book_new();
+  for (const [name, rows] of Object.entries(tabs)) {
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), name);
+  }
+  const b64 = XLSX.write(wb, { type: "base64", bookType: "xlsx" });
+  return `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${b64}`;
+}
+const wb1 = wbDataUrl({ Sheet1: [["Name", "Target", "Status"], ["Alpha " + stamp, "10", "Open"], ["Beta " + stamp, "20", "Open"]] });
+const watchSrc = (await req("POST", "/api/sync-sources", {
+  name: "Watch Source " + stamp, source_url: wb1, mode: "watch", interval_minutes: 30, key_columns: ["Name"],
+}, 201)).data.item;
+const run1 = (await req("POST", `/api/sync-sources/${watchSrc._id}/run`, {}, 200)).data;
+ok("watch: baseline snapshot raises no changes", run1.status === "OK" && run1.changes === 0, JSON.stringify(run1));
+// client edits the sheet: Alpha 10→15, Beta row deleted, Gamma added, a whole new tab appears
+const wb2 = wbDataUrl({
+  Sheet1: [["Name", "Target", "Status"], ["Alpha " + stamp, "15", "Open"], ["Gamma " + stamp, "30", "Open"]],
+  Extra: [["Col1"], ["x"]],
+});
+await req("PATCH", `/api/sync-sources/${watchSrc._id}`, { source_url: wb2 }, 200);
+const run2 = (await req("POST", `/api/sync-sources/${watchSrc._id}/run`, {}, 200)).data;
+ok("watch: second run detects changes", run2.status === "OK" && run2.changes >= 3, JSON.stringify(run2));
+const wc = (await req("GET", "/api/workbook-changes?status=New", undefined, 200)).data;
+const modified = wc.items.find((c) => c.row_key === "Alpha " + stamp && c.column === "Target");
+ok("watch: modified cell has old → new", modified?.old_value === "10" && modified?.new_value === "15", JSON.stringify(modified));
+ok("watch: removed row detected", wc.items.some((c) => c.row_key === "Beta " + stamp && c.change_type === "Removed"));
+ok("watch: added row detected", wc.items.some((c) => c.row_key === "Gamma " + stamp && c.change_type === "Added"));
+// re-run without edits: no duplicate changes for the standing difference
+const run3 = (await req("POST", `/api/sync-sources/${watchSrc._id}/run`, {}, 200)).data;
+ok("watch: unchanged sheet re-run raises nothing", run3.changes === 0, JSON.stringify(run3));
+await req("PATCH", `/api/workbook-changes/${modified._id}`, { status: "Seen" }, 200);
+await req("PATCH", `/api/workbook-changes/${modified._id}`, { status: "Accepted" }, 200);
+await req("PATCH", `/api/workbook-changes/${modified._id}`, { status: "New" }, 400); // review states only
+const wcCount = (await req("GET", "/api/workbook-changes?count=1")).data;
+ok("watch: count endpoint", typeof wcCount.count === "number", JSON.stringify(wcCount));
+
+// ---- Location contacts + meeting notes ----
+await req("PATCH", `/api/locations/${loc._id}`, {
+  contacts: [
+    { name: "SPOC Two " + stamp, phone: "9000000001", role_label: "SPOC" },
+    { name: "Cluster Head " + stamp, phone: "9000000002", role_label: "Cluster Head" },
+  ],
+}, 200);
+const locAfter = (await req("GET", `/api/locations/${loc._id}`)).data.item;
+ok("location holds multiple contacts", locAfter.contacts?.length === 2, JSON.stringify(locAfter.contacts));
+await req("POST", `/api/locations/${loc._id}/notes`, { met_with: "Principal", note: "Discussed batch plan " + stamp }, 201);
+await req("POST", `/api/locations/${loc._id}/notes`, { met_with: "Nobody" }, 400); // note text required
+const notes = (await req("GET", `/api/locations/${loc._id}/notes`, undefined, 200)).data.items;
+ok("meeting note recorded with author", notes.length === 1 && !!notes[0].logged_by?.name, JSON.stringify(notes[0]).slice(0, 120));
+
+// ---- Trainer pipeline warning ----
+const pipeTrainer = (await req("POST", "/api/trainers", {
+  name: "Pipeline Trainer " + stamp, phone: "97777" + stamp.slice(0, 5),
+  skills: ["TestSkill" + stamp], pipeline_status: "Shortlisted", tr_id: "TR" + stamp,
+}, 201)).data.item;
+const warnBatch = await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: pipeTrainer._id, planned_start: "2027-03-01", target_size: 3 }, 201);
+ok("booking a not-Ready trainer warns, not blocks", String(warnBatch.data.warning ?? "").includes("Shortlisted"), JSON.stringify(warnBatch.data.warning));
+await req("POST", `/api/batches/${warnBatch.data.item._id}/transition`, { target: "Cancelled", reason: "pipeline test cleanup" }, 200);
+
+// ---- Backward batch planner ----
+const plan = (await req("GET", "/api/plan-batch?start=2026-09-20", undefined, 200)).data;
+ok("planner: 5 milestones, sorted by date", plan.milestones?.length === 5 &&
+  plan.milestones.every((m, i, a) => i === 0 || new Date(a[i - 1].due_date) <= new Date(m.due_date)), JSON.stringify(plan.milestones?.map((m) => m.key)));
+const totMs = plan.milestones.find((m) => m.key === "tot_done");
+const totGap = Math.round((new Date("2026-09-20") - new Date(totMs?.due_date)) / 86400e3);
+ok("planner: TOT due 3 days before start", totGap === 3, `gap=${totGap}d due=${totMs?.due_date}`);
+const planBatch = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, planned_start: "2027-04-01", target_size: 3 }, 201)).data.item;
+ok("batch stores its backward plan", planBatch.milestones?.length === 5, `count=${planBatch.milestones?.length}`);
+const ticked = (await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { key: "mobilization", done: true }, 200)).data.item;
+ok("milestone tick-off records done_on", !!ticked.milestones.find((m) => m.key === "mobilization")?.done_on);
+await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { regenerate: true }, 200);
+const regen = (await req("GET", `/api/batches/${planBatch._id}`)).data.item;
+ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.key === "mobilization")?.done_on);
+await req("POST", `/api/batches/${planBatch._id}/transition`, { target: "Cancelled", reason: "planner test cleanup" }, 200);
+
+// ---- Candidate eligibility ----
+const oldCand = (await req("POST", "/api/candidates", {
+  name: "Old Cand " + stamp, phone: "77770" + stamp.slice(0, 5), location: loc._id, program: prog._id,
+  dob: "1950-01-01", education: "10th Pass",
+}, 201)).data.item;
+const oldCandRead = (await req("GET", `/api/candidates/${oldCand._id}`)).data.item;
+ok("eligibility: age above max flagged", oldCandRead.eligibility?.eligible === false &&
+  oldCandRead.eligibility.reasons.some((r) => r.includes("above")), JSON.stringify(oldCandRead.eligibility));
+const freshCand = (await req("POST", "/api/candidates", {
+  name: "Fresh Cand " + stamp, phone: "77771" + stamp.slice(0, 5), location: loc._id, program: prog._id,
+  dob: "2000-01-01", education: "10th Pass",
+}, 201)).data.item;
+const freshRead = (await req("GET", `/api/candidates/${freshCand._id}`)).data.item;
+ok("eligibility: valid candidate passes", freshRead.eligibility?.eligible === true, JSON.stringify(freshRead.eligibility));
+const cooldownCand = (await req("POST", "/api/candidates", {
+  name: "Cooldown Cand " + stamp, phone: "77772" + stamp.slice(0, 5), location: loc._id, program: prog._id,
+  dob: "2000-01-01", education: "10th Pass", last_training_date: new Date(Date.now() - 30 * 86400e3).toISOString(),
+}, 201)).data.item;
+const cooldownRead = (await req("GET", `/api/candidates/${cooldownCand._id}`)).data.item;
+ok("eligibility: 6-month training cooldown flagged", cooldownRead.eligibility?.eligible === false, JSON.stringify(cooldownRead.eligibility));
+// assignment warns, enrollment completion hard-blocks
+const eligBatch = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, planned_start: "2027-05-01", target_size: 5 }, 201)).data.item;
+const assignRes = (await req("POST", "/api/candidates/assign", { batch: eligBatch._id, candidate_ids: [oldCand._id] }, 200)).data;
+ok("assign ineligible candidate warns", assignRes.assigned === 1 && assignRes.warnings?.length === 1, JSON.stringify(assignRes.warnings));
+const eligMembers = (await req("GET", `/api/batches/${eligBatch._id}/members`)).data.items;
+const oldMember = eligMembers.find((m) => String(m.candidate?._id ?? m.candidate) === String(oldCand._id));
+await req("PATCH", `/api/members/${oldMember._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 409); // hard gate
+ok("enrollment completion blocked for ineligible candidate", true);
+await req("POST", `/api/batches/${eligBatch._id}/transition`, { target: "Cancelled", reason: "eligibility test cleanup" }, 200);
+
+// ---- SIDH status tracking ----
+await req("PATCH", `/api/candidates/${freshCand._id}`, { sidh_status: "Link Sent", sidh_link_sent_at: new Date().toISOString() }, 200);
+const sidhRead = (await req("GET", `/api/candidates/${freshCand._id}`)).data.item;
+ok("SIDH status tracked on candidate", sidhRead.sidh_status === "Link Sent" && !!sidhRead.sidh_link_sent_at);
+
+// ---- SIDH CRM export (D:\crm sheet contract) ----
+const sidhExport = await fetch(BASE + `/api/candidates/export-sidh?location=${loc._id}`, { headers: { cookie } });
+ok("export-sidh returns an xlsx", sidhExport.status === 200 &&
+  (sidhExport.headers.get("content-type") ?? "").includes("spreadsheetml"), `status=${sidhExport.status}`);
+
+// ---- Public self-registration (capability link, no session) ----
+const regToken = (await req("POST", "/api/public-tokens", { purpose: "register", location: loc._id, program: prog._id }, 201)).data.item;
+const pubGet = await fetch(BASE + `/api/public/register/${regToken.token}`); // deliberately no cookie
+ok("public register form loads without login", pubGet.status === 200, `status=${pubGet.status}`);
+const pubPost = await fetch(BASE + `/api/public/register/${regToken.token}`, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ name: "SelfReg Cand " + stamp, phone: "7666600" + stamp.slice(0, 3), dob: "2001-05-05", education: "12th Pass" }),
+});
+ok("public self-registration creates a candidate", pubPost.status === 201, `status=${pubPost.status}`);
+const honeypot = await fetch(BASE + `/api/public/register/${regToken.token}`, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ name: "Bot", phone: "7666600999", website: "spam.example" }),
+});
+ok("honeypot submission rejected", honeypot.status === 400, `status=${honeypot.status}`);
+const badToken = await fetch(BASE + "/api/public/register/deadbeefdeadbeefdeadbeefdeadbeef");
+ok("invalid register token → 404", badToken.status === 404, `status=${badToken.status}`);
+const selfReg = (await req("GET", `/api/candidates?q=${encodeURIComponent("SelfReg Cand " + stamp)}`)).data.items;
+ok("self-registered candidate lands in the pool", selfReg.length === 1 && selfReg[0].source === "Self Registration", JSON.stringify(selfReg[0]?.source));
+await req("PATCH", `/api/public-tokens/${regToken._id}`, { active: false }, 200);
+const revoked = await fetch(BASE + `/api/public/register/${regToken.token}`);
+ok("revoked register token → 404", revoked.status === 404, `status=${revoked.status}`);
+
+// ---- Candidate feedback (per-member links, one response each) ----
+// `batch` from earlier in the suite is Active with members.
+const fbLinks = (await req("POST", "/api/public-tokens", { purpose: "feedback", batch: batch._id }, 201)).data.items;
+ok("feedback links generated per roster member", fbLinks.length >= 3, `count=${fbLinks.length}`);
+const fbToken = fbLinks[0].token;
+const fbGet = await fetch(BASE + `/api/public/feedback/${fbToken}`);
+ok("public feedback form loads without login", fbGet.status === 200, `status=${fbGet.status}`);
+const fbPost = await fetch(BASE + `/api/public/feedback/${fbToken}`, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ rating: 5, liked: "Great trainer", suggestions: "More practice time" }),
+});
+ok("feedback submitted", fbPost.status === 201, `status=${fbPost.status}`);
+const fbDup = await fetch(BASE + `/api/public/feedback/${fbToken}`, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ rating: 1 }),
+});
+ok("second submission on same link → 409", fbDup.status === 409, `status=${fbDup.status}`);
+const fbBadRating = await fetch(BASE + `/api/public/feedback/${fbLinks[1].token}`, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ rating: 9 }),
+});
+ok("rating outside 1–5 → 400", fbBadRating.status === 400, `status=${fbBadRating.status}`);
+const fbList = (await req("GET", `/api/batches/${batch._id}/feedback`, undefined, 200)).data;
+ok("batch feedback tab lists responses with average", fbList.count === 1 && fbList.average === 5, JSON.stringify({ count: fbList.count, avg: fbList.average }));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

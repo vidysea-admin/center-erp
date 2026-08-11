@@ -10,9 +10,11 @@ const ids = (docs) => docs.map((d) => d._id);
 
 const testLocs = await db.collection("locations").find({ name: { $regex: "^(Test Location|Sync Loc|Gate Location)" } }).toArray();
 const testProgs = await db.collection("programs").find({ name: { $regex: "^(Test Program|Sync Prog)" } }).toArray();
-const testTrainers = await db.collection("trainers").find({ name: { $regex: "^(Trainer \\d|SyncTrainer)" } }).toArray();
-const testCands = await db.collection("candidates").find({ $or: [{ name: { $regex: "^(Cand |Cand4|SyncCand|Cap |Dup [AB] |R[0-9] )" } }, { location: { $in: ids(testLocs) } }] }).toArray();
+const testTrainers = await db.collection("trainers").find({ name: { $regex: "^(Trainer \\d|SyncTrainer|Pipeline Trainer)" } }).toArray();
+const testCands = await db.collection("candidates").find({ $or: [{ name: { $regex: "^(Cand |Cand4|SyncCand|Cap |Dup [AB] |R[0-9] |Old Cand|Fresh Cand|Cooldown Cand|SelfReg Cand)" } }, { location: { $in: ids(testLocs) } }] }).toArray();
 const testBatches = await db.collection("batches").find({ $or: [{ location: { $in: ids(testLocs) } }, { program: { $in: ids(testProgs) } }] }).toArray();
+// Capture roster ids BEFORE members are deleted — feedback tokens hang off them.
+const testMembers = await db.collection("batchmembers").find({ batch: { $in: ids(testBatches) } }).toArray();
 
 const r = {};
 r.batchmembers = (await db.collection("batchmembers").deleteMany({ $or: [{ batch: { $in: ids(testBatches) } }, { candidate: { $in: ids(testCands) } }] })).deletedCount;
@@ -26,10 +28,16 @@ r.batches = (await db.collection("batches").deleteMany({ _id: { $in: ids(testBat
 r.candidates = (await db.collection("candidates").deleteMany({ _id: { $in: ids(testCands) } })).deletedCount;
 r.trainers = (await db.collection("trainers").deleteMany({ _id: { $in: ids(testTrainers) } })).deletedCount;
 r.rooms = (await db.collection("rooms").deleteMany({ location: { $in: ids(testLocs) } })).deletedCount;
-const testSyncSources = await db.collection("syncsources").find({ name: { $regex: "^Test sheet" } }).toArray();
+const testSyncSources = await db.collection("syncsources").find({ name: { $regex: "^(Test sheet|Watch Source)" } }).toArray();
 const testChanges = await db.collection("sheetchanges").find({ sync_source: { $in: ids(testSyncSources) } }).toArray();
 r.followups = (await db.collection("followupactions").deleteMany({ source_change: { $in: ids(testChanges) } })).deletedCount;
 r.sheetchanges = (await db.collection("sheetchanges").deleteMany({ _id: { $in: ids(testChanges) } })).deletedCount;
+// 2026-08-11 collections
+r.workbooksnapshots = (await db.collection("workbooksnapshots").deleteMany({ sync_source: { $in: ids(testSyncSources) } })).deletedCount;
+r.workbookchanges = (await db.collection("workbookchanges").deleteMany({ sync_source: { $in: ids(testSyncSources) } })).deletedCount;
+r.meetingnotes = (await db.collection("meetingnotes").deleteMany({ location: { $in: ids(testLocs) } })).deletedCount;
+r.publictokens = (await db.collection("publictokens").deleteMany({ $or: [{ location: { $in: ids(testLocs) } }, { batch_member: { $in: ids(testMembers) } }] })).deletedCount;
+r.feedbacks = (await db.collection("feedbacks").deleteMany({ batch: { $in: ids(testBatches) } })).deletedCount;
 r.syncsources = (await db.collection("syncsources").deleteMany({ _id: { $in: ids(testSyncSources) } })).deletedCount;
 r.locations = (await db.collection("locations").deleteMany({ _id: { $in: ids(testLocs) } })).deletedCount;
 r.programs = (await db.collection("programs").deleteMany({ _id: { $in: ids(testProgs) } })).deletedCount;

@@ -33,16 +33,21 @@ function TrainersInner() {
 
   function openEdit(t: any) {
     setEdit(t);
-    setForm({ ...t, home_location: t.home_location?._id ?? "", skills: t.skills ?? [] });
+    setForm({ ...t, home_location: t.home_location?._id ?? "", skills: t.skills ?? [], capable_locations: (t.capable_locations ?? []).map((l: any) => l?._id ?? l) });
     setDrawer(true);
   }
 
   async function save() {
     try {
-      const json = { ...form, skills: typeof form.skills === "string" ? form.skills.split(",").map((s: string) => s.trim()).filter(Boolean) : form.skills, home_location: form.home_location || undefined };
+      const json = {
+        ...form,
+        skills: typeof form.skills === "string" ? form.skills.split(",").map((s: string) => s.trim()).filter(Boolean) : form.skills,
+        home_location: form.home_location || undefined,
+        compensation_type: form.compensation_type || undefined,
+      };
       if (edit) await api(`/api/trainers/${edit._id}`, { method: "PATCH", json });
       else await api("/api/trainers", { method: "POST", json });
-      setDrawer(false); setEdit(null); setForm({ max_concurrent_batches: 1, status: "Available" }); load();
+      setDrawer(false); setEdit(null); setForm({ max_concurrent_batches: 4, status: "Available" }); load();
     } catch (e: any) { setError(e.message); }
   }
 
@@ -69,7 +74,7 @@ function TrainersInner() {
         <h1 className="text-xl font-semibold">Trainers</h1>
         <div className="flex gap-2">
           <input className={inputCls + " max-w-52"} placeholder="Search…" value={q} onChange={(e) => setQ(e.target.value)} />
-          <Btn onClick={() => { setEdit(null); setForm({ max_concurrent_batches: 1, status: "Available" }); setDrawer(true); }}>Add Trainer</Btn>
+          <Btn onClick={() => { setEdit(null); setForm({ max_concurrent_batches: 4, status: "Available", pipeline_status: "Applied" }); setDrawer(true); }}>Add Trainer</Btn>
         </div>
       </div>
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
@@ -80,10 +85,18 @@ function TrainersInner() {
           columns={[
             { key: "name", label: "Name", mobile: false, render: (r: any) => <NameCell name={r.name} sub={r.phone} /> },
             { key: "skills", label: "Skills", render: (r: any) => (r.skills ?? []).join(", ") },
-            { key: "home_location", label: "Home location", render: (r: any) => r.home_location?.name ?? "—" },
+            { key: "home_location", label: "Home location", render: (r: any) => r.home_location?.name ?? "—", mobile: false },
+            {
+              key: "pipeline_status", label: "Pipeline", render: (r: any) => (
+                <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${r.pipeline_status === "Ready to Train" ? "border-green-200 bg-green-50 text-green-700" : "border-amber-200 bg-amber-50 text-amber-700"}`}>
+                  {r.pipeline_status ?? "Ready to Train"}
+                </span>
+              ),
+            },
+            { key: "tr_id", label: "TR ID", render: (r: any) => r.tr_id || "—", mobile: false },
             { key: "status", label: "Status", render: (r: any) => <Chip value={r.status} /> },
-            { key: "available_from", label: "Available from", render: (r: any) => fmtDate(r.available_from) },
-            { key: "max_concurrent_batches", label: "Max batches" },
+            { key: "available_from", label: "Available from", render: (r: any) => fmtDate(r.available_from), mobile: false },
+            { key: "max_concurrent_batches", label: "Max batches", mobile: false },
           ]} empty="No trainers yet." />
       ) : (
         <DataTable rows={requests} onRowClick={openReqEdit}
@@ -115,6 +128,21 @@ function TrainersInner() {
               {locations.map((l) => <option key={l._id} value={l._id}>{l.name}</option>)}
             </select>
           </Field>
+          {/* 2026-08-11: application → shortlist → TOT → Ready to Train, plus NSDC TR ID */}
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Hiring pipeline">
+              <select className={inputCls} value={form.pipeline_status ?? "Ready to Train"} onChange={(e) => set("pipeline_status", e.target.value)}>
+                {["Applied", "Shortlisted", "TOT In Progress", "Ready to Train"].map((s) => <option key={s}>{s}</option>)}
+              </select>
+            </Field>
+            <Field label="TR ID (NSDC, after TOT)"><input className={inputCls} value={form.tr_id ?? ""} onChange={(e) => set("tr_id", e.target.value)} /></Field>
+          </div>
+          <Field label="Can train at (2026-08-11: one, two or ten locations)">
+            <select multiple className={inputCls + " h-28"} value={form.capable_locations ?? []}
+              onChange={(e) => set("capable_locations", Array.from(e.target.selectedOptions).map((o) => o.value))}>
+              {locations.map((l) => <option key={l._id} value={l._id}>{l.name}</option>)}
+            </select>
+          </Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Status">
               <select className={inputCls} value={form.status} onChange={(e) => set("status", e.target.value)}>
@@ -123,11 +151,22 @@ function TrainersInner() {
             </Field>
             <Field label="Available from"><input type="date" className={inputCls} value={form.available_from?.slice?.(0, 10) ?? ""} onChange={(e) => set("available_from", e.target.value)} /></Field>
           </div>
+          {/* 2026-08-11: batch-wise or monthly, fixed + performance incentive */}
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Compensation type">
+              <select className={inputCls} value={form.compensation_type ?? ""} onChange={(e) => set("compensation_type", e.target.value)}>
+                <option value="">—</option><option>Batch-wise</option><option>Monthly</option>
+              </select>
+            </Field>
+            <Field label={`Fixed amount (₹${form.compensation_type === "Monthly" ? "/month" : form.compensation_type === "Batch-wise" ? "/batch" : ""})`}>
+              <input type="number" className={inputCls} value={form.compensation_fixed ?? ""} onChange={(e) => set("compensation_fixed", +e.target.value)} />
+            </Field>
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Day rate (₹)"><input type="number" className={inputCls} value={form.day_rate ?? ""} onChange={(e) => set("day_rate", +e.target.value)} /></Field>
-            <Field label="Max concurrent batches"><input type="number" className={inputCls} value={form.max_concurrent_batches ?? 1} onChange={(e) => set("max_concurrent_batches", +e.target.value)} /></Field>
+            <Field label="Max concurrent batches"><input type="number" className={inputCls} value={form.max_concurrent_batches ?? 4} onChange={(e) => set("max_concurrent_batches", +e.target.value)} /></Field>
           </div>
-          <Field label="Incentive note"><input className={inputCls} placeholder="e.g. ₹500/batch completion bonus" value={form.incentive_note ?? ""} onChange={(e) => set("incentive_note", e.target.value)} /></Field>
+          <Field label="Performance incentive note"><input className={inputCls} placeholder="e.g. ₹500/batch completion bonus" value={form.incentive_note ?? ""} onChange={(e) => set("incentive_note", e.target.value)} /></Field>
           <Btn onClick={save} disabled={!form.name || !form.phone}>{edit ? "Save changes" : "Add Trainer"}</Btn>
         </div>
       </Drawer>

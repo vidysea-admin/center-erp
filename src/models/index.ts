@@ -5,6 +5,10 @@ export const APPROVAL_STATUS = ["Pending", "Approved", "Rejected"] as const;
 export const OPERATIONAL_STATUS = ["Not Started", "Active", "On Hold", "Stopped", "Closed"] as const;
 export const ROOM_TYPE = ["Classroom", "Lab"] as const;
 export const TRAINER_STATUS = ["Available", "Assigned", "Unavailable"] as const;
+// 2026-08-11 meeting: "application pool से चालू होगा… ready to train वाला status आना चाहिए" —
+// the hiring journey, separate from the derived operational status above (Rule 12).
+export const TRAINER_PIPELINE = ["Applied", "Shortlisted", "TOT In Progress", "Ready to Train"] as const;
+export const COMPENSATION_TYPE = ["Batch-wise", "Monthly"] as const;
 export const TRAINER_REQUEST_STATUS = ["Open", "In Progress", "Fulfilled", "Cancelled"] as const;
 // "Not Certified" (RPL M17/M18): finished the batch but did not pass — not Completed
 // (which would inflate outcome reporting) and not Dropped (they never left).
@@ -57,7 +61,27 @@ const LocationSchema = new Schema({
   status_changed_on: Date,
   spoc_name: String, spoc_phone: String, spoc_user: oid("User"),
   principal_name: String, principal_phone: String, principal_user: oid("User"),
+  // 2026-08-11 meeting: "एक SPOC, दो SPOC… कोई और contact person है तो वो सब ऐड कर पाऊं" —
+  // any number of named contacts beyond the two legacy slots above (which stay untouched).
+  contacts: [{
+    name: { type: String, required: true },
+    phone: String,
+    role_label: { type: String, default: "Contact" }, // SPOC / Principal / Cluster Head / Contact…
+    user: oid("User"),
+  }],
 }, { timestamps: true });
+
+// ---------- MeetingNote (2026-08-11 meeting) ----------
+// "मीटिंग के नोट्स ले पाऊं… ताकि मुझे पता रहे किससे किस लोकेशन पे किस दिन बात हुई है" —
+// so the boss and Manish stay on the same page about every location conversation.
+const MeetingNoteSchema = new Schema({
+  location: oid("Location", true),
+  meeting_date: { type: Date, required: true, default: () => new Date() },
+  met_with: String,                 // who the conversation was with
+  note: { type: String, required: true },
+  logged_by: oid("User", true),
+}, { timestamps: true });
+MeetingNoteSchema.index({ location: 1, meeting_date: -1 });
 
 // ---------- LocationTarget ----------
 const LocationTargetSchema = new Schema({
@@ -86,10 +110,18 @@ const TrainerSchema = new Schema({
   skills: { type: [String], required: true },
   home_location: oid("Location"),
   status: { type: String, enum: TRAINER_STATUS, required: true, default: "Available" },
+  // Hiring pipeline (2026-08-11). Existing trainers predate the pipeline — they default to
+  // Ready to Train so nothing operational changes for them.
+  pipeline_status: { type: String, enum: TRAINER_PIPELINE, default: "Ready to Train" },
+  tr_id: String, // NSDC TR ID, assigned after TOT certification
+  capable_locations: [{ type: Schema.Types.ObjectId, ref: "Location" }], // "कहां-कहां training ले सकता है" — 1, 2 or 10
+  programs_applied: [{ type: Schema.Types.ObjectId, ref: "Program" }],
   available_from: Date,
   day_rate: Number,
-  incentive_note: String,
-  max_concurrent_batches: { type: Number, required: true, default: 5 }, // RPL M5: up to 5 batches per trainer
+  incentive_note: String, // incentive based on performance — free text until the formula is defined
+  compensation_type: { type: String, enum: COMPENSATION_TYPE },
+  compensation_fixed: Number, // the fixed component (per batch or per month, per compensation_type)
+  max_concurrent_batches: { type: Number, required: true, default: 4 }, // 2026-08-11: "up to four batches का provision" (was RPL M5's 5)
   active: { type: Boolean, default: true },
 }, { timestamps: true });
 
@@ -107,6 +139,11 @@ const TrainerRequestSchema = new Schema({
 }, { timestamps: true });
 
 // ---------- Candidate ----------
+// 2026-08-11 meeting: eligibility criteria (age 18–40, 10th pass, no training in the last
+// 6 months), interest capture, and the SIDH registration stage — a candidate stage, not a
+// batch step ("हमें बच्चा जब हमारे पास आया, तभी से registration process चालू").
+export const EDUCATION_LEVEL = ["Below 10th", "10th Pass", "12th Pass", "Graduate", "Post Graduate"] as const;
+export const SIDH_STATUS = ["Not Registered", "Link Sent", "Registered"] as const;
 const CandidateSchema = new Schema({
   name: { type: String, required: true },
   phone: { type: String, required: true },
@@ -116,6 +153,13 @@ const CandidateSchema = new Schema({
   location: oid("Location", true),
   program: oid("Program", true),
   source: String,
+  education: { type: String, enum: [...EDUCATION_LEVEL, null], default: null },
+  last_training_date: Date, // "last training कब हुई वो date ले लो" — eligibility flips when the cooldown lapses
+  interested_programs: [{ type: Schema.Types.ObjectId, ref: "Program" }],
+  interested_locations: [{ type: Schema.Types.ObjectId, ref: "Location" }],
+  sidh_status: { type: String, enum: SIDH_STATUS, default: "Not Registered" },
+  sidh_link_sent_at: Date,
+  sidh_registered_on: Date,
   lifecycle_status: { type: String, enum: LIFECYCLE_STATUS, required: true, default: "Unassigned" },
   created_by: oid("User"),
 }, { timestamps: true });
@@ -128,11 +172,22 @@ const BatchSchema = new Schema({
   trainer: oid("Trainer"),
   room: oid("Room"),
   session: { type: String, enum: BATCH_SESSION, default: "Full Day" },
+  // 2026-08-11 meeting: a trainer runs up to 4 parallel batches with the day divided by time
+  // ("7 से 11, 12 से 4, 5 से 9"). Optional "HH:mm" pair; when both batches carry slots, a
+  // same-time overlap for one trainer is hard-blocked.
+  slot_start: String, slot_end: String,
   target_size: { type: Number, required: true },
   planned_start: { type: Date, required: true },
   planned_end: Date,
   actual_start: Date, actual_end: Date,
   status: { type: String, enum: BATCH_STATUS, required: true, default: "Planning" },
+  // Backward planner (2026-08-11): milestone dates computed back from planned_start with
+  // configurable lead times, each tick-off-able. Regenerable while the batch is in Planning.
+  milestones: [{
+    key: String, label: String,
+    due_date: Date,
+    done_on: Date, done_by: oid("User"),
+  }],
   cancel_reason: String,
   created_by: oid("User"),
 }, { timestamps: true });
@@ -246,15 +301,22 @@ const CostEntrySchema = new Schema({
 }, { timestamps: true });
 
 // ---------- SyncSource ----------
+// mode "mapped": the original Location-field sync (Rules 1–9).
+// mode "watch": 2026-08-11 meeting — snapshot EVERY tab and column of the client's live
+// workbook on an interval, and surface every cell change; nothing is written to ERP entities.
+export const SYNC_MODE = ["mapped", "watch"] as const;
 const SyncSourceSchema = new Schema({
   name: { type: String, required: true },
   source_url: { type: String, required: true },
   sync_time: String,
   frequency: { type: String, enum: SYNC_FREQUENCY, default: "Manual only" },
+  mode: { type: String, enum: SYNC_MODE, default: "mapped" },
+  interval_minutes: { type: Number, default: 30 },      // watch mode: poll cadence
+  key_columns: { type: [String], default: [] },          // watch mode: row identity (e.g. Institution Name + Job role)
   last_synced_at: Date,
   last_status: { type: String, enum: SYNC_STATUS },
   last_error: String,
-  field_mappings: { type: Schema.Types.Mixed, default: {} }, // external_column -> erp_field
+  field_mappings: { type: Schema.Types.Mixed, default: {} }, // external_column -> erp_field (mapped mode)
 }, { timestamps: true });
 
 // ---------- SheetChange ----------
@@ -270,6 +332,39 @@ const SheetChangeSchema = new Schema({
   note: String,
   actor: oid("User"), actioned_at: Date,
 }, { timestamps: true });
+
+// ---------- Workbook Watch (2026-08-11 meeting) ----------
+// The client edits their sheet in place and tells nobody. Every `interval_minutes` the full
+// workbook is snapshotted; each cell that differs from the previous snapshot becomes a
+// WorkbookChange the team reviews. Advisory only — accepting a change never writes to ERP
+// entities (that stays with the mapped sync / manual edits).
+export const WORKBOOK_CHANGE_TYPE = ["Added", "Removed", "Modified"] as const;
+export const WORKBOOK_CHANGE_STATUS = ["New", "Seen", "Accepted"] as const;
+
+const WorkbookSnapshotSchema = new Schema({
+  sync_source: oid("SyncSource", true),
+  tab: { type: String, required: true },
+  header: { type: [String], default: [] },     // detected header row
+  header_row: { type: Number, default: 0 },    // its index in the raw sheet
+  rows: { type: Schema.Types.Mixed, default: [] }, // array of {key, cells: {col: value}}
+  hash: String,                                 // content hash — unchanged tab ⇒ no diff walk
+  taken_at: { type: Date, required: true, default: () => new Date() },
+});
+WorkbookSnapshotSchema.index({ sync_source: 1, tab: 1, taken_at: -1 });
+
+const WorkbookChangeSchema = new Schema({
+  sync_source: oid("SyncSource", true),
+  tab: { type: String, required: true },
+  row_key: { type: String, required: true },   // key_columns values joined, else row #
+  column: String,                               // null for whole-row Added/Removed
+  old_value: String, new_value: String,
+  change_type: { type: String, enum: WORKBOOK_CHANGE_TYPE, required: true },
+  status: { type: String, enum: WORKBOOK_CHANGE_STATUS, required: true, default: "New" },
+  detected_at: { type: Date, required: true, default: () => new Date() },
+  actor: oid("User"), actioned_at: Date,
+}, { timestamps: true });
+WorkbookChangeSchema.index({ sync_source: 1, status: 1, detected_at: -1 });
+WorkbookChangeSchema.index({ tab: 1, row_key: 1, column: 1, status: 1 });
 
 // ---------- FollowUpAction ----------
 const FollowUpActionSchema = new Schema({
@@ -331,6 +426,33 @@ const NotificationSchema = new Schema({
 NotificationSchema.index({ type: 1, entity_id: 1, status: 1 });
 NotificationSchema.index({ status: 1, createdAt: -1 });
 
+// ---------- Public tokens (2026-08-11: self-registration + candidate feedback) ----------
+// Capability URLs: the random token IS the credential. register tokens are per-location
+// (Admin/Ops generate and share); feedback tokens are per batch-member.
+export const PUBLIC_TOKEN_PURPOSE = ["register", "feedback"] as const;
+const PublicTokenSchema = new Schema({
+  token: { type: String, required: true, unique: true },
+  purpose: { type: String, enum: PUBLIC_TOKEN_PURPOSE, required: true },
+  location: oid("Location"),    // register: which location's pool the candidate lands in
+  program: oid("Program"),      // register: optional preselected program
+  batch_member: oid("BatchMember"), // feedback: who this link belongs to
+  active: { type: Boolean, default: true },
+  created_by: oid("User"),
+}, { timestamps: true });
+PublicTokenSchema.index({ purpose: 1, location: 1 });
+PublicTokenSchema.index({ purpose: 1, batch_member: 1 });
+
+// ---------- Feedback (2026-08-11: "हर बच्चा… feedback दे पाए") ----------
+const FeedbackSchema = new Schema({
+  batch: oid("Batch", true),
+  batch_member: oid("BatchMember", true),
+  rating: { type: Number, min: 1, max: 5, required: true },
+  liked: String,        // what was good
+  suggestions: String,  // "कुछ सुझाव है, सुझाव दे पाए"
+  submitted_at: { type: Date, default: () => new Date() },
+}, { timestamps: true });
+FeedbackSchema.index({ batch_member: 1 }, { unique: true }); // one response per member
+
 // ---------- User ----------
 const UserSchema = new Schema({
   name: { type: String, required: true },
@@ -370,16 +492,29 @@ const DefaultsSchema = new Schema({
   attendance_gap_amber: { type: Number, default: 5 },
   attendance_gap_red: { type: Number, default: 10 },
   daily_log_edit_window_hours: { type: Number, default: 48 },
-  max_concurrent_batches: { type: Number, default: 5 },
+  max_concurrent_batches: { type: Number, default: 4 }, // 2026-08-11: cap 4 (was RPL M5's 5)
   roster_threshold_pct: { type: Number, default: 80 }, // Rule 16: roster ≥ this % of target_size
   // plan1.md resolution #1: Ready → Active additionally requires this % of roster enrolled
   enrollment_threshold_pct: { type: Number, default: 80 },
+  // Candidate eligibility (2026-08-11)
+  min_age: { type: Number, default: 18 },
+  max_age: { type: Number, default: 40 },
+  training_cooldown_months: { type: Number, default: 6 },
+  // Backward batch planner lead times (2026-08-11)
+  lead_enrollment_days: { type: Number, default: 1 },
+  lead_mobilization_days: { type: Number, default: 2 },
+  lead_trainer_ready_days: { type: Number, default: 1 },
+  lead_tot_done_days: { type: Number, default: 3 },
+  lead_trainer_found_days: { type: Number, default: 7 },
+  min_daily_evidence: { type: Number, default: 2 },
+  sidh_url: { type: String, default: "https://www.skillindiadigital.gov.in/" },
 });
 
 export type Id = Types.ObjectId;
 
 export const Program = models.Program || model("Program", ProgramSchema);
 export const Location = models.Location || model("Location", LocationSchema);
+export const MeetingNote = models.MeetingNote || model("MeetingNote", MeetingNoteSchema);
 export const LocationTarget = models.LocationTarget || model("LocationTarget", LocationTargetSchema);
 export const Room = models.Room || model("Room", RoomSchema);
 export const Trainer = models.Trainer || model("Trainer", TrainerSchema);
@@ -394,6 +529,10 @@ export const Invoice = models.Invoice || model("Invoice", InvoiceSchema);
 export const CostEntry = models.CostEntry || model("CostEntry", CostEntrySchema);
 export const SyncSource = models.SyncSource || model("SyncSource", SyncSourceSchema);
 export const SheetChange = models.SheetChange || model("SheetChange", SheetChangeSchema);
+export const WorkbookSnapshot = models.WorkbookSnapshot || model("WorkbookSnapshot", WorkbookSnapshotSchema);
+export const WorkbookChange = models.WorkbookChange || model("WorkbookChange", WorkbookChangeSchema);
+export const PublicToken = models.PublicToken || model("PublicToken", PublicTokenSchema);
+export const Feedback = models.Feedback || model("Feedback", FeedbackSchema);
 export const FollowUpAction = models.FollowUpAction || model("FollowUpAction", FollowUpActionSchema);
 export const User = models.User || model("User", UserSchema);
 export const Notification = models.Notification || model("Notification", NotificationSchema);
