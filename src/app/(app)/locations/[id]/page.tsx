@@ -111,6 +111,18 @@ function Targets({ locationId, setError }: any) {
             { key: "program", label: "Program", render: (r: any) => r.program?.name ?? "?" },
             { key: "approved_target", label: "Approved (external)" },
             { key: "allocated_target", label: "Allocated (internal)" },
+            {
+              key: "achieved", label: "Achieved",
+              render: (r: any) => r.achieved ? (
+                <span className="text-xs">
+                  <span className="font-medium text-gray-900">{r.achieved.enrolled}</span> enrolled ·{" "}
+                  <span className="font-medium text-gray-900">{r.achieved.certified}</span> certified
+                  <span className="block text-gray-400">
+                    {r.achieved.batches_created} batch{r.achieved.batches_created === 1 ? "" : "es"} · remaining {r.achieved.remaining_by_certified}
+                  </span>
+                </span>
+              ) : "—",
+            },
             { key: "capacity", label: "Capacity math", render: (r: any) => <span className="text-xs text-gray-600">{r.capacity?.sentence ?? "—"}</span> },
           ]}
           empty="No targets yet."

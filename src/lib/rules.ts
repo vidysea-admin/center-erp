@@ -374,6 +374,84 @@ export async function canEditDailyLog(log: { entered_by: unknown; entered_at: Da
   return String(log.entered_by) === String(userId) && ageHours <= defaults.daily_log_edit_window_hours;
 }
 
+// ---------- Batch Health Score (RPL cross-cutting) ----------
+// A composite Green/Amber/Red — but the score is NEVER shown alone: `reasons` always travels
+// with it, because a bare "Amber" hides which thing is actually wrong.
+export type BatchHealth = {
+  score: "Green" | "Amber" | "Red";
+  reasons: { code: string; label: string; severity: "amber" | "red" }[];
+};
+
+// Shared gap arithmetic — previously inlined in the Home route, now the single implementation.
+export function attendanceGap(log: { roster_count?: number; internal_present?: number; govt_present?: number | null }): number | null {
+  if (log.govt_present == null || !log.roster_count) return null;
+  const internalPct = (100 * (log.internal_present ?? 0)) / log.roster_count;
+  const govtPct = (100 * log.govt_present) / log.roster_count;
+  return Math.round(internalPct - govtPct);
+}
+
+// How many consecutive operating days (ending yesterday) have no daily log.
+export async function missingLogStreak(batch: any, operating: number[]): Promise<{ days: number; lastMissing: Date | null }> {
+  let d = addDays(dayStart(new Date()), -1);
+  let days = 0, lastMissing: Date | null = null, guard = 0;
+  while (guard++ < 21) {
+    if (!operating.includes(d.getDay())) { d = addDays(d, -1); continue; }
+    if (batch.actual_start && d < dayStart(batch.actual_start)) break;
+    const log = await DailyLog.findOne({ batch: batch._id, log_date: d }).select("_id").lean();
+    if (log) break;
+    days++;
+    if (!lastMissing) lastMissing = d;
+    d = addDays(d, -1);
+  }
+  return { days, lastMissing };
+}
+
+export async function batchHealth(batchId: string): Promise<BatchHealth> {
+  const defaults = await getDefaults();
+  const batch = await Batch.findById(batchId).populate("program", "operating_days").lean<any>();
+  if (!batch) throw new HttpError(404, "Batch not found");
+  const reasons: BatchHealth["reasons"] = [];
+
+  if (["Completed", "Cancelled"].includes(batch.status)) return { score: "Green", reasons };
+
+  // 1. Missing daily logs (Rule 33) — a streak matters more than a single miss.
+  if (batch.status === "Active") {
+    const operating: number[] = batch.program?.operating_days?.length ? batch.program.operating_days : [1, 2, 3, 4, 5, 6];
+    const { days } = await missingLogStreak(batch, operating);
+    if (days >= 3) reasons.push({ code: "missing_logs", label: `No daily log for ${days} operating days`, severity: "red" });
+    else if (days >= 1) reasons.push({ code: "missing_logs", label: `Daily log missing for ${days} day${days > 1 ? "s" : ""}`, severity: "amber" });
+  }
+
+  // 2. Government attendance gap (Rule 31) — worst of the last 10 verified logs.
+  const logs = await DailyLog.find({ batch: batchId, govt_present: { $ne: null } })
+    .sort({ log_date: -1 }).limit(10).select("roster_count internal_present govt_present").lean<any[]>();
+  const worstGap = logs.reduce((w, l) => Math.max(w, attendanceGap(l) ?? 0), 0);
+  if (worstGap >= defaults.attendance_gap_red) reasons.push({ code: "govt_gap", label: `Government attendance gap ${worstGap} pts`, severity: "red" });
+  else if (worstGap >= defaults.attendance_gap_amber) reasons.push({ code: "govt_gap", label: `Government attendance gap ${worstGap} pts`, severity: "amber" });
+
+  // 3. Open enrollment failures.
+  const failures = await BatchMember.countDocuments({ batch: batchId, enrollment_status: "Failed", left_on: null });
+  if (failures > 0) reasons.push({ code: "enrollment_failures", label: `${failures} enrollment failure${failures > 1 ? "s" : ""} unresolved`, severity: failures >= 3 ? "red" : "amber" });
+
+  // 4. Planning gaps — only meaningful before the batch starts.
+  if (["Planning", "Ready"].includes(batch.status)) {
+    const r = await batchReadiness(batchId);
+    const failing = Object.entries(r.checks).filter(([, ok]) => !ok).map(([k]) => k);
+    const overdue = dayStart(new Date()) > dayStart(batch.planned_start);
+    if (failing.length) {
+      reasons.push({
+        code: "not_ready",
+        label: `Not ready: ${failing.join(", ").replace(/_/g, " ")}`,
+        severity: overdue ? "red" : "amber",
+      });
+    }
+    if (r.location_halted) reasons.push({ code: "location_halted", label: "Location is not operational", severity: "red" });
+  }
+
+  const score = reasons.some((r) => r.severity === "red") ? "Red" : reasons.length ? "Amber" : "Green";
+  return { score, reasons };
+}
+
 // Rule 33: Active batches missing previous operating day's log
 export async function missingLogQueue(locationScopeFilter: Record<string, unknown>) {
   const batches = await Batch.find({ status: "Active", ...locationScopeFilter })

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { Batch, Program } from "@/models";
-import { assertBatchInScope, assertRoomFreeForBatch, assertTrainerAvailableForBatch, computePlannedEnd, deriveTrainerStatus, batchReadiness } from "@/lib/rules";
+import { assertBatchInScope, assertRoomFreeForBatch, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, batchReadiness } from "@/lib/rules";
 import { auditDiff } from "@/lib/audit";
 
 export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
@@ -11,7 +11,8 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   const { id } = await ctx.params;
   await assertBatchInScope(user, id); // Rule 38
   const readiness = await batchReadiness(id); // includes populated batch
-  return NextResponse.json({ item: readiness.batch, readiness });
+  const health = await batchHealth(id);
+  return NextResponse.json({ item: readiness.batch, readiness, health });
 });
 
 export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {

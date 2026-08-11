@@ -26,7 +26,20 @@ function CandidatesInner() {
   const [drawer, setDrawer] = useState<"" | "add" | "import" | "assign">("");
   const [form, setForm] = useState<any>({});
   const [importState, setImportState] = useState<any>({});
+  const [dupes, setDupes] = useState<any[]>([]);
   const set = (k: string, v: unknown) => setForm((f: any) => ({ ...f, [k]: v }));
+
+  // Rule 7: advisory duplicate lookup while the operator types. Never blocks the save.
+  useEffect(() => {
+    const phone = String(form.phone ?? "").replace(/\D/g, "");
+    if (drawer !== "add" || phone.length < 7) { setDupes([]); return; }
+    const t = setTimeout(() => {
+      api("/api/candidates/check-duplicate", { method: "POST", json: { name: form.name, phone: form.phone, dob: form.dob } })
+        .then((d) => setDupes(d.duplicates ?? []))
+        .catch(() => setDupes([]));
+    }, 400);
+    return () => clearTimeout(t);
+  }, [form.phone, form.name, form.dob, drawer]);
 
   const load = () => {
     const params = new URLSearchParams({ q, limit: "200" });
@@ -127,11 +140,23 @@ function CandidatesInner() {
             <Field label="Phone" required><input className={inputCls} value={form.phone ?? ""} onChange={(e) => set("phone", e.target.value)} /></Field>
             <Field label="Alt phone"><input className={inputCls} value={form.alt_phone ?? ""} onChange={(e) => set("alt_phone", e.target.value)} /></Field>
           </div>
-          <Field label="Gender">
-            <select className={inputCls} value={form.gender ?? ""} onChange={(e) => set("gender", e.target.value)}>
-              <option value="">—</option><option>Female</option><option>Male</option><option>Other</option>
-            </select>
-          </Field>
+          {dupes.length > 0 && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              <div className="font-medium">Possible duplicate — check before saving</div>
+              <ul className="mt-1 space-y-0.5 text-xs">
+                {dupes.map((d: any) => <li key={d.candidate_id}>• {d.message}</li>)}
+              </ul>
+              <div className="mt-1 text-xs text-amber-700">You can still save — one phone number often serves a whole family.</div>
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Gender">
+              <select className={inputCls} value={form.gender ?? ""} onChange={(e) => set("gender", e.target.value)}>
+                <option value="">—</option><option>Female</option><option>Male</option><option>Other</option>
+              </select>
+            </Field>
+            <Field label="Date of birth"><input type="date" className={inputCls} value={form.dob ?? ""} onChange={(e) => set("dob", e.target.value)} /></Field>
+          </div>
           <Field label="Location" required>
             <select className={inputCls} value={form.location ?? ""} onChange={(e) => set("location", e.target.value)}>
               <option value="">Select…</option>
@@ -202,6 +227,15 @@ function CandidatesInner() {
               </div>
               {importState.preview && (
                 <p className="text-sm text-gray-600">{importState.preview.valid} valid, {importState.preview.skipped} skipped (missing name/phone).</p>
+              )}
+              {importState.preview?.duplicate_count > 0 && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  <div className="font-medium">{importState.preview.duplicate_count} possible duplicate{importState.preview.duplicate_count > 1 ? "s" : ""} — review before importing</div>
+                  <ul className="mt-1 max-h-40 space-y-0.5 overflow-y-auto text-xs">
+                    {importState.preview.duplicates.map((d: string, i: number) => <li key={i}>• {d}</li>)}
+                  </ul>
+                  <div className="mt-1 text-xs text-amber-700">Importing anyway is allowed — these are flagged, not blocked.</div>
+                </div>
               )}
             </>
           )}

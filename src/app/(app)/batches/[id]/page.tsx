@@ -2,7 +2,7 @@
 import { use, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { api, fmtDate, toInputDate } from "@/lib/client";
-import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
+import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, HealthBanner, Section, Tabs, inputCls } from "@/components/ui";
 import { Activity } from "@/components/activity";
 import { flushQueue, getQueue, uploadWithRetry } from "@/lib/upload";
 
@@ -29,6 +29,7 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
         <span className="text-sm text-gray-500">{b.program?.name} · {fmtDate(b.planned_start)} → {fmtDate(b.planned_end)}</span>
       </div>
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
+      <HealthBanner health={data.health} />
       <Tabs tabs={TABS} active={tab} onChange={setTab} />
       {tab === "Overview" && <Overview data={data} onChanged={load} setError={setError} />}
       {tab === "Candidates" && <Roster batchId={id} batch={b} setError={setError} onChanged={load} />}

@@ -2,7 +2,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, fmtDate } from "@/lib/client";
-import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, inputCls } from "@/components/ui";
+import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, HealthChip, inputCls } from "@/components/ui";
 import { useLocationCtx } from "@/components/shell";
 
 export default function BatchesPage() {
@@ -79,6 +79,7 @@ function BatchesInner() {
           { key: "location", label: "Location", render: (r: any) => r.location?.name },
           { key: "program", label: "Program", render: (r: any) => r.program?.name, mobile: false },
           { key: "status", label: "Status", render: (r: any) => <Chip value={r.status} />, mobile: false },
+          { key: "health", label: "Health", render: (r: any) => <HealthChip health={r.health} /> },
           { key: "roster", label: "Enrolled / Roster / Target", render: (r: any) => `${r.enrolled_count} / ${r.roster_count} / ${r.target_size}` },
           { key: "trainer", label: "Trainer", render: (r: any) => r.trainer?.name ?? "—" },
           { key: "planned_start", label: "Start", render: (r: any) => fmtDate(r.planned_start) },

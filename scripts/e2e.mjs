@@ -209,6 +209,14 @@ const capTargets = (await req("GET", `/api/locations/${loc._id}/targets`)).data.
 ok("capacity exposes both constraint terms", capTargets[0]?.capacity?.by_deadline === 2 && capTargets[0]?.capacity?.by_concurrency === 2, JSON.stringify(capTargets[0]?.capacity));
 ok("targets expose achieved counts", capTargets[0]?.achieved?.enrolled >= 0 && capTargets[0]?.achieved?.remaining_by_certified >= 0, JSON.stringify(capTargets[0]?.achieved));
 
+// ---- Batch Health Score (score always travels with reasons) ----
+const healthBatch = (await req("GET", `/api/batches/${capBatch._id}`)).data;
+ok("health score present with reasons array", ["Green", "Amber", "Red"].includes(healthBatch.health?.score) && Array.isArray(healthBatch.health?.reasons), JSON.stringify(healthBatch.health));
+const listHealth = (await req("GET", "/api/batches")).data.items;
+ok("health on every batch list row", listHealth.every((b) => b.health?.score), "missing on some rows");
+const amberOrRed = listHealth.find((b) => b.health.score !== "Green");
+ok("non-green batches always name a reason", !amberOrRed || amberOrRed.health.reasons.length > 0, JSON.stringify(amberOrRed?.health));
+
 // ---- audit trail exists ----
 const audit = (await req("GET", `/api/audit/Batch/${batch._id}`)).data.items;
 ok("AuditLog rows written for batch", audit.length >= 3, `count=${audit.length}`);

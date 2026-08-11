@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, requireRole, locationFilter, assertLocationInScope, HttpError } from "@/lib/authz";
 import { Batch, BatchMember, Program } from "@/models";
-import { assertLocationOperational, assertRoomFreeForBatch, assertTrainerAvailableForBatch, computePlannedEnd, deriveTrainerStatus, nextBatchCode } from "@/lib/rules";
+import { assertLocationOperational, assertRoomFreeForBatch, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, nextBatchCode } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
 export const GET = apiHandler(async (req: NextRequest) => {
@@ -32,7 +32,13 @@ export const GET = apiHandler(async (req: NextRequest) => {
     { $group: { _id: "$batch", roster: { $sum: 1 }, enrolled: { $sum: { $cond: [{ $eq: ["$enrollment_status", "Completed"] }, 1, 0] } } } },
   ]);
   const byBatch = new Map(counts.map((c) => [String(c._id), c]));
-  const out = items.map((b) => ({ ...b, roster_count: byBatch.get(String(b._id))?.roster ?? 0, enrolled_count: byBatch.get(String(b._id))?.enrolled ?? 0 }));
+  // Health is computed per row; the list is already capped by location scope + status filter.
+  const out = await Promise.all(items.map(async (b) => ({
+    ...b,
+    roster_count: byBatch.get(String(b._id))?.roster ?? 0,
+    enrolled_count: byBatch.get(String(b._id))?.enrolled ?? 0,
+    health: await batchHealth(String(b._id)),
+  })));
   return NextResponse.json({ items: out, total: out.length });
 });
 

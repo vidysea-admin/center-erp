@@ -26,7 +26,44 @@ const CHIP_COLORS: Record<string, string> = {
   "On Hold": "bg-amber-100 text-amber-700", "On Leave": "bg-amber-100 text-amber-700",
   "Partial": "bg-amber-100 text-amber-700", "Skipped": "bg-amber-100 text-amber-700",
   "Ignored": "bg-gray-100 text-gray-500", "Actioned": "bg-green-100 text-green-700",
+  // Batch health
+  "Green": "bg-green-100 text-green-700", "Amber": "bg-amber-100 text-amber-700", "Red": "bg-red-100 text-red-700",
 };
+
+// Health is never shown as a bare colour — the reasons always travel with it.
+export function HealthChip({ health, inline }: { health?: { score: string; reasons: { label: string; severity: string }[] }; inline?: boolean }) {
+  if (!health) return <span className="text-gray-400">—</span>;
+  const title = health.reasons.length ? health.reasons.map((r) => r.label).join(" · ") : "No issues";
+  if (inline) {
+    return (
+      <span className="flex flex-wrap items-center gap-1.5" title={title}>
+        <Chip value={health.score} />
+        {health.reasons.slice(0, 2).map((r, i) => (
+          <span key={i} className={`text-[11px] ${r.severity === "red" ? "text-red-600" : "text-amber-600"}`}>{r.label}</span>
+        ))}
+        {health.reasons.length > 2 && <span className="text-[11px] text-gray-400">+{health.reasons.length - 2}</span>}
+      </span>
+    );
+  }
+  return <span title={title}><Chip value={health.score} /></span>;
+}
+
+export function HealthBanner({ health }: { health?: { score: string; reasons: { label: string; severity: string }[] } }) {
+  if (!health || health.score === "Green") return null;
+  const red = health.score === "Red";
+  return (
+    <div className={`rounded-xl border px-4 py-3 ${red ? "border-red-200 bg-red-50" : "border-amber-200 bg-amber-50"}`}>
+      <div className={`text-sm font-semibold ${red ? "text-red-700" : "text-amber-700"}`}>
+        Batch health: {health.score}
+      </div>
+      <ul className="mt-1 space-y-0.5 text-sm">
+        {health.reasons.map((r, i) => (
+          <li key={i} className={r.severity === "red" ? "text-red-700" : "text-amber-700"}>• {r.label}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 export function Chip({ value }: { value?: string | null }) {
   if (!value) return <span className="text-gray-400">—</span>;
