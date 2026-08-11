@@ -17,7 +17,7 @@ export const PUT = apiHandler(async (req: NextRequest) => {
   requireRole(user, "Admin"); // Rule 40
   const body = await req.json();
   const set: Record<string, unknown> = {};
-  for (const f of ["batch_size", "duration_days", "buffer_days", "completion_deadline_days", "mobilisation_lead_days", "attendance_gap_amber", "attendance_gap_red", "daily_log_edit_window_hours", "max_concurrent_batches", "enrollment_threshold_pct"]) {
+  for (const f of ["batch_size", "duration_days", "buffer_days", "completion_deadline_days", "mobilisation_lead_days", "attendance_gap_amber", "attendance_gap_red", "daily_log_edit_window_hours", "max_concurrent_batches", "enrollment_threshold_pct", "roster_threshold_pct"]) {
     if (body[f] !== undefined) set[f] = body[f];
   }
   const doc = await Defaults.findOneAndUpdate({ _singleton: "defaults" }, { $set: set }, { upsert: true, new: true });

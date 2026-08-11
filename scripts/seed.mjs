@@ -17,7 +17,7 @@ await db.collection("defaults").updateOne(
     _singleton: "defaults", batch_size: 30, duration_days: 15, buffer_days: 5,
     completion_deadline_days: 90, mobilisation_lead_days: 7,
     attendance_gap_amber: 5, attendance_gap_red: 10,
-    daily_log_edit_window_hours: 48, max_concurrent_batches: 1,
+    daily_log_edit_window_hours: 48, max_concurrent_batches: 5, roster_threshold_pct: 80,
     enrollment_threshold_pct: 80,
   } },
   { upsert: true },

@@ -31,7 +31,7 @@ export function requireEdit(user: SessionUser) {
 // Rule 38: Location-role users see only rows in location_scope — enforced per query.
 // Enrollment users are scoped the same way when a location_scope is set; an empty
 // scope means a central enrollment operator working across all locations.
-function isScoped(user: SessionUser): boolean {
+export function isScoped(user: SessionUser): boolean {
   if (user.role === "Location") return true;
   return user.role === "Enrollment" && (user.location_scope?.length ?? 0) > 0;
 }
@@ -57,9 +57,13 @@ export function apiHandler<T extends unknown[]>(fn: (...args: T) => Promise<Resp
         return NextResponse.json({ error: e.message }, { status: e.status });
       }
       const msg = e instanceof Error ? e.message : "Internal error";
-      // Mongo duplicate key → readable 409
+      // Mongo duplicate key → readable 409 naming the field, without leaking the raw driver text.
       if (typeof msg === "string" && msg.includes("E11000")) {
-        return NextResponse.json({ error: "Duplicate value violates a uniqueness rule: " + msg }, { status: 409 });
+        const field = msg.match(/index: (\w+)_/)?.[1] ?? msg.match(/dup key: \{ (\w+):/)?.[1];
+        return NextResponse.json(
+          { error: field ? `That ${field.replace(/_/g, " ")} is already in use.` : "This record already exists." },
+          { status: 409 },
+        );
       }
       console.error(e);
       return NextResponse.json({ error: msg }, { status: 500 });

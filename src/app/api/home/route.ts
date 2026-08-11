@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, locationFilter } from "@/lib/authz";
+import { apiHandler, requireUser, locationFilter, isScoped } from "@/lib/authz";
 import { Batch, BatchMember, DailyLog, FollowUpAction, Invoice, Location, SheetChange, TrainerRequest } from "@/models";
 import { missingLogQueue } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
@@ -12,10 +12,15 @@ export const GET = apiHandler(async () => {
   const scope = locationFilter(user);
   const defaults = await getDefaults();
 
+  // Rule 38: every scoped user (Location, and Enrollment when a scope is set) sees only
+  // their own locations' rows — including the KPI counts.
+  const scopedBatchIds = isScoped(user) ? await Batch.find(scope).distinct("_id") : null;
+  const batchScope = scopedBatchIds ? { batch: { $in: scopedBatchIds } } : {};
+
   const [activeLocations, activeBatches, enrolledMembers, openRequests] = await Promise.all([
-    Location.countDocuments({ operational_status: "Active", ...(user.role === "Location" ? { _id: { $in: user.location_scope } } : {}) }),
+    Location.countDocuments({ operational_status: "Active", ...locationFilter(user, "_id") }),
     Batch.countDocuments({ status: "Active", ...scope }),
-    BatchMember.countDocuments({ left_on: null, enrollment_status: "Completed" }),
+    BatchMember.countDocuments({ left_on: null, enrollment_status: "Completed", ...batchScope }),
     TrainerRequest.countDocuments({ status: { $in: ["Open", "In Progress"] }, ...scope }),
   ]);
 
@@ -26,10 +31,6 @@ export const GET = apiHandler(async () => {
   const openChanges = ["Admin", "Operations"].includes(user.role)
     ? await SheetChange.find({ status: "Open" }).sort({ detected_at: -1 }).limit(10).populate("location", "name code").lean()
     : [];
-
-  // Rule 38: Location-role users only ever see rows from their own batches
-  const scopedBatchIds = user.role === "Location" ? await Batch.find(scope).distinct("_id") : null;
-  const batchScope = scopedBatchIds ? { batch: { $in: scopedBatchIds } } : {};
 
   // Queue 3: govt attendance gap (Rule 31) — recent logs where gap ≥ amber
   const recentLogs = await DailyLog.find({ govt_present: { $ne: null }, ...batchScope })

@@ -96,12 +96,24 @@ ok("Rule 21: candidate lifecycle Enrolled", c0.lifecycle_status === "Enrolled", 
 await req("POST", `/api/batches/${batch._id}/transition`, { target: "Active" }, 200);
 
 // ---- trainer / room conflicts ----
-// Rule 10: same trainer, overlapping dates → 409
+// Rule 10 (2026-08 policy: a trainer may hold up to max_concurrent_batches overlapping batches).
+// The 2nd–5th overlapping batch is allowed; the 6th is blocked.
+const extraBatches = [];
+for (let i = 0; i < 4; i++) {
+  const r = await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, planned_start: today, target_size: 3 }, 201);
+  extraBatches.push(r.data.item?._id);
+}
+ok("Rule 10: trainer may hold 5 concurrent batches", extraBatches.every(Boolean));
 await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, planned_start: today, target_size: 3 }, 409);
 // Rule 13: same room, overlapping, same session → 409
 await req("POST", "/api/batches", { location: loc._id, program: prog._id, room: room._id, planned_start: today, target_size: 3 }, 409);
 // different session (Morning vs Full Day) still conflicts per rule
 await req("POST", "/api/batches", { location: loc._id, program: prog._id, room: room._id, planned_start: today, target_size: 3, session: "Morning" }, 409);
+
+// Release the concurrency-test batches so later assertions see a clean trainer workload.
+for (const id of extraBatches) {
+  await req("POST", `/api/batches/${id}/transition`, { target: "Cancelled", reason: "concurrency test cleanup" }, 200);
+}
 
 // ---- daily log ----
 const mIds = members.map((m) => m._id);
@@ -162,6 +174,40 @@ ok("Rule 21: dropped candidate lifecycle", cand4b.lifecycle_status === "Dropped"
 await req("POST", `/api/batches/${batch2._id}/members`, { candidate: cand4._id }, 409); // same batch: unique(batch,candidate)
 const batch3 = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, planned_start: today, target_size: 3, session: "Morning" }, 201)).data.item;
 await req("POST", `/api/batches/${batch3._id}/members`, { candidate: cand4._id }, 201); // different batch OK
+
+// ---- Rule 1: location-status gating (2026-08) ----
+const gateLoc = (await req("POST", "/api/locations", { code: "GATE" + stamp, name: "Gate Location " + stamp, approval_status: "Approved" }, 201)).data.item;
+await req("POST", "/api/batches", { location: gateLoc._id, program: prog._id, planned_start: today, target_size: 3 }, 201); // Not Started is allowed (advance planning)
+await req("PATCH", `/api/locations/${gateLoc._id}`, { operational_status: "Stopped", status_reason: "test" }, 200);
+await req("POST", "/api/batches", { location: gateLoc._id, program: prog._id, planned_start: today, target_size: 3 }, 409); // Rule 1
+
+// ---- Rule 48: enrolled count capped at batch capacity ----
+const capBatch = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, planned_start: today, target_size: 1 }, 201)).data.item;
+const capCands = [];
+for (let i = 0; i < 2; i++) {
+  capCands.push((await req("POST", "/api/candidates", { name: `Cap ${i} ${stamp}`, phone: `77${stamp}${i}`, location: loc._id, program: prog._id }, 201)).data.item);
+}
+const capMembers = [];
+for (const c of capCands) capMembers.push((await req("POST", `/api/batches/${capBatch._id}/members`, { candidate: c._id }, 201)).data.item);
+await req("PATCH", `/api/members/${capMembers[0]._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+await req("PATCH", `/api/members/${capMembers[1]._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 409); // Rule 48
+
+// ---- Rule 7: duplicate candidate detection is advisory, never a block ----
+const dupPhone = "9" + stamp + "111";
+await req("POST", "/api/candidates", { name: "Dup A " + stamp, phone: dupPhone, location: loc._id, program: prog._id }, 201);
+const dupCheck = (await req("POST", "/api/candidates/check-duplicate", { name: "Dup B", phone: "+91 " + dupPhone })).data;
+ok("Rule 7: duplicate found across phone formats", (dupCheck.duplicates ?? []).length >= 1, JSON.stringify(dupCheck).slice(0, 120));
+await req("POST", "/api/candidates", { name: "Dup B " + stamp, phone: dupPhone, location: loc._id, program: prog._id }, 201); // warned, not blocked
+
+// ---- Rule 36: invoice status moves one step forward only ----
+const invBatchId = batch._id; // its invoice is "Raised" by this point
+await req("PATCH", `/api/batches/${invBatchId}/invoice`, { status: "Paid", paid_on: today }, 200); // forward: legal
+await req("PATCH", `/api/batches/${invBatchId}/invoice`, { status: "Ready" }, 409); // backwards: blocked
+
+// ---- Capacity math honours both constraints ----
+const capTargets = (await req("GET", `/api/locations/${loc._id}/targets`)).data.items;
+ok("capacity exposes both constraint terms", capTargets[0]?.capacity?.by_deadline === 2 && capTargets[0]?.capacity?.by_concurrency === 2, JSON.stringify(capTargets[0]?.capacity));
+ok("targets expose achieved counts", capTargets[0]?.achieved?.enrolled >= 0 && capTargets[0]?.achieved?.remaining_by_certified >= 0, JSON.stringify(capTargets[0]?.achieved));
 
 // ---- audit trail exists ----
 const audit = (await req("GET", `/api/audit/Batch/${batch._id}`)).data.items;

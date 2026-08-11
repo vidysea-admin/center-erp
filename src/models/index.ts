@@ -85,7 +85,7 @@ const TrainerSchema = new Schema({
   available_from: Date,
   day_rate: Number,
   incentive_note: String,
-  max_concurrent_batches: { type: Number, required: true, default: 1 },
+  max_concurrent_batches: { type: Number, required: true, default: 5 }, // RPL M5: up to 5 batches per trainer
   active: { type: Boolean, default: true },
 }, { timestamps: true });
 
@@ -107,6 +107,8 @@ const CandidateSchema = new Schema({
   name: { type: String, required: true },
   phone: { type: String, required: true },
   alt_phone: String, gender: String,
+  dob: Date,            // RPL M8: name+DOB is the second duplicate-match key
+  id_reference: String, // government ID reference (NOT the Aadhaar number itself)
   location: oid("Location", true),
   program: oid("Program", true),
   source: String,
@@ -274,7 +276,8 @@ const DefaultsSchema = new Schema({
   attendance_gap_amber: { type: Number, default: 5 },
   attendance_gap_red: { type: Number, default: 10 },
   daily_log_edit_window_hours: { type: Number, default: 48 },
-  max_concurrent_batches: { type: Number, default: 1 },
+  max_concurrent_batches: { type: Number, default: 5 },
+  roster_threshold_pct: { type: Number, default: 80 }, // Rule 16: roster ≥ this % of target_size
   // plan1.md resolution #1: Ready → Active additionally requires this % of roster enrolled
   enrollment_threshold_pct: { type: Number, default: 80 },
 });

@@ -5,14 +5,27 @@ import {
   Batch, BatchMember, Candidate, Closure, DailyLog, Invoice, Location, Program, Room, Trainer,
 } from "@/models";
 import { getDefaults } from "@/lib/defaults";
-import { HttpError } from "@/lib/authz";
+import { HttpError, isScoped } from "@/lib/authz";
 import type { SessionUser } from "@/auth";
 
 const ACTIVE_BATCH_STATUSES = ["Planning", "Ready", "Active", "Closing"];
 
-// Rule 38 on by-ID access: Location-role users may only touch batches at their locations.
+// Rule 1 (RPL M1/M10): no operational activity at a location that has been stopped.
+// "Not Started" is deliberately allowed — centres are planned before they open, which is
+// the whole point of advance batch planning.
+const HALTED_LOCATION_STATUSES = ["On Hold", "Stopped", "Closed"];
+
+export async function assertLocationOperational(locationId: unknown, action = "This action") {
+  const loc = await Location.findById(locationId).select("name operational_status").lean<any>();
+  if (!loc) throw new HttpError(400, "Location not found");
+  if (HALTED_LOCATION_STATUSES.includes(loc.operational_status)) {
+    throw new HttpError(409, `Rule 1: ${action} is blocked — ${loc.name} is ${loc.operational_status}.`);
+  }
+}
+
+// Rule 38 on by-ID access: scoped users may only touch batches at their locations.
 export async function assertBatchInScope(user: SessionUser, batchId: string) {
-  if (user.role !== "Location") return;
+  if (!isScoped(user)) return;
   const b = await Batch.findById(batchId).select("location").lean<any>();
   if (!b) throw new HttpError(404, "Batch not found");
   if (!user.location_scope.map(String).includes(String(b.location))) {
@@ -22,7 +35,7 @@ export async function assertBatchInScope(user: SessionUser, batchId: string) {
 
 // Same, resolved via a BatchMember id.
 export async function assertMemberInScope(user: SessionUser, memberId: string) {
-  if (user.role !== "Location") return;
+  if (!isScoped(user)) return;
   const m = await BatchMember.findById(memberId).select("batch").lean<any>();
   if (!m) throw new HttpError(404, "Batch member not found");
   await assertBatchInScope(user, String(m.batch));
@@ -46,13 +59,21 @@ export function computePlannedEnd(planned_start: Date, program: { duration_days:
   return addDays(planned_start, program.duration_days + program.buffer_days);
 }
 
-export function capacitySummary(approved_target: number, program: { default_batch_size: number; duration_days: number; buffer_days: number; completion_deadline_days: number }) {
+export function capacitySummary(
+  approved_target: number,
+  program: { default_batch_size: number; duration_days: number; buffer_days: number; completion_deadline_days: number },
+  maxConcurrentBatches = 5,
+) {
   const batches_required = Math.ceil(approved_target / program.default_batch_size);
   const batch_duration = program.duration_days + program.buffer_days;
   const trainer_days = batches_required * batch_duration;
-  const trainers_required = Math.ceil(trainer_days / program.completion_deadline_days);
+  // Two constraints, both from the spec: the deadline (meeting whiteboard math) and the
+  // per-trainer batch cap (RPL M6). Whichever needs more trainers wins.
+  const by_deadline = Math.ceil(trainer_days / program.completion_deadline_days);
+  const by_concurrency = Math.ceil(batches_required / Math.max(1, maxConcurrentBatches));
+  const trainers_required = Math.max(by_deadline, by_concurrency);
   return {
-    batches_required, batch_duration, trainer_days, trainers_required,
+    batches_required, batch_duration, trainer_days, by_deadline, by_concurrency, trainers_required,
     sentence: `Target ${approved_target} → ${batches_required} batches × ${batch_duration} days = ${trainer_days} trainer-days → ${trainers_required} trainer${trainers_required === 1 ? "" : "s"} required within ${program.completion_deadline_days} days.`,
   };
 }
@@ -137,15 +158,22 @@ export async function activeRoster(batchId: string): Promise<any[]> {
   return BatchMember.find({ batch: batchId, left_on: null }).lean<any[]>();
 }
 
-// Rule 20 + 21: add a candidate to a batch
+// Rule 20 + 21: add a candidate to a batch.
+// Returns { member, warning } — over-target assignment is a WARNING, not a block: centres
+// deliberately assign a dropout buffer. The hard cap lands on enrolment (Rule 48).
 export async function addMemberChecked(batchId: string, candidateId: string, joined_on: Date) {
   const existing = await BatchMember.findOne({ candidate: candidateId, left_on: null }).populate("batch", "code").lean<any>();
   if (existing) {
     throw new HttpError(409, `Rule 20: Candidate already active in batch ${existing.batch?.code ?? existing.batch}.`);
   }
+  const batch = await Batch.findById(batchId).select("target_size code").lean<any>();
+  const rosterCount = await BatchMember.countDocuments({ batch: batchId, left_on: null });
   const member = await BatchMember.create({ batch: batchId, candidate: candidateId, joined_on: dayStart(joined_on) });
   await Candidate.findByIdAndUpdate(candidateId, { lifecycle_status: "Assigned" }); // Rule 21
-  return member;
+  const warning = batch && rosterCount + 1 > batch.target_size
+    ? `Roster is now ${rosterCount + 1} of target ${batch.target_size} — enrolment will be capped at ${batch.target_size}.`
+    : undefined;
+  return Object.assign(member, { warning });
 }
 
 // Rules 22–24: enrollment step update
@@ -183,6 +211,17 @@ export async function updateEnrollment(memberId: string, patch: {
     if (patch.issue !== undefined) m.issue = patch.issue as any;
     if (patch.issue_note !== undefined) m.issue_note = patch.issue_note ?? undefined;
   }
+
+  // Rule 48 (RPL M12): enrolled candidates can never exceed batch capacity.
+  if (m.enrollment_status === "Completed" && m.isModified("enrollment_status")) {
+    const batch = await Batch.findById(m.batch).select("target_size").lean<any>();
+    const enrolled = await BatchMember.countDocuments({
+      batch: m.batch, left_on: null, enrollment_status: "Completed", _id: { $ne: m._id },
+    });
+    if (batch && enrolled + 1 > batch.target_size) {
+      throw new HttpError(409, `Rule 48: batch capacity is ${batch.target_size} and ${enrolled} are already enrolled. Raise the target size or drop a member first.`);
+    }
+  }
   await m.save();
 
   if (m.enrollment_status === "Completed") {
@@ -208,7 +247,7 @@ export async function dropMemberChecked(memberId: string, left_on: Date, drop_re
 
 // ---------- Batch lifecycle (Rules 14–19) ----------
 export async function batchReadiness(batchId: string) {
-  const batch = await Batch.findById(batchId).populate("program").populate("room").populate("trainer").populate("location", "name code approval_status").lean<any>();
+  const batch = await Batch.findById(batchId).populate("program").populate("room").populate("trainer").populate("location", "name code approval_status operational_status").lean<any>();
   if (!batch) throw new HttpError(404, "Batch not found");
   const location = batch.location?.approval_status !== undefined ? batch.location : await Location.findById(batch.location).lean<any>();
   const roster = await activeRoster(batchId);
@@ -222,10 +261,11 @@ export async function batchReadiness(batchId: string) {
   const enrollmentThreshold = Math.ceil((defaults.enrollment_threshold_pct / 100) * roster.length);
 
   const checks = {
-    location_approved: location?.approval_status === "Approved",
+    location_approved: location?.approval_status === "Approved"
+      && !HALTED_LOCATION_STATUSES.includes(location?.operational_status), // Rule 1
     room_assigned: roomOk,
     trainer_ready: trainerAvailable,
-    roster_80pct: roster.length >= Math.ceil(0.8 * batch.target_size),
+    roster_80pct: roster.length >= Math.ceil((defaults.roster_threshold_pct / 100) * batch.target_size),
   }; // Rule 16
   return {
     checks,
@@ -234,6 +274,7 @@ export async function batchReadiness(batchId: string) {
     enrolled_count: enrolled,
     enrollment_threshold: enrollmentThreshold,
     enrollment_ok: roster.length > 0 && enrolled >= enrollmentThreshold, // plan1.md resolution #1
+    location_halted: HALTED_LOCATION_STATUSES.includes(location?.operational_status),
     batch,
   };
 }
@@ -255,6 +296,7 @@ export async function transitionBatch(batchId: string, target: string, opts: { i
       break; // allow going back to fix things
     case "Ready->Active": {
       if (dayStart(new Date()) < dayStart(batch.planned_start)) fail("Rule 17: cannot start before planned_start.");
+      await assertLocationOperational(batch.location, "Starting a batch"); // Rule 1
       const r = await batchReadiness(batchId);
       if (!r.enrollment_ok) fail(`Enrollment threshold not met: ${r.enrolled_count}/${r.enrollment_threshold} required (${(await getDefaults()).enrollment_threshold_pct}% of roster).`);
       batch.actual_start = new Date();
@@ -306,6 +348,7 @@ export async function validateDailyLog(batchId: string, log_date: Date, payload:
   if (batch.status !== "Active" && batch.status !== "Closing") {
     throw new HttpError(409, "Daily logs only for Active/Closing batches.");
   }
+  await assertLocationOperational(batch.location, "Entering a daily log"); // Rule 1
   const D = dayStart(log_date);
   if (batch.actual_start && D < dayStart(batch.actual_start)) throw new HttpError(400, "Rule 32: log date before batch actual start.");
   if (batch.actual_end && D > dayStart(batch.actual_end)) throw new HttpError(400, "Rule 32: log date after batch actual end.");
@@ -388,10 +431,21 @@ export async function upsertClosureChecked(batchId: string, patch: Record<string
   return closure;
 }
 
+const INVOICE_ORDER = ["Not Ready", "Ready", "Raised", "Paid"];
+
 export async function updateInvoiceChecked(batchId: string, patch: Record<string, unknown>) {
   const inv = await Invoice.findOne({ batch: batchId });
   if (!inv) throw new HttpError(404, "Invoice not found (mark batch ready for invoice first).");
   const target = patch.status as string | undefined;
+  // Rule 36: the invoice status only ever moves one step forward. Previously enforced only
+  // by disabled buttons in the UI, so an API caller could jump Ready → Paid.
+  if (target && target !== inv.status) {
+    const from = INVOICE_ORDER.indexOf(inv.status);
+    const to = INVOICE_ORDER.indexOf(target);
+    if (to !== from + 1) {
+      throw new HttpError(409, `Rule 36: invoice status moves ${INVOICE_ORDER.join(" → ")}; cannot go from ${inv.status} to ${target}.`);
+    }
+  }
   if (target === "Raised" && !((patch.invoice_no ?? inv.invoice_no) && (patch.raised_on ?? inv.raised_on))) {
     throw new HttpError(400, "Rule 36: Raised requires invoice_no and raised_on.");
   }

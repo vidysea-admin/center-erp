@@ -40,7 +40,13 @@ silent partial import.
 3. `git clone` / copy `center-erp`, create `.env.local` (production values), `npm ci`,
    `npm run build`, run under a process manager: `pm2 start npm --name center-erp -- start`.
 4. Reverse proxy with HTTPS (Caddy: `caddy reverse-proxy --from erp.yourdomain.com --to :3000`).
-5. Back up `center_erp` DB (mongodump nightly) and the `uploads/` directory.
+5. **Backups** — install the nightly job (DB + uploaded files, 14-day retention):
+   ```bash
+   chmod +x /opt/center-erp/scripts/backup.sh
+   (crontab -l 2>/dev/null; echo "0 2 * * * /opt/center-erp/scripts/backup.sh >> /var/log/center-erp-backup.log 2>&1") | crontab -
+   /opt/center-erp/scripts/backup.sh      # run once now and check the output
+   ```
+   Restore is documented in the header of `scripts/backup.sh` — always restore into a scratch DB name first.
 6. Seed: `node --env-file=.env.local scripts/seed.mjs`, then create real users in Admin.
 
 ## Architecture notes

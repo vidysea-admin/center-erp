@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, requireRole, locationFilter, assertLocationInScope, HttpError } from "@/lib/authz";
 import { Batch, BatchMember, Program } from "@/models";
-import { assertRoomFreeForBatch, assertTrainerAvailableForBatch, computePlannedEnd, deriveTrainerStatus, nextBatchCode } from "@/lib/rules";
+import { assertLocationOperational, assertRoomFreeForBatch, assertTrainerAvailableForBatch, computePlannedEnd, deriveTrainerStatus, nextBatchCode } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
 export const GET = apiHandler(async (req: NextRequest) => {
@@ -45,6 +45,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const { location, program: programId, trainer, room, session = "Full Day", planned_start } = body;
   if (!location || !programId || !planned_start) throw new HttpError(400, "location, program and planned_start are required");
   assertLocationInScope(user, location);
+  await assertLocationOperational(location, "Creating a batch"); // Rule 1
   const program = await Program.findById(programId).lean<any>();
   if (!program) throw new HttpError(400, "Program not found");
 
