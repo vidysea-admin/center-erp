@@ -209,6 +209,76 @@ const capTargets = (await req("GET", `/api/locations/${loc._id}/targets`)).data.
 ok("capacity exposes both constraint terms", capTargets[0]?.capacity?.by_deadline === 2 && capTargets[0]?.capacity?.by_concurrency === 2, JSON.stringify(capTargets[0]?.capacity));
 ok("targets expose achieved counts", capTargets[0]?.achieved?.enrolled >= 0 && capTargets[0]?.achieved?.remaining_by_certified >= 0, JSON.stringify(capTargets[0]?.achieved));
 
+// ================= Per-candidate assessment & certification (Rules 41–47) =================
+// Runs on its own batch so the legacy batch-level path above stays untouched.
+const b4 = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, room: room._id, planned_start: today, target_size: 3 }, 201)).data.item;
+const b4Cands = [];
+for (let i = 0; i < 3; i++) {
+  b4Cands.push((await req("POST", "/api/candidates", { name: `R${i} ${stamp}`, phone: `66${stamp}${i}`, location: loc._id, program: prog._id }, 201)).data.item);
+}
+const b4Members = [];
+for (const c of b4Cands) b4Members.push((await req("POST", `/api/batches/${b4._id}/members`, { candidate: c._id }, 201)).data.item);
+for (const m of b4Members) await req("PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+await req("POST", `/api/batches/${b4._id}/transition`, { target: "Ready" }, 200);
+await req("POST", `/api/batches/${b4._id}/transition`, { target: "Active" }, 200);
+
+const r0 = (await req("GET", `/api/batches/${b4._id}/results`, undefined, 200)).data;
+ok("Rule 41: new batch starts legacy with a row per member", r0.legacy === true && r0.items.length === 3, JSON.stringify({ legacy: r0.legacy, n: r0.items?.length }));
+
+await req("PUT", `/api/batches/${b4._id}/results`, { rows: [{ member: b4Members[0]._id, result: "Pass", score: 78, assessed_on: today, assessor: "NCVET" }] }, 200);
+const afterPass = (await req("GET", `/api/batches/${b4._id}/closure`)).data;
+ok("Rule 42: aggregates written through to Closure", afterPass.closure?.appeared === 1 && afterPass.closure?.passed === 1 && afterPass.legacy === false, JSON.stringify({ a: afterPass.closure?.appeared, p: afterPass.closure?.passed, legacy: afterPass.legacy }));
+
+await req("PUT", `/api/batches/${b4._id}/results`, { rows: [{ member: b4Members[1]._id, result: "Fail" }] }, 400); // Rule 44
+await req("PUT", `/api/batches/${b4._id}/results`, { rows: [{ member: b4Members[1]._id, result: "Fail", failure_reason: "Below cut-off", score: 31 }] }, 200);
+await req("PUT", `/api/batches/${b4._id}/closure`, { assessment_status: "Completed", assessment_date: today }, 409); // Rule 43
+
+await req("PUT", `/api/batches/${b4._id}/closure`, { appeared: 99, passed: 99 }, 200);
+const ignored = (await req("GET", `/api/batches/${b4._id}/closure`)).data;
+ok("Rule 42: hand-typed aggregates ignored once rows exist", ignored.closure.appeared === 2 && ignored.closure.passed === 1, JSON.stringify({ a: ignored.closure.appeared, p: ignored.closure.passed }));
+
+await req("PUT", `/api/batches/${b4._id}/results`, { rows: [{ member: b4Members[2]._id, result: "Absent" }] }, 200);
+const sum3 = (await req("GET", `/api/batches/${b4._id}/results`)).data.summary;
+ok("Rule 42: Absent does not count as appeared", sum3.appeared === 2 && sum3.absent === 1, JSON.stringify(sum3));
+await req("PUT", `/api/batches/${b4._id}/closure`, { assessment_status: "Completed", assessment_date: today }, 200); // Rule 43 satisfied
+await req("POST", `/api/batches/${b4._id}/transition`, { target: "Closing" }, 200);
+
+// Certificates (Rules 45/46)
+const resultRows = (await req("GET", `/api/batches/${b4._id}/results`)).data.items;
+const passRow = resultRows.find((i) => i.result?.result === "Pass").result;
+const failRow = resultRows.find((i) => i.result?.result === "Fail").result;
+await req("PATCH", `/api/results/${failRow._id}`, { certificate_status: "Processing" }, 409); // Rule 45
+await req("PATCH", `/api/results/${passRow._id}`, { certificate_status: "Generated", certificate_no: "X" + stamp, certificate_date: today }, 409); // Rule 46 ordering
+await req("PATCH", `/api/results/${passRow._id}`, { certificate_status: "Processing" }, 200);
+await req("PATCH", `/api/results/${passRow._id}`, { certificate_status: "Generated" }, 400); // Rule 46 needs no + date
+await req("PATCH", `/api/results/${passRow._id}`, { certificate_status: "Generated", certificate_no: "CERT-" + stamp, certificate_date: today }, 200);
+await req("PUT", `/api/batches/${b4._id}/closure`, { certification_status: "Completed", certification_date: today }, 409); // Rule 46: not Issued yet
+await req("PATCH", `/api/results/${passRow._id}`, { certificate_status: "Rejected" }, 400); // needs reason
+await req("PATCH", `/api/results/${passRow._id}`, { certificate_status: "Rejected", certificate_rejection_reason: "Name spelling" }, 200);
+await req("PATCH", `/api/results/${passRow._id}`, { certificate_status: "Processing" }, 200); // resubmission path
+await req("PATCH", `/api/results/${passRow._id}`, { certificate_status: "Generated", certificate_no: "CERT-" + stamp, certificate_date: today }, 200);
+await req("PATCH", `/api/results/${passRow._id}`, { certificate_status: "Issued" }, 200);
+await req("PATCH", `/api/results/${passRow._id}`, { result: "Fail", failure_reason: "x" }, 409); // Rule 45 reverse
+const certd = (await req("GET", `/api/batches/${b4._id}/closure`)).data;
+ok("Rule 42: certificates_issued derived", certd.closure.certificates_issued === 1, String(certd.closure.certificates_issued));
+
+await req("PUT", `/api/batches/${b4._id}/closure`, { certification_status: "Completed", certification_date: today }, 200);
+await req("PUT", `/api/batches/${b4._id}/closure`, { ready_for_invoice: true }, 200);
+ok("invoice linkage unchanged by per-candidate mode", (await req("GET", `/api/batches/${b4._id}/closure`)).data.invoice?.status === "Ready");
+await req("POST", `/api/batches/${b4._id}/transition`, { target: "Completed" }, 200);
+
+// Rule 47: lifecycle splits by result
+const lcPass = (await req("GET", `/api/candidates/${b4Cands[0]._id}`)).data.item;
+const lcFail = (await req("GET", `/api/candidates/${b4Cands[1]._id}`)).data.item;
+const lcAbs = (await req("GET", `/api/candidates/${b4Cands[2]._id}`)).data.item;
+ok("Rule 47: Pass → Completed, Fail/Absent → Not Certified",
+  lcPass.lifecycle_status === "Completed" && lcFail.lifecycle_status === "Not Certified" && lcAbs.lifecycle_status === "Not Certified",
+  `${lcPass.lifecycle_status}/${lcFail.lifecycle_status}/${lcAbs.lifecycle_status}`);
+
+await req("PUT", `/api/batches/${b4._id}/results`, { rows: [{ member: b4Members[0]._id, result: "Pass" }] }, 400); // Rule 41: closed batch
+const candHistory = (await req("GET", `/api/candidates/${b4Cands[0]._id}/results`, undefined, 200)).data;
+ok("candidate result history available", candHistory.items?.length >= 1 && candHistory.items[0].batch?.code === b4.code, JSON.stringify(candHistory.items?.[0]?.batch));
+
 // ---- Batch Health Score (score always travels with reasons) ----
 const healthBatch = (await req("GET", `/api/batches/${capBatch._id}`)).data;
 ok("health score present with reasons array", ["Green", "Amber", "Red"].includes(healthBatch.health?.score) && Array.isArray(healthBatch.health?.reasons), JSON.stringify(healthBatch.health));

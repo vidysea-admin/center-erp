@@ -2,8 +2,9 @@
 // center-erp-data-model-rules.md §4. Rule numbers are cited inline.
 import { Types } from "mongoose";
 import {
-  Batch, BatchMember, Candidate, Closure, DailyLog, Invoice, Location, Program, Room, Trainer,
+  Batch, BatchMember, Candidate, CandidateResult, Closure, DailyLog, Invoice, Location, Program, Room, Trainer,
 } from "@/models";
+import { auditDiff } from "@/lib/audit";
 import { getDefaults } from "@/lib/defaults";
 import { HttpError, isScoped } from "@/lib/authz";
 import type { SessionUser } from "@/auth";
@@ -242,6 +243,9 @@ export async function dropMemberChecked(memberId: string, left_on: Date, drop_re
   m.drop_reason = drop_reason;
   await m.save();
   await Candidate.findByIdAndUpdate(m.candidate, { lifecycle_status: "Dropped" }); // Rule 21
+  // Rule 42: an existing result is NOT deleted when someone drops — they still appeared.
+  // Recompute so the aggregates reflect the new roster.
+  await recomputeClosureAggregates(String(m.batch));
   return m;
 }
 
@@ -311,12 +315,25 @@ export async function transitionBatch(batchId: string, target: string, opts: { i
       const closure = await Closure.findOne({ batch: batchId }).lean<any>();
       if (closure?.certification_status !== "Completed") fail("Rule 18: certification must be Completed before batch completes.");
       batch.actual_end = new Date();
-      // Rule 21: still-active members become Completed
       const roster = await activeRoster(batchId);
-      await Candidate.updateMany(
-        { _id: { $in: roster.map((m) => m.candidate) } },
-        { lifecycle_status: "Completed" },
-      );
+      const rosterCandidateIds = roster.map((m) => String(m.candidate));
+      const results = await CandidateResult.find({ batch: batchId }).select("candidate result").lean<any[]>();
+      if (results.length) {
+        // Rule 47: only a Pass finishes as Completed; Fail/Absent are Not Certified.
+        const passed = results.filter((r) => r.result === "Pass").map((r) => String(r.candidate));
+        const notCertified = results.filter((r) => ["Fail", "Absent"].includes(r.result)).map((r) => String(r.candidate));
+        await Candidate.updateMany(
+          { _id: { $in: passed.filter((id) => rosterCandidateIds.includes(id)) } },
+          { lifecycle_status: "Completed" },
+        );
+        await Candidate.updateMany(
+          { _id: { $in: notCertified.filter((id) => rosterCandidateIds.includes(id)) } },
+          { lifecycle_status: "Not Certified" },
+        );
+      } else {
+        // Legacy batches keep the original blanket behaviour (Rule 21).
+        await Candidate.updateMany({ _id: { $in: roster.map((m) => m.candidate) } }, { lifecycle_status: "Completed" });
+      }
       break;
     }
     case "Planning->Cancelled":
@@ -473,6 +490,225 @@ export async function missingLogQueue(locationScopeFilter: Record<string, unknow
   return out;
 }
 
+// ---------- Per-candidate assessment & certification (Rules 41–47, RPL M17/M18) ----------
+
+export type ResultSummary = {
+  total: number; final: number; pending: number;
+  appeared: number; passed: number; failed: number; absent: number; certificates_issued: number;
+};
+
+// Pure — used on GET so reads never write.
+export function summarizeResults(rows: any[]): ResultSummary {
+  const by = (r: string) => rows.filter((x) => x.result === r).length;
+  const passed = by("Pass"), failed = by("Fail"), absent = by("Absent"), pending = by("Pending");
+  return {
+    total: rows.length,
+    final: rows.length - pending,
+    pending,
+    appeared: passed + failed, // Rule 42: Absent did not appear
+    passed, failed, absent,
+    certificates_issued: rows.filter((x) => x.certificate_status === "Issued").length,
+  };
+}
+
+// Rule 41: a batch with no rows is "legacy" and keeps its stored batch-level figures.
+export async function batchUsesPerCandidateResults(batchId: string): Promise<boolean> {
+  return (await CandidateResult.countDocuments({ batch: batchId })) > 0;
+}
+
+// Rule 42: aggregates are derived from the rows and written through to Closure, so every
+// existing reader (invoice flow, dashboards) keeps working unchanged.
+export async function recomputeClosureAggregates(batchId: string, actorId?: string) {
+  const rows = await CandidateResult.find({ batch: batchId }).lean<any[]>();
+  const summary = summarizeResults(rows);
+  if (!rows.length) return { ...summary, legacy: true };
+
+  const closure = (await Closure.findOne({ batch: batchId })) ?? new Closure({ batch: batchId });
+  const before = { appeared: closure.appeared, passed: closure.passed, certificates_issued: closure.certificates_issued };
+  closure.appeared = summary.appeared;
+  closure.passed = summary.passed;
+  closure.certificates_issued = summary.certificates_issued;
+  if (!closure.assessment_date) {
+    const dates = rows.map((r) => r.assessed_on).filter(Boolean).map((d) => new Date(d).getTime());
+    if (dates.length) closure.assessment_date = new Date(Math.max(...dates));
+  }
+  await closure.save();
+  // Any previously hand-typed figure survives in the audit trail, attributed to derivation.
+  await auditDiff("Closure", closure._id, before,
+    { appeared: summary.appeared, passed: summary.passed, certificates_issued: summary.certificates_issued },
+    actorId ?? null, "SYSTEM");
+  return { ...summary, legacy: false };
+}
+
+// Rule 43: no indefinite Pending — every roster member needs a final result.
+export async function assessmentCompleteness(batchId: string) {
+  const rows = await CandidateResult.find({ batch: batchId }).populate("candidate", "name").lean<any[]>();
+  if (!rows.length) return { legacy: true, total: 0, final: 0, pending: [] as any[], complete: true };
+  const closure = await Closure.findOne({ batch: batchId }).select("assessment_date").lean<any>();
+  const roster = closure?.assessment_date
+    ? await rosterOnDate(batchId, new Date(closure.assessment_date))
+    : await activeRoster(batchId);
+  // Walk the ROSTER, not the rows: a member with no row yet is pending too — otherwise a
+  // batch where only two of thirty were marked would count as complete.
+  const byMember = new Map(rows.map((r) => [String(r.batch_member), r]));
+  const pending: { member: string; name?: string }[] = [];
+  for (const m of roster) {
+    const row = byMember.get(String(m._id));
+    if (!row || row.result === "Pending") {
+      pending.push({ member: String(m._id), name: row?.candidate?.name });
+    }
+  }
+  return {
+    legacy: false,
+    total: roster.length,
+    final: roster.length - pending.length,
+    pending,
+    complete: roster.length > 0 && pending.length === 0,
+  };
+}
+
+// Rules 45/46: certification completes when every Pass candidate holds an Issued certificate.
+export async function certificationCompleteness(batchId: string) {
+  const rows = await CandidateResult.find({ batch: batchId }).populate("candidate", "name").lean<any[]>();
+  if (!rows.length) return { legacy: true, pass_count: 0, issued: 0, blocking: [] as any[], complete: true };
+  const passes = rows.filter((r) => r.result === "Pass");
+  const blocking = passes.filter((r) => r.certificate_status !== "Issued");
+  return {
+    legacy: false,
+    pass_count: passes.length,
+    issued: passes.length - blocking.length,
+    blocking: blocking.map((b) => ({ name: b.candidate?.name, status: b.certificate_status })),
+    complete: blocking.length === 0,
+  };
+}
+
+const CERT_FLOW: Record<string, string[]> = {
+  Pending: ["Processing"],
+  Processing: ["Generated", "Rejected"],
+  Generated: ["Issued", "Rejected"],
+  Issued: [],
+  Rejected: ["Processing"], // resubmission path
+};
+
+// Rules 41, 42, 44, 45 — mark or update one candidate's assessment result.
+export async function upsertCandidateResult(batchId: string, memberId: string, patch: Record<string, any>, userId: string) {
+  const batch = await Batch.findById(batchId).select("status").lean<any>();
+  if (!batch) throw new HttpError(404, "Batch not found");
+  if (["Completed", "Cancelled"].includes(batch.status)) {
+    throw new HttpError(409, "Rule 41: this batch is closed — results can no longer be recorded.");
+  }
+  const member = await BatchMember.findById(memberId).select("batch candidate").lean<any>();
+  if (!member) throw new HttpError(404, "Batch member not found");
+  if (String(member.batch) !== String(batchId)) throw new HttpError(400, "Member belongs to a different batch.");
+
+  const row = (await CandidateResult.findOne({ batch: batchId, candidate: member.candidate }))
+    ?? new CandidateResult({ batch: batchId, candidate: member.candidate, batch_member: memberId });
+
+  const nextResult = patch.result ?? row.result;
+  if (nextResult === "Fail" && !(patch.failure_reason ?? row.failure_reason)) {
+    throw new HttpError(400, "Rule 44: a Fail result requires a failure reason.");
+  }
+  const wantsReassessment = patch.reassessment_required ?? row.reassessment_required;
+  if (wantsReassessment && !(patch.reassessment_date ?? row.reassessment_date)) {
+    throw new HttpError(400, "Rule 44: reassessment required means a reassessment date is required.");
+  }
+  // Rule 45: a certificate already in flight pins the result at Pass.
+  if (row.result === "Pass" && nextResult !== "Pass" && row.certificate_status !== "Pending") {
+    throw new HttpError(409, `Rule 45: this candidate already has a certificate (${row.certificate_status}). Reject the certificate before changing the result.`);
+  }
+
+  for (const f of ["result", "score", "max_score", "assessed_on", "assessor", "failure_reason", "failure_note", "reassessment_required", "reassessment_date", "evidence_file"]) {
+    if (patch[f] !== undefined) (row as any)[f] = patch[f];
+  }
+  if (nextResult !== "Fail") { row.failure_reason = undefined; row.failure_note = undefined; }
+  row.marked_by = userId as any;
+  row.marked_at = new Date();
+  await row.save();
+  await recomputeClosureAggregates(batchId, userId);
+  return row;
+}
+
+// Rules 45, 46 — certificate lifecycle for one candidate.
+export async function upsertCandidateCertificate(resultId: string, patch: Record<string, any>, userId: string) {
+  const row = await CandidateResult.findById(resultId);
+  if (!row) throw new HttpError(404, "Result not found");
+  if (row.result !== "Pass") {
+    throw new HttpError(409, "Rule 45: no certificate without a Pass result.");
+  }
+  const target = patch.certificate_status as string | undefined;
+  if (target && target !== row.certificate_status) {
+    if (!CERT_FLOW[row.certificate_status]?.includes(target)) {
+      throw new HttpError(409, `Rule 46: certificate status cannot go from ${row.certificate_status} to ${target}.`);
+    }
+    if (target === "Generated" && !(patch.certificate_no ?? row.certificate_no) ) {
+      throw new HttpError(400, "Rule 46: a generated certificate needs a certificate number.");
+    }
+    if (target === "Generated" && !(patch.certificate_date ?? row.certificate_date)) {
+      throw new HttpError(400, "Rule 46: a generated certificate needs a certificate date.");
+    }
+    if (target === "Rejected" && !(patch.certificate_rejection_reason ?? row.certificate_rejection_reason)) {
+      throw new HttpError(400, "Rule 46: a rejected certificate needs a reason.");
+    }
+  }
+  for (const f of ["certificate_status", "certificate_no", "certificate_date", "certificate_file", "certificate_rejection_reason"]) {
+    if (patch[f] !== undefined) (row as any)[f] = patch[f];
+  }
+  // Never store "" — the partial unique index would then collide across every blank row.
+  if (!row.certificate_no) row.set("certificate_no", undefined);
+  await row.save();
+  await recomputeClosureAggregates(String(row.batch), userId);
+  return row;
+}
+
+// Rule 44: archive the current attempt and reopen the result.
+export async function startReassessment(resultId: string, reassessment_date: Date, userId: string) {
+  const row = await CandidateResult.findById(resultId);
+  if (!row) throw new HttpError(404, "Result not found");
+  if (row.result === "Pending") throw new HttpError(409, "Rule 44: this result is already open.");
+  if (row.certificate_status !== "Pending") throw new HttpError(409, "Rule 44: a certificate exists — reject it before reassessing.");
+  const batch = await Batch.findById(row.batch).select("status").lean<any>();
+  if (["Completed", "Cancelled"].includes(batch?.status)) throw new HttpError(409, "Rule 44: the batch is closed.");
+
+  row.attempts.push({
+    attempt: row.attempt, result: row.result, score: row.score, assessed_on: row.assessed_on,
+    assessor: row.assessor, failure_reason: row.failure_reason, evidence_file: row.evidence_file,
+    recorded_by: userId as any, recorded_at: new Date(),
+  } as any);
+  row.attempt = (row.attempt ?? 1) + 1;
+  row.result = "Pending";
+  row.score = undefined; row.assessed_on = undefined; row.failure_reason = undefined; row.failure_note = undefined;
+  row.reassessment_required = false;
+  row.reassessment_date = reassessment_date;
+  await row.save();
+  await recomputeClosureAggregates(String(row.batch), userId);
+  return row;
+}
+
+// Bulk marking — one bad row must not abort a 30-candidate save.
+export async function bulkMarkResults(batchId: string, rows: any[], userId: string) {
+  const errors: { member: string; error: string }[] = [];
+  let updated = 0;
+  for (const r of rows) {
+    try {
+      const { member, ...patch } = r;
+      delete patch.source; // §7: provenance is never client-declared
+      await upsertCandidateResult(batchId, member, patch, userId);
+      updated++;
+    } catch (e) {
+      errors.push({ member: r.member, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+  return { updated, errors };
+}
+
+// Rule 38 for by-ID result access.
+export async function assertResultInScope(user: SessionUser, resultId: string) {
+  if (!isScoped(user)) return;
+  const row = await CandidateResult.findById(resultId).select("batch").lean<any>();
+  if (!row) throw new HttpError(404, "Result not found");
+  await assertBatchInScope(user, String(row.batch));
+}
+
 // ---------- Closure / Invoice (Rules 34–36) ----------
 export async function upsertClosureChecked(batchId: string, patch: Record<string, unknown>, userId: string) {
   const batch = await Batch.findById(batchId).lean<any>();
@@ -480,7 +716,29 @@ export async function upsertClosureChecked(batchId: string, patch: Record<string
   let closure = await Closure.findOne({ batch: batchId });
   if (!closure) closure = new Closure({ batch: batchId });
 
-  if (patch.assessment_status === "Completed" || patch.appeared != null || patch.passed != null) {
+  const perCandidate = await batchUsesPerCandidateResults(batchId);
+  if (perCandidate) {
+    // Rule 42: once rows exist the aggregates are derived. Silently drop hand-typed values
+    // rather than erroring — the existing Save button still sends them, and the UI shows
+    // these fields read-only.
+    for (const f of ["appeared", "passed", "certificates_issued"]) delete patch[f];
+    // Rule 43
+    if (patch.assessment_status === "Completed") {
+      const c = await assessmentCompleteness(batchId);
+      if (!c.complete) {
+        throw new HttpError(409, `Rule 43: ${c.total - c.final} candidate(s) still have no final result — ${c.pending.map((p) => p.name).filter(Boolean).slice(0, 5).join(", ")}`);
+      }
+    }
+    // Rules 45/46
+    if (patch.certification_status === "Completed") {
+      const c = await certificationCompleteness(batchId);
+      if (!c.complete) {
+        throw new HttpError(409, `Rule 46: certificates not yet Issued for ${c.blocking.map((b) => `${b.name} (${b.status})`).slice(0, 5).join(", ")}`);
+      }
+    }
+  }
+
+  if (!perCandidate && (patch.assessment_status === "Completed" || patch.appeared != null || patch.passed != null)) {
     const assessDate = (patch.assessment_date as Date) ?? closure.assessment_date ?? new Date();
     const roster = await rosterOnDate(batchId, new Date(assessDate));
     const appeared = (patch.appeared as number) ?? closure.appeared;
@@ -506,6 +764,7 @@ export async function upsertClosureChecked(batchId: string, patch: Record<string
     ); // Rule 35
   }
   await closure.save();
+  if (perCandidate) await recomputeClosureAggregates(batchId, userId); // Rule 42: derived wins
   return closure;
 }
 

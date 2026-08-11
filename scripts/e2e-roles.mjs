@@ -114,6 +114,17 @@ if (anyBatch) {
   ok("audit actor_type stays USER despite body.source=Automation", latest?.actor_type === "USER", latest?.actor_type);
 }
 
+// Per-candidate results routes must respect Rule 38 exactly like the rest
+if (foreignBatch) {
+  ok("IDOR: SPOC GET foreign batch results → 403", (await req(spoc, "GET", `/api/batches/${foreignBatch._id}/results`)).status === 403);
+  ok("IDOR: SPOC PUT foreign batch results → 403", (await req(spoc, "PUT", `/api/batches/${foreignBatch._id}/results`, { rows: [{ member: "000000000000000000000000", result: "Pass" }] })).status === 403);
+}
+const ownActive = spocBatches.data.items.find((b) => !["Completed", "Cancelled"].includes(b.status));
+if (ownActive) {
+  ok("SPOC can read results for own batch", (await req(spoc, "GET", `/api/batches/${ownActive._id}/results`)).status === 200);
+  ok("view-only principal cannot mark results", (await req(principal, "PUT", `/api/batches/${ownActive._id}/results`, { rows: [{ member: "000000000000000000000000", result: "Pass" }] })).status === 403);
+}
+
 // Home queues must be scoped for Location users (no cross-location leakage)
 const spocHome = await req(spoc, "GET", "/api/home");
 const homeQueues = spocHome.data.queues ?? {};

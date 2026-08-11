@@ -2,7 +2,7 @@
 import { use, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { api, fmtDate, toInputDate } from "@/lib/client";
-import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, HealthBanner, Section, Tabs, inputCls } from "@/components/ui";
+import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, HealthBanner, NameCell, Section, Tabs, inputCls } from "@/components/ui";
 import { Activity } from "@/components/activity";
 import { flushQueue, getQueue, uploadWithRetry } from "@/lib/upload";
 
@@ -35,7 +35,7 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
       {tab === "Candidates" && <Roster batchId={id} batch={b} setError={setError} onChanged={load} />}
       {tab === "Enrollment" && <Enrollment batchId={id} setError={setError} />}
       {tab === "Daily Execution" && <DailyExecution batchId={id} batch={b} setError={setError} />}
-      {tab === "Closure" && <ClosureTab batchId={id} setError={setError} onChanged={load} />}
+      {tab === "Closure" && <ClosureTab batchId={id} batch={b} setError={setError} onChanged={load} />}
       {tab === "Costs" && <CostsTab batchId={id} batch={b} setError={setError} />}
       {tab === "Activity" && <Activity entity="Batch" id={id} />}
     </div>
@@ -510,16 +510,22 @@ function Gap({ r }: any) {
   return <span className={cls}>{gap > 0 ? `−${gap}` : gap} pts</span>;
 }
 
-// ---------- Closure tab (Rules 34–36) ----------
-function ClosureTab({ batchId, setError, onChanged }: any) {
+// ---------- Closure tab (Rules 34–36, 41–47) ----------
+function ClosureTab({ batchId, batch, setError, onChanged }: any) {
   const [closure, setClosure] = useState<any>(null);
   const [invoice, setInvoice] = useState<any>(null);
   const [form, setForm] = useState<any>({});
   const [invForm, setInvForm] = useState<any>({});
+  const [legacy, setLegacy] = useState(true);
+  const [summary, setSummary] = useState<any>(null);
+  const [perCandidate, setPerCandidate] = useState(false);
 
   const load = () => api(`/api/batches/${batchId}/closure`).then((d) => {
     setClosure(d.closure); setInvoice(d.invoice);
     setForm(d.closure ?? {}); setInvForm(d.invoice ?? {});
+    setLegacy(d.legacy !== false);
+    setSummary(d.results_summary ?? null);
+    if (d.legacy === false) setPerCandidate(true);
   }).catch((e: any) => setError(e.message));
   useEffect(() => { load(); }, [batchId]);
 
@@ -532,28 +538,55 @@ function ClosureTab({ batchId, setError, onChanged }: any) {
     catch (e: any) { setError(e.message); }
   }
 
+  const closed = ["Completed", "Cancelled"].includes(batch?.status);
+
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      <Section title={`Assessment — ${closure?.assessment_status ?? "Pending"}`}>
+    <div className="space-y-4">
+      {/* Per-candidate marking gets the full width — it is a data-entry grid, not a side panel. */}
+      {perCandidate && (
+        <CandidateResults batchId={batchId} batch={batch} setError={setError} onChanged={() => { load(); onChanged(); }} />
+      )}
+      <div className="grid gap-4 lg:grid-cols-2">
+      <Section
+        title={`Assessment — ${closure?.assessment_status ?? "Pending"}`}
+        actions={legacy && !perCandidate && !closed ? <Btn small kind="ghost" onClick={() => setPerCandidate(true)}>Start per-candidate marking</Btn> : undefined}
+      >
         <div className="grid grid-cols-2 gap-3">
           <Field label="Assessment date"><input type="date" className={inputCls} value={toInputDate(form.assessment_date)} onChange={(e) => setForm({ ...form, assessment_date: e.target.value })} /></Field>
           <div />
-          <Field label="Appeared"><input type="number" className={inputCls} value={form.appeared ?? ""} onChange={(e) => setForm({ ...form, appeared: +e.target.value })} /></Field>
-          <Field label="Passed"><input type="number" className={inputCls} value={form.passed ?? ""} onChange={(e) => setForm({ ...form, passed: +e.target.value })} /></Field>
+          {legacy && !perCandidate ? (
+            <>
+              <Field label="Appeared"><input type="number" className={inputCls} value={form.appeared ?? ""} onChange={(e) => setForm({ ...form, appeared: +e.target.value })} /></Field>
+              <Field label="Passed"><input type="number" className={inputCls} value={form.passed ?? ""} onChange={(e) => setForm({ ...form, passed: +e.target.value })} /></Field>
+            </>
+          ) : (
+            <>
+              <Field label="Appeared"><div className={inputCls + " bg-gray-50 text-gray-700"}>{closure?.appeared ?? 0} <span className="text-xs text-gray-400">derived</span></div></Field>
+              <Field label="Passed"><div className={inputCls + " bg-gray-50 text-gray-700"}>{closure?.passed ?? 0} <span className="text-xs text-gray-400">derived</span></div></Field>
+            </>
+          )}
         </div>
+        {legacy && !perCandidate && (
+          <p className="mt-2 text-xs text-gray-500">Batch-level figures (recorded before per-candidate marking existed).</p>
+        )}
         <div className="mt-3 flex gap-2">
-          <Btn small kind="ghost" onClick={() => saveClosure({ assessment_date: form.assessment_date, appeared: form.appeared, passed: form.passed })}>Save</Btn>
-          <Btn small onClick={() => saveClosure({ assessment_status: "Completed", assessment_date: form.assessment_date ?? new Date(), appeared: form.appeared, passed: form.passed })} disabled={closure?.assessment_status === "Completed"}>Mark Completed</Btn>
+          <Btn small kind="ghost" onClick={() => saveClosure({ assessment_date: form.assessment_date, ...(legacy && !perCandidate ? { appeared: form.appeared, passed: form.passed } : {}) })}>Save</Btn>
+          <Btn small onClick={() => saveClosure({ assessment_status: "Completed", assessment_date: form.assessment_date ?? new Date(), ...(legacy && !perCandidate ? { appeared: form.appeared, passed: form.passed } : {}) })} disabled={closure?.assessment_status === "Completed"}>Mark Completed</Btn>
         </div>
       </Section>
       <Section title={`Certification — ${closure?.certification_status ?? "Pending"}`}>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Certification date"><input type="date" className={inputCls} value={toInputDate(form.certification_date)} onChange={(e) => setForm({ ...form, certification_date: e.target.value })} /></Field>
-          <Field label="Certificates issued"><input type="number" className={inputCls} value={form.certificates_issued ?? ""} onChange={(e) => setForm({ ...form, certificates_issued: +e.target.value })} /></Field>
+          {legacy && !perCandidate
+            ? <Field label="Certificates issued"><input type="number" className={inputCls} value={form.certificates_issued ?? ""} onChange={(e) => setForm({ ...form, certificates_issued: +e.target.value })} /></Field>
+            : <Field label="Certificates issued"><div className={inputCls + " bg-gray-50 text-gray-700"}>{closure?.certificates_issued ?? 0} <span className="text-xs text-gray-400">derived</span></div></Field>}
         </div>
+        {!legacy && summary && summary.passed > summary.certificates_issued && (
+          <p className="mt-2 text-xs text-amber-700">{summary.passed - summary.certificates_issued} passed candidate(s) still need an issued certificate (Rule 46).</p>
+        )}
         <div className="mt-3 flex gap-2">
-          <Btn small kind="ghost" onClick={() => saveClosure({ certification_date: form.certification_date, certificates_issued: form.certificates_issued })}>Save</Btn>
-          <Btn small onClick={() => saveClosure({ certification_status: "Completed", certification_date: form.certification_date ?? new Date(), certificates_issued: form.certificates_issued })} disabled={closure?.certification_status === "Completed"}>Mark Completed</Btn>
+          <Btn small kind="ghost" onClick={() => saveClosure({ certification_date: form.certification_date, ...(legacy ? { certificates_issued: form.certificates_issued } : {}) })}>Save</Btn>
+          <Btn small onClick={() => saveClosure({ certification_status: "Completed", certification_date: form.certification_date ?? new Date(), ...(legacy ? { certificates_issued: form.certificates_issued } : {}) })} disabled={closure?.certification_status === "Completed"}>Mark Completed</Btn>
         </div>
       </Section>
       <Section title={`Invoice — ${invoice?.status ?? "Not Ready"}`}>
@@ -579,7 +612,199 @@ function ClosureTab({ batchId, setError, onChanged }: any) {
           )}
         </div>
       </Section>
+      </div>
     </div>
+  );
+}
+
+// ---------- Per-candidate assessment & certification (RPL M17/M18) ----------
+function CandidateResults({ batchId, batch, setError, onChanged }: any) {
+  const [items, setItems] = useState<any[]>([]);
+  const [summary, setSummary] = useState<any>(null);
+  const [reasons, setReasons] = useState<any[]>([]);
+  const [view, setView] = useState<"mark" | "review">("mark");
+  const [bulk, setBulk] = useState<any>({ assessed_on: toInputDate(new Date()), assessor: "" });
+  const [certDrawer, setCertDrawer] = useState(false);
+  const [certForm, setCertForm] = useState<any>({});
+  const [idx, setIdx] = useState(0);
+  const closed = ["Completed", "Cancelled"].includes(batch?.status);
+
+  const load = () => Promise.all([
+    api(`/api/batches/${batchId}/results`).then((d) => { setItems(d.items); setSummary(d.summary); }),
+    api("/api/master-lists/failure-reasons").then((d) => setReasons(d.items)).catch(() => setReasons([])),
+  ]).catch((e: any) => setError(e.message));
+  useEffect(() => { load(); }, [batchId]);
+
+  async function mark(member: string, patch: any) {
+    try {
+      await api(`/api/batches/${batchId}/results`, { method: "PUT", json: { rows: [{ member, assessed_on: bulk.assessed_on, assessor: bulk.assessor || undefined, ...patch }] } });
+      await load(); onChanged();
+    } catch (e: any) { setError(e.message); }
+  }
+  async function bulkApply(rows: any[]) {
+    if (!rows.length) return;
+    try { await api(`/api/batches/${batchId}/results`, { method: "PUT", json: { rows } }); await load(); onChanged(); }
+    catch (e: any) { setError(e.message); }
+  }
+  async function certPatch(resultId: string, patch: any) {
+    try { await api(`/api/results/${resultId}`, { method: "PATCH", json: patch }); await load(); onChanged(); }
+    catch (e: any) { setError(e.message); }
+  }
+
+  const active = items.filter((i) => !i.left_on);
+  const pending = active.filter((i) => !i.result || i.result.result === "Pending");
+  const passes = items.filter((i) => i.result?.result === "Pass");
+
+  const ResultButtons = ({ i }: any) => (
+    <div className="flex flex-wrap gap-1.5">
+      {["Pass", "Fail", "Absent"].map((r) => {
+        const on = i.result?.result === r;
+        const tone = r === "Pass" ? "border-green-300 bg-green-50 text-green-700"
+          : r === "Fail" ? "border-red-300 bg-red-50 text-red-700" : "border-amber-300 bg-amber-50 text-amber-700";
+        return (
+          <button key={r} disabled={closed}
+            onClick={() => r === "Fail" ? mark(i.member, { result: "Fail", failure_reason: i.result?.failure_reason || reasons[0]?.name || "Below cut-off" }) : mark(i.member, { result: r })}
+            className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium disabled:opacity-50 ${on ? tone : "border-gray-200 bg-white text-gray-500"}`}>
+            {on ? "✓ " : ""}{r}
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  const Card = ({ i }: any) => (
+    <div className="space-y-2 rounded-xl border bg-white p-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="font-medium">{i.candidate?.name}</div>
+          <div className="text-xs text-gray-500">{i.candidate?.phone}{i.left_on ? " · dropped" : ""}</div>
+        </div>
+        <Chip value={i.result?.result ?? "Pending"} />
+      </div>
+      <ResultButtons i={i} />
+      <div className="flex flex-wrap items-center gap-2">
+        <input type="number" placeholder="Score" disabled={closed}
+          className="w-24 rounded-lg border border-gray-300 px-2 py-1 text-sm"
+          defaultValue={i.result?.score ?? ""}
+          onBlur={(e) => e.target.value !== String(i.result?.score ?? "") && mark(i.member, { score: +e.target.value })} />
+        {i.result?.result === "Fail" && (
+          <select className="rounded-lg border border-gray-300 px-2 py-1 text-sm" disabled={closed}
+            value={i.result?.failure_reason ?? ""}
+            onChange={(e) => mark(i.member, { result: "Fail", failure_reason: e.target.value })}>
+            {reasons.map((r) => <option key={r._id}>{r.name}</option>)}
+            {!reasons.length && <option>Below cut-off</option>}
+          </select>
+        )}
+        {i.result?.certificate_status && i.result.certificate_status !== "Pending" && <Chip value={i.result.certificate_status} />}
+      </div>
+    </div>
+  );
+
+  return (
+    <Section
+      title={`Candidate results — ${summary?.final ?? 0}/${active.length} marked${summary?.pending ? ` · ${summary.pending} pending` : ""}`}
+      actions={<Btn small kind="ghost" onClick={() => setView(view === "mark" ? "review" : "mark")}>{view === "mark" ? "Review table" : "Mark results"}</Btn>}
+    >
+      {pending.length > 0 && (
+        <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          Still pending: {pending.map((p) => p.candidate?.name).slice(0, 6).join(", ")}
+          {pending.length > 6 ? ` +${pending.length - 6} more` : ""} — assessment cannot be marked Completed until every candidate has a final result (Rule 43).
+        </div>
+      )}
+
+      {!closed && (
+        <div className="mb-3 flex flex-wrap items-end gap-2 rounded-lg bg-gray-50 p-3">
+          <Field label="Assessment date (applies to marks)">
+            <input type="date" className={inputCls + " max-w-40"} value={bulk.assessed_on} onChange={(e) => setBulk({ ...bulk, assessed_on: e.target.value })} />
+          </Field>
+          <Field label="Assessor">
+            <input className={inputCls + " max-w-44"} value={bulk.assessor} onChange={(e) => setBulk({ ...bulk, assessor: e.target.value })} placeholder="Assessor name" />
+          </Field>
+          <Btn small kind="ghost" onClick={() => bulkApply(pending.map((i) => ({ member: i.member, result: "Pass", assessed_on: bulk.assessed_on, assessor: bulk.assessor || undefined })))} disabled={!pending.length}>
+            Mark {pending.length} pending as Pass
+          </Btn>
+          <Btn small kind="ghost" onClick={async () => {
+            // Absentees = members missing from the most recent daily log (data we already hold).
+            const logs = await api(`/api/batches/${batchId}/logs`).then((d) => d.items).catch(() => []);
+            const present = new Set((logs[0]?.present_member_ids ?? []).map(String));
+            const absent = pending.filter((i) => logs.length && !present.has(String(i.member)));
+            bulkApply(absent.map((i) => ({ member: i.member, result: "Absent", assessed_on: bulk.assessed_on })));
+          }} disabled={!pending.length}>Mark absentees from last log</Btn>
+          <Btn small onClick={() => { setCertForm({ certificate_date: toInputDate(new Date()), prefix: "RPL/2026/", numbers: {} }); setCertDrawer(true); }} disabled={!passes.length}>
+            Issue certificates ({passes.length})
+          </Btn>
+        </div>
+      )}
+
+      {view === "review" ? (
+        <DataTable rows={items}
+          cardTitle={(r: any) => r.candidate?.name}
+          columns={[
+            { key: "candidate", label: "Candidate", render: (r: any) => <NameCell name={r.candidate?.name} sub={r.candidate?.phone} /> },
+            { key: "result", label: "Result", render: (r: any) => <Chip value={r.result?.result ?? "Pending"} /> },
+            { key: "score", label: "Score", render: (r: any) => r.result?.score ?? "—" },
+            { key: "assessor", label: "Assessor", render: (r: any) => r.result?.assessor ?? "—", mobile: false },
+            { key: "failure_reason", label: "Failure reason", render: (r: any) => r.result?.failure_reason ?? "—" },
+            { key: "cert", label: "Certificate", render: (r: any) => r.result?.certificate_no ? `${r.result.certificate_no} (${r.result.certificate_status})` : (r.result?.certificate_status ?? "—") },
+          ]} empty="No members on this batch." />
+      ) : (
+        <>
+          <div className="hidden gap-3 md:grid md:grid-cols-2 xl:grid-cols-3">
+            {items.map((i) => <Card key={i.member} i={i} />)}
+          </div>
+          <div className="md:hidden">
+            {items.length > 0 && <Card i={items[Math.min(idx, items.length - 1)]} />}
+            <div className="mt-3 flex items-center justify-between">
+              <Btn kind="ghost" onClick={() => setIdx((v) => Math.max(0, v - 1))} disabled={idx === 0}>← Prev</Btn>
+              <span className="text-sm text-gray-500">{idx + 1} / {items.length}</span>
+              <Btn kind="ghost" onClick={() => setIdx((v) => Math.min(items.length - 1, v + 1))} disabled={idx >= items.length - 1}>Next →</Btn>
+            </div>
+          </div>
+        </>
+      )}
+
+      <Drawer open={certDrawer} onClose={() => setCertDrawer(false)} title="Issue certificates" wide>
+        <div className="space-y-3">
+          <p className="text-sm text-gray-600">Only candidates who passed appear here — no certificate without a Pass (Rule 45).</p>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Certificate date"><input type="date" className={inputCls} value={certForm.certificate_date ?? ""} onChange={(e) => setCertForm({ ...certForm, certificate_date: e.target.value })} /></Field>
+            <Field label="Number prefix (auto-fill)">
+              <div className="flex gap-2">
+                <input className={inputCls} value={certForm.prefix ?? ""} onChange={(e) => setCertForm({ ...certForm, prefix: e.target.value })} />
+                <Btn small kind="ghost" onClick={() => {
+                  const numbers: any = {};
+                  passes.forEach((p, n) => { numbers[p.result._id] = `${certForm.prefix}${String(n + 1).padStart(3, "0")}`; });
+                  setCertForm({ ...certForm, numbers });
+                }}>Fill</Btn>
+              </div>
+            </Field>
+          </div>
+          {passes.map((p) => (
+            <div key={p.result._id} className="flex items-center gap-2 rounded-lg border px-3 py-2">
+              <span className="w-40 truncate text-sm font-medium">{p.candidate?.name}</span>
+              <input className={inputCls} placeholder="Certificate number"
+                value={certForm.numbers?.[p.result._id] ?? p.result.certificate_no ?? ""}
+                onChange={(e) => setCertForm({ ...certForm, numbers: { ...certForm.numbers, [p.result._id]: e.target.value } })} />
+              <Chip value={p.result.certificate_status} />
+            </div>
+          ))}
+          <Btn onClick={async () => {
+            for (const p of passes) {
+              const no = certForm.numbers?.[p.result._id] ?? p.result.certificate_no;
+              if (!no) continue;
+              try {
+                if (p.result.certificate_status === "Pending") await api(`/api/results/${p.result._id}`, { method: "PATCH", json: { certificate_status: "Processing" } });
+                if (["Pending", "Processing"].includes(p.result.certificate_status)) {
+                  await api(`/api/results/${p.result._id}`, { method: "PATCH", json: { certificate_status: "Generated", certificate_no: no, certificate_date: certForm.certificate_date } });
+                }
+                await api(`/api/results/${p.result._id}`, { method: "PATCH", json: { certificate_status: "Issued" } });
+              } catch (e: any) { setError(`${p.candidate?.name}: ${e.message}`); }
+            }
+            setCertDrawer(false); await load(); onChanged();
+          }}>Generate &amp; issue</Btn>
+        </div>
+      </Drawer>
+    </Section>
   );
 }
 

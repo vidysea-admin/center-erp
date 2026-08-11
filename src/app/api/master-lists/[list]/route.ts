@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireRole, HttpError } from "@/lib/authz";
-import { CostCategory, DropReason } from "@/models";
+import { CostCategory, DropReason, FailureReason } from "@/models";
 
-const LISTS: Record<string, any> = { "cost-categories": CostCategory, "drop-reasons": DropReason };
+const LISTS: Record<string, any> = { "cost-categories": CostCategory, "drop-reasons": DropReason, "failure-reasons": FailureReason };
 
 export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ list: string }> }) => {
   await dbConnect();

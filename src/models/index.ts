@@ -6,7 +6,11 @@ export const OPERATIONAL_STATUS = ["Not Started", "Active", "On Hold", "Stopped"
 export const ROOM_TYPE = ["Classroom", "Lab"] as const;
 export const TRAINER_STATUS = ["Available", "Assigned", "Unavailable"] as const;
 export const TRAINER_REQUEST_STATUS = ["Open", "In Progress", "Fulfilled", "Cancelled"] as const;
-export const LIFECYCLE_STATUS = ["Unassigned", "Assigned", "Enrolled", "Dropped", "Completed"] as const;
+// "Not Certified" (RPL M17/M18): finished the batch but did not pass — not Completed
+// (which would inflate outcome reporting) and not Dropped (they never left).
+export const LIFECYCLE_STATUS = ["Unassigned", "Assigned", "Enrolled", "Dropped", "Completed", "Not Certified"] as const;
+export const ASSESSMENT_RESULT = ["Pending", "Pass", "Fail", "Absent"] as const;
+export const CERTIFICATE_STATUS = ["Pending", "Processing", "Generated", "Issued", "Rejected"] as const;
 export const BATCH_SESSION = ["Morning", "Afternoon", "Full Day"] as const;
 export const BATCH_STATUS = ["Planning", "Ready", "Active", "Closing", "Completed", "Cancelled"] as const;
 export const ENROLLMENT_STATUS = ["Not Started", "In Progress", "Completed", "Failed"] as const;
@@ -182,6 +186,47 @@ const ClosureSchema = new Schema({
   marked_ready_by: oid("User"), marked_ready_at: Date,
 }, { timestamps: true });
 
+// ---------- CandidateResult (RPL M17 + M18) — one row per candidate per batch ----------
+// A separate collection, not fields on BatchMember: it keeps "this batch has never used
+// per-candidate marking" a single cheap predicate (row count === 0), which is the whole
+// legacy/back-compat strategy, and makes rollback a collection drop.
+const CandidateResultSchema = new Schema({
+  batch: oid("Batch", true),
+  candidate: oid("Candidate", true),
+  batch_member: oid("BatchMember", true),
+
+  // M17 — assessment
+  result: { type: String, enum: ASSESSMENT_RESULT, default: "Pending" },
+  score: Number,
+  max_score: { type: Number, default: 100 },
+  assessed_on: Date,
+  assessor: String,
+  failure_reason: String,
+  failure_note: String,
+  reassessment_required: { type: Boolean, default: false },
+  reassessment_date: Date,
+  evidence_file: String,
+  attempt: { type: Number, default: 1 },
+  attempts: [{
+    attempt: Number, result: String, score: Number, assessed_on: Date, assessor: String,
+    failure_reason: String, evidence_file: String, recorded_by: oid("User"), recorded_at: Date,
+  }],
+
+  // M18 — certification
+  certificate_status: { type: String, enum: CERTIFICATE_STATUS, default: "Pending" },
+  certificate_no: String,
+  certificate_date: Date,
+  certificate_file: String,
+  certificate_rejection_reason: String,
+
+  marked_by: oid("User"), marked_at: Date,
+  source: { type: String, enum: MEMBER_SOURCE, default: "Manual" }, // §7 provenance
+}, { timestamps: true });
+CandidateResultSchema.index({ batch: 1, candidate: 1 }, { unique: true });
+CandidateResultSchema.index({ candidate: 1, createdAt: -1 });
+// Partial index: only rows that actually carry a number participate, so blank rows never collide.
+CandidateResultSchema.index({ certificate_no: 1 }, { unique: true, partialFilterExpression: { certificate_no: { $type: "string" } } });
+
 // ---------- Invoice ----------
 const InvoiceSchema = new Schema({
   batch: { ...oid("Batch", true), unique: true },
@@ -295,6 +340,7 @@ export const Batch = models.Batch || model("Batch", BatchSchema);
 export const BatchMember = models.BatchMember || model("BatchMember", BatchMemberSchema);
 export const DailyLog = models.DailyLog || model("DailyLog", DailyLogSchema);
 export const Closure = models.Closure || model("Closure", ClosureSchema);
+export const CandidateResult = models.CandidateResult || model("CandidateResult", CandidateResultSchema);
 export const Invoice = models.Invoice || model("Invoice", InvoiceSchema);
 export const CostEntry = models.CostEntry || model("CostEntry", CostEntrySchema);
 export const SyncSource = models.SyncSource || model("SyncSource", SyncSourceSchema);
@@ -304,6 +350,7 @@ export const User = models.User || model("User", UserSchema);
 export const AuditLog = models.AuditLog || model("AuditLog", AuditLogSchema);
 export const CostCategory = models.CostCategory || model("CostCategory", NamedActiveSchema);
 export const DropReason = models.DropReason || model("DropReason", (NamedActiveSchema as any).clone?.() ?? NamedActiveSchema);
+export const FailureReason = models.FailureReason || model("FailureReason", (NamedActiveSchema as any).clone?.() ?? NamedActiveSchema);
 export const Defaults = models.Defaults || model("Defaults", DefaultsSchema);
 
 export { mongoose };

@@ -8,16 +8,17 @@ await mongoose.connect(process.env.MONGODB_URL, { dbName: process.env.MONGODB_DB
 const db = mongoose.connection.db;
 const ids = (docs) => docs.map((d) => d._id);
 
-const testLocs = await db.collection("locations").find({ name: { $regex: "^(Test Location|Sync Loc)" } }).toArray();
+const testLocs = await db.collection("locations").find({ name: { $regex: "^(Test Location|Sync Loc|Gate Location)" } }).toArray();
 const testProgs = await db.collection("programs").find({ name: { $regex: "^(Test Program|Sync Prog)" } }).toArray();
 const testTrainers = await db.collection("trainers").find({ name: { $regex: "^(Trainer \\d|SyncTrainer)" } }).toArray();
-const testCands = await db.collection("candidates").find({ $or: [{ name: { $regex: "^(Cand |Cand4|SyncCand)" } }, { location: { $in: ids(testLocs) } }] }).toArray();
+const testCands = await db.collection("candidates").find({ $or: [{ name: { $regex: "^(Cand |Cand4|SyncCand|Cap |Dup [AB] |R[0-9] )" } }, { location: { $in: ids(testLocs) } }] }).toArray();
 const testBatches = await db.collection("batches").find({ $or: [{ location: { $in: ids(testLocs) } }, { program: { $in: ids(testProgs) } }] }).toArray();
 
 const r = {};
 r.batchmembers = (await db.collection("batchmembers").deleteMany({ $or: [{ batch: { $in: ids(testBatches) } }, { candidate: { $in: ids(testCands) } }] })).deletedCount;
 r.dailylogs = (await db.collection("dailylogs").deleteMany({ batch: { $in: ids(testBatches) } })).deletedCount;
 r.closures = (await db.collection("closures").deleteMany({ batch: { $in: ids(testBatches) } })).deletedCount;
+r.candidateresults = (await db.collection("candidateresults").deleteMany({ $or: [{ batch: { $in: ids(testBatches) } }, { candidate: { $in: ids(testCands) } }] })).deletedCount;
 r.invoices = (await db.collection("invoices").deleteMany({ batch: { $in: ids(testBatches) } })).deletedCount;
 r.costentries = (await db.collection("costentries").deleteMany({ $or: [{ batch: { $in: ids(testBatches) } }, { trainer: { $in: ids(testTrainers) } }, { location: { $in: ids(testLocs) } }] })).deletedCount;
 r.trainerrequests = (await db.collection("trainerrequests").deleteMany({ location: { $in: ids(testLocs) } })).deletedCount;
