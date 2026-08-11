@@ -8,6 +8,10 @@ export const GET = apiHandler(async (req: NextRequest) => {
   const user = await requireUser();
   requireRole(user, "Admin", "Operations"); // Rule 40
   const status = req.nextUrl.searchParams.get("status") || "Open";
+  // The sidebar badge only needs the number — fetching every row to read .length was wasteful.
+  if (req.nextUrl.searchParams.get("count") === "1") {
+    return NextResponse.json({ count: await SheetChange.countDocuments(status === "all" ? {} : { status }) });
+  }
   const items = await SheetChange.find(status === "all" ? {} : { status })
     .sort({ detected_at: -1 })
     .populate("location", "name code")

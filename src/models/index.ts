@@ -282,6 +282,27 @@ const FollowUpActionSchema = new Schema({
   completed_by: oid("User"), completed_at: Date,
 }, { timestamps: true });
 
+// ---------- Notification (RPL M22) ----------
+export const NOTIFICATION_STATUS = ["New", "Acknowledged", "Resolved"] as const;
+export const NOTIFICATION_SEVERITY = ["info", "warning", "critical"] as const;
+
+const NotificationSchema = new Schema({
+  type: { type: String, required: true },      // stable key, e.g. "sheet_change_stale"
+  severity: { type: String, enum: NOTIFICATION_SEVERITY, default: "warning" },
+  message: { type: String, required: true },
+  entity: String, entity_id: Schema.Types.ObjectId,
+  link: String,                                 // where the user should go to act
+  role_target: [{ type: String, enum: USER_ROLE }],
+  location: oid("Location"),                    // for Rule 38 scoping
+  due_at: Date,
+  status: { type: String, enum: NOTIFICATION_STATUS, required: true, default: "New" },
+  acknowledged_by: oid("User"), acknowledged_at: Date,
+}, { timestamps: true });
+// One live alert per condition per entity — the scheduler re-runs every few minutes and
+// must not create a duplicate each time.
+NotificationSchema.index({ type: 1, entity_id: 1, status: 1 });
+NotificationSchema.index({ status: 1, createdAt: -1 });
+
 // ---------- User ----------
 const UserSchema = new Schema({
   name: { type: String, required: true },
@@ -347,6 +368,7 @@ export const SyncSource = models.SyncSource || model("SyncSource", SyncSourceSch
 export const SheetChange = models.SheetChange || model("SheetChange", SheetChangeSchema);
 export const FollowUpAction = models.FollowUpAction || model("FollowUpAction", FollowUpActionSchema);
 export const User = models.User || model("User", UserSchema);
+export const Notification = models.Notification || model("Notification", NotificationSchema);
 export const AuditLog = models.AuditLog || model("AuditLog", AuditLogSchema);
 export const CostCategory = models.CostCategory || model("CostCategory", NamedActiveSchema);
 export const DropReason = models.DropReason || model("DropReason", (NamedActiveSchema as any).clone?.() ?? NamedActiveSchema);

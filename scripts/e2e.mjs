@@ -287,6 +287,19 @@ ok("health on every batch list row", listHealth.every((b) => b.health?.score), "
 const amberOrRed = listHealth.find((b) => b.health.score !== "Green");
 ok("non-green batches always name a reason", !amberOrRed || amberOrRed.health.reasons.length > 0, JSON.stringify(amberOrRed?.health));
 
+// ---- Alerts (RPL M22) ----
+const alerts = (await req("GET", "/api/notifications", undefined, 200)).data;
+ok("alerts endpoint returns a list", Array.isArray(alerts.items), JSON.stringify(alerts).slice(0, 80));
+const alertCount = (await req("GET", "/api/notifications?count=1")).data;
+ok("alerts count endpoint", typeof alertCount.count === "number", JSON.stringify(alertCount));
+if (alerts.items.length) {
+  const a = alerts.items[0];
+  await req("POST", `/api/notifications/${a._id}`, { status: "Acknowledged" }, 200);
+  await req("POST", `/api/notifications/${a._id}`, { status: "Bogus" }, 400);
+}
+const syncCount = (await req("GET", "/api/sheet-changes?count=1")).data;
+ok("sheet-changes count endpoint (badge no longer fetches all rows)", typeof syncCount.count === "number", JSON.stringify(syncCount));
+
 // ---- audit trail exists ----
 const audit = (await req("GET", `/api/audit/Batch/${batch._id}`)).data.items;
 ok("AuditLog rows written for batch", audit.length >= 3, `count=${audit.length}`);

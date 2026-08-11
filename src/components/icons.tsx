@@ -25,4 +25,5 @@ export const IconDoc = (p: P) => <I {...p}><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2
 export const IconCalendar = (p: P) => <I {...p}><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M8 3v4M16 3v4M3 10h18" /></I>;
 export const IconTrendUp = (p: P) => <I {...p}><path d="m3 17 6-6 4 4 8-8" /><path d="M14 7h7v7" /></I>;
 export const IconTrendDown = (p: P) => <I {...p}><path d="m3 7 6 6 4-4 8 8" /><path d="M14 17h7v-7" /></I>;
+export const IconBell = (p: P) => <I {...p}><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.7 21a2 2 0 0 1-3.4 0" /></I>;
 export const IconBuilding = (p: P) => <I {...p}><rect x="4" y="3" width="16" height="18" rx="1.5" /><path d="M9 21v-4h6v4" /><path d="M8 7h.01M12 7h.01M16 7h.01M8 11h.01M12 11h.01M16 11h.01M8 15h.01M16 15h.01" /></I>;

@@ -7,7 +7,7 @@ import { api } from "@/lib/client";
 import { BASE_PATH } from "@/lib/base-path";
 import {
   IconHome, IconSync, IconPin, IconUser, IconUsers, IconCap, IconWallet, IconGear,
-  IconSearch, IconMenu, IconLogout, IconChevronDown, IconBuilding,
+  IconSearch, IconMenu, IconLogout, IconChevronDown, IconBuilding, IconBell,
 } from "@/components/icons";
 
 // Locked navigation (§1)
@@ -172,10 +172,14 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [userMenu, setUserMenu] = useState(false);
   const [syncCount, setSyncCount] = useState(0);
+  const [alertCount, setAlertCount] = useState(0);
 
   useEffect(() => {
-    if (!user || !["Admin", "Operations"].includes(user.role)) return;
-    api("/api/sheet-changes?status=Open").then((d) => setSyncCount(d.items?.length ?? 0)).catch(() => {});
+    if (!user) return;
+    if (["Admin", "Operations"].includes(user.role)) {
+      api("/api/sheet-changes?count=1").then((d) => setSyncCount(d.count ?? 0)).catch(() => {});
+    }
+    api("/api/notifications?count=1").then((d) => setAlertCount(d.count ?? 0)).catch(() => {});
   }, [pathname, user]);
 
   const nav = NAV.filter((n) => !n.roles || (user && n.roles.includes(user.role)));
@@ -217,6 +221,15 @@ export function AppShell({ children }: { children: ReactNode }) {
           <span className="hidden text-[15px] font-semibold tracking-tight lg:block">Center Management ERP</span>
         </Link>
         <div className="flex flex-1 justify-center px-2"><GlobalSearch /></div>
+        <Link href="/notifications" title="Alerts"
+          className="relative flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500 hover:border-blue-300 hover:text-blue-600">
+          <IconBell size={17} />
+          {alertCount > 0 && (
+            <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
+              {alertCount > 99 ? "99+" : alertCount}
+            </span>
+          )}
+        </Link>
         <HelpButton />
         <LocationSwitcher />
         <div className="relative">
