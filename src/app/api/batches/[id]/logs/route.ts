@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { DailyLog } from "@/models";
-import { assertBatchInScope, dayStart, validateDailyLog } from "@/lib/rules";
+import { assertBatchInScope, dayKey, dayRange, validateDailyLog } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
 export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
@@ -26,7 +26,14 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   await assertBatchInScope(user, id); // Rule 38
   const body = await req.json();
   if (!body.log_date) throw new HttpError(400, "log_date is required");
-  const D = dayStart(body.log_date);
+  // F-008: store the calendar date itself (UTC midnight), not midnight in whatever timezone this
+  // process happens to run in — otherwise the same day written by two processes is two instants.
+  const D = dayKey(body.log_date);
+  // Rule 27 is backed by a unique index on {batch, log_date}, which only catches an exact repeat.
+  // Check the whole calendar day as well, so a row written under the old timezone-dependent
+  // encoding cannot be duplicated by a new one for the same day.
+  const clash = await DailyLog.findOne({ batch: id, log_date: dayRange(D) }).select("_id").lean();
+  if (clash) throw new HttpError(409, "Rule 27: a log already exists for this batch on that date.");
   const { roster_count, internal_present } = await validateDailyLog(id, D, {
     present_member_ids: body.present_member_ids ?? [],
     govt_present: body.govt_present ?? null,

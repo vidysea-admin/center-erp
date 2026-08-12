@@ -133,6 +133,21 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: today, present_m
 // valid
 const log = (await req("POST", `/api/batches/${batch._id}/logs`, { log_date: today, present_member_ids: mIds.slice(0, 2), govt_present: 2, actual_topic: "Day 1" }, 201)).data.item;
 ok("Rule 28: roster_count frozen at 3", log.roster_count === 3);
+// 2026-08-12 audit F-008 (S1): log_date used to be midnight in the SERVER PROCESS's timezone, so
+// the same calendar day written by a laptop in IST and by the container in UTC were different
+// instants. The missing-log lookups compared them for exact equality, so the alarm reported
+// "no daily log for 8 operating days" directly above a table listing five of them. The stored
+// value must now be the calendar date itself, pinned to UTC midnight, whatever TZ this runs in.
+ok("F-008: log_date stored as a timezone-independent calendar date",
+  new Date(log.log_date).toISOString() === `${today}T00:00:00.000Z`,
+  `${new Date(log.log_date).toISOString()} for ${today}`);
+{
+  const h = (await req("GET", `/api/batches/${batch._id}`)).data.health;
+  const missing = (h?.reasons ?? []).filter((r) => r.code === "missing_logs");
+  ok("F-008: a batch logged today is not reported as missing its log", missing.length === 0, JSON.stringify(missing.map((m) => m.label)));
+}
+// Rule 27 now also catches a same-calendar-day duplicate written under the old encoding.
+await req("POST", `/api/batches/${batch._id}/logs`, { log_date: `${today}T09:30:00.000Z`, present_member_ids: [] }, 409);
 // Rule 27 (unique): duplicate date → 409
 await req("POST", `/api/batches/${batch._id}/logs`, { log_date: today, present_member_ids: [] }, 409);
 // Rule 32: date before actual_start

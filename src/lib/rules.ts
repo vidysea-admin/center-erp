@@ -54,6 +54,29 @@ export function dayStart(d: Date | string): Date {
   return r;
 }
 
+// 2026-08-12 audit F-008 (S1): dayStart() is midnight in the SERVER PROCESS's timezone, and
+// DailyLog.log_date was stored with it — so "7 Aug" written by a laptop in IST is a different
+// instant from "7 Aug" written by the container in UTC. Lookups compared those instants for
+// exact equality, so the missing-log alarm never matched the seeded rows and reported "no daily
+// log for 8 operating days" directly above a table listing five. It also means the
+// {batch, log_date} unique index behind Rule 27 is keyed on a timezone-dependent value.
+//
+// dayKey is the calendar date itself, pinned to UTC midnight so it does not move with the
+// server's timezone. dayRange spans exactly that calendar day for querying.
+export function dayKey(d: Date | string): Date {
+  if (typeof d === "string") {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d);
+    if (m) return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  }
+  const dt = new Date(d);
+  return new Date(Date.UTC(dt.getFullYear(), dt.getMonth(), dt.getDate()));
+}
+
+export function dayRange(d: Date | string): { $gte: Date; $lt: Date } {
+  const s = dayKey(d);
+  return { $gte: s, $lt: new Date(s.getTime() + 86_400_000) };
+}
+
 // ---------- Computed values (§5) ----------
 export function computePlannedEnd(planned_start: Date, program: { duration_days: number; buffer_days: number }): Date {
   // Rule 15
@@ -485,10 +508,12 @@ export async function validateDailyLog(batchId: string, log_date: Date, payload:
     throw new HttpError(409, "Daily logs only for Active/Closing batches.");
   }
   await assertLocationOperational(batch.location, "Entering a daily log"); // Rule 1
-  const D = dayStart(log_date);
-  if (batch.actual_start && D < dayStart(batch.actual_start)) throw new HttpError(400, "Rule 32: log date before batch actual start.");
-  if (batch.actual_end && D > dayStart(batch.actual_end)) throw new HttpError(400, "Rule 32: log date after batch actual end.");
-  if (D > dayStart(new Date())) throw new HttpError(400, "Cannot log a future date.");
+  // F-008: compare calendar dates on one consistent footing. Mixing dayStart (server-local) with
+  // the dayKey the log is stored under would shift the day by the server's UTC offset.
+  const D = dayKey(log_date);
+  if (batch.actual_start && D < dayKey(batch.actual_start)) throw new HttpError(400, "Rule 32: log date before batch actual start.");
+  if (batch.actual_end && D > dayKey(batch.actual_end)) throw new HttpError(400, "Rule 32: log date after batch actual end.");
+  if (D > dayKey(new Date())) throw new HttpError(400, "Cannot log a future date.");
 
   const roster = await rosterOnDate(batchId, D); // Rule 26
   const rosterIds = new Set(roster.map((m) => String(m._id)));
@@ -541,7 +566,7 @@ export async function missingLogStreak(batch: any, operating: number[]): Promise
   while (guard++ < 21) {
     if (!operating.includes(d.getDay())) { d = addDays(d, -1); continue; }
     if (batch.actual_start && d < dayStart(batch.actual_start)) break;
-    const log = await DailyLog.findOne({ batch: batch._id, log_date: d }).select("_id").lean();
+    const log = await DailyLog.findOne({ batch: batch._id, log_date: dayRange(d) }).select("_id").lean();
     if (log) break;
     days++;
     if (!lastMissing) lastMissing = d;
@@ -611,7 +636,7 @@ export async function missingLogQueue(locationScopeFilter: Record<string, unknow
     let guard = 0;
     while (!operating.includes(d.getDay()) && guard++ < 7) d = addDays(d, -1);
     if (b.actual_start && d < dayStart(b.actual_start)) continue;
-    const log = await DailyLog.findOne({ batch: b._id, log_date: d }).lean();
+    const log = await DailyLog.findOne({ batch: b._id, log_date: dayRange(d) }).lean();
     if (!log) out.push({ batch: b, missing_date: d, owner: b.location?.spoc_name ?? "SPOC" });
   }
   return out;
