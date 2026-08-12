@@ -67,6 +67,7 @@
   <a href="#eligibility-sidh">Eligibility &amp; SIDH</a>
   <a href="#feedback">Candidate Feedback</a>
   <a href="#permissions">Permissions &amp; Signup</a>
+  <a href="#sheet-sources">Adding Any Sheet</a>
   <a href="#govt-attendance">Govt Attendance Import</a>
   <a href="#scheme-rules">Scheme Timing &amp; Counting</a>
   <h2>Help</h2>
@@ -424,6 +425,22 @@
       <li>Admin always has every right — you cannot lock yourself out</li>
     </ol>
     <div class="tip">💡 In Sheet Watch, a <b>new row</b> in the client's sheet shows a <span class="btn">Create location…</span> button: the form comes prefilled from the sheet itself, you correct anything that is wrong, and only then it enters the system. Nothing from the sheet ever writes itself into the database.</div>
+  </section>
+
+  <section class="screen" id="sheet-sources">
+    <h2>🔗 Adding Any Sheet to Watch</h2>
+    <p class="sub">Sheet Watch → Manage sheets — point the system at any spreadsheet, not just the client's</p>
+    <ol class="steps">
+      <li>Open <b>Sheet Watch</b> and click <span class="btn">Manage sheets</span>. Every sheet the system is watching is listed, with when it last ran and whether that run worked</li>
+      <li><span class="btn">Add a sheet</span> → <b>paste the link straight out of your browser's address bar</b>. You do not need a special download link — the system works out the right one for Google Sheets, Google Drive, OneDrive, SharePoint, Dropbox, or any direct CSV/Excel URL</li>
+      <li>Click <span class="btn">Test this link</span> <b>before</b> saving. It fetches the sheet and shows you every tab it found with its row count and column names — so you can see it is the right sheet. If it cannot open it, it tells you exactly why and what to change</li>
+      <li><mark>The sheet must be shared as "anyone with the link can view"</mark>. A sheet restricted to named people cannot be opened by the server, no matter who is logged into the ERP — the server is not a person and has no Google or Microsoft account</li>
+      <li><b>Watch mode</b> (recommended) checks every tab on a timer and reports every changed cell. <b>Mapped mode</b> maps columns to ERP fields and sends changes to the Sync Inbox for approval — nothing from a sheet ever writes itself into the database</li>
+      <li><b>Row identity columns:</b> leave blank and the first column is used. Set them (e.g. "Institution Name, Job role") when rows get renumbered or re-sorted — that is what stops a re-sorted sheet looking like every row changed at once</li>
+      <li>Click any sheet in the list to <b>edit its link, rename it or change how often it is checked</b>. <span class="btn">Run now</span> checks immediately instead of waiting for the timer</li>
+      <li><b>Pause</b> (untick Active) stops checking but keeps the history — for a sheet the client has stopped updating. <b>Remove</b> deletes it entirely; it will refuse if changes from that sheet are still waiting in the Sync Inbox, so nothing pending is lost</li>
+    </ol>
+    <div class="tip">💡 New sheets can be added by anyone with the <b>Configure sync sources</b> right (Admin → Permissions). When the client sends a new or replacement sheet, nobody has to touch the code or call the developer.</div>
   </section>
 
   <section class="screen" id="govt-attendance">

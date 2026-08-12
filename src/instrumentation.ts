@@ -31,7 +31,7 @@ export async function register() {
       if (!(await takeLock("sync", 5 * 60_000))) return;
       const now = new Date();
       const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-      const sources = await SyncSource.find({ frequency: "Daily", mode: { $ne: "watch" } }).lean<any[]>();
+      const sources = await SyncSource.find({ frequency: "Daily", mode: { $ne: "watch" }, active: { $ne: false } }).lean<any[]>();
       for (const s of sources) {
         if (!s.sync_time) continue;
         const due = s.sync_time.slice(0, 5) <= hhmm;
@@ -43,7 +43,7 @@ export async function register() {
         }
       }
       // Watch-mode sources (2026-08-11): poll every interval_minutes, not once a day.
-      const watches = await SyncSource.find({ mode: "watch" }).lean<any[]>();
+      const watches = await SyncSource.find({ mode: "watch", active: { $ne: false } }).lean<any[]>();
       for (const s of watches) {
         const intervalMs = Math.max(5, s.interval_minutes ?? 30) * 60_000;
         if (s.last_synced_at && now.getTime() - new Date(s.last_synced_at).getTime() < intervalMs) continue;

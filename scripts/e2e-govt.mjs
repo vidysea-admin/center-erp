@@ -263,5 +263,56 @@ await req(admin, "DELETE", `/api/govt-attendance/${again.data._id}`);
 ok("an import can be deleted (wrong file, wrong centre)",
   (await req(admin, "GET", `/api/govt-attendance/${done.data._id}`)).status === 404);
 
+
+// ---------------------------------------------------------------- universal sheet sources (2026-08-12)
+// The feature used to be one hard-coded URL registered by a script. These assertions pin the
+// thing that actually matters: any link a person pastes out of their browser can be added,
+// tested, edited, paused and removed.
+
+// A Google Sheets /edit link is not downloadable; the export endpoint is. The system must make
+// that translation itself — expecting a user to know it is how a source ends up silently dead.
+const gTest = await req(admin, "POST", "/api/sync-sources/test", {
+  source_url: "https://docs.google.com/spreadsheets/d/1f9veYSwuLktmggOJdUlspl_yydotdqnf/edit?gid=1579134034#gid=1579134034",
+});
+ok("a Google Sheets browser link is rewritten to its export URL",
+  gTest.data.normalized_url === "https://docs.google.com/spreadsheets/d/1f9veYSwuLktmggOJdUlspl_yydotdqnf/export?format=xlsx",
+  gTest.data.normalized_url);
+ok("a private sheet fails the probe instead of being saved as a dead source", gTest.data.ok === false, JSON.stringify(gTest.data).slice(0, 200));
+ok("and the failure names the sharing fix rather than a generic error",
+  /anyone with the link/i.test(gTest.data.hint ?? "") && /private/i.test(gTest.data.error ?? ""),
+  JSON.stringify({ e: gTest.data.error, h: gTest.data.hint }).slice(0, 300));
+
+const dTest = await req(admin, "POST", "/api/sync-sources/test", { source_url: "https://drive.google.com/file/d/ABC123def/view?usp=sharing" });
+ok("a Drive file link is rewritten to its download URL",
+  dTest.data.normalized_url === "https://drive.google.com/uc?export=download&id=ABC123def", dTest.data.normalized_url);
+
+const notALink = await req(admin, "POST", "/api/sync-sources/test", { source_url: "just some text" });
+ok("something that is not a link is refused up front", notALink.status === 400, `got ${notALink.status}`);
+
+// The client's real OneDrive workbook — the one case that must keep working end to end.
+const odTest = await req(admin, "POST", "/api/sync-sources/test", {
+  source_url: "https://onedrive.live.com/:x:/g/personal/c1d310c499f08fba/IQBHQGQ1_HmBRZjCmC1XQMK8AQCFnOpu1H8GXm3MNvZnypE",
+});
+ok("the client's OneDrive workbook still probes green", odTest.data.ok === true, JSON.stringify(odTest.data).slice(0, 200));
+ok("and the probe reports its tabs and columns back", (odTest.data.tabs?.[0]?.columns ?? []).some((c) => /tc\s*id/i.test(c)),
+  JSON.stringify(odTest.data.tabs?.[0]?.columns ?? []).slice(0, 200));
+
+// Add → edit → pause → remove, all through the API the screen uses.
+const created = await req(admin, "POST", "/api/sync-sources", {
+  name: `${NAME} sheet`, source_url: "https://example.invalid/whatever.csv",
+  mode: "watch", interval_minutes: 45, key_columns: ["Institution Name", "Job role"], frequency: "Manual only",
+});
+ok("any URL can be registered as a source", created.status === 201, JSON.stringify(created.data).slice(0, 200));
+const srcId = created.data.item?._id;
+const edited = await req(admin, "PATCH", `/api/sync-sources/${srcId}`, { source_url: "https://example.invalid/renamed.csv", interval_minutes: 60 });
+ok("its URL and cadence can be edited afterwards",
+  edited.data.item?.source_url === "https://example.invalid/renamed.csv" && edited.data.item?.interval_minutes === 60,
+  JSON.stringify(edited.data.item).slice(0, 200));
+const paused = await req(admin, "PATCH", `/api/sync-sources/${srcId}`, { active: false });
+ok("it can be paused without losing its history", paused.data.item?.active === false, JSON.stringify(paused.data.item?.active));
+const removed = await req(admin, "DELETE", `/api/sync-sources/${srcId}`);
+ok("and removed", removed.status === 200, JSON.stringify(removed.data).slice(0, 150));
+ok("removal is real", (await req(admin, "GET", `/api/sync-sources/${srcId}`)).status === 404);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

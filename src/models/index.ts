@@ -376,6 +376,9 @@ const SyncSourceSchema = new Schema({
   last_synced_at: Date,
   last_status: { type: String, enum: SYNC_STATUS },
   last_error: String,
+  // 2026-08-12: pause a source without deleting it — a sheet the client has stopped updating
+  // should not keep raising failures, but its history is still worth keeping.
+  active: { type: Boolean, default: true },
   field_mappings: { type: Schema.Types.Mixed, default: {} }, // external_column -> erp_field (mapped mode)
 }, { timestamps: true });
 

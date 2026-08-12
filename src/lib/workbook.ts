@@ -67,18 +67,67 @@ async function fetchOneDriveShare(url: string): Promise<Buffer> {
   return Buffer.from(await file.arrayBuffer());
 }
 
-export async function fetchWorkbook(url: string): Promise<XLSX.WorkBook> {
+/**
+ * Turn whatever a person pasted out of their browser into something fetchable.
+ *
+ * Nobody copies a download URL — they copy what is in the address bar while looking at the
+ * sheet. Requiring the "right" URL is how a sync source ends up silently broken, so the
+ * translation happens here instead of in the user's head. Returns the URL unchanged when there
+ * is nothing to do, so anything already correct (a published CSV, a raw file endpoint) is
+ * passed straight through.
+ */
+export function normalizeSheetUrl(raw: string): string {
+  const url = String(raw ?? "").trim();
+  if (!url) return url;
+
+  // Google Sheets: an /edit (or /view, or bare) link cannot be downloaded — the export endpoint
+  // can. A single-tab export is requested as xlsx so every tab survives; ?gid= is dropped
+  // deliberately, because pinning one tab is the opposite of watching the whole workbook.
+  const g = /^https:\/\/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/.exec(url);
+  if (g && !/\/export\b/.test(url) && !/\/pub\b/.test(url) && !/\/gviz\b/.test(url)) {
+    return `https://docs.google.com/spreadsheets/d/${g[1]}/export?format=xlsx`;
+  }
+  // Google Drive file link (an .xlsx uploaded to Drive rather than a native Sheet).
+  const d = /^https:\/\/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/.exec(url);
+  if (d) return `https://drive.google.com/uc?export=download&id=${d[1]}`;
+
+  // Dropbox serves a preview page on dl=0 and the file itself on dl=1.
+  if (/^https:\/\/(www\.)?dropbox\.com\//i.test(url)) {
+    return url.replace(/([?&])dl=0(&|$)/, "$1dl=1$2") + (/[?&]dl=/.test(url) ? "" : (url.includes("?") ? "&dl=1" : "?dl=1"));
+  }
+  // SharePoint/OneDrive for Business: ?download=1 skips the web viewer.
+  if (/sharepoint\.com\//i.test(url) && !/download=1/.test(url)) {
+    return url + (url.includes("?") ? "&download=1" : "?download=1");
+  }
+  // Personal OneDrive share links are handled by the badger flow, which wants the path as-is.
+  return url;
+}
+
+export async function fetchWorkbook(rawUrl: string): Promise<XLSX.WorkBook> {
+  const url = normalizeSheetUrl(rawUrl);
   const buf = isOneDriveShare(url)
     ? await fetchOneDriveShare(url)
     : await (async () => {
         const res = await fetch(url, { redirect: "follow", headers: { "User-Agent": BROWSER_UA } });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        // A private sheet answers 401/403 outright — the HTML sign-in sniff below never gets a
+        // chance. "HTTP 401" tells the person nothing actionable, so name the actual cause here.
+        if (res.status === 401 || res.status === 403) {
+          throw new Error("The link is private — the host refused access (sign-in required). Open sharing to “anyone with the link (Viewer)”, or publish the sheet to the web, then test again.");
+        }
+        if (res.status === 404) throw new Error("Nothing at that link (404) — the sheet may have been moved, renamed or deleted.");
+        if (!res.ok) throw new Error(`The host returned HTTP ${res.status} for this link.`);
         return Buffer.from(await res.arrayBuffer());
       })();
   // Auth walls serve HTML with a spreadsheet content-type — catch it before XLSX guesses.
-  const head = buf.subarray(0, 64).toString("utf8").trimStart().toLowerCase();
+  const head = buf.subarray(0, 2048).toString("utf8").trimStart().toLowerCase();
   if (head.startsWith("<!doctype") || head.startsWith("<html")) {
-    throw new Error("Source returned an HTML page instead of a spreadsheet (login wall?)");
+    // The commonest failure by far, and the one worth naming precisely: the sheet is private,
+    // so the host served a sign-in page. Saying "login wall?" sends people hunting for a bug
+    // that is not there.
+    const signIn = /accounts\.google\.com|sign in|servicelogin|login\.microsoftonline/.test(head);
+    throw new Error(signIn
+      ? "The link is private — the host returned a sign-in page instead of the file. Open sharing to “anyone with the link (Viewer)”, or publish the sheet to the web, then test again."
+      : "That link returned a web page, not a spreadsheet. Use the sheet's own link (not a folder or search page).");
   }
   return XLSX.read(buf, { type: "buffer" }); // handles xlsx, xls and csv alike
 }

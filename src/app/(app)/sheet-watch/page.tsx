@@ -6,6 +6,7 @@
 import { useEffect, useState } from "react";
 import { api, fmtDate } from "@/lib/client";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, inputCls } from "@/components/ui";
+import { SheetSources } from "@/components/sheet-sources";
 
 const TYPE_STYLE: Record<string, string> = {
   Added: "bg-green-50 text-green-700 border-green-200",
@@ -21,6 +22,7 @@ export default function SheetWatchPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [showSources, setShowSources] = useState(false);
 
   const load = () =>
     api(`/api/workbook-changes?status=${status}${tab ? `&tab=${encodeURIComponent(tab)}` : ""}`)
@@ -73,6 +75,7 @@ export default function SheetWatchPage() {
           <p className="text-sm text-gray-500">Every change the client makes in the shared workbook — row, column, old → new</p>
         </div>
         <div className="flex gap-2">
+          <Btn small kind="ghost" onClick={() => setShowSources((s) => !s)}>{showSources ? "Hide sheets" : "Manage sheets"}</Btn>
           <select className={inputCls + " max-w-40"} value={tab} onChange={(e) => setTab(e.target.value)}>
             <option value="">All tabs</option>
             {tabs.map((t) => <option key={t}>{t}</option>)}
@@ -83,6 +86,8 @@ export default function SheetWatchPage() {
         </div>
       </div>
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
+      {/* 2026-08-12: any sheet can be added here — the feature is no longer one hard-coded URL. */}
+      {showSources && <SheetSources onChanged={load} />}
       {selected.size > 0 && (
         <div className="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm">
           <span className="font-medium">{selected.size} selected</span>
