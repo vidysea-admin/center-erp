@@ -350,6 +350,17 @@ export async function dropMemberChecked(memberId: string, left_on: Date, drop_re
   m.left_on = lo;
   m.drop_reason = drop_reason;
   await m.save();
+  // 2026-08-12 audit F-007 (S1): Rule 26 excludes a member from the roster on their own leave
+  // date, so a log for that day kept listing someone who was no longer on it. Every later edit
+  // to that log — including entering the government attendance figure, the number the whole
+  // system exists to report — was then refused with "present member not in roster on that
+  // date", naming neither the member nor the day. Tidy the roster history as we go instead.
+  const staleLogs = await DailyLog.find({ batch: m.batch, log_date: { $gte: lo }, present_member_ids: m._id });
+  for (const log of staleLogs) {
+    log.present_member_ids = log.present_member_ids.filter((id: any) => String(id) !== String(m._id));
+    log.internal_present = log.present_member_ids.length; // Rule 29; roster_count stays frozen (Rule 28)
+    await log.save();
+  }
   await Candidate.findByIdAndUpdate(m.candidate, { lifecycle_status: "Dropped" }); // Rule 21
   // Rule 42: an existing result is NOT deleted when someone drops — they still appeared.
   // Recompute so the aggregates reflect the new roster.
@@ -482,7 +493,15 @@ export async function validateDailyLog(batchId: string, log_date: Date, payload:
   const roster = await rosterOnDate(batchId, D); // Rule 26
   const rosterIds = new Set(roster.map((m) => String(m._id)));
   for (const id of payload.present_member_ids) {
-    if (!rosterIds.has(String(id))) throw new HttpError(400, "Rule 29: present member not in roster on that date.");
+    if (!rosterIds.has(String(id))) {
+      // Name who and when — the operator cannot act on "a present member" (audit F-007).
+      const m = await BatchMember.findById(id).populate("candidate", "name").lean<any>();
+      const who = m?.candidate?.name ?? "That candidate";
+      const when = D.toLocaleDateString("en-IN");
+      throw new HttpError(400, m?.left_on
+        ? `Rule 29: ${who} left this batch on ${new Date(m.left_on).toLocaleDateString("en-IN")}, so they were not on the roster on ${when}. Untick them to save.`
+        : `Rule 29: ${who} was not on this batch's roster on ${when}.`);
+    }
   }
   const internal_present = payload.present_member_ids.length; // Rule 29
   if (internal_present > roster.length) throw new HttpError(400, "Rule 29: present exceeds roster.");
@@ -962,11 +981,16 @@ export async function upsertClosureChecked(batchId: string, patch: Record<string
   if (settingReady) {
     closure.marked_ready_by = new Types.ObjectId(userId);
     closure.marked_ready_at = new Date();
-    await Invoice.findOneAndUpdate(
-      { batch: batchId },
-      { $set: { status: "Ready" }, $setOnInsert: { batch: batchId } },
-      { upsert: true },
-    ); // Rule 35
+    // 2026-08-12 audit (sync S1-5): this unconditionally forced the invoice back to "Ready",
+    // so un-ticking and re-ticking "ready for invoice" walked a Raised or even Paid invoice
+    // backwards past both the monotonic order in Rule 36 and the approval gate. Only ever
+    // create the invoice or lift it off "Not Ready" — never drag a live one back.
+    const existing = await Invoice.findOne({ batch: batchId }).select("status").lean<any>();
+    if (!existing) {
+      await Invoice.create({ batch: batchId, status: "Ready" }); // Rule 35
+    } else if (existing.status === "Not Ready") {
+      await Invoice.updateOne({ batch: batchId }, { $set: { status: "Ready" } });
+    }
   }
   await closure.save();
   if (perCandidate) await recomputeClosureAggregates(batchId, userId); // Rule 42: derived wins
@@ -993,6 +1017,27 @@ export async function updateInvoiceChecked(batchId: string, patch: Record<string
   }
   if (target === "Paid" && !(patch.paid_on ?? inv.paid_on)) {
     throw new HttpError(400, "Rule 36: Paid requires paid_on.");
+  }
+  // 2026-08-12 audit (sync S1-6): the money fields stayed freely editable after Raised, and a
+  // field-only PATCH carried no status change so it skipped the approval gate entirely — an
+  // invoice number or amount could be rewritten after the fact with nothing recording it.
+  // They are now frozen once the invoice has left "Ready"; correcting one means moving the
+  // invoice back deliberately, which is itself gated and audited.
+  const MONEY_FIELDS = ["amount", "invoice_no", "raised_on", "paid_on"];
+  if (INVOICE_ORDER.indexOf(inv.status) >= INVOICE_ORDER.indexOf("Raised")) {
+    const changed = MONEY_FIELDS.filter((f) => {
+      if (patch[f] === undefined) return false;
+      const before = (inv as any)[f];
+      const a = before instanceof Date ? before.toISOString().slice(0, 10) : before ?? null;
+      const b = patch[f] instanceof Date ? (patch[f] as Date).toISOString().slice(0, 10) : String(patch[f] ?? "").slice(0, 10) || null;
+      return String(a ?? "") !== String(b ?? "");
+    });
+    // Setting paid_on as part of the Ready→Raised→Paid move itself is legitimate.
+    const allowed = target === "Paid" ? ["paid_on"] : [];
+    const blocked = changed.filter((f) => !allowed.includes(f));
+    if (blocked.length) {
+      throw new HttpError(409, `Rule 36: ${blocked.join(", ")} cannot be changed once the invoice is ${inv.status}.`);
+    }
   }
   Object.assign(inv, patch);
   await inv.save();
