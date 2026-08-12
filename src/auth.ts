@@ -19,6 +19,10 @@ export type SessionUser = {
 export const { handlers, auth, signIn, signOut } = NextAuth({
   session: { strategy: "jwt" },
   pages: { signIn: "/login" },
+  // Behind the production reverse proxy the request's own Host is the instance's internal
+  // address (ip-10-0-…:3000). Trusting the forwarded host keeps every URL Auth.js builds
+  // on the public origin. Belt-and-braces: the sign-out button also redirects client-side.
+  trustHost: true,
   providers: [
     Credentials({
       credentials: { email: {}, password: {} },

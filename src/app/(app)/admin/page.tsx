@@ -15,7 +15,16 @@ const APPROVAL_LABELS: Record<string, string> = {
 };
 
 export default function AdminPage() {
-  const [tab, setTab] = useState("Programs");
+  // Deep links land here from notifications ("New signup awaiting approval" → ?tab=Users),
+  // so the query parameter has to choose the tab — it was previously ignored and every
+  // link dropped the user on Programs. Prefixes match so ?tab=Users finds "Users & Access".
+  const [tab, setTab] = useState(() => {
+    if (typeof window === "undefined") return "Programs";
+    const want = new URLSearchParams(window.location.search).get("tab");
+    return TABS.find((t) => t === want)
+      ?? TABS.find((t) => want && t.toLowerCase().startsWith(want.toLowerCase()))
+      ?? "Programs";
+  });
   const [error, setError] = useState("");
   return (
     <div className="space-y-4">

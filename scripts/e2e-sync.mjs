@@ -119,6 +119,8 @@ const T1 = [["Institution Name", "Job role", "Target"], ["Alpha " + tabStamp, "D
 const T2 = [["Institution Name", "Job role", "Target"], ["Beta " + tabStamp, "Solar", "200"]];
 const T3 = [["Institution Name", "Job role", "Target"], ["Gamma " + tabStamp, "EV", "300"]];
 
+const mine = (items, srcId) => (items ?? []).filter((c) => String(c.sync_source?._id ?? c.sync_source) === String(srcId));
+
 const dynSrc = (await req("POST", "/api/sync-sources", {
   name: "Watch Source Dyn " + tabStamp, mode: "watch",
   key_columns: ["Institution Name", "Job role"],
@@ -134,7 +136,7 @@ const T1b = [["Institution Name", "Job role", "Target"], ["Alpha " + tabStamp, "
 await req("PATCH", `/api/sync-sources/${dynSrc._id}`, { source_url: wbDataUrl({ "Batch Plan": T1b, "Back Date": T2, "Planning 2027": T3 }) }, 200);
 const dr2 = (await req("POST", `/api/sync-sources/${dynSrc._id}/run`, {}, 200)).data;
 ok("new tab is picked up automatically (3 tabs now)", dr2.tabs === 3, JSON.stringify(dr2));
-const ch2 = (await req("GET", "/api/workbook-changes?status=New")).data.items ?? [];
+const ch2 = mine((await req("GET", "/api/workbook-changes?status=New")).data.items, dynSrc._id);
 const newTab = ch2.find((c) => c.tab === "Planning 2027" && c.row_key === "Tab: Planning 2027");
 ok("a NEW TAB is announced, not absorbed silently", newTab?.change_type === "Added" && newTab.new_value.includes("appeared"), JSON.stringify(newTab));
 ok("…and it does not flood one change per row", ch2.filter((c) => c.tab === "Planning 2027").length === 1);
@@ -144,21 +146,44 @@ ok("edits in an existing tab still tracked alongside", ch2.some((c) => c.tab ===
 const T3b = [["Institution Name", "Job role", "Target"], ["Gamma " + tabStamp, "EV", "350"]];
 await req("PATCH", `/api/sync-sources/${dynSrc._id}`, { source_url: wbDataUrl({ "Batch Plan": T1b, "Back Date": T2, "Planning 2027": T3b }) }, 200);
 await req("POST", `/api/sync-sources/${dynSrc._id}/run`, {}, 200);
-const ch3 = (await req("GET", "/api/workbook-changes?status=New")).data.items ?? [];
+const ch3 = mine((await req("GET", "/api/workbook-changes?status=New")).data.items, dynSrc._id);
 ok("row edits inside the newly-added tab are tracked", ch3.some((c) => c.tab === "Planning 2027" && c.column === "Target" && c.old_value === "300" && c.new_value === "350"));
 
 // Run 4 — client DELETES a tab.
 await req("PATCH", `/api/sync-sources/${dynSrc._id}`, { source_url: wbDataUrl({ "Batch Plan": T1b, "Planning 2027": T3b }) }, 200);
 const dr4 = (await req("POST", `/api/sync-sources/${dynSrc._id}/run`, {}, 200)).data;
 ok("tab count drops when a tab is deleted", dr4.tabs === 2, JSON.stringify(dr4));
-const ch4 = (await req("GET", "/api/workbook-changes?status=New")).data.items ?? [];
+const ch4 = mine((await req("GET", "/api/workbook-changes?status=New")).data.items, dynSrc._id);
 const goneTab = ch4.find((c) => c.row_key === "Tab: Back Date" && c.change_type === "Removed");
 ok("a DELETED TAB is announced", !!goneTab && goneTab.new_value.includes("gone from the workbook"), JSON.stringify(goneTab));
 
 // Run 5 — the removal must not re-fire on every poll.
 await req("POST", `/api/sync-sources/${dynSrc._id}/run`, {}, 200);
-const ch5 = (await req("GET", "/api/workbook-changes?status=New")).data.items ?? [];
+const ch5 = mine((await req("GET", "/api/workbook-changes?status=New")).data.items, dynSrc._id);
 ok("deleted-tab alert fires once, not every tick", ch5.filter((c) => c.row_key === "Tab: Back Date").length === 1);
+
+// ---- people are told the moment the sheet moves (2026-08-12) ----
+// Name a tab row exactly like a real location so the per-centre alert can find it.
+const notifyLoc = (await req("POST", "/api/locations", { code: "NL" + tabStamp, name: "Notify Centre " + tabStamp, approval_status: "Approved" }, 201)).data.item;
+const NT1 = [["Institution Name", "Job role", "Target"], ["Notify Centre " + tabStamp, "Drone", "100"]];
+const notifySrc = (await req("POST", "/api/sync-sources", {
+  name: "Watch Source Notify " + tabStamp, mode: "watch",
+  key_columns: ["Institution Name", "Job role"], source_url: wbDataUrl({ Master: NT1 }),
+}, 201)).data.item;
+await req("POST", `/api/sync-sources/${notifySrc._id}/run`, {}, 200); // baseline, silent
+const beforeNotifs = ((await req("GET", "/api/notifications?status=all")).data.items ?? []).length;
+const NT2 = [["Institution Name", "Job role", "Target"], ["Notify Centre " + tabStamp, "Drone", "175"]];
+await req("PATCH", `/api/sync-sources/${notifySrc._id}`, { source_url: wbDataUrl({ Master: NT2 }) }, 200);
+await req("POST", `/api/sync-sources/${notifySrc._id}/run`, {}, 200);
+const afterNotifs = (await req("GET", "/api/notifications?status=all")).data.items ?? [];
+ok("a sheet change alerts immediately (not only after 48h)", afterNotifs.length > beforeNotifs, `${beforeNotifs} → ${afterNotifs.length}`);
+const summary = afterNotifs.find((n) => n.type === "workbook_change_new" && n.message.includes(tabStamp));
+ok("reviewers get a summary naming the tab and count", !!summary && summary.message.includes("Master (1)"), JSON.stringify(summary?.message));
+const perLoc = afterNotifs.find((n) => n.type === "workbook_change_location" && String(n.location?._id ?? n.location) === String(notifyLoc._id));
+ok("the affected centre gets its own alert", !!perLoc && perLoc.message.includes("Notify Centre"), JSON.stringify(perLoc?.message));
+ok("…and it is scoped to that location so its SPOC sees it", !!perLoc?.location);
+const baselineNoise = afterNotifs.filter((n) => n.type === "workbook_change_new" && n.message.includes("Watch Source Notify " + tabStamp));
+ok("the first baseline run raises no alert, only the later change does", baselineNoise.length === 1, `${baselineNoise.length}`);
 
 // ---- the REAL client workbook, every tab, through the server ----
 const realDyn = (await req("POST", "/api/sync-sources", {

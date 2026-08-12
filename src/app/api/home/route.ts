@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, locationFilter, isScoped } from "@/lib/authz";
-import { Batch, BatchMember, DailyLog, FollowUpAction, Invoice, Location, SheetChange, TrainerRequest } from "@/models";
+import { Batch, BatchMember, DailyLog, FollowUpAction, Invoice, Location, SheetChange, TrainerRequest, User } from "@/models";
 import { missingLogQueue } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 
@@ -66,6 +66,16 @@ export const GET = apiHandler(async () => {
         .limit(10).lean()
     : [];
 
+  // Queue 7: signups waiting on an Admin (2026-08-12). These were only visible if you
+  // happened to open Admin → Users, so the person who has to act never saw them. Full
+  // contact details ride along — an approver decides on who this is, not just a name.
+  const pendingUsers = user.role === "Admin"
+    ? await User.find({ approval_status: "Pending" })
+        .select("name email phone role requested_role location_scope createdAt")
+        .populate("location_scope", "name code")
+        .sort({ createdAt: -1 }).limit(10).lean()
+    : [];
+
   return NextResponse.json({
     kpis: { active_locations: activeLocations, active_batches: activeBatches, enrolled_students: enrolledMembers, open_trainer_requests: openRequests, pending_followups: followUps.length },
     queues: {
@@ -75,6 +85,7 @@ export const GET = apiHandler(async () => {
       enrollment_failures: failures,
       follow_ups: followUps,
       invoices_pending: invoices,
+      pending_users: pendingUsers,
     },
     thresholds: { amber: defaults.attendance_gap_amber, red: defaults.attendance_gap_red },
   });

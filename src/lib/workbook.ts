@@ -3,7 +3,7 @@
 // The client edits the sheet directly and tells nobody — this is the tracking that replaces
 // the manual "किसने क्या बदला" hunt. Advisory only: nothing here writes to ERP entities.
 import * as XLSX from "xlsx";
-import { SyncSource, WorkbookChange, WorkbookSnapshot } from "@/models";
+import { Location, Notification, SyncSource, WorkbookChange, WorkbookSnapshot } from "@/models";
 import { HttpError } from "@/lib/authz";
 
 // Content hash for change detection only (not security) — cyrb53, dependency-free so the
@@ -232,7 +232,59 @@ export async function runWatch(sourceId: string): Promise<WatchResult> {
   src.last_error = undefined;
   src.last_synced_at = new Date();
   await src.save();
+
+  // Tell people the moment something changes. Until now the only alert fired after a change
+  // had been ignored for 48 hours, which is exactly the silence the client's habit of
+  // editing the sheet unannounced already creates.
+  if (totalChanges > 0) await notifyWatchChanges(src._id, src.name);
+
   return { status: "OK", tabs: wb.SheetNames.length, changes: totalChanges };
+}
+
+// Reviewers get one summary; each centre whose own row moved gets its own alert, so a SPOC
+// hears about their location without being handed the whole workbook.
+async function notifyWatchChanges(sourceId: unknown, sourceName: string): Promise<void> {
+  const fresh = await WorkbookChange.find({ sync_source: sourceId, status: "New" })
+    .sort({ createdAt: -1 }).limit(200).lean<any[]>();
+  if (!fresh.length) return;
+
+  const byTab = new Map<string, number>();
+  for (const c of fresh) byTab.set(c.tab, (byTab.get(c.tab) ?? 0) + 1);
+  const tabSummary = [...byTab.entries()].map(([t, n]) => `${t} (${n})`).join(", ");
+
+  await Notification.create({
+    type: "workbook_change_new", severity: "warning",
+    message: `${fresh.length} change(s) detected in "${sourceName}" — ${tabSummary}. Review before acting.`,
+    entity: "SyncSource", entity_id: sourceId, link: "/sheet-watch",
+    role_target: ["Admin", "Operations"],
+  });
+
+  // Map changed rows to known centres by name or external id. The row key starts with the
+  // institution name, so an exact-name or TC-ID match is enough; unmatched rows simply stay
+  // in the reviewers' summary above.
+  const names = [...new Set(fresh.map((c) => String(c.row_key).replace(/ \(#\d+\)$/, "").split(" · ")[0].trim()).filter(Boolean))];
+  if (!names.length) return;
+  const locs = await Location.find({ $or: [{ name: { $in: names } }, { external_id: { $in: names } }] })
+    .select("_id name external_id").lean<any[]>();
+  if (!locs.length) return;
+
+  const byLoc = new Map<string, { name: string; count: number }>();
+  for (const c of fresh) {
+    const head = String(c.row_key).replace(/ \(#\d+\)$/, "").split(" · ")[0].trim();
+    const loc = locs.find((l) => l.name === head || l.external_id === head);
+    if (!loc) continue;
+    const cur = byLoc.get(String(loc._id)) ?? { name: loc.name, count: 0 };
+    cur.count++;
+    byLoc.set(String(loc._id), cur);
+  }
+  for (const [locId, info] of byLoc) {
+    await Notification.create({
+      type: "workbook_change_location", severity: "warning",
+      message: `The client's sheet changed ${info.count} value(s) for your centre ${info.name}. Open Sheet Watch to see what moved.`,
+      entity: "Location", entity_id: locId, link: "/sheet-watch",
+      location: locId, role_target: ["Admin", "Operations", "Location"],
+    });
+  }
 }
 
 function summarizeRow(row: SnapRow): string {

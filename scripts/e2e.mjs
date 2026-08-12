@@ -528,6 +528,13 @@ const su = await fetch(BASE + "/api/public/signup", {
 });
 ok("public signup creates a pending account", su.status === 201, `status=${su.status}`);
 ok("pending account cannot log in", (await loginAs(signupEmail, "Test@12345")) === null);
+// A second signup left deliberately un-approved, to assert the Home queue below.
+const signupEmail2 = `spoc${stamp}@test.local`;
+await fetch(BASE + "/api/public/signup", {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ name: "Pending SPOC " + stamp, email: signupEmail2, phone: "9876500011", password: "Test@12345", role: "Location", location: loc._id }),
+});
+
 const dupSignup = await fetch(BASE + "/api/public/signup", {
   method: "POST", headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ name: "Dup", email: signupEmail, password: "Test@12345", role: "Trainer" }),
@@ -616,6 +623,12 @@ const created = await req("POST", `/api/workbook-changes/${addedRow._id}/create-
 ok("human-validated location created with edited value", created.data.item?.city === "Sirsa (edited)");
 const afterApply = (await req("GET", "/api/workbook-changes?status=New")).data.items ?? [];
 ok("row's pending changes auto-accepted after validation", !afterApply.some((c) => c.row_key === addedRow.row_key));
+
+// ---- pending signups surface where the approver actually looks (2026-08-12) ----
+const homeAfterSignup = (await req("GET", "/api/home")).data;
+const queued = (homeAfterSignup.queues?.pending_users ?? []).find((u) => u.email === signupEmail2);
+ok("a pending signup appears on the Admin's Home queue", !!queued, JSON.stringify(homeAfterSignup.queues?.pending_users?.length));
+ok("…with the contact details an approver needs", !!queued && queued.phone === "9876500011" && !!queued.requested_role, JSON.stringify(queued));
 
 // ---- public build marker (deploy verification, no auth) ----
 const verRes = await fetch(BASE + "/api/public/version");

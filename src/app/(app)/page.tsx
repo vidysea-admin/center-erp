@@ -123,6 +123,32 @@ export default function HomePage() {
             </ul>
           )}
         </Section>
+
+        {/* Signups waiting on the Admin (2026-08-12). Previously only discoverable by
+            opening Admin → Users, so the one person who can act never saw them. Contact
+            details are shown inline — approving is a decision about a person. */}
+        {(q.pending_users?.length ?? 0) > 0 && (
+          <Section title={`Signups Awaiting Your Approval (${q.pending_users.length})`} titleHref="/admin?tab=Users"
+            actions={<Link href="/admin?tab=Users"><Btn kind="ghost" small>Review all</Btn></Link>}>
+            <ul className="divide-y divide-gray-100 text-sm">
+              {q.pending_users.map((u: any) => (
+                <li key={u._id} className="py-2.5">
+                  <Link href="/admin?tab=Users" className="block hover:bg-gray-50">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium">{u.name}</span>
+                      <Chip value={u.requested_role ?? u.role} />
+                      <span className="ml-auto text-xs text-gray-400">{fmtDate(u.createdAt)}</span>
+                    </div>
+                    <div className="mt-0.5 text-xs text-gray-500">
+                      {u.email}{u.phone ? ` · ${u.phone}` : ""}
+                      {(u.location_scope ?? []).length > 0 && ` · wants ${(u.location_scope ?? []).map((l: any) => l.name ?? l.code).join(", ")}`}
+                    </div>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </Section>
+        )}
       </div>
     </div>
   );
