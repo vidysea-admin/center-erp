@@ -143,10 +143,12 @@ function EditDetails({ b, onChanged, setError }: any) {
     slot_start: b.slot_start ?? "", slot_end: b.slot_end ?? "",
     govt_batch_id: b.govt_batch_id ?? "", drive_folder_url: b.drive_folder_url ?? "",
   });
+  const [driveRoot, setDriveRoot] = useState("");
   useEffect(() => {
     api("/api/trainers?limit=200").then((d) => setTrainers(d.items)).catch(() => {});
     const locId = b.location?._id ?? b.location;
     api(`/api/locations/${locId}/rooms`).then((d) => setRooms(d.items)).catch(() => {});
+    api("/api/defaults").then((d) => setDriveRoot(d.item?.drive_root_url ?? "")).catch(() => {});
   }, [b]);
 
   async function save() {
@@ -215,6 +217,12 @@ function EditDetails({ b, onChanged, setError }: any) {
         <Field label="Drive evidence folder">
           <input className={inputCls} value={form.drive_folder_url} placeholder="https://drive.google.com/…"
             onChange={(e) => setForm({ ...form, drive_folder_url: e.target.value })} />
+          {/* RPL project → All Locations → District — this batch's folder lives under here. */}
+          {driveRoot && (
+            <a href={form.drive_folder_url || driveRoot} target="_blank" rel="noreferrer" className="mt-1 inline-block text-xs text-blue-700 hover:underline">
+              {form.drive_folder_url ? "Open this batch's folder ↗" : "Open the project Drive to create it ↗"}
+            </a>
+          )}
         </Field>
       </div>
       <div className="text-xs text-gray-500">Actual: {fmtDate(b.actual_start)} → {fmtDate(b.actual_end)}</div>

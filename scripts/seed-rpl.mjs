@@ -127,6 +127,10 @@ for (const r of rows) {
       trainer_skill: jobRole, sector: scheme.startsWith("RPL") ? "RPL" : "PMKVY",
       duration_days: 15, buffer_days: 5, default_batch_size: 30, completion_deadline_days: 90,
       requires_lab: false, operating_days: [1, 2, 3, 4, 5, 6], active: true,
+      // "industry experience aur teaching experience required hai — mendetary hai TVP mein
+      // jaane ke lie" (2026-08-12). The team drafts these for every technical job role today,
+      // so every seeded role carries them on top of the universal five.
+      mandatory_trainer_docs: ["Industry Experience", "Teaching Experience"],
       createdAt: new Date(), updatedAt: new Date(),
     });
   }
@@ -149,6 +153,18 @@ console.log(`programmes ${programs.size}   ${[...programs.values()].map((p) => p
 console.log(`targets    ${targets.length}`);
 console.log(`sum target ${sumTarget}`);
 console.log(`sum trainers required ${sumTrainers}`);
+
+// The states actually present — Manish says "abhi do hi hain, Haryana aur Uttar Pradesh", but
+// the sheet is the master. If it still carries others, say so; do not silently seed a surprise.
+const states = [...new Set([...locations.values()].map((l) => l.state).filter(Boolean))].sort();
+console.log(`states     ${states.join(", ")}${states.length > 2 ? "   ⚠️ Manish said only Haryana + UP — confirm the extra rows" : ""}`);
+
+// The client's stated fixed target vs what the rows add up to. Their own header disagrees with
+// their own rows; the variance is reported, never "fixed" — that reconciliation is Manish's call.
+const CLIENT_FIXED_TARGET = 12398; // "ye 12398 ye fix target hai" (2026-08-12)
+if (sumTarget !== CLIENT_FIXED_TARGET) {
+  console.log(`⚠️  client says the fixed target is ${CLIENT_FIXED_TARGET}; the sheet's usable rows sum to ${sumTarget} (difference ${CLIENT_FIXED_TARGET - sumTarget}, incl. any skipped rows below). Reported as-is for Manish to reconcile.`);
+}
 if (skipped.length) {
   console.log(`\n⚠️  ${skipped.length} row(s) skipped — no programme could be derived:`);
   for (const s of skipped) console.log(`   ${s.institution} · "${s.scheme}" · "${s.jobRole}" — ${s.why}`);

@@ -1169,8 +1169,9 @@ export async function nextBatchCode(): Promise<string> {
 // the normal case, not the exception. Anything can reach "Dropped" with a reason.
 
 // Documents that must be on file before a nomination can be prepared. Kept here rather than in
-// Defaults for now because the list is the same across the four live job roles; when a scheme
-// circular changes it per role, this becomes a Defaults entry keyed by programme.
+// The floor that applies to every job role. A programme can name its own wider set in
+// Program.mandatory_trainer_docs — "industry experience aur teaching experience required hai,
+// mendetary hai TVP mein jaane ke lie", and which ones differ BY JOB ROLE (2026-08-12, Manish).
 export const MANDATORY_TRAINER_DOCS = ["Aadhaar", "PAN", "Photo", "CV", "Educational Qualification"] as const;
 
 const TRAINER_FLOW: Record<string, string[]> = {
@@ -1193,10 +1194,23 @@ const TRAINER_FLOW: Record<string, string[]> = {
 };
 
 export async function trainerDocSummary(trainerId: string) {
-  const docs = await TrainerDocument.find({ trainer: trainerId }).select("doc_type verified").lean<any[]>();
+  const [docs, trainer] = await Promise.all([
+    TrainerDocument.find({ trainer: trainerId }).select("doc_type verified").lean<any[]>(),
+    Trainer.findById(trainerId).select("nominated_for_program").lean<any>(),
+  ]);
+  // The job role decides the extra paperwork: the five identity documents are the floor for
+  // everyone, and a role that demands experience certificates names them on the programme —
+  // the union gates. No nomination target yet (early pipeline) → the floor alone applies; the
+  // role's extras bite once the vacancy is chosen, which is always before Nomination Prepared
+  // (Rule T3 requires the target by then), so nothing incomplete ever reaches NSDC.
+  const required: string[] = [...MANDATORY_TRAINER_DOCS];
+  if (trainer?.nominated_for_program) {
+    const prog = await Program.findById(trainer.nominated_for_program).select("mandatory_trainer_docs").lean<any>();
+    for (const d of prog?.mandatory_trainer_docs ?? []) if (!required.includes(d)) required.push(d);
+  }
   const have = new Set(docs.map((d) => d.doc_type));
-  const missing = MANDATORY_TRAINER_DOCS.filter((t) => !have.has(t));
-  return { total: docs.length, missing, complete: missing.length === 0, verified: docs.filter((d) => d.verified).length };
+  const missing = required.filter((t) => !have.has(t));
+  return { total: docs.length, required, missing, complete: missing.length === 0, verified: docs.filter((d) => d.verified).length };
 }
 
 // Mirrors transitionBatch: an explicit edge table, each edge naming its own precondition, and a
@@ -1221,6 +1235,16 @@ export async function transitionTrainer(
   const when = opts.date ? new Date(opts.date) : new Date();
 
   switch (target) {
+    case "Docs Complete": {
+      // The stage says the papers are in, so the system checks they actually are — including the
+      // job role's own extras ("industry experience aur teaching experience — mendetary hai TVP
+      // mein jaane ke lie"). Rule T2 re-checks at nomination in case documents were removed after.
+      const d = await trainerDocSummary(trainerId);
+      if (!d.complete) {
+        throw new HttpError(409, `Rule T1: ${t.name} is still missing ${d.missing.join(", ")} - "Docs Complete" means exactly that.`);
+      }
+      break;
+    }
     case "Nomination Prepared": {
       // The whole point of the document stage. Nominating someone whose papers are incomplete is
       // what gets the profile bounced back by NSDC, which is the delay this pipeline exists to stop.

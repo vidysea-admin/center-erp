@@ -94,6 +94,23 @@ function Programs({ setError }: any) {
             <Field label="Completion deadline days"><input type="number" className={inputCls} value={form.completion_deadline_days ?? ""} onChange={(e) => set("completion_deadline_days", +e.target.value)} /></Field>
           </div>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!form.requires_lab} onChange={(e) => set("requires_lab", e.target.checked)} /> Requires Lab</label>
+          {/* 2026-08-12 (Manish): experience certificates are mandatory PER JOB ROLE to qualify
+              for TVP. Aadhaar/PAN/Photo/CV/Educational Qualification always apply; ticks here add
+              to that floor for trainers nominated to this job role. */}
+          <Field label="Extra mandatory trainer documents (on top of the standard five)">
+            <div className="grid gap-1.5 md:grid-cols-2">
+              {["CIPSA Certificate", "Industry Experience", "Teaching Experience", "Other"].map((d) => (
+                <label key={d} className="flex items-center gap-2 text-xs">
+                  <input type="checkbox" checked={(form.mandatory_trainer_docs ?? []).includes(d)}
+                    onChange={() => {
+                      const cur: string[] = form.mandatory_trainer_docs ?? [];
+                      set("mandatory_trainer_docs", cur.includes(d) ? cur.filter((x) => x !== d) : [...cur, d]);
+                    }} />
+                  {d}
+                </label>
+              ))}
+            </div>
+          </Field>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.active ?? true} onChange={(e) => set("active", e.target.checked)} /> Active</label>
           <Btn onClick={save} disabled={!form.code || !form.name || !form.trainer_skill}>{edit ? "Save" : "Add Program"}</Btn>
         </div>
@@ -593,6 +610,11 @@ function DefaultsTab({ setError }: any) {
           </Field>
           <Field label="SIDH portal URL">
             <input className={inputCls} value={form.sidh_url ?? ""} onChange={(e) => setForm({ ...form, sidh_url: e.target.value })} />
+          </Field>
+          {/* Manish's evidence backup: RPL project → All Locations → District. The batch screen
+              links here so the parallel Drive copy is one click from where evidence is entered. */}
+          <Field label="Project Drive folder (evidence backup root)">
+            <input className={inputCls} value={form.drive_root_url ?? ""} onChange={(e) => setForm({ ...form, drive_root_url: e.target.value })} placeholder="https://drive.google.com/drive/folders/…" />
           </Field>
         </div>
       </Section>

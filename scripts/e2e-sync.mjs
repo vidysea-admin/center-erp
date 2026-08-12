@@ -33,7 +33,9 @@ const stamp = "S" + Date.now().toString().slice(-6);
 
 // Build an in-memory xlsx and hand it to the watcher as a data: URL — lets the tab
 // add/remove tests drive an arbitrary workbook shape without any external hosting.
-const xlsxMod = await import("file:///D:/erp/center-erp/node_modules/xlsx/xlsx.mjs");
+// Resolved from the repo's own node_modules — an absolute file:/// path here kept every
+// CI run red (Linux runners have no D: drive) while passing silently on the dev laptop.
+const xlsxMod = await import("xlsx");
 const XLSX = xlsxMod.default ?? xlsxMod;
 function wbDataUrl(tabs) {
   const wb = XLSX.utils.book_new();
