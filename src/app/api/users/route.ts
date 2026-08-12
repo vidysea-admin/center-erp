@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireRole, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, requireRole, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { User } from "@/models";
 import { audit } from "@/lib/audit";
@@ -18,6 +18,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
   await requirePerm(user, "users.manage"); // togglable (2026-08-11)
+  requireEdit(user); // Rule 39: a view-only holder of a granted right still may not write
   const body = await req.json();
   if (!body.name || !body.email || !body.password || !body.role) {
     throw new HttpError(400, "name, email, password, role are required");

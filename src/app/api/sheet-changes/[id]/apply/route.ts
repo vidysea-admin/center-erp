@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { applySheetChange } from "@/lib/sync";
 
@@ -11,6 +11,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   await dbConnect();
   const user = await requireUser();
   await requirePerm(user, "sheet.approve");
+  requireEdit(user); // Rule 39: can_edit=false is view-only everywhere, including granted rights
   const { id } = await ctx.params;
   const { action, note } = await req.json();
   const result = await applySheetChange(id, action, note, user.id);

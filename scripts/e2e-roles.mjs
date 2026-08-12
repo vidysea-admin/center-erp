@@ -256,6 +256,40 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   ok("F-000: ordinary field filters still work", enumFilter.status === 200 && (enumFilter.data.items ?? []).every((c) => c.lifecycle_status === "Enrolled"));
 }
 
+// 2026-08-12 audit (auth S1-9, sync S2-11): Rule 39 says can_edit=false is view-and-nothing-else
+// everywhere. Seven write routes gated on a GRANTABLE right but never called requireEdit, so a
+// view-only reviewer holding sheet.approve could close a centre, and the same shape could edit
+// defaults, costs and users. The principal below is a real view-only Location account.
+{
+  const jprId = spocLocs.data.items[0]._id;
+  ok("Rule 39: view-only cannot add a cost entry", (await req(principal, "POST", "/api/costs", { entry_date: "2026-08-12", location: jprId, category: "000000000000000000000000", amount: 1 })).status === 403);
+  ok("Rule 39: view-only cannot edit Defaults", (await req(principal, "PUT", "/api/defaults", { batch_size: 99 })).status === 403);
+  ok("Rule 39: view-only cannot create a user", (await req(principal, "POST", "/api/users", { name: "x", email: `vo${Date.now()}@t.local`, password: "Test@12345", role: "Location" })).status === 403);
+  ok("Rule 39: view-only cannot bulk-ignore sheet changes", (await req(principal, "POST", "/api/sheet-changes/bulk-ignore", { ids: ["000000000000000000000000"] })).status === 403);
+  ok("Rule 39: view-only cannot apply a sheet change", (await req(principal, "POST", "/api/sheet-changes/000000000000000000000000/apply", { action: "Close location", note: "x" })).status === 403);
+  // auth S1-8: the invoice route was the only by-id batch route with no scope assertion at all
+  const foreign = allBatches.data.items.find((b) => b.location?.code && b.location.code !== "JPR03");
+  if (foreign) {
+    ok("auth S1-8: SPOC cannot touch another centre's invoice", (await req(spoc, "PATCH", `/api/batches/${foreign._id}/invoice`, { amount: 1 })).status === 403);
+  }
+
+  // auth S1-5: the audit trail stores before/after values, so an unscoped feed leaked exactly the
+  // personal data Rule 38 exists to protect. Any signed-in user could read any record's history.
+  if (foreign) {
+    ok("auth S1-5: SPOC cannot read a foreign batch's audit trail", (await req(spoc, "GET", `/api/audit/Batch/${foreign._id}`)).status === 403);
+    const foreignCand = (await req(admin, "GET", "/api/candidates?limit=200")).data.items.find((c) => c.location?.code && c.location.code !== "JPR03");
+    if (foreignCand) {
+      ok("auth S1-5: …nor a foreign candidate's", (await req(spoc, "GET", `/api/audit/Candidate/${foreignCand._id}`)).status === 403);
+    }
+    ok("auth S1-5: unknown entity fails closed for a scoped user", (await req(spoc, "GET", `/api/audit/Whatever/${foreign._id}`)).status === 403);
+  }
+  const ownBatchForAudit = spocBatches.data.items[0];
+  if (ownBatchForAudit) {
+    ok("auth S1-5: SPOC can still read their own batch's audit trail", (await req(spoc, "GET", `/api/audit/Batch/${ownBatchForAudit._id}`)).status === 200);
+  }
+  ok("auth S1-5: Admin still reads any audit trail", (await req(admin, "GET", `/api/audit/Batch/${allBatches.data.items[0]._id}`)).status === 200);
+}
+
 // unauthenticated → 401
 const anon = await fetch(BASE + "/api/locations");
 ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}`);

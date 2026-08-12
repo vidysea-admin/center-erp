@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireRole } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, requireRole } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Defaults } from "@/models";
 import { getDefaults } from "@/lib/defaults";
@@ -16,6 +16,7 @@ export const PUT = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
   await requirePerm(user, "defaults.manage"); // togglable (2026-08-11); Admin-only by default (Rule 40)
+  requireEdit(user); // Rule 39: can_edit=false is view-only everywhere, including granted rights
   const body = await req.json();
   const set: Record<string, unknown> = {};
   for (const f of [

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireRole, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, requireRole, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { User } from "@/models";
 import { audit } from "@/lib/audit";
@@ -10,6 +10,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   await dbConnect();
   const user = await requireUser();
   await requirePerm(user, "users.manage"); // togglable (2026-08-11)
+  requireEdit(user); // Rule 39: a view-only holder of a granted right still may not write
   const { id } = await ctx.params;
   const doc = await User.findById(id);
   if (!doc) throw new HttpError(404, "User not found");
