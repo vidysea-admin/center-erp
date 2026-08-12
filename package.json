@@ -13,7 +13,7 @@
     "test:roles": "node scripts/e2e-roles.mjs",
     "test:sync": "node scripts/e2e-sync.mjs",
     "test:blindspot": "node scripts/e2e-blindspot.mjs",
-    "test:govt": "node scripts/e2e-govt.mjs && node scripts/e2e-trainer-pipeline.mjs",
+    "test:govt": "node scripts/e2e-govt.mjs",
     "test:trainer": "node scripts/e2e-trainer-pipeline.mjs",
     "purge": "node scripts/purge-unsourced.mjs",
     "seed:rpl": "node scripts/seed-rpl.mjs",

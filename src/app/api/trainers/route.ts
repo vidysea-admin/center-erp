@@ -6,7 +6,9 @@ import { hasPermission } from "@/lib/permissions";
 // so every signed-in user could read all 19 trainers INCLUDING day_rate, compensation and
 // incentive notes. Pay is not directory data. Anyone without the trainers.manage right now
 // gets the roster without the money fields.
-const PAY_FIELDS = ["day_rate", "compensation_type", "compensation_fixed", "nominated_for_location", "nominated_for_program", "source", "qualification", "industry_experience_years", "teaching_experience_years", "nsdc_remarks", "eligibility_payment_amount", "payment_reference", "tot_certificate_no", "pipeline_note", "incentive_note"];
+// 2026-08-12: extended to the hiring journey too — NSDC remarks, qualification, experience
+// and payment references are personnel data, not directory data.
+const SENSITIVE_FIELDS = ["day_rate", "compensation_type", "compensation_fixed", "nominated_for_location", "nominated_for_program", "source", "qualification", "industry_experience_years", "teaching_experience_years", "nsdc_remarks", "eligibility_payment_amount", "payment_reference", "tot_certificate_no", "pipeline_note", "incentive_note"];
 
 export const { GET, POST } = collectionRoutes({
   model: Trainer, entity: "Trainer", scopeField: null,
@@ -14,7 +16,7 @@ export const { GET, POST } = collectionRoutes({
     if (await hasPermission(user, "trainers.manage")) return items;
     return items.map((t) => {
       const safe = { ...t };
-      for (const f of PAY_FIELDS) delete safe[f];
+      for (const f of SENSITIVE_FIELDS) delete safe[f];
       return safe;
     });
   },

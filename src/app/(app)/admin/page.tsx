@@ -226,9 +226,26 @@ function SpecialGrants({ form, set }: any) {
   const extra: string[] = form.extra_permissions ?? [];
   const toggle = (key: string) =>
     set("extra_permissions", extra.includes(key) ? extra.filter((k) => k !== key) : [...extra, key]);
+
+  // 2026-08-12: granting a trusted person everything meant ticking sixteen boxes one at a time.
+  // Select all does it in one, and unticks the same way; the box shows a dash while only some
+  // are granted, so it never claims a state that isn't true.
+  const allKeys = catalog.map((p) => p.key);
+  const allOn = allKeys.length > 0 && allKeys.every((k) => extra.includes(k));
+  const someOn = !allOn && allKeys.some((k) => extra.includes(k));
+
   return (
     <details className="rounded-lg border border-gray-200 p-3">
       <summary className="cursor-pointer text-sm font-medium">Special rights ({extra.length} granted) — on top of the role's set</summary>
+      <label className="mt-2 flex items-center gap-2 border-b border-gray-200 pb-2 text-xs font-semibold">
+        <input
+          type="checkbox"
+          checked={allOn}
+          ref={(el) => { if (el) el.indeterminate = someOn; }}
+          onChange={() => set("extra_permissions", allOn ? [] : allKeys)}
+        />
+        <span>Select all — grant every right ({allKeys.length})</span>
+      </label>
       <div className="mt-2 grid gap-1.5 md:grid-cols-2">
         {catalog.map((p) => (
           <label key={p.key} className="flex items-center gap-2 text-xs">
