@@ -110,7 +110,7 @@ export async function evaluateAlerts(): Promise<{ raised: number; checked: strin
         type: "daily_log_overdue", severity: days >= 3 ? "critical" : "warning",
         message: `${b.code} at ${b.location?.name} has no daily log for ${days} operating days`,
         entity: "Batch", entity_id: b._id, link: `/batches/${b._id}?tab=Daily Execution`,
-        location: b.location?._id, role_target: ["Admin", "Operations", "Location"],
+        location: b.location?._id, role_target: ["Admin", "Operations", "Location", "Trainer"],
       })) raised++;
     }
   }
@@ -131,7 +131,7 @@ export async function evaluateAlerts(): Promise<{ raised: number; checked: strin
         type: "attendance_mismatch", severity: "critical",
         message: `${l.batch.code} at ${l.batch.location?.name}: government attendance is ${gap} points below internal on ${new Date(l.log_date).toLocaleDateString("en-IN")}`,
         entity: "Batch", entity_id: l.batch._id, link: `/batches/${l.batch._id}?tab=Daily Execution`,
-        location: l.batch.location?._id, role_target: ["Admin", "Operations", "Location"],
+        location: l.batch.location?._id, role_target: ["Admin", "Operations", "Location", "Trainer"],
       })) raised++;
     }
   }
@@ -153,7 +153,7 @@ export async function evaluateAlerts(): Promise<{ raised: number; checked: strin
         type: "evidence_low", severity: "warning",
         message: `${b.code} at ${b.location?.name}: only ${count} photo/video upload(s) yesterday — minimum is ${defaults.min_daily_evidence}`,
         entity: "Batch", entity_id: b._id, link: `/batches/${b._id}?tab=Daily Execution`,
-        location: b.location?._id, role_target: ["Admin", "Operations", "Location"],
+        location: b.location?._id, role_target: ["Admin", "Operations", "Location", "Trainer"],
       })) raised++;
     }
   }
