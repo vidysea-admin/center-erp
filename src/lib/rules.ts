@@ -709,8 +709,13 @@ export async function assessmentCompleteness(batchId: string) {
 export async function certificationCompleteness(batchId: string) {
   const rows = await CandidateResult.find({ batch: batchId }).populate("candidate", "name").lean<any[]>();
   if (!rows.length) return { legacy: true, pass_count: 0, issued: 0, blocking: [] as any[], complete: true };
-  const passes = rows.filter((r) => r.result === "Pass");
-  const blocking = passes.filter((r) => r.certificate_status !== "Issued");
+  // 2026-08-12 audit (S0): a candidate who has left the batch kept blocking certification
+  // forever, because this walked every result row regardless of membership.
+  const dropped = await BatchMember.find({ batch: batchId, left_on: { $ne: null } }).select("_id").lean<any[]>();
+  const droppedIds = new Set(dropped.map((m) => String(m._id)));
+  const passes = rows.filter((r) => r.result === "Pass" && !droppedIds.has(String(r.batch_member)));
+  // "Not Issued" is a settled outcome, not an outstanding one.
+  const blocking = passes.filter((r) => !["Issued", "Not Issued"].includes(r.certificate_status));
   return {
     legacy: false,
     pass_count: passes.length,
@@ -722,10 +727,14 @@ export async function certificationCompleteness(batchId: string) {
 
 const CERT_FLOW: Record<string, string[]> = {
   Pending: ["Processing"],
-  Processing: ["Generated", "Rejected"],
-  Generated: ["Issued", "Rejected"],
+  Processing: ["Generated", "Rejected", "Not Issued"],
+  Generated: ["Issued", "Rejected", "Not Issued"],
   Issued: [],
-  Rejected: ["Processing"], // resubmission path
+  // 2026-08-12 audit (S0): "Rejected" used to lead only back to "Processing", which demands a
+  // certificate_no — so a certificate the awarding body refused could never be abandoned and the
+  // batch could never leave Closing. "Not Issued" is the honest terminal state.
+  Rejected: ["Processing", "Not Issued"], // resubmit, or give up on it
+  "Not Issued": ["Processing"], // reopen if the awarding body relents
 };
 
 // Rules 41, 42, 44, 45 — mark or update one candidate's assessment result.
@@ -734,6 +743,15 @@ export async function upsertCandidateResult(batchId: string, memberId: string, p
   if (!batch) throw new HttpError(404, "Batch not found");
   if (["Completed", "Cancelled"].includes(batch.status)) {
     throw new HttpError(409, "Rule 41: this batch is closed — results can no longer be recorded.");
+  }
+  // 2026-08-12 audit (S0): marking the FIRST candidate on a batch that already completed
+  // assessment in batch-level mode silently rewrote Closure.appeared/passed from the real
+  // figures (e.g. 30/25) down to 1/1, and left every unmarked candidate stranded at Enrolled
+  // on a closed batch. Switching modes after the fact is now refused outright.
+  const closureNow = await Closure.findOne({ batch: batchId }).select("assessment_status").lean<any>();
+  if (closureNow?.assessment_status === "Completed" && !(await batchUsesPerCandidateResults(batchId))) {
+    throw new HttpError(409,
+      "Rule 42: assessment was already completed with batch-level figures. Reopen the assessment before marking candidates individually, so the totals are rebuilt from the roster rather than overwritten.");
   }
   const member = await BatchMember.findById(memberId).select("batch candidate").lean<any>();
   if (!member) throw new HttpError(404, "Batch member not found");
@@ -787,6 +805,16 @@ export async function upsertCandidateCertificate(resultId: string, patch: Record
     if (target === "Rejected" && !(patch.certificate_rejection_reason ?? row.certificate_rejection_reason)) {
       throw new HttpError(400, "Rule 46: a rejected certificate needs a reason.");
     }
+    // Abandoning a certificate is a reportable decision, so it carries a reason too.
+    if (target === "Not Issued" && !(patch.certificate_rejection_reason ?? row.certificate_rejection_reason)) {
+      throw new HttpError(400, "Rule 46: say why this certificate will never be issued.");
+    }
+    // A stale number must not survive onto an abandoned or reopened certificate — it would
+    // otherwise block its own reuse via the partial unique index (sync S2-10).
+    if (["Not Issued", "Processing"].includes(target)) {
+      row.set("certificate_no", undefined);
+      row.set("certificate_date", undefined);
+    }
   }
   for (const f of ["certificate_status", "certificate_no", "certificate_date", "certificate_file", "certificate_rejection_reason"]) {
     if (patch[f] !== undefined) (row as any)[f] = patch[f];
@@ -803,7 +831,12 @@ export async function startReassessment(resultId: string, reassessment_date: Dat
   const row = await CandidateResult.findById(resultId);
   if (!row) throw new HttpError(404, "Result not found");
   if (row.result === "Pending") throw new HttpError(409, "Rule 44: this result is already open.");
-  if (row.certificate_status !== "Pending") throw new HttpError(409, "Rule 44: a certificate exists — reject it before reassessing.");
+  // "Not Issued" is settled, not outstanding — a candidate whose certificate was abandoned may
+  // be reassessed. Previously only "Pending" passed here, and the error told you to reject a
+  // certificate that was already rejected (2026-08-12 audit, S0).
+  if (!["Pending", "Not Issued"].includes(row.certificate_status)) {
+    throw new HttpError(409, `Rule 44: this candidate's certificate is ${row.certificate_status} — reject it or mark it Not Issued before reassessing.`);
+  }
   const batch = await Batch.findById(row.batch).select("status").lean<any>();
   if (["Completed", "Cancelled"].includes(batch?.status)) throw new HttpError(409, "Rule 44: the batch is closed.");
 
@@ -876,13 +909,47 @@ export async function upsertClosureChecked(batchId: string, patch: Record<string
     }
   }
 
-  if (!perCandidate && (patch.assessment_status === "Completed" || patch.appeared != null || patch.passed != null)) {
-    const assessDate = (patch.assessment_date as Date) ?? closure.assessment_date ?? new Date();
-    const roster = await rosterOnDate(batchId, new Date(assessDate));
-    const appeared = (patch.appeared as number) ?? closure.appeared;
-    const passed = (patch.passed as number) ?? closure.passed;
-    if (appeared != null && appeared > roster.length) throw new HttpError(400, `Rule 34: appeared (${appeared}) exceeds roster on assessment date (${roster.length}).`);
-    if (passed != null && appeared != null && passed > appeared) throw new HttpError(400, "Rule 34: passed cannot exceed appeared.");
+  if (!perCandidate) {
+    // Batch-level mode. Audit F-010 (S0): Rules 43/46 used to live ONLY inside the
+    // perCandidate branch above, and perCandidate is false exactly when nobody has been
+    // assessed — so a batch with zero results could be marked assessment Completed, then
+    // certification Completed, then carried all the way to a Paid invoice with no evidence
+    // behind it. "No results exist" was being read as "nothing is pending" instead of
+    // "nothing was assessed". Completing now requires the numbers, in either mode.
+    if (patch.assessment_status === "Completed") {
+      const appeared = (patch.appeared as number) ?? closure.appeared;
+      const passed = (patch.passed as number) ?? closure.passed;
+      if (appeared == null || passed == null) {
+        throw new HttpError(409, "Rule 43: record how many candidates appeared and passed, or mark each candidate individually, before completing assessment.");
+      }
+    }
+    if (patch.certification_status === "Completed") {
+      const issued = (patch.certificates_issued as number) ?? closure.certificates_issued;
+      if (issued == null) {
+        throw new HttpError(409, "Rule 46: record how many certificates were issued, or mark each candidate's certificate, before completing certification.");
+      }
+    }
+
+    if (patch.assessment_status === "Completed" || patch.certification_status === "Completed"
+      || patch.appeared != null || patch.passed != null || patch.certificates_issued != null) {
+      const assessDate = (patch.assessment_date as Date) ?? closure.assessment_date ?? new Date();
+      const roster = await rosterOnDate(batchId, new Date(assessDate));
+      const appeared = (patch.appeared as number) ?? closure.appeared;
+      const passed = (patch.passed as number) ?? closure.passed;
+      const issued = (patch.certificates_issued as number) ?? closure.certificates_issued;
+      if (appeared != null && appeared > roster.length) throw new HttpError(400, `Rule 34: appeared (${appeared}) exceeds roster on assessment date (${roster.length}).`);
+      // sync S1-7: `passed` was unchecked whenever `appeared` was null, and
+      // `certificates_issued` was never checked at all. Both feed the invoice.
+      if (passed != null && passed > (appeared ?? roster.length)) {
+        throw new HttpError(400, `Rule 34: passed (${passed}) cannot exceed ${appeared != null ? `appeared (${appeared})` : `the roster (${roster.length})`}.`);
+      }
+      if (issued != null && issued > (passed ?? roster.length)) {
+        throw new HttpError(400, `Rule 46: certificates issued (${issued}) cannot exceed ${passed != null ? `passed (${passed})` : `the roster (${roster.length})`}.`);
+      }
+      if ([appeared, passed, issued].some((n) => n != null && (!Number.isInteger(n) || (n as number) < 0))) {
+        throw new HttpError(400, "Rule 34: appeared, passed and certificates issued must be whole numbers of zero or more.");
+      }
+    }
   }
 
   const settingReady = patch.ready_for_invoice === true && !closure.ready_for_invoice;

@@ -139,6 +139,18 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: today, present_m
 await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", present_member_ids: [] }, 400);
 
 // ---- closure ----
+// 2026-08-12 audit F-010 (S0): Rules 43/46 lived only inside the per-candidate branch, and that
+// branch is skipped exactly when nobody has been assessed. A batch with zero results could be
+// marked assessment Completed → Closing → certification Completed → invoice Raised → Paid, with
+// ten candidates ending up lifecycle "Completed" and no evidence anywhere. Completing now
+// demands either the batch-level numbers or per-candidate rows.
+await req("PUT", `/api/batches/${batch._id}/closure`, { assessment_status: "Completed", assessment_date: today }, 409);
+await req("PUT", `/api/batches/${batch._id}/closure`, { assessment_status: "Completed", assessment_date: today, appeared: 3 }, 409);
+await req("PUT", `/api/batches/${batch._id}/closure`, { certification_status: "Completed", certification_date: today }, 409);
+// sync S1-7: `passed` was unchecked when `appeared` was absent, and certificates_issued never checked.
+await req("PUT", `/api/batches/${batch._id}/closure`, { passed: 99 }, 400);
+await req("PUT", `/api/batches/${batch._id}/closure`, { appeared: 3, passed: 2, certificates_issued: 3 }, 400);
+await req("PUT", `/api/batches/${batch._id}/closure`, { appeared: -1, passed: 0 }, 400);
 // Rule 34: appeared > roster on date
 await req("PUT", `/api/batches/${batch._id}/closure`, { assessment_status: "Completed", assessment_date: today, appeared: 5, passed: 2 }, 400);
 // Rule 19: cancel with logs, non-force → still admin so allowed with reason; test missing reason
