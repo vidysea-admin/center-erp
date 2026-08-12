@@ -101,6 +101,11 @@ const ProgramSchema = new Schema({
   sector: String,
   // "पहले हमें ABPL, HSL दूसरे priority पे है, तीसरे पे ये है" — lower number = worked first.
   scheme_priority: { type: Number, default: 99 },
+  // 2026-08-12 (Manish): "industry experience aur teaching experience required hai — mendetary
+  // hai unko qualify karaane ke lie TVP mein jaane ke lie" — and it differs BY JOB ROLE. These
+  // are IN ADDITION to the universal five (MANDATORY_TRAINER_DOCS); the union gates the
+  // Docs Complete stage for trainers nominated to this job role.
+  mandatory_trainer_docs: [{ type: String, enum: TRAINER_DOC_TYPE }],
   // plan1.md resolution #2: operating days (0=Sun..6=Sat) so Sundays don't raise fake missing-log alerts
   operating_days: { type: [Number], default: [1, 2, 3, 4, 5, 6] },
   active: { type: Boolean, default: true },

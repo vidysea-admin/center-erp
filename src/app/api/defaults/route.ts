@@ -26,7 +26,7 @@ export const PUT = apiHandler(async (req: NextRequest) => {
     // 2026-08-11 tunables
     "min_age", "max_age", "training_cooldown_months",
     "lead_enrollment_days", "lead_mobilization_days", "lead_trainer_ready_days", "lead_tot_done_days", "lead_tot_start_days", "lead_trainer_ready_for_tot_days", "lead_trainer_found_days",
-    "min_daily_evidence", "sidh_url",
+    "min_daily_evidence", "sidh_url", "drive_root_url",
     // 2026-08-12: scheme timing guidelines + client-contract counting rules (Manish)
     "day_start_time", "day_end_time", "max_session_hours", "max_batches_per_day",
     "absent_counts_as_appeared", "dropped_pass_is_billable", "max_upload_mb",

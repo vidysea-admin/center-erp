@@ -28,6 +28,8 @@ export type AppDefaults = {
   min_daily_evidence: number;
   // SIDH portal registration link sent to candidates
   sidh_url: string;
+  // Manish's Drive: RPL project → All Locations → District — the evidence backup root.
+  drive_root_url: string;
   // Scheme timing guidelines (Manish, 2026-08-12)
   day_start_time: string;      // "9 to 6" — a 07:00 start was asked for and refused
   day_end_time: string;
@@ -66,6 +68,7 @@ export const DEFAULT_VALUES: AppDefaults = {
   lead_trainer_found_days: 20,
   min_daily_evidence: 2,
   sidh_url: "https://www.skillindiadigital.gov.in/",
+  drive_root_url: "https://drive.google.com/drive/folders/1NOfRCw9lIyRoJTEFAg4--HIJiTG-Of0G",
   day_start_time: "09:00",
   day_end_time: "18:00",
   max_session_hours: 4,
