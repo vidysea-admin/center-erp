@@ -5,6 +5,7 @@ import {
 } from "@/models";
 import { audit } from "@/lib/audit";
 import { HttpError } from "@/lib/authz";
+import { safeFetch } from "@/lib/safe-fetch";
 
 const ACTIVE_BATCH_STATUSES = ["Planning", "Ready", "Active", "Closing"];
 
@@ -57,7 +58,8 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
 
   let text: string;
   try {
-    const res = await fetch(src.source_url, { redirect: "follow" });
+    // Same SSRF guard as the watch engine — this URL is user-supplied too (2026-08-12).
+    const res = await safeFetch(src.source_url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     text = await res.text();
   } catch (e) {

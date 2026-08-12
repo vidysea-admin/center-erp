@@ -201,14 +201,24 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
 // Trainer pay is not directory data (2026-08-12): a signed-in user without trainers.manage
 // could read every trainer's day rate and compensation from the roster.
 {
+  // A trainer created here with a known day rate, rather than hoping one in the seed data has
+  // one: the roster is capped, so "some trainer in the list has pay" quietly becomes false once
+  // enough pay-less trainers exist, and the assertion then passes or fails on unrelated data.
+  const stamp = Date.now().toString().slice(-6);
+  const paid = (await req(admin, "POST", "/api/trainers", {
+    name: `PayCheck Trainer ${stamp}`, phone: `97${stamp}00`, skills: ["PayCheck"],
+    day_rate: 1234, compensation_type: "Batch-wise", compensation_fixed: 5678, incentive_note: "secret",
+  })).data.item;
+
   const list = (await req(enroll, "GET", "/api/trainers")).data.items ?? [];
   ok("trainer roster is readable without the manage right", list.length > 0);
   ok("…but day rate is hidden", list.every((t) => t.day_rate === undefined), JSON.stringify(list[0]?.day_rate));
   ok("…and compensation fields are hidden", list.every((t) => t.compensation_type === undefined && t.compensation_fixed === undefined && t.incentive_note === undefined));
-  const one = (await req(enroll, "GET", `/api/trainers/${list[0]._id}`)).data.item;
-  ok("…opening one trainer by id does not leak them either", one?.day_rate === undefined && one?.compensation_fixed === undefined, JSON.stringify(one?.day_rate));
-  const adminList = (await req(admin, "GET", "/api/trainers")).data.items ?? [];
-  ok("Admin still sees pay", adminList.some((t) => t.day_rate !== undefined));
+  const one = (await req(enroll, "GET", `/api/trainers/${paid._id}`)).data.item;
+  ok("…opening the paid trainer by id does not leak them either",
+    one?.day_rate === undefined && one?.compensation_fixed === undefined && one?.incentive_note === undefined, JSON.stringify(one?.day_rate));
+  const adminOne = (await req(admin, "GET", `/api/trainers/${paid._id}`)).data.item;
+  ok("Admin still sees pay", adminOne?.day_rate === 1234 && adminOne?.compensation_fixed === 5678, JSON.stringify(adminOne?.day_rate));
 }
 
 // unauthenticated → 401

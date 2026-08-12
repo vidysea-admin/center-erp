@@ -5,6 +5,7 @@
 import * as XLSX from "xlsx";
 import { Location, Notification, SyncSource, WorkbookChange, WorkbookSnapshot } from "@/models";
 import { HttpError } from "@/lib/authz";
+import { safeFetch } from "@/lib/safe-fetch";
 
 // Content hash for change detection only (not security) — cyrb53, dependency-free so the
 // Edge instrumentation trace stays clean (node:crypto is not Edge-safe).
@@ -62,7 +63,9 @@ async function fetchOneDriveShare(url: string): Promise<Buffer> {
   const item = await meta.json();
   const dl = item?.["@content.downloadUrl"];
   if (!dl) throw new Error("OneDrive share returned no download URL");
-  const file = await fetch(dl, { headers: { "User-Agent": BROWSER_UA } });
+  // The download URL comes back from Microsoft, but it is still a URL this server is about to
+  // fetch on a user's behalf — guard it like any other.
+  const file = await safeFetch(dl, { headers: { "User-Agent": BROWSER_UA } });
   if (!file.ok) throw new Error(`OneDrive download failed: HTTP ${file.status}`);
   return Buffer.from(await file.arrayBuffer());
 }
@@ -108,7 +111,7 @@ export async function fetchWorkbook(rawUrl: string): Promise<XLSX.WorkBook> {
   const buf = isOneDriveShare(url)
     ? await fetchOneDriveShare(url)
     : await (async () => {
-        const res = await fetch(url, { redirect: "follow", headers: { "User-Agent": BROWSER_UA } });
+        const res = await safeFetch(url, { headers: { "User-Agent": BROWSER_UA } });
         // A private sheet answers 401/403 outright — the HTML sign-in sniff below never gets a
         // chance. "HTTP 401" tells the person nothing actionable, so name the actual cause here.
         if (res.status === 401 || res.status === 403) {

@@ -314,5 +314,57 @@ const removed = await req(admin, "DELETE", `/api/sync-sources/${srcId}`);
 ok("and removed", removed.status === 200, JSON.stringify(removed.data).slice(0, 150));
 ok("removal is real", (await req(admin, "GET", `/api/sync-sources/${srcId}`)).status === 404);
 
+
+// ---------------------------------------------------------------- SSRF guard (2026-08-12 security review)
+// Sheet source URLs are typed in by a person, so every fetch of one is a request the server makes
+// on someone else's behalf. This server runs on EC2, where 169.254.169.254 hands out IAM
+// credentials — and XLSX.read parses ANY plain text as CSV, so an internal endpoint's response
+// would come straight back out of this probe as "columns". These assertions pin that shut.
+const SSRF = [
+  ["http://169.254.169.254/latest/meta-data/iam/security-credentials/", "the EC2 metadata service"],
+  ["http://127.0.0.1:3000/erp/api/home", "loopback"],
+  ["http://localhost/", "localhost by name"],
+  ["http://10.0.105.118/", "a private 10/8 address"],
+  ["http://192.168.1.1/", "a private 192.168/16 address"],
+  ["http://172.16.0.5/", "a private 172.16/12 address"],
+  ["http://[::1]/", "IPv6 loopback"],
+  ["http://[::ffff:169.254.169.254]/", "the metadata service via an IPv4-mapped IPv6 address"],
+  ["http://13.202.206.101:27017/", "a non-web port (the Mongo host)"],
+  ["file:///etc/passwd", "a non-http scheme"],
+];
+for (const [url, what] of SSRF) {
+  const r = await req(admin, "POST", "/api/sync-sources/test", { source_url: url });
+  const blocked = r.status === 400
+    || (r.data.ok === false && /internal|not allowed|standard web ports|valid link|resolve/i.test(r.data.error ?? ""));
+  ok(`SSRF: ${what} is refused`, blocked, `status=${r.status} ${JSON.stringify(r.data).slice(0, 160)}`);
+  ok(`SSRF: ${what} returns no content`, (r.data.tabs ?? []).length === 0, JSON.stringify(r.data.tabs ?? []).slice(0, 150));
+}
+
+// The guard has to sit on the poller too, not only the one route the review flagged — a source
+// saved with an internal URL would otherwise exfiltrate on a timer.
+const evil = await req(admin, "POST", "/api/sync-sources", {
+  name: `${NAME} ssrf`, source_url: "http://169.254.169.254/latest/meta-data/",
+  mode: "watch", interval_minutes: 5, frequency: "Manual only",
+});
+if (evil.status === 201) {
+  const ran = await req(admin, "POST", `/api/sync-sources/${evil.data.item._id}/run`, {});
+  ok("SSRF: running a source aimed at the metadata service yields nothing",
+    ran.status >= 400 || ran.data.status === "Failed" || /internal|not allowed/i.test(JSON.stringify(ran.data)),
+    JSON.stringify(ran.data).slice(0, 200));
+  const changes = await req(admin, "GET", "/api/workbook-changes?status=all");
+  ok("SSRF: and no instance metadata reached the change log",
+    !(changes.data.items ?? []).some((c) => /security-credentials|ami-id|instance-id/i.test(`${c.new_value ?? ""}${c.row_key ?? ""}`)));
+  await req(admin, "DELETE", `/api/sync-sources/${evil.data.item._id}`);
+} else {
+  ok("SSRF: an internal URL cannot even be saved as a source", true);
+  ok("SSRF: and no instance metadata reached the change log", true);
+}
+
+// The guard must not break the legitimate case.
+const stillOk = await req(admin, "POST", "/api/sync-sources/test", {
+  source_url: "https://onedrive.live.com/:x:/g/personal/c1d310c499f08fba/IQBHQGQ1_HmBRZjCmC1XQMK8AQCFnOpu1H8GXm3MNvZnypE",
+});
+ok("SSRF guard does not block the real client workbook", stillOk.data.ok === true, JSON.stringify(stillOk.data).slice(0, 200));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
