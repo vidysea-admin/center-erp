@@ -113,8 +113,29 @@ function CandidatesInner() {
 
   async function markSidhRegistered(c: any) {
     try {
-      await api(`/api/candidates/${c._id}`, { method: "PATCH", json: { sidh_status: "Registered", sidh_registered_on: new Date().toISOString() } });
+      await api(`/api/candidates/${c._id}`, { method: "PATCH", json: { sidh_status: "Registered", sidh_registered_on: new Date().toISOString(), sidh_failure_reason: "" } });
       load();
+    } catch (e: any) { setError(e.message); }
+  }
+
+  // GD-81: a refused registration goes into its own queue WITH the why — "registration ho hi
+  // nahi paya, to main time kyun waste karun… doosri queue mein dalunga".
+  async function markSidhFailed(c: any) {
+    const reason = window.prompt(`Why did the portal refuse ${c.name}'s registration?\n(e.g. OTP not received, Aadhaar mismatch, already registered elsewhere)`);
+    if (reason == null) return; // cancelled
+    if (!reason.trim()) { setError("A failed registration needs the reason — the queue is useless without it."); return; }
+    try {
+      await api(`/api/candidates/${c._id}`, { method: "PATCH", json: { sidh_status: "Registration Failed", sidh_failure_reason: reason.trim() } });
+      load();
+    } catch (e: any) { setError(e.message); }
+  }
+
+  // GD-70: one click from the row to the portal itself. Cross-site prefill is not possible from
+  // a browser; opening the right portal with the row on screen is the practical version.
+  async function openSidhPortal() {
+    try {
+      const d = await api("/api/defaults");
+      window.open(d.item?.sidh_url || "https://www.skillindiadigital.gov.in/", "_blank");
     } catch (e: any) { setError(e.message); }
   }
 
@@ -207,14 +228,23 @@ function CandidatesInner() {
             key: "sidh_status", label: "SIDH", render: (r: any) => (
               <span className="flex items-center gap-1.5">
                 <Chip value={r.sidh_status ?? "Not Registered"} />
+                {r.sidh_status === "Registration Failed" && r.sidh_failure_reason && (
+                  <span className="text-[11px] text-red-600" title={r.sidh_failure_reason}>({r.sidh_failure_reason.slice(0, 24)}{r.sidh_failure_reason.length > 24 ? "…" : ""})</span>
+                )}
                 {r.sidh_status !== "Registered" && (
                   <>
                     <button className="text-[11px] font-medium text-blue-700 hover:underline" title="Send registration link on WhatsApp"
                       onClick={(e) => { e.stopPropagation(); sendSidhLink(r, "wa"); }}>WhatsApp</button>
                     <button className="text-[11px] font-medium text-indigo-700 hover:underline" title="Send the same link by SMS — for candidates who do not use WhatsApp"
                       onClick={(e) => { e.stopPropagation(); sendSidhLink(r, "sms"); }}>SMS</button>
+                    <button className="text-[11px] font-medium text-gray-600 hover:underline" title="Open the SIDH portal"
+                      onClick={(e) => { e.stopPropagation(); openSidhPortal(); }}>Portal↗</button>
                     <button className="text-[11px] font-medium text-green-700 hover:underline" title="Mark as registered on the SIDH portal"
                       onClick={(e) => { e.stopPropagation(); markSidhRegistered(r); }}>✓ Reg.</button>
+                    {r.sidh_status !== "Registration Failed" && (
+                      <button className="text-[11px] font-medium text-red-600 hover:underline" title="The portal refused this registration — record why"
+                        onClick={(e) => { e.stopPropagation(); markSidhFailed(r); }}>✗ Failed</button>
+                    )}
                   </>
                 )}
               </span>

@@ -141,6 +141,7 @@ function EditDetails({ b, onChanged, setError }: any) {
     trainer: b.trainer?._id ?? "", room: b.room?._id ?? "", session: b.session,
     planned_start: toInputDate(b.planned_start), planned_end: toInputDate(b.planned_end), target_size: b.target_size,
     slot_start: b.slot_start ?? "", slot_end: b.slot_end ?? "",
+    govt_batch_id: b.govt_batch_id ?? "", drive_folder_url: b.drive_folder_url ?? "",
   });
   useEffect(() => {
     api("/api/trainers?limit=200").then((d) => setTrainers(d.items)).catch(() => {});
@@ -154,13 +155,36 @@ function EditDetails({ b, onChanged, setError }: any) {
       onChanged();
     } catch (e: any) { setError(e.message); }
   }
+
+  const idOf = (v: any) => (v?._id ?? v) as string | undefined;
+  const locId = idOf(b.location), progId = idOf(b.program);
+  const eligible = (t: any) => {
+    if (t.pipeline_status !== "Certified" || !t.tr_id) return false;
+    const nomLoc = idOf(t.nominated_for_location), nomProg = idOf(t.nominated_for_program);
+    if (nomLoc || nomProg) return nomLoc === locId && nomProg === progId;
+    return (t.capable_locations ?? []).some((l: any) => idOf(l) === locId);
+  };
+  const certified = trainers.filter(eligible);
+  const others = trainers.filter((t) => !eligible(t));
+
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-3">
+        {/* Same TR-ID gate as batch creation — reassigning a trainer here must not quietly
+            sidestep the rule the create drawer enforces. */}
         <Field label="Trainer">
           <select className={inputCls} value={form.trainer} onChange={(e) => setForm({ ...form, trainer: e.target.value })}>
             <option value="">—</option>
-            {trainers.map((t) => <option key={t._id} value={t._id}>{t.name}</option>)}
+            {certified.length > 0 && (
+              <optgroup label="Certified — has a TR ID and is cleared for this centre">
+                {certified.map((t) => <option key={t._id} value={t._id}>{t.name} · TR {t.tr_id}</option>)}
+              </optgroup>
+            )}
+            {others.length > 0 && (
+              <optgroup label="Not yet certified — NSDC will not accept these on a batch">
+                {others.map((t) => <option key={t._id} value={t._id}>{t.name} ({t.pipeline_status ?? t.status})</option>)}
+              </optgroup>
+            )}
           </select>
         </Field>
         <Field label="Room">
@@ -179,6 +203,19 @@ function EditDetails({ b, onChanged, setError }: any) {
         <Field label="Target size"><input type="number" className={inputCls} value={form.target_size} onChange={(e) => setForm({ ...form, target_size: +e.target.value })} /></Field>
         <Field label="Time slot start"><input type="time" className={inputCls} value={form.slot_start} onChange={(e) => setForm({ ...form, slot_start: e.target.value })} /></Field>
         <Field label="Time slot end"><input type="time" className={inputCls} value={form.slot_end} onChange={(e) => setForm({ ...form, slot_end: e.target.value })} /></Field>
+      </div>
+      {/* The portal's own identifiers. Batch formation happens on SIDH, so the ERP has to hold
+          the key that links our row to theirs — and the Drive folder Manish keeps in parallel
+          with the NSDC upload, which is the only copy if the portal upload is ever questioned. */}
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Government batch ID (SIDH)">
+          <input className={inputCls} value={form.govt_batch_id} placeholder="as shown on the portal"
+            onChange={(e) => setForm({ ...form, govt_batch_id: e.target.value })} />
+        </Field>
+        <Field label="Drive evidence folder">
+          <input className={inputCls} value={form.drive_folder_url} placeholder="https://drive.google.com/…"
+            onChange={(e) => setForm({ ...form, drive_folder_url: e.target.value })} />
+        </Field>
       </div>
       <div className="text-xs text-gray-500">Actual: {fmtDate(b.actual_start)} → {fmtDate(b.actual_end)}</div>
       <Btn onClick={save}>Save details</Btn>
@@ -225,6 +262,14 @@ function Roster({ batchId, batch, setError, onChanged }: any) {
             { key: "phone", label: "Phone", render: (r: any) => r.candidate?.phone, mobile: false },
             { key: "joined_on", label: "Joined", render: (r: any) => fmtDate(r.joined_on) },
             { key: "enrollment_status", label: "Enrollment", render: (r: any) => <Chip value={r.enrollment_status} /> },
+            {
+              // GD-102: running attendance per candidate, from the daily logs.
+              key: "attendance", label: "Attendance", render: (r: any) => r.attendance?.days_held
+                ? <span className={`text-xs tabular-nums ${r.attendance.pct < 70 ? "font-semibold text-red-600" : "text-gray-700"}`}>
+                    {r.attendance.present}/{r.attendance.days_held} ({r.attendance.pct}%)
+                  </span>
+                : <span className="text-xs text-gray-400">—</span>,
+            },
             { key: "left_on", label: "Left", render: (r: any) => r.left_on ? `${fmtDate(r.left_on)} (${r.drop_reason})` : "—" },
             { key: "_act", label: "", render: (r: any) => !r.left_on ? <Btn small kind="ghost" onClick={() => setDropTarget(r)}>Drop</Btn> : null },
           ]} empty="No members yet — add from the candidate pool." />

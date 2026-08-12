@@ -217,7 +217,35 @@ function Targets({ locationId, setError }: any) {
                 </span>
               ) : "—",
             },
-            { key: "capacity", label: "Capacity math", render: (r: any) => <span className="text-xs text-gray-600">{r.capacity?.sentence ?? "—"}</span> },
+            {
+              // Trainers counted from our own records, with the sheet's requirement beside them.
+              key: "trainers", label: "Trainers", render: (r: any) => r.trainers ? (
+                <span className="text-xs">
+                  <span className={`font-medium ${r.trainers.shortfall ? "text-amber-700" : "text-gray-900"}`}>
+                    {r.trainers.certified}
+                  </span>
+                  {r.trainers.required != null ? ` / ${r.trainers.required} needed` : " certified"}
+                  <span className="block text-gray-400">
+                    {r.trainers.nominated} nominated · {r.trainers.in_pipeline} in pipeline
+                  </span>
+                </span>
+              ) : "—",
+            },
+            {
+              // The client sheet's own figure, never merged into ours. A variance is the story.
+              key: "reported", label: "Sheet says", mobile: false, render: (r: any) =>
+                r.reported?.enrolled == null ? <span className="text-xs text-gray-400">—</span> : (
+                  <span className="text-xs">
+                    {r.reported.enrolled} enrolled
+                    {r.reported.enrolled_variance ? (
+                      <span className="block font-medium text-amber-700">
+                        we count {r.reported.enrolled_variance > 0 ? "+" : ""}{r.reported.enrolled_variance}
+                      </span>
+                    ) : <span className="block text-gray-400">matches ours</span>}
+                  </span>
+                ),
+            },
+            { key: "capacity", label: "Capacity math", mobile: false, render: (r: any) => <span className="text-xs text-gray-600">{r.capacity?.sentence ?? "—"}</span> },
           ]}
           empty="No targets yet."
         />
@@ -232,6 +260,7 @@ function Targets({ locationId, setError }: any) {
           </Field>
           <Field label="Approved target"><input type="number" className={inputCls} value={form.approved_target ?? ""} onChange={(e) => setForm({ ...form, approved_target: +e.target.value })} /></Field>
           <Field label="Allocated target"><input type="number" className={inputCls} value={form.allocated_target ?? ""} onChange={(e) => setForm({ ...form, allocated_target: +e.target.value })} /></Field>
+          <Field label="Trainers required"><input type="number" className={inputCls} value={form.trainers_required ?? ""} onChange={(e) => setForm({ ...form, trainers_required: +e.target.value })} /></Field>
           <div className="flex items-end"><Btn onClick={save} disabled={!form.program}>Save target</Btn></div>
         </div>
       </Section>
@@ -243,6 +272,8 @@ function TrainersInfra({ locationId, setError }: any) {
   const [rooms, setRooms] = useState<any[]>([]);
   const [requests, setRequests] = useState<any[]>([]);
   const [programs, setPrograms] = useState<any[]>([]);
+  const [readiness, setReadiness] = useState<any[]>([]);
+  const [trainers, setTrainers] = useState<any[]>([]);
   const [roomForm, setRoomForm] = useState<any>({ type: "Classroom" });
   const [reqForm, setReqForm] = useState<any>({});
 
@@ -250,6 +281,8 @@ function TrainersInfra({ locationId, setError }: any) {
     api(`/api/locations/${locationId}/rooms`).then((d) => setRooms(d.items)),
     api(`/api/trainer-requests?location=${locationId}`).then((d) => setRequests(d.items)),
     api("/api/programs?limit=100").then((d) => setPrograms(d.items)),
+    api(`/api/mapping/readiness?location=${locationId}`).then((d) => setReadiness(d.items ?? [])).catch(() => setReadiness([])),
+    api(`/api/trainers?nominated_for_location=${locationId}&limit=100`).then((d) => setTrainers(d.items ?? [])).catch(() => setTrainers([])),
   ]).catch((e) => setError(e.message));
   useEffect(() => { load(); }, [locationId]);
 
@@ -264,6 +297,48 @@ function TrainersInfra({ locationId, setError }: any) {
 
   return (
     <div className="space-y-4">
+      {/* 2026-08-08: "wo trainer jitne chahiye — Trainer 1, Trainer 2, Trainer 3 — iske aage
+          dikhne lag jaye ki kya-kya kahani hai." One slot per required trainer, each filled by a
+          named person at their pipeline stage; an empty slot is unstarted hiring, said plainly. */}
+      {readiness.length > 0 && (
+        <Section title="Trainer slots — required vs who is actually filling them">
+          <div className="space-y-3">
+            {readiness.map((r: any) => {
+              const progId = r.program?._id;
+              const named = trainers.filter((t: any) => (t.nominated_for_program?._id ?? t.nominated_for_program) === progId && t.pipeline_status !== "Dropped");
+              const required = r.trainers?.required ?? Math.max(named.length, 1);
+              const slots = Array.from({ length: Math.max(required, named.length) }, (_, i) => named[i] ?? null);
+              return (
+                <div key={progId} className="rounded-lg border border-gray-200 p-3">
+                  <div className="mb-2 flex items-baseline justify-between">
+                    <span className="text-sm font-medium">{r.program?.name}</span>
+                    <span className="text-xs text-gray-500">{r.trainers?.certified ?? 0} certified of {r.trainers?.required ?? "?"} required</span>
+                  </div>
+                  <ol className="grid gap-1.5 text-sm md:grid-cols-2">
+                    {slots.map((t: any, i: number) => (
+                      <li key={i} className="flex items-center gap-2">
+                        <span className="w-16 shrink-0 text-xs text-gray-400">Trainer {i + 1}</span>
+                        {t ? (
+                          <Link href={`/trainers/${t._id}`} className="flex items-center gap-1.5 text-blue-700 hover:underline">
+                            {t.name}
+                            <span className={`rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${
+                              t.pipeline_status === "Certified" ? "border-green-200 bg-green-50 text-green-700" : "border-amber-200 bg-amber-50 text-amber-700"}`}>
+                              {t.pipeline_status === "Certified" ? "Certified (Ready to Train)" : t.pipeline_status}
+                            </span>
+                          </Link>
+                        ) : (
+                          <span className="text-xs text-gray-400">empty — hiring not started (raise a trainer request below)</span>
+                        )}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              );
+            })}
+          </div>
+        </Section>
+      )}
+
       <Section title="Rooms (identity matters for conflicts — Rule 13)">
         <DataTable rows={rooms}
           cardTitle={(r: any) => r.name}

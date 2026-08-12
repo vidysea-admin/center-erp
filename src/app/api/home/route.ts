@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, locationFilter, isScoped } from "@/lib/authz";
-import { Batch, BatchMember, DailyLog, FollowUpAction, Invoice, Location, SheetChange, TrainerRequest, User } from "@/models";
+import { Batch, BatchMember, Candidate, DailyLog, FollowUpAction, Invoice, Location, SheetChange, TrainerRequest, User } from "@/models";
 import { missingLogQueue } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 
@@ -52,6 +52,13 @@ export const GET = apiHandler(async () => {
     .populate({ path: "batch", select: "code location", populate: { path: "location", select: "name code" } })
     .limit(20).lean();
 
+  // Queue 4b (GD-81): candidates the portal refused. "Main bacche ko drop karke doosri queue
+  // mein dalunga" — these are worked on for registration, not planned into batches.
+  const regFailed = await Candidate.find({ sidh_status: "Registration Failed", ...scope })
+    .select("name phone sidh_failure_reason location")
+    .populate("location", "name code")
+    .sort({ updatedAt: -1 }).limit(20).lean();
+
   // Queue 5: pending follow-ups — sync workflow belongs to Admin/Operations (Rule 40)
   const followUps = ["Admin", "Operations"].includes(user.role)
     ? await FollowUpAction.find({ status: "Pending" })
@@ -83,6 +90,7 @@ export const GET = apiHandler(async () => {
       sheet_changes: openChanges,
       attendance_gaps: gaps,
       enrollment_failures: failures,
+      registration_failed: regFailed,
       follow_ups: followUps,
       invoices_pending: invoices,
       pending_users: pendingUsers,

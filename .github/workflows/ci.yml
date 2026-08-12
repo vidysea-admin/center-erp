@@ -74,3 +74,13 @@ jobs:
         run: npm run test:blindspot
       - name: Government attendance
         run: npm run test:govt
+      - name: Trainer preparation pipeline
+        run: npm run test:trainer
+      # The awkward cases on the RPL surface, including a timing assertion on the readiness
+      # endpoint that Home calls on every load.
+      - name: RPL edge cases
+        run: npm run test:rpl-blindspot
+      # Transcript gap items (2026-08-12 evening): cost booking, pool notification, failed-
+      # registration queue, per-candidate attendance, infra blockers, import duplicates, slots.
+      - name: Flow gap items
+        run: npm run test:flows

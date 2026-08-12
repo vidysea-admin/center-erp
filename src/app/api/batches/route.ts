@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, requireRole, locationFilter, assertLocationInScope, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
-import { Batch, BatchMember, Program } from "@/models";
+import { Batch, BatchMember, Candidate, Location, Notification, Program } from "@/models";
 import { assertLocationOperational, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, nextBatchCode, planBatchBackward, trainerBookingWarnings } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
@@ -81,5 +81,20 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // warns but does not block (Rule 11 gates the actual start).
   const warnings = trainer ? await trainerBookingWarnings(trainer, location) : [];
   await audit({ entity: "Batch", entityId: doc._id, newValue: "created " + doc.code, actor: user.id });
+
+  // 2026-08-08 (both transcriptions): "Batch open hote hi inke paas aana chahiye — bhaiya tere
+  // candidate pool mein 50." The centre's own people are told the batch exists and how many
+  // unassigned candidates they have to fill it from, at the moment it opens — not when someone
+  // happens to look. Rule 38 scoping on the inbox delivers it to exactly that centre.
+  const [poolCount, locDoc] = await Promise.all([
+    Candidate.countDocuments({ location, program: programId, lifecycle_status: "Unassigned" }),
+    Location.findById(location).select("name").lean<any>(),
+  ]);
+  await Notification.create({
+    type: "batch_created", severity: "info",
+    message: `${doc.code} (${program.name}) opened at ${locDoc?.name ?? "your centre"} — ${poolCount} candidate${poolCount === 1 ? "" : "s"} in your pool to assign`,
+    entity: "Batch", entity_id: doc._id, link: `/batches/${doc._id}?tab=Candidates`,
+    location, role_target: ["Location", "Operations", "Enrollment"],
+  });
   return NextResponse.json({ item: doc, ...(warnings.length ? { warning: warnings.join(" ") } : {}) }, { status: 201 });
 });

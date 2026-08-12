@@ -87,11 +87,17 @@ function TrainersInner() {
             { key: "skills", label: "Skills", render: (r: any) => (r.skills ?? []).join(", ") },
             { key: "home_location", label: "Home location", render: (r: any) => r.home_location?.name ?? "—", mobile: false },
             {
-              key: "pipeline_status", label: "Pipeline", render: (r: any) => (
-                <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${r.pipeline_status === "Ready to Train" ? "border-green-200 bg-green-50 text-green-700" : "border-amber-200 bg-amber-50 text-amber-700"}`}>
-                  {r.pipeline_status ?? "Ready to Train"}
-                </span>
-              ),
+              // 2026-08-12: three states now, not two — a rejected profile and a dropped applicant
+              // are not "in progress", and showing them amber hides the ones needing action.
+              key: "pipeline_status", label: "Pipeline", render: (r: any) => {
+                const s = r.pipeline_status ?? "Applied";
+                const tone = s === "Certified" ? "border-green-200 bg-green-50 text-green-700"
+                  : s === "NSDC Rejected" || s === "Dropped" ? "border-red-200 bg-red-50 text-red-700"
+                    : "border-amber-200 bg-amber-50 text-amber-700";
+                {/* GD-39: "Ready to Train ka status bhi capture karna hai" — same state, said in
+                    the operator's words, so nobody wonders whether Certified means usable. */}
+                return <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${tone}`}>{s === "Certified" ? "Certified (Ready to Train)" : s}</span>;
+              },
             },
             { key: "tr_id", label: "TR ID", render: (r: any) => r.tr_id || "—", mobile: false },
             { key: "status", label: "Status", render: (r: any) => <Chip value={r.status} /> },
@@ -128,12 +134,14 @@ function TrainersInner() {
               {locations.map((l) => <option key={l._id} value={l._id}>{l.name}</option>)}
             </select>
           </Field>
-          {/* 2026-08-11: application → shortlist → TOT → Ready to Train, plus NSDC TR ID */}
+          {/* 2026-08-12: the real journey (Manish) — CV → docs → nomination → NSDC → ₹3250 → TOT →
+              TR ID. The stage is shown here for reference but is MOVED BY the transition endpoint,
+              which enforces the order and the preconditions; setting it freely from a dropdown
+              would let someone skip the document and nomination gates entirely. */}
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Hiring pipeline">
-              <select className={inputCls} value={form.pipeline_status ?? "Ready to Train"} onChange={(e) => set("pipeline_status", e.target.value)}>
-                {["Applied", "Shortlisted", "TOT In Progress", "Ready to Train"].map((s) => <option key={s}>{s}</option>)}
-              </select>
+            <Field label="Hiring stage">
+              <input className={inputCls + " bg-gray-50"} value={form.pipeline_status ?? "Applied"} readOnly
+                title="Move a trainer along the pipeline from their detail page" />
             </Field>
             <Field label="TR ID (NSDC, after TOT)"><input className={inputCls} value={form.tr_id ?? ""} onChange={(e) => set("tr_id", e.target.value)} /></Field>
           </div>

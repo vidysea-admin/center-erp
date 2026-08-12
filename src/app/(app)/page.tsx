@@ -10,9 +10,13 @@ import { IconPin, IconCap, IconUsers, IconUser, IconAlert } from "@/components/i
 export default function HomePage() {
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState("");
+  // The three-way mapping queue (2026-08-12). Fetched on its own rather than folded into
+  // /api/home, because it walks every target and must not slow down the rest of the page.
+  const [mapping, setMapping] = useState<any>(null);
 
   const load = () => api("/api/home").then(setData).catch((e) => setError(e.message));
   useEffect(() => { load(); }, []);
+  useEffect(() => { api("/api/mapping/readiness").then(setMapping).catch(() => setMapping(null)); }, []);
 
   if (error) return <ErrorBanner msg={error} />;
   if (!data) return <div className="p-8 text-center text-sm text-gray-400">Loading…</div>;
@@ -41,6 +45,33 @@ export default function HomePage() {
         <KPI label="Open Trainer Requests" value={data.kpis.open_trainer_requests} tone="amber" icon={<IconUser size={19} />} href="/trainers?tab=Requests" />
         <KPI label="Pending Follow-ups" value={data.kpis.pending_followups} tone="red" icon={<IconAlert size={19} />} href="/sync" />
       </div>
+
+      {/* Manish, 2026-08-12: "location, trainer aur candidate — ye teeno map ho gaye to batch form
+          ho jaata hai." This queue answers exactly that, and names the one thing still missing. */}
+      {mapping && mapping.total > 0 && (
+        <Section
+          title={`Centres Ready to Start (${mapping.ready_count} of ${mapping.total})`}
+          titleHref="/batches"
+          actions={<Link href="/batches"><Btn kind="ghost" small>Batches</Btn></Link>}
+        >
+          <ul className="divide-y divide-gray-100 text-sm">
+            {mapping.items.slice(0, 8).map((r: any) => (
+              <Row key={`${r.location._id}-${r.program._id}`}
+                href={`/batches?location=${r.location._id}`}
+                left={<>
+                  <span className="font-medium text-blue-700">{r.location.name}</span>
+                  <span className="text-gray-500"> · {r.program.name}</span>
+                  <span className={`block text-xs ${r.ready ? "text-green-700" : "text-amber-700"}`}>{r.next_action}</span>
+                </>}
+                right={<span className="shrink-0 text-xs text-gray-500 tabular-nums">
+                  {r.trainers.certified}/{r.trainers.required ?? "?"} trainers · {r.candidates.registered}/{r.candidates.needed} registered
+                </span>}
+              />
+            ))}
+          </ul>
+          {mapping.total > 8 && <p className="mt-2 text-xs text-gray-400">{mapping.total - 8} more centre/job-role pairs not shown.</p>}
+        </Section>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Section title={`Missing Daily Logs (${q.missing_logs.length})`} titleHref="/batches?status=Active" actions={<Link href="/batches?status=Active"><Btn kind="ghost" small>All batches</Btn></Link>}>
@@ -82,6 +113,20 @@ export default function HomePage() {
             </ul>
           )}
         </Section>
+
+        {/* GD-81: the portal said no. These are worked for registration, not planned into batches. */}
+        {(q.registration_failed ?? []).length > 0 && (
+          <Section title={`Registration Failed on SIDH (${q.registration_failed.length})`} titleHref="/candidates">
+            <ul className="divide-y divide-gray-100 text-sm">
+              {q.registration_failed.map((c: any) => (
+                <Row key={c._id} href="/candidates"
+                  left={<><span className="font-medium">{c.name}</span><span className="text-gray-500"> · {c.location?.name ?? "—"} · {c.phone}</span></>}
+                  right={<span className="shrink-0 text-xs text-red-600">{c.sidh_failure_reason || "no reason recorded"}</span>}
+                />
+              ))}
+            </ul>
+          </Section>
+        )}
 
         <Section title={`Enrollment Failures (${q.enrollment_failures.length})`} titleHref="/batches">
           {q.enrollment_failures.length === 0 ? <p className="text-sm text-gray-400">No open failures.</p> : (

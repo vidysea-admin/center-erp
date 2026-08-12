@@ -43,7 +43,12 @@ ok("Admin sees all locations", (adminLocs.data.items?.length ?? 0) > 5, `got ${a
 // Rule 38: scoped batches/candidates
 const spocBatches = await req(spoc, "GET", "/api/batches");
 ok("Rule 38: SPOC batches all JPR03", spocBatches.data.items?.every((b) => b.location?.code === "JPR03"), JSON.stringify(spocBatches.data.items?.map((b) => b.location?.code)));
-const otherLoc = adminLocs.data.items.find((l) => l.code === "KOT02");
+// Search for KOT02 rather than scanning a capped page for it. The list route caps at 200 rows and
+// the test database grows with every run, so "find it in the first 200" quietly became false and
+// the suite died on an undefined instead of failing an assertion. The search parameter is `q`.
+const otherLoc = (await req(admin, "GET", "/api/locations?q=KOT02")).data.items?.find((l) => l.code === "KOT02")
+  ?? adminLocs.data.items.find((l) => l.code === "KOT02");
+ok("fixture: the foreign location KOT02 exists (run seed:sample first)", !!otherLoc);
 const spocForeign = await req(spoc, "GET", `/api/locations/${otherLoc._id}`);
 ok("Rule 38: SPOC blocked from foreign location detail (403)", spocForeign.status === 403, `got ${spocForeign.status}`);
 
@@ -219,6 +224,27 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
     one?.day_rate === undefined && one?.compensation_fixed === undefined && one?.incentive_note === undefined, JSON.stringify(one?.day_rate));
   const adminOne = (await req(admin, "GET", `/api/trainers/${paid._id}`)).data.item;
   ok("Admin still sees pay", adminOne?.day_rate === 1234 && adminOne?.compensation_fixed === 5678, JSON.stringify(adminOne?.day_rate));
+
+  // The other side of the same mask, and the more dangerous one. The nomination target is what
+  // makes a trainer's TR ID usable at a centre, so the batch screen filters the dropdown on it.
+  // It was briefly masked alongside the pay fields, which silently emptied the certified group
+  // for everyone without trainers.manage — the people who mostly create batches. Masking it
+  // again would break batch creation without failing any other assertion, so it is pinned here.
+  const loc = (await req(admin, "GET", "/api/locations?limit=1")).data.items[0];
+  const prog = (await req(admin, "GET", "/api/programs?limit=1")).data.items[0];
+  const nom = (await req(admin, "POST", "/api/trainers", {
+    name: `Nominated Trainer ${stamp}`, phone: `96${stamp}00`, skills: ["PayCheck"],
+    nominated_for_location: loc._id, nominated_for_program: prog._id,
+  })).data.item;
+  const seen = (await req(enroll, "GET", `/api/trainers/${nom._id}`)).data.item;
+  ok("the nomination target stays visible without trainers.manage",
+    (seen?.nominated_for_location?._id ?? seen?.nominated_for_location) === loc._id,
+    JSON.stringify(seen?.nominated_for_location));
+  ok("…and so does the job role it was nominated for",
+    (seen?.nominated_for_program?._id ?? seen?.nominated_for_program) === prog._id,
+    JSON.stringify(seen?.nominated_for_program));
+  ok("…while the personnel fields beside it stay hidden",
+    seen?.nsdc_remarks === undefined && seen?.qualification === undefined && seen?.payment_reference === undefined);
 }
 
 // 2026-08-12 audit F-000 (S0): the generic list route copied every ?key=value into the Mongo

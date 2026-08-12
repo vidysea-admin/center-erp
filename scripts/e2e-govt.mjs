@@ -78,7 +78,7 @@ ok("room created", !!room?._id, JSON.stringify(room).slice(0, 200));
 
 const trainer = (await req(admin, "POST", "/api/trainers", {
   name: `${NAME} Trainer`, phone: `9${STAMP}0001`, skills: ["Testing"],
-  home_location: loc._id, pipeline_status: "Ready to Train", max_concurrent_batches: 4,
+  home_location: loc._id, pipeline_status: "Certified", max_concurrent_batches: 4,
   available_from: new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10),
 })).data.item;
 ok("trainer created (matches the fixture's Trainer row by name)", !!trainer?._id);
