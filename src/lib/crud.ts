@@ -16,6 +16,10 @@ export type CrudConfig = {
   scopeField?: string | null; // Rule 38 — null disables location scoping
   writeRoles?: Role[]; // roles allowed to create/update (edit flag still applies)
   readRoles?: Role[]; // optional read restriction (Rule 40)
+  // Togglable right required to READ. Reading and writing a screen are governed by the
+  // same grant, so an Admin who grants every right does not leave screens mysteriously
+  // closed (2026-08-12: found by testing a real account with all rights granted).
+  readPermission?: string;
   // 2026-08-11 (CEO, AWS-style toggles): when set, writes are gated by this togglable
   // permission INSTEAD of the static writeRoles list — an Admin can grant it to anyone
   // or revoke it from a whole role. writeRoles remains the fallback when absent.
@@ -50,7 +54,8 @@ export function collectionRoutes(cfg: CrudConfig) {
   const GET = apiHandler(async (req: NextRequest) => {
     await dbConnect();
     const user = await requireUser();
-    if (cfg.readRoles) requireRole(user, ...cfg.readRoles);
+    if (cfg.readPermission) await requirePerm(user, cfg.readPermission);
+    else if (cfg.readRoles) requireRole(user, ...cfg.readRoles);
     const sp = req.nextUrl.searchParams;
     const filter: Record<string, unknown> = {};
     if (cfg.scopeField !== null) Object.assign(filter, locationFilter(user, cfg.scopeField ?? "location"));
@@ -92,7 +97,8 @@ export function itemRoutes(cfg: CrudConfig) {
   const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
     await dbConnect();
     const user = await requireUser();
-    if (cfg.readRoles) requireRole(user, ...cfg.readRoles);
+    if (cfg.readPermission) await requirePerm(user, cfg.readPermission);
+    else if (cfg.readRoles) requireRole(user, ...cfg.readRoles);
     const { id } = await ctx.params;
     let query = cfg.model.findById(id);
     for (const p of cfg.populate ?? []) query = query.populate(p.path, p.select);

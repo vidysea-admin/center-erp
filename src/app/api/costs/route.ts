@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireRole, locationFilter } from "@/lib/authz";
+import { requirePerm } from "@/lib/permissions";
 import { CostEntry } from "@/models";
 import { assertCostEntryValid } from "@/lib/rules";
 import { audit } from "@/lib/audit";
@@ -8,7 +9,7 @@ import { audit } from "@/lib/audit";
 export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
-  requireRole(user, "Admin", "Operations"); // Rule 40 (Costs screen: Operations and Admin)
+  await requirePerm(user, "costs.manage"); // read follows the same togglable right as write
   const sp = req.nextUrl.searchParams;
   const filter: Record<string, unknown> = { ...locationFilter(user) };
   for (const k of ["location", "batch", "trainer", "category"]) {
@@ -25,7 +26,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
 export const POST = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
-  requireRole(user, "Admin", "Operations");
+  await requirePerm(user, "costs.manage");
   const body = await req.json();
   assertCostEntryValid(body); // Rule 37
   const doc = await CostEntry.create({

@@ -181,6 +181,36 @@ ok("restoring the right reopens it", (await req(ops, "GET", "/api/workbook-chang
 ok("Admin role toggles are refused (lockout-proof)", (await req(admin, "PUT", "/api/permissions", { role: "Admin", permissions: [] })).status === 400);
 ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permissions")).status === 403);
 
+// 2026-08-12, found by testing a REAL approved account on production with every right
+// granted: four screens stayed closed because their READ gate was still a hardcoded role
+// check while only the write gate had moved onto the toggles. Granting a right must open
+// the screen, not just the save button.
+{
+  const target = (await req(admin, "GET", "/api/users")).data.items.find((u) => u.email === "enroll@vidysea.com");
+  const ALL = ["costs.manage", "invoices.manage", "sheet.sources", "feedback.links"];
+  await req(admin, "PATCH", `/api/users/${target._id}`, { extra_permissions: ALL });
+  for (const [path, label] of [["/api/costs", "costs"], ["/api/invoices", "invoices"], ["/api/sync-sources", "sync sources"], ["/api/public-tokens", "public links"]]) {
+    ok(`granting the right opens ${label} for reading too`, (await req(enroll, "GET", path)).status === 200, `${path}`);
+  }
+  await req(admin, "PATCH", `/api/users/${target._id}`, { extra_permissions: [] });
+  for (const [path, label] of [["/api/costs", "costs"], ["/api/invoices", "invoices"], ["/api/sync-sources", "sync sources"]]) {
+    ok(`revoking it closes ${label} again`, (await req(enroll, "GET", path)).status === 403, `${path}`);
+  }
+}
+
+// Trainer pay is not directory data (2026-08-12): a signed-in user without trainers.manage
+// could read every trainer's day rate and compensation from the roster.
+{
+  const list = (await req(enroll, "GET", "/api/trainers")).data.items ?? [];
+  ok("trainer roster is readable without the manage right", list.length > 0);
+  ok("…but day rate is hidden", list.every((t) => t.day_rate === undefined), JSON.stringify(list[0]?.day_rate));
+  ok("…and compensation fields are hidden", list.every((t) => t.compensation_type === undefined && t.compensation_fixed === undefined && t.incentive_note === undefined));
+  const one = (await req(enroll, "GET", `/api/trainers/${list[0]._id}`)).data.item;
+  ok("…opening one trainer by id does not leak them either", one?.day_rate === undefined && one?.compensation_fixed === undefined, JSON.stringify(one?.day_rate));
+  const adminList = (await req(admin, "GET", "/api/trainers")).data.items ?? [];
+  ok("Admin still sees pay", adminList.some((t) => t.day_rate !== undefined));
+}
+
 // unauthenticated → 401
 const anon = await fetch(BASE + "/api/locations");
 ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}`);

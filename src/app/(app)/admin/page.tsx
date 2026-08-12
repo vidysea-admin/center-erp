@@ -192,6 +192,13 @@ function Users({ setError }: any) {
                 onChange={(e) => set("location_scope", [...e.target.selectedOptions].map((o) => o.value))}>
                 {locations.map((l) => <option key={l._id} value={l._id}>{l.name}</option>)}
               </select>
+              {/* 2026-08-12: an approved Trainer/Location user with no scope signs in to a
+                  completely empty app and cannot tell why. Say so at the moment of approval. */}
+              {(form.location_scope ?? []).length === 0 && (
+                <p className="mt-1 text-xs font-medium text-amber-700">
+                  ⚠ No location selected — this user will sign in and see no locations, batches or candidates at all. Pick at least one.
+                </p>
+              )}
             </Field>
           )}
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!form.can_edit} onChange={(e) => set("can_edit", e.target.checked)} /> Can edit (off = view only, Rule 39)</label>

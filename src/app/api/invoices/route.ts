@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireRole } from "@/lib/authz";
+import { requirePerm } from "@/lib/permissions";
 import { Invoice } from "@/models";
 
 export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
-  requireRole(user, "Admin", "Operations");
+  await requirePerm(user, "invoices.manage"); // read follows the same togglable right as write
   const status = req.nextUrl.searchParams.get("status");
   const filter: Record<string, unknown> = {};
   if (status) filter.status = status;

@@ -15,7 +15,7 @@ import { audit } from "@/lib/audit";
 export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
-  requireRole(user, "Admin", "Operations", "Location");
+  await requirePerm(user, "feedback.links"); // read follows the same togglable right as write
   const sp = req.nextUrl.searchParams;
   const filter: Record<string, unknown> = {};
   if (sp.get("purpose")) filter.purpose = sp.get("purpose");
