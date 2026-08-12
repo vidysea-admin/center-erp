@@ -1,23 +1,26 @@
 import { itemRoutes } from "@/lib/crud";
 import { Trainer } from "@/models";
 import { hasPermission } from "@/lib/permissions";
+import { maskTrainerSecrets } from "../route";
 
-// Same pay-field masking as the list route (2026-08-12) — opening one trainer by id was
-// the obvious way around a list-only filter.
-const SENSITIVE_FIELDS = ["day_rate", "compensation_type", "compensation_fixed", "nominated_for_location", "nominated_for_program", "source", "qualification", "industry_experience_years", "teaching_experience_years", "nsdc_remarks", "eligibility_payment_amount", "payment_reference", "tot_certificate_no", "pipeline_note", "incentive_note"];
-
+// Same masking as the list route (2026-08-12) — opening one trainer by id was the obvious way
+// around a list-only filter. The field list itself lives in the list route so there is only one.
 export const { GET, PATCH } = itemRoutes({
   model: Trainer, entity: "Trainer", scopeField: null,
   async mapItems(items, user) {
-    if (await hasPermission(user, "trainers.manage")) return items;
-    return items.map((t) => {
-      const safe = { ...t };
-      for (const f of SENSITIVE_FIELDS) delete safe[f];
-      return safe;
-    });
+    return maskTrainerSecrets(items, await hasPermission(user, "trainers.manage"));
   },
-  fields: ["name", "phone", "email", "skills", "home_location", "status", "available_from", "day_rate", "incentive_note", "max_concurrent_batches", "active", "pipeline_status", "tr_id", "capable_locations", "programs_applied", "compensation_type", "compensation_fixed", "govt_candidate_id"],
+  // The hiring-journey fields have to be writable here too — the detail page and the transition
+  // routes both PATCH through this route, and a field missing from this list is silently dropped.
+  fields: ["name", "phone", "email", "skills", "home_location", "status", "available_from", "day_rate", "incentive_note", "max_concurrent_batches", "active", "pipeline_status", "tr_id", "capable_locations", "programs_applied", "compensation_type", "compensation_fixed", "govt_candidate_id",
+    "nominated_for_location", "nominated_for_program", "source", "qualification",
+    "industry_experience_years", "teaching_experience_years", "nsdc_remarks",
+    "eligibility_payment_amount", "payment_reference", "tot_certificate_no", "pipeline_note"],
   writeRoles: ["Admin", "Operations"],
   permission: "trainers.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
-  populate: [{ path: "home_location", select: "name code" }],
+  populate: [
+    { path: "home_location", select: "name code" },
+    { path: "nominated_for_location", select: "name code" },
+    { path: "nominated_for_program", select: "name code scheme" },
+  ],
 });

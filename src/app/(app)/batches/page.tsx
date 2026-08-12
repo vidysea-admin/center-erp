@@ -1,6 +1,7 @@
 "use client";
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { api, fmtDate } from "@/lib/client";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, HealthChip, inputCls } from "@/components/ui";
 import { useLocationCtx } from "@/components/shell";
@@ -42,6 +43,33 @@ function BatchesInner() {
 
   const program = programs.find((p) => p._id === form.program);
   const matchingTrainers = trainers.filter((t) => !program || (t.skills ?? []).includes(program.trainer_skill));
+
+  // 2026-08-12 (Manish): "dropdown se choose kar lijiye unke TR ID ke basis pe". NSDC only accepts
+  // a certified trainer carrying a TR ID, and only at the centre and job role they were nominated
+  // for — the nomination is what makes the TR ID usable there. So nomination is the gate, and
+  // capable_locations is only a fallback for trainers who predate the hiring pipeline and were
+  // never nominated through it. Keying on capable_locations alone hid every certified trainer,
+  // because nothing in the journey ever writes that field.
+  const idOf = (v: any) => (v?._id ?? v) as string | undefined;
+  const eligible = (t: any) => {
+    if (t.pipeline_status !== "Certified" || !t.tr_id) return false;
+    const nomLoc = idOf(t.nominated_for_location), nomProg = idOf(t.nominated_for_program);
+    if (nomLoc || nomProg) {
+      return (!form.location || nomLoc === form.location) && (!form.program || nomProg === form.program);
+    }
+    return !form.location || (t.capable_locations ?? []).some((l: any) => idOf(l) === form.location);
+  };
+  const readyTrainers = matchingTrainers.filter(eligible);
+  const otherTrainers = matchingTrainers.filter((t) => !eligible(t));
+
+  // The three-way mapping, answered before the batch is created rather than after it fails.
+  const [readiness, setReadiness] = useState<any>(null);
+  useEffect(() => {
+    if (!form.location || !form.program) { setReadiness(null); return; }
+    api(`/api/mapping/readiness?location=${form.location}`)
+      .then((d) => setReadiness((d.items ?? []).find((r: any) => r.program?._id === form.program || r.program === form.program) ?? null))
+      .catch(() => setReadiness(null));
+  }, [form.location, form.program]);
 
   // §5 earliest_possible_start = max(trainer.available_from, today + mobilisation_lead_days)
   const [defaults, setDefaults] = useState<any>(null);
@@ -134,8 +162,29 @@ function BatchesInner() {
           <Field label={`Trainer${program ? ` (skill: ${program.trainer_skill})` : ""}`}>
             <select className={inputCls} value={form.trainer ?? ""} onChange={(e) => set("trainer", e.target.value)}>
               <option value="">— assign later —</option>
-              {matchingTrainers.map((t) => <option key={t._id} value={t._id}>{t.name} ({t.status})</option>)}
+              {readyTrainers.length > 0 && (
+                <optgroup label="Certified — has a TR ID and is cleared for this centre">
+                  {readyTrainers.map((t) => <option key={t._id} value={t._id}>{t.name} · TR {t.tr_id}</option>)}
+                </optgroup>
+              )}
+              {otherTrainers.length > 0 && (
+                <optgroup label="Not yet certified — NSDC will not accept these on a batch">
+                  {otherTrainers.map((t) => <option key={t._id} value={t._id}>{t.name} ({t.pipeline_status ?? t.status})</option>)}
+                </optgroup>
+              )}
             </select>
+            {form.trainer && otherTrainers.some((t) => t._id === form.trainer) && (
+              <p className="mt-1 text-xs font-medium text-amber-700">
+                ⚠ This trainer has no TR ID yet. You can plan the batch, but the portal will refuse
+                them until the TOT certificate is recorded.
+              </p>
+            )}
+            {program && readyTrainers.length === 0 && (
+              <p className="mt-1 text-xs text-gray-500">
+                No certified trainer for {program.trainer_skill} at this centre yet — track the hiring
+                journey on the <Link href="/trainers" className="underline">Trainers</Link> screen.
+              </p>
+            )}
           </Field>
           <Field label={`Room${program?.requires_lab ? " (program requires a Lab)" : ""}`}>
             <select className={inputCls} value={form.room ?? ""} onChange={(e) => set("room", e.target.value)}>
@@ -149,6 +198,21 @@ function BatchesInner() {
           {earliestStart && (
             <p className="rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-700">
               Earliest possible start: <b>{earliestStart}</b> (mobilisation lead {defaults?.mobilisation_lead_days ?? 7}d{selTrainer?.available_from ? `, trainer available ${new Date(selTrainer.available_from).toLocaleDateString("en-IN")}` : ""})
+            </p>
+          )}
+          {/* Location + trainer + candidate: say which of the three is missing before the batch
+              is attempted, not after the portal rejects it. */}
+          {readiness && !readiness.ready && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+              <div className="font-semibold">Not ready to start yet</div>
+              <ul className="mt-1 list-disc pl-4">
+                {readiness.blockers.map((b: string) => <li key={b}>{b}</li>)}
+              </ul>
+            </div>
+          )}
+          {readiness?.ready && (
+            <p className="rounded-lg bg-green-50 px-3 py-2 text-xs text-green-700">
+              Centre, trainer and candidates are all in place for this job role.
             </p>
           )}
           <p className="text-xs text-gray-500">Planned end auto-computes: start + duration + buffer (Rule 15). Trainer/room conflicts are hard-blocked on save (Rules 10, 13).</p>
