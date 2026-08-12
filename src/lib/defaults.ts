@@ -21,6 +21,8 @@ export type AppDefaults = {
   lead_mobilization_days: number;    // mobilization complete
   lead_trainer_ready_days: number;   // trainer finalized/trained
   lead_tot_done_days: number;        // "TOT done has to be at least three days before the batch start"
+  lead_tot_start_days: number;       // TOT actually begins
+  lead_trainer_ready_for_tot_days: number; // trainer available and ready to be sent for TOT
   lead_trainer_found_days: number;   // trainer identified
   // Daily evidence (2026-08-11: photos/videos "दिन में दो बार कम से कम")
   min_daily_evidence: number;
@@ -49,7 +51,9 @@ export const DEFAULT_VALUES: AppDefaults = {
   lead_mobilization_days: 2,
   lead_trainer_ready_days: 1,
   lead_tot_done_days: 3,
-  lead_trainer_found_days: 7,
+  lead_tot_start_days: 10,
+  lead_trainer_ready_for_tot_days: 15,
+  lead_trainer_found_days: 20,
   min_daily_evidence: 2,
   sidh_url: "https://www.skillindiadigital.gov.in/",
 };

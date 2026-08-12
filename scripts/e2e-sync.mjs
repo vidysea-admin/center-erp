@@ -171,12 +171,16 @@ const notifySrc = (await req("POST", "/api/sync-sources", {
   key_columns: ["Institution Name", "Job role"], source_url: wbDataUrl({ Master: NT1 }),
 }, 201)).data.item;
 await req("POST", `/api/sync-sources/${notifySrc._id}/run`, {}, 200); // baseline, silent
-const beforeNotifs = ((await req("GET", "/api/notifications?status=all")).data.items ?? []).length;
+// The list is capped at 100, so counting totals cannot prove growth — assert on the
+// specific alert this run should produce instead.
+const beforeMine = ((await req("GET", "/api/notifications?status=all")).data.items ?? [])
+  .filter((n) => String(n.message ?? "").includes(tabStamp)).length;
 const NT2 = [["Institution Name", "Job role", "Target"], ["Notify Centre " + tabStamp, "Drone", "175"]];
 await req("PATCH", `/api/sync-sources/${notifySrc._id}`, { source_url: wbDataUrl({ Master: NT2 }) }, 200);
 await req("POST", `/api/sync-sources/${notifySrc._id}/run`, {}, 200);
 const afterNotifs = (await req("GET", "/api/notifications?status=all")).data.items ?? [];
-ok("a sheet change alerts immediately (not only after 48h)", afterNotifs.length > beforeNotifs, `${beforeNotifs} → ${afterNotifs.length}`);
+const afterMine = afterNotifs.filter((n) => String(n.message ?? "").includes(tabStamp)).length;
+ok("a sheet change alerts immediately (not only after 48h)", afterMine > beforeMine, `${beforeMine} → ${afterMine}`);
 const summary = afterNotifs.find((n) => n.type === "workbook_change_new" && n.message.includes(tabStamp));
 ok("reviewers get a summary naming the tab and count", !!summary && summary.message.includes("Master (1)"), JSON.stringify(summary?.message));
 const perLoc = afterNotifs.find((n) => n.type === "workbook_change_location" && String(n.location?._id ?? n.location) === String(notifyLoc._id));

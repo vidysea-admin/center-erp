@@ -403,13 +403,13 @@ await req("POST", `/api/batches/${warnBatch.data.item._id}/transition`, { target
 
 // ---- Backward batch planner ----
 const plan = (await req("GET", "/api/plan-batch?start=2026-09-20", undefined, 200)).data;
-ok("planner: 5 milestones, sorted by date", plan.milestones?.length === 5 &&
+ok("planner: 7 milestones, sorted by date", plan.milestones?.length === 7 &&
   plan.milestones.every((m, i, a) => i === 0 || new Date(a[i - 1].due_date) <= new Date(m.due_date)), JSON.stringify(plan.milestones?.map((m) => m.key)));
 const totMs = plan.milestones.find((m) => m.key === "tot_done");
 const totGap = Math.round((new Date("2026-09-20") - new Date(totMs?.due_date)) / 86400e3);
 ok("planner: TOT due 3 days before start", totGap === 3, `gap=${totGap}d due=${totMs?.due_date}`);
 const planBatch = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, planned_start: "2027-04-01", target_size: 3 }, 201)).data.item;
-ok("batch stores its backward plan", planBatch.milestones?.length === 5, `count=${planBatch.milestones?.length}`);
+ok("batch stores its backward plan", planBatch.milestones?.length === 7, `count=${planBatch.milestones?.length}`);
 const ticked = (await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { key: "mobilization", done: true }, 200)).data.item;
 ok("milestone tick-off records done_on", !!ticked.milestones.find((m) => m.key === "mobilization")?.done_on);
 await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { regenerate: true }, 200);
@@ -623,6 +623,33 @@ const created = await req("POST", `/api/workbook-changes/${addedRow._id}/create-
 ok("human-validated location created with edited value", created.data.item?.city === "Sirsa (edited)");
 const afterApply = (await req("GET", "/api/workbook-changes?status=New")).data.items ?? [];
 ok("row's pending changes auto-accepted after validation", !afterApply.some((c) => c.row_key === addedRow.row_key));
+
+// ---- the trainer-preparation chain the CEO said was missing (2026-08-12) ----
+// "ट्रेन होने से पहले ट्रेनर के TOT का कितना टाइम लगता है? वो नहीं कैप्चर किया हुआ है इसमें"
+{
+  const planned = (await req("GET", "/api/plan-batch?start=2027-03-01")).data;
+  const keys = (planned.milestones ?? []).map((m) => m.key);
+  ok("planner captures when the trainer is ready FOR tot", keys.includes("trainer_ready_for_tot"), JSON.stringify(keys));
+  ok("planner captures when TOT starts", keys.includes("tot_start"), JSON.stringify(keys));
+  ok("planner still has found → tot done → ready → mobilization → enrollment",
+    ["trainer_found", "tot_done", "trainer_ready", "mobilization", "enrollment_done"].every((k) => keys.includes(k)), JSON.stringify(keys));
+  const by = Object.fromEntries((planned.milestones ?? []).map((m) => [m.key, new Date(m.due_date).getTime()]));
+  ok("the chain runs in the right order: ready-for-TOT → TOT starts → TOT done",
+    by.trainer_ready_for_tot < by.tot_start && by.tot_start < by.tot_done,
+    JSON.stringify({ r: by.trainer_ready_for_tot, s: by.tot_start, d: by.tot_done }));
+  ok("the trainer is found before anyone tries to ready them for TOT",
+    by.trainer_found < by.trainer_ready_for_tot, JSON.stringify({ found: by.trainer_found, ready: by.trainer_ready_for_tot }));
+  ok("TOT completes at least 3 days before the batch starts (CEO's hard rule)",
+    (new Date("2027-03-01").getTime() - by.tot_done) / 86400000 >= 3);
+}
+
+// All four compensation types the CEO named must be selectable.
+{
+  const tr = (await req("POST", "/api/trainers", { name: `Comp ${stamp}`, phone: "95555" + stamp.slice(2), skills: ["Skill" + stamp], compensation_type: "Incentive-based" }, 201)).data.item;
+  ok("Incentive-based compensation accepted", tr.compensation_type === "Incentive-based");
+  const tr2 = (await req("PATCH", `/api/trainers/${tr._id}`, { compensation_type: "Fixed", compensation_fixed: 25000 }, 200)).data.item;
+  ok("Fixed compensation accepted with an amount", tr2.compensation_type === "Fixed" && tr2.compensation_fixed === 25000);
+}
 
 // ---- pending signups surface where the approver actually looks (2026-08-12) ----
 const homeAfterSignup = (await req("GET", "/api/home")).data;

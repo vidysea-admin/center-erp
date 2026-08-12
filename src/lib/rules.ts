@@ -900,11 +900,15 @@ export function planBatchBackward(
   defaults: {
     lead_enrollment_days: number; lead_mobilization_days: number; lead_trainer_ready_days: number;
     lead_tot_done_days: number; lead_trainer_found_days: number;
+    lead_tot_start_days: number; lead_trainer_ready_for_tot_days: number;
   },
 ): Milestone[] {
   const start = dayStart(planned_start);
   const plan: Milestone[] = [
     { key: "trainer_found", label: "Trainer identified", due_date: addDays(start, -defaults.lead_trainer_found_days) },
+    // The CEO's own gap: how long TOT itself takes was never captured, only its deadline.
+    { key: "trainer_ready_for_tot", label: "Trainer available & ready for TOT", due_date: addDays(start, -(defaults.lead_trainer_ready_for_tot_days ?? 12)) },
+    { key: "tot_start", label: "TOT starts", due_date: addDays(start, -(defaults.lead_tot_start_days ?? 10)) },
     { key: "tot_done", label: "Trainer TOT completed", due_date: addDays(start, -defaults.lead_tot_done_days) },
     { key: "mobilization", label: "Candidate mobilization complete", due_date: addDays(start, -defaults.lead_mobilization_days) },
     { key: "trainer_ready", label: "Trainer finalized & ready", due_date: addDays(start, -defaults.lead_trainer_ready_days) },

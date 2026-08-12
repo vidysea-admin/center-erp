@@ -21,3 +21,11 @@ const t = await db.collection("trainers").updateMany(
 );
 console.log(`defaults updated: ${d.modifiedCount}, trainers updated: ${t.modifiedCount}`);
 await mongoose.disconnect();
+// 2026-08-12: TOT itself now has a duration in the backward plan, so trainer discovery has
+// to move to the front of the chain — at 7 days it landed AFTER "ready for TOT".
+const d2 = await db.collection("defaults").updateMany({}, {
+  $set: { lead_trainer_found_days: 20, lead_trainer_ready_for_tot_days: 15, lead_tot_start_days: 10 },
+});
+console.log("planner lead days realigned:", d2.modifiedCount);
+
+

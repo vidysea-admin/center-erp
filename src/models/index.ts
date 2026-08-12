@@ -8,7 +8,9 @@ export const TRAINER_STATUS = ["Available", "Assigned", "Unavailable"] as const;
 // 2026-08-11 meeting: "application pool से चालू होगा… ready to train वाला status आना चाहिए" —
 // the hiring journey, separate from the derived operational status above (Rule 12).
 export const TRAINER_PIPELINE = ["Applied", "Shortlisted", "TOT In Progress", "Ready to Train"] as const;
-export const COMPENSATION_TYPE = ["Batch-wise", "Monthly"] as const;
+// CEO named four: "एक तो बैच वाइज पैसे देते हैं, एक किसी को मंथली देते हैं… एक तो हो गया
+// फिक्स, और एक होता है इंसेंटिव बेस्ड ऑन देयर परफॉरमेंस". Only two were selectable (2026-08-12).
+export const COMPENSATION_TYPE = ["Batch-wise", "Monthly", "Fixed", "Incentive-based"] as const;
 export const TRAINER_REQUEST_STATUS = ["Open", "In Progress", "Fulfilled", "Cancelled"] as const;
 // "Not Certified" (RPL M17/M18): finished the batch but did not pass — not Completed
 // (which would inflate outcome reporting) and not Dropped (they never left).
@@ -526,7 +528,9 @@ const DefaultsSchema = new Schema({
   lead_mobilization_days: { type: Number, default: 2 },
   lead_trainer_ready_days: { type: Number, default: 1 },
   lead_tot_done_days: { type: Number, default: 3 },
-  lead_trainer_found_days: { type: Number, default: 7 },
+  lead_tot_start_days: { type: Number, default: 10 },
+  lead_trainer_ready_for_tot_days: { type: Number, default: 15 },
+  lead_trainer_found_days: { type: Number, default: 20 },
   min_daily_evidence: { type: Number, default: 2 },
   sidh_url: { type: String, default: "https://www.skillindiadigital.gov.in/" },
 });

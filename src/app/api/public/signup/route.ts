@@ -11,7 +11,7 @@ import { audit } from "@/lib/audit";
 const SIGNUP_ROLES = ["Trainer", "Location", "Enrollment", "Operations"] as const;
 
 const hits = new Map<string, { count: number; windowStart: number }>();
-function rateLimit(ip: string, max = 5, windowMs = 15 * 60_000) {
+function rateLimit(ip: string, max = 10, windowMs = 15 * 60_000) {
   const now = Date.now();
   const h = hits.get(ip);
   if (!h || now - h.windowStart > windowMs) { hits.set(ip, { count: 1, windowStart: now }); return; }
