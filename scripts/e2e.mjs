@@ -617,5 +617,10 @@ ok("human-validated location created with edited value", created.data.item?.city
 const afterApply = (await req("GET", "/api/workbook-changes?status=New")).data.items ?? [];
 ok("row's pending changes auto-accepted after validation", !afterApply.some((c) => c.row_key === addedRow.row_key));
 
+// ---- public build marker (deploy verification, no auth) ----
+const verRes = await fetch(BASE + "/api/public/version");
+const verBody = await verRes.json().catch(() => ({}));
+ok("version endpoint is public and names the release", verRes.status === 200 && !!verBody.release, `status=${verRes.status} ${JSON.stringify(verBody).slice(0, 80)}`);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
