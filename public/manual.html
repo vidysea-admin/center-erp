@@ -67,6 +67,8 @@
   <a href="#eligibility-sidh">Eligibility &amp; SIDH</a>
   <a href="#feedback">Candidate Feedback</a>
   <a href="#permissions">Permissions &amp; Signup</a>
+  <a href="#govt-attendance">Govt Attendance Import</a>
+  <a href="#scheme-rules">Scheme Timing &amp; Counting</a>
   <h2>Help</h2>
   <a href="#faq">FAQ / Common Questions</a>
 </nav>
@@ -76,7 +78,7 @@
   <div class="hero">
     <h1>Center Management ERP — User Manual</h1>
     <p>The complete operational journey in one system: Location &amp; Target → Trainer → Batch → Candidate → Enrollment → Daily Attendance → Assessment → Certificate → Invoice → Cost. Step-by-step instructions for every screen are below. Use the search box above to find anything.</p>
-    <p style="margin-top:8px"><b>Updated August 2026</b> — new since the first release: <a href="#sheet-watch">Sheet Watch</a> (track the client's workbook automatically), <a href="#contacts-notes">Contacts &amp; Meeting Notes</a>, <a href="#planner">Backward Batch Planner</a> &amp; time slots, <a href="#eligibility-sidh">Candidate Eligibility &amp; SIDH registration</a>, <a href="#feedback">Candidate Feedback</a>, and <a href="#permissions">self-signup with Admin approval &amp; togglable role permissions</a>.</p>
+    <p style="margin-top:8px"><b>Updated August 2026</b> — new since the first release: <a href="#sheet-watch">Sheet Watch</a> (track the client's workbook automatically), <a href="#contacts-notes">Contacts &amp; Meeting Notes</a>, <a href="#planner">Backward Batch Planner</a> &amp; time slots, <a href="#eligibility-sidh">Candidate Eligibility &amp; SIDH registration</a>, <a href="#feedback">Candidate Feedback</a>, and <a href="#permissions">self-signup with Admin approval &amp; togglable role permissions</a>. Newest: <a href="#govt-attendance">Government Attendance Import</a> (upload the portal export, see where it disagrees with our logs) and the confirmed <a href="#scheme-rules">scheme timing &amp; counting rules</a>.</p>
   </div>
 
   <section class="screen" id="overview">
@@ -381,7 +383,7 @@
       <li><span class="btn">Copy as text</span> or <span class="btn">Print</span> to hand the checklist to anyone: <mark>"तेरे को batch start करना है तो ये-ये काम इस-इस date तक"</mark></li>
       <li>Every new batch stores this checklist on its Overview tab — tick milestones off as they finish; overdue ones turn red and raise an alert</li>
       <li>All lead times are configurable in Admin → Defaults</li>
-      <li><b>Time slots:</b> a trainer may run up to <b>4 parallel batches</b> when the day is divided by time. Give each batch a slot (e.g. 09:00–13:00) — the system hard-blocks the same trainer being in two places at the same time</li>
+      <li><b>Time slots:</b> a trainer may run up to <b>4 parallel batches</b> across dates when the day is divided by time. Give each batch a slot (e.g. 09:00–13:00) — the system hard-blocks the same trainer being in two places at the same time, and enforces the scheme guidelines (9–6, max 4 hours, max two sessions a day — see <a href="#scheme-rules">Scheme Timing</a>)</li>
     </ol>
   </section>
 
@@ -392,7 +394,8 @@
       <li>Each candidate row shows an eligibility badge: <b>Eligible</b> (green), <b>Not eligible</b> (red — hover to see why), or <b>Unverified</b> (DOB/education not recorded yet)</li>
       <li>The rules: age 18–40, 10th pass, and no government training in the last 6 months — record the <b>last training date</b> and the system knows exactly when they become eligible again. Thresholds live in Admin → Defaults</li>
       <li>Assigning an ineligible candidate to a batch <b>warns</b> you; completing their enrollment is <b>blocked</b></li>
-      <li><b>SIDH column:</b> <span class="btn">Send link</span> opens WhatsApp with the Skill India registration link pre-filled — the candidate registers themselves. Click <span class="btn">✓ Reg.</span> once they are registered on the portal</li>
+      <li><b>SIDH column:</b> <span class="btn">WhatsApp</span> or <span class="btn">SMS</span> opens that app with the Skill India registration link pre-filled — the candidate registers themselves. Click <span class="btn">✓ Reg.</span> once they are registered on the portal. <mark>SMS is there because rural candidates often do not use WhatsApp</mark></li>
+      <li><span class="btn">Bulk SMS file</span> downloads a phone-plus-message CSV for everyone in the current view who is not yet registered — the format a bulk-SMS gateway takes, for when sending sixty links by hand is not realistic</li>
       <li><span class="btn">Export for SIDH CRM</span> downloads an Excel in the assisted-registration tool's format, for candidates who need an agent's help on the call (the Aadhaar column is left blank on purpose — the agent fills it during the call; the ERP never stores Aadhaar)</li>
       <li><span class="btn">Self-reg link</span> creates a public link for a location — share it on WhatsApp and candidates fill in their own details, which land straight in your pool marked "Self Registration"</li>
     </ol>
@@ -421,6 +424,38 @@
       <li>Admin always has every right — you cannot lock yourself out</li>
     </ol>
     <div class="tip">💡 In Sheet Watch, a <b>new row</b> in the client's sheet shows a <span class="btn">Create location…</span> button: the form comes prefilled from the sheet itself, you correct anything that is wrong, and only then it enters the system. Nothing from the sheet ever writes itself into the database.</div>
+  </section>
+
+  <section class="screen" id="govt-attendance">
+    <h2>🗂️ Government Attendance Import</h2>
+    <p class="sub">Govt Attendance — upload the portal's attendance export and see where it disagrees with us</p>
+    <ol class="steps">
+      <li>Download the attendance report from the government portal as usual (CSV or Excel — either works, and the file does not need reformatting)</li>
+      <li>Click <span class="btn">Upload portal export</span> and pick the file. The system reads <b>every row</b>, works out which centre it belongs to from the <b>TC ID</b> in the Org Name column, and shows you a preview <b>before</b> anything is saved</li>
+      <li>Each row is matched to a candidate — first by the portal's own <b>Candidate ID</b> (CAN_…), and if that is missing, by name. Rows are labelled <b>Matched</b>, <b>Ambiguous</b> (two candidates share the name — set the Candidate ID on the right one to fix it) or <b>Unmatched</b> (the portal knows someone we do not)</li>
+      <li>The important column is <b>Variance</b>: the portal's days-present minus what the centre actually logged. <mark>A positive number means the portal credits more days than our own daily logs do</mark> — that is the number the client is invoiced on, so it is the one to chase</li>
+      <li>Click <span class="btn">Import</span> to save. Admin and Operations get an alert if anything is unmatched or shows a variance. Use the <b>Variance</b> and <b>Unmatched</b> filters on the import to jump straight to the problems</li>
+      <li>Trainer rows in the file are matched to trainers, not candidates — the portal lists them alongside the trainees</li>
+      <li><b>Tip:</b> fill in <b>Portal Candidate ID</b> on the candidate record (it is on the Add/Edit form). Once it is set, every future import matches that person automatically and can never be confused with a same-name candidate</li>
+      <li>Re-uploading a newer export creates a <b>new</b> import rather than overwriting the old one — the history of what the portal said on each date is preserved. A wrong file can be deleted</li>
+    </ol>
+  </section>
+
+  <section class="screen" id="scheme-rules">
+    <h2>⏰ Scheme Timing &amp; Counting Rules</h2>
+    <p class="sub">Admin → Defaults — the guideline numbers, confirmed with Manish (Aug 2026)</p>
+    <ol class="steps">
+      <li><b>Training day:</b> 9:00 to 18:00. A batch time slot outside this window is refused — a 7:00 AM start was asked for and is not permitted</li>
+      <li><b>Session length:</b> up to <b>4 hours</b> per batch. A 5-hour slot is refused</li>
+      <li><b>Sessions per day:</b> <b>two</b> 4-hour batches is the sanctioned pattern. Three 3-hour batches was asked for and refused, so a third slotted session on the same day is blocked</li>
+      <li><b>Breaks:</b> no minimum break between sessions is prescribed, so none is enforced</li>
+      <li><b>"Appeared" count:</b> candidates marked Absent <b>are</b> counted as appeared for the client contract — they are not deducted</li>
+      <li><b>Dropped but passed:</b> their result is kept, but they are <b>not billable</b>. The Closure summary shows both the passed figure and the billable figure so the difference is never a surprise</li>
+      <li><b>Mid-batch replacement:</b> when someone drops out, the seat can be filled by a new candidate with a <b>later joining date</b> — just add them to the roster as usual</li>
+      <li><b>Re-assessment after closing</b> and <b>reopening a completed batch</b> both stay <b>locked</b>, as confirmed. A mistyped certificate number cannot be corrected after closure — check it before completing</li>
+      <li><b>Uploads:</b> the file size limit is now <b>100 MB</b> (was 25 MB) so the twice-daily videos fit, and phone formats .mov and .3gp are accepted</li>
+      <li>Every number above is editable in <b>Admin → Defaults</b> — if a scheme circular changes them, no software release is needed</li>
+    </ol>
   </section>
 
   <section class="screen" id="faq">

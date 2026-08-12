@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { BatchMember, CandidateResult } from "@/models";
-import { assertBatchInScope, bulkMarkResults, summarizeResults } from "@/lib/rules";
+import { assertBatchInScope, bulkMarkResults, summarizeBatchResults } from "@/lib/rules";
 
 // GET — every roster member left-joined to its result row, so the marking grid renders
 // before anything has been marked. Pure read: no writes, no aggregate recompute (Rule 41).
@@ -25,7 +25,7 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     enrollment_status: m.enrollment_status,
     result: byCandidate.get(String(m.candidate?._id ?? m.candidate)) ?? null,
   }));
-  return NextResponse.json({ items, summary: summarizeResults(rows), legacy: rows.length === 0 });
+  return NextResponse.json({ items, summary: await summarizeBatchResults(id, rows), legacy: rows.length === 0 });
 });
 
 // PUT — bulk mark. Body: { rows: [{ member, result, score, ... }] }
@@ -46,5 +46,5 @@ export const PUT = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   const res = await bulkMarkResults(id, rows, user.id);
   if (res.updated === 0 && res.errors.length) throw new HttpError(400, res.errors[0].error);
   const after = await CandidateResult.find({ batch: id }).lean<any[]>();
-  return NextResponse.json({ ...res, summary: summarizeResults(after) });
+  return NextResponse.json({ ...res, summary: await summarizeBatchResults(id, after) });
 });

@@ -588,6 +588,50 @@ function DefaultsTab({ setError }: any) {
           ))}
         </div>
       </Section>
+
+      {/* 2026-08-12 — Manish confirmed these against the scheme guidelines. They are settings
+          rather than constants because a circular can move them without a deploy. */}
+      <Section title="Scheme timing guidelines (Manish, 2026-08-12)" actions={<Btn small onClick={save}>Save</Btn>}>
+        <p className="mb-3 text-xs text-gray-500">
+          Batch time slots are validated against these. Confirmed: the day runs 9 to 6, a session may be up to
+          4 hours, and two 4-hour batches a day is the sanctioned pattern (three 3-hour batches was refused).
+          No minimum break between sessions is prescribed.
+        </p>
+        <div className="grid gap-3 md:grid-cols-4">
+          <Field label="Day starts"><input type="time" className={inputCls} value={form.day_start_time ?? "09:00"} onChange={(e) => setForm({ ...form, day_start_time: e.target.value })} /></Field>
+          <Field label="Day ends"><input type="time" className={inputCls} value={form.day_end_time ?? "18:00"} onChange={(e) => setForm({ ...form, day_end_time: e.target.value })} /></Field>
+          <Field label="Max hours per session"><input type="number" className={inputCls} value={form.max_session_hours ?? ""} onChange={(e) => setForm({ ...form, max_session_hours: +e.target.value })} /></Field>
+          <Field label="Max sessions per day"><input type="number" className={inputCls} value={form.max_batches_per_day ?? ""} onChange={(e) => setForm({ ...form, max_batches_per_day: +e.target.value })} /></Field>
+        </div>
+      </Section>
+
+      <Section title="Client contract & uploads (Manish, 2026-08-12)" actions={<Btn small onClick={save}>Save</Btn>}>
+        <div className="space-y-3">
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-1" checked={form.absent_counts_as_appeared !== false}
+              onChange={(e) => setForm({ ...form, absent_counts_as_appeared: e.target.checked })} />
+            <span>
+              <span className="font-medium">Absentees count towards “appeared”</span>
+              <span className="block text-xs text-gray-500">Confirmed for the current client: an absentee is not deducted from the appeared figure. Untick only if a contract counts the other way.</span>
+            </span>
+          </label>
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-1" checked={form.dropped_pass_is_billable === true}
+              onChange={(e) => setForm({ ...form, dropped_pass_is_billable: e.target.checked })} />
+            <span>
+              <span className="font-medium">A candidate who dropped out but passed is billable</span>
+              <span className="block text-xs text-gray-500">Confirmed off: their result is still kept, but it is excluded from the billable count.</span>
+            </span>
+          </label>
+          <Field label="Maximum upload size (MB)">
+            <input type="number" className={inputCls} value={form.max_upload_mb ?? ""} onChange={(e) => setForm({ ...form, max_upload_mb: +e.target.value })} />
+          </Field>
+          <p className="text-xs text-gray-500">
+            Raising this beyond what the web server accepts will not work on its own — the reverse proxy in front of the
+            app has its own body-size cap that has to be raised to match.
+          </p>
+        </div>
+      </Section>
     </div>
   );
 }

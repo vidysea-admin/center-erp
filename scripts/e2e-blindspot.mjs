@@ -79,7 +79,9 @@ ok("booking at a capable location does not warn", bCapOk.status === 201 && !bCap
 
 // ---- 5. Instant notification on trainer request (CEO: detail मनीष जी के पास) ----
 const req1 = (await req(admin, "POST", "/api/trainer-requests", { location: loc._id, program: prog._id, required_by_date: "2027-06-01" })).data.item;
-const notifs = (await req(admin, "GET", "/api/notifications?status=all")).data.items ?? [];
+// Queried by type — the inbox caps at 100 and sorts severity-first, so an unfiltered scan
+// silently drops this alert once enough unrelated warnings accumulate in the database.
+const notifs = (await req(admin, "GET", "/api/notifications?status=all&type=trainer_request_new")).data.items ?? [];
 ok("new trainer request raises an instant alert", notifs.some((n) => n.type === "trainer_request_new" && String(n.entity_id) === String(req1._id)));
 
 // ---- 6. Workbook Watch edge cases ----

@@ -248,7 +248,9 @@ ok("Rule 42: hand-typed aggregates ignored once rows exist", ignored.closure.app
 
 await req("PUT", `/api/batches/${b4._id}/results`, { rows: [{ member: b4Members[2]._id, result: "Absent" }] }, 200);
 const sum3 = (await req("GET", `/api/batches/${b4._id}/results`)).data.summary;
-ok("Rule 42: Absent does not count as appeared", sum3.appeared === 2 && sum3.absent === 1, JSON.stringify(sum3));
+// 2026-08-12 (Manish, client contract): an absentee is NOT deducted from "appeared" — the
+// client counts everyone who reached assessment stage. Reversible via Defaults.absent_counts_as_appeared.
+ok("Absent counts toward 'appeared' (Manish 2026-08-12)", sum3.appeared === 3 && sum3.absent === 1, JSON.stringify(sum3));
 await req("PUT", `/api/batches/${b4._id}/closure`, { assessment_status: "Completed", assessment_date: today }, 200); // Rule 43 satisfied
 await req("POST", `/api/batches/${b4._id}/transition`, { target: "Closing" }, 200);
 
@@ -540,7 +542,9 @@ const dupSignup = await fetch(BASE + "/api/public/signup", {
   body: JSON.stringify({ name: "Dup", email: signupEmail, password: "Test@12345", role: "Trainer" }),
 });
 ok("duplicate email signup → 409", dupSignup.status === 409, `status=${dupSignup.status}`);
-const adminNotifs = (await req("GET", "/api/notifications?status=all")).data.items ?? [];
+// Queried by type: the inbox is capped at 100 and sorted severity-first, so scanning the whole
+// list makes this assertion depend on how much unrelated noise the database happens to hold.
+const adminNotifs = (await req("GET", "/api/notifications?status=all&type=signup_pending")).data.items ?? [];
 ok("admin notified of pending signup", adminNotifs.some((n) => n.type === "signup_pending" && n.message.includes(signupEmail)));
 const allUsers = (await req("GET", "/api/users")).data.items;
 const pendingUser = allUsers.find((u) => u.email === signupEmail);

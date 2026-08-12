@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, Program } from "@/models";
-import { assertBatchInScope, assertRoomFreeForBatch, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, batchReadiness, planBatchBackward, trainerBookingWarnings } from "@/lib/rules";
+import { assertBatchInScope, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, batchReadiness, planBatchBackward, trainerBookingWarnings } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { auditDiff } from "@/lib/audit";
 
@@ -50,6 +50,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
     slot_start: (patch.slot_start as string | undefined) ?? batch.slot_start,
     slot_end: (patch.slot_end as string | undefined) ?? batch.slot_end,
   };
+  await assertSlotWithinGuidelines(slot); // 2026-08-12: 09:00–18:00, ≤4h per session
   if (trainer) await assertTrainerAvailableForBatch(String(trainer), id, newStart, newEnd ?? newStart, slot); // Rule 10 + slot clash
   if (room) await assertRoomFreeForBatch(String(room), id, newStart, newEnd ?? newStart, session); // Rule 13
 

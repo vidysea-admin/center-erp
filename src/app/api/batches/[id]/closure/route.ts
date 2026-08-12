@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { CandidateResult, Closure, Invoice } from "@/models";
-import { assertBatchInScope, summarizeResults, upsertClosureChecked } from "@/lib/rules";
+import { assertBatchInScope, summarizeBatchResults, upsertClosureChecked } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
 export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
@@ -20,7 +20,7 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   return NextResponse.json({
     closure, invoice,
     legacy: rows.length === 0,
-    results_summary: summarizeResults(rows),
+    results_summary: await summarizeBatchResults(id, rows),
   });
 });
 

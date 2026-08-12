@@ -28,6 +28,16 @@ export type AppDefaults = {
   min_daily_evidence: number;
   // SIDH portal registration link sent to candidates
   sidh_url: string;
+  // Scheme timing guidelines (Manish, 2026-08-12)
+  day_start_time: string;      // "9 to 6" — a 07:00 start was asked for and refused
+  day_end_time: string;
+  max_session_hours: number;   // a 4-hour batch is permitted
+  max_batches_per_day: number; // two 4-hour batches; three 3-hour batches was refused
+  // Client-contract counting rules (Manish, 2026-08-12)
+  absent_counts_as_appeared: boolean; // absentees are NOT deducted from "appeared"
+  dropped_pass_is_billable: boolean;  // a dropout who passed is not billable
+  // Evidence uploads
+  max_upload_mb: number;
 };
 
 // Fallbacks for every tunable. A Defaults document written before a field existed simply
@@ -56,6 +66,13 @@ export const DEFAULT_VALUES: AppDefaults = {
   lead_trainer_found_days: 20,
   min_daily_evidence: 2,
   sidh_url: "https://www.skillindiadigital.gov.in/",
+  day_start_time: "09:00",
+  day_end_time: "18:00",
+  max_session_hours: 4,
+  max_batches_per_day: 2,
+  absent_counts_as_appeared: true,
+  dropped_pass_is_billable: false,
+  max_upload_mb: 100,
 };
 
 export async function getDefaults(): Promise<AppDefaults> {
@@ -67,6 +84,8 @@ export async function getDefaults(): Promise<AppDefaults> {
     const want = typeof DEFAULT_VALUES[key];
     if (want === "number" && typeof v === "number" && Number.isFinite(v)) (merged as any)[key] = v;
     if (want === "string" && typeof v === "string" && v.trim() !== "") (merged as any)[key] = v;
+    // Booleans must accept a stored `false` — the falsy checks above would silently drop it.
+    if (want === "boolean" && typeof v === "boolean") (merged as any)[key] = v;
   }
   return merged;
 }

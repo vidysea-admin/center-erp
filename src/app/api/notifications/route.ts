@@ -15,6 +15,11 @@ export const GET = apiHandler(async (req: NextRequest) => {
     role_target: user.role,
     ...(status === "all" ? {} : status === "open" ? { status: { $in: ["New", "Acknowledged"] } } : { status }),
   };
+  // 2026-08-12: filter by alert type. The list is capped at 100 and sorted severity-first, so
+  // without this a low-severity alert (a pending signup, say) becomes unreachable once enough
+  // warnings pile up — the bell would show it and the inbox would not.
+  const type = req.nextUrl.searchParams.get("type");
+  if (type) filter.type = { $in: type.split(",").map((t) => t.trim()).filter(Boolean) };
   if (isScoped(user)) {
     filter.$or = [{ location: null }, { ...locationFilter(user) }];
   }

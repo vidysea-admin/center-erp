@@ -99,9 +99,54 @@ function slotsClash(aStart?: string | null, aEnd?: string | null, bStart?: strin
   return aStart < bEnd && bStart < aEnd;
 }
 
+const toMin = (hhmm: string) => {
+  const m = /^(\d{1,2}):([0-5]\d)$/.exec(String(hhmm ?? "").trim());
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+};
+
+/**
+ * Scheme timing guidelines, confirmed by Manish 2026-08-12:
+ *   • the training day runs 09:00–18:00 — a 07:00 start was asked for and refused;
+ *   • a session may run up to 4 hours (4 is explicitly permitted, not just 3);
+ *   • the sanctioned pattern is two 4-hour batches a day — three 3-hour batches was refused;
+ *   • no minimum break between sessions is prescribed, so none is enforced.
+ * All four numbers live in Defaults, because a scheme circular can move them and that must not
+ * need a deploy. Blocking (not warning) is deliberate: these are the guidelines an audit checks.
+ */
+export function slotGuidelineErrors(
+  slot: { slot_start?: string | null; slot_end?: string | null } | undefined,
+  defaults: { day_start_time?: string; day_end_time?: string; max_session_hours?: number },
+): string[] {
+  if (!slot?.slot_start || !slot?.slot_end) return []; // slots stay optional — legacy batches have none
+  const errs: string[] = [];
+  const s = toMin(slot.slot_start), e = toMin(slot.slot_end);
+  if (s == null || e == null) return ["Time slot must be in HH:mm form, e.g. 09:00."];
+  if (e <= s) return ["Slot end must be after slot start."];
+
+  const dayStart = toMin(defaults.day_start_time ?? "09:00") ?? 540;
+  const dayEnd = toMin(defaults.day_end_time ?? "18:00") ?? 1080;
+  if (s < dayStart || e > dayEnd) {
+    errs.push(`Scheme guideline: training runs ${defaults.day_start_time ?? "09:00"}–${defaults.day_end_time ?? "18:00"}. This slot (${slot.slot_start}–${slot.slot_end}) falls outside it.`);
+  }
+  const maxH = defaults.max_session_hours ?? 4;
+  if (e - s > maxH * 60) {
+    errs.push(`Scheme guideline: a session may not exceed ${maxH} hours. This slot is ${((e - s) / 60).toFixed(1)} hours.`);
+  }
+  return errs;
+}
+
+export async function assertSlotWithinGuidelines(
+  slot: { slot_start?: string | null; slot_end?: string | null } | undefined,
+) {
+  const errs = slotGuidelineErrors(slot, await getDefaults());
+  if (errs.length) throw new HttpError(400, errs.join(" "));
+}
+
 // Rule 10: hard block if trainer would exceed max_concurrent_batches on overlapping ranges.
 // 2026-08-11 addition: when both batches carry a time slot, a same-time overlap is blocked
 // outright — a trainer cannot teach two rooms at 9:00 no matter how low the count is.
+// 2026-08-12 addition: and no more than max_batches_per_day slotted batches on one day, since
+// two 4-hour sessions is the pattern the scheme sanctions.
 export async function assertTrainerAvailableForBatch(
   trainerId: string, batchId: string | null, planned_start: Date, planned_end: Date,
   slot?: { slot_start?: string | null; slot_end?: string | null },
@@ -121,6 +166,17 @@ export async function assertTrainerAvailableForBatch(
   if (clash) {
     throw new HttpError(409,
       `Time slot clash: Trainer ${trainer.name} already teaches batch ${clash.code} at ${clash.location?.name ?? "?"} during ${clash.slot_start}–${clash.slot_end}.`);
+  }
+  // Two 4-hour batches a day is the sanctioned pattern (Manish, 2026-08-12). Only slotted
+  // batches are counted — an unslotted batch is "whole day" and is already governed by the
+  // concurrency cap, so counting it here would double-penalise legacy data.
+  if (slot?.slot_start && slot?.slot_end) {
+    const maxPerDay = (await getDefaults()).max_batches_per_day ?? 2;
+    const sameDaySlotted = overlapping.filter((b) => b.slot_start && b.slot_end);
+    if (sameDaySlotted.length + 1 > maxPerDay) {
+      throw new HttpError(409,
+        `Scheme guideline: at most ${maxPerDay} sessions a day. Trainer ${trainer.name} already runs ${sameDaySlotted.length} slotted batch(es) over these dates (${sameDaySlotted.map((b) => `${b.code} ${b.slot_start}–${b.slot_end}`).join(", ")}).`);
+    }
   }
   if (overlapping.length + 1 > (trainer.max_concurrent_batches ?? 1)) {
     const c = overlapping[0];
@@ -547,20 +603,50 @@ export async function missingLogQueue(locationScopeFilter: Record<string, unknow
 export type ResultSummary = {
   total: number; final: number; pending: number;
   appeared: number; passed: number; failed: number; absent: number; certificates_issued: number;
+  billable_passed: number; dropped_passed: number;
+};
+
+export type SummaryOpts = {
+  // Manish, 2026-08-12: for this client's contract an absentee is NOT deducted from "appeared".
+  // It is a contract term rather than a scheme rule, so it stays a Defaults toggle.
+  absentCountsAsAppeared?: boolean;
+  // BatchMember ids that carry a left_on — a candidate who dropped out is not billable even if
+  // they passed (Manish, 2026-08-12), while their result itself is still preserved (Rule 42).
+  droppedMemberIds?: Set<string>;
 };
 
 // Pure — used on GET so reads never write.
-export function summarizeResults(rows: any[]): ResultSummary {
+export function summarizeResults(rows: any[], opts: SummaryOpts = {}): ResultSummary {
+  const { absentCountsAsAppeared = true, droppedMemberIds } = opts;
   const by = (r: string) => rows.filter((x) => x.result === r).length;
   const passed = by("Pass"), failed = by("Fail"), absent = by("Absent"), pending = by("Pending");
+  const droppedPassed = droppedMemberIds
+    ? rows.filter((x) => x.result === "Pass" && droppedMemberIds.has(String(x.batch_member))).length
+    : 0;
   return {
     total: rows.length,
     final: rows.length - pending,
     pending,
-    appeared: passed + failed, // Rule 42: Absent did not appear
+    appeared: absentCountsAsAppeared ? passed + failed + absent : passed + failed,
     passed, failed, absent,
     certificates_issued: rows.filter((x) => x.certificate_status === "Issued").length,
+    dropped_passed: droppedPassed,
+    billable_passed: passed - droppedPassed,
   };
+}
+
+// The DB-aware wrapper: reads the contract toggles and the drop list, so callers get the
+// invoice-grade numbers without each one re-deriving them.
+export async function summarizeBatchResults(batchId: string, rows?: any[]): Promise<ResultSummary> {
+  const [defaults, resultRows, droppedMembers] = await Promise.all([
+    getDefaults(),
+    rows ? Promise.resolve(rows) : CandidateResult.find({ batch: batchId }).lean<any[]>(),
+    BatchMember.find({ batch: batchId, left_on: { $ne: null } }).select("_id").lean<any[]>(),
+  ]);
+  return summarizeResults(resultRows, {
+    absentCountsAsAppeared: defaults.absent_counts_as_appeared !== false,
+    droppedMemberIds: defaults.dropped_pass_is_billable ? undefined : new Set(droppedMembers.map((m) => String(m._id))),
+  });
 }
 
 // Rule 41: a batch with no rows is "legacy" and keeps its stored batch-level figures.
@@ -572,7 +658,7 @@ export async function batchUsesPerCandidateResults(batchId: string): Promise<boo
 // existing reader (invoice flow, dashboards) keeps working unchanged.
 export async function recomputeClosureAggregates(batchId: string, actorId?: string) {
   const rows = await CandidateResult.find({ batch: batchId }).lean<any[]>();
-  const summary = summarizeResults(rows);
+  const summary = await summarizeBatchResults(batchId, rows);
   if (!rows.length) return { ...summary, legacy: true };
 
   const closure = (await Closure.findOne({ batch: batchId })) ?? new Closure({ batch: batchId });

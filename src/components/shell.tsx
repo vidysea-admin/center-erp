@@ -19,6 +19,8 @@ const NAV = [
   { href: "/trainers", label: "Trainers", Icon: IconUser },
   { href: "/candidates", label: "Candidates", Icon: IconUsers },
   { href: "/batches", label: "Batches", Icon: IconCap },
+  // 2026-08-12: the portal attendance export Manish uploads, reconciled against our daily logs.
+  { href: "/govt-attendance", label: "Govt Attendance", Icon: IconCap, roles: ["Admin", "Operations", "Location"] },
   { href: "/costs", label: "Costs", Icon: IconWallet, roles: ["Admin", "Operations"] },
 ];
 

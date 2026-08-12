@@ -20,6 +20,7 @@ export const PERMISSIONS: { key: string; label: string; group: string }[] = [
   { key: "batches.manage", label: "Plan/edit batches & transitions", group: "Batches" },
   { key: "batches.daily_log", label: "Enter daily logs & evidence", group: "Batches" },
   { key: "closure.manage", label: "Assessment, certification & closure", group: "Batches" },
+  { key: "attendance.govt", label: "Import & reconcile government portal attendance", group: "Batches" },
   { key: "costs.manage", label: "Enter costs", group: "Finance" },
   { key: "invoices.manage", label: "Manage invoices", group: "Finance" },
   { key: "feedback.links", label: "Generate public registration/feedback links", group: "Public" },
@@ -35,11 +36,11 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   Operations: [
     "sheet.approve", "sheet.sources", "locations.manage", "trainers.manage",
     "candidates.manage", "candidates.assign", "batches.manage", "batches.daily_log",
-    "closure.manage", "costs.manage", "invoices.manage", "feedback.links", "approvals.decide",
+    "closure.manage", "attendance.govt", "costs.manage", "invoices.manage", "feedback.links", "approvals.decide",
   ],
   Location: [
     "locations.manage", "candidates.manage", "candidates.assign",
-    "batches.manage", "batches.daily_log", "closure.manage", "feedback.links",
+    "batches.manage", "batches.daily_log", "closure.manage", "attendance.govt", "feedback.links",
   ],
   Enrollment: ["candidates.manage", "candidates.assign", "batches.daily_log"],
   Trainer: ["batches.daily_log"],

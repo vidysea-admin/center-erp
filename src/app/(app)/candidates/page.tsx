@@ -5,6 +5,7 @@ import { api } from "@/lib/client";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, NameCell, inputCls } from "@/components/ui";
 import { useLocationCtx } from "@/components/shell";
 import { BASE_PATH } from "@/lib/base-path";
+import { bulkSmsCsv, smsLink, unsendableCount, waLink } from "@/lib/messaging";
 
 export default function CandidatesPage() {
   return <Suspense><CandidatesInner /></Suspense>;
@@ -77,16 +78,36 @@ function CandidatesInner() {
     } catch (e: any) { setError(e.message); }
   }
 
-  // 2026-08-11: SIDH registration link per candidate — WhatsApp deep link + status flip.
-  async function sendSidhLink(c: any) {
+  // 2026-08-11: SIDH registration link per candidate. 2026-08-12 (Manish): rural candidates are
+  // not reliably on WhatsApp, so the same link goes out over SMS too — `channel` picks which.
+  async function sendSidhLink(c: any, channel: "wa" | "sms") {
     try {
       const d = await api("/api/defaults");
       const url = d.item?.sidh_url || "https://www.skillindiadigital.gov.in/";
-      const msg = encodeURIComponent(`Namaste ${c.name}! Please register for your training on the Skill India portal: ${url}`);
-      const phone = String(c.phone ?? "").replace(/\D/g, "").slice(-10);
-      window.open(`https://wa.me/91${phone}?text=${msg}`, "_blank");
+      const msg = `Namaste ${c.name}! Please register for your training on the Skill India portal: ${url}`;
+      const href = channel === "wa" ? waLink(c.phone, msg) : smsLink(c.phone, msg);
+      if (!href) { setError(`${c.name} has no usable 10-digit mobile number.`); return; }
+      window.open(href, "_blank");
       await api(`/api/candidates/${c._id}`, { method: "PATCH", json: { sidh_status: "Link Sent", sidh_link_sent_at: new Date().toISOString() } });
       load();
+    } catch (e: any) { setError(e.message); }
+  }
+
+  // Bulk SMS for the filtered list — the gateway-ready CSV, since sending 60 links by hand is
+  // not a thing anyone will do.
+  async function downloadBulkSms() {
+    try {
+      const d = await api("/api/defaults");
+      const url = d.item?.sidh_url || "https://www.skillindiadigital.gov.in/";
+      const targets = items.filter((r: any) => r.sidh_status !== "Registered");
+      if (!targets.length) { setError("Every candidate in this view is already registered."); return; }
+      const csv = bulkSmsCsv(targets, (t: any) => `Namaste ${t.name}! Please register for your training on the Skill India portal: ${url}`);
+      const skipped = unsendableCount(targets);
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+      a.download = `sms-sidh-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      setError(skipped ? `Downloaded. ${skipped} candidate(s) skipped — no usable mobile number.` : "");
     } catch (e: any) { setError(e.message); }
   }
 
@@ -147,6 +168,7 @@ function CandidatesInner() {
           </select>
           <Btn kind="ghost" onClick={() => { setImportState({}); setDrawer("import"); }}>Import Excel</Btn>
           <Btn kind="ghost" onClick={shareRegistrationLink}>Self-reg link</Btn>
+          <Btn kind="ghost" onClick={downloadBulkSms}>Bulk SMS file</Btn>
           <a href={`${BASE_PATH}/api/candidates/export-sidh${fLoc ? `?location=${fLoc}` : ""}`}
             className="flex h-9 items-center rounded-lg border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 hover:border-blue-300 hover:text-blue-700"
             title="Excel in the SIDH CRM's format — upload it in the assisted-registration console">
@@ -188,7 +210,9 @@ function CandidatesInner() {
                 {r.sidh_status !== "Registered" && (
                   <>
                     <button className="text-[11px] font-medium text-blue-700 hover:underline" title="Send registration link on WhatsApp"
-                      onClick={(e) => { e.stopPropagation(); sendSidhLink(r); }}>Send link</button>
+                      onClick={(e) => { e.stopPropagation(); sendSidhLink(r, "wa"); }}>WhatsApp</button>
+                    <button className="text-[11px] font-medium text-indigo-700 hover:underline" title="Send the same link by SMS — for candidates who do not use WhatsApp"
+                      onClick={(e) => { e.stopPropagation(); sendSidhLink(r, "sms"); }}>SMS</button>
                     <button className="text-[11px] font-medium text-green-700 hover:underline" title="Mark as registered on the SIDH portal"
                       onClick={(e) => { e.stopPropagation(); markSidhRegistered(r); }}>✓ Reg.</button>
                   </>
@@ -244,6 +268,11 @@ function CandidatesInner() {
             </Field>
             <Field label="Last govt training (if any)"><input type="date" className={inputCls} value={form.last_training_date ?? ""} onChange={(e) => set("last_training_date", e.target.value)} /></Field>
           </div>
+          {/* 2026-08-12: the portal attendance export keys on this ID — filling it in makes every
+              future import match this candidate automatically instead of falling back to the name. */}
+          <Field label="Portal Candidate ID (from the government portal, e.g. CAN_40918461)">
+            <input className={inputCls} placeholder="CAN_…" value={form.sidh_candidate_id ?? ""} onChange={(e) => set("sidh_candidate_id", e.target.value)} />
+          </Field>
           {/* 2026-08-11: "कौन से program में interested… कौन-कौन सी location में" — for fast shortlisting later */}
           <div className="grid grid-cols-2 gap-3">
             <Field label="Interested programs (Ctrl-click for many)">

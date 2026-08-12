@@ -18,7 +18,7 @@ export const { GET, POST } = collectionRoutes({
       return safe;
     });
   },
-  fields: ["name", "phone", "email", "skills", "home_location", "status", "available_from", "day_rate", "incentive_note", "max_concurrent_batches", "active", "pipeline_status", "tr_id", "capable_locations", "programs_applied", "compensation_type", "compensation_fixed"],
+  fields: ["name", "phone", "email", "skills", "home_location", "status", "available_from", "day_rate", "incentive_note", "max_concurrent_batches", "active", "pipeline_status", "tr_id", "capable_locations", "programs_applied", "compensation_type", "compensation_fixed", "govt_candidate_id"],
   searchFields: ["name", "phone", "email"],
   writeRoles: ["Admin", "Operations"],
   permission: "trainers.manage", // 2026-08-11 togglable right (writeRoles = fallback only)

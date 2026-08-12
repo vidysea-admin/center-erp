@@ -119,6 +119,7 @@ const TrainerSchema = new Schema({
   // Ready to Train so nothing operational changes for them.
   pipeline_status: { type: String, enum: TRAINER_PIPELINE, default: "Ready to Train" },
   tr_id: String, // NSDC TR ID, assigned after TOT certification
+  govt_candidate_id: String, // portal "Candidate ID" (CAN_…) — trainers appear on the attendance export too
   user: oid("User"), // linked login (2026-08-11: trainers sign up and get approved)
   capable_locations: [{ type: Schema.Types.ObjectId, ref: "Location" }], // "कहां-कहां training ले सकता है" — 1, 2 or 10
   programs_applied: [{ type: Schema.Types.ObjectId, ref: "Program" }],
@@ -166,6 +167,9 @@ const CandidateSchema = new Schema({
   sidh_status: { type: String, enum: SIDH_STATUS, default: "Not Registered" },
   sidh_link_sent_at: Date,
   sidh_registered_on: Date,
+  // Portal "Candidate ID" (CAN_40918461). The government attendance export keys on this, so it
+  // is the only reliable join — names repeat within a centre.
+  sidh_candidate_id: { type: String, default: null },
   lifecycle_status: { type: String, enum: LIFECYCLE_STATUS, required: true, default: "Unassigned" },
   created_by: oid("User"),
 }, { timestamps: true });
@@ -235,6 +239,56 @@ const DailyLogSchema = new Schema({
   entered_at: { type: Date, required: true, default: () => new Date() },
 }, { timestamps: true });
 DailyLogSchema.index({ batch: 1, log_date: 1 }, { unique: true });
+
+// ---------- Government portal attendance (2026-08-12) ----------
+// The portal exports a cumulative per-person summary, not a day-wise register, so it cannot be
+// folded into DailyLog.govt_present (which is per day). It is kept as its own immutable import
+// record: the file as received, plus what each row matched to and how far it diverges from the
+// centre's own logs. Re-importing a newer file creates a NEW import — history is never rewritten,
+// because the client contract is settled against whatever the portal said on a given date.
+export const GOVT_MATCH_STATUS = ["Matched", "Ambiguous", "Unmatched"] as const;
+const GovtAttendanceImportSchema = new Schema({
+  location: oid("Location"),
+  batch: oid("Batch"),          // optional: an import can cover a whole centre
+  file_name: String,
+  org_name: String,
+  tc_id: String,
+  period_label: String,         // e.g. "till 11 Aug" — operator-supplied, the portal does not carry it
+  row_count: { type: Number, default: 0 },
+  matched_count: { type: Number, default: 0 },
+  unmatched_count: { type: Number, default: 0 },
+  ambiguous_count: { type: Number, default: 0 },
+  variance_count: { type: Number, default: 0 }, // rows where portal days ≠ our logged days
+  imported_by: oid("User"),
+  imported_at: { type: Date, default: () => new Date() },
+}, { timestamps: true });
+
+const GovtAttendanceRowSchema = new Schema({
+  import: oid("GovtAttendanceImport", true),
+  location: oid("Location"),
+  batch: oid("Batch"),
+  candidate: oid("Candidate"),
+  trainer: oid("Trainer"),
+  batch_member: oid("BatchMember"),
+  // as received from the portal
+  sl_no: Number,
+  org_name: String, tc_id: String, attendance_id: String,
+  name: String,
+  govt_candidate_id: String,
+  candidate_type: String, designation: String,
+  total_working_days: Number,
+  total_days_present: Number,
+  total_hours_minutes: Number, total_hours_raw: String,
+  average_per_day_raw: String,
+  not_closed: Number,
+  // reconciliation
+  match_status: { type: String, enum: GOVT_MATCH_STATUS, default: "Unmatched" },
+  match_by: String, match_note: String,
+  internal_days_present: { type: Number, default: null },
+  variance_days: { type: Number, default: null },
+}, { timestamps: true });
+GovtAttendanceRowSchema.index({ import: 1 });
+GovtAttendanceRowSchema.index({ candidate: 1, createdAt: -1 });
 
 // ---------- Closure ----------
 const ClosureSchema = new Schema({
@@ -533,6 +587,23 @@ const DefaultsSchema = new Schema({
   lead_trainer_found_days: { type: Number, default: 20 },
   min_daily_evidence: { type: Number, default: 2 },
   sidh_url: { type: String, default: "https://www.skillindiadigital.gov.in/" },
+  // Scheme timing guidelines, confirmed by Manish 2026-08-12: the training day runs 9 to 6; a
+  // session may be up to 4 hours; two 4-hour batches a day is the sanctioned pattern (three
+  // 3-hour batches was asked for and refused); no minimum break is prescribed.
+  day_start_time: { type: String, default: "09:00" },
+  day_end_time: { type: String, default: "18:00" },
+  max_session_hours: { type: Number, default: 4 },
+  max_batches_per_day: { type: Number, default: 2 },
+  // Client-contract counting rules, confirmed by Manish 2026-08-12.
+  // "Appeared" is NOT reduced by absentees — the client counts everyone who reached assessment
+  // stage. Kept as a toggle because it is a contract term, not a scheme rule, and the next
+  // client may well count the other way.
+  absent_counts_as_appeared: { type: Boolean, default: true },
+  // A candidate who dropped out is not billable even if they passed.
+  dropped_pass_is_billable: { type: Boolean, default: false },
+  // Evidence uploads: 25 MB was too small for the twice-daily videos. Configurable so the
+  // ceiling can be tuned against the server's disk without a deploy.
+  max_upload_mb: { type: Number, default: 100 },
 });
 
 export type Id = Types.ObjectId;
@@ -548,6 +619,8 @@ export const Candidate = models.Candidate || model("Candidate", CandidateSchema)
 export const Batch = models.Batch || model("Batch", BatchSchema);
 export const BatchMember = models.BatchMember || model("BatchMember", BatchMemberSchema);
 export const DailyLog = models.DailyLog || model("DailyLog", DailyLogSchema);
+export const GovtAttendanceImport = models.GovtAttendanceImport || model("GovtAttendanceImport", GovtAttendanceImportSchema);
+export const GovtAttendanceRow = models.GovtAttendanceRow || model("GovtAttendanceRow", GovtAttendanceRowSchema);
 export const Closure = models.Closure || model("Closure", ClosureSchema);
 export const CandidateResult = models.CandidateResult || model("CandidateResult", CandidateResultSchema);
 export const Invoice = models.Invoice || model("Invoice", InvoiceSchema);

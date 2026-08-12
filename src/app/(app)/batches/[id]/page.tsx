@@ -6,6 +6,7 @@ import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, HealthBanner, NameCel
 import { Activity } from "@/components/activity";
 import { flushQueue, getQueue, uploadWithRetry } from "@/lib/upload";
 import { BASE_PATH } from "@/lib/base-path";
+import { bulkSmsCsv, smsLink, waLink } from "@/lib/messaging";
 
 const TABS = ["Overview", "Candidates", "Enrollment", "Daily Execution", "Closure", "Feedback", "Costs", "Activity"];
 
@@ -868,22 +869,34 @@ function FeedbackTab({ batchId, setError }: any) {
         actions={<Btn small kind="ghost" disabled={busy} onClick={generateLinks}>Get feedback links</Btn>}>
         {links && (
           <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm">
-            <div className="mb-2 font-medium text-blue-800">One link per candidate — send on WhatsApp:</div>
+            {/* 2026-08-12 (Manish): SMS alongside WhatsApp — rural candidates are not reliably on WhatsApp. */}
+            <div className="mb-2 font-medium text-blue-800">One link per candidate — send on WhatsApp or SMS:</div>
             <ul className="max-h-56 space-y-1 overflow-y-auto text-xs">
               {links.map((t: any) => {
                 const name = t.batch_member?.candidate?.name ?? "?";
-                const phone = String(t.batch_member?.candidate?.phone ?? "").replace(/\D/g, "").slice(-10);
+                const phone = t.batch_member?.candidate?.phone;
                 const url = linkFor(t);
-                const wa = `https://wa.me/91${phone}?text=${encodeURIComponent(`Namaste ${name}! Please share your training feedback: ${url}`)}`;
+                const msg = `Namaste ${name}! Please share your training feedback: ${url}`;
+                const wa = waLink(phone, msg), sms = smsLink(phone, msg);
                 return (
                   <li key={t._id ?? t.token} className="flex items-center gap-2">
                     <span className="font-medium">{name}</span>
                     <button className="text-blue-700 hover:underline" onClick={() => navigator.clipboard.writeText(url)}>copy link</button>
-                    <a className="text-green-700 hover:underline" href={wa} target="_blank" rel="noreferrer">WhatsApp</a>
+                    {wa && <a className="text-green-700 hover:underline" href={wa} target="_blank" rel="noreferrer">WhatsApp</a>}
+                    {sms && <a className="text-indigo-700 hover:underline" href={sms}>SMS</a>}
+                    {!wa && <span className="text-gray-400">no mobile number</span>}
                   </li>
                 );
               })}
             </ul>
+            <button className="mt-2 text-xs font-medium text-indigo-700 hover:underline"
+              onClick={() => {
+                const targets = links.map((t: any) => ({ name: t.batch_member?.candidate?.name, phone: t.batch_member?.candidate?.phone, url: linkFor(t) }));
+                const csv = bulkSmsCsv(targets, (t: any) => `Namaste ${t.name}! Please share your training feedback: ${t.url}`);
+                const a = document.createElement("a");
+                a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+                a.download = "sms-feedback-links.csv"; a.click();
+              }}>Download bulk SMS file</button>
           </div>
         )}
         <DataTable rows={data?.items ?? []}

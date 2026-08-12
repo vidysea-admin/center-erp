@@ -8,10 +8,13 @@ await mongoose.connect(process.env.MONGODB_URL, { dbName: process.env.MONGODB_DB
 const db = mongoose.connection.db;
 const ids = (docs) => docs.map((d) => d._id);
 
-const testLocs = await db.collection("locations").find({ name: { $regex: "^(Test Location|Sync Loc|Gate Location)" } }).toArray();
+// e2e-govt.mjs stamps every name it creates as "G<6 digits> …" so its runs cannot collide with
+// each other; the same prefix is what makes them findable here.
+const GOVT = "G\\d{6} ";
+const testLocs = await db.collection("locations").find({ name: { $regex: `^(Test Location|Sync Loc|Gate Location|${GOVT})` } }).toArray();
 const testProgs = await db.collection("programs").find({ name: { $regex: "^(Test Program|Sync Prog)" } }).toArray();
-const testTrainers = await db.collection("trainers").find({ name: { $regex: "^(Trainer \\d|SyncTrainer|Pipeline Trainer)" } }).toArray();
-const testCands = await db.collection("candidates").find({ $or: [{ name: { $regex: "^(Cand |Cand4|SyncCand|Cap |Dup [AB] |R[0-9] |Old Cand|Fresh Cand|Cooldown Cand|SelfReg Cand)" } }, { location: { $in: ids(testLocs) } }] }).toArray();
+const testTrainers = await db.collection("trainers").find({ name: { $regex: `^(Trainer \\d|SyncTrainer|Pipeline Trainer|${GOVT})` } }).toArray();
+const testCands = await db.collection("candidates").find({ $or: [{ name: { $regex: `^(Cand |Cand4|SyncCand|Cap |Dup [AB] |R[0-9] |Old Cand|Fresh Cand|Cooldown Cand|SelfReg Cand|${GOVT})` } }, { location: { $in: ids(testLocs) } }] }).toArray();
 const testBatches = await db.collection("batches").find({ $or: [{ location: { $in: ids(testLocs) } }, { program: { $in: ids(testProgs) } }] }).toArray();
 // Capture roster ids BEFORE members are deleted — feedback tokens hang off them.
 const testMembers = await db.collection("batchmembers").find({ batch: { $in: ids(testBatches) } }).toArray();
@@ -19,6 +22,10 @@ const testMembers = await db.collection("batchmembers").find({ batch: { $in: ids
 const r = {};
 r.batchmembers = (await db.collection("batchmembers").deleteMany({ $or: [{ batch: { $in: ids(testBatches) } }, { candidate: { $in: ids(testCands) } }] })).deletedCount;
 r.dailylogs = (await db.collection("dailylogs").deleteMany({ batch: { $in: ids(testBatches) } })).deletedCount;
+// Government portal attendance (2026-08-12): rows first, then the import headers they hang off.
+const testGovtImports = await db.collection("govtattendanceimports").find({ location: { $in: ids(testLocs) } }).toArray();
+r.govtattendancerows = (await db.collection("govtattendancerows").deleteMany({ import: { $in: ids(testGovtImports) } })).deletedCount;
+r.govtattendanceimports = (await db.collection("govtattendanceimports").deleteMany({ _id: { $in: ids(testGovtImports) } })).deletedCount;
 r.closures = (await db.collection("closures").deleteMany({ batch: { $in: ids(testBatches) } })).deletedCount;
 r.candidateresults = (await db.collection("candidateresults").deleteMany({ $or: [{ batch: { $in: ids(testBatches) } }, { candidate: { $in: ids(testCands) } }] })).deletedCount;
 r.invoices = (await db.collection("invoices").deleteMany({ batch: { $in: ids(testBatches) } })).deletedCount;
@@ -39,6 +46,16 @@ r.meetingnotes = (await db.collection("meetingnotes").deleteMany({ location: { $
 r.publictokens = (await db.collection("publictokens").deleteMany({ $or: [{ location: { $in: ids(testLocs) } }, { batch_member: { $in: ids(testMembers) } }] })).deletedCount;
 r.feedbacks = (await db.collection("feedbacks").deleteMany({ batch: { $in: ids(testBatches) } })).deletedCount;
 r.syncsources = (await db.collection("syncsources").deleteMany({ _id: { $in: ids(testSyncSources) } })).deletedCount;
+// Alerts raised for test entities. Left behind they pile up in the inbox, and because the list
+// is capped at 100 and sorted severity-first they push real low-severity alerts out of reach.
+r.notifications = (await db.collection("notifications").deleteMany({
+  $or: [
+    { location: { $in: ids(testLocs) } },
+    { entity: "GovtAttendanceImport", entity_id: { $in: ids(testGovtImports) } },
+    { entity: "Batch", entity_id: { $in: ids(testBatches) } },
+    { entity: "TrainerRequest", location: { $in: ids(testLocs) } },
+  ],
+})).deletedCount;
 r.locations = (await db.collection("locations").deleteMany({ _id: { $in: ids(testLocs) } })).deletedCount;
 r.programs = (await db.collection("programs").deleteMany({ _id: { $in: ids(testProgs) } })).deletedCount;
 
