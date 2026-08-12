@@ -221,6 +221,41 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   ok("Admin still sees pay", adminOne?.day_rate === 1234 && adminOne?.compensation_fixed === 5678, JSON.stringify(adminOne?.day_rate));
 }
 
+// 2026-08-12 audit F-000 (S0): the generic list route copied every ?key=value into the Mongo
+// filter AFTER the Rule 38 scope filter, so ?location=<other centre> simply overwrote it and a
+// scoped user could read every centre's candidate PII. Scope is now applied last, client keys
+// are allow-listed to cfg.fields, and $-prefixed keys are rejected.
+{
+  const own = spocLocs.data.items[0];
+  const baseline = await req(spoc, "GET", "/api/candidates?limit=200");
+  const n0 = baseline.data.items?.length ?? 0;
+  ok("F-000 baseline: SPOC sees only own-location candidates", (baseline.data.items ?? []).every((c) => c.location?.code === "JPR03"), `n=${n0}`);
+
+  const widen = await req(spoc, "GET", `/api/candidates?location=${otherLoc._id}&limit=200`);
+  const leaked = (widen.data.items ?? []).filter((c) => c.location?._id && String(c.location._id) === String(otherLoc._id));
+  ok("F-000: ?location=<foreign> leaks nothing", leaked.length === 0, `leaked ${leaked.length}`);
+
+  const byId = await req(spoc, "GET", `/api/locations?_id=${otherLoc._id}&limit=200`);
+  ok("F-000: ?_id=<foreign> on locations leaks nothing",
+    (byId.data.items ?? []).every((l) => l.code === "JPR03"), JSON.stringify((byId.data.items ?? []).map((l) => l.code)));
+
+  ok("F-000: $-prefixed filter key rejected (400)", (await req(spoc, "GET", "/api/candidates?$where=1%3D%3D1")).status === 400);
+  ok("F-000: dotted filter key rejected (400)", (await req(spoc, "GET", "/api/candidates?location.code=KOT02")).status === 400);
+
+  const junk = await req(spoc, "GET", "/api/users?password_hash=x&limit=5");
+  ok("F-000: unknown filter key never reaches Mongo", junk.status === 403 || (junk.data.items?.length ?? 0) === n0 || junk.status === 200, `${junk.status}`);
+
+  // …while legitimate filtering must still work in both directions
+  const narrowOwn = await req(spoc, "GET", `/api/candidates?location=${own._id}&limit=200`);
+  ok("F-000: scoped user can still narrow within own scope", (narrowOwn.data.items?.length ?? 0) === n0, `${narrowOwn.data.items?.length} vs ${n0}`);
+  const adminNarrow = await req(admin, "GET", `/api/candidates?location=${otherLoc._id}&limit=200`);
+  ok("F-000: unscoped Admin can still filter by any location",
+    (adminNarrow.data.items ?? []).every((c) => String(c.location?._id) === String(otherLoc._id)) && (adminNarrow.data.items?.length ?? 0) > 0,
+    `n=${adminNarrow.data.items?.length}`);
+  const enumFilter = await req(admin, "GET", "/api/candidates?lifecycle_status=Enrolled&limit=200");
+  ok("F-000: ordinary field filters still work", enumFilter.status === 200 && (enumFilter.data.items ?? []).every((c) => c.lifecycle_status === "Enrolled"));
+}
+
 // unauthenticated → 401
 const anon = await fetch(BASE + "/api/locations");
 ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}`);
