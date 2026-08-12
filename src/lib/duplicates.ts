@@ -20,7 +20,10 @@ export type DuplicateHit = {
 };
 
 // Finds existing candidates that look like `input`. Returns [] when nothing matches.
-export async function findDuplicateCandidates(input: { name?: string; phone?: string; dob?: string | Date }, excludeId?: string): Promise<DuplicateHit[]> {
+// `locationScope` (2026-08-12 audit, auth S2-12): when the caller is a scoped user, the probe
+// must only ever answer about their own centres. Constrained in the query rather than filtered
+// afterwards — the returned hit carries a location NAME, so a post-filter cannot be trusted.
+export async function findDuplicateCandidates(input: { name?: string; phone?: string; dob?: string | Date }, excludeId?: string, locationScope?: string[]): Promise<DuplicateHit[]> {
   const phone = normalizePhone(input.phone);
   const or: Record<string, unknown>[] = [];
   // 7 digits, not 10: field data carries landlines and mistyped numbers, and a near-match
@@ -34,7 +37,11 @@ export async function findDuplicateCandidates(input: { name?: string; phone?: st
   }
   if (!or.length) return [];
 
-  const found = await Candidate.find({ $or: or, ...(excludeId ? { _id: { $ne: excludeId } } : {}) })
+  const found = await Candidate.find({
+    $or: or,
+    ...(excludeId ? { _id: { $ne: excludeId } } : {}),
+    ...(locationScope?.length ? { location: { $in: locationScope } } : {}),
+  })
     .select("name phone alt_phone dob location lifecycle_status")
     .populate("location", "name code")
     .limit(5)

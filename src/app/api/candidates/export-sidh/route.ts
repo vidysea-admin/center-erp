@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, locationFilter, assertLocationInScope } from "@/lib/authz";
+import { requirePerm } from "@/lib/permissions";
 import { Candidate } from "@/models";
 
 // Export candidates in the SIDH assisted-registration CRM's sheet contract (the D:\crm
@@ -11,6 +12,10 @@ import { Candidate } from "@/models";
 export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
+  // 2026-08-12 audit (auth S3-7): this walks out with up to 2000 rows of name + mobile +
+  // district as a spreadsheet, gated by nothing but a session — so a read-only Trainer could
+  // take the lot. Every other candidate surface answers to candidates.manage; so does this.
+  await requirePerm(user, "candidates.manage");
   const sp = req.nextUrl.searchParams;
   const filter: Record<string, unknown> = { ...locationFilter(user) };
   const loc = sp.get("location");

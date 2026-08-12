@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, HttpError } from "@/lib/authz";
+import { rateLimit, clientKey } from "@/lib/rate-limit";
 import { Candidate, EDUCATION_LEVEL, Program, PublicToken } from "@/models";
 import { findDuplicateCandidates } from "@/lib/duplicates";
 import { audit } from "@/lib/audit";
@@ -8,15 +9,6 @@ import { audit } from "@/lib/audit";
 // Public candidate self-registration (2026-08-11: "मैंने आपको एक link भेज दिया, उस link पे
 // आप अपनी detail भर दो"). No session — the per-location token in the URL is the credential.
 // Guard rails: token must be active, honeypot field must be empty, per-IP rate limit.
-
-const hits = new Map<string, { count: number; windowStart: number }>();
-function rateLimit(ip: string, max = 10, windowMs = 10 * 60_000) {
-  const now = Date.now();
-  const h = hits.get(ip);
-  if (!h || now - h.windowStart > windowMs) { hits.set(ip, { count: 1, windowStart: now }); return; }
-  h.count++;
-  if (h.count > max) throw new HttpError(429, "Too many submissions — please try again later.");
-}
 
 async function loadToken(token: string) {
   const t = await PublicToken.findOne({ token, purpose: "register", active: true })
@@ -46,7 +38,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   await dbConnect();
   const { token } = await ctx.params;
   const t = await loadToken(token);
-  rateLimit(req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "local");
+  rateLimit(clientKey(req), 10, 10 * 60_000); // audit auth S2-14: right-most trusted hop
   const body = await req.json();
   if (body.website) throw new HttpError(400, "Invalid submission."); // honeypot — bots fill every field
 

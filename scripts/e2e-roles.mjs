@@ -321,6 +321,63 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   ok("auth S1-4: reactivating restores it, still without a re-login", afterOn.status === 200, `${afterOn.status}`);
 }
 
+// 2026-08-12 audit — the access/disclosure S2/S3 cluster
+{
+  const jprId = spocLocs.data.items[0]._id;
+
+  // auth S3-5: the approvals queue carries closure reasons and invoice amounts in its payload
+  ok("auth S3-5: approvals queue needs the approvals.decide right", (await req(enroll, "GET", "/api/approvals")).status === 403);
+  ok("auth S3-5: …and an Admin still reads it", (await req(admin, "GET", "/api/approvals")).status === 200);
+
+  // auth S3-7 + S2-12: a 2000-row name+mobile+district export, and a duplicate oracle over every
+  // centre, were both gated by nothing but "is signed in" — so a right that can be revoked
+  // everywhere else could not be revoked here. Prove the gate by taking the right away.
+  {
+    const enrollPerms = (await req(admin, "GET", "/api/permissions")).data.roles.find((r) => r.role === "Enrollment")?.permissions ?? [];
+    ok("auth S3-7/S2-12: both are open while the right is held",
+      [200, 404].includes((await req(enroll, "GET", "/api/candidates/export-sidh")).status)
+      && (await req(enroll, "POST", "/api/candidates/check-duplicate", { phone: "7700000001" })).status === 200);
+    await req(admin, "PUT", "/api/permissions", { role: "Enrollment", permissions: enrollPerms.filter((p) => p !== "candidates.manage") });
+    await new Promise((r) => setTimeout(r, 5200)); // permission cache TTL
+    ok("auth S3-7: revoking candidates.manage closes the bulk SIDH export",
+      (await req(enroll, "GET", "/api/candidates/export-sidh")).status === 403);
+    ok("auth S2-12: …and closes the duplicate probe",
+      (await req(enroll, "POST", "/api/candidates/check-duplicate", { phone: "7700000001" })).status === 403);
+    await req(admin, "PUT", "/api/permissions", { role: "Enrollment", permissions: enrollPerms });
+    await new Promise((r) => setTimeout(r, 5200));
+  }
+  const scopedProbe = await req(spoc, "POST", "/api/candidates/check-duplicate", { phone: "7700000001" });
+  ok("auth S2-12: a scoped user only ever learns about their own centres",
+    scopedProbe.status === 200 && (scopedProbe.data.duplicates ?? []).every((d) => !d.location || String(d.location).includes("Jaipur")),
+    JSON.stringify((scopedProbe.data.duplicates ?? []).map((d) => d.location)));
+
+  // auth S3-6: revoking locations.manage must also stop room writes
+  const rooms = (await req(spoc, "GET", `/api/locations/${jprId}/rooms`)).data.items ?? [];
+  if (rooms[0]) {
+    ok("auth S3-6: view-only cannot edit a room", (await req(principal, "PATCH", `/api/rooms/${rooms[0]._id}`, { capacity: 99 })).status === 403);
+  }
+
+  // auth S2-13: editing a log is where the government figure is set — same right as creating one
+  const ownB = spocBatches.data.items.find((b) => ["Active", "Closing"].includes(b.status));
+  if (ownB) {
+    const lg = (await req(spoc, "GET", `/api/batches/${ownB._id}/logs`)).data.items?.[0];
+    if (lg) ok("auth S2-13: view-only cannot edit a daily log", (await req(principal, "PATCH", `/api/logs/${lg._id}`, { note: "nope" })).status === 403);
+  }
+
+  // auth S2-15: a 500 must not hand the client the raw exception text
+  const boom = await req(admin, "POST", "/api/candidates", { name: "x", phone: "1", location: "not-an-objectid", program: "also-not" });
+  ok("auth S2-15: an internal error does not leak driver/schema detail",
+    boom.status < 500 || !/Cast to ObjectId|mongo|ValidationError|E11000|at .*\.ts:/i.test(JSON.stringify(boom.data)),
+    `${boom.status} ${JSON.stringify(boom.data).slice(0, 120)}`);
+
+  // auth S2-16: signup must not confirm which addresses already have an account
+  const dup = await fetch(BASE + "/api/public/signup", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "Probe", email: "admin@vidysea.com", password: "Test@12345", role: "Trainer" }),
+  });
+  ok("auth S2-16: signup does not reveal that an address is already registered", dup.status !== 409, `got ${dup.status}`);
+}
+
 // unauthenticated → 401
 const anon = await fetch(BASE + "/api/locations");
 ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}`);

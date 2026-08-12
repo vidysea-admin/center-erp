@@ -607,7 +607,13 @@ const dupSignup = await fetch(BASE + "/api/public/signup", {
   method: "POST", headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ name: "Dup", email: signupEmail, password: "Test@12345", role: "Trainer" }),
 });
-ok("duplicate email signup → 409", dupSignup.status === 409, `status=${dupSignup.status}`);
+// UPDATED 2026-08-12 (audit auth S2-16). A distinct 409 on an existing address made this an
+// unauthenticated oracle for "does this person have an account here". A repeat signup is now
+// accepted with the same 201 as a fresh one and creates nothing — the real user's experience is
+// identical (both just wait for an Admin), and no second pending row appears.
+ok("auth S2-16: a repeat signup does not reveal the address is taken", dupSignup.status === 201, `status=${dupSignup.status}`);
+const dupUsers = (await req("GET", "/api/users")).data.items.filter((u) => u.email === signupEmail);
+ok("auth S2-16: …and no second account is created", dupUsers.length === 1, `count=${dupUsers.length}`);
 // Queried by type: the inbox is capped at 100 and sorted severity-first, so scanning the whole
 // list makes this assertion depend on how much unrelated noise the database happens to hold.
 const adminNotifs = (await req("GET", "/api/notifications?status=all&type=signup_pending")).data.items ?? [];

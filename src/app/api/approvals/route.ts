@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireRole, isScoped, locationFilter } from "@/lib/authz";
+import { requirePerm } from "@/lib/permissions";
 import { ApprovalRequest, ApprovalRule } from "@/models";
 import { APPROVAL_ACTIONS } from "@/models";
 import { audit } from "@/lib/audit";
@@ -9,6 +10,11 @@ import { audit } from "@/lib/audit";
 export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
+  // 2026-08-12 audit (auth S3-5): requireUser() alone. Each request carries the replay
+  // `payload` — closure reasons, invoice amounts — so any signed-in user could read what the
+  // business was about to do and why. Deciding an approval is already gated; seeing the queue
+  // now is too.
+  await requirePerm(user, "approvals.decide");
   const status = req.nextUrl.searchParams.get("status") ?? "Pending";
   const filter: Record<string, unknown> = status === "all" ? {} : { status };
   if (isScoped(user)) Object.assign(filter, locationFilter(user));
