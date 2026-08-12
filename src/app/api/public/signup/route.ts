@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, HttpError } from "@/lib/authz";
+import { rateLimit, clientKey } from "@/lib/rate-limit";
 import { Location, Notification, User } from "@/models";
 import { audit } from "@/lib/audit";
 
@@ -9,15 +10,6 @@ import { audit } from "@/lib/audit";
 // sign up, choose a role, and the account sits PENDING until an Admin approves it. Nothing
 // is accessible before approval. Admin is deliberately not offered.
 const SIGNUP_ROLES = ["Trainer", "Location", "Enrollment", "Operations"] as const;
-
-const hits = new Map<string, { count: number; windowStart: number }>();
-function rateLimit(ip: string, max = 10, windowMs = 15 * 60_000) {
-  const now = Date.now();
-  const h = hits.get(ip);
-  if (!h || now - h.windowStart > windowMs) { hits.set(ip, { count: 1, windowStart: now }); return; }
-  h.count++;
-  if (h.count > max) throw new HttpError(429, "Too many signups — please try again later.");
-}
 
 // GET → what the form needs (role choices + locations for SPOC/Trainer preference)
 export const GET = apiHandler(async () => {
@@ -28,7 +20,7 @@ export const GET = apiHandler(async () => {
 
 export const POST = apiHandler(async (req: NextRequest) => {
   await dbConnect();
-  rateLimit(req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "local");
+  rateLimit(clientKey(req), 10, 15 * 60_000); // audit auth S2-14: right-most trusted hop
   const body = await req.json();
   if (body.website) throw new HttpError(400, "Invalid submission."); // honeypot
 
@@ -43,7 +35,12 @@ export const POST = apiHandler(async (req: NextRequest) => {
   if (!SIGNUP_ROLES.includes(role as any)) throw new HttpError(400, "Choose a valid role.");
 
   const existing = await User.findOne({ email }).select("_id").lean();
-  if (existing) throw new HttpError(409, "An account with this email already exists — try logging in.");
+  // 2026-08-12 audit (auth S2-16): a distinct 409 on an existing address turned this into an
+  // unauthenticated oracle for "does this person have an account here". The request is now
+  // accepted either way and nothing is created for an address already in use — the honest
+  // outcome for the real user is identical, because a genuine signup also just waits for an
+  // Admin. An Admin sees only the one pending row, so this cannot be used to spam the queue.
+  if (existing) return NextResponse.json({ ok: true, pending: true }, { status: 201 });
 
   const doc = await User.create({
     name, email, phone,

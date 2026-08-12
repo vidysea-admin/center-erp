@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { requirePerm } from "@/lib/permissions";
 import { DailyLog } from "@/models";
 import { assertBatchInScope, canEditDailyLog, validateDailyLog } from "@/lib/rules";
 import { auditDiff } from "@/lib/audit";
@@ -10,6 +11,10 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   await dbConnect();
   const user = await requireUser();
   requireEdit(user);
+  // 2026-08-12 audit (auth S2-13): creating a daily log requires batches.daily_log, but
+  // editing one required nothing — and an edit is where the government attendance figure
+  // actually gets set. Revoking the right left the back door open.
+  await requirePerm(user, "batches.daily_log");
   const { id } = await ctx.params;
   const log = await DailyLog.findById(id);
   if (!log) throw new HttpError(404, "Log not found");

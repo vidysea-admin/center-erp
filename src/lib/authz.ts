@@ -112,8 +112,14 @@ export function apiHandler<T extends unknown[]>(fn: (...args: T) => Promise<Resp
           { status: 409 },
         );
       }
+      // 2026-08-12 audit (auth S2-15): the raw exception text used to go straight to the client.
+      // A Mongoose ValidationError names internal field paths and echoes the offending value, a
+      // connection failure prints the database host and port, and a cast error reveals the schema
+      // — none of which a browser needs, and all of which help someone map the system. The detail
+      // stays in the server log where it is useful; the client gets a stable, unhelpful-to-an-
+      // attacker message. HttpError above is deliberate and human-written, so it still passes.
       console.error(e);
-      return NextResponse.json({ error: msg }, { status: 500 });
+      return NextResponse.json({ error: "Something went wrong on our side. Please try again." }, { status: 500 });
     }
   };
 }
