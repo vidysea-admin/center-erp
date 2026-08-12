@@ -290,6 +290,37 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   ok("auth S1-5: Admin still reads any audit trail", (await req(admin, "GET", `/api/audit/Batch/${allBatches.data.items[0]._id}`)).status === 200);
 }
 
+// 2026-08-12 audit (auth S1-4): role, scope, can_edit and deactivation were frozen into the JWT
+// at sign-in with a 30-day life, so an Admin could deactivate or demote someone and they carried
+// on with their old powers until the token expired. The identity is now re-read from the database
+// behind the same short TTL the permission cache uses.
+{
+  const target = (await req(admin, "GET", "/api/users")).data.items.find((u) => u.email === "enroll@vidysea.com");
+  const before = await req(enroll, "GET", "/api/home");
+  ok("auth S1-4: active account works before the change", before.status === 200, `${before.status}`);
+
+  // narrowing scope must bite without a re-login
+  const jprId = spocLocs.data.items[0]._id;
+  await req(admin, "PATCH", `/api/users/${target._id}`, { location_scope: [jprId] }, undefined);
+  await new Promise((r) => setTimeout(r, 5200));
+  const scoped = await req(enroll, "GET", "/api/locations?limit=200");
+  ok("auth S1-4: a narrowed scope applies to the live session",
+    (scoped.data.items ?? []).every((l) => l.code === "JPR03"), JSON.stringify((scoped.data.items ?? []).map((l) => l.code)));
+  await req(admin, "PATCH", `/api/users/${target._id}`, { location_scope: [] }, undefined);
+  await new Promise((r) => setTimeout(r, 5200));
+
+  // deactivation must end the session
+  await req(admin, "PATCH", `/api/users/${target._id}`, { active: false }, undefined);
+  await new Promise((r) => setTimeout(r, 5200));
+  const afterOff = await req(enroll, "GET", "/api/home");
+  ok("auth S1-4: deactivating an account ends its live session", afterOff.status === 401, `${afterOff.status}`);
+
+  await req(admin, "PATCH", `/api/users/${target._id}`, { active: true }, undefined);
+  await new Promise((r) => setTimeout(r, 5200));
+  const afterOn = await req(enroll, "GET", "/api/home");
+  ok("auth S1-4: reactivating restores it, still without a re-login", afterOn.status === 200, `${afterOn.status}`);
+}
+
 // unauthenticated → 401
 const anon = await fetch(BASE + "/api/locations");
 ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}`);
