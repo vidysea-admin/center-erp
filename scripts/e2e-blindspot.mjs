@@ -75,7 +75,12 @@ ok("contained slot (10–11 inside 9–13) blocked", b3.status === 409, `got ${b
 const bCap = await req(admin, "POST", "/api/batches", { location: loc2._id, program: prog._id, trainer: tr._id, planned_start: "2027-08-01", target_size: 3 });
 ok("booking outside capable_locations warns", bCap.status === 201 && String(bCap.data.warning ?? "").includes("not listed as able"), JSON.stringify(bCap.data.warning));
 const bCapOk = await req(admin, "POST", "/api/batches", { location: loc._id, program: prog._id, trainer: tr._id, planned_start: "2027-10-01", target_size: 3 });
-ok("booking at a capable location does not warn", bCapOk.status === 201 && !bCapOk.data.warning, JSON.stringify(bCapOk.data.warning));
+// 2026-08-12: assert on the capability warning specifically. A trainer now starts at "Applied"
+// (the real pipeline default), which legitimately raises its own not-yet-Certified warning —
+// that must not be read as a location-capability failure.
+ok("booking at a capable location does not warn about capability",
+  bCapOk.status === 201 && !String(bCapOk.data.warning ?? "").includes("not listed as able"),
+  JSON.stringify(bCapOk.data.warning));
 
 // ---- 5. Instant notification on trainer request (CEO: detail मनीष जी के पास) ----
 const req1 = (await req(admin, "POST", "/api/trainer-requests", { location: loc._id, program: prog._id, required_by_date: "2027-06-01" })).data.item;

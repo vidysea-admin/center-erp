@@ -7,7 +7,43 @@ export const ROOM_TYPE = ["Classroom", "Lab"] as const;
 export const TRAINER_STATUS = ["Available", "Assigned", "Unavailable"] as const;
 // 2026-08-11 meeting: "application pool से चालू होगा… ready to train वाला status आना चाहिए" —
 // the hiring journey, separate from the derived operational status above (Rule 12).
-export const TRAINER_PIPELINE = ["Applied", "Shortlisted", "TOT In Progress", "Ready to Train"] as const;
+//
+// 2026-08-12 (Manish, RPL walkthrough): the four placeholder stages were nowhere near the real
+// journey, which is a round-trip through an external body we do not control:
+//   "CV आयी different sources से → review → देख रहे हमारे इन तीन job role में किस में fit बैठ रहा
+//    है → documents मंगाये (आधार, PAN, photo, CV, educational qualification, CIPSA certificate) →
+//    industry + teaching experience → nomination form भरते हैं → ABPL team अपनी email से NSDC को
+//    submit करती है → approve होके आता है / profile में त्रुटि बतायी जाती है → correct करके वापस
+//    भेजते हैं → eligible होने पर ₹3250 payment → TOT → certified → TR ID"
+// "NSDC Rejected" is deliberately NOT terminal — the correct-and-resubmit loop is the common case,
+// and the 2026-08-12 audit found an S0 exactly where a rejected certificate had no way back.
+export const TRAINER_PIPELINE = [
+  "Applied",
+  "CV Reviewed",
+  "Shortlisted",
+  "Docs Pending",
+  "Docs Complete",
+  "Nomination Prepared",
+  "Submitted to NSDC",
+  "NSDC Approved",
+  "NSDC Rejected",
+  "Payment Done",
+  "TOT Scheduled",
+  "TOT In Progress",
+  "Certified",
+  "Dropped",
+] as const;
+
+// The documents Manish listed by name, plus the two experience certificates that are mandatory
+// for TVP eligibility on some job roles.
+export const TRAINER_DOC_TYPE = [
+  "Aadhaar", "PAN", "Photo", "CV", "Educational Qualification",
+  "CIPSA Certificate", "Industry Experience", "Teaching Experience", "Other",
+] as const;
+
+// The government schemes actually running, from the client's RPL workbook (2026-08-12).
+// Priority is the CEO's: "पहले हमें ABPL, HSL दूसरे priority पे है, तीसरे पे ये है".
+export const SCHEME = ["RPL-AVPL", "RPL-HSL", "PMKVY-BECIL", "DDU-GKY2.0", "DDUGKY 2.0 SPH"] as const;
 // CEO named four: "एक तो बैच वाइज पैसे देते हैं, एक किसी को मंथली देते हैं… एक तो हो गया
 // फिक्स, और एक होता है इंसेंटिव बेस्ड ऑन देयर परफॉरमेंस". Only two were selectable (2026-08-12).
 export const COMPENSATION_TYPE = ["Batch-wise", "Monthly", "Fixed", "Incentive-based"] as const;
@@ -54,6 +90,17 @@ const ProgramSchema = new Schema({
   requires_lab: { type: Boolean, default: false },
   trainer_skill: { type: String, required: true },
   completion_deadline_days: { type: Number, required: true, default: 90 },
+  // 2026-08-12 (Manish): a programme in this business is a JOB ROLE run under a SCHEME —
+  // "HSL हमेशा solar है… ABPL RPL जहाँ लिखा होगा समझिये drone or battery है". The client's
+  // workbook is one row per Institution × Scheme × Job role, so scheme belongs on the programme.
+  // Without it the same job role under two schemes is indistinguishable, and nothing can be
+  // reported or prioritised by scheme.
+  scheme: { type: String, enum: SCHEME },
+  qp_code: String,        // NSDC Qualification Pack, e.g. "ELE/Q4602"
+  nsqf_level: Number,
+  sector: String,
+  // "पहले हमें ABPL, HSL दूसरे priority पे है, तीसरे पे ये है" — lower number = worked first.
+  scheme_priority: { type: Number, default: 99 },
   // plan1.md resolution #2: operating days (0=Sun..6=Sat) so Sundays don't raise fake missing-log alerts
   operating_days: { type: [Number], default: [1, 2, 3, 4, 5, 6] },
   active: { type: Boolean, default: true },
@@ -65,6 +112,18 @@ const LocationSchema = new Schema({
   external_id: { type: String },
   name: { type: String, required: true },
   city: String, state: String, address: String,
+  // 2026-08-12: the fields the client's RPL workbook actually carries for a centre. Without the
+  // TC identity the ERP cannot say whether a centre is even able to enrol on the government
+  // portal — "उस location के TC ID और password से login करूँगा और student का enrollment शुरू
+  // कर दूँगा". tc_password is a live credential: it is masked for non-Admins exactly like the
+  // Sheet Watch column already is (see src/app/api/workbook-changes/route.ts).
+  district: String,
+  tc_id: String,
+  tc_password: String,
+  tc_status: String,              // free text from the sheet ("Approved", blank, …)
+  operating_partner: String,      // "Vidysea" / "Vidysea/RPTO" / "Vidysea/No Center"
+  cluster_head_name: String,
+  cluster_head_phone: String,
   approval_status: { type: String, enum: APPROVAL_STATUS, required: true, default: "Pending" },
   operational_status: { type: String, enum: OPERATIONAL_STATUS, required: true, default: "Not Started" },
   status_reason: String,
@@ -100,6 +159,17 @@ const LocationTargetSchema = new Schema({
   approved_target: { type: Number, required: true },
   allocated_target: Number,
   start_date: Date, end_date: Date,
+  // 2026-08-12: the client's sheet states how many trainers each centre×job-role needs
+  // ("trainer कितने per location required है"). Requirement is stored; how many are actually
+  // nominated or certified is DERIVED by counting Trainer rows, never stored — the two sheets
+  // already disagree with each other (nominated 23 vs 20, certified 18 vs 16), which is exactly
+  // what happens when a count is kept in more than one place.
+  trainers_required: Number,
+  // What the client's sheet CLAIMS, kept deliberately separate from what we compute, so a stale
+  // or wrong figure from them can never overwrite our own enrolment number.
+  enrolled_reported: Number,
+  pending_reported: Number,
+  reported_at: Date,
 }, { timestamps: true });
 LocationTargetSchema.index({ location: 1, program: 1 }, { unique: true });
 
@@ -122,7 +192,9 @@ const TrainerSchema = new Schema({
   status: { type: String, enum: TRAINER_STATUS, required: true, default: "Available" },
   // Hiring pipeline (2026-08-11). Existing trainers predate the pipeline — they default to
   // Ready to Train so nothing operational changes for them.
-  pipeline_status: { type: String, enum: TRAINER_PIPELINE, default: "Ready to Train" },
+  // Default is the START of the journey. It used to be the END ("Ready to Train") because the
+  // placeholder pipeline had no real intake; with the real stages a new trainer is an applicant.
+  pipeline_status: { type: String, enum: TRAINER_PIPELINE, default: "Applied" },
   tr_id: String, // NSDC TR ID, assigned after TOT certification
   govt_candidate_id: String, // portal "Candidate ID" (CAN_…) — trainers appear on the attendance export too
   user: oid("User"), // linked login (2026-08-11: trainers sign up and get approved)
@@ -135,7 +207,56 @@ const TrainerSchema = new Schema({
   compensation_fixed: Number, // the fixed component (per batch or per month, per compensation_type)
   max_concurrent_batches: { type: Number, required: true, default: 4 }, // 2026-08-11: "up to four batches का provision" (was RPL M5's 5)
   active: { type: Boolean, default: true },
+
+  // ---- 2026-08-12 (Manish): the hiring journey the ERP has to carry ----
+  // Which vacancy this person is being put up for. The client's sheet counts trainers per
+  // Institution × Scheme × Job role, so a nomination only means something against that pair.
+  nominated_for_location: oid("Location"),
+  nominated_for_program: oid("Program"),
+  source: String,                       // "CV आयी different sources से" — referral, portal, agency…
+  qualification: String,
+  industry_experience_years: Number,    // required for some job roles before TVP will take them
+  teaching_experience_years: Number,
+  // The NSDC round-trip. ABPL submit from their own email, so we hold dates and their verdict,
+  // not the submission itself: "approve होके आता है… profile में क्या त्रुटि है वो बताते हैं".
+  nomination_sent_on: Date,
+  nsdc_submitted_on: Date,
+  nsdc_result_on: Date,
+  nsdc_remarks: String,                 // why they were rejected — this is what gets corrected and resent
+  // "eligible हो जाता है तब उसको हम 3250 rupee payment करने के लिए दे देंगे और TOT कराने के लिए"
+  eligibility_payment_amount: { type: Number, default: 3250 },
+  paid_on: Date,
+  payment_reference: String,
+  tot_scheduled_on: Date,
+  tot_done_on: Date,
+  tot_certificate_no: String,
+  pipeline_note: String,
+  dropped_reason: String,               // required to reach the terminal "Dropped" state
 }, { timestamps: true });
+// 2026-08-12 audit: this schema declared NO indexes, so the same trainer could be created any
+// number of times and a TR ID could be duplicated across people. A TR ID is issued by NSDC and
+// is unique by definition; phone is how this team actually identifies a person.
+TrainerSchema.index({ phone: 1 }, { unique: true });
+TrainerSchema.index({ tr_id: 1 }, { unique: true, partialFilterExpression: { tr_id: { $type: "string" } } });
+
+// ---------- TrainerDocument (2026-08-12) ----------
+// "फिर उसके documents मंगाये — आधार, PAN, photo, CV, educational qualification, CIPSA certificate"
+// There was no attachment model anywhere in the system; file URLs were ad-hoc string fields on a
+// few other models. A trainer needs many documents, each separately verifiable, so this is a
+// collection rather than an array — one row can be re-uploaded or rejected without touching the
+// others, and the audit trail stays per-document.
+const TrainerDocumentSchema = new Schema({
+  trainer: oid("Trainer", true),
+  doc_type: { type: String, enum: TRAINER_DOC_TYPE, required: true },
+  file_url: { type: String, required: true },
+  original_name: String,
+  uploaded_by: oid("User"),
+  verified: { type: Boolean, default: false },
+  verified_by: oid("User"),
+  verified_at: Date,
+  note: String,
+}, { timestamps: true });
+TrainerDocumentSchema.index({ trainer: 1, doc_type: 1 });
 
 // ---------- TrainerRequest ----------
 const TrainerRequestSchema = new Schema({
@@ -205,6 +326,14 @@ const BatchSchema = new Schema({
   }],
   cancel_reason: String,
   created_by: oid("User"),
+  // 2026-08-12 (Manish): the batch is actually formed on the SIDH portal — "batch बन गया… अब मैं
+  // उस location के TC ID और password से login करूँगा और student का enrollment उस batch में शुरू
+  // कर दूँगा". Without the portal's own id there is no way to tie our row to theirs when an
+  // attendance export or a discrepancy comes back.
+  govt_batch_id: String,
+  // "हम अपनी safety के लिए ये सारे records अपने पास capture करके drive वाले folder में डालते हैं" —
+  // the evidence goes to the NSDC portal AND to a Drive folder kept in parallel.
+  drive_folder_url: String,
 }, { timestamps: true });
 
 // ---------- BatchMember (the roster) ----------
@@ -622,6 +751,7 @@ export const MeetingNote = models.MeetingNote || model("MeetingNote", MeetingNot
 export const LocationTarget = models.LocationTarget || model("LocationTarget", LocationTargetSchema);
 export const Room = models.Room || model("Room", RoomSchema);
 export const Trainer = models.Trainer || model("Trainer", TrainerSchema);
+export const TrainerDocument = models.TrainerDocument || model("TrainerDocument", TrainerDocumentSchema);
 export const TrainerRequest = models.TrainerRequest || model("TrainerRequest", TrainerRequestSchema);
 export const Candidate = models.Candidate || model("Candidate", CandidateSchema);
 export const Batch = models.Batch || model("Batch", BatchSchema);

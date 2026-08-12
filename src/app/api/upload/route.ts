@@ -10,7 +10,9 @@ import { getDefaults } from "@/lib/defaults";
 // 2026-08-12 (Manish): 25 MB was too small for the twice-daily evidence videos, so the ceiling
 // moved to Defaults.max_upload_mb (100 MB out of the box) and can be tuned against the server's
 // disk without a deploy. .mov/.3gp added — that is what the field phones actually record.
-const ALLOWED = new Set([".jpg", ".jpeg", ".png", ".webp", ".pdf", ".mp4", ".mov", ".3gp", ".xlsx", ".xls", ".csv"]);
+// 2026-08-12: .doc/.docx added — a trainer's industry and teaching experience certificates arrive
+// as Word files, and without these the mandatory-document gate could never be satisfied.
+const ALLOWED = new Set([".jpg", ".jpeg", ".png", ".webp", ".pdf", ".mp4", ".mov", ".3gp", ".xlsx", ".xls", ".csv", ".doc", ".docx"]);
 
 // POST multipart { file } → { url } (served from /uploads via next.config rewrite-free public dir)
 export const POST = apiHandler(async (req: NextRequest) => {

@@ -1,0 +1,33 @@
+import { NextRequest, NextResponse } from "next/server";
+import { dbConnect } from "@/lib/db";
+import { apiHandler, requireUser, requireEdit } from "@/lib/authz";
+import { requirePerm } from "@/lib/permissions";
+import { transitionTrainer } from "@/lib/rules";
+import { audit } from "@/lib/audit";
+
+// POST { target, reason?, remarks?, date?, payload? } — move a trainer along the hiring pipeline
+// (2026-08-12, Manish's RPL walkthrough). The guards live in transitionTrainer; this route is the
+// gate and the audit trail. A nomination, an NSDC verdict and a TR ID are all reportable facts,
+// so every move is written to the audit log with who did it.
+export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
+  await dbConnect();
+  const user = await requireUser();
+  requireEdit(user);
+  await requirePerm(user, "trainers.manage");
+  const { id } = await ctx.params;
+  const { target, reason, remarks, date, payload } = await req.json();
+
+  const before = target;
+  const t = await transitionTrainer(id, target, { reason, remarks, date, payload });
+
+  await audit({
+    entity: "Trainer",
+    entityId: t._id,
+    field: "pipeline_status",
+    newValue: before,
+    oldValue: undefined,
+    actor: user.id,
+  });
+
+  return NextResponse.json({ item: t });
+});

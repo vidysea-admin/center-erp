@@ -74,3 +74,5 @@ jobs:
         run: npm run test:blindspot
       - name: Government attendance
         run: npm run test:govt
+      - name: Trainer preparation pipeline
+        run: npm run test:trainer

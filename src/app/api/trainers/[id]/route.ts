@@ -4,7 +4,7 @@ import { hasPermission } from "@/lib/permissions";
 
 // Same pay-field masking as the list route (2026-08-12) — opening one trainer by id was
 // the obvious way around a list-only filter.
-const PAY_FIELDS = ["day_rate", "compensation_type", "compensation_fixed", "incentive_note"];
+const PAY_FIELDS = ["day_rate", "compensation_type", "compensation_fixed", "nominated_for_location", "nominated_for_program", "source", "qualification", "industry_experience_years", "teaching_experience_years", "nsdc_remarks", "eligibility_payment_amount", "payment_reference", "tot_certificate_no", "pipeline_note", "incentive_note"];
 
 export const { GET, PATCH } = itemRoutes({
   model: Trainer, entity: "Trainer", scopeField: null,

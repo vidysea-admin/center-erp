@@ -2,7 +2,8 @@
 // center-erp-data-model-rules.md §4. Rule numbers are cited inline.
 import { Types } from "mongoose";
 import {
-  Batch, BatchMember, Candidate, CandidateResult, Closure, DailyLog, Invoice, Location, Program, Room, Trainer,
+  Batch, BatchMember, Candidate, CandidateResult, Closure, DailyLog, Invoice, Location, LocationTarget,
+  Program, Room, Trainer, TrainerDocument,
 } from "@/models";
 import { auditDiff } from "@/lib/audit";
 import { getDefaults } from "@/lib/defaults";
@@ -222,8 +223,8 @@ export async function trainerBookingWarnings(trainerId: string, locationId?: unk
   const t = await Trainer.findById(trainerId).select("name pipeline_status capable_locations").lean<any>();
   if (!t) return [];
   const warnings: string[] = [];
-  if (t.pipeline_status && t.pipeline_status !== "Ready to Train") {
-    warnings.push(`Trainer ${t.name} is still "${t.pipeline_status}" — not yet Ready to Train.`);
+  if (t.pipeline_status && t.pipeline_status !== "Certified") {
+    warnings.push(`Trainer ${t.name} is still "${t.pipeline_status}" — not yet Certified, so they have no TR ID for the portal.`);
   }
   if (locationId && t.capable_locations?.length &&
       !t.capable_locations.map(String).includes(String(locationId))) {
@@ -1156,4 +1157,189 @@ export async function nextBatchCode(): Promise<string> {
   );
   const seq = (res as any)?.seq ?? (res as any)?.value?.seq ?? 1;
   return "B" + String(seq).padStart(3, "0");
+}
+
+// ---------- Trainer preparation pipeline (2026-08-12, Manish's RPL walkthrough) ----------
+// The journey is a round-trip through a body we do not control (NSDC/SSC via the ABPL team), so
+// the machine has to model waiting and rejection as first-class, not as an afterthought:
+//   Applied -> CV Reviewed -> Shortlisted -> Docs Pending -> Docs Complete -> Nomination Prepared
+//   -> Submitted to NSDC -> NSDC Approved -> Payment Done -> TOT Scheduled -> TOT In Progress -> Certified
+// with "NSDC Rejected" branching off the submission and looping BACK to Docs Pending, because
+// "profile mein kya truti hai vo batate hain... hum isko correct karke wapas bhej rahe hain" is
+// the normal case, not the exception. Anything can reach "Dropped" with a reason.
+
+// Documents that must be on file before a nomination can be prepared. Kept here rather than in
+// Defaults for now because the list is the same across the four live job roles; when a scheme
+// circular changes it per role, this becomes a Defaults entry keyed by programme.
+export const MANDATORY_TRAINER_DOCS = ["Aadhaar", "PAN", "Photo", "CV", "Educational Qualification"] as const;
+
+const TRAINER_FLOW: Record<string, string[]> = {
+  "Applied": ["CV Reviewed", "Dropped"],
+  "CV Reviewed": ["Shortlisted", "Dropped"],
+  "Shortlisted": ["Docs Pending", "Dropped"],
+  "Docs Pending": ["Docs Complete", "Dropped"],
+  "Docs Complete": ["Nomination Prepared", "Docs Pending", "Dropped"],
+  "Nomination Prepared": ["Submitted to NSDC", "Docs Pending", "Dropped"],
+  "Submitted to NSDC": ["NSDC Approved", "NSDC Rejected", "Dropped"],
+  // The correct-and-resubmit loop. Also allowed straight back to Submitted for a clerical fix.
+  "NSDC Rejected": ["Docs Pending", "Submitted to NSDC", "Dropped"],
+  "NSDC Approved": ["Payment Done", "Dropped"],
+  "Payment Done": ["TOT Scheduled", "Dropped"],
+  "TOT Scheduled": ["TOT In Progress", "Dropped"],
+  // A trainer can fail TOT - back to scheduled for a retake, or out.
+  "TOT In Progress": ["Certified", "TOT Scheduled", "Dropped"],
+  "Certified": ["Dropped"],
+  "Dropped": ["Applied"], // re-open a candidate who comes back later
+};
+
+export async function trainerDocSummary(trainerId: string) {
+  const docs = await TrainerDocument.find({ trainer: trainerId }).select("doc_type verified").lean<any[]>();
+  const have = new Set(docs.map((d) => d.doc_type));
+  const missing = MANDATORY_TRAINER_DOCS.filter((t) => !have.has(t));
+  return { total: docs.length, missing, complete: missing.length === 0, verified: docs.filter((d) => d.verified).length };
+}
+
+// Mirrors transitionBatch: an explicit edge table, each edge naming its own precondition, and a
+// 409 that says what is actually missing rather than "invalid transition".
+export async function transitionTrainer(
+  trainerId: string,
+  target: string,
+  opts: { reason?: string; remarks?: string; date?: Date; payload?: Record<string, unknown> } = {},
+) {
+  const t = await Trainer.findById(trainerId);
+  if (!t) throw new HttpError(404, "Trainer not found");
+  const from = t.pipeline_status ?? "Applied";
+  if (from === target) throw new HttpError(409, `${t.name} is already at "${target}".`);
+
+  const allowed = TRAINER_FLOW[from];
+  if (!allowed) throw new HttpError(409, `Unknown pipeline state "${from}".`);
+  if (!allowed.includes(target)) {
+    throw new HttpError(409,
+      `A trainer at "${from}" can only move to ${allowed.map((a) => `"${a}"`).join(" or ")} - not "${target}".`);
+  }
+
+  const when = opts.date ? new Date(opts.date) : new Date();
+
+  switch (target) {
+    case "Nomination Prepared": {
+      // The whole point of the document stage. Nominating someone whose papers are incomplete is
+      // what gets the profile bounced back by NSDC, which is the delay this pipeline exists to stop.
+      const d = await trainerDocSummary(trainerId);
+      if (!d.complete) {
+        throw new HttpError(409, `Rule T2: ${t.name} is still missing ${d.missing.join(", ")}. Collect every mandatory document before preparing the nomination.`);
+      }
+      if (!t.nominated_for_location || !t.nominated_for_program) {
+        throw new HttpError(409, "Rule T3: say which centre and job role this nomination is for - a nomination is always against a specific vacancy.");
+      }
+      t.nomination_sent_on = when;
+      break;
+    }
+    case "Submitted to NSDC":
+      t.nsdc_submitted_on = when;
+      break;
+    case "NSDC Approved":
+      t.nsdc_result_on = when;
+      t.nsdc_remarks = undefined;
+      break;
+    case "NSDC Rejected":
+      // Without the remarks nobody downstream knows what to correct before resubmitting.
+      if (!opts.remarks) throw new HttpError(400, "Rule T4: record what NSDC said was wrong, so it can be corrected and resent.");
+      t.nsdc_result_on = when;
+      t.nsdc_remarks = opts.remarks;
+      break;
+    case "Payment Done":
+      t.paid_on = when;
+      if (opts.payload?.payment_reference) t.payment_reference = String(opts.payload.payment_reference);
+      break;
+    case "TOT Scheduled":
+      t.tot_scheduled_on = when;
+      break;
+    case "Certified": {
+      // "TOT certified result aa jata hai... phir SIDH portal mein batch formation karte waqt vo
+      // trainer ki profile mangta hai" - the TR ID is the whole reason this pipeline exists.
+      const trId = (opts.payload?.tr_id as string) ?? t.tr_id;
+      if (!trId) throw new HttpError(400, "Rule T5: a certified trainer needs their NSDC TR ID - it is what the portal asks for when a batch is formed.");
+      t.tr_id = trId;
+      t.tot_done_on = when;
+      if (opts.payload?.tot_certificate_no) t.tot_certificate_no = String(opts.payload.tot_certificate_no);
+      if (!t.available_from) t.available_from = when;
+      break;
+    }
+    case "Dropped":
+      if (!opts.reason) throw new HttpError(400, "Rule T6: dropping a trainer needs a reason.");
+      t.dropped_reason = opts.reason;
+      t.active = false;
+      break;
+    case "Applied":
+      // Re-opening someone previously dropped.
+      t.dropped_reason = undefined;
+      t.active = true;
+      break;
+  }
+
+  t.pipeline_status = target as any;
+  if (opts.reason && target !== "Dropped") t.pipeline_note = opts.reason;
+  await t.save();
+  return t;
+}
+
+// Rule T7 - the counters the client tracks per centre x job role, DERIVED rather than stored.
+// The two sheets already disagree with each other (nominated 23 vs 20, certified 18 vs 16),
+// which is what happens when the same number is kept in two places; computing it here makes the
+// ERP the source of truth and leaves each sheet as a cross-check.
+const NOMINATED_STATES = ["Nomination Prepared", "Submitted to NSDC", "NSDC Approved", "NSDC Rejected",
+  "Payment Done", "TOT Scheduled", "TOT In Progress", "Certified"];
+
+export async function trainerCountsFor(locationId: unknown, programId: unknown) {
+  const base = { nominated_for_location: locationId, nominated_for_program: programId, active: true };
+  const [nominated, certified, inPipeline] = await Promise.all([
+    Trainer.countDocuments({ ...base, pipeline_status: { $in: NOMINATED_STATES } }),
+    Trainer.countDocuments({ ...base, pipeline_status: "Certified" }),
+    Trainer.countDocuments({ ...base, pipeline_status: { $nin: ["Certified", "Dropped"] } }),
+  ]);
+  return { nominated, certified, in_pipeline: inPipeline };
+}
+
+// Rule T8 - can this centre x job role actually start a batch? The three-way mapping Manish
+// described: "ye teen cheezein hain - location, trainer, aur candidate. Ye teeno map ho gaye to
+// batch form ho jata hai." Returns the ONE thing that is blocking, so the screen can say what to
+// do next rather than showing a wall of red.
+export async function mappingReadiness(locationId: string, programId: string) {
+  const [loc, prog, target] = await Promise.all([
+    Location.findById(locationId).select("name code tc_id tc_status approval_status operational_status").lean<any>(),
+    Program.findById(programId).select("name code scheme default_batch_size").lean<any>(),
+    LocationTarget.findOne({ location: locationId, program: programId }).lean<any>(),
+  ]);
+  if (!loc || !prog) throw new HttpError(404, "Location or programme not found");
+
+  const counts = await trainerCountsFor(locationId, programId);
+  const registered = await Candidate.countDocuments({
+    location: locationId, program: programId, sidh_status: "Registered", lifecycle_status: "Unassigned",
+  });
+  const pool = await Candidate.countDocuments({ location: locationId, program: programId, lifecycle_status: "Unassigned" });
+
+  const needed = prog.default_batch_size ?? 30;
+  const blockers: string[] = [];
+  // A centre with no approved TC cannot enrol anyone on the portal at all, whatever else is ready.
+  if (!loc.tc_id) blockers.push("no TC ID on record");
+  else if (loc.tc_status && loc.tc_status !== "Approved") blockers.push(`TC status is "${loc.tc_status}"`);
+  if (loc.approval_status !== "Approved") blockers.push("centre not approved");
+  if (["On Hold", "Stopped", "Closed"].includes(loc.operational_status)) blockers.push(`centre is ${loc.operational_status}`);
+  if (counts.certified < 1) {
+    blockers.push(counts.in_pipeline > 0
+      ? `no certified trainer yet (${counts.in_pipeline} in the pipeline)`
+      : "no trainer nominated for this job role");
+  }
+  if (registered < needed) blockers.push(`${registered} of ${needed} candidates registered on SIDH`);
+
+  return {
+    location: { _id: loc._id, name: loc.name, code: loc.code, tc_id: loc.tc_id ?? null, tc_status: loc.tc_status ?? null },
+    program: { _id: prog._id, name: prog.name, code: prog.code, scheme: prog.scheme ?? null },
+    approved_target: target?.approved_target ?? null,
+    trainers: { required: target?.trainers_required ?? null, ...counts },
+    candidates: { pool, registered, needed },
+    ready: blockers.length === 0,
+    blockers,
+    next_action: blockers[0] ?? "Ready to form a batch",
+  };
 }

@@ -54,7 +54,10 @@ export const PUT = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   const program = await Program.findById(body.program).lean<any>();
   if (!program) throw new HttpError(400, "Program not found");
   const set: Record<string, unknown> = {};
-  for (const f of ["approved_target", "allocated_target", "start_date", "end_date"]) {
+  // 2026-08-12: the client sheet also states how many trainers this centre x job role needs, and
+  // what they believe is already enrolled — kept separate from our own computed figure.
+  for (const f of ["approved_target", "allocated_target", "start_date", "end_date",
+    "trainers_required", "enrolled_reported", "pending_reported"]) {
     if (body[f] !== undefined) set[f] = body[f];
   }
   const doc = await LocationTarget.findOneAndUpdate(
