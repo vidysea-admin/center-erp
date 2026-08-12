@@ -88,7 +88,7 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
         <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
           stage === "Certified" ? "border-green-200 bg-green-50 text-green-700"
             : isOff ? "border-red-200 bg-red-50 text-red-700"
-              : "border-amber-200 bg-amber-50 text-amber-700"}`}>{stage}</span>
+              : "border-amber-200 bg-amber-50 text-amber-700"}`}>{stage === "Certified" ? "Certified (Ready to Train)" : stage}</span>
         <span className="text-sm text-gray-500">{t.phone}{t.tr_id ? ` · TR ID ${t.tr_id}` : ""}</span>
       </div>
 

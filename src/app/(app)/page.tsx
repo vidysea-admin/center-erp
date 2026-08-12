@@ -114,6 +114,20 @@ export default function HomePage() {
           )}
         </Section>
 
+        {/* GD-81: the portal said no. These are worked for registration, not planned into batches. */}
+        {(q.registration_failed ?? []).length > 0 && (
+          <Section title={`Registration Failed on SIDH (${q.registration_failed.length})`} titleHref="/candidates">
+            <ul className="divide-y divide-gray-100 text-sm">
+              {q.registration_failed.map((c: any) => (
+                <Row key={c._id} href="/candidates"
+                  left={<><span className="font-medium">{c.name}</span><span className="text-gray-500"> · {c.location?.name ?? "—"} · {c.phone}</span></>}
+                  right={<span className="shrink-0 text-xs text-red-600">{c.sidh_failure_reason || "no reason recorded"}</span>}
+                />
+              ))}
+            </ul>
+          </Section>
+        )}
+
         <Section title={`Enrollment Failures (${q.enrollment_failures.length})`} titleHref="/batches">
           {q.enrollment_failures.length === 0 ? <p className="text-sm text-gray-400">No open failures.</p> : (
             <ul className="divide-y divide-gray-100 text-sm">

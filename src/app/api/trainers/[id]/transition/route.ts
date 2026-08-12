@@ -18,7 +18,8 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   const { target, reason, remarks, date, payload } = await req.json();
 
   const before = target;
-  const t = await transitionTrainer(id, target, { reason, remarks, date, payload });
+  // actor: Payment Done books the ₹3250 eligibility fee as a CostEntry, entered by this user.
+  const t = await transitionTrainer(id, target, { reason, remarks, date, payload, actor: user.id });
 
   await audit({
     entity: "Trainer",

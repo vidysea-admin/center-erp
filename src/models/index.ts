@@ -276,7 +276,10 @@ const TrainerRequestSchema = new Schema({
 // 6 months), interest capture, and the SIDH registration stage — a candidate stage, not a
 // batch step ("हमें बच्चा जब हमारे पास आया, तभी से registration process चालू").
 export const EDUCATION_LEVEL = ["Below 10th", "10th Pass", "12th Pass", "Graduate", "Post Graduate"] as const;
-export const SIDH_STATUS = ["Not Registered", "Link Sent", "Registered"] as const;
+// 2026-08-11 (GD-81): "registration ho hi nahi paya, to main time kyun waste karun… main bacche
+// ko drop karke doosri queue mein dalunga" — a failed registration is its own state with its own
+// queue, so nobody plans a batch around a candidate the portal will not take.
+export const SIDH_STATUS = ["Not Registered", "Link Sent", "Registered", "Registration Failed"] as const;
 const CandidateSchema = new Schema({
   name: { type: String, required: true },
   phone: { type: String, required: true },
@@ -293,6 +296,7 @@ const CandidateSchema = new Schema({
   sidh_status: { type: String, enum: SIDH_STATUS, default: "Not Registered" },
   sidh_link_sent_at: Date,
   sidh_registered_on: Date,
+  sidh_failure_reason: String, // why the portal refused — the queue is useless without the why
   // Portal "Candidate ID" (CAN_40918461). The government attendance export keys on this, so it
   // is the only reliable join — names repeat within a centre.
   sidh_candidate_id: { type: String, default: null },

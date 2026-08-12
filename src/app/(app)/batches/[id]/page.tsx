@@ -262,6 +262,14 @@ function Roster({ batchId, batch, setError, onChanged }: any) {
             { key: "phone", label: "Phone", render: (r: any) => r.candidate?.phone, mobile: false },
             { key: "joined_on", label: "Joined", render: (r: any) => fmtDate(r.joined_on) },
             { key: "enrollment_status", label: "Enrollment", render: (r: any) => <Chip value={r.enrollment_status} /> },
+            {
+              // GD-102: running attendance per candidate, from the daily logs.
+              key: "attendance", label: "Attendance", render: (r: any) => r.attendance?.days_held
+                ? <span className={`text-xs tabular-nums ${r.attendance.pct < 70 ? "font-semibold text-red-600" : "text-gray-700"}`}>
+                    {r.attendance.present}/{r.attendance.days_held} ({r.attendance.pct}%)
+                  </span>
+                : <span className="text-xs text-gray-400">—</span>,
+            },
             { key: "left_on", label: "Left", render: (r: any) => r.left_on ? `${fmtDate(r.left_on)} (${r.drop_reason})` : "—" },
             { key: "_act", label: "", render: (r: any) => !r.left_on ? <Btn small kind="ghost" onClick={() => setDropTarget(r)}>Drop</Btn> : null },
           ]} empty="No members yet — add from the candidate pool." />

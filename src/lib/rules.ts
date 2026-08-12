@@ -2,8 +2,8 @@
 // center-erp-data-model-rules.md §4. Rule numbers are cited inline.
 import { Types } from "mongoose";
 import {
-  Batch, BatchMember, Candidate, CandidateResult, Closure, DailyLog, Invoice, Location, LocationTarget,
-  Program, Room, Trainer, TrainerDocument,
+  Batch, BatchMember, Candidate, CandidateResult, Closure, CostCategory, CostEntry, DailyLog, Invoice, Location,
+  LocationTarget, Program, Room, Trainer, TrainerDocument,
 } from "@/models";
 import { auditDiff } from "@/lib/audit";
 import { getDefaults } from "@/lib/defaults";
@@ -1204,7 +1204,7 @@ export async function trainerDocSummary(trainerId: string) {
 export async function transitionTrainer(
   trainerId: string,
   target: string,
-  opts: { reason?: string; remarks?: string; date?: Date; payload?: Record<string, unknown> } = {},
+  opts: { reason?: string; remarks?: string; date?: Date; payload?: Record<string, unknown>; actor?: string } = {},
 ) {
   const t = await Trainer.findById(trainerId);
   if (!t) throw new HttpError(404, "Trainer not found");
@@ -1247,10 +1247,34 @@ export async function transitionTrainer(
       t.nsdc_result_on = when;
       t.nsdc_remarks = opts.remarks;
       break;
-    case "Payment Done":
+    case "Payment Done": {
       t.paid_on = when;
       if (opts.payload?.payment_reference) t.payment_reference = String(opts.payload.payment_reference);
+      // "har stage pe cost capture karni hai" — the ₹3250 eligibility fee is a real per-trainer
+      // spend, and recording it only on the trainer kept it out of the cost model entirely. One
+      // CostEntry per trainer, booked by whoever moved the stage; guarded against doubles so a
+      // re-entry into this stage (Dropped → re-opened → paid) doesn't book the fee twice.
+      if (opts.actor) {
+        const cat = await CostCategory.findOneAndUpdate(
+          { name: "Trainer eligibility fee" },
+          { $setOnInsert: { name: "Trainer eligibility fee", active: true } },
+          { upsert: true, new: true },
+        );
+        const already = await CostEntry.findOne({ trainer: t._id, category: cat._id }).lean();
+        if (!already) {
+          await CostEntry.create({
+            entry_date: when,
+            trainer: t._id,
+            location: t.nominated_for_location || undefined,
+            category: cat._id,
+            amount: t.eligibility_payment_amount ?? 3250,
+            note: `NSDC eligibility payment for ${t.name}${t.payment_reference ? ` (ref ${t.payment_reference})` : ""}`,
+            entered_by: opts.actor,
+          });
+        }
+      }
       break;
+    }
     case "TOT Scheduled":
       t.tot_scheduled_on = when;
       break;
@@ -1324,6 +1348,7 @@ function readinessBlockers(
   counts: { certified: number; in_pipeline: number },
   registered: number,
   needed: number,
+  infra?: { rooms: number; labs: number; requires_lab?: boolean },
 ): string[] {
   const blockers: string[] = [];
   // A centre with no approved TC cannot enrol anyone on the portal at all, whatever else is ready.
@@ -1336,6 +1361,14 @@ function readinessBlockers(
       ? `no certified trainer yet (${counts.in_pipeline} in the pipeline)`
       : "no trainer nominated for this job role");
   }
+  // 2026-08-08: "teen trainer to rakh diye, classroom do hi hai, lab ek hi hai — can that be
+  // managed or not?" The hard floor of that question: a centre with no usable room cannot run
+  // any batch, and a lab job role with no lab cannot run either. Finer classroom-vs-parallel-
+  // batch arithmetic stays in planning; readiness names only what makes a start impossible.
+  if (infra) {
+    if (infra.rooms < 1) blockers.push("no room at the centre");
+    else if (infra.requires_lab && infra.labs < 1) blockers.push("no lab, and this job role needs one");
+  }
   if (registered < needed) blockers.push(`${registered} of ${needed} candidates registered on SIDH`);
   return blockers;
 }
@@ -1347,7 +1380,7 @@ function readinessBlockers(
 export async function mappingReadinessBulk(targetFilter: Record<string, unknown>, limit = 400) {
   const targets = await LocationTarget.find(targetFilter)
     .populate("location", "name code tc_id tc_status approval_status operational_status")
-    .populate("program", "name code scheme default_batch_size")
+    .populate("program", "name code scheme default_batch_size requires_lab")
     .limit(limit).lean<any[]>();
   if (!targets.length) return [];
 
@@ -1355,7 +1388,7 @@ export async function mappingReadinessBulk(targetFilter: Record<string, unknown>
   const locIds = [...new Set(targets.map((t) => t.location?._id).filter(Boolean))];
   const progIds = [...new Set(targets.map((t) => t.program?._id).filter(Boolean))];
 
-  const [trainerRows, candRows] = await Promise.all([
+  const [trainerRows, candRows, roomRows] = await Promise.all([
     Trainer.aggregate([
       { $match: { nominated_for_location: { $in: locIds }, nominated_for_program: { $in: progIds }, active: true } },
       { $group: {
@@ -1373,10 +1406,19 @@ export async function mappingReadinessBulk(targetFilter: Record<string, unknown>
         registered: { $sum: { $cond: [{ $eq: ["$sidh_status", "Registered"] }, 1, 0] } },
       } },
     ]),
+    Room.aggregate([
+      { $match: { location: { $in: locIds }, active: { $ne: false } } },
+      { $group: {
+        _id: "$location",
+        rooms: { $sum: 1 },
+        labs: { $sum: { $cond: [{ $eq: ["$type", "Lab"] }, 1, 0] } },
+      } },
+    ]),
   ]);
 
   const byTrainer = new Map(trainerRows.map((r) => [key(r._id.l, r._id.p), r]));
   const byCand = new Map(candRows.map((r) => [key(r._id.l, r._id.p), r]));
+  const byRoom = new Map(roomRows.map((r) => [String(r._id), r]));
 
   return targets.filter((t) => t.location && t.program).map((t) => {
     const k = key(t.location._id, t.program._id);
@@ -1384,7 +1426,9 @@ export async function mappingReadinessBulk(targetFilter: Record<string, unknown>
     const cc = byCand.get(k) ?? { pool: 0, registered: 0 };
     const needed = t.program.default_batch_size ?? 30;
     const counts = { nominated: tc.nominated, certified: tc.certified, in_pipeline: tc.in_pipeline };
-    const blockers = readinessBlockers(t.location, counts, cc.registered, needed);
+    const rc = byRoom.get(String(t.location._id)) ?? { rooms: 0, labs: 0 };
+    const blockers = readinessBlockers(t.location, counts, cc.registered, needed,
+      { rooms: rc.rooms, labs: rc.labs, requires_lab: !!t.program.requires_lab });
     return {
       location: {
         _id: t.location._id, name: t.location.name, code: t.location.code,
@@ -1404,7 +1448,7 @@ export async function mappingReadinessBulk(targetFilter: Record<string, unknown>
 export async function mappingReadiness(locationId: string, programId: string) {
   const [loc, prog, target] = await Promise.all([
     Location.findById(locationId).select("name code tc_id tc_status approval_status operational_status").lean<any>(),
-    Program.findById(programId).select("name code scheme default_batch_size").lean<any>(),
+    Program.findById(programId).select("name code scheme default_batch_size requires_lab").lean<any>(),
     LocationTarget.findOne({ location: locationId, program: programId }).lean<any>(),
   ]);
   if (!loc || !prog) throw new HttpError(404, "Location or programme not found");
@@ -1415,8 +1459,13 @@ export async function mappingReadiness(locationId: string, programId: string) {
   });
   const pool = await Candidate.countDocuments({ location: locationId, program: programId, lifecycle_status: "Unassigned" });
 
+  const rooms = await Room.find({ location: locationId, active: { $ne: false } }).select("type").lean<any[]>();
   const needed = prog.default_batch_size ?? 30;
-  const blockers = readinessBlockers(loc, counts, registered, needed);
+  const blockers = readinessBlockers(loc, counts, registered, needed, {
+    rooms: rooms.length,
+    labs: rooms.filter((r) => r.type === "Lab").length,
+    requires_lab: !!prog.requires_lab,
+  });
 
   return {
     location: { _id: loc._id, name: loc.name, code: loc.code, tc_id: loc.tc_id ?? null, tc_status: loc.tc_status ?? null },

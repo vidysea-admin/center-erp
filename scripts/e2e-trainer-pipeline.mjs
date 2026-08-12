@@ -115,10 +115,21 @@ ok("…and stamps the TOT completion date", !!cert.data.item.tot_done_on);
 
 // ---- the counters are derived, not stored ----
 await req("PUT", `/api/locations/${loc._id}/targets`, { program: prog._id, approved_target: 135, trainers_required: 2 }, 200);
+
+// Infra feasibility (2026-08-08: "classroom do hi hai, lab ek hi hai — can that be managed or
+// not"): with no room on record, readiness must say so; adding one clears it.
+{
+  const noRoom = await req("GET", `/api/mapping/readiness?location=${loc._id}`, undefined, 200);
+  const r0 = (noRoom.data.items ?? [])[0];
+  ok("a centre with no room is named as such", r0?.blockers?.some((b) => /no room/.test(b)), JSON.stringify(r0?.blockers));
+  await req("POST", `/api/locations/${loc._id}/rooms`, { name: "Room 1", type: "Classroom", capacity: 30 }, 201);
+}
+
 const ready = await req("GET", `/api/mapping/readiness?location=${loc._id}`, undefined, 200);
 const row = (ready.data.items ?? [])[0];
 ok("readiness reports the derived certified count", row?.trainers?.certified === 1, JSON.stringify(row?.trainers));
 ok("…against the requirement from the sheet", row?.trainers?.required === 2, JSON.stringify(row?.trainers));
+ok("…and the room blocker cleared once a room exists", !row?.blockers?.some((b) => /no room/.test(b)), JSON.stringify(row?.blockers));
 ok("…and blocks on candidates, since the centre and trainer are now ready",
   row && row.ready === false && /candidates/.test(row.next_action), JSON.stringify(row?.next_action));
 

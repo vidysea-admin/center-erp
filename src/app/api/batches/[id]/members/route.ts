@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError, assertLocationInScope } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
-import { Batch, BatchMember, Candidate } from "@/models";
+import { Batch, BatchMember, Candidate, DailyLog } from "@/models";
 import { addMemberChecked, assertBatchInScope, assertLocationOperational } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
@@ -12,7 +12,27 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   const { id } = await ctx.params;
   await assertBatchInScope(user, id); // Rule 38
   const items = await BatchMember.find({ batch: id }).populate("candidate", "name phone lifecycle_status").sort({ joined_on: 1 }).lean();
-  return NextResponse.json({ items });
+
+  // GD-102: "kitne bacche ki kitni-kitni attendance chal rahi hai" — each member's running
+  // attendance, counted from the daily logs rather than stored anywhere it could go stale.
+  const logs = await DailyLog.find({ batch: id }).select("present_member_ids").lean<any[]>();
+  const daysHeld = logs.length;
+  const presentDays = new Map<string, number>();
+  for (const l of logs) {
+    for (const mid of l.present_member_ids ?? []) {
+      const k = String(mid);
+      presentDays.set(k, (presentDays.get(k) ?? 0) + 1);
+    }
+  }
+  const withAttendance = items.map((m: any) => ({
+    ...m,
+    attendance: {
+      present: presentDays.get(String(m._id)) ?? 0,
+      days_held: daysHeld,
+      pct: daysHeld ? Math.round((100 * (presentDays.get(String(m._id)) ?? 0)) / daysHeld) : null,
+    },
+  }));
+  return NextResponse.json({ items: withAttendance });
 });
 
 // POST { candidate, joined_on? } — add one member (Rules 20–21)
