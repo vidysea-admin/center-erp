@@ -90,7 +90,9 @@ const notifs = (await req(admin, "GET", "/api/notifications?status=all&type=trai
 ok("new trainer request raises an instant alert", notifs.some((n) => n.type === "trainer_request_new" && String(n.entity_id) === String(req1._id)));
 
 // ---- 6. Workbook Watch edge cases ----
-const xlsxMod = await import("file:///D:/erp/center-erp/node_modules/xlsx/xlsx.mjs");
+// Resolved from the repo's own node_modules — an absolute file:/// path here kept every
+// CI run red (Linux runners have no D: drive) while passing silently on the dev laptop.
+const xlsxMod = await import("xlsx");
 const XLSX = xlsxMod.default ?? xlsxMod;
 function wbUrl(tabs) {
   const wb = XLSX.utils.book_new();
