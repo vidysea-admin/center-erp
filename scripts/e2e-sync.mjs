@@ -31,6 +31,16 @@ cookie = [csrfCookie, session].join("; ");
 
 const stamp = "S" + Date.now().toString().slice(-6);
 
+// Build an in-memory xlsx and hand it to the watcher as a data: URL — lets the tab
+// add/remove tests drive an arbitrary workbook shape without any external hosting.
+const xlsxMod = await import("file:///D:/erp/center-erp/node_modules/xlsx/xlsx.mjs");
+const XLSX = xlsxMod.default ?? xlsxMod;
+function wbDataUrl(tabs) {
+  const wb = XLSX.utils.book_new();
+  for (const [name, rows] of Object.entries(tabs)) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), name);
+  return "data:application/octet-stream;base64," + XLSX.write(wb, { type: "base64", bookType: "xlsx" });
+}
+
 // location matched by external_id, with an ACTIVE batch so Close generates follow-ups
 const prog = (await req("POST", "/api/programs", { code: "P" + stamp, name: "Sync Prog " + stamp, trainer_skill: "SyncSkill" + stamp }, 201)).data.item;
 const loc = (await req("POST", "/api/locations", { code: "L" + stamp, name: "Sync Loc " + stamp, external_id: stamp, approval_status: "Approved", city: "Jaipur" }, 201)).data.item;
@@ -99,6 +109,65 @@ const up2 = (await req("POST", "/api/upload", fd2, 200)).data;
 await req("PATCH", `/api/sync-sources/${src._id}`, { source_url: new URL(up2.url, BASE).href }, 200);
 const run3 = (await req("POST", `/api/sync-sources/${src._id}/run`, undefined, 200)).data;
 ok("Rule 2: missing columns → Partial, zero changes", run3.status === "Partial" && run3.created === 0, JSON.stringify(run3));
+
+// ============================================================================
+// Dynamic tabs (2026-08-12): the client adds/removes tabs without telling anyone.
+// Every tab must be covered, new tabs announced, removed tabs announced.
+// ============================================================================
+const tabStamp = "TAB" + Date.now().toString().slice(-6);
+const T1 = [["Institution Name", "Job role", "Target"], ["Alpha " + tabStamp, "Drone", "100"]];
+const T2 = [["Institution Name", "Job role", "Target"], ["Beta " + tabStamp, "Solar", "200"]];
+const T3 = [["Institution Name", "Job role", "Target"], ["Gamma " + tabStamp, "EV", "300"]];
+
+const dynSrc = (await req("POST", "/api/sync-sources", {
+  name: "Watch Source Dyn " + tabStamp, mode: "watch",
+  key_columns: ["Institution Name", "Job role"],
+  source_url: wbDataUrl({ "Batch Plan": T1, "Back Date": T2 }),
+}, 201)).data.item;
+
+// Run 1 — baseline. Two tabs, no noise.
+const dr1 = (await req("POST", `/api/sync-sources/${dynSrc._id}/run`, {}, 200)).data;
+ok("all tabs read on the first run (baseline, no flood)", dr1.tabs === 2 && dr1.changes === 0, JSON.stringify(dr1));
+
+// Run 2 — client ADDS a third tab and edits a row in an existing one.
+const T1b = [["Institution Name", "Job role", "Target"], ["Alpha " + tabStamp, "Drone", "150"]];
+await req("PATCH", `/api/sync-sources/${dynSrc._id}`, { source_url: wbDataUrl({ "Batch Plan": T1b, "Back Date": T2, "Planning 2027": T3 }) }, 200);
+const dr2 = (await req("POST", `/api/sync-sources/${dynSrc._id}/run`, {}, 200)).data;
+ok("new tab is picked up automatically (3 tabs now)", dr2.tabs === 3, JSON.stringify(dr2));
+const ch2 = (await req("GET", "/api/workbook-changes?status=New")).data.items ?? [];
+const newTab = ch2.find((c) => c.tab === "Planning 2027" && c.row_key === "Tab: Planning 2027");
+ok("a NEW TAB is announced, not absorbed silently", newTab?.change_type === "Added" && newTab.new_value.includes("appeared"), JSON.stringify(newTab));
+ok("…and it does not flood one change per row", ch2.filter((c) => c.tab === "Planning 2027").length === 1);
+ok("edits in an existing tab still tracked alongside", ch2.some((c) => c.tab === "Batch Plan" && c.column === "Target" && c.old_value === "100" && c.new_value === "150"));
+
+// Run 3 — the new tab now tracks rows normally.
+const T3b = [["Institution Name", "Job role", "Target"], ["Gamma " + tabStamp, "EV", "350"]];
+await req("PATCH", `/api/sync-sources/${dynSrc._id}`, { source_url: wbDataUrl({ "Batch Plan": T1b, "Back Date": T2, "Planning 2027": T3b }) }, 200);
+await req("POST", `/api/sync-sources/${dynSrc._id}/run`, {}, 200);
+const ch3 = (await req("GET", "/api/workbook-changes?status=New")).data.items ?? [];
+ok("row edits inside the newly-added tab are tracked", ch3.some((c) => c.tab === "Planning 2027" && c.column === "Target" && c.old_value === "300" && c.new_value === "350"));
+
+// Run 4 — client DELETES a tab.
+await req("PATCH", `/api/sync-sources/${dynSrc._id}`, { source_url: wbDataUrl({ "Batch Plan": T1b, "Planning 2027": T3b }) }, 200);
+const dr4 = (await req("POST", `/api/sync-sources/${dynSrc._id}/run`, {}, 200)).data;
+ok("tab count drops when a tab is deleted", dr4.tabs === 2, JSON.stringify(dr4));
+const ch4 = (await req("GET", "/api/workbook-changes?status=New")).data.items ?? [];
+const goneTab = ch4.find((c) => c.row_key === "Tab: Back Date" && c.change_type === "Removed");
+ok("a DELETED TAB is announced", !!goneTab && goneTab.new_value.includes("gone from the workbook"), JSON.stringify(goneTab));
+
+// Run 5 — the removal must not re-fire on every poll.
+await req("POST", `/api/sync-sources/${dynSrc._id}/run`, {}, 200);
+const ch5 = (await req("GET", "/api/workbook-changes?status=New")).data.items ?? [];
+ok("deleted-tab alert fires once, not every tick", ch5.filter((c) => c.row_key === "Tab: Back Date").length === 1);
+
+// ---- the REAL client workbook, every tab, through the server ----
+const realDyn = (await req("POST", "/api/sync-sources", {
+  name: "Watch Source Real " + tabStamp, mode: "watch",
+  key_columns: ["Institution Name", "Job role"],
+  source_url: "https://onedrive.live.com/:x:/g/personal/c1d310c499f08fba/IQBHQGQ1_HmBRZjCmC1XQMK8AQCFnOpu1H8GXm3MNvZnypE",
+}, 201)).data.item;
+const realRun = (await req("POST", `/api/sync-sources/${realDyn._id}/run`, {}, 200)).data;
+ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.status === "OK" && realRun.tabs >= 1, JSON.stringify(realRun));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -155,12 +155,29 @@ export async function runWatch(sourceId: string): Promise<WatchResult> {
     return { status: "Failed", tabs: 0, changes: 0, error: src.last_error ?? undefined };
   }
 
+  // Tabs are read from the workbook itself every run (never a stored list), so the watch
+  // follows the client's sheet as it grows or shrinks. A tab appearing or disappearing is
+  // itself news the client never tells us — raise it, don't just absorb it silently.
+  // The very first run of a source is the baseline, so it must not announce every tab.
+  const isFirstRun = (await WorkbookSnapshot.countDocuments({ sync_source: src._id })) === 0;
+  const seenTabs = new Set(wb.SheetNames);
+
   let totalChanges = 0;
   for (const tab of wb.SheetNames) {
     const snap = snapshotTab(wb.Sheets[tab], keyColumns);
     const prev = await WorkbookSnapshot.findOne({ sync_source: src._id, tab }).sort({ taken_at: -1 }).lean<any>();
 
     if (prev && prev.hash === snap.hash) continue; // unchanged tab — keep the old snapshot
+
+    if (!prev && !isFirstRun) {
+      // A tab that did not exist last time. Announce the tab once and baseline its rows —
+      // listing every row as "Added" would bury the actual news under a flood.
+      totalChanges += await recordChange(
+        src._id, tab, `Tab: ${tab}`, null, "",
+        `New tab "${tab}" appeared — ${snap.rows.length} rows, ${snap.header.filter(Boolean).length} columns. Row-level changes are tracked from now on.`,
+        "Added",
+      );
+    }
 
     if (prev) {
       const prevRows = new Map<string, SnapRow>((prev.rows as SnapRow[]).map((r) => [r.key, r]));
@@ -193,6 +210,22 @@ export async function runWatch(sourceId: string): Promise<WatchResult> {
     const stale = await WorkbookSnapshot.find({ sync_source: src._id, tab })
       .sort({ taken_at: -1 }).skip(10).select("_id").lean<any[]>();
     if (stale.length) await WorkbookSnapshot.deleteMany({ _id: { $in: stale.map((s) => s._id) } });
+  }
+
+  // Tabs we have snapshots for that are no longer in the workbook — the client deleted or
+  // renamed one. Announce it, then forget the tab so the alert does not re-fire every tick
+  // (and so the same name reappearing later reads correctly as a new tab).
+  const knownTabs: string[] = await WorkbookSnapshot.distinct("tab", { sync_source: src._id });
+  for (const tab of knownTabs) {
+    if (seenTabs.has(tab)) continue;
+    const last = await WorkbookSnapshot.findOne({ sync_source: src._id, tab }).sort({ taken_at: -1 }).lean<any>();
+    totalChanges += await recordChange(
+      src._id, tab, `Tab: ${tab}`, null,
+      `Tab "${tab}" existed with ${last?.rows?.length ?? 0} rows`,
+      `Tab "${tab}" is gone from the workbook — deleted or renamed. Its tracking history stops here.`,
+      "Removed",
+    );
+    await WorkbookSnapshot.deleteMany({ sync_source: src._id, tab });
   }
 
   src.last_status = "OK";
