@@ -19,6 +19,15 @@ export type SessionUser = {
 export const { handlers, auth, signIn, signOut } = NextAuth({
   session: { strategy: "jwt" },
   pages: { signIn: "/login" },
+  // 2026-08-12: pinned deliberately. Next strips the app basePath before this handler runs, so
+  // Auth.js always sees /api/auth/*. But when AUTH_URL carries a path — and .env.example
+  // documents exactly that, "https://www.vidysea.com/erp/api/auth" — Auth.js derives its
+  // basePath from it and starts expecting /erp/api/auth/*, which never arrives. Every action is
+  // then rejected as "Bad request.": no CSRF token, no sign-in, nobody can log in, while the
+  // rest of the app keeps serving normally so it does not look like an outage.
+  // Setting AUTH_URL to the public origin is still right and still fixes the sign-out redirect;
+  // it just must not be allowed to move the route path. Reproduced and verified 2026-08-12.
+  basePath: "/api/auth",
   // Behind the production reverse proxy the request's own Host is the instance's internal
   // address (ip-10-0-…:3000). Trusting the forwarded host keeps every URL Auth.js builds
   // on the public origin. Belt-and-braces: the sign-out button also redirects client-side.
