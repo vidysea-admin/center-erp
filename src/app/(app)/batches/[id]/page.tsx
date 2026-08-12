@@ -68,7 +68,9 @@ function Overview({ data, onChanged, setError }: any) {
 
   return (
     <div className="grid gap-4 lg:grid-cols-2">
-      <Section title={`Readiness checklist (${CHECKS.filter(([, , v]) => v).length}/4)`}>
+      {/* The count used to be hardcoded "/4" while five checks were rendered, so it silently
+          excluded the enrollment gate — the one that actually blocks Start Batch (audit F-005). */}
+      <Section title={`Readiness checklist (${CHECKS.filter(([, , v]) => v).length + (r.enrollment_ok ? 1 : 0)}/${CHECKS.length + 1})`}>
         <ul className="space-y-2 text-sm">
           {CHECKS.map(([k, label, ok]) => (
             <li key={k} className="flex items-center gap-2">
@@ -438,7 +440,8 @@ function DailyExecution({ batchId, batch, setError }: any) {
         <DataTable rows={logs}
           cardTitle={(r: any) => fmtDate(r.log_date)}
           columns={[
-            { key: "log_date", label: "Date", render: (r: any) => fmtDate(r.log_date) },
+            // mobile:false — the card already leads with this date as its title (audit F-005).
+            { key: "log_date", label: "Date", render: (r: any) => fmtDate(r.log_date), mobile: false },
             { key: "internal_present", label: "Internal", render: (r: any) => `${r.internal_present}/${r.roster_count} (${r.roster_count ? Math.round((100 * r.internal_present) / r.roster_count) : 0}%)` },
             { key: "govt_present", label: "Govt", render: (r: any) => r.govt_present == null ? <span className="text-gray-400">Not verified</span> : `${r.govt_present}/${r.roster_count} (${Math.round((100 * r.govt_present) / r.roster_count)}%)` },
             { key: "gap", label: "Gap", render: (r: any) => <Gap r={r} /> },

@@ -201,10 +201,16 @@ export async function assertTrainerAvailableForBatch(
         `Scheme guideline: at most ${maxPerDay} sessions a day. Trainer ${trainer.name} already runs ${sameDaySlotted.length} slotted batch(es) over these dates (${sameDaySlotted.map((b) => `${b.code} ${b.slot_start}–${b.slot_end}`).join(", ")}).`);
     }
   }
-  if (overlapping.length + 1 > (trainer.max_concurrent_batches ?? 1)) {
+  // 2026-08-12 audit F-001: Admin → Defaults shows a "Max concurrent batches" field, but Rule 10
+  // read only the per-trainer number, so changing that Default did nothing to enforcement — it
+  // fed only the capacity sentence on the location screen. Production had the Default at 5 while
+  // the cap actually applied was 4. The per-trainer value still wins when it is set (some
+  // trainers genuinely carry more or fewer); the Default is the policy behind everyone else.
+  const cap = trainer.max_concurrent_batches ?? (await getDefaults()).max_concurrent_batches ?? 1;
+  if (overlapping.length + 1 > cap) {
     const c = overlapping[0];
     throw new HttpError(409,
-      `Rule 10: Trainer ${trainer.name} already assigned to batch ${c.code} at ${c.location?.name ?? "?"} (${new Date(batchRange(c)[0]).toDateString()} – ${new Date(batchRange(c)[1]).toDateString()}); max concurrent = ${trainer.max_concurrent_batches}.`);
+      `Rule 10: Trainer ${trainer.name} already assigned to batch ${c.code} at ${c.location?.name ?? "?"} (${new Date(batchRange(c)[0]).toDateString()} – ${new Date(batchRange(c)[1]).toDateString()}); max concurrent = ${cap}.`);
   }
 }
 
