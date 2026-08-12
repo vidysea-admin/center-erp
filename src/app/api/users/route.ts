@@ -24,8 +24,15 @@ export const POST = apiHandler(async (req: NextRequest) => {
   }
   // Security review 2026-08-11: users.manage is grantable — creating an Admin (or a user
   // with pre-granted special rights) stays an Admin-only act.
-  if ((body.role === "Admin" || (body.extra_permissions?.length ?? 0) > 0) && user.role !== "Admin") {
-    throw new HttpError(403, "Only an Admin may create Admin accounts or grant special rights.");
+  // 2026-08-12 audit (S1): the guard named only "Admin", so a users.manage holder could mint
+  // themselves an Operations account — unscoped, can_edit, and exempt from Rule 39 — which is
+  // the same escalation by a different door. Any privileged shape is now Admin-only.
+  const elevated = body.role === "Admin" || body.role === "Operations"
+    || (body.extra_permissions?.length ?? 0) > 0
+    || body.can_edit === true
+    || (body.location_scope?.length ?? 0) === 0; // unscoped == sees every centre
+  if (elevated && user.role !== "Admin") {
+    throw new HttpError(403, "Only an Admin may create Admin/Operations accounts, unscoped accounts, or grant special rights.");
   }
   const doc = await User.create({
     name: body.name, email: body.email,

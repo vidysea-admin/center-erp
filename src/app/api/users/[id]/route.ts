@@ -19,7 +19,11 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   // right, so a non-Admin holder must never be able to raise anyone's privileges — role,
   // rights, edit flag, activation and approvals stay Admin-only. And nobody, Admin
   // included, edits their own privileges.
-  const PRIV_FIELDS = ["role", "location_scope", "can_edit", "active", "extra_permissions"];
+  // 2026-08-12 audit (S0): `password` and `email` were missing from this list, so a body of
+  // only {"password":"…"} skipped the Admin check below and rewrote the hash further down —
+  // any non-Admin holding the GRANTABLE users.manage right could reset the Admin's password
+  // and take over the account. Credentials ARE privileges; they belong in this list.
+  const PRIV_FIELDS = ["role", "location_scope", "can_edit", "active", "extra_permissions", "password", "email"];
   const changingPriv = PRIV_FIELDS.some((f) => body[f] !== undefined) || body.approval !== undefined;
   if (changingPriv && user.role !== "Admin") {
     throw new HttpError(403, "Only an Admin may change roles, rights or account status.");
