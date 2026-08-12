@@ -43,7 +43,12 @@ ok("Admin sees all locations", (adminLocs.data.items?.length ?? 0) > 5, `got ${a
 // Rule 38: scoped batches/candidates
 const spocBatches = await req(spoc, "GET", "/api/batches");
 ok("Rule 38: SPOC batches all JPR03", spocBatches.data.items?.every((b) => b.location?.code === "JPR03"), JSON.stringify(spocBatches.data.items?.map((b) => b.location?.code)));
-const otherLoc = adminLocs.data.items.find((l) => l.code === "KOT02");
+// Search for KOT02 rather than scanning a capped page for it. The list route caps at 200 rows and
+// the test database grows with every run, so "find it in the first 200" quietly became false and
+// the suite died on an undefined instead of failing an assertion. The search parameter is `q`.
+const otherLoc = (await req(admin, "GET", "/api/locations?q=KOT02")).data.items?.find((l) => l.code === "KOT02")
+  ?? adminLocs.data.items.find((l) => l.code === "KOT02");
+ok("fixture: the foreign location KOT02 exists (run seed:sample first)", !!otherLoc);
 const spocForeign = await req(spoc, "GET", `/api/locations/${otherLoc._id}`);
 ok("Rule 38: SPOC blocked from foreign location detail (403)", spocForeign.status === 403, `got ${spocForeign.status}`);
 

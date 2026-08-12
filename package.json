@@ -15,9 +15,10 @@
     "test:blindspot": "node scripts/e2e-blindspot.mjs",
     "test:govt": "node scripts/e2e-govt.mjs",
     "test:trainer": "node scripts/e2e-trainer-pipeline.mjs",
+    "test:rpl-blindspot": "node scripts/e2e-rpl-blindspot.mjs",
     "purge": "node scripts/purge-unsourced.mjs",
     "seed:rpl": "node scripts/seed-rpl.mjs",
-    "test": "node scripts/e2e.mjs && node scripts/e2e-roles.mjs && node scripts/e2e-sync.mjs && node scripts/e2e-blindspot.mjs && node scripts/e2e-govt.mjs && node scripts/e2e-trainer-pipeline.mjs"
+    "test": "node scripts/e2e.mjs && node scripts/e2e-roles.mjs && node scripts/e2e-sync.mjs && node scripts/e2e-blindspot.mjs && node scripts/e2e-govt.mjs && node scripts/e2e-trainer-pipeline.mjs && node scripts/e2e-rpl-blindspot.mjs"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

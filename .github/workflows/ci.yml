@@ -76,3 +76,7 @@ jobs:
         run: npm run test:govt
       - name: Trainer preparation pipeline
         run: npm run test:trainer
+      # The awkward cases on the RPL surface, including a timing assertion on the readiness
+      # endpoint that Home calls on every load.
+      - name: RPL edge cases
+        run: npm run test:rpl-blindspot

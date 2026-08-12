@@ -217,7 +217,35 @@ function Targets({ locationId, setError }: any) {
                 </span>
               ) : "—",
             },
-            { key: "capacity", label: "Capacity math", render: (r: any) => <span className="text-xs text-gray-600">{r.capacity?.sentence ?? "—"}</span> },
+            {
+              // Trainers counted from our own records, with the sheet's requirement beside them.
+              key: "trainers", label: "Trainers", render: (r: any) => r.trainers ? (
+                <span className="text-xs">
+                  <span className={`font-medium ${r.trainers.shortfall ? "text-amber-700" : "text-gray-900"}`}>
+                    {r.trainers.certified}
+                  </span>
+                  {r.trainers.required != null ? ` / ${r.trainers.required} needed` : " certified"}
+                  <span className="block text-gray-400">
+                    {r.trainers.nominated} nominated · {r.trainers.in_pipeline} in pipeline
+                  </span>
+                </span>
+              ) : "—",
+            },
+            {
+              // The client sheet's own figure, never merged into ours. A variance is the story.
+              key: "reported", label: "Sheet says", mobile: false, render: (r: any) =>
+                r.reported?.enrolled == null ? <span className="text-xs text-gray-400">—</span> : (
+                  <span className="text-xs">
+                    {r.reported.enrolled} enrolled
+                    {r.reported.enrolled_variance ? (
+                      <span className="block font-medium text-amber-700">
+                        we count {r.reported.enrolled_variance > 0 ? "+" : ""}{r.reported.enrolled_variance}
+                      </span>
+                    ) : <span className="block text-gray-400">matches ours</span>}
+                  </span>
+                ),
+            },
+            { key: "capacity", label: "Capacity math", mobile: false, render: (r: any) => <span className="text-xs text-gray-600">{r.capacity?.sentence ?? "—"}</span> },
           ]}
           empty="No targets yet."
         />
@@ -232,6 +260,7 @@ function Targets({ locationId, setError }: any) {
           </Field>
           <Field label="Approved target"><input type="number" className={inputCls} value={form.approved_target ?? ""} onChange={(e) => setForm({ ...form, approved_target: +e.target.value })} /></Field>
           <Field label="Allocated target"><input type="number" className={inputCls} value={form.allocated_target ?? ""} onChange={(e) => setForm({ ...form, allocated_target: +e.target.value })} /></Field>
+          <Field label="Trainers required"><input type="number" className={inputCls} value={form.trainers_required ?? ""} onChange={(e) => setForm({ ...form, trainers_required: +e.target.value })} /></Field>
           <div className="flex items-end"><Btn onClick={save} disabled={!form.program}>Save target</Btn></div>
         </div>
       </Section>

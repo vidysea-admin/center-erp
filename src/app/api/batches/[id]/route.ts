@@ -31,7 +31,12 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   const before = batch.toObject();
 
   const patch: Record<string, unknown> = {};
-  for (const f of ["trainer", "room", "session", "target_size", "planned_start", "planned_end", "slot_start", "slot_end"]) {
+  // govt_batch_id and drive_folder_url were added to the schema but never to this list, so both
+  // were unreachable through the API — written nowhere, readable nowhere. The SIDH batch id is
+  // the key that links our row to the portal's, and the Drive folder is the evidence backup
+  // Manish keeps in parallel with the NSDC upload; a field the API cannot write does not exist.
+  for (const f of ["trainer", "room", "session", "target_size", "planned_start", "planned_end", "slot_start", "slot_end",
+    "govt_batch_id", "drive_folder_url"]) {
     if (body[f] !== undefined) patch[f] = body[f];
   }
 

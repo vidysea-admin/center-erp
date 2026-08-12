@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, locationFilter, assertLocationInScope } from "@/lib/authz";
-import { LocationTarget } from "@/models";
-import { mappingReadiness } from "@/lib/rules";
+import { mappingReadinessBulk } from "@/lib/rules";
 
 // The three-way mapping, 2026-08-12 (Manish): "ye teen cheezein hain - location, trainer, aur
 // candidate. Ye teeno map ho gaye to batch form ho jata hai."
@@ -26,17 +25,10 @@ export const GET = apiHandler(async (req: NextRequest) => {
 
   // Targets are the definitive list of what each centre is contracted to deliver, so they are
   // the right spine for this view — a centre with no target has nothing to be ready for.
-  const targets = await LocationTarget.find(filter).select("location program").limit(400).lean<any[]>();
-
-  const rows = [];
-  for (const t of targets) {
-    try {
-      rows.push(await mappingReadiness(String(t.location), String(t.program)));
-    } catch {
-      // A target pointing at a deleted location or programme should not break the whole screen.
-      continue;
-    }
-  }
+  // Three aggregations for the whole estate, not five queries per row: Home calls this on every
+  // load, and the per-row version measured 10.3s for 81 targets. Rows whose location or programme
+  // has been deleted are dropped rather than breaking the screen.
+  const rows = await mappingReadinessBulk(filter);
 
   const readyOnly = sp.get("ready") === "1";
   const items = readyOnly ? rows.filter((r) => r.ready) : rows;

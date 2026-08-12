@@ -133,5 +133,40 @@ await req("POST", `/api/trainers/${t2._id}/transition`, { target: "Dropped", rea
 const reopened = await req("POST", `/api/trainers/${t2._id}/transition`, { target: "Applied" }, 200);
 ok("a dropped trainer can be re-opened if they come back", reopened.data.item.pipeline_status === "Applied" && reopened.data.item.active === true);
 
+// ---- the targets endpoint must derive its own trainer counts (B5) ----
+// The two client sheets disagree (nominated 23 vs 20, certified 18 vs 16). Ours is computed from
+// Trainer rows; theirs is reported alongside. A regression that drops either half puts the ERP
+// back to trusting a spreadsheet it cannot verify.
+{
+  const t = (await req("GET", `/api/locations/${loc._id}/targets`, undefined, 200)).data.items
+    .find((x) => String(x.program?._id ?? x.program) === String(prog._id));
+  ok("targets derive the certified trainer count from Trainer rows", t?.trainers?.certified === 1, JSON.stringify(t?.trainers));
+  ok("…and carry the sheet's requirement beside it", t?.trainers?.required === 2, JSON.stringify(t?.trainers));
+  ok("…and report the shortfall rather than making the reader subtract", t?.trainers?.shortfall === 1, JSON.stringify(t?.trainers));
+
+  // The sheet's own enrolled figure is kept, never merged into ours, and the variance is stated.
+  await req("PUT", `/api/locations/${loc._id}/targets`, { program: prog._id, enrolled_reported: 7 }, 200);
+  const t2r = (await req("GET", `/api/locations/${loc._id}/targets`, undefined, 200)).data.items
+    .find((x) => String(x.program?._id ?? x.program) === String(prog._id));
+  ok("the sheet's reported enrolment is kept separate from ours", t2r?.reported?.enrolled === 7, JSON.stringify(t2r?.reported));
+  ok("…and the variance against our own count is stated",
+    t2r?.reported?.enrolled_variance === (t2r.achieved.enrolled - 7), JSON.stringify(t2r?.reported));
+}
+
+// ---- the portal identifiers must be writable (C) ----
+// Both fields sat on the Batch schema but were missing from the PATCH whitelist, so they could
+// never be written or read. A schema field the API refuses to accept does not exist.
+{
+  const b = (await req("POST", "/api/batches", {
+    location: loc._id, program: prog._id, planned_start: new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10),
+  }, 201)).data.item;
+  const saved = await req("PATCH", `/api/batches/${b._id}`, {
+    govt_batch_id: `SIDH-${stamp}`, drive_folder_url: "https://drive.google.com/drive/folders/abc",
+  }, 200);
+  ok("the SIDH batch id can be recorded", saved.data.item.govt_batch_id === `SIDH-${stamp}`, JSON.stringify(saved.data.item.govt_batch_id));
+  ok("…and the Drive evidence folder alongside it",
+    saved.data.item.drive_folder_url === "https://drive.google.com/drive/folders/abc", JSON.stringify(saved.data.item.drive_folder_url));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

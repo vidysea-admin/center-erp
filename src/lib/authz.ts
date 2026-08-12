@@ -112,12 +112,35 @@ export function apiHandler<T extends unknown[]>(fn: (...args: T) => Promise<Resp
           { status: 409 },
         );
       }
+      // A ValidationError is the CALLER's mistake, not ours, so it must not be masked as a 500.
+      // The S2-15 masking below swept it up with genuine server faults, and the result actively
+      // misled: sending an out-of-enum operational_status answered "Something went wrong on our
+      // side. Please try again." — nothing had gone wrong on our side, and retrying could never
+      // help. Found 2026-08-12 by the RPL blindspot probe, which hit it with a wrong enum value.
+      //
+      // What made the original leak dangerous was the ECHOED VALUE and the full internal path
+      // ("Cast to ObjectId failed for value ... at path ..."), not the field name — field names
+      // are already public, since the caller just sent them. So: name the field and, for an enum,
+      // the permitted values; never repeat what was submitted.
+      if (e instanceof Error && e.name === "ValidationError") {
+        const errs = (e as unknown as { errors?: Record<string, { kind?: string; properties?: { enumValues?: string[] } }> }).errors ?? {};
+        const parts = Object.entries(errs).slice(0, 4).map(([path, err]) => {
+          const allowed = err?.properties?.enumValues;
+          if (allowed?.length) return `${path} must be one of: ${allowed.join(", ")}`;
+          if (err?.kind === "required") return `${path} is required`;
+          return `${path} is not valid`;
+        });
+        return NextResponse.json(
+          { error: parts.length ? parts.join("; ") : "Some of the submitted values are not valid." },
+          { status: 400 },
+        );
+      }
+
       // 2026-08-12 audit (auth S2-15): the raw exception text used to go straight to the client.
-      // A Mongoose ValidationError names internal field paths and echoes the offending value, a
-      // connection failure prints the database host and port, and a cast error reveals the schema
-      // — none of which a browser needs, and all of which help someone map the system. The detail
-      // stays in the server log where it is useful; the client gets a stable, unhelpful-to-an-
-      // attacker message. HttpError above is deliberate and human-written, so it still passes.
+      // A connection failure prints the database host and port, and a cast error reveals the
+      // schema — none of which a browser needs, and all of which help someone map the system. The
+      // detail stays in the server log where it is useful; the client gets a stable, unhelpful-to-
+      // an-attacker message. HttpError above is deliberate and human-written, so it still passes.
       console.error(e);
       return NextResponse.json({ error: "Something went wrong on our side. Please try again." }, { status: 500 });
     }

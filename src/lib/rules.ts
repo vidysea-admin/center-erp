@@ -1265,11 +1265,23 @@ export async function transitionTrainer(
       if (!t.available_from) t.available_from = when;
       break;
     }
-    case "Dropped":
+    case "Dropped": {
       if (!opts.reason) throw new HttpError(400, "Rule T6: dropping a trainer needs a reason.");
+      // Rule T7: dropping someone who is still running a batch stranded it silently — the batch
+      // kept pointing at a trainer who had left, the readiness screen still counted them, and
+      // nobody found out until the day the class did not start. Name the batches and make the
+      // reassignment happen first; this is the same trap the certificate rejection used to set.
+      const booked = await Batch.find({ trainer: trainerId, status: { $in: ACTIVE_BATCH_STATUSES } })
+        .select("code status").lean<any[]>();
+      if (booked.length) {
+        throw new HttpError(409,
+          `Rule T7: ${t.name} is still assigned to ${booked.map((b) => `${b.code} (${b.status})`).join(", ")}. ` +
+          `Reassign ${booked.length === 1 ? "that batch" : "those batches"} to another trainer before dropping them.`);
+      }
       t.dropped_reason = opts.reason;
       t.active = false;
       break;
+    }
     case "Applied":
       // Re-opening someone previously dropped.
       t.dropped_reason = undefined;
@@ -1304,6 +1316,91 @@ export async function trainerCountsFor(locationId: unknown, programId: unknown) 
 // described: "ye teen cheezein hain - location, trainer, aur candidate. Ye teeno map ho gaye to
 // batch form ho jata hai." Returns the ONE thing that is blocking, so the screen can say what to
 // do next rather than showing a wall of red.
+// The one definition of "what is stopping this centre x job role", shared by the single-row
+// lookup below and the bulk listing. Two copies of this would drift, and a readiness screen that
+// disagrees with itself is worse than none.
+function readinessBlockers(
+  loc: { tc_id?: string; tc_status?: string; approval_status?: string; operational_status?: string },
+  counts: { certified: number; in_pipeline: number },
+  registered: number,
+  needed: number,
+): string[] {
+  const blockers: string[] = [];
+  // A centre with no approved TC cannot enrol anyone on the portal at all, whatever else is ready.
+  if (!loc.tc_id) blockers.push("no TC ID on record");
+  else if (loc.tc_status && loc.tc_status !== "Approved") blockers.push(`TC status is "${loc.tc_status}"`);
+  if (loc.approval_status !== "Approved") blockers.push("centre not approved");
+  if (["On Hold", "Stopped", "Closed"].includes(String(loc.operational_status))) blockers.push(`centre is ${loc.operational_status}`);
+  if (counts.certified < 1) {
+    blockers.push(counts.in_pipeline > 0
+      ? `no certified trainer yet (${counts.in_pipeline} in the pipeline)`
+      : "no trainer nominated for this job role");
+  }
+  if (registered < needed) blockers.push(`${registered} of ${needed} candidates registered on SIDH`);
+  return blockers;
+}
+
+// Bulk readiness for a whole estate. The first version looped mappingReadiness once per target and
+// awaited each in turn — about five queries per row, run sequentially, which measured 10.3s for 81
+// rows on a laptop. Home calls this on every load for every user, so that was a real outage in
+// waiting. This does the same work in three aggregations regardless of how many targets exist.
+export async function mappingReadinessBulk(targetFilter: Record<string, unknown>, limit = 400) {
+  const targets = await LocationTarget.find(targetFilter)
+    .populate("location", "name code tc_id tc_status approval_status operational_status")
+    .populate("program", "name code scheme default_batch_size")
+    .limit(limit).lean<any[]>();
+  if (!targets.length) return [];
+
+  const key = (l: unknown, p: unknown) => `${String(l)}|${String(p)}`;
+  const locIds = [...new Set(targets.map((t) => t.location?._id).filter(Boolean))];
+  const progIds = [...new Set(targets.map((t) => t.program?._id).filter(Boolean))];
+
+  const [trainerRows, candRows] = await Promise.all([
+    Trainer.aggregate([
+      { $match: { nominated_for_location: { $in: locIds }, nominated_for_program: { $in: progIds }, active: true } },
+      { $group: {
+        _id: { l: "$nominated_for_location", p: "$nominated_for_program" },
+        nominated: { $sum: { $cond: [{ $in: ["$pipeline_status", NOMINATED_STATES] }, 1, 0] } },
+        certified: { $sum: { $cond: [{ $eq: ["$pipeline_status", "Certified"] }, 1, 0] } },
+        in_pipeline: { $sum: { $cond: [{ $in: ["$pipeline_status", ["Certified", "Dropped"]] }, 0, 1] } },
+      } },
+    ]),
+    Candidate.aggregate([
+      { $match: { location: { $in: locIds }, program: { $in: progIds }, lifecycle_status: "Unassigned" } },
+      { $group: {
+        _id: { l: "$location", p: "$program" },
+        pool: { $sum: 1 },
+        registered: { $sum: { $cond: [{ $eq: ["$sidh_status", "Registered"] }, 1, 0] } },
+      } },
+    ]),
+  ]);
+
+  const byTrainer = new Map(trainerRows.map((r) => [key(r._id.l, r._id.p), r]));
+  const byCand = new Map(candRows.map((r) => [key(r._id.l, r._id.p), r]));
+
+  return targets.filter((t) => t.location && t.program).map((t) => {
+    const k = key(t.location._id, t.program._id);
+    const tc = byTrainer.get(k) ?? { nominated: 0, certified: 0, in_pipeline: 0 };
+    const cc = byCand.get(k) ?? { pool: 0, registered: 0 };
+    const needed = t.program.default_batch_size ?? 30;
+    const counts = { nominated: tc.nominated, certified: tc.certified, in_pipeline: tc.in_pipeline };
+    const blockers = readinessBlockers(t.location, counts, cc.registered, needed);
+    return {
+      location: {
+        _id: t.location._id, name: t.location.name, code: t.location.code,
+        tc_id: t.location.tc_id ?? null, tc_status: t.location.tc_status ?? null,
+      },
+      program: { _id: t.program._id, name: t.program.name, code: t.program.code, scheme: t.program.scheme ?? null },
+      approved_target: t.approved_target ?? null,
+      trainers: { required: t.trainers_required ?? null, ...counts },
+      candidates: { pool: cc.pool, registered: cc.registered, needed },
+      ready: blockers.length === 0,
+      blockers,
+      next_action: blockers[0] ?? "Ready to form a batch",
+    };
+  });
+}
+
 export async function mappingReadiness(locationId: string, programId: string) {
   const [loc, prog, target] = await Promise.all([
     Location.findById(locationId).select("name code tc_id tc_status approval_status operational_status").lean<any>(),
@@ -1319,18 +1416,7 @@ export async function mappingReadiness(locationId: string, programId: string) {
   const pool = await Candidate.countDocuments({ location: locationId, program: programId, lifecycle_status: "Unassigned" });
 
   const needed = prog.default_batch_size ?? 30;
-  const blockers: string[] = [];
-  // A centre with no approved TC cannot enrol anyone on the portal at all, whatever else is ready.
-  if (!loc.tc_id) blockers.push("no TC ID on record");
-  else if (loc.tc_status && loc.tc_status !== "Approved") blockers.push(`TC status is "${loc.tc_status}"`);
-  if (loc.approval_status !== "Approved") blockers.push("centre not approved");
-  if (["On Hold", "Stopped", "Closed"].includes(loc.operational_status)) blockers.push(`centre is ${loc.operational_status}`);
-  if (counts.certified < 1) {
-    blockers.push(counts.in_pipeline > 0
-      ? `no certified trainer yet (${counts.in_pipeline} in the pipeline)`
-      : "no trainer nominated for this job role");
-  }
-  if (registered < needed) blockers.push(`${registered} of ${needed} candidates registered on SIDH`);
+  const blockers = readinessBlockers(loc, counts, registered, needed);
 
   return {
     location: { _id: loc._id, name: loc.name, code: loc.code, tc_id: loc.tc_id ?? null, tc_status: loc.tc_status ?? null },
