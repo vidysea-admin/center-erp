@@ -54,6 +54,29 @@ export function dayStart(d: Date | string): Date {
   return r;
 }
 
+// 2026-08-12 audit F-008 (S1): dayStart() is midnight in the SERVER PROCESS's timezone, and
+// DailyLog.log_date was stored with it — so "7 Aug" written by a laptop in IST is a different
+// instant from "7 Aug" written by the container in UTC. Lookups compared those instants for
+// exact equality, so the missing-log alarm never matched the seeded rows and reported "no daily
+// log for 8 operating days" directly above a table listing five. It also means the
+// {batch, log_date} unique index behind Rule 27 is keyed on a timezone-dependent value.
+//
+// dayKey is the calendar date itself, pinned to UTC midnight so it does not move with the
+// server's timezone. dayRange spans exactly that calendar day for querying.
+export function dayKey(d: Date | string): Date {
+  if (typeof d === "string") {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d);
+    if (m) return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  }
+  const dt = new Date(d);
+  return new Date(Date.UTC(dt.getFullYear(), dt.getMonth(), dt.getDate()));
+}
+
+export function dayRange(d: Date | string): { $gte: Date; $lt: Date } {
+  const s = dayKey(d);
+  return { $gte: s, $lt: new Date(s.getTime() + 86_400_000) };
+}
+
 // ---------- Computed values (§5) ----------
 export function computePlannedEnd(planned_start: Date, program: { duration_days: number; buffer_days: number }): Date {
   // Rule 15
@@ -178,10 +201,16 @@ export async function assertTrainerAvailableForBatch(
         `Scheme guideline: at most ${maxPerDay} sessions a day. Trainer ${trainer.name} already runs ${sameDaySlotted.length} slotted batch(es) over these dates (${sameDaySlotted.map((b) => `${b.code} ${b.slot_start}–${b.slot_end}`).join(", ")}).`);
     }
   }
-  if (overlapping.length + 1 > (trainer.max_concurrent_batches ?? 1)) {
+  // 2026-08-12 audit F-001: Admin → Defaults shows a "Max concurrent batches" field, but Rule 10
+  // read only the per-trainer number, so changing that Default did nothing to enforcement — it
+  // fed only the capacity sentence on the location screen. Production had the Default at 5 while
+  // the cap actually applied was 4. The per-trainer value still wins when it is set (some
+  // trainers genuinely carry more or fewer); the Default is the policy behind everyone else.
+  const cap = trainer.max_concurrent_batches ?? (await getDefaults()).max_concurrent_batches ?? 1;
+  if (overlapping.length + 1 > cap) {
     const c = overlapping[0];
     throw new HttpError(409,
-      `Rule 10: Trainer ${trainer.name} already assigned to batch ${c.code} at ${c.location?.name ?? "?"} (${new Date(batchRange(c)[0]).toDateString()} – ${new Date(batchRange(c)[1]).toDateString()}); max concurrent = ${trainer.max_concurrent_batches}.`);
+      `Rule 10: Trainer ${trainer.name} already assigned to batch ${c.code} at ${c.location?.name ?? "?"} (${new Date(batchRange(c)[0]).toDateString()} – ${new Date(batchRange(c)[1]).toDateString()}); max concurrent = ${cap}.`);
   }
 }
 
@@ -350,6 +379,17 @@ export async function dropMemberChecked(memberId: string, left_on: Date, drop_re
   m.left_on = lo;
   m.drop_reason = drop_reason;
   await m.save();
+  // 2026-08-12 audit F-007 (S1): Rule 26 excludes a member from the roster on their own leave
+  // date, so a log for that day kept listing someone who was no longer on it. Every later edit
+  // to that log — including entering the government attendance figure, the number the whole
+  // system exists to report — was then refused with "present member not in roster on that
+  // date", naming neither the member nor the day. Tidy the roster history as we go instead.
+  const staleLogs = await DailyLog.find({ batch: m.batch, log_date: { $gte: lo }, present_member_ids: m._id });
+  for (const log of staleLogs) {
+    log.present_member_ids = log.present_member_ids.filter((id: any) => String(id) !== String(m._id));
+    log.internal_present = log.present_member_ids.length; // Rule 29; roster_count stays frozen (Rule 28)
+    await log.save();
+  }
   await Candidate.findByIdAndUpdate(m.candidate, { lifecycle_status: "Dropped" }); // Rule 21
   // Rule 42: an existing result is NOT deleted when someone drops — they still appeared.
   // Recompute so the aggregates reflect the new roster.
@@ -474,15 +514,25 @@ export async function validateDailyLog(batchId: string, log_date: Date, payload:
     throw new HttpError(409, "Daily logs only for Active/Closing batches.");
   }
   await assertLocationOperational(batch.location, "Entering a daily log"); // Rule 1
-  const D = dayStart(log_date);
-  if (batch.actual_start && D < dayStart(batch.actual_start)) throw new HttpError(400, "Rule 32: log date before batch actual start.");
-  if (batch.actual_end && D > dayStart(batch.actual_end)) throw new HttpError(400, "Rule 32: log date after batch actual end.");
-  if (D > dayStart(new Date())) throw new HttpError(400, "Cannot log a future date.");
+  // F-008: compare calendar dates on one consistent footing. Mixing dayStart (server-local) with
+  // the dayKey the log is stored under would shift the day by the server's UTC offset.
+  const D = dayKey(log_date);
+  if (batch.actual_start && D < dayKey(batch.actual_start)) throw new HttpError(400, "Rule 32: log date before batch actual start.");
+  if (batch.actual_end && D > dayKey(batch.actual_end)) throw new HttpError(400, "Rule 32: log date after batch actual end.");
+  if (D > dayKey(new Date())) throw new HttpError(400, "Cannot log a future date.");
 
   const roster = await rosterOnDate(batchId, D); // Rule 26
   const rosterIds = new Set(roster.map((m) => String(m._id)));
   for (const id of payload.present_member_ids) {
-    if (!rosterIds.has(String(id))) throw new HttpError(400, "Rule 29: present member not in roster on that date.");
+    if (!rosterIds.has(String(id))) {
+      // Name who and when — the operator cannot act on "a present member" (audit F-007).
+      const m = await BatchMember.findById(id).populate("candidate", "name").lean<any>();
+      const who = m?.candidate?.name ?? "That candidate";
+      const when = D.toLocaleDateString("en-IN");
+      throw new HttpError(400, m?.left_on
+        ? `Rule 29: ${who} left this batch on ${new Date(m.left_on).toLocaleDateString("en-IN")}, so they were not on the roster on ${when}. Untick them to save.`
+        : `Rule 29: ${who} was not on this batch's roster on ${when}.`);
+    }
   }
   const internal_present = payload.present_member_ids.length; // Rule 29
   if (internal_present > roster.length) throw new HttpError(400, "Rule 29: present exceeds roster.");
@@ -522,7 +572,7 @@ export async function missingLogStreak(batch: any, operating: number[]): Promise
   while (guard++ < 21) {
     if (!operating.includes(d.getDay())) { d = addDays(d, -1); continue; }
     if (batch.actual_start && d < dayStart(batch.actual_start)) break;
-    const log = await DailyLog.findOne({ batch: batch._id, log_date: d }).select("_id").lean();
+    const log = await DailyLog.findOne({ batch: batch._id, log_date: dayRange(d) }).select("_id").lean();
     if (log) break;
     days++;
     if (!lastMissing) lastMissing = d;
@@ -592,7 +642,7 @@ export async function missingLogQueue(locationScopeFilter: Record<string, unknow
     let guard = 0;
     while (!operating.includes(d.getDay()) && guard++ < 7) d = addDays(d, -1);
     if (b.actual_start && d < dayStart(b.actual_start)) continue;
-    const log = await DailyLog.findOne({ batch: b._id, log_date: d }).lean();
+    const log = await DailyLog.findOne({ batch: b._id, log_date: dayRange(d) }).lean();
     if (!log) out.push({ batch: b, missing_date: d, owner: b.location?.spoc_name ?? "SPOC" });
   }
   return out;
@@ -709,8 +759,13 @@ export async function assessmentCompleteness(batchId: string) {
 export async function certificationCompleteness(batchId: string) {
   const rows = await CandidateResult.find({ batch: batchId }).populate("candidate", "name").lean<any[]>();
   if (!rows.length) return { legacy: true, pass_count: 0, issued: 0, blocking: [] as any[], complete: true };
-  const passes = rows.filter((r) => r.result === "Pass");
-  const blocking = passes.filter((r) => r.certificate_status !== "Issued");
+  // 2026-08-12 audit (S0): a candidate who has left the batch kept blocking certification
+  // forever, because this walked every result row regardless of membership.
+  const dropped = await BatchMember.find({ batch: batchId, left_on: { $ne: null } }).select("_id").lean<any[]>();
+  const droppedIds = new Set(dropped.map((m) => String(m._id)));
+  const passes = rows.filter((r) => r.result === "Pass" && !droppedIds.has(String(r.batch_member)));
+  // "Not Issued" is a settled outcome, not an outstanding one.
+  const blocking = passes.filter((r) => !["Issued", "Not Issued"].includes(r.certificate_status));
   return {
     legacy: false,
     pass_count: passes.length,
@@ -722,10 +777,14 @@ export async function certificationCompleteness(batchId: string) {
 
 const CERT_FLOW: Record<string, string[]> = {
   Pending: ["Processing"],
-  Processing: ["Generated", "Rejected"],
-  Generated: ["Issued", "Rejected"],
+  Processing: ["Generated", "Rejected", "Not Issued"],
+  Generated: ["Issued", "Rejected", "Not Issued"],
   Issued: [],
-  Rejected: ["Processing"], // resubmission path
+  // 2026-08-12 audit (S0): "Rejected" used to lead only back to "Processing", which demands a
+  // certificate_no — so a certificate the awarding body refused could never be abandoned and the
+  // batch could never leave Closing. "Not Issued" is the honest terminal state.
+  Rejected: ["Processing", "Not Issued"], // resubmit, or give up on it
+  "Not Issued": ["Processing"], // reopen if the awarding body relents
 };
 
 // Rules 41, 42, 44, 45 — mark or update one candidate's assessment result.
@@ -734,6 +793,15 @@ export async function upsertCandidateResult(batchId: string, memberId: string, p
   if (!batch) throw new HttpError(404, "Batch not found");
   if (["Completed", "Cancelled"].includes(batch.status)) {
     throw new HttpError(409, "Rule 41: this batch is closed — results can no longer be recorded.");
+  }
+  // 2026-08-12 audit (S0): marking the FIRST candidate on a batch that already completed
+  // assessment in batch-level mode silently rewrote Closure.appeared/passed from the real
+  // figures (e.g. 30/25) down to 1/1, and left every unmarked candidate stranded at Enrolled
+  // on a closed batch. Switching modes after the fact is now refused outright.
+  const closureNow = await Closure.findOne({ batch: batchId }).select("assessment_status").lean<any>();
+  if (closureNow?.assessment_status === "Completed" && !(await batchUsesPerCandidateResults(batchId))) {
+    throw new HttpError(409,
+      "Rule 42: assessment was already completed with batch-level figures. Reopen the assessment before marking candidates individually, so the totals are rebuilt from the roster rather than overwritten.");
   }
   const member = await BatchMember.findById(memberId).select("batch candidate").lean<any>();
   if (!member) throw new HttpError(404, "Batch member not found");
@@ -787,6 +855,16 @@ export async function upsertCandidateCertificate(resultId: string, patch: Record
     if (target === "Rejected" && !(patch.certificate_rejection_reason ?? row.certificate_rejection_reason)) {
       throw new HttpError(400, "Rule 46: a rejected certificate needs a reason.");
     }
+    // Abandoning a certificate is a reportable decision, so it carries a reason too.
+    if (target === "Not Issued" && !(patch.certificate_rejection_reason ?? row.certificate_rejection_reason)) {
+      throw new HttpError(400, "Rule 46: say why this certificate will never be issued.");
+    }
+    // A stale number must not survive onto an abandoned or reopened certificate — it would
+    // otherwise block its own reuse via the partial unique index (sync S2-10).
+    if (["Not Issued", "Processing"].includes(target)) {
+      row.set("certificate_no", undefined);
+      row.set("certificate_date", undefined);
+    }
   }
   for (const f of ["certificate_status", "certificate_no", "certificate_date", "certificate_file", "certificate_rejection_reason"]) {
     if (patch[f] !== undefined) (row as any)[f] = patch[f];
@@ -803,7 +881,12 @@ export async function startReassessment(resultId: string, reassessment_date: Dat
   const row = await CandidateResult.findById(resultId);
   if (!row) throw new HttpError(404, "Result not found");
   if (row.result === "Pending") throw new HttpError(409, "Rule 44: this result is already open.");
-  if (row.certificate_status !== "Pending") throw new HttpError(409, "Rule 44: a certificate exists — reject it before reassessing.");
+  // "Not Issued" is settled, not outstanding — a candidate whose certificate was abandoned may
+  // be reassessed. Previously only "Pending" passed here, and the error told you to reject a
+  // certificate that was already rejected (2026-08-12 audit, S0).
+  if (!["Pending", "Not Issued"].includes(row.certificate_status)) {
+    throw new HttpError(409, `Rule 44: this candidate's certificate is ${row.certificate_status} — reject it or mark it Not Issued before reassessing.`);
+  }
   const batch = await Batch.findById(row.batch).select("status").lean<any>();
   if (["Completed", "Cancelled"].includes(batch?.status)) throw new HttpError(409, "Rule 44: the batch is closed.");
 
@@ -876,13 +959,47 @@ export async function upsertClosureChecked(batchId: string, patch: Record<string
     }
   }
 
-  if (!perCandidate && (patch.assessment_status === "Completed" || patch.appeared != null || patch.passed != null)) {
-    const assessDate = (patch.assessment_date as Date) ?? closure.assessment_date ?? new Date();
-    const roster = await rosterOnDate(batchId, new Date(assessDate));
-    const appeared = (patch.appeared as number) ?? closure.appeared;
-    const passed = (patch.passed as number) ?? closure.passed;
-    if (appeared != null && appeared > roster.length) throw new HttpError(400, `Rule 34: appeared (${appeared}) exceeds roster on assessment date (${roster.length}).`);
-    if (passed != null && appeared != null && passed > appeared) throw new HttpError(400, "Rule 34: passed cannot exceed appeared.");
+  if (!perCandidate) {
+    // Batch-level mode. Audit F-010 (S0): Rules 43/46 used to live ONLY inside the
+    // perCandidate branch above, and perCandidate is false exactly when nobody has been
+    // assessed — so a batch with zero results could be marked assessment Completed, then
+    // certification Completed, then carried all the way to a Paid invoice with no evidence
+    // behind it. "No results exist" was being read as "nothing is pending" instead of
+    // "nothing was assessed". Completing now requires the numbers, in either mode.
+    if (patch.assessment_status === "Completed") {
+      const appeared = (patch.appeared as number) ?? closure.appeared;
+      const passed = (patch.passed as number) ?? closure.passed;
+      if (appeared == null || passed == null) {
+        throw new HttpError(409, "Rule 43: record how many candidates appeared and passed, or mark each candidate individually, before completing assessment.");
+      }
+    }
+    if (patch.certification_status === "Completed") {
+      const issued = (patch.certificates_issued as number) ?? closure.certificates_issued;
+      if (issued == null) {
+        throw new HttpError(409, "Rule 46: record how many certificates were issued, or mark each candidate's certificate, before completing certification.");
+      }
+    }
+
+    if (patch.assessment_status === "Completed" || patch.certification_status === "Completed"
+      || patch.appeared != null || patch.passed != null || patch.certificates_issued != null) {
+      const assessDate = (patch.assessment_date as Date) ?? closure.assessment_date ?? new Date();
+      const roster = await rosterOnDate(batchId, new Date(assessDate));
+      const appeared = (patch.appeared as number) ?? closure.appeared;
+      const passed = (patch.passed as number) ?? closure.passed;
+      const issued = (patch.certificates_issued as number) ?? closure.certificates_issued;
+      if (appeared != null && appeared > roster.length) throw new HttpError(400, `Rule 34: appeared (${appeared}) exceeds roster on assessment date (${roster.length}).`);
+      // sync S1-7: `passed` was unchecked whenever `appeared` was null, and
+      // `certificates_issued` was never checked at all. Both feed the invoice.
+      if (passed != null && passed > (appeared ?? roster.length)) {
+        throw new HttpError(400, `Rule 34: passed (${passed}) cannot exceed ${appeared != null ? `appeared (${appeared})` : `the roster (${roster.length})`}.`);
+      }
+      if (issued != null && issued > (passed ?? roster.length)) {
+        throw new HttpError(400, `Rule 46: certificates issued (${issued}) cannot exceed ${passed != null ? `passed (${passed})` : `the roster (${roster.length})`}.`);
+      }
+      if ([appeared, passed, issued].some((n) => n != null && (!Number.isInteger(n) || (n as number) < 0))) {
+        throw new HttpError(400, "Rule 34: appeared, passed and certificates issued must be whole numbers of zero or more.");
+      }
+    }
   }
 
   const settingReady = patch.ready_for_invoice === true && !closure.ready_for_invoice;
@@ -895,11 +1012,16 @@ export async function upsertClosureChecked(batchId: string, patch: Record<string
   if (settingReady) {
     closure.marked_ready_by = new Types.ObjectId(userId);
     closure.marked_ready_at = new Date();
-    await Invoice.findOneAndUpdate(
-      { batch: batchId },
-      { $set: { status: "Ready" }, $setOnInsert: { batch: batchId } },
-      { upsert: true },
-    ); // Rule 35
+    // 2026-08-12 audit (sync S1-5): this unconditionally forced the invoice back to "Ready",
+    // so un-ticking and re-ticking "ready for invoice" walked a Raised or even Paid invoice
+    // backwards past both the monotonic order in Rule 36 and the approval gate. Only ever
+    // create the invoice or lift it off "Not Ready" — never drag a live one back.
+    const existing = await Invoice.findOne({ batch: batchId }).select("status").lean<any>();
+    if (!existing) {
+      await Invoice.create({ batch: batchId, status: "Ready" }); // Rule 35
+    } else if (existing.status === "Not Ready") {
+      await Invoice.updateOne({ batch: batchId }, { $set: { status: "Ready" } });
+    }
   }
   await closure.save();
   if (perCandidate) await recomputeClosureAggregates(batchId, userId); // Rule 42: derived wins
@@ -926,6 +1048,27 @@ export async function updateInvoiceChecked(batchId: string, patch: Record<string
   }
   if (target === "Paid" && !(patch.paid_on ?? inv.paid_on)) {
     throw new HttpError(400, "Rule 36: Paid requires paid_on.");
+  }
+  // 2026-08-12 audit (sync S1-6): the money fields stayed freely editable after Raised, and a
+  // field-only PATCH carried no status change so it skipped the approval gate entirely — an
+  // invoice number or amount could be rewritten after the fact with nothing recording it.
+  // They are now frozen once the invoice has left "Ready"; correcting one means moving the
+  // invoice back deliberately, which is itself gated and audited.
+  const MONEY_FIELDS = ["amount", "invoice_no", "raised_on", "paid_on"];
+  if (INVOICE_ORDER.indexOf(inv.status) >= INVOICE_ORDER.indexOf("Raised")) {
+    const changed = MONEY_FIELDS.filter((f) => {
+      if (patch[f] === undefined) return false;
+      const before = (inv as any)[f];
+      const a = before instanceof Date ? before.toISOString().slice(0, 10) : before ?? null;
+      const b = patch[f] instanceof Date ? (patch[f] as Date).toISOString().slice(0, 10) : String(patch[f] ?? "").slice(0, 10) || null;
+      return String(a ?? "") !== String(b ?? "");
+    });
+    // Setting paid_on as part of the Ready→Raised→Paid move itself is legitimate.
+    const allowed = target === "Paid" ? ["paid_on"] : [];
+    const blocked = changed.filter((f) => !allowed.includes(f));
+    if (blocked.length) {
+      throw new HttpError(409, `Rule 36: ${blocked.join(", ")} cannot be changed once the invoice is ${inv.status}.`);
+    }
   }
   Object.assign(inv, patch);
   await inv.save();

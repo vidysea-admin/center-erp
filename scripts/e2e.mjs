@@ -133,12 +133,65 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: today, present_m
 // valid
 const log = (await req("POST", `/api/batches/${batch._id}/logs`, { log_date: today, present_member_ids: mIds.slice(0, 2), govt_present: 2, actual_topic: "Day 1" }, 201)).data.item;
 ok("Rule 28: roster_count frozen at 3", log.roster_count === 3);
+// 2026-08-12 audit F-008 (S1): log_date used to be midnight in the SERVER PROCESS's timezone, so
+// the same calendar day written by a laptop in IST and by the container in UTC were different
+// instants. The missing-log lookups compared them for exact equality, so the alarm reported
+// "no daily log for 8 operating days" directly above a table listing five of them. The stored
+// value must now be the calendar date itself, pinned to UTC midnight, whatever TZ this runs in.
+ok("F-008: log_date stored as a timezone-independent calendar date",
+  new Date(log.log_date).toISOString() === `${today}T00:00:00.000Z`,
+  `${new Date(log.log_date).toISOString()} for ${today}`);
+{
+  const h = (await req("GET", `/api/batches/${batch._id}`)).data.health;
+  const missing = (h?.reasons ?? []).filter((r) => r.code === "missing_logs");
+  ok("F-008: a batch logged today is not reported as missing its log", missing.length === 0, JSON.stringify(missing.map((m) => m.label)));
+}
+// Rule 27 now also catches a same-calendar-day duplicate written under the old encoding.
+await req("POST", `/api/batches/${batch._id}/logs`, { log_date: `${today}T09:30:00.000Z`, present_member_ids: [] }, 409);
 // Rule 27 (unique): duplicate date → 409
 await req("POST", `/api/batches/${batch._id}/logs`, { log_date: today, present_member_ids: [] }, 409);
 // Rule 32: date before actual_start
 await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", present_member_ids: [] }, 400);
 
+// 2026-08-12 audit F-007 (S1): dropping a candidate on day D used to lock day D's log. Rule 26
+// excludes them from that day's roster, the saved log still listed them present, and every later
+// PATCH touching present_member_ids or govt_present was refused — so the government attendance
+// figure for that day could never be entered. Editing note/photos still worked, which made the
+// failure look random. Reproduced on production before the fix.
+{
+  const fresh = (await req("POST", "/api/candidates", { name: `Drop Log ${stamp}`, phone: `77770${stamp}`, location: loc._id, program: prog._id }, 201)).data.item;
+  const fm = (await req("POST", `/api/batches/${batch._id}/members`, { candidate: fresh._id }, 201)).data.item;
+  const rosterBefore = (await req("GET", `/api/batches/${batch._id}/logs`)).data.items[0]?.roster_count;
+  // put them on today's log, then drop them today
+  const withThem = [...mIds.slice(0, 2), fm._id];
+  await req("PATCH", `/api/logs/${log._id}`, { present_member_ids: withThem }, 200);
+  await req("POST", `/api/members/${fm._id}/drop`, { left_on: today, drop_reason: "Got a job" }, 200);
+  // the log must have been tidied, not left inconsistent
+  const tidied = (await req("GET", `/api/batches/${batch._id}/logs`)).data.items.find((l) => l._id === log._id);
+  ok("F-007: dropping a member strips them from that day's present list", !tidied.present_member_ids.map(String).includes(String(fm._id)));
+  ok("F-007: internal_present follows the tidy-up", tidied.internal_present === tidied.present_member_ids.length, `${tidied.internal_present} vs ${tidied.present_member_ids.length}`);
+  ok("F-007: Rule 28 roster_count still frozen after a drop", tidied.roster_count === rosterBefore, `${tidied.roster_count} vs ${rosterBefore}`);
+  // …and the number that matters can still be entered
+  await req("PATCH", `/api/logs/${log._id}`, { govt_present: 1 }, 200);
+  await req("PATCH", `/api/logs/${log._id}`, { note: "still editable" }, 200);
+  // Rule 30 bounds still enforced against the frozen roster
+  await req("PATCH", `/api/logs/${log._id}`, { govt_present: 999 }, 400);
+  await req("PATCH", `/api/logs/${log._id}`, { govt_present: -1 }, 400);
+}
+
 // ---- closure ----
+// 2026-08-12 audit F-010 (S0): Rules 43/46 lived only inside the per-candidate branch, and that
+// branch is skipped exactly when nobody has been assessed. A batch with zero results could be
+// marked assessment Completed → Closing → certification Completed → invoice Raised → Paid, with
+// ten candidates ending up lifecycle "Completed" and no evidence anywhere. Completing now
+// demands either the batch-level numbers or per-candidate rows.
+await req("PUT", `/api/batches/${batch._id}/closure`, { assessment_status: "Completed", assessment_date: today }, 409);
+await req("PUT", `/api/batches/${batch._id}/closure`, { assessment_status: "Completed", assessment_date: today, appeared: 3 }, 409);
+await req("PUT", `/api/batches/${batch._id}/closure`, { certification_status: "Completed", certification_date: today }, 409);
+// sync S1-7: `passed` was unchecked when `appeared` was absent, and certificates_issued never checked.
+await req("PUT", `/api/batches/${batch._id}/closure`, { passed: 99 }, 400);
+await req("PUT", `/api/batches/${batch._id}/closure`, { appeared: 3, passed: 2, certificates_issued: 3 }, 400);
+await req("PUT", `/api/batches/${batch._id}/closure`, { appeared: -1, passed: 0 }, 400);
 // Rule 34: appeared > roster on date
 await req("PUT", `/api/batches/${batch._id}/closure`, { assessment_status: "Completed", assessment_date: today, appeared: 5, passed: 2 }, 400);
 // Rule 19: cancel with logs, non-force → still admin so allowed with reason; test missing reason
@@ -156,6 +209,19 @@ ok("Rule 35: invoice auto Not Ready→Ready", inv1?.status === "Ready", inv1?.st
 // Rule 36: Raised without invoice_no → 400
 await req("PATCH", `/api/batches/${batch._id}/invoice`, { status: "Raised" }, 400);
 await req("PATCH", `/api/batches/${batch._id}/invoice`, { status: "Raised", invoice_no: "INV-" + stamp, raised_on: today, amount: 100000 }, 200);
+// 2026-08-12 audit (sync S1-6): the money fields stayed editable after Raised, and a field-only
+// PATCH skipped the approval gate because it carried no status change.
+await req("PATCH", `/api/batches/${batch._id}/invoice`, { amount: 1 }, 409);
+await req("PATCH", `/api/batches/${batch._id}/invoice`, { invoice_no: "INV-REWRITTEN" }, 409);
+await req("PATCH", `/api/batches/${batch._id}/invoice`, { raised_on: "2020-01-01" }, 409);
+// re-sending the same value is not a change, so it must not be refused
+await req("PATCH", `/api/batches/${batch._id}/invoice`, { invoice_no: "INV-" + stamp }, 200);
+// 2026-08-12 audit (sync S1-5): un-ticking and re-ticking "ready for invoice" used to drag a
+// Raised (or Paid) invoice back to Ready, past the monotonic order and the approval gate.
+await req("PUT", `/api/batches/${batch._id}/closure`, { ready_for_invoice: false }, 200);
+await req("PUT", `/api/batches/${batch._id}/closure`, { ready_for_invoice: true }, 200);
+const invAfterRetick = (await req("GET", `/api/batches/${batch._id}/closure`)).data.invoice;
+ok("sync S1-5: re-ticking ready does not reset a Raised invoice", invAfterRetick?.status === "Raised", invAfterRetick?.status);
 // complete batch
 await req("POST", `/api/batches/${batch._id}/transition`, { target: "Completed" }, 200);
 const c0b = (await req("GET", `/api/candidates/${cands[0]._id}`)).data.item;

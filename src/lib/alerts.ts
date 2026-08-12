@@ -6,7 +6,7 @@ import {
   Batch, Closure, DailyLog, Invoice, Notification, SheetChange, TrainerRequest, WorkbookChange,
 } from "@/models";
 import { getDefaults } from "@/lib/defaults";
-import { addDays, assessmentCompleteness, dayStart, missingLogStreak } from "@/lib/rules";
+import { addDays, assessmentCompleteness, dayRange, dayStart, missingLogStreak } from "@/lib/rules";
 
 type Raise = {
   type: string;
@@ -145,7 +145,7 @@ export async function evaluateAlerts(): Promise<{ raised: number; checked: strin
   for (const b of activeBatches) {
     const operating: number[] = b.program?.operating_days?.length ? b.program.operating_days : [1, 2, 3, 4, 5, 6];
     if (!operating.includes(yesterday.getDay())) continue;
-    const log = await DailyLog.findOne({ batch: b._id, log_date: yesterday }).select("photos videos").lean<any>();
+    const log = await DailyLog.findOne({ batch: b._id, log_date: dayRange(yesterday) }).select("photos videos").lean<any>();
     const count = (log?.photos?.length ?? 0) + (log?.videos?.length ?? 0);
     if (log && count < (defaults.min_daily_evidence ?? 2)) {
       evLow.push(b._id);

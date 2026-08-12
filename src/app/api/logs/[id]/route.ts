@@ -23,13 +23,25 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   for (const f of ["planned_topic", "actual_topic", "present_member_ids", "govt_present", "govt_source", "govt_screenshot", "photos", "videos", "note"]) {
     if (body[f] !== undefined) patch[f] = body[f];
   }
-  if (patch.present_member_ids || patch.govt_present !== undefined) {
+  // 2026-08-12 audit F-007 (S1): this used to re-validate the STORED present list against the
+  // CURRENT roster on every edit that touched either field. Once anyone was dropped, the stored
+  // list no longer matched the roster, so entering the government attendance figure for that day
+  // failed — while editing the note or the photos still worked, which made it look random.
+  // Only an incoming present list needs roster validation; govt_present is bounded by the
+  // roster_count frozen at save (Rules 28 and 30).
+  if (patch.present_member_ids !== undefined) {
     const check = await validateDailyLog(String(log.batch), log.log_date, {
-      present_member_ids: (patch.present_member_ids as string[]) ?? log.present_member_ids.map(String),
+      present_member_ids: patch.present_member_ids as string[],
       govt_present: (patch.govt_present as number | null) ?? log.govt_present,
     });
     patch.internal_present = check.internal_present; // Rule 29
     // Rule 28: roster_count stays frozen — deliberately NOT recomputed
+  } else if (patch.govt_present !== undefined && patch.govt_present !== null) {
+    const g = Number(patch.govt_present);
+    if (!Number.isInteger(g) || g < 0) throw new HttpError(400, "Rule 30: government attendance must be a whole number of zero or more.");
+    if (g > log.roster_count) {
+      throw new HttpError(400, `Rule 30: government attendance (${g}) cannot exceed the ${log.roster_count} on the roster that day.`);
+    }
   }
   Object.assign(log, patch);
   await log.save();

@@ -190,8 +190,14 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
           <div key={r._id ?? i} onClick={() => onRowClick?.(r)} className={`rounded-xl border bg-white p-3 shadow-sm ${onRowClick ? "cursor-pointer active:bg-blue-50" : ""}`}>
             {cardTitle && <div className="mb-1.5 font-medium">{cardTitle(r)}</div>}
             <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-sm">
+              {/* A label-less column (the actions cell) used to render a bare ": " before its
+                  button, and a column already shown as the card title was repeated underneath
+                  it — "07 Aug 2026" with "Date: 07 Aug 2026" below (audit F-005 screenshots). */}
               {columns.filter((c) => c.mobile !== false).map((c) => (
-                <div key={c.key}><span className="text-xs text-gray-400">{c.label}: </span>{cell(c, r)}</div>
+                <div key={c.key}>
+                  {c.label ? <span className="text-xs text-gray-400">{c.label}: </span> : null}
+                  {cell(c, r)}
+                </div>
               ))}
             </div>
           </div>

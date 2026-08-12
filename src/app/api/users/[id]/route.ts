@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireRole, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, requireRole, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { User } from "@/models";
 import { audit } from "@/lib/audit";
@@ -10,6 +10,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   await dbConnect();
   const user = await requireUser();
   await requirePerm(user, "users.manage"); // togglable (2026-08-11)
+  requireEdit(user); // Rule 39: a view-only holder of a granted right still may not write
   const { id } = await ctx.params;
   const doc = await User.findById(id);
   if (!doc) throw new HttpError(404, "User not found");
@@ -19,7 +20,11 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   // right, so a non-Admin holder must never be able to raise anyone's privileges — role,
   // rights, edit flag, activation and approvals stay Admin-only. And nobody, Admin
   // included, edits their own privileges.
-  const PRIV_FIELDS = ["role", "location_scope", "can_edit", "active", "extra_permissions"];
+  // 2026-08-12 audit (S0): `password` and `email` were missing from this list, so a body of
+  // only {"password":"…"} skipped the Admin check below and rewrote the hash further down —
+  // any non-Admin holding the GRANTABLE users.manage right could reset the Admin's password
+  // and take over the account. Credentials ARE privileges; they belong in this list.
+  const PRIV_FIELDS = ["role", "location_scope", "can_edit", "active", "extra_permissions", "password", "email"];
   const changingPriv = PRIV_FIELDS.some((f) => body[f] !== undefined) || body.approval !== undefined;
   if (changingPriv && user.role !== "Admin") {
     throw new HttpError(403, "Only an Admin may change roles, rights or account status.");

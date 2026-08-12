@@ -9,11 +9,56 @@ export class HttpError extends Error {
   }
 }
 
+// 2026-08-12 audit (auth S1-4): role, location_scope, can_edit, deactivation and rejection were
+// frozen into the JWT at sign-in and the session lasts 30 days, so none of them reached a live
+// session — an Admin could demote, rescope, deactivate or reject an account and that person kept
+// their old powers until the token expired. The meeting's promise was "toggles bite within ~5s,
+// no re-login", which was true of the permission matrix but not of the identity behind it.
+//
+// The token still says who you are; the database says what you may do. Re-read that here, where
+// every API authorisation decision is made, behind the same short TTL the permission cache uses.
+// Deliberately NOT in the jwt/session callback: those also run on the Edge runtime, where
+// Mongoose cannot connect.
+const IDENTITY_TTL_MS = 5_000;
+const identityCache = new Map<string, { at: number; user: SessionUser | null }>();
+
+export function invalidateIdentity(userId?: string) {
+  if (userId) identityCache.delete(String(userId));
+  else identityCache.clear();
+}
+
 export async function requireUser(): Promise<SessionUser> {
   const session = await auth();
   const user = session?.user as unknown as SessionUser | undefined;
   if (!user?.id) throw new HttpError(401, "Unauthorized");
-  return user;
+
+  const hit = identityCache.get(user.id);
+  if (hit && Date.now() - hit.at < IDENTITY_TTL_MS) {
+    if (!hit.user) throw new HttpError(401, "This account is no longer active. Please sign in again.");
+    return hit.user;
+  }
+
+  // Imported lazily so this module stays usable from contexts that never touch the database.
+  const { dbConnect } = await import("@/lib/db");
+  const { User } = await import("@/models");
+  await dbConnect();
+  const fresh = await User.findById(user.id).select("name email role location_scope can_edit active approval_status").lean<any>();
+
+  if (!fresh || !fresh.active || fresh.approval_status === "Rejected" || fresh.approval_status === "Pending") {
+    identityCache.set(user.id, { at: Date.now(), user: null });
+    throw new HttpError(401, "This account is no longer active. Please sign in again.");
+  }
+
+  const current: SessionUser = {
+    id: String(fresh._id),
+    name: fresh.name,
+    email: fresh.email,
+    role: fresh.role,
+    location_scope: (fresh.location_scope || []).map(String),
+    can_edit: !!fresh.can_edit,
+  };
+  identityCache.set(user.id, { at: Date.now(), user: current });
+  return current;
 }
 
 // Rule 40: role gates

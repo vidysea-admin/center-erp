@@ -91,7 +91,15 @@ ok("Rule 8: follow-ups generated (stop batch + release trainer + return candidat
 const after = (await req("GET", "/api/sheet-changes?status=Open")).data.items.find((c) => c._id === sChange._id);
 ok("Rule 7: change stays Open while follow-ups pending", !!after && after.pending_followups === 3, JSON.stringify(after?.pending_followups));
 const locAfter = (await req("GET", `/api/locations/${loc._id}`)).data.item;
-ok("Rule 5: operational_status Closed with reason, batches untouched", locAfter.operational_status === "Closed" && locAfter.status_reason === "Rejected in SDP sheet");
+// UPDATED 2026-08-12 (audit sync S1-3). This used to assert the centre was Closed the instant
+// the action was applied — which is precisely the defect: Rule 1 then refused daily logs for the
+// batch still running there, so attendance mid-delivery could not be recorded. Rule 6 says Close
+// "cannot be applied … until the generated FollowUpActions are resolved or explicitly skipped",
+// so the close is now deferred: the reason is recorded, follow-ups are raised, and the centre
+// keeps operating until they are settled (asserted below, after they are resolved).
+ok("Rule 6: the reason is recorded but the close waits for the follow-ups",
+  locAfter.operational_status !== "Closed" && locAfter.status_reason === "Rejected in SDP sheet",
+  `${locAfter.operational_status} / ${locAfter.status_reason}`);
 const batchAfter = (await req("GET", `/api/batches/${batch._id}`)).data.item;
 ok("Rule 5: batch NOT auto-stopped", batchAfter.status === "Active", batchAfter.status);
 
@@ -100,6 +108,10 @@ const fups = (await req("GET", "/api/follow-ups?status=Pending")).data.items.fil
 for (const f of fups) await req("POST", `/api/follow-ups/${f._id}`, { status: "Done" }, 200);
 const settled = (await req("GET", "/api/sheet-changes?status=Actioned")).data.items.find((c) => c._id === sChange._id);
 ok("Rule 7: change auto-Actioned once follow-ups resolved", !!settled);
+// …and the deferred close finally lands, which is the other half of Rule 6 (audit sync S1-3).
+const locSettled = (await req("GET", `/api/locations/${loc._id}`)).data.item;
+ok("Rule 6: the centre closes once every follow-up is settled",
+  locSettled.operational_status === "Closed", locSettled.operational_status);
 
 // Rule 2: break the column set → Partial, no changes
 const badCsv = `Center ID,City\n${stamp},Udaipur\n`;
@@ -197,6 +209,109 @@ const realDyn = (await req("POST", "/api/sync-sources", {
 }, 201)).data.item;
 const realRun = (await req("POST", `/api/sync-sources/${realDyn._id}/run`, {}, 200)).data;
 ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.status === "OK" && realRun.tabs >= 1, JSON.stringify(realRun));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2026-08-12 audit — the five sync S1 defects
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  const s2 = "T" + Date.now().toString().slice(-6);
+  const p2 = (await req("POST", "/api/programs", { code: "P" + s2, name: "Audit Prog " + s2, trainer_skill: "AudSkill" + s2 }, 201)).data.item;
+  const l2 = (await req("POST", "/api/locations", { code: "L" + s2, name: "Audit Loc " + s2, external_id: s2, approval_status: "Approved", city: "Jaipur" }, 201)).data.item;
+
+  const mkSource = async (csv, name) => {
+    const fd = new FormData();
+    fd.append("file", new File([csv], "s.csv", { type: "text/csv" }));
+    const u = (await req("POST", "/api/upload", fd, 200)).data;
+    return (await req("POST", "/api/sync-sources", {
+      name, source_url: new URL(u.url, BASE).href,
+      field_mappings: { "Center ID": "external_id", "City": "city", "Target": `approved_target:P${s2}` },
+    }, 201)).data.item;
+  };
+
+  // ---- sync S1-1: a blank cell used to write approved_target = 0, and "1,200" used to write 1 ----
+  // A thousands separator is a legitimate way for a sheet to hold 1200, so it is read, not
+  // refused. What must never happen is a silent wrong number: no truncation, and no
+  // "empty cell means zero".
+  const findTgt = async () => ((await req("GET", "/api/sheet-changes?status=Open")).data.items ?? [])
+    .find((c) => c.field_name === `approved_target:P${s2}` && String(c.location?._id ?? c.location) === String(l2._id));
+
+  const srcThousands = await mkSource(`Center ID,City,Target\n${s2},Kota,"1,200"\n`, "Audit num " + s2);
+  await req("POST", `/api/sync-sources/${srcThousands._id}/run`, undefined, 200);
+  const tgtChange = await findTgt();
+  if (tgtChange) {
+    ok("sync S1-1: the sheet's thousands separator survives into the change", tgtChange.new_value === "1,200", JSON.stringify(tgtChange.new_value));
+    await req("POST", `/api/sheet-changes/${tgtChange._id}/apply`, { action: "Update target" }, 200);
+    const t = (await req("GET", `/api/locations/${l2._id}/targets`)).data.items ?? [];
+    ok("sync S1-1: \"1,200\" is stored as 1200, not truncated to 1", t.some((x) => x.approved_target === 1200), JSON.stringify(t.map((x) => x.approved_target)));
+  } else { ok("sync S1-1: target change detected", false, "no change row"); }
+
+  // a blank cell must be refused outright rather than becoming a target of zero
+  const srcBlank = await mkSource(`Center ID,City,Target\n${s2},Kota,\n`, "Audit blank " + s2);
+  await req("POST", `/api/sync-sources/${srcBlank._id}/run`, undefined, 200);
+  const blankChange = await findTgt();
+  if (blankChange) {
+    const rb = await req("POST", `/api/sheet-changes/${blankChange._id}/apply`, { action: "Update target" });
+    ok("sync S1-1: a blank target cell is refused, not written as 0", rb.status === 400, `got ${rb.status}: ${JSON.stringify(rb.data).slice(0, 110)}`);
+    const t2 = (await req("GET", `/api/locations/${l2._id}/targets`)).data.items ?? [];
+    ok("sync S1-1: …and the real target is left alone", t2.some((x) => x.approved_target === 1200), JSON.stringify(t2.map((x) => x.approved_target)));
+  }
+
+  // ---- sync S1-2: a truncated row must not read as "the client cleared this field" ----
+  const srcShort = await mkSource(`Center ID,City,Target\n${s2}\n`, "Audit short " + s2);
+  const shortRun = (await req("POST", `/api/sync-sources/${srcShort._id}/run`, undefined, 200)).data;
+  ok("sync S1-2: a row missing mapped columns is reported Partial, not applied", shortRun.status === "Partial", JSON.stringify(shortRun));
+  ok("sync S1-2: …and proposes no changes at all", (shortRun.created ?? 0) === 0, JSON.stringify(shortRun));
+
+  // ---- sync S1-3: Rule 6 — cannot Close a location that still has a running batch ----
+  const pr3 = (await req("POST", `/api/locations/${l2._id}/rooms`, { name: "CR", type: "Classroom" }, 201)).data.item;
+  const tr3 = (await req("POST", "/api/trainers", { name: "AudTrainer " + s2, phone: "7" + Date.now().toString().slice(-9), skills: ["AudSkill" + s2] }, 201)).data.item;
+  const td = new Date().toISOString().slice(0, 10);
+  const b3 = (await req("POST", "/api/batches", { location: l2._id, program: p2._id, trainer: tr3._id, room: pr3._id, planned_start: td, target_size: 1 }, 201)).data.item;
+  const c3 = (await req("POST", "/api/candidates", { name: "AudCand " + s2, phone: "6" + Date.now().toString().slice(-9), location: l2._id, program: p2._id }, 201)).data.item;
+  const m3 = (await req("POST", `/api/batches/${b3._id}/members`, { candidate: c3._id }, 201)).data.item;
+  await req("PATCH", `/api/members/${m3._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+  await req("POST", `/api/batches/${b3._id}/transition`, { target: "Ready" }, 200);
+  await req("POST", `/api/batches/${b3._id}/transition`, { target: "Active" }, 200);
+
+  const srcClose = await mkSource(`Center ID,City,Target\n${s2},Udaipur,50\n`, "Audit close " + s2);
+  await req("POST", `/api/sync-sources/${srcClose._id}/run`, undefined, 200);
+  const openNow = (await req("GET", "/api/sheet-changes?status=Open")).data.items ?? [];
+  const cityChange = openNow.find((c) => c.field_name === "city" && String(c.location?._id ?? c.location) === String(l2._id));
+  if (cityChange) {
+    const closed = await req("POST", `/api/sheet-changes/${cityChange._id}/apply`, { action: "Close location", note: "audit test" });
+    ok("sync S1-3: Rule 6 defers the close and raises follow-ups instead", closed.status === 200 && closed.data.deferred === true && (closed.data.followUps ?? 0) > 0, JSON.stringify(closed.data).slice(0, 160));
+    const stillLive = (await req("GET", `/api/locations/${l2._id}`)).data.item;
+    ok("sync S1-3: …the centre keeps operating until they are settled", stillLive.operational_status !== "Closed", stillLive.operational_status);
+    // the batch must still be able to record attendance — the operational point of Rule 6
+    const logAfter = await req("POST", `/api/batches/${b3._id}/logs`, { log_date: td, present_member_ids: [m3._id] });
+    ok("sync S1-3: the running batch can still record its daily log", logAfter.status === 201, `got ${logAfter.status}`);
+
+    // ---- sync S1-8: bulkIgnore must not close a change that still has Pending follow-ups ----
+    const stopped = await req("POST", `/api/sheet-changes/${cityChange._id}/apply`, { action: "Stop location", note: "audit stop" });
+    ok("Stop location applies and raises follow-ups", stopped.status === 200, `got ${stopped.status}`);
+    const afterStop = (await req("GET", `/api/sheet-changes/${cityChange._id}`)).data.item
+      ?? ((await req("GET", "/api/sheet-changes?status=Open")).data.items ?? []).find((c) => String(c._id) === String(cityChange._id));
+    if (afterStop) {
+      ok("Rule 7: it stays Open while follow-ups are Pending", afterStop.status === "Open", afterStop.status);
+      const bi = (await req("POST", "/api/sheet-changes/bulk-ignore", { ids: [cityChange._id] }, 200)).data;
+      ok("sync S1-8: bulk-ignore refuses a change with Pending follow-ups", (bi.skipped ?? 0) === 1 && (bi.ignored ?? 0) === 0, JSON.stringify(bi));
+      const stillOpen = ((await req("GET", "/api/sheet-changes?status=Open")).data.items ?? []).find((c) => String(c._id) === String(cityChange._id));
+      ok("sync S1-8: …so it is still Open, with its real action intact", !!stillOpen && stillOpen.action_taken === "Stop location", JSON.stringify({ s: stillOpen?.status, a: stillOpen?.action_taken }));
+    }
+  } else { ok("sync S1-3/S1-8: city change detected", false, "no change row"); }
+
+  // ---- sync S1-4: Close/Stop from the Sync Inbox must answer to the approval matrix ----
+  await req("PUT", "/api/approvals", { action: "location.stop", enabled: true, approver_role: "Operations" });
+  const srcAppr = await mkSource(`Center ID,City,Target\n${s2},Ajmer,60\n`, "Audit appr " + s2);
+  await req("POST", `/api/sync-sources/${srcAppr._id}/run`, undefined, 200);
+  const apprChange = ((await req("GET", "/api/sheet-changes?status=Open")).data.items ?? [])
+    .find((c) => c.field_name === "city" && c.new_value === "Ajmer" && String(c.location?._id ?? c.location) === String(l2._id));
+  if (apprChange) {
+    const parked = await req("POST", `/api/sheet-changes/${apprChange._id}/apply`, { action: "Stop location", note: "needs approval" });
+    ok("sync S1-4: Stop from the Sync Inbox is parked for approval like the Location screen", parked.status === 202, `got ${parked.status}: ${JSON.stringify(parked.data).slice(0, 120)}`);
+  }
+  await req("PUT", "/api/approvals", { action: "location.stop", enabled: false });
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

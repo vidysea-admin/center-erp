@@ -16,7 +16,12 @@ export const TRAINER_REQUEST_STATUS = ["Open", "In Progress", "Fulfilled", "Canc
 // (which would inflate outcome reporting) and not Dropped (they never left).
 export const LIFECYCLE_STATUS = ["Unassigned", "Assigned", "Enrolled", "Dropped", "Completed", "Not Certified"] as const;
 export const ASSESSMENT_RESULT = ["Pending", "Pass", "Fail", "Absent"] as const;
-export const CERTIFICATE_STATUS = ["Pending", "Processing", "Generated", "Issued", "Rejected"] as const;
+// "Not Issued" (2026-08-12 audit, S0): a terminal state for a Pass candidate the awarding body
+// will never certify — name mismatch on the government ID, duplicate NSDC record, withdrawal.
+// Without it, a Rejected certificate had no exit at all: reassessment refused, the result could
+// not move off Pass, and the batch sat in Closing forever, so the only escape an operator could
+// find was to invent a certificate number — which then counted in Closure.certificates_issued.
+export const CERTIFICATE_STATUS = ["Pending", "Processing", "Generated", "Issued", "Rejected", "Not Issued"] as const;
 export const BATCH_SESSION = ["Morning", "Afternoon", "Full Day"] as const;
 export const BATCH_STATUS = ["Planning", "Ready", "Active", "Closing", "Completed", "Cancelled"] as const;
 export const ENROLLMENT_STATUS = ["Not Started", "In Progress", "Completed", "Failed"] as const;

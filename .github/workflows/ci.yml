@@ -14,9 +14,63 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      # Build includes TypeScript checking. E2E suites need a live server + MongoDB,
-      # so they run against a real environment, not in CI (scripts/e2e*.mjs).
       - run: npm run build
         env:
           MONGODB_URL: mongodb://ci-placeholder:27017
           AUTH_SECRET: ci-placeholder
+
+  # The e2e suites need a live server and a real MongoDB, which is why they used to run only by
+  # hand — and why every defect in the 2026-08-12 audit survived: the assertions existed, nothing
+  # ever ran them. A service container gives them both, so they run on every push and PR.
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:7
+        ports: ["27017:27017"]
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ping:1}).ok'"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+    env:
+      MONGODB_URL: mongodb://localhost:27017
+      MONGODB_DB: center_erp_ci
+      AUTH_SECRET: ci-only-not-a-real-secret
+      AUTH_TRUST_HOST: "true"
+      BASE_URL: http://localhost:3000/erp
+      ADMIN_PASSWORD: admin123
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+      - name: Seed core data
+        run: npm run seed
+
+      - name: Start the server
+        run: |
+          npm start &
+          for i in $(seq 1 60); do
+            if curl -sf "$BASE_URL/api/public/version" >/dev/null; then echo "server up"; exit 0; fi
+            sleep 2
+          done
+          echo "server did not come up in time"; exit 1
+
+      # seed-sample talks to the running server on purpose, so every rule and audit row applies.
+      - name: Seed the sample dataset
+        run: npm run seed:sample
+
+      # Each suite exits non-zero on any failed assertion.
+      - name: Lifecycle, rules and closure
+        run: npm run test:e2e
+      - name: Roles, scoping and permissions
+        run: npm run test:roles
+      - name: Sheet sync engine
+        run: npm run test:sync
+      - name: Edge cases
+        run: npm run test:blindspot
+      - name: Government attendance
+        run: npm run test:govt

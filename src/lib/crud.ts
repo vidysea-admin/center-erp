@@ -58,11 +58,25 @@ export function collectionRoutes(cfg: CrudConfig) {
     else if (cfg.readRoles) requireRole(user, ...cfg.readRoles);
     const sp = req.nextUrl.searchParams;
     const filter: Record<string, unknown> = {};
-    if (cfg.scopeField !== null) Object.assign(filter, locationFilter(user, cfg.scopeField ?? "location"));
-    // simple field filters: any ?field=value matching a writable/known field
+    const scopeField = cfg.scopeField ?? "location";
+    // Client-supplied filters are restricted to known fields and applied BEFORE the location
+    // scope. Previously any ?key=value was copied in after the scope filter, so ?location=<other
+    // centre> simply overwrote Rule 38 and exposed every centre's candidate PII (audit F-000),
+    // and $-prefixed keys reached mongod as query operators.
+    const filterable = new Set([...cfg.fields, ...(cfg.scopeField === null ? [] : [scopeField])]);
     for (const [k, v] of sp.entries()) {
       if (["q", "page", "limit", "sort"].includes(k) || !v) continue;
+      if (k.startsWith("$") || k.includes(".")) throw new HttpError(400, `Unsupported filter "${k}".`);
+      if (!filterable.has(k)) continue; // unknown key: ignored, never a Mongo filter
       filter[k] = v === "null" ? null : v;
+    }
+    // Rule 38 last, so a client filter can narrow within scope but never widen past it.
+    if (cfg.scopeField !== null && isScoped(user)) {
+      const allowed = (user.location_scope ?? []).map(String);
+      const requested = filter[scopeField];
+      if (requested === undefined || !allowed.includes(String(requested))) {
+        Object.assign(filter, locationFilter(user, scopeField));
+      }
     }
     const q = sp.get("q");
     if (q && cfg.searchFields?.length) {
@@ -107,7 +121,8 @@ export function itemRoutes(cfg: CrudConfig) {
     if (cfg.scopeField !== null && isScoped(user)) {
       const locVal = item[cfg.scopeField ?? "location"];
       const locId = typeof locVal === "object" && locVal?._id ? locVal._id : locVal;
-      if (locId && !user.location_scope.map(String).includes(String(locId))) {
+      // Fail closed: a record with no scope value is NOT visible to a scoped user.
+      if (!locId || !user.location_scope.map(String).includes(String(locId))) {
         throw new HttpError(403, "Out of scope");
       }
     }
@@ -124,7 +139,8 @@ export function itemRoutes(cfg: CrudConfig) {
     if (!existing) throw new HttpError(404, cfg.entity + " not found");
     if (cfg.scopeField !== null && isScoped(user)) {
       const locId = existing[cfg.scopeField ?? "location"]; // Rule 38 on by-ID writes
-      if (locId && !user.location_scope.map(String).includes(String(locId))) {
+      // Fail closed: an unscoped record is not writable by a scoped user either.
+      if (!locId || !user.location_scope.map(String).includes(String(locId))) {
         throw new HttpError(403, "Out of scope");
       }
     }
