@@ -179,6 +179,12 @@ const LocationTargetSchema = new Schema({
   enrolled_reported: Number,
   pending_reported: Number,
   reported_at: Date,
+  // 2026-08-13 (Manish: "31 approved hain, 10 nahi"): the government approves each
+  // centre×scheme×job-role ROW separately — each sheet row even carries its OWN TC ID
+  // (Charthwal: TC353328 for AVPL, TC352938 for HSL). Centre-level Location.tc_status
+  // stays as the fallback for pre-migration rows.
+  tc_id: String,
+  tc_status: String, // free text from the sheet ("Approved", blank, …)
 }, { timestamps: true });
 LocationTargetSchema.index({ location: 1, program: 1 }, { unique: true });
 
@@ -342,6 +348,10 @@ const BatchSchema = new Schema({
   }],
   cancel_reason: String,
   created_by: oid("User"),
+  // 2026-08-13 (Manish): "har row ke bagal mein source ka link" — sheet-imported batches carry
+  // the tab they came from ("AVPL Batch_Master"); app-created ones leave it unset and the UI
+  // says "Entered in ERP". Provenance is never guessed from the shape of the row.
+  source: String,
   // 2026-08-12 (Manish): the batch is actually formed on the SIDH portal — "batch बन गया… अब मैं
   // उस location के TC ID और password से login करूँगा और student का enrollment उस batch में शुरू
   // कर दूँगा". Without the portal's own id there is no way to tie our row to theirs when an

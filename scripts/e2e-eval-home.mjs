@@ -83,6 +83,20 @@ for (const [email, label] of [["ops@vidysea.com", "Operations"], ["spoc.jpr03@vi
   ok(`[worst] Home answers 200 for ${label}`, r.status === 200, `got ${r.status}`);
 }
 
+// ---- 2026-08-13 (Manish walkthrough): role-wise cards need role-wise KPI payload ----
+const kFinal = homeFinal.kpis;
+ok("[best] KPI approved_targets counts centre×job-role approvals, not centres", typeof kFinal.approved_targets === "number" && typeof kFinal.targets_total === "number",
+  JSON.stringify({ a: kFinal.approved_targets, t: kFinal.targets_total }));
+ok("[avg] …and it never exceeds the total number of job-role targets", kFinal.approved_targets <= kFinal.targets_total, `${kFinal.approved_targets}/${kFinal.targets_total}`);
+ok("[best] KPI trainers_by_role is grouped by job role with counts", Array.isArray(kFinal.trainers_by_role) && kFinal.trainers_by_role.every((r) => typeof r.count === "number" && "program" in r),
+  JSON.stringify(kFinal.trainers_by_role).slice(0, 160));
+ok("[avg] …and trainers_active_total equals the sum of its groups",
+  kFinal.trainers_active_total === (kFinal.trainers_by_role ?? []).reduce((s, r) => s + r.count, 0), String(kFinal.trainers_active_total));
+ok("[best] KPI attendance carries present/roster/pct and today's split", kFinal.attendance && typeof kFinal.attendance.present === "number" && typeof kFinal.attendance.roster === "number" && "today_present" in kFinal.attendance,
+  JSON.stringify(kFinal.attendance));
+ok("[worst] …attendance pct is null (not NaN/0) when nothing has been logged",
+  kFinal.attendance.roster > 0 ? typeof kFinal.attendance.pct === "number" : kFinal.attendance.pct === null, String(kFinal.attendance.pct));
+
 // cleanup: close down the fixture batch so later suites' KPI deltas start clean
 await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Cancelled", reason: "eval fixture teardown" });
 

@@ -2,7 +2,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/lib/client";
-import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, inputCls } from "@/components/ui";
+import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, SourceCell, inputCls } from "@/components/ui";
 
 export default function LocationsPage() {
   return <Suspense><LocationsInner /></Suspense>;
@@ -54,11 +54,32 @@ function LocationsInner() {
         defaultSort={{ key: "name", dir: "asc" }}
         columns={[
           { key: "code", label: "Code", mobile: false, sortable: true, sortValue: (r: any) => r.code },
-          { key: "name", label: "Name", mobile: false, sortable: true, sortValue: (r: any) => r.name },
+          { key: "name", label: "Name", mobile: false, sortable: true, sortValue: (r: any) => r.name, minWidth: 220 },
           { key: "city", label: "City", mobile: false, sortable: true, sortValue: (r: any) => r.city },
+          {
+            // 2026-08-13 (Manish): "Ongoing scheme bhi saath mein dikhana must hai" — the scheme
+            // travels with every job role, and the funnel filters by it.
+            key: "schemes", label: "Ongoing scheme", filterable: true,
+            filterText: (r: any) => (r.schemes ?? []).join(" · "),
+            render: (r: any) => (r.schemes ?? []).length
+              ? <span className="flex flex-wrap gap-1">{r.schemes.map((s: string) => <Chip key={s} value={s} />)}</span>
+              : <span className="text-gray-400">—</span>,
+          },
+          {
+            key: "job_roles", label: "Job roles (approved)", minWidth: 240,
+            filterText: (r: any) => (r.job_roles ?? []).map((j: any) => `${j.program} ${j.tc_status ?? ""}`).join(" · "),
+            render: (r: any) => (r.job_roles ?? []).length ? (
+              <span className="text-xs">
+                <span className="font-medium text-gray-900">{r.approved_job_roles}</span> of {r.job_roles.length} approved
+                <span className="block text-gray-400">{r.job_roles.map((j: any) => j.code ?? j.program).join(" · ")}</span>
+              </span>
+            ) : <span className="text-gray-400">no targets</span>,
+          },
           { key: "approval_status", label: "Approval", sortable: true, sortValue: (r: any) => r.approval_status, render: (r: any) => <Chip value={r.approval_status} /> },
           { key: "operational_status", label: "Operational", sortable: true, sortValue: (r: any) => r.operational_status, render: (r: any) => <Chip value={r.operational_status} /> },
           { key: "spoc_name", label: "SPOC" },
+          // Centres come from the workbook's Location_Master tab; external_id is that row's TC ID.
+          { key: "source", label: "Source", mobile: false, filterText: (r: any) => r.external_id ? "AVPL Location_Master" : "Entered in ERP", render: (r: any) => <SourceCell source={r.external_id ? "AVPL Location_Master" : ""} /> },
         ]}
         empty="No locations yet — create the first one."
       />

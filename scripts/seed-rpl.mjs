@@ -49,18 +49,34 @@ const slug = (name) => {
   return `${tail}-${head.slice(0, 4).toUpperCase()}`;
 };
 
-// ---- fetch the workbook anonymously (same badger flow as src/lib/workbook.ts) ----
-const b64 = "u!" + Buffer.from(SHARE).toString("base64").replace(/=+$/, "").replace(/\//g, "_").replace(/\+/g, "-");
-const tok = await (await fetch("https://api-badgerp.svc.ms/v1.0/token", {
-  method: "POST", headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ appId: "5cbed6ac-a083-4e14-b191-b4ba07653de2" }),
-})).json();
-const meta = await (await fetch(
-  `https://my.microsoftpersonalcontent.com/_api/v2.0/shares/${b64}/driveitem?$select=name,@content.downloadUrl`,
-  { headers: { Authorization: "Badger " + tok.token, Prefer: "autoredeem", "User-Agent": "Mozilla/5.0" } },
-)).json();
-const wb = XLSX.read(Buffer.from(await (await fetch(meta["@content.downloadUrl"])).arrayBuffer()), { type: "buffer" });
-const grid = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: "" });
+// ---- fetch the workbook ----
+// 2026-08-13: the LIVE master moved to the Google workbook (Sonbhadra was approved there
+// today and the OneDrive copy never saw it). Default = the Google export's Location_Master
+// tab, same as seed-avpl-master; the legacy OneDrive badger flow stays behind --onedrive.
+let wb, sourceName;
+if (process.argv.includes("--onedrive")) {
+  const b64 = "u!" + Buffer.from(SHARE).toString("base64").replace(/=+$/, "").replace(/\//g, "_").replace(/\+/g, "-");
+  const tok = await (await fetch("https://api-badgerp.svc.ms/v1.0/token", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ appId: "5cbed6ac-a083-4e14-b191-b4ba07653de2" }),
+  })).json();
+  const meta = await (await fetch(
+    `https://my.microsoftpersonalcontent.com/_api/v2.0/shares/${b64}/driveitem?$select=name,@content.downloadUrl`,
+    { headers: { Authorization: "Badger " + tok.token, Prefer: "autoredeem", "User-Agent": "Mozilla/5.0" } },
+  )).json();
+  wb = XLSX.read(Buffer.from(await (await fetch(meta["@content.downloadUrl"])).arrayBuffer()), { type: "buffer" });
+  sourceName = meta.name;
+} else {
+  const GURL = process.env.AVPL_SHEET_URL
+    || "https://docs.google.com/spreadsheets/d/1f9veYSwuLktmggOJdUlspl_yydotdqnf/export?format=xlsx";
+  const buf = Buffer.from(await (await fetch(GURL, { redirect: "follow" })).arrayBuffer());
+  if (buf.slice(0, 2).toString() !== "PK") { console.error("Google sheet not readable (got HTML) — check sharing, or use --onedrive."); process.exit(2); }
+  wb = XLSX.read(buf, { type: "buffer" });
+  sourceName = "AVPL Google workbook";
+}
+const sheet = wb.Sheets["Location_Master"] ?? wb.Sheets[wb.SheetNames[0]];
+const grid = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+const meta = { name: sourceName };
 
 // Header is on the SECOND row — the first carries the client's own totals.
 const H = grid[1].map(S);
@@ -110,6 +126,11 @@ for (const r of rows) {
       operational_status: /^Operational$/i.test(S(r[IDX.operational])) ? "Active" : "Not Started",
       createdAt: new Date(), updatedAt: new Date(),
     });
+  } else if (S(r[IDX.tcStatus]) === "Approved") {
+    // 2026-08-13 (Manish: "31 approved hain"): approval is PER ROW (centre×scheme×job-role) —
+    // first-row-wins used to discard rows 2..n, undercounting approved centres too. A centre
+    // with ANY approved job role is an approved centre.
+    locations.get(institution).approval_status = "Approved";
   }
 
   // A row with no job role (the DDU-GKY ones) cannot become a programme or a target — report it
@@ -140,8 +161,13 @@ for (const r of rows) {
     trainers_required: N(r[IDX.trReq]),
     enrolled_reported: N(r[IDX.enrolled]),
     pending_reported: N(r[IDX.pending]),
+    // Per-row government identity: each centre×scheme×job-role has its OWN TC ID + status
+    // (Charthwal: TC353328 AVPL vs TC352938 HSL) — this is what "31 approved" counts.
+    tc_id: S(r[IDX.tcId]) || undefined,
+    tc_status: S(r[IDX.tcStatus]) || undefined,
   });
 }
+const approvedTargets = targets.filter((t) => t.tc_status === "Approved").length;
 
 // ---- reconcile against the sheet's own totals before writing anything ----
 const sumTarget = targets.reduce((s, t) => s + (t.approved_target || 0), 0);
@@ -150,7 +176,7 @@ console.log(`workbook   ${meta.name}`);
 console.log(`mode       ${APPLY ? "APPLY" : "dry run"}\n`);
 console.log(`locations  ${locations.size}`);
 console.log(`programmes ${programs.size}   ${[...programs.values()].map((p) => p.code).join(", ")}`);
-console.log(`targets    ${targets.length}`);
+console.log(`targets    ${targets.length}   (${approvedTargets} approved per-row — the "31" Manish counts)`);
 console.log(`sum target ${sumTarget}`);
 console.log(`sum trainers required ${sumTrainers}`);
 
@@ -190,14 +216,17 @@ let written = 0;
 for (const t of targets) {
   const location = locIds.get(t.institution), program = progIds.get(t.key);
   if (!location || !program) continue;
+  // undefined stripped: absent = "no opinion", never null-out (same lesson as seed-avpl-master).
+  const clean = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined));
   await db.collection("locationtargets").updateOne(
     { location, program },
-    { $set: {
+    { $set: clean({
       location, program,
       approved_target: t.approved_target, trainers_required: t.trainers_required,
       enrolled_reported: t.enrolled_reported, pending_reported: t.pending_reported,
+      tc_id: t.tc_id, tc_status: t.tc_status,
       reported_at: new Date(), updatedAt: new Date(),
-    }, $setOnInsert: { createdAt: new Date() } },
+    }), $setOnInsert: { createdAt: new Date() } },
     { upsert: true },
   );
   written++;

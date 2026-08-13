@@ -218,7 +218,17 @@ function Targets({ locationId, setError }: any) {
         <DataTable rows={items}
           cardTitle={(r: any) => r.program?.name}
           columns={[
-            { key: "program", label: "Program", render: (r: any) => r.program?.name ?? "?" },
+            { key: "program", label: "Program", render: (r: any) => <span>{r.program?.name ?? "?"}{r.program?.scheme ? <span className="text-xs text-gray-400"> ({r.program.scheme})</span> : null}</span> },
+            {
+              // 2026-08-13 (Manish: "31 approved"): each job-role row has its OWN TC id + verdict.
+              key: "tc", label: "TC (per job role)", filterText: (r: any) => `${r.tc_id ?? ""} ${r.tc_status ?? ""}`,
+              render: (r: any) => (
+                <span className="text-xs">
+                  {r.tc_id ?? <span className="text-gray-400">no TC ID</span>}
+                  <span className="block">{r.tc_status ? <Chip value={r.tc_status} /> : <span className="text-gray-400">status —</span>}</span>
+                </span>
+              ),
+            },
             { key: "approved_target", label: "Approved (external)" },
             { key: "allocated_target", label: "Allocated (internal)" },
             {
