@@ -248,7 +248,10 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
         if (t) vals.set(t, (vals.get(t) ?? 0) + 1);
         if (vals.size > 25 && c.filterable !== true) { capped = true; break; }
       }
-      if (!capped && vals.size >= 2) m[c.key] = vals;
+      // filterable:true always shows its funnel — even one distinct value (2026-08-13, Umesh:
+      // the Program funnel vanished on a view where every batch was the same job role, which
+      // read as "filter missing", not "nothing to narrow").
+      if (!capped && (vals.size >= 2 || (c.filterable === true && vals.size >= 1))) m[c.key] = vals;
     }
     return m;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -543,8 +546,11 @@ const KPI_TONES: Record<string, string> = {
   red: "bg-red-50 text-red-600",
 };
 
-export function KPI({ label, value, icon, tone = "blue", delta, href }: {
+export function KPI({ label, value, icon, tone = "blue", delta, href, sub }: {
   label: string; value: ReactNode; icon?: ReactNode; tone?: keyof typeof KPI_TONES; delta?: { value: number; label?: string; goodWhenUp?: boolean }; href?: string;
+  // 2026-08-13 (Umesh): "ek ke baad do count" — the companion figure (completed alongside
+  // active, pending alongside approved) rides on the same card.
+  sub?: ReactNode;
 }) {
   const up = (delta?.value ?? 0) >= 0;
   const good = delta ? (delta.goodWhenUp !== false ? up : !up) : true;
@@ -554,6 +560,7 @@ export function KPI({ label, value, icon, tone = "blue", delta, href }: {
       <div className="min-w-0">
         <div className="truncate text-xs font-medium text-gray-500">{label}</div>
         <div className="mt-0.5 text-[22px] font-semibold leading-7 tracking-tight text-gray-900">{value}</div>
+        {sub && <div className="mt-0.5 truncate text-[11px] font-medium text-gray-400">{sub}</div>}
         {delta && (
           <div className={`mt-0.5 flex items-center gap-1 text-[11px] font-medium ${good ? "text-emerald-600" : "text-red-500"}`}>
             {up ? <IconTrendUp size={12} /> : <IconTrendDown size={12} />}

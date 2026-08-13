@@ -50,10 +50,15 @@ export default function HomePage() {
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
         {/* 2026-08-13 (Manish): headline counts APPROVED centres; job-role detail = readiness section below.
             Every KPI deep-links to the SAME filtered population it counted (list-UX cycle). */}
-        <KPI label="Approved Locations" value={data.kpis.approved_locations} tone="blue" icon={<IconPin size={19} />} href="/locations?approval_status=Approved" />
-        <KPI label="Active Batches" value={data.kpis.active_batches} tone="violet" icon={<IconCap size={19} />} href="/batches?status=Active" />
-        <KPI label="Enrolled Students" value={data.kpis.enrolled_students} tone="green" icon={<IconUsers size={19} />} href="/candidates?lifecycle_status=Enrolled" />
-        <KPI label="Open Trainer Requests" value={data.kpis.open_trainer_requests} tone="amber" icon={<IconUser size={19} />} href="/trainers?tab=Requests" />
+        {/* 2026-08-13 (Umesh): "ek ke baad do count" — the paired figure on each card. */}
+        <KPI label="Approved Locations" value={data.kpis.approved_locations} tone="blue" icon={<IconPin size={19} />} href="/locations?approval_status=Approved"
+          sub={`${data.kpis.pending_locations ?? 0} pending approval`} />
+        <KPI label="Active Batches" value={data.kpis.active_batches} tone="violet" icon={<IconCap size={19} />} href="/batches?status=Active"
+          sub={`${data.kpis.completed_batches ?? 0} completed`} />
+        <KPI label="Enrolled Students" value={data.kpis.enrolled_students} tone="green" icon={<IconUsers size={19} />} href="/candidates?lifecycle_status=Enrolled"
+          sub={`of ${data.kpis.pool_candidates ?? 0} in the pool`} />
+        <KPI label="Open Trainer Requests" value={data.kpis.open_trainer_requests} tone="amber" icon={<IconUser size={19} />} href="/trainers?tab=Requests"
+          sub={`${data.kpis.fulfilled_trainer_requests ?? 0} fulfilled`} />
         <KPI label="Pending Follow-ups" value={data.kpis.pending_followups} tone="red" icon={<IconAlert size={19} />} href="/sync" />
       </div>
 

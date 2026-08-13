@@ -270,7 +270,7 @@ function CandidatesInner() {
           { key: "phone", label: "Phone" },
           { key: "location", label: "Location", sortable: true, sortValue: (r: any) => r.location?.name, render: (r: any) => r.location?.name },
           {
-            key: "program", label: "Program", sortable: true, sortValue: (r: any) => progOf(r)?.name ?? "",
+            key: "program", label: "Program", sortable: true, filterable: true, sortValue: (r: any) => progOf(r)?.name ?? "",
             render: (r: any) => r.program?.name
               ?? (r.active_batch?.program
                 ? <span title={`Via batch ${r.active_batch.code} — the row itself has no programme yet`}>{r.active_batch.program.name} <span className="text-[10px] text-gray-400">via {r.active_batch.code}</span></span>

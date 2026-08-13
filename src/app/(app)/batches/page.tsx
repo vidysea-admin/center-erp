@@ -153,7 +153,7 @@ function BatchesInner() {
             columns={[
               { key: "code", label: "Code", mobile: false, sortable: true, sortValue: (r: any) => r.code },
               { key: "location", label: "Location", sortable: true, sortValue: (r: any) => r.location?.name, render: (r: any) => r.location?.name },
-              { key: "program", label: "Program", sortable: true, sortValue: (r: any) => r.program?.name, render: (r: any) => r.program?.name, mobile: false },
+              { key: "program", label: "Program", sortable: true, filterable: true, sortValue: (r: any) => r.program?.name, render: (r: any) => r.program?.name, mobile: false },
               { key: "status", label: "Status", sortable: true, sortValue: (r: any) => r.status, render: (r: any) => <Chip value={r.status} />, mobile: false },
               // A Planning batch's gaps show inline — "backward planning chal rahi hai,
               // requirement incomplete" is visible from the LIST, not just the detail page.
@@ -180,7 +180,7 @@ function BatchesInner() {
             cardTitle={(r: any) => `${r.location?.name} · ${r.program?.name}`}
             columns={[
               { key: "location", label: "Location", sortable: true, sortValue: (r: any) => r.location?.name, render: (r: any) => r.location?.name },
-              { key: "program", label: "Job role", sortable: true, sortValue: (r: any) => r.program?.name, render: (r: any) => <span>{r.program?.name}{r.program?.scheme ? <span className="text-xs text-gray-400"> ({r.program.scheme})</span> : null}</span> },
+              { key: "program", label: "Job role", sortable: true, filterable: true, sortValue: (r: any) => r.program?.name, render: (r: any) => <span>{r.program?.name}{r.program?.scheme ? <span className="text-xs text-gray-400"> ({r.program.scheme})</span> : null}</span> },
               { key: "ready", label: "Ready?", sortable: true, sortValue: (r: any) => (r.ready ? 1 : 0), render: (r: any) => <Chip value={r.ready ? "Ready" : "Not Ready"} /> },
               {
                 key: "blockers", label: "Missing before start", render: (r: any) => r.ready
