@@ -489,6 +489,18 @@ export async function transitionBatch(batchId: string, target: string, opts: { i
       }
       break;
     }
+    case "Completed->Closed": {
+      // CEO 13/08 (Rule 52): "Complete hone ke baad certify → invoice → payment → ALL DUES
+      // SETTLE — main khali payment lene mein interested nahi hoon; sabka settle karke NO
+      // DUES, tab batch CLOSED." Completed is the training outcome; Closed is the money
+      // outcome, and it cannot be claimed before the money story is actually over.
+      const closure = await Closure.findOne({ batch: batchId }).lean<any>();
+      if (closure?.certification_status !== "Completed") fail("Rule 52: certification must be Completed before closing.");
+      const invoice = await Invoice.findOne({ batch: batchId }).lean<any>();
+      if (invoice?.status !== "Paid") fail(`Rule 52: the invoice must be PAID before a batch closes (currently ${invoice?.status ?? "not raised"}).`);
+      if (!closure?.dues_settled) fail("Rule 52: mark ALL dues settled (trainer, centre, vendor — no dues pending) before closing the batch.");
+      break;
+    }
     case "Planning->Cancelled":
     case "Ready->Cancelled":
     case "Active->Cancelled": {
@@ -970,13 +982,18 @@ export async function upsertClosureChecked(batchId: string, patch: Record<string
   const batch = await Batch.findById(batchId).lean<any>();
   if (!batch) throw new HttpError(404, "Batch not found");
   // DEC-6 (Umesh, 2026-08-13): once the batch is Completed the closure record is frozen.
-  // ready_for_invoice alone stays writable — invoicing naturally happens after completion and
-  // Rule 35 already gates it on certification Completed.
+  // The MONEY-FLOW flags stay writable — invoicing and the Rule 52 dues attestation happen
+  // naturally AFTER completion (that is their whole purpose); the training facts stay locked.
+  const POST_COMPLETION_WRITABLE = new Set(["ready_for_invoice", "dues_settled", "dues_note", "dues_marked_by", "dues_marked_at"]);
   if (["Completed", "Cancelled"].includes(batch.status)) {
-    const blocked = Object.keys(patch).filter((k) => patch[k] !== undefined && k !== "ready_for_invoice");
+    const blocked = Object.keys(patch).filter((k) => patch[k] !== undefined && !POST_COMPLETION_WRITABLE.has(k));
     if (blocked.length) {
-      throw new HttpError(409, `The batch is closed — ${blocked.join(", ")} can no longer change (2026-08-13 decision: a Completed batch stays locked; only invoice-readiness may still be marked).`);
+      throw new HttpError(409, `The batch is closed — ${blocked.join(", ")} can no longer change (2026-08-13 decision: a Completed batch stays locked; only invoice-readiness and the dues attestation may still be marked).`);
     }
+  }
+  // Rule 52: once CLOSED, even the money flags are history.
+  if (batch.status === "Closed") {
+    throw new HttpError(409, "The batch is Closed — the settlement record is final.");
   }
   let closure = await Closure.findOne({ batch: batchId });
   if (!closure) closure = new Closure({ batch: batchId });

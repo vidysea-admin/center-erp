@@ -101,6 +101,8 @@ function Overview({ data, role, onChanged, setError }: any) {
             {b.status === "Ready" && <Btn kind="ghost" onClick={() => transition("Planning")}>Back to Planning</Btn>}
             {b.status === "Active" && <Btn onClick={() => transition("Closing")}>Move to Closing</Btn>}
             {b.status === "Closing" && <Btn onClick={() => transition("Completed")}>Complete Batch</Btn>}
+            {/* Rule 52: Completed = training over; Closed = money over (cert + invoice PAID + no dues). */}
+            {b.status === "Completed" && <Btn onClick={() => transition("Closed")}>Close Batch (no dues)</Btn>}
             {["Planning", "Ready", "Active"].includes(b.status) && <Btn kind="danger" onClick={() => setConfirmCancel(true)}>Cancel Batch</Btn>}
           </div>
         ) : (
@@ -967,6 +969,24 @@ function ClosureTab({ batchId, batch, setError, onChanged }: any) {
               <Btn small onClick={() => saveInvoice({ ...invForm, status: "Paid" })} disabled={invoice.status !== "Raised"}>Mark Paid</Btn>
             </div>
           )}
+          {/* Rule 52 (CEO): payment aane ke baad bhi batch CLOSED tabhi jab SAB dues settle —
+              "main khali payment lene mein interested nahi hoon; no dues, tab close". */}
+          <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={!!closure?.dues_settled}
+                onChange={(e) => saveClosure({ dues_settled: e.target.checked })} />
+              <span className="font-medium">All dues settled — trainer, centre, vendor: NO dues pending</span>
+            </label>
+            {closure?.dues_settled && closure?.dues_marked_at && (
+              <p className="mt-1 text-xs text-gray-500">Attested {fmtDate(closure.dues_marked_at)}</p>
+            )}
+            <input className={inputCls + " mt-2"} placeholder="Dues note (optional — what was settled, references)"
+              value={closure?.dues_note ?? ""} onChange={(e) => saveClosure({ dues_note: e.target.value })} />
+            <p className="mt-2 text-xs text-gray-500">
+              Batch closes from the Overview tab once certification is Completed, the invoice is
+              PAID, and this attestation is ticked (Rule 52).
+            </p>
+          </div>
         </div>
       </Section>
       </div>

@@ -34,8 +34,14 @@ export const PUT = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   await assertBatchInScope(user, id); // Rule 38
   const body = await req.json();
   const patch: Record<string, unknown> = {};
-  for (const f of ["assessment_status", "assessment_date", "appeared", "passed", "result_file", "certification_status", "certification_date", "certificates_issued", "certificate_file", "ready_for_invoice"]) {
+  for (const f of ["assessment_status", "assessment_date", "appeared", "passed", "result_file", "certification_status", "certification_date", "certificates_issued", "certificate_file", "ready_for_invoice",
+    // Rule 52 (CEO): the no-dues attestation that gates Completed → Closed.
+    "dues_settled", "dues_note"]) {
     if (body[f] !== undefined) patch[f] = body[f];
+  }
+  if (body.dues_settled !== undefined) {
+    patch.dues_marked_by = user.id;
+    patch.dues_marked_at = new Date();
   }
   const closure = await upsertClosureChecked(id, patch, user.id);
   await audit({ entity: "Closure", entityId: closure._id, field: "closure", newValue: patch, actor: user.id });

@@ -59,7 +59,8 @@ export const ASSESSMENT_RESULT = ["Pending", "Pass", "Fail", "Absent"] as const;
 // find was to invent a certificate number — which then counted in Closure.certificates_issued.
 export const CERTIFICATE_STATUS = ["Pending", "Processing", "Generated", "Issued", "Rejected", "Not Issued"] as const;
 export const BATCH_SESSION = ["Morning", "Afternoon", "Full Day"] as const;
-export const BATCH_STATUS = ["Planning", "Ready", "Active", "Closing", "Completed", "Cancelled"] as const;
+// "Closed" added 2026-08-14 (Rule 52): Completed = training over; Closed = money over.
+export const BATCH_STATUS = ["Planning", "Ready", "Active", "Closing", "Completed", "Closed", "Cancelled"] as const;
 export const ENROLLMENT_STATUS = ["Not Started", "In Progress", "Completed", "Failed"] as const;
 export const ENROLLMENT_ISSUE = ["OTP not received", "Already registered", "KYC failed", "Portal error", "Duplicate", "Other"] as const;
 export const MEMBER_SOURCE = ["Manual", "Automation"] as const;
@@ -492,6 +493,11 @@ const ClosureSchema = new Schema({
   certification_date: Date, certificates_issued: Number, certificate_file: String,
   ready_for_invoice: { type: Boolean, default: false },
   marked_ready_by: oid("User"), marked_ready_at: Date,
+  // Rule 52 (CEO 13/08): Closed = the MONEY story is over — invoice paid AND every due
+  // (trainer, centre, vendor) settled. This flag is the human attestation of the latter.
+  dues_settled: { type: Boolean, default: false },
+  dues_note: String,
+  dues_marked_by: oid("User"), dues_marked_at: Date,
 }, { timestamps: true });
 
 // ---------- CandidateResult (RPL M17 + M18) — one row per candidate per batch ----------

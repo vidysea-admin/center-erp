@@ -252,6 +252,9 @@ await req("POST", `/api/batches/${batch._id}/transition`, { target: "Completed" 
 const c0b = (await req("GET", `/api/candidates/${cands[0]._id}`)).data.item;
 ok("Rule 21: candidate Completed on batch completion", c0b.lifecycle_status === "Completed", c0b.lifecycle_status);
 
+// ---- Rule 52 (CEO 13/08): Completed ≠ Closed — invoice still Raised, dues unset → refused ----
+await req("POST", `/api/batches/${batch._id}/transition`, { target: "Closed" }, 409);
+
 // trainer released (Rule 12)
 const t2 = (await req("GET", `/api/trainers/${trainer._id}`)).data.item;
 ok("Rule 12: trainer derived back to Available", t2.status === "Available", t2.status);
@@ -303,6 +306,14 @@ await req("POST", "/api/candidates", { name: "Dup B " + stamp, phone: dupPhone, 
 const invBatchId = batch._id; // its invoice is "Raised" by this point
 await req("PATCH", `/api/batches/${invBatchId}/invoice`, { status: "Paid", paid_on: today }, 200); // forward: legal
 await req("PATCH", `/api/batches/${invBatchId}/invoice`, { status: "Ready" }, 409); // backwards: blocked
+
+// ---- Rule 52 continued: invoice now PAID — dues attestation is the last gate to Closed ----
+await req("POST", `/api/batches/${batch._id}/transition`, { target: "Closed" }, 409); // paid, but dues unset
+const duesRes = await req("PUT", `/api/batches/${batch._id}/closure`, { dues_settled: true, dues_note: "trainer + centre settled " + stamp }, 200);
+ok("Rule 52: dues attestation records who/when", !!duesRes.data.item.dues_marked_at, JSON.stringify(duesRes.data.item.dues_marked_at));
+const closedRes = await req("POST", `/api/batches/${batch._id}/transition`, { target: "Closed" }, 200);
+ok("Rule 52: cert + invoice PAID + no-dues → batch closes", closedRes.data.item.status === "Closed", closedRes.data.item.status);
+await req("POST", `/api/batches/${batch._id}/transition`, { target: "Completed" }, 409); // Closed is terminal
 
 // ---- Capacity math honours both constraints ----
 const capTargets = (await req("GET", `/api/locations/${loc._id}/targets`)).data.items;
