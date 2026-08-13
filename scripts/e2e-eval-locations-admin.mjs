@@ -73,6 +73,29 @@ ok("[best] certifying the nominated trainer bumps the live count by exactly 1", 
   JSON.stringify({ total: locRow3?.trainers_certified_total, row: locRow3?.job_roles?.[0]?.trainers_certified }));
 ok("[avg] …while the sheet's claim stays its own separate column, never merged", locRow3?.trainers_certified_reported_total === 1, String(locRow3?.trainers_certified_reported_total));
 
+// ---- Open Positions (CEO 13/08: "kahan-kahan trainer hire karne hain; required poore
+// hote hi position apne aap Closed") — derived, never stored ----
+{
+  const pos = (await req(admin, "GET", "/api/open-positions", undefined, 200)).data.items ?? [];
+  const mine = pos.find((p) => String(p.location?._id) === String(loc._id) && String(p.program?._id) === String(prog._id));
+  ok("[best] approved centre×job-role appears as a position", !!mine, `${pos.length} rows`);
+  ok("[best] position math: required 4 · certified 1 · balance 3 · Open",
+    mine?.required === 4 && mine?.certified === 1 && mine?.balance === 3 && mine?.status === "Open",
+    JSON.stringify({ r: mine?.required, c: mine?.certified, b: mine?.balance, s: mine?.status }));
+  // Drop the requirement to 1 — certified (1) now meets it — the position must self-close.
+  await req(admin, "PUT", `/api/locations/${loc._id}/targets`, { program: prog._id, trainers_required: 1 }, 200);
+  const pos2 = (await req(admin, "GET", "/api/open-positions", undefined, 200)).data.items ?? [];
+  const mine2 = pos2.find((p) => String(p.location?._id) === String(loc._id));
+  ok("[best] position auto-CLOSES the moment certified meets required", mine2?.status === "Closed" && mine2?.balance === 0,
+    JSON.stringify({ s: mine2?.status, b: mine2?.balance }));
+  await req(admin, "PUT", `/api/locations/${loc._id}/targets`, { program: prog._id, trainers_required: 4 }, 200); // restore
+  // Only per-row-APPROVED targets qualify: flip the row's TC verdict off and it vanishes.
+  await req(admin, "PUT", `/api/locations/${loc._id}/targets`, { program: prog._id, tc_status: "Pending" }, 200);
+  const pos3 = (await req(admin, "GET", "/api/open-positions", undefined, 200)).data.items ?? [];
+  ok("[worst] a non-approved row is NOT an open position", !pos3.some((p) => String(p.location?._id) === String(loc._id)), `${pos3.length} rows`);
+  await req(admin, "PUT", `/api/locations/${loc._id}/targets`, { program: prog._id, tc_status: "Approved" }, 200); // restore
+}
+
 // ---- TC identity fields (the govt portal credentials the sheet carries) ----
 await req(admin, "PATCH", `/api/locations/${loc._id}`, { district: "Meerut", tc_id: "TC" + s, tc_status: "Approved", tc_password: "secret-" + s, operating_partner: "Vidysea", cluster_head_name: "TEST-EL Head", cluster_head_phone: phone("70") }, 200);
 const asAdmin = (await req(admin, "GET", `/api/locations/${loc._id}`, undefined, 200)).data.item;

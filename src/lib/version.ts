@@ -3,10 +3,11 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.13-12";
+export const RELEASE = "2026.08.14-1";
 export const RELEASE_NOTE =
-  "The sync ENGINE now resolves merged cells itself (Umesh: 'ye kaam code ko karna chahiye " +
-  "tha') — every grid the app reads (Sheet Watch diffs, mapped sync, tab-mapping imports) " +
-  "goes through one merge-expanding reader, so continuation rows carry their institution " +
-  "instead of appearing as '· Solar Panel…' keys, and the 30-minute sync tracks the same " +
-  "values a human sees in Excel. No more manual re-seeds to correct counts.";
+  "Open Positions (the CEO's new section): a third tab on Trainers listing every approved " +
+  "centre × approved job role with required / certified (ours, live) / in-pipeline / " +
+  "balance-to-hire — sortable and filterable by location AND by job role, exactly the two " +
+  "cuts Karunn asked for. A position closes BY ITSELF the moment the required number of " +
+  "trainers is certified for that centre × job role ('do certify ho gaye toh wo location " +
+  "close'). Derived fresh on every load, never stored. Divya's hiring workspace.";

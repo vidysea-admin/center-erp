@@ -24,7 +24,7 @@ export default function TrainersPage() {
 function TrainersInner() {
   const sp = useSearchParams();
   const router = useRouter();
-  const [tab, setTab] = useState(sp.get("tab") === "Requests" ? "Requests" : "Trainers");
+  const [tab, setTab] = useState(["Requests", "Open Positions"].includes(sp.get("tab") ?? "") ? sp.get("tab")! : "Trainers");
   const [items, setItems] = useState<any[]>([]);
   const [requests, setRequests] = useState<any[]>([]);
   const [locations, setLocations] = useState<any[]>([]);
@@ -37,6 +37,8 @@ function TrainersInner() {
   const [edit, setEdit] = useState<any>(null);
   const [form, setForm] = useState<any>({ max_concurrent_batches: 1, status: "Available" });
   const set = (k: string, v: unknown) => setForm((f: any) => ({ ...f, [k]: v }));
+  const [positions, setPositions] = useState<any[]>([]);   // CEO: Open Positions tab
+  const [posFilter, setPosFilter] = useState("Open");      // default = only what needs hiring
   const [reqEdit, setReqEdit] = useState<any>(null);
   const [reqForm, setReqForm] = useState<any>({});
   const setReq = (k: string, v: unknown) => setReqForm((f: any) => ({ ...f, [k]: v }));
@@ -47,6 +49,7 @@ function TrainersInner() {
     api(`/api/trainers?${sp.get("status") ? `status=${encodeURIComponent(sp.get("status")!)}&` : ""}${sp.get("pipeline_status") ? `pipeline_status=${encodeURIComponent(sp.get("pipeline_status")!)}&` : ""}limit=2000`).then((d) => setItems(d.items)),
     api("/api/trainer-requests?limit=2000").then((d) => setRequests(d.items)),
     api("/api/locations?limit=2000").then((d) => setLocations(d.items)),
+    api("/api/open-positions").then((d) => setPositions(d.items)),
   ]).catch((e) => setError(e.message)).finally(() => setLoading(false));
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -54,6 +57,8 @@ function TrainersInner() {
   for (const t of items) tagCounts.set(availabilityTag(t), (tagCounts.get(availabilityTag(t)) ?? 0) + 1);
   const shown = tag ? items.filter((t) => availabilityTag(t) === tag) : items;
   const openReq = requests.filter((r) => ["Open", "In Progress"].includes(r.status));
+  const openPos = positions.filter((p) => p.status === "Open");
+  const shownPos = posFilter === "Open" ? openPos : posFilter === "Closed" ? positions.filter((p) => p.status === "Closed") : positions;
   const shownReq = reqFilter === "open" ? openReq : reqFilter ? requests.filter((r) => r.status === reqFilter) : requests;
 
   function openEdit(t: any) {
@@ -109,7 +114,42 @@ function TrainersInner() {
         </div>
       </div>
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
-      <Tabs tabs={["Trainers", `Requests (${requests.filter((r) => ["Open", "In Progress"].includes(r.status)).length})`]} active={tab.startsWith("Requests") ? `Requests (${requests.filter((r) => ["Open", "In Progress"].includes(r.status)).length})` : tab} onChange={(t) => setTab(t.startsWith("Requests") ? "Requests" : t)} />
+      {/* CEO 13/08: "Open Positions — kahan-kahan trainer hire karne hain" — Divya's tab. */}
+      <Tabs tabs={["Trainers", `Requests (${openReq.length})`, `Open Positions (${openPos.length})`]}
+        active={tab.startsWith("Requests") ? `Requests (${openReq.length})` : tab.startsWith("Open Positions") ? `Open Positions (${openPos.length})` : tab}
+        onChange={(t) => setTab(t.startsWith("Requests") ? "Requests" : t.startsWith("Open Positions") ? "Open Positions" : t)} />
+      {tab === "Open Positions" && (
+        <>
+          <FilterPills active={posFilter} onChange={(v) => setPosFilter(v === posFilter ? "" : v)}
+            options={[
+              { value: "Open", label: "Open", count: openPos.length },
+              { value: "Closed", label: "Closed (filled)", count: positions.filter((p) => p.status === "Closed").length },
+              { value: "", label: "All", count: positions.length },
+            ]} />
+          <p className="text-xs text-gray-500">
+            Only approved centres with an approved job role appear here. A position closes by itself the
+            moment the required number of trainers is certified for that centre × job role.
+          </p>
+          <DataTable rows={shownPos} storageKey="open-positions"
+            cardTitle={(r: any) => <>{r.location?.name} <span className="text-xs text-gray-400">· {r.program?.name}</span></>}
+            loading={loading}
+            defaultSort={{ key: "balance", dir: "desc" }}
+            columns={[
+              { key: "location", label: "Location", sortable: true, sortValue: (r: any) => r.location?.name, filterable: true, filterText: (r: any) => r.location?.name, minWidth: 220,
+                render: (r: any) => <NameCell name={r.location?.name} sub={r.location?.code} /> },
+              { key: "program", label: "Job role", sortable: true, sortValue: (r: any) => r.program?.name, filterable: true, filterText: (r: any) => `${r.program?.name ?? ""} ${r.program?.scheme ?? ""}`,
+                render: (r: any) => <span>{r.program?.name} {r.program?.scheme && <Chip value={r.program.scheme} />}</span> },
+              { key: "required", label: "Required", sortable: true, sortValue: (r: any) => r.required ?? -1, render: (r: any) => r.required ?? <span className="text-gray-400">not set</span> },
+              { key: "certified", label: "Certified (ours)", sortable: true, sortValue: (r: any) => r.certified },
+              { key: "nominated", label: "In pipeline", mobile: false, render: (r: any) => r.nominated },
+              { key: "balance", label: "Balance to hire", sortable: true, sortValue: (r: any) => r.balance ?? -1,
+                render: (r: any) => r.balance == null ? <span className="text-gray-400">—</span>
+                  : <span className={`font-semibold ${r.balance > 0 ? "text-amber-600" : "text-green-700"}`}>{r.balance}</span> },
+              { key: "status", label: "Status", sortable: true, sortValue: (r: any) => r.status, render: (r: any) => <Chip value={r.status} /> },
+            ]}
+            empty="No open positions — every approved centre × job role has its trainers." />
+        </>
+      )}
       {tab === "Trainers" ? (
         <>
           <FilterPills active={tag} onChange={(v) => setTag(v === tag ? "" : v)}
@@ -154,7 +194,7 @@ function TrainersInner() {
               },
             ]} empty="No trainers yet." />
         </>
-      ) : (
+      ) : tab === "Requests" ? (
         <>
           {/* Default = the open ones, so the Home KPI's count and this list agree. */}
           <FilterPills active={reqFilter} onChange={(v) => setReqFilter(v)}
@@ -177,7 +217,7 @@ function TrainersInner() {
               { key: "fulfilled_by_trainer", label: "Fulfilled by", render: (r: any) => r.fulfilled_by_trainer?.name ?? "—" },
             ]} empty="No trainer requests." />
         </>
-      )}
+      ) : null}
 
       <Drawer open={drawer} onClose={() => setDrawer(false)} title={edit ? `Edit ${edit.name}` : "Add Trainer"}>
         <div className="space-y-3">
