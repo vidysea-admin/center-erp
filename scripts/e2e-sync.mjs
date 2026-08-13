@@ -48,7 +48,8 @@ const prog = (await req("POST", "/api/programs", { code: "P" + stamp, name: "Syn
 const loc = (await req("POST", "/api/locations", { code: "L" + stamp, name: "Sync Loc " + stamp, external_id: stamp, approval_status: "Approved", city: "Jaipur" }, 201)).data.item;
 const room = (await req("POST", `/api/locations/${loc._id}/rooms`, { name: "CR1", type: "Classroom" }, 201)).data.item;
 const trainer = (await req("POST", "/api/trainers", { name: "SyncTrainer " + stamp, phone: "9" + Date.now().toString().slice(-9), skills: ["SyncSkill" + stamp] }, 201)).data.item;
-const today = new Date().toISOString().slice(0, 10);
+const _n = new Date(); // LOCAL date, matching the UI (IST-midnight window fix — see e2e.mjs)
+const today = `${_n.getFullYear()}-${String(_n.getMonth() + 1).padStart(2, "0")}-${String(_n.getDate()).padStart(2, "0")}`;
 const batch = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, room: room._id, planned_start: today, target_size: 1 }, 201)).data.item;
 const cand = (await req("POST", "/api/candidates", { name: "SyncCand", phone: "8" + Date.now().toString().slice(-9), location: loc._id, program: prog._id }, 201)).data.item;
 const mem = (await req("POST", `/api/batches/${batch._id}/members`, { candidate: cand._id }, 201)).data.item;
@@ -304,7 +305,7 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
   // ---- sync S1-3: Rule 6 — cannot Close a location that still has a running batch ----
   const pr3 = (await req("POST", `/api/locations/${l2._id}/rooms`, { name: "CR", type: "Classroom" }, 201)).data.item;
   const tr3 = (await req("POST", "/api/trainers", { name: "AudTrainer " + s2, phone: "7" + Date.now().toString().slice(-9), skills: ["AudSkill" + s2] }, 201)).data.item;
-  const td = new Date().toISOString().slice(0, 10);
+  const td = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
   const b3 = (await req("POST", "/api/batches", { location: l2._id, program: p2._id, trainer: tr3._id, room: pr3._id, planned_start: td, target_size: 1 }, 201)).data.item;
   const c3 = (await req("POST", "/api/candidates", { name: "AudCand " + s2, phone: "6" + Date.now().toString().slice(-9), location: l2._id, program: p2._id }, 201)).data.item;
   const m3 = (await req("POST", `/api/batches/${b3._id}/members`, { candidate: c3._id }, 201)).data.item;

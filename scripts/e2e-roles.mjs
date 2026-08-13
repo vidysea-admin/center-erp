@@ -445,7 +445,7 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   // NO attendance: daily-log POST and marking rounds are refused for the Location role.
   const anyBatch = spocBatches.data.items.find((b) => ["Active", "Closing"].includes(b.status));
   if (anyBatch) {
-    const dl = await req(principal, "POST", `/api/batches/${anyBatch._id}/logs`, { log_date: new Date().toISOString().slice(0, 10), present_member_ids: [] });
+    const dl = await req(principal, "POST", `/api/batches/${anyBatch._id}/logs`, { log_date: new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10), present_member_ids: [] });
     ok("matrix: principal CANNOT enter a daily log (attendance is the trainer's)", dl.status === 403, `got ${dl.status}`);
     const gv = await req(principal, "POST", "/api/govt-attendance", {});
     ok("matrix: principal CANNOT import govt attendance", gv.status === 403, `got ${gv.status}`);

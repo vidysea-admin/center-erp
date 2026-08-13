@@ -207,7 +207,7 @@ ok("a dropped trainer can be re-opened if they come back", reopened.data.item.pi
 // never be written or read. A schema field the API refuses to accept does not exist.
 {
   const b = (await req("POST", "/api/batches", {
-    location: loc._id, program: prog._id, planned_start: new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10),
+    location: loc._id, program: prog._id, planned_start: new Date(Date.now() + 30 * 864e5 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10),
   }, 201)).data.item;
   const saved = await req("PATCH", `/api/batches/${b._id}`, {
     govt_batch_id: `SIDH-${stamp}`, drive_folder_url: "https://drive.google.com/drive/folders/abc",

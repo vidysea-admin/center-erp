@@ -50,4 +50,5 @@ export function finish() {
 // entity" and corrupt assertions (the e2e-govt.mjs lesson).
 export const stamp = (p = "T") => p + Date.now().toString().slice(-7);
 export const phone = (prefix) => prefix + Date.now().toString().slice(-8);
-export const today = () => new Date().toISOString().slice(0, 10);
+// LOCAL calendar date (what the UI sends) — see e2e.mjs note on the IST-midnight window.
+export const today = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`; };

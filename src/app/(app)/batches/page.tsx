@@ -50,7 +50,8 @@ function BatchesInner() {
   ]).catch((e) => setError(e.message)).finally(() => setLoading(false));
   useEffect(() => { load(); }, [fLoc]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const BATCH_STATUSES = ["Planning", "Ready", "Active", "Closing", "Completed", "Cancelled"];
+  // "Closed" (Rule 52) included so settled batches can be isolated and counted (audit find).
+  const BATCH_STATUSES = ["Planning", "Ready", "Active", "Closing", "Completed", "Closed", "Cancelled"];
   const statusCount = (s: string) => items.filter((b) => b.status === s).length;
   const shown = fStatus ? items.filter((b) => b.status === fStatus) : items;
 

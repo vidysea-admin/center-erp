@@ -93,7 +93,7 @@ console.log("\n--- BS1: a certified trainer running a live batch ---");
 
   const b = (await req(admin, "POST", "/api/batches", {
     location: loc._id, program: prog._id, trainer: t._id,
-    planned_start: new Date(Date.now() + 20 * 864e5).toISOString().slice(0, 10),
+    planned_start: new Date(Date.now() + 20 * 864e5 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10),
   }, 201)).data.item;
 
   // The trainer is booked. Dropping them now leaves the batch pointing at someone who has left.

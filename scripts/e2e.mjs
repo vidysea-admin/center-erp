@@ -59,7 +59,11 @@ for (let i = 0; i < 3; i++) {
 }
 
 // ---- batch ----
-const today = new Date().toISOString().slice(0, 10);
+// LOCAL calendar date, exactly what the UI sends (toInputDate). The UTC version broke the
+// whole wall in the IST 00:00-05:30 window: dayKey(actual_start) uses LOCAL day for Date
+// objects, so a UTC "today" string read as YESTERDAY and Rule 32 rejected every log.
+const _n = new Date();
+const today = `${_n.getFullYear()}-${String(_n.getMonth() + 1).padStart(2, "0")}-${String(_n.getDate()).padStart(2, "0")}`;
 const batch = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, room: room._id, planned_start: today, target_size: 3 }, 201)).data.item;
 ok("batch code auto-assigned (B###)", /^B\d+$/.test(batch.code), batch.code);
 const end = new Date(batch.planned_end), start = new Date(batch.planned_start);

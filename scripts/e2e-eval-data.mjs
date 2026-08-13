@@ -94,7 +94,7 @@ ok("[worst] a runaway limit is clamped, not honoured", over.status === 200 && ov
 // ---- shape 5 (2026-08-13, roster fix): a program-less import row joins a matching batch and
 // inherits its programme — the exact path the 572 prod rows take from the pool drawer.
 const { ObjectId } = await import("mongodb");
-const apiBatch = (await req(admin, "POST", "/api/batches", { location: loc._id, program: prog._id, target_size: 5, planned_start: new Date().toISOString().slice(0, 10) }, 201)).data.item;
+const apiBatch = (await req(admin, "POST", "/api/batches", { location: loc._id, program: prog._id, target_size: 5, planned_start: new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10) }, 201)).data.item;
 const bare2 = await db.collection("candidates").insertOne({ name: "TEST-ED NoProg " + s, phone: phone("75"), location: new ObjectId(String(loc._id)), lifecycle_status: "Unassigned", createdAt: new Date(), updatedAt: new Date() });
 const joined = await req(admin, "POST", `/api/batches/${apiBatch._id}/members`, { candidate: String(bare2.insertedId) });
 ok("[best] program-less import row can join a matching batch", joined.status === 201, `got ${joined.status}: ${JSON.stringify(joined.data).slice(0, 120)}`);

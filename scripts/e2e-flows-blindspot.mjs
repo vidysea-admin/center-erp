@@ -111,7 +111,7 @@ console.log("\n--- FL2: batch opens → the centre is told, with its pool count 
     await req(admin, "POST", "/api/candidates", { name: `FL Pool ${stamp}-${i}`, phone: phone(), location: loc._id, program: prog._id }, 201);
   }
   const b = (await req(admin, "POST", "/api/batches", {
-    location: loc._id, program: prog._id, planned_start: new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10),
+    location: loc._id, program: prog._id, planned_start: new Date(Date.now() + 30 * 864e5 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10),
   }, 201)).data.item;
 
   const inbox = (await req(spocHere, "GET", "/api/notifications?type=batch_created")).data.items ?? [];
@@ -146,12 +146,12 @@ console.log("\n--- FL4: per-candidate attendance is counted from the logs, not t
   // "kitne bacche ki kitni-kitni attendance chal rahi hai"
   const tr = (await req(admin, "POST", "/api/trainers", {
     name: `FL Trainer ${stamp}`, phone: phone(), skills: [`fl${stamp}`], pipeline_status: "Certified",
-    available_from: new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10),
+    available_from: new Date(Date.now() - 30 * 864e5 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10),
   }, 201)).data.item;
   const room2 = (await req(admin, "POST", `/api/locations/${loc._id}/rooms`, { name: "FL Room 2", type: "Classroom", capacity: 30 }, 201)).data.item;
   const b = (await req(admin, "POST", "/api/batches", {
     location: loc._id, program: prog._id, trainer: tr._id, room: room2._id, target_size: 2,
-    planned_start: new Date().toISOString().slice(0, 10),
+    planned_start: new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10),
   }, 201)).data.item;
   const members = [];
   for (const nm of ["Att A", "Att B"]) {
@@ -164,7 +164,7 @@ console.log("\n--- FL4: per-candidate attendance is counted from the logs, not t
   await req(admin, "POST", `/api/batches/${b._id}/transition`, { target: "Active" }, 200);
   // One loggable day (today): A present, B absent.
   await req(admin, "POST", `/api/batches/${b._id}/logs`, {
-    log_date: new Date().toISOString().slice(0, 10),
+    log_date: new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10),
     present_member_ids: [members[0]._id], actual_topic: "attendance probe",
   }, 201);
   const roster = (await req(admin, "GET", `/api/batches/${b._id}/members`)).data.items ?? [];
@@ -230,7 +230,7 @@ console.log("\n--- FL7: an unregistered candidate can still be assigned (decoupl
   // demand prior SIDH registration — the readiness gate reports the shortfall instead.
   const c = (await req(admin, "POST", "/api/candidates", { name: `FL Unreg ${stamp}`, phone: phone(), location: loc._id, program: prog._id }, 201)).data.item;
   const b = (await req(admin, "POST", "/api/batches", {
-    location: loc._id, program: prog._id, planned_start: new Date(Date.now() + 40 * 864e5).toISOString().slice(0, 10),
+    location: loc._id, program: prog._id, planned_start: new Date(Date.now() + 40 * 864e5 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10),
   }, 201)).data.item;
   const add = await req(admin, "POST", `/api/batches/${b._id}/members`, { candidate: c._id });
   ok("FL7: assignment succeeds although SIDH status is Not Registered", add.status === 201, `got ${add.status}`);
@@ -241,9 +241,9 @@ console.log("\n--- FL8: the day holds two slotted batches per trainer, never thr
   // GD-118/123: "chaar-chaar ghante ke do batch" — up to 4 concurrent, but 2 slotted per DAY.
   const tr = (await req(admin, "POST", "/api/trainers", {
     name: `FL Slots ${stamp}`, phone: phone(), skills: [`fl${stamp}`], pipeline_status: "Certified",
-    available_from: new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10), max_concurrent_batches: 4,
+    available_from: new Date(Date.now() - 30 * 864e5 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10), max_concurrent_batches: 4,
   }, 201)).data.item;
-  const start = new Date(Date.now() + 50 * 864e5).toISOString().slice(0, 10);
+  const start = new Date(Date.now() + 50 * 864e5 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
   const mk = (s, e) => req(admin, "POST", "/api/batches", {
     location: loc._id, program: prog._id, trainer: tr._id, planned_start: start, slot_start: s, slot_end: e,
   });
@@ -255,7 +255,7 @@ console.log("\n--- FL8: the day holds two slotted batches per trainer, never thr
   // two end — a start inside their range still clashes on the daily slot, and rightly so.
   const later = await req(admin, "POST", "/api/batches", {
     location: loc._id, program: prog._id, trainer: tr._id,
-    planned_start: new Date(Date.now() + 150 * 864e5).toISOString().slice(0, 10), slot_start: "10:00", slot_end: "14:00",
+    planned_start: new Date(Date.now() + 150 * 864e5 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10), slot_start: "10:00", slot_end: "14:00",
   });
   ok("FL8: the same slot after the earlier batches END is fine", later.status === 201, `got ${later.status}`);
 }

@@ -3,11 +3,10 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-6";
+export const RELEASE = "2026.08.14-7";
 export const RELEASE_NOTE =
-  "Batch settlement (CEO, Rule 52): Completed is the TRAINING outcome; the new CLOSED " +
-  "state is the MONEY outcome — a batch closes only when certification is done, the " +
-  "invoice is PAID, and a named person attests ALL dues settled (trainer, centre, " +
-  "vendor — no dues pending). Close button on the batch Overview; dues attestation " +
-  "with who/when on the Closure tab. Main khali payment lene mein interested nahi — " +
-  "no dues, tab close.";
+  "Visibility polish: the trainer journey is a stage-count strip (har stage pe kitne, " +
+  "aur us stage pe kitne REJECTED — click filters the list); every batch shows the " +
+  "CEO's 3-way attendance — Expected so far (operating days × roster, with hours) vs " +
+  "our trainer-marked days vs the govt portal, gaps amber; and settled (Closed) " +
+  "batches finally have their own pill on the Batches list.";

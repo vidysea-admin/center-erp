@@ -31,6 +31,7 @@ function TrainersInner() {
   const [locations, setLocations] = useState<any[]>([]);
   // Deep-link presets: /trainers?tag=Available (pill) or ?status=/?pipeline_status= (API-side).
   const [tag, setTag] = useState(sp.get("tag") ?? "");
+  const [stageFilter, setStageFilter] = useState("");  // CEO: "har stage pe accepted/rejected dikhe"
   const [reqFilter, setReqFilter] = useState("open"); // KPI counts open ones — the list defaults to match
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -57,7 +58,19 @@ function TrainersInner() {
 
   const tagCounts = new Map<string, number>();
   for (const t of items) tagCounts.set(availabilityTag(t), (tagCounts.get(availabilityTag(t)) ?? 0) + 1);
-  const shown = tag ? items.filter((t) => availabilityTag(t) === tag) : items;
+  // CEO 13/08: stage-wise counts with rejected-here — the journey as a strip, click = filter.
+  const STAGES = ["Applied", "CV Reviewed", "Shortlisted", "Docs Pending", "Docs Complete", "Nomination Prepared",
+    "Submitted to NSDC", "NSDC Approved", "NSDC Rejected", "Payment Done", "TOT Scheduled", "TOT In Progress", "Certified"];
+  const stageCur = new Map<string, number>();
+  const stageRej = new Map<string, number>();
+  for (const t of items) {
+    stageCur.set(t.pipeline_status ?? "Applied", (stageCur.get(t.pipeline_status ?? "Applied") ?? 0) + 1);
+    if (t.dropped_from_stage) stageRej.set(t.dropped_from_stage, (stageRej.get(t.dropped_from_stage) ?? 0) + 1);
+  }
+  const stageShown = stageFilter
+    ? items.filter((t) => (t.pipeline_status === stageFilter) || (t.pipeline_status === "Dropped" && t.dropped_from_stage === stageFilter))
+    : items;
+  const shown = tag ? stageShown.filter((t) => availabilityTag(t) === tag) : stageShown;
   const openReq = requests.filter((r) => ["Open", "In Progress"].includes(r.status));
   const openPos = positions.filter((p) => p.status === "Open");
   const shownPos = posFilter === "Open" ? openPos : posFilter === "Closed" ? positions.filter((p) => p.status === "Closed") : positions;
@@ -156,6 +169,26 @@ function TrainersInner() {
       )}
       {tab === "Trainers" ? (
         <>
+          {/* CEO 13/08: "har stage pe Accepted/Rejected dikhe" — the whole journey as counts;
+              red = trainers who were DROPPED at that stage. Click a stage to filter. */}
+          <div className="dt-scroll flex gap-1.5 overflow-x-auto pb-1">
+            {STAGES.map((st) => {
+              const cur = stageCur.get(st) ?? 0, rej = stageRej.get(st) ?? 0;
+              if (!cur && !rej) return (
+                <button key={st} onClick={() => setStageFilter(stageFilter === st ? "" : st)}
+                  className={`shrink-0 rounded-lg border px-2 py-1 text-[11px] ${stageFilter === st ? "border-blue-400 bg-blue-50" : "border-gray-100 text-gray-300"}`}>
+                  {pipelineLabel(st)} 0
+                </button>
+              );
+              return (
+                <button key={st} onClick={() => setStageFilter(stageFilter === st ? "" : st)}
+                  className={`shrink-0 rounded-lg border px-2 py-1 text-left text-[11px] font-medium ${stageFilter === st ? "border-blue-400 bg-blue-50 text-blue-800" : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"}`}>
+                  {pipelineLabel(st)} <span className="font-semibold text-gray-900">{cur}</span>
+                  {rej > 0 && <span className="ml-1 rounded-full bg-red-100 px-1.5 text-[10px] font-semibold text-red-700">{rej} rejected</span>}
+                </button>
+              );
+            })}
+          </div>
           <FilterPills active={tag} onChange={(v) => setTag(v === tag ? "" : v)}
             options={[{ value: "", label: "All", count: items.length },
               ...TAG_ORDER.map((t) => ({ value: t, label: t, count: tagCounts.get(t) ?? 0 }))]} />

@@ -20,7 +20,7 @@ const badEnum = await req(admin, "POST", "/api/candidates", { name: "TEST-EC Bad
 ok("[worst] invalid sidh_status → 400 naming the allowed values", badEnum.status === 400 && /Not Registered|Registered/.test(JSON.stringify(badEnum.data)), JSON.stringify(badEnum.data).slice(0, 120));
 
 // [best] a clean create lands Unassigned with eligibility computed.
-const dob21 = new Date(Date.now() - 21 * 365.25 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+const dob21 = new Date(Date.now() - 21 * 365.25 * 24 * 3600 * 1000 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 const c1 = (await req(admin, "POST", "/api/candidates", { name: "TEST-EC One " + s, phone: phone("84"), location: loc._id, program: prog._id, dob: dob21, education: "12th Pass" }, 201)).data.item;
 const c1Read = (await req(admin, "GET", `/api/candidates/${c1._id}`, undefined, 200)).data.item;
 ok("[best] fresh candidate is Unassigned", c1Read.lifecycle_status === "Unassigned", c1Read.lifecycle_status);

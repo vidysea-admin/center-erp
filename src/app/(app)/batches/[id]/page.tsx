@@ -565,12 +565,49 @@ function DailyExecution({ batchId, batch, role, setError }: any) {
     return <p className="p-6 text-center text-sm text-gray-400">Daily logs open once the batch is Active.</p>;
   }
 
+  // CEO 13/08 (3-way): "100% attendance = itne hours; hamare records ke hisaab se itne;
+  // govt portal ke hisaab se itne." Expected = operating days elapsed × roster (an
+  // approximation against TODAY's roster, said as such); ours/govt summed from the logs.
+  const roster = members.length;
+  const opDays: number[] = batch.program?.operating_days ?? [1, 2, 3, 4, 5, 6];
+  let expDays = 0;
+  if (batch.actual_start) {
+    const end = batch.actual_end ? new Date(batch.actual_end) : new Date();
+    for (let d = new Date(batch.actual_start); d <= end; d.setDate(d.getDate() + 1)) {
+      if (opDays.includes(d.getDay())) expDays++;
+    }
+  }
+  const expSD = expDays * roster;
+  const oursSD = logs.reduce((s: number, l: any) => s + (l.internal_present ?? 0), 0);
+  const govtSD = logs.reduce((s: number, l: any) => s + (l.govt_present ?? 0), 0);
+  const hoursPerDay = batch.program?.hours && batch.program?.duration_days ? batch.program.hours / batch.program.duration_days : 8;
+  const pct = (n: number) => (expSD > 0 ? Math.round((100 * n) / expSD) : null);
+
   return (
     <div className="space-y-4">
       {!canMark && (
         <p className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-2.5 text-xs text-gray-500">
           Attendance is marked by the batch trainer — this view is read-only for your role.
         </p>
+      )}
+      {expSD > 0 && (
+        <div className="grid grid-cols-3 gap-3">
+          <div className="rounded-xl border border-gray-200/80 bg-white p-3">
+            <div className="text-[11px] font-medium uppercase tracking-wider text-gray-400">Expected so far (100%)</div>
+            <div className="text-lg font-semibold text-gray-900">{expSD} <span className="text-xs font-normal text-gray-400">student-days</span></div>
+            <div className="text-[11px] text-gray-400">{expDays} operating days × {roster} on roster · ≈{Math.round(expSD * hoursPerDay)} hrs</div>
+          </div>
+          <div className={`rounded-xl border p-3 ${oursSD < expSD * 0.6 ? "border-amber-300 bg-amber-50" : "border-gray-200/80 bg-white"}`}>
+            <div className="text-[11px] font-medium uppercase tracking-wider text-gray-400">Our records (trainer-marked)</div>
+            <div className="text-lg font-semibold text-gray-900">{oursSD} <span className="text-xs font-normal text-gray-400">({pct(oursSD)}%)</span></div>
+            <div className="text-[11px] text-gray-400">≈{Math.round(oursSD * hoursPerDay)} hrs marked</div>
+          </div>
+          <div className={`rounded-xl border p-3 ${govtSD > oursSD ? "border-amber-300 bg-amber-50" : "border-gray-200/80 bg-white"}`}>
+            <div className="text-[11px] font-medium uppercase tracking-wider text-gray-400">Govt portal</div>
+            <div className="text-lg font-semibold text-gray-900">{govtSD} <span className="text-xs font-normal text-gray-400">({pct(govtSD)}%)</span></div>
+            <div className="text-[11px] text-gray-400">from verified/imported days only</div>
+          </div>
+        </div>
       )}
       {canMark && <Section title="Today's entry">
         <div className="space-y-4">

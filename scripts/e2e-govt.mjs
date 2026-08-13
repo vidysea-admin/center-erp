@@ -8,6 +8,7 @@ import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import path from "path";
 
+const localDate = (ms = Date.now()) => { const n = new Date(ms); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`; }; // LOCAL date = what the UI sends (IST-midnight window fix)
 const BASE = process.env.BASE_URL || "http://localhost:3000/erp";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 let pass = 0, fail = 0;
@@ -79,7 +80,7 @@ ok("room created", !!room?._id, JSON.stringify(room).slice(0, 200));
 const trainer = (await req(admin, "POST", "/api/trainers", {
   name: `${NAME} Trainer`, phone: `9${STAMP}0001`, skills: ["Testing"],
   home_location: loc._id, pipeline_status: "Certified", max_concurrent_batches: 4,
-  available_from: new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10),
+  available_from: localDate(Date.now() - 30 * 86400_000),
 })).data.item;
 ok("trainer created (matches the fixture's Trainer row by name)", !!trainer?._id);
 
@@ -88,7 +89,7 @@ ok("trainer created (matches the fixture's Trainer row by name)", !!trainer?._id
 // to reconcile the portal figures against.
 const batch = (await req(admin, "POST", "/api/batches", {
   location: loc._id, program: program._id, target_size: 5, trainer: trainer._id, room: room._id,
-  planned_start: new Date().toISOString().slice(0, 10),
+  planned_start: localDate(),
 })).data.item;
 ok("batch created", !!batch?._id);
 
@@ -110,7 +111,7 @@ for (const [i, p] of people.entries()) {
   })).data.item;
   // Joined 20 days ago so the back-dated daily logs below have a roster to draw on (Rule 26).
   const m = (await req(admin, "POST", `/api/batches/${batch._id}/members`, {
-    candidate: c._id, joined_on: new Date(Date.now() - 20 * 86400_000).toISOString().slice(0, 10),
+    candidate: c._id, joined_on: localDate(Date.now() - 20 * 86400_000),
   })).data.item;
   members.push({ ...p, candidate: c, member: m });
 }
@@ -128,7 +129,7 @@ ok("batch reached Active (daily logs require it)", active.status === 200 || acti
 // One day's log: Alpha and Bravo present. Rule 32 pins logs to on-or-after actual_start, which
 // the Active transition stamps as today — so today is the only loggable date.
 const logRes = await req(admin, "POST", `/api/batches/${batch._id}/logs`, {
-  log_date: new Date().toISOString().slice(0, 10),
+  log_date: localDate(),
   present_member_ids: [members[0].member._id, members[1].member._id], actual_topic: "govt test",
 });
 // Asserted, not assumed: had the log silently failed to write, every variance below would read
@@ -224,7 +225,7 @@ ok("a file with no attendance header is rejected with a readable reason",
 // ---------------------------------------------------------------- scheme timing (Manish 2026-08-12)
 const mkBatch = (extra) => req(admin, "POST", "/api/batches", {
   location: loc._id, program: program._id, target_size: 30,
-  planned_start: new Date(Date.now() + 86400_000).toISOString().slice(0, 10), ...extra,
+  planned_start: localDate(Date.now() + 86400_000), ...extra,
 });
 const early = await mkBatch({ slot_start: "07:00", slot_end: "11:00" });
 ok("07:00 start refused — the day runs 09:00–18:00", early.status === 400 && /09:00/.test(early.data.error ?? ""), JSON.stringify(early.data).slice(0, 160));
@@ -277,7 +278,7 @@ ok("with nobody dropped, billable == passed", sum.billable_passed === 3, String(
 
 // A candidate who dropped out is not billable even though their Pass survives (Rule 42).
 const dropped = await req(admin, "POST", `/api/members/${members[4].member._id}/drop`, {
-  left_on: new Date().toISOString().slice(0, 10), drop_reason: "Personal",
+  left_on: localDate(), drop_reason: "Personal",
 });
 ok("a roster member can be dropped", [200, 201].includes(dropped.status), JSON.stringify(dropped.data).slice(0, 200));
 sum = (await req(admin, "GET", `/api/batches/${batch._id}/results`)).data.summary;
@@ -290,7 +291,7 @@ const replacement = (await req(admin, "POST", "/api/candidates", {
   name: `${NAME} Replacement`, phone: `9${STAMP}2000`, location: loc._id, program: program._id,
 })).data.item;
 const readd = await req(admin, "POST", `/api/batches/${batch._id}/members`, {
-  candidate: replacement._id, joined_on: new Date().toISOString().slice(0, 10),
+  candidate: replacement._id, joined_on: new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10),
 });
 ok("mid-batch replacement allowed on a later joining date (Manish: yes)", readd.status === 201, JSON.stringify(readd.data).slice(0, 200));
 
@@ -368,7 +369,7 @@ const plk = await lookup({ phone: cPool.phone });
 ok("portal lookup: a pool candidate learns their registration status, not a dead end", plk.status === 200 && plk.data.enrolled === false && typeof plk.data.sidh_status === "string", JSON.stringify(plk.data).slice(0, 120));
 
 // ---------------------------------------------------------------- F-N2 (2026-08-13): assessment date raises an in-app alert
-const assessDate = new Date(Date.now() + 7 * 864e5).toISOString().slice(0, 10);
+const assessDate = new Date(Date.now() + 7 * 864e5 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 const closurePut = await req(admin, "PUT", `/api/batches/${batch._id}/closure`, { assessment_date: assessDate });
 ok("assessment date lands on the closure", closurePut.status === 200, JSON.stringify(closurePut.data).slice(0, 160));
 const schedList = (await req(admin, "GET", "/api/notifications?type=assessment_scheduled")).data.items ?? [];
@@ -386,7 +387,7 @@ const t2 = (await req(admin, "POST", "/api/trainers", { name: `${NAME} LockTrain
 const room2 = (await req(admin, "POST", `/api/locations/${loc._id}/rooms`, { name: `${NAME} Lab 2`, type: "Lab", capacity: 30 })).data.item;
 const mk2 = await req(admin, "POST", "/api/batches", {
   location: loc._id, program: program._id, trainer: t2._id, room: room2._id,
-  planned_start: new Date().toISOString().slice(0, 10), target_size: 1,
+  planned_start: localDate(), target_size: 1,
 });
 ok("lock fixture: batch2 created", mk2.status === 201, JSON.stringify(mk2.data).slice(0, 200));
 const batch2 = mk2.data.item;
@@ -398,10 +399,10 @@ await req(admin, "POST", `/api/batches/${batch2._id}/transition`, { target: "Act
 await req(admin, "PUT", `/api/batches/${batch2._id}/results`, { rows: [{ member: m2._id, result: "Pass" }] });
 const rrow = ((await req(admin, "GET", `/api/batches/${batch2._id}/results`)).data.items ?? []).find((i) => i.result)?.result;
 await req(admin, "PATCH", `/api/results/${rrow._id}`, { certificate_status: "Processing" });
-await req(admin, "PATCH", `/api/results/${rrow._id}`, { certificate_status: "Generated", certificate_no: `CERT-${STAMP}-1`, certificate_date: new Date().toISOString().slice(0, 10) });
+await req(admin, "PATCH", `/api/results/${rrow._id}`, { certificate_status: "Generated", certificate_no: `CERT-${STAMP}-1`, certificate_date: new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10) });
 await req(admin, "PATCH", `/api/results/${rrow._id}`, { certificate_status: "Issued" });
-await req(admin, "PUT", `/api/batches/${batch2._id}/closure`, { assessment_status: "Completed", assessment_date: new Date().toISOString().slice(0, 10) });
-await req(admin, "PUT", `/api/batches/${batch2._id}/closure`, { certification_status: "Completed", certification_date: new Date().toISOString().slice(0, 10) });
+await req(admin, "PUT", `/api/batches/${batch2._id}/closure`, { assessment_status: "Completed", assessment_date: new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10) });
+await req(admin, "PUT", `/api/batches/${batch2._id}/closure`, { certification_status: "Completed", certification_date: new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10) });
 await req(admin, "POST", `/api/batches/${batch2._id}/transition`, { target: "Closing" });
 const toDone = await req(admin, "POST", `/api/batches/${batch2._id}/transition`, { target: "Completed" });
 ok("lock fixture: batch walked to Completed", toDone.status === 200, JSON.stringify(toDone.data).slice(0, 200));
@@ -409,7 +410,7 @@ ok("lock fixture: batch walked to Completed", toDone.status === 200, JSON.string
 const certEdit = await req(admin, "PATCH", `/api/results/${rrow._id}`, { certificate_no: `CERT-${STAMP}-TYPO` });
 ok("a mistyped certificate number CANNOT be corrected after completion (stays locked, Umesh)",
   certEdit.status === 409 && /closed/i.test(certEdit.data.error ?? ""), JSON.stringify(certEdit.data).slice(0, 200));
-const closureEdit = await req(admin, "PUT", `/api/batches/${batch2._id}/closure`, { assessment_date: new Date(Date.now() + 864e5).toISOString().slice(0, 10) });
+const closureEdit = await req(admin, "PUT", `/api/batches/${batch2._id}/closure`, { assessment_date: new Date(Date.now() + 864e5 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10) });
 ok("closure fields are frozen after completion too", closureEdit.status === 409, JSON.stringify(closureEdit.data).slice(0, 200));
 const readyInv = await req(admin, "PUT", `/api/batches/${batch2._id}/closure`, { ready_for_invoice: true });
 ok("…but invoice-readiness may still be marked (invoicing follows completion)", readyInv.status === 200, JSON.stringify(readyInv.data).slice(0, 160));
