@@ -613,40 +613,19 @@ async function loginAs(email, password) {
   return sess ? [cc, sess].join("; ") : null;
 }
 
-// ---- self-signup → pending → approve → login ----
+// ---- staff self-signup is CLOSED (CEO 13/08) — accounts are admin-created ----
 const signupEmail = `trainer${stamp}@test.local`;
 const su = await fetch(BASE + "/api/public/signup", {
   method: "POST", headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ name: "Signup Trainer " + stamp, email: signupEmail, password: "Test@12345", role: "Trainer", location: loc._id }),
 });
-ok("public signup creates a pending account", su.status === 201, `status=${su.status}`);
-ok("pending account cannot log in", (await loginAs(signupEmail, "Test@12345")) === null);
-// A second signup left deliberately un-approved, to assert the Home queue below.
-const signupEmail2 = `spoc${stamp}@test.local`;
-await fetch(BASE + "/api/public/signup", {
-  method: "POST", headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ name: "Pending SPOC " + stamp, email: signupEmail2, phone: "9876500011", password: "Test@12345", role: "Location", location: loc._id }),
-});
-
-const dupSignup = await fetch(BASE + "/api/public/signup", {
-  method: "POST", headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ name: "Dup", email: signupEmail, password: "Test@12345", role: "Trainer" }),
-});
-// UPDATED 2026-08-12 (audit auth S2-16). A distinct 409 on an existing address made this an
-// unauthenticated oracle for "does this person have an account here". A repeat signup is now
-// accepted with the same 201 as a fresh one and creates nothing — the real user's experience is
-// identical (both just wait for an Admin), and no second pending row appears.
-ok("auth S2-16: a repeat signup does not reveal the address is taken", dupSignup.status === 201, `status=${dupSignup.status}`);
-const dupUsers = (await req("GET", "/api/users")).data.items.filter((u) => u.email === signupEmail);
-ok("auth S2-16: …and no second account is created", dupUsers.length === 1, `count=${dupUsers.length}`);
-// Queried by type: the inbox is capped at 100 and sorted severity-first, so scanning the whole
-// list makes this assertion depend on how much unrelated noise the database happens to hold.
-const adminNotifs = (await req("GET", "/api/notifications?status=all&type=signup_pending")).data.items ?? [];
-ok("admin notified of pending signup", adminNotifs.some((n) => n.type === "signup_pending" && n.message.includes(signupEmail)));
-const allUsers = (await req("GET", "/api/users")).data.items;
-const pendingUser = allUsers.find((u) => u.email === signupEmail);
-ok("signup appears in users list as Pending", pendingUser?.approval_status === "Pending" && pendingUser?.active === false);
-await req("PATCH", `/api/users/${pendingUser._id}`, { approval: "approve" }, 200);
+ok("public staff signup answers 410 GONE (closed, with guidance)", su.status === 410, `status=${su.status}`);
+const suBody = await su.json().catch(() => ({}));
+ok("…and points at the right doors (candidate portal + trainer apply)", /trainer-apply/.test(JSON.stringify(suBody)), JSON.stringify(suBody).slice(0, 120));
+ok("GET signup meta is gone too", (await fetch(BASE + "/api/public/signup")).status === 410);
+// The login below is ADMIN-CREATED now (the only way staff accounts come to exist).
+const mkTrainerUser = await req("POST", "/api/users", { name: "Signup Trainer " + stamp, email: signupEmail, password: "Test@12345", role: "Trainer", can_edit: true, location_scope: [loc._id] }, 201);
+const pendingUser = mkTrainerUser.data.item;
 const trainerCookie = await loginAs(signupEmail, "Test@12345");
 ok("approved account can log in", !!trainerCookie);
 // Trainer role: scoped + no batch-manage right
@@ -752,11 +731,14 @@ ok("row's pending changes auto-accepted after validation", !afterApply.some((c) 
   ok("Fixed compensation accepted with an amount", tr2.compensation_type === "Fixed" && tr2.compensation_fixed === 25000);
 }
 
-// ---- pending signups surface where the approver actually looks (2026-08-12) ----
+// ---- LEGACY pending accounts still surface for the approver (2026-08-14: self-signup is
+// closed, but pre-existing pending rows — e.g. prod's real one — must stay visible) ----
+const legacyEmail = `legacy.pending${stamp}@test.local`;
+await req("POST", "/api/users", { name: "Legacy Pending " + stamp, email: legacyEmail, phone: "9876500011", password: "Test@12345", role: "Location", approval_status: "Pending", active: false, requested_role: "Location" });
 const homeAfterSignup = (await req("GET", "/api/home")).data;
-const queued = (homeAfterSignup.queues?.pending_users ?? []).find((u) => u.email === signupEmail2);
-ok("a pending signup appears on the Admin's Home queue", !!queued, JSON.stringify(homeAfterSignup.queues?.pending_users?.length));
-ok("…with the contact details an approver needs", !!queued && queued.phone === "9876500011" && !!queued.requested_role, JSON.stringify(queued));
+const queued = (homeAfterSignup.queues?.pending_users ?? []).find((u) => u.email === legacyEmail);
+ok("a pending account appears on the Admin's Home queue", !!queued, JSON.stringify(homeAfterSignup.queues?.pending_users?.length));
+ok("…with the contact details an approver needs", !!queued && queued.phone === "9876500011", JSON.stringify(queued));
 
 // ---- public build marker (deploy verification, no auth) ----
 const verRes = await fetch(BASE + "/api/public/version");

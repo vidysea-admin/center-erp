@@ -36,12 +36,16 @@ export const POST = apiHandler(async (req: NextRequest) => {
     throw new HttpError(403, "Only an Admin may create Admin/Operations accounts, unscoped accounts, or grant special rights.");
   }
   const doc = await User.create({
-    name: body.name, email: body.email,
+    name: body.name, email: body.email, phone: body.phone,
     password_hash: await bcrypt.hash(body.password, 10),
     role: body.role,
     location_scope: body.location_scope ?? [],
     can_edit: body.can_edit ?? false,
     active: body.active ?? true,
+    // 2026-08-14: self-signup is closed, so a known-but-not-yet-cleared person is entered
+    // by the Admin as Pending and approved through the same queue as before.
+    approval_status: body.approval_status,
+    requested_role: body.requested_role,
   });
   await audit({ entity: "User", entityId: doc._id, newValue: "created " + body.email, actor: user.id });
   const { password_hash: _ph, ...safe } = doc.toObject();

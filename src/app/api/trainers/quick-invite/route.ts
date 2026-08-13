@@ -1,0 +1,37 @@
+import { NextRequest, NextResponse } from "next/server";
+import crypto from "crypto";
+import { dbConnect } from "@/lib/db";
+import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { requirePerm } from "@/lib/permissions";
+import { PublicToken, Trainer } from "@/models";
+import { audit } from "@/lib/audit";
+
+// Quick-invite (CEO 13/08): "chhota sa form — naam, email, phone dala, link bana, WhatsApp/
+// SMS chala gaya; trainer khud baaki bhar de, mere staff ka kaam kam ho." Creates the
+// Trainer at "Applied" and mints a single-use trainer_apply link that completes the profile.
+export const POST = apiHandler(async (req: NextRequest) => {
+  await dbConnect();
+  const user = await requireUser();
+  requireEdit(user);
+  await requirePerm(user, "trainers.manage"); // Admin/Ops — and the principal, per the role matrix
+  const body = await req.json();
+  const S = (v: unknown) => String(v ?? "").trim();
+  const name = S(body.name), email = S(body.email), phone = S(body.phone).replace(/\D/g, "").slice(-10);
+  if (!name || phone.length !== 10) throw new HttpError(400, "Name and a 10-digit phone are required.");
+
+  // One live profile per phone — re-inviting someone re-uses their record and a fresh link.
+  let tr = await Trainer.findOne({ phone });
+  if (!tr) {
+    tr = await Trainer.create({
+      name, phone, email: email || undefined,
+      skills: ["(to be filled by the applicant)"], // model requires skills; the form replaces this
+      pipeline_status: "Applied", status: "Available", source: "Quick invite",
+    });
+  }
+  // Burn any earlier unused link for this trainer — exactly one live link at a time.
+  await PublicToken.updateMany({ purpose: "trainer_apply", trainer: tr._id, active: true }, { $set: { active: false } });
+  const token = crypto.randomBytes(16).toString("hex");
+  await PublicToken.create({ token, purpose: "trainer_apply", trainer: tr._id, created_by: user.id });
+  await audit({ entity: "Trainer", entityId: tr._id, field: "quick_invite", newValue: `apply link minted by ${user.email ?? user.id}`, actor: user.id });
+  return NextResponse.json({ item: { trainer: tr._id, link: `/p/trainer-apply?token=${token}` } }, { status: 201 });
+});

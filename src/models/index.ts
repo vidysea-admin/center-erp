@@ -718,13 +718,16 @@ NotificationSchema.index({ status: 1, createdAt: -1 });
 // (Admin/Ops generate and share); feedback and attendance tokens are per batch-member
 // (attendance added 2026-08-13: "bacche puchte hain sir mera kitna ho gaya attendance" —
 // each student gets a link showing their own days/hours/eligibility, nobody else's).
-export const PUBLIC_TOKEN_PURPOSE = ["register", "feedback", "attendance"] as const;
+// trainer_apply added 2026-08-14 (CEO: "Add Trainer ke fields as a form uske paas chala
+// jaye, wo khud bhar de — Divya naam-email-phone dale, link WhatsApp/SMS chala jaye").
+export const PUBLIC_TOKEN_PURPOSE = ["register", "feedback", "attendance", "trainer_apply"] as const;
 const PublicTokenSchema = new Schema({
   token: { type: String, required: true, unique: true },
   purpose: { type: String, enum: PUBLIC_TOKEN_PURPOSE, required: true },
   location: oid("Location"),    // register: which location's pool the candidate lands in
   program: oid("Program"),      // register: optional preselected program
   batch_member: oid("BatchMember"), // feedback: who this link belongs to
+  trainer: oid("Trainer"),      // trainer_apply: the pre-created profile this link completes
   active: { type: Boolean, default: true },
   created_by: oid("User"),
 }, { timestamps: true });

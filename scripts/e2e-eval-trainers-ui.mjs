@@ -81,4 +81,42 @@ await req(admin, "PATCH", `/api/trainers/${t3._id}`, { nominated_for_location: n
 const nomCleared = (await req(admin, "GET", `/api/trainers/${t3._id}`, undefined, 200)).data.item;
 ok("[avg] nomination can be cleared again (wrong pick is reversible)", nomCleared.nominated_for_location == null && nomCleared.nominated_for_program == null, JSON.stringify(nomCleared.nominated_for_location));
 
+// ---- 2026-08-14 (CEO): quick-invite + public trainer application ----
+{
+  const BASE = process.env.BASE_URL || "http://localhost:3000/erp";
+  const pub = (path, body) => fetch(BASE + path, body === undefined ? undefined : {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  // [best] Divya's flow: name+phone → single-use link → trainer fills the rest himself.
+  const qPhone = phone("93");
+  const inv = (await req(admin, "POST", "/api/trainers/quick-invite", { name: "TEST-ET Invite " + s, phone: qPhone, email: `invite.${s}@t.local` }, 201)).data.item;
+  ok("[best] quick-invite returns an application link", /\/p\/trainer-apply\?token=/.test(inv.link ?? ""), inv.link);
+  const tok = inv.link.split("token=")[1];
+  const pre = await (await pub(`/api/public/trainer-apply?token=${tok}`)).json();
+  ok("[best] the link prefills what Divya typed", pre.prefill?.name === "TEST-ET Invite " + s && pre.prefill?.phone === qPhone, JSON.stringify(pre.prefill));
+  const done = await pub("/api/public/trainer-apply", { token: tok, name: "TEST-ET Invite " + s, phone: qPhone, qualification: "B.Tech", skills: "Drone Service, Solar", industry_experience_years: 4, teaching_experience_years: 2, home_location_other: "Basti" });
+  ok("[best] applicant completes the profile through the link", done.status === 200, `got ${done.status}`);
+  const filled = (await req(admin, "GET", `/api/trainers/${inv.trainer}`, undefined, 200)).data.item;
+  ok("[best] the profile carries what the APPLICANT wrote", filled.qualification === "B.Tech" && (filled.skills ?? []).includes("Drone Service") && filled.industry_experience_years === 4, JSON.stringify({ q: filled.qualification, sk: filled.skills }));
+  ok("[avg] …and stays at the top of the pipeline for CV review", filled.pipeline_status === "Applied", filled.pipeline_status);
+  // [worst] the link is single-use — a second submit is refused.
+  ok("[worst] a used link is dead", (await pub("/api/public/trainer-apply", { token: tok, name: "x", phone: qPhone, skills: "y" })).status === 404);
+
+  // [best] fresh self-application (no token) lands as Applied / Self Application.
+  const fPhone = phone("94");
+  const fresh = await pub("/api/public/trainer-apply", { name: "TEST-ET Fresh " + s, phone: fPhone, skills: "Battery Repair", qualification: "ITI" });
+  ok("[best] fresh public application is accepted", fresh.status === 201, `got ${fresh.status}`);
+  const found = ((await req(admin, "GET", `/api/trainers?q=${fPhone}&limit=5`, undefined, 200)).data.items ?? []).find((t) => t.phone === fPhone);
+  ok("[best] …and creates the pipeline record", found?.pipeline_status === "Applied" && found?.source === "Self Application", JSON.stringify({ p: found?.pipeline_status, src: found?.source }));
+  // [worst] duplicate phone: same success shape, no second record (anti-enumeration).
+  await pub("/api/public/trainer-apply", { name: "TEST-ET Dup " + s, phone: fPhone, skills: "x" });
+  const dupCount = ((await req(admin, "GET", `/api/trainers?q=${fPhone}&limit=10`, undefined, 200)).data.items ?? []).filter((t) => t.phone === fPhone).length;
+  ok("[worst] duplicate application creates no second record", dupCount === 1, `count=${dupCount}`);
+  // [worst] honeypot bots get a fake yes and write nothing.
+  const hpPhone = phone("95");
+  await pub("/api/public/trainer-apply", { name: "Bot", phone: hpPhone, skills: "x", website: "spam.example" });
+  const hpCount = ((await req(admin, "GET", `/api/trainers?q=${hpPhone}&limit=5`, undefined, 200)).data.items ?? []).filter((t) => t.phone === hpPhone).length;
+  ok("[worst] honeypot submission writes nothing", hpCount === 0, `count=${hpCount}`);
+}
+
 finish();

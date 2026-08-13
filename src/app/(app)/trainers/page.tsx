@@ -2,7 +2,8 @@
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, fmtDate, toInputDate } from "@/lib/client";
-import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, SourceCell, Tabs, inputCls } from "@/components/ui";
+import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, ShareLinkPanel, SourceCell, Tabs, inputCls } from "@/components/ui";
+import { BASE_PATH } from "@/lib/base-path";
 
 // 2026-08-13 (Umesh): "10 mein se 5 available, 2 under preparation, 3 not available — sab ke
 // saath proper tag with filters". One derived availability tag per trainer: the pipeline says
@@ -37,6 +38,7 @@ function TrainersInner() {
   const [edit, setEdit] = useState<any>(null);
   const [form, setForm] = useState<any>({ max_concurrent_batches: 1, status: "Available" });
   const set = (k: string, v: unknown) => setForm((f: any) => ({ ...f, [k]: v }));
+  const [invite, setInvite] = useState<any>(null);         // quick-invite drawer {form, link?}
   const [positions, setPositions] = useState<any[]>([]);   // CEO: Open Positions tab
   const [posFilter, setPosFilter] = useState("Open");      // default = only what needs hiring
   const [reqEdit, setReqEdit] = useState<any>(null);
@@ -110,6 +112,8 @@ function TrainersInner() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-xl font-semibold">Trainers</h1>
         <div className="flex gap-2">
+          {/* CEO 13/08: "naam-email-phone dala, link bana, WhatsApp chala gaya — trainer khud bhare" */}
+          <Btn kind="ghost" onClick={() => setInvite({ form: {} })}>Quick add + send link</Btn>
           <Btn onClick={() => { setEdit(null); setForm({ max_concurrent_batches: 4, status: "Available", pipeline_status: "Applied" }); setDrawer(true); }}>Add Trainer</Btn>
         </div>
       </div>
@@ -218,6 +222,35 @@ function TrainersInner() {
             ]} empty="No trainer requests." />
         </>
       ) : null}
+
+      <Drawer open={!!invite} onClose={() => setInvite(null)} title="Quick add trainer — send them the form">
+        {invite && (
+          <div className="space-y-3">
+            <p className="text-xs text-gray-500">
+              Naam + phone dalo — ek application link banega jise WhatsApp/SMS se bhej do. Trainer
+              khud apni qualification, experience aur skills bharega; profile pipeline mein
+              "Applied" pe aayegi. Link single-use hai.
+            </p>
+            <Field label="Full name" required><input className={inputCls} value={invite.form.name ?? ""} onChange={(e) => setInvite({ ...invite, form: { ...invite.form, name: e.target.value } })} /></Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Phone (10 digit)" required><input className={inputCls} inputMode="numeric" value={invite.form.phone ?? ""} onChange={(e) => setInvite({ ...invite, form: { ...invite.form, phone: e.target.value } })} /></Field>
+              <Field label="Email"><input className={inputCls} type="email" value={invite.form.email ?? ""} onChange={(e) => setInvite({ ...invite, form: { ...invite.form, email: e.target.value } })} /></Field>
+            </div>
+            {invite.link ? (
+              <ShareLinkPanel label="Application link" link={invite.link}
+                hint="Single-use — trainer ke form submit karte hi band ho jayega. Dobara bhejo toh naya link banao."
+                onDismiss={() => { setInvite(null); load(); }} />
+            ) : (
+              <Btn disabled={!invite.form.name || !(invite.form.phone ?? "").trim()} onClick={async () => {
+                try {
+                  const d = await api("/api/trainers/quick-invite", { method: "POST", json: invite.form });
+                  setInvite({ ...invite, link: `${window.location.origin}${BASE_PATH}${d.item.link}` });
+                } catch (e: any) { setError(e.message); }
+              }}>Create link</Btn>
+            )}
+          </div>
+        )}
+      </Drawer>
 
       <Drawer open={drawer} onClose={() => setDrawer(false)} title={edit ? `Edit ${edit.name}` : "Add Trainer"}>
         <div className="space-y-3">
