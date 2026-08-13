@@ -25,7 +25,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   const body = await req.json();
   const before = log.toObject();
   const patch: Record<string, unknown> = {};
-  for (const f of ["planned_topic", "actual_topic", "present_member_ids", "trainer_present", "govt_present", "govt_source", "govt_screenshot", "photos", "videos", "note"]) {
+  for (const f of ["planned_topic", "actual_topic", "present_member_ids", "biometric_member_ids", "trainer_present", "govt_present", "govt_source", "govt_screenshot", "photos", "videos", "note"]) {
     if (body[f] !== undefined) patch[f] = body[f];
   }
   // 2026-08-12 audit F-007 (S1): this used to re-validate the STORED present list against the
@@ -34,14 +34,20 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   // failed — while editing the note or the photos still worked, which made it look random.
   // Only an incoming present list needs roster validation; govt_present is bounded by the
   // roster_count frozen at save (Rules 28 and 30).
-  if (patch.present_member_ids !== undefined) {
+  if (patch.present_member_ids !== undefined || patch.biometric_member_ids !== undefined) {
+    const present = (patch.present_member_ids as string[] | undefined) ?? (log.present_member_ids ?? []).map(String);
+    const biometric = (patch.biometric_member_ids as string[] | undefined) ?? (log.biometric_member_ids ?? []).map(String);
     const check = await validateDailyLog(String(log.batch), log.log_date, {
-      present_member_ids: patch.present_member_ids as string[],
+      present_member_ids: present,
       govt_present: (patch.govt_present as number | null) ?? log.govt_present,
       trainer_present: (patch.trainer_present as boolean | undefined) ?? log.trainer_present,
+      biometric_member_ids: biometric, // Rule 51 holds on the final day-level pair
     });
     patch.internal_present = check.internal_present; // Rule 29
     // Rule 28: roster_count stays frozen — deliberately NOT recomputed
+    // A day-level edit is a CORRECTION, not a marking round: the day arrays are replaced as
+    // given, and the correction is appended to the session history so the trail stays honest.
+    patch.sessions = [...(log.sessions ?? []), { at: new Date(), present_member_ids: present, biometric_member_ids: biometric, marked_by: user.id, correction: true }];
   } else if (patch.govt_present !== undefined && patch.govt_present !== null) {
     const g = Number(patch.govt_present);
     if (!Number.isInteger(g) || g < 0) throw new HttpError(400, "Rule 30: government attendance must be a whole number of zero or more.");

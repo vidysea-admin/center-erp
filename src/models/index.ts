@@ -394,6 +394,22 @@ const DailyLogSchema = new Schema({
   log_date: { type: Date, required: true },
   planned_topic: String, actual_topic: String,
   present_member_ids: { type: [Schema.Types.ObjectId], default: [] },
+  // 2026-08-13 (Karunn): per-student BIOMETRIC flag — "biometric done & present / not done &
+  // present ho sakta hai; biometric done & NOT present nahi ho sakta" (Rule 51, enforced at
+  // write). Day-level array, same shape as present_member_ids; always a subset of it.
+  biometric_member_ids: { type: [Schema.Types.ObjectId], default: [] },
+  // 2026-08-13 (Karunn): attendance is marked in ROUNDS — "din mein do baar, teen baar, jitni
+  // baar bhi P-P-P, timestamp ke saath". Sessions are the append-only history of marking
+  // rounds; the day-level arrays above are their running UNION, so every existing consumer
+  // (counts, govt compare, gap queue) reads exactly what it always did. A day-level edit
+  // (Rule 27 correction) REPLACES the day arrays and is recorded as a correction session.
+  sessions: [{
+    at: { type: Date, required: true },
+    present_member_ids: { type: [Schema.Types.ObjectId], default: [] },
+    biometric_member_ids: { type: [Schema.Types.ObjectId], default: [] },
+    marked_by: oid("User"),
+    correction: Boolean,
+  }],
   // 2026-08-13 (Manish): the government portal only accepts student attendance for a day on
   // which the trainer's own (biometric) attendance exists — "trainer attendance banayega tabhi
   // batch shuru hogi". Mirrored here: a log with students present must assert the trainer was

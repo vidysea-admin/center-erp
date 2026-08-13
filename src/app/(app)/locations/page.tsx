@@ -65,7 +65,9 @@ function LocationsInner() {
           { key: "state", label: "State", mobile: false, sortable: true, sortValue: (r: any) => r.state },
           { key: "district", label: "District", sortable: true, sortValue: (r: any) => r.district ?? r.city, render: (r: any) => r.district ?? r.city ?? "—" },
           { key: "name", label: "Institution Name", sortable: true, sortValue: (r: any) => r.name, minWidth: 240 },
-          { key: "operational_status", label: "Operational", sortable: true, sortValue: (r: any) => r.operational_status, render: (r: any) => <Chip value={r.operational_status} /> },
+          // Karunn 13/08: the sheet's Operational claim is unreliable ("chal raha bhi Operational,
+          // nahi chal raha bhi") — approval drives; column stays available via the picker.
+          { key: "operational_status", label: "Operational", hidden: true, sortable: true, sortValue: (r: any) => r.operational_status, render: (r: any) => <Chip value={r.operational_status} /> },
           { key: "operating_partner", label: "Operating Partner", mobile: false },
           {
             // 2026-08-13 (Manish): "Ongoing scheme bhi saath mein dikhana must hai" — the scheme
@@ -84,8 +86,9 @@ function LocationsInner() {
             ) : <span className="text-gray-400">no targets</span>,
           },
           { key: "total_target", label: "Total Target", sortable: true, sortValue: (r: any) => r.total_target ?? 0 },
-          { key: "enrolled_reported_total", label: "Already Enrolled (sheet)", mobile: false, sortable: true, sortValue: (r: any) => r.enrolled_reported_total ?? 0 },
-          { key: "pending_reported_total", label: "Pending Enrollment (sheet)", mobile: false, sortable: true, sortValue: (r: any) => r.pending_reported_total ?? 0 },
+          // Karunn 13/08: "Already Enrolled + Pending Enrollment dono hata do" — the sheet's
+          // enrolment claims are junk (only BECIL ever filled them; enrolment is OURS to count).
+          // Columns removed outright; the *_reported fields stay in DB/API for the detail tab.
           {
             key: "tc_ids", label: "TC ID", mobile: false, minWidth: 150,
             filterText: (r: any) => (r.tc_ids ?? []).join(" ") || (r.tc_id ?? ""),

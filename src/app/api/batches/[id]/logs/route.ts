@@ -38,11 +38,16 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     present_member_ids: body.present_member_ids ?? [],
     govt_present: body.govt_present ?? null,
     trainer_present: body.trainer_present,
+    biometric_member_ids: body.biometric_member_ids ?? [], // Rule 51
   });
   const doc = await DailyLog.create({
     batch: id, log_date: D,
     planned_topic: body.planned_topic, actual_topic: body.actual_topic,
     present_member_ids: body.present_member_ids ?? [],
+    biometric_member_ids: body.biometric_member_ids ?? [],
+    // Karunn 2026-08-13: every marking is a timestamped ROUND; the day starts with round 1.
+    // Further rounds append via POST /api/logs/[id]/sessions and union into the day arrays.
+    sessions: [{ at: new Date(), present_member_ids: body.present_member_ids ?? [], biometric_member_ids: body.biometric_member_ids ?? [], marked_by: user.id }],
     trainer_present: body.trainer_present,
     internal_present, roster_count, // Rule 28: frozen
     govt_present: body.govt_present ?? null,

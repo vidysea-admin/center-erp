@@ -44,3 +44,6 @@ next-env.d.ts
 .goal/
 uploads/
 *.log
+
+# Prod mongodump backups — NEVER in git (PII + live TC credentials)
+backups/

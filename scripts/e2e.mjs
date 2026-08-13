@@ -179,6 +179,31 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   await req("PATCH", `/api/logs/${log._id}`, { govt_present: -1 }, 400);
 }
 
+// ---- Rule 51 + marking rounds (Karunn 2026-08-13) ----
+{
+  // Rule 51: "biometric done & NOT present" cannot happen — reject at day level…
+  await req("PATCH", `/api/logs/${log._id}`, { present_member_ids: [mIds[0]], biometric_member_ids: [mIds[1]] }, 400);
+  // …and the legal pair round-trips (biometric ⊆ present).
+  const ed = (await req("PATCH", `/api/logs/${log._id}`, { present_member_ids: [mIds[0], mIds[1]], biometric_member_ids: [mIds[0]] }, 200)).data.item;
+  ok("Rule 51: biometric subset saves and persists", ed.biometric_member_ids.map(String).includes(String(mIds[0])) && ed.biometric_member_ids.length === 1, JSON.stringify(ed.biometric_member_ids));
+  ok("day-level edit is recorded as a correction round", (ed.sessions ?? []).some((s) => s.correction), `${ed.sessions?.length} sessions`);
+
+  // Rule 51 on a ROUND: biometric for a student present NOWHERE that day is refused
+  // (mIds[2] is not yet in the day union and not in this round's present list).
+  await req("POST", `/api/logs/${log._id}/sessions`, { present_member_ids: [], biometric_member_ids: [mIds[2]] }, 400);
+  // An empty round is meaningless.
+  await req("POST", `/api/logs/${log._id}/sessions`, { present_member_ids: [] }, 400);
+  // A later marking ROUND unions into the day: mIds[2] joins via round 2, nobody is lost.
+  const before = ed.internal_present;
+  const r2 = (await req("POST", `/api/logs/${log._id}/sessions`, { present_member_ids: [mIds[2]], biometric_member_ids: [mIds[2]] }, 201)).data.item;
+  ok("marking round unions into the day (present grows by 1)", r2.internal_present === before + 1, `${before} → ${r2.internal_present}`);
+  ok("…and the round is timestamped in the history", (r2.sessions ?? []).length >= 2 && !!r2.sessions[r2.sessions.length - 1].at, `${r2.sessions?.length} sessions`);
+  ok("…and biometric union follows", r2.biometric_member_ids.map(String).includes(String(mIds[2])), JSON.stringify(r2.biometric_member_ids));
+  // Biometric marked in a LATER round for a student present since an earlier round is fine —
+  // "bio done & present" across rounds is still bio done & present.
+  await req("POST", `/api/logs/${log._id}/sessions`, { present_member_ids: [mIds[1]], biometric_member_ids: [mIds[1]] }, 201);
+}
+
 // ---- closure ----
 // 2026-08-12 audit F-010 (S0): Rules 43/46 lived only inside the per-candidate branch, and that
 // branch is skipped exactly when nobody has been assessed. A batch with zero results could be
