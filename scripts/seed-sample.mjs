@@ -127,9 +127,13 @@ for (const [lc, , , ,] of locationDefs.map((d) => d)) {
   const progCodes = targetDefs.filter(([l]) => l === lc).map(([, p]) => p);
   for (let i = 0; i < 15; i++) {
     const name = `${first[(i * 7 + lc.charCodeAt(0)) % first.length]} ${last[(i * 3 + lc.charCodeAt(3)) % last.length]}`;
+    // 2026-08-13: membership now REQUIRES the candidate's programme to match the batch's
+    // (cross-role rosters were a live defect), so the first/primary programme gets the bulk —
+    // B1 needs 12 matching candidates at JPR03, and an even split starved it.
+    const pick = progCodes.length === 1 ? 0 : (i < 12 ? 0 : 1 + ((i - 12) % (progCodes.length - 1)));
     const c = (await req("POST", "/api/candidates", {
       name, phone: String(phone++), gender: i % 3 === 0 ? "Female" : "Male",
-      location: locations[lc]._id, program: programs[progCodes[i % progCodes.length]]._id,
+      location: locations[lc]._id, program: programs[progCodes[pick]]._id,
       source: i % 2 ? "Mobiliser - Ramesh" : "Campaign - August",
     })).item;
     candidates[lc].push(c);
@@ -144,7 +148,9 @@ async function makeBatch(lc, pc, trainerName, roomIdx, planStartOffset, memberCo
     trainer: trainers[trainerName]?._id, room: rooms[roomIdx]._id,
     planned_start: day(planStartOffset), target_size: targetSize,
   })).item;
-  const pool = candidates[lc].filter((c) => String(c.program) === String(programs[pc]._id) || true).slice(0, memberCount);
+  // (the `|| true` that used to sit here made this filter a no-op — exactly the cross-role
+  // roster the 2026-08-13 server check now refuses)
+  const pool = candidates[lc].filter((c) => String(c.program) === String(programs[pc]._id)).slice(0, memberCount);
   const memberIds = [];
   for (const c of pool) {
     try {
