@@ -157,11 +157,29 @@ function detectHeaderRow(rows: string[][], keyColumns: string[]): number {
   return best;
 }
 
+// A serial number renumbers the moment a row is inserted, so keying on it makes every row below
+// look "changed" — the noise that reads as "this tab isn't syncing properly".
+const SERIAL_HEADER = /^(s\.?\s*(no|n)\.?|sl\.?\s*#?|sr\.?\s*no\.?|#|serial|sno)$/i;
+// Headers that actually identify a row, in preference order.
+const IDENTIFYING_HEADER = /(name|trainer|candidate|institution|location|centre|center|job\s*role|course|scheme|tc\s*id|tr\s*id|email|phone|mobile|code|id)$/i;
+
+// One workbook can hold fifteen differently-shaped tabs, and a single source-level key_columns
+// list cannot fit them all. When the configured keys are absent from THIS tab, pick that tab's own
+// identifying columns instead of falling back to "first non-empty cell" (which was usually the
+// serial number). 2026-08-13.
+function autoKeyIndexes(header: string[]): number[] {
+  const usable = header.map((h, i) => ({ h: h.trim(), i })).filter((x) => x.h && !SERIAL_HEADER.test(x.h));
+  const identifying = usable.filter((x) => IDENTIFYING_HEADER.test(x.h)).slice(0, 3).map((x) => x.i);
+  if (identifying.length) return identifying;
+  return usable.slice(0, 3).map((x) => x.i); // composite of the first real columns, never just one
+}
+
 export function snapshotTab(sheet: XLSX.WorkSheet, keyColumns: string[]): TabSnap {
   const raw: string[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false }) as string[][];
   const headerRow = detectHeaderRow(raw, keyColumns);
   const header = (raw[headerRow] ?? []).map((h) => String(h).trim());
-  const keyIdx = keyColumns.map((k) => header.indexOf(k)).filter((i) => i >= 0);
+  const configured = keyColumns.map((k) => header.indexOf(k)).filter((i) => i >= 0);
+  const keyIdx = configured.length ? configured : autoKeyIndexes(header);
   const rows: SnapRow[] = [];
   const seen = new Map<string, number>();
   for (let r = headerRow + 1; r < raw.length; r++) {
@@ -170,11 +188,12 @@ export function snapshotTab(sheet: XLSX.WorkSheet, keyColumns: string[]): TabSna
     const cells: Record<string, string> = {};
     for (let c = 0; c < header.length; c++) {
       if (!header[c]) continue;
+      // A serial number is the row's position, not its data: inserting one row renumbers every
+      // row below it, and reporting those as edits buried the one real change under a flood.
+      if (SERIAL_HEADER.test(header[c])) continue;
       cells[header[c]] = String(line[c] ?? "").trim();
     }
-    let key = keyIdx.length
-      ? keyIdx.map((i) => String(line[i] ?? "").trim()).join(" · ")
-      : Object.values(cells).find((v) => v !== "") ?? "";
+    let key = keyIdx.map((i) => String(line[i] ?? "").trim()).filter(Boolean).join(" · ");
     if (!key.trim()) key = `row ${r + 1}`;
     // Duplicate keys (two rows for the same institution+role) get a stable ordinal suffix.
     const n = (seen.get(key) ?? 0) + 1;

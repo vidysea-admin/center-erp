@@ -16,6 +16,15 @@ const SOURCES = [
     key_columns: ["Institution Name", "Job role"],
   },
   {
+    // "RPL Project - Required Trainers List" — the individual-trainer master (10-15 tabs).
+    // key_columns left EMPTY on purpose: one list cannot fit fifteen differently-shaped tabs,
+    // so each tab picks its own identifying columns (see autoKeyIndexes in lib/workbook.ts).
+    name: "RPL Required Trainers List",
+    url: process.env.TRAINER_SHEET_URL ||
+      "https://docs.google.com/spreadsheets/d/1f9veYSwuLktmggOJdUlspl_yydotdqnf/edit",
+    key_columns: [],
+  },
+  {
     name: "Trainer hiring (Vidysea sheet)",
     url: process.env.HIRING_SOURCE_URL ||
       "https://docs.google.com/spreadsheets/d/1d-2n2kXkiqV5YHV4n6Cs5-KE3FVsNwGbPGvfCNXRZXQ",
@@ -68,6 +77,7 @@ const avpl = await db.collection("syncsources").updateOne(
         "State": "state",
         "SPOC Name": "spoc_name",
         "TC Status": "tc_status",
+        "TC Password": "tc_password",
       },
     },
   },

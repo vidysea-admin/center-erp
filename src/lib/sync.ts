@@ -35,14 +35,15 @@ export function parseCsv(text: string): string[][] {
 }
 
 // Fields on Location a sheet may own. "approved_target:<PROGRAM_CODE>" targets LocationTarget.
-// tc_status added 2026-08-13 — the government's verdict on a centre changes in the client's
-// sheet first, and the review inbox is exactly where that change should surface.
-// tc_password is deliberately NOT mappable: a SheetChange row prints old/new values to every
-// reviewer, which would leak a live portal credential the location routes go out of their way
-// to mask.
+// tc_status + tc_id + tc_password added 2026-08-13: the government's verdict AND the portal
+// credentials change in the client's sheet first, and Umesh's call is that these are the initial
+// credentials we are given anyway ("baad ke to hamare paas hain hi nahi"). The values are still
+// masked on the review screens for anyone without locations.manage — see SENSITIVE_SYNC_COLUMNS
+// in the sheet-changes route; only the mapping itself is now allowed.
 const LOCATION_FIELDS = new Set([
   "external_id", "name", "city", "state", "address",
-  "approval_status", "spoc_name", "spoc_phone", "principal_name", "principal_phone", "tc_status",
+  "approval_status", "spoc_name", "spoc_phone", "principal_name", "principal_phone",
+  "tc_status", "tc_id", "tc_password",
 ]);
 
 async function impactSnapshot(locationId: unknown) {
