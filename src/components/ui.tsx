@@ -182,6 +182,9 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
     filterText?: (row: T) => string | null | undefined;
     // true = funnel even past the 25-distinct cap; false = never show a funnel.
     filterable?: boolean;
+    // Room this column needs to stay readable (px). Feeds the table's min-width floor —
+    // heavy columns (old→new diffs, note text) declare more than the 130 default.
+    minWidth?: number;
   }[];
   rows: T[];
   onRowClick?: (row: T) => void;
@@ -335,12 +338,15 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
     window.addEventListener("pointerup", up);
   };
   const anyWidth = Object.keys(widths).length > 0;
-  // Fixed layout + a min-width floor make the overflow-x-auto wrapper actually scroll once
-  // the user widens columns, instead of squeezing the untouched ones to nothing.
+  // Every table gets a min-width floor from its columns (2026-08-13, Umesh: "horizontal
+  // scroller daal jahan needful hai" — without a floor, wide tables crushed every column
+  // into unreadable slivers instead of scrolling). Below the floor the overflow-x-auto
+  // wrapper scrolls; on a wide screen nothing changes. Resizing keeps its fixed layout.
+  const colFloor = (c: Col) => c.minWidth ?? (c.label ? 130 : 48);
   const tableStyle = anyWidth ? {
     tableLayout: "fixed" as const,
-    minWidth: Object.values(widths).reduce((s, w) => s + w, 0) + columns.filter((c) => !widths[c.key]).length * 120,
-  } : undefined;
+    minWidth: Object.values(widths).reduce((s, w) => s + w, 0) + columns.filter((c) => !widths[c.key]).reduce((s, c) => s + colFloor(c), 0),
+  } : { minWidth: columns.reduce((s, c) => s + colFloor(c), 0) };
   const activeFilters = Object.entries(filters).filter(([, v]) => v.length);
   const showSearch = searchable ?? rows.length > 10;
   const toolbar = (showSearch || activeFilters.length > 0) && (
@@ -428,7 +434,9 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
                 <tr><td colSpan={columns.length} className="px-3.5 py-8 text-center text-sm text-gray-400">{noMatch}</td></tr>
               ) : slice.map((r, i) => (
                 <tr key={r._id ?? i} onClick={() => onRowClick?.(r)} className={onRowClick ? "cursor-pointer transition-colors hover:bg-blue-50/40" : ""}>
-                  {columns.map((c) => <td key={c.key} className="break-words px-3.5 py-3">{cell(c, r)}</td>)}
+                  {/* align-top: a tall cell (multi-line old→new diff) reads row-wise only if
+                      its siblings start at the same line, not floating mid-air. */}
+                  {columns.map((c) => <td key={c.key} className="break-words px-3.5 py-3 align-top">{cell(c, r)}</td>)}
                 </tr>
               ))}
             </tbody>

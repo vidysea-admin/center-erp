@@ -3,13 +3,10 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.13-5";
+export const RELEASE = "2026.08.13-6";
 export const RELEASE_NOTE =
-  "Umesh-testing fixes (13/08 doc): sheet's new Batch Status column drives batch statuses " +
-  "(Complete→Completed, In Progress→Active — counts finally match the sheet, apply via " +
-  "seed-avpl-master); teaching trainers (TR code + batch on Trainer_Master) import as " +
-  "Certified/Assigned instead of everyone stuck 'under preparation'; candidates in a batch show " +
-  "the batch's programme instead of a false 'No programme'; every list shows a loading skeleton " +
-  "instead of blank/'nothing here' while data fetches; New Batch drawer has Create Batch + " +
-  "Create backward plan buttons and the plan is WhatsApp-shareable; per-batch bulk attendance " +
-  "upload is a visible button.";
+  "Table readability: every table now has a per-column min-width floor, so a wide table " +
+  "(Sheet Watch with paragraph-long old→new diffs) scrolls horizontally instead of crushing " +
+  "every column into slivers; heavy columns (Sheet Watch/Sync old→new, row keys) declare the " +
+  "room they need; cells top-align so tall rows read row-wise. Sync inbox old→new is now " +
+  "searchable text too.";

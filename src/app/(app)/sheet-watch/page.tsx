@@ -109,11 +109,12 @@ export default function SheetWatchPage() {
         columns={[
           { key: "_sel", label: "", mobile: false, render: (r: any) => r.status !== "Accepted" ? <input type="checkbox" checked={selected.has(r._id)} onChange={() => toggle(r._id)} onClick={(e) => e.stopPropagation()} /> : null },
           { key: "tab", label: "Tab", mobile: false },
-          { key: "row_key", label: "Row", render: (r: any) => <span className="text-[13px] font-medium">{r.row_key}</span> },
+          { key: "row_key", label: "Row", minWidth: 200, render: (r: any) => <span className="text-[13px] font-medium">{r.row_key}</span> },
           { key: "change_type", label: "Type", render: (r: any) => <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${TYPE_STYLE[r.change_type] ?? ""}`}>{r.change_type}</span> },
           { key: "column", label: "Column", render: (r: any) => r.column ?? <span className="text-gray-400">whole row</span> },
           {
             key: "change", label: "Old → New",
+            minWidth: 380, // whole-row diffs are paragraphs — without room this column crushed the rest
             filterText: (r: any) => `${r.old_value ?? ""} ${r.new_value ?? ""}`,
             render: (r: any) => (
               <span className="text-xs">
