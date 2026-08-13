@@ -240,7 +240,9 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   // It was briefly masked alongside the pay fields, which silently emptied the certified group
   // for everyone without trainers.manage — the people who mostly create batches. Masking it
   // again would break batch creation without failing any other assertion, so it is pinned here.
-  const loc = (await req(admin, "GET", "/api/locations?limit=1")).data.items[0];
+  // F-B5 made nominating for a HALTED centre a 409, and "?limit=1" can now hand back a
+  // suite-halted Gate Location — pin the fixture to the known-operational JPR03 instead.
+  const loc = jpr;
   const prog = (await req(admin, "GET", "/api/programs?limit=1")).data.items[0];
   const nom = (await req(admin, "POST", "/api/trainers", {
     name: `Nominated Trainer ${stamp}`, phone: `96${stamp}00`, skills: ["PayCheck"],

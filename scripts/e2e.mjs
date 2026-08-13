@@ -305,6 +305,23 @@ await req("PATCH", `/api/locations/${gateLoc._id}`, { operational_status: "Activ
 await req("POST", "/api/trainer-requests", { location: gateLoc._id, program: prog._id, required_by_date: today }, 201); // resumes with the centre
 await req("PATCH", `/api/locations/${gateLoc._id}`, { operational_status: "Stopped", status_reason: "test again" }, 200); // restore for Rule 1 asserts below
 
+// ---- F-A3: TOT must finish ≥ lead_tot_done_days (3) before batch start — HARD gate now ----
+const totTr = (await req("POST", "/api/trainers", { name: "TOT Lead " + stamp, phone: "56" + stamp.slice(-8), skills: ["totlead" + stamp], pipeline_status: "TOT In Progress" }, 201)).data.item;
+const totCert = await req("POST", `/api/trainers/${totTr._id}/transition`, { target: "Certified", payload: { tr_id: "TRL" + stamp } }, 200);
+ok("F-A3 fixture: certification stamps tot_done_on", !!totCert.data.item.tot_done_on, JSON.stringify(totCert.data.item.tot_done_on));
+const totBatch = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: totTr._id, room: room._id, planned_start: today, target_size: 1 }, 201)).data.item;
+const totCand = (await req("POST", "/api/candidates", { name: "TOT Cand " + stamp, phone: "55" + stamp.slice(-8), location: loc._id, program: prog._id }, 201)).data.item;
+const totMem = (await req("POST", `/api/batches/${totBatch._id}/members`, { candidate: totCand._id }, 201)).data.item;
+await req("PATCH", `/api/members/${totMem._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+const totBlocked = await req("POST", `/api/batches/${totBatch._id}/transition`, { target: "Ready" }, 409);
+ok("F-A3: TOT finished today + start today → Ready refused naming tot_lead_ok", /tot_lead_ok/.test(totBlocked.data?.error ?? ""), totBlocked.data?.error);
+const in5 = new Date(Date.now() + 5 * 864e5 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+await req("PATCH", `/api/batches/${totBatch._id}`, { planned_start: in5 }, 200);
+await req("POST", `/api/batches/${totBatch._id}/transition`, { target: "Ready" }, 200); // 5-day lead clears it
+await req("POST", `/api/batches/${totBatch._id}/transition`, { target: "Planning" }, 200);
+// Cancel the fixture so its future dates don't hold the shared room against later batches (Rule 13).
+await req("POST", `/api/batches/${totBatch._id}/transition`, { target: "Cancelled", reason: "F-A3 fixture done" }, 200);
+
 // ---- Rule 48: enrolled count capped at batch capacity ----
 const capBatch = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, planned_start: today, target_size: 1 }, 201)).data.item;
 const capCands = [];

@@ -417,11 +417,19 @@ export async function batchReadiness(batchId: string) {
   const enrolled = roster.filter((m) => m.enrollment_status === "Completed").length;
   const enrollmentThreshold = Math.ceil((defaults.enrollment_threshold_pct / 100) * roster.length);
 
+  // F-A3 (Manish, 2026-08-14 — hard gate, was advisory): "TOT done at least three days
+  // before batch start." Enforced only when the TOT completion date is on record —
+  // trainers who predate the pipeline carry no tot_done_on and are not retro-blocked.
+  const totLeadDays = defaults.lead_tot_done_days ?? 3;
+  const totLeadOk = !trainer?.tot_done_on
+    || dayStart(trainer.tot_done_on) <= dayStart(addDays(batch.planned_start, -totLeadDays));
+
   const checks = {
     location_approved: location?.approval_status === "Approved"
       && !HALTED_LOCATION_STATUSES.includes(location?.operational_status), // Rule 1
     room_assigned: roomOk,
     trainer_ready: trainerAvailable,
+    tot_lead_ok: totLeadOk, // F-A3
     roster_80pct: roster.length >= Math.ceil((defaults.roster_threshold_pct / 100) * batch.target_size),
   }; // Rule 16
   return {
