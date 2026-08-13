@@ -1375,7 +1375,8 @@ function CostsTab({ batchId, batch, setError }: any) {
   }, [batchId, batch]);
 
   async function addSuggested() {
-    const cat = cats.find((c: any) => c.name === "Trainer Fee");
+    // F-B17: case-insensitive — production carried "Trainer fee" alongside "Trainer Fee".
+    const cat = cats.find((c: any) => c.name?.toLowerCase() === "trainer fee");
     if (!cat) { setError('Cost category "Trainer Fee" not found — add it in Admin → Master Lists.'); return; }
     try {
       await api("/api/costs", {
@@ -1398,7 +1399,7 @@ function CostsTab({ batchId, batch, setError }: any) {
   }
   const total = items.reduce((s, i) => s + (i.amount ?? 0), 0);
 
-  const hasTrainerFee = items.some((i) => i.category?.name === "Trainer Fee");
+  const hasTrainerFee = items.some((i) => i.category?.name?.toLowerCase() === "trainer fee");
 
   return (
     <Section title={`Cost entries — total ₹${total.toLocaleString("en-IN")}`}>

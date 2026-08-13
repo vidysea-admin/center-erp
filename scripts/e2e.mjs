@@ -268,6 +268,14 @@ await req("POST", "/api/costs", { category: "000000000000000000000000", amount: 
 const cats = (await req("GET", "/api/master-lists/cost-categories")).data.items;
 await req("POST", "/api/costs", { category: cats[0]._id, amount: 5000, trainer: trainer._id }, 201); // trainer-only allowed
 
+// F-B17: list names are unique case-insensitively — "Trainer fee" beside "Trainer Fee"
+// broke the trainer-fee auto-suggest in production.
+await req("POST", "/api/master-lists/cost-categories", { name: "Trainer Fee" }, 409); // exact dupe
+const dupeRes = await req("POST", "/api/master-lists/cost-categories", { name: "  trainer FEE  " }, 409); // case + whitespace dupe
+ok("F-B17: the refusal names the existing entry", /"Trainer Fee" already exists/.test(dupeRes.data?.error ?? ""), dupeRes.data?.error);
+const freshCat = await req("POST", "/api/master-lists/cost-categories", { name: "E2E Cat " + stamp }, 201);
+ok("F-B17: a genuinely new name still creates (trimmed)", freshCat.data.item?.name === "E2E Cat " + stamp, freshCat.data.item?.name);
+
 // ---- drop rules ----
 const batch2 = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, planned_start: today, target_size: 3 }, 201)).data.item;
 const cand4 = (await req("POST", "/api/candidates", { name: "Cand4 " + stamp, phone: "77777" + stamp.slice(0, 5), location: loc._id, program: prog._id }, 201)).data.item;

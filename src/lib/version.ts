@@ -3,11 +3,10 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-9";
+export const RELEASE = "2026.08.14-10";
 export const RELEASE_NOTE =
-  "Certificates bulk upload: pick a whole folder's files on the batch Closure tab; " +
-  "each filename's CAN id joins to the roster's SIDH candidate id and the certificate " +
-  "lands on that candidate automatically — files with no id, no roster match, an " +
-  "ambiguous id, or a non-Pass result are reported by name with the reason, never " +
-  "guessed. On a Completed batch only an ABSENT certificate file may be filled " +
-  "(the DEC-6 freeze stays intact for everything recorded).";
+  "F-B17 defect fix: master-list names are unique case-insensitively (the refusal " +
+  "names the existing entry), and the trainer-fee auto-suggest matches its category " +
+  "case-insensitively — production carried 'Trainer fee' beside 'Trainer Fee' and " +
+  "the suggestion silently broke. The unused lowercase duplicate was removed from " +
+  "production (backed up first).";

@@ -23,7 +23,13 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   const Model = LISTS[list];
   if (!Model) throw new HttpError(404, "Unknown list");
   const body = await req.json();
-  if (!body.name) throw new HttpError(400, "name required");
-  const item = await Model.create({ name: body.name, active: body.active ?? true });
+  const name = String(body.name ?? "").trim();
+  if (!name) throw new HttpError(400, "name required");
+  // F-B17 (2026-08-14): "Trainer Fee" and "Trainer fee" both existed in production and
+  // the trainer-fee auto-suggest matched neither reliably. Names are unique per list,
+  // case-insensitively — the refusal names the existing entry so the fix is obvious.
+  const dupe = await Model.findOne({ name: { $regex: `^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, $options: "i" } }).lean();
+  if (dupe) throw new HttpError(409, `"${dupe.name}" already exists in this list — names are unique (case-insensitive).`);
+  const item = await Model.create({ name, active: body.active ?? true });
   return NextResponse.json({ item }, { status: 201 });
 });
