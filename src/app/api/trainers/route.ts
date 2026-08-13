@@ -1,6 +1,7 @@
 import { collectionRoutes } from "@/lib/crud";
 import { Trainer } from "@/models";
 import { hasPermission } from "@/lib/permissions";
+import { assertLocationOperational } from "@/lib/rules";
 
 // 2026-08-12, found by testing a real Trainer login: the directory is not location-scoped,
 // so every signed-in user could read all 19 trainers INCLUDING day_rate, compensation and
@@ -51,6 +52,10 @@ export const { GET, POST } = collectionRoutes({
   searchFields: ["name", "phone", "email", "tr_id"],
   writeRoles: ["Admin", "Operations"],
   permission: "trainers.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
+  // F-B5 (Manish): a halted centre must stop hiring — no nominating trainers for it.
+  async beforeCreate(body) {
+    if (body.nominated_for_location) await assertLocationOperational(body.nominated_for_location, "Nominating a trainer for this centre");
+  },
   populate: [
     { path: "home_location", select: "name code" },
     { path: "nominated_for_location", select: "name code" },

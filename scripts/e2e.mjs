@@ -296,6 +296,15 @@ await req("POST", "/api/batches", { location: gateLoc._id, program: prog._id, pl
 await req("PATCH", `/api/locations/${gateLoc._id}`, { operational_status: "Stopped", status_reason: "test" }, 200);
 await req("POST", "/api/batches", { location: gateLoc._id, program: prog._id, planned_start: today, target_size: 3 }, 409); // Rule 1
 
+// F-B5 (Manish): a halted centre must stop HIRING too, not just training.
+await req("POST", "/api/trainer-requests", { location: gateLoc._id, program: prog._id, required_by_date: today }, 409);
+await req("POST", "/api/trainers", { name: "Halted Nominee " + stamp, phone: "58" + stamp.slice(-8), nominated_for_location: gateLoc._id, nominated_for_program: prog._id }, 409);
+const reNom = (await req("POST", "/api/trainers", { name: "Re-nominee " + stamp, phone: "59" + stamp.slice(-8) }, 201)).data.item;
+await req("PATCH", `/api/trainers/${reNom._id}`, { nominated_for_location: gateLoc._id }, 409); // re-pointing is hiring too
+await req("PATCH", `/api/locations/${gateLoc._id}`, { operational_status: "Active", status_reason: "resumed" }, 200);
+await req("POST", "/api/trainer-requests", { location: gateLoc._id, program: prog._id, required_by_date: today }, 201); // resumes with the centre
+await req("PATCH", `/api/locations/${gateLoc._id}`, { operational_status: "Stopped", status_reason: "test again" }, 200); // restore for Rule 1 asserts below
+
 // ---- Rule 48: enrolled count capped at batch capacity ----
 const capBatch = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, planned_start: today, target_size: 1 }, 201)).data.item;
 const capCands = [];

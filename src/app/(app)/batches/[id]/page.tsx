@@ -1360,16 +1360,23 @@ function CostsTab({ batchId, batch, setError }: any) {
   ]).catch((e: any) => setError(e.message));
   useEffect(() => { load(); }, [batchId]);
 
-  // Trainer fee suggestion: day_rate × distinct training days (DailyLog dates).
-  // Suggestion only — nothing is written until the user adds it.
+  // Trainer fee suggestion — honours the trainer's compensation model (F-B1):
+  // Batch-wise / Fixed → the recorded fixed amount; otherwise day_rate × distinct
+  // training days (DailyLog dates). Suggestion only — nothing is written until added.
   useEffect(() => {
     const trainerId = batch.trainer?._id ?? batch.trainer;
     if (!trainerId) return;
     Promise.all([api(`/api/trainers/${trainerId}`), api(`/api/batches/${batchId}/logs`)])
       .then(([t, l]) => {
-        const rate = t.item?.day_rate;
+        const tr = t.item ?? {};
         const days = l.items?.length ?? 0;
-        if (rate > 0 && days > 0) setSuggest({ trainer: trainerId, name: t.item.name, rate, days, amount: rate * days });
+        if (["Batch-wise", "Fixed"].includes(tr.compensation_type) && tr.compensation_fixed > 0) {
+          setSuggest({ trainer: trainerId, name: tr.name, amount: tr.compensation_fixed,
+            basis: tr.compensation_type === "Batch-wise" ? "batch-wise fixed" : "fixed compensation" });
+        } else if (tr.day_rate > 0 && days > 0) {
+          setSuggest({ trainer: trainerId, name: tr.name, amount: tr.day_rate * days,
+            basis: `₹${tr.day_rate}/day × ${days} training day${days === 1 ? "" : "s"}` });
+        }
       })
       .catch(() => {});
   }, [batchId, batch]);
@@ -1384,7 +1391,7 @@ function CostsTab({ batchId, batch, setError }: any) {
         json: {
           entry_date: toInputDate(new Date()), batch: batchId, location: batch.location?._id ?? batch.location,
           trainer: suggest.trainer, category: cat._id, amount: suggest.amount,
-          note: `Auto-suggested: ₹${suggest.rate}/day × ${suggest.days} training days (${suggest.name})`,
+          note: `Auto-suggested: ${suggest.basis} (${suggest.name})`,
         },
       });
       setSuggest(null); load();
@@ -1405,7 +1412,7 @@ function CostsTab({ batchId, batch, setError }: any) {
     <Section title={`Cost entries — total ₹${total.toLocaleString("en-IN")}`}>
       {suggest && !hasTrainerFee && (
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
-          <span>Trainer fee suggestion: <b>₹{suggest.amount.toLocaleString("en-IN")}</b> — ₹{suggest.rate}/day × {suggest.days} training day{suggest.days === 1 ? "" : "s"} ({suggest.name})</span>
+          <span>Trainer fee suggestion: <b>₹{suggest.amount.toLocaleString("en-IN")}</b> — {suggest.basis} ({suggest.name})</span>
           <Btn small onClick={addSuggested}>Add as cost entry</Btn>
         </div>
       )}

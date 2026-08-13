@@ -1,6 +1,7 @@
 import { itemRoutes } from "@/lib/crud";
 import { Trainer } from "@/models";
 import { hasPermission } from "@/lib/permissions";
+import { assertLocationOperational } from "@/lib/rules";
 import { maskTrainerSecrets } from "../route";
 
 // Same masking as the list route (2026-08-12) — opening one trainer by id was the obvious way
@@ -21,6 +22,12 @@ export const { GET, PATCH } = itemRoutes({
     "eligibility_payment_amount", "payment_reference", "tot_certificate_no", "pipeline_note"],
   writeRoles: ["Admin", "Operations"],
   permission: "trainers.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
+  // F-B5: re-pointing a trainer's nomination at a halted centre is also hiring for it.
+  async beforeUpdate(_id, body, existing) {
+    if (body.nominated_for_location && String(body.nominated_for_location) !== String(existing.nominated_for_location ?? "")) {
+      await assertLocationOperational(body.nominated_for_location, "Nominating a trainer for this centre");
+    }
+  },
   populate: [
     { path: "home_location", select: "name code" },
     { path: "nominated_for_location", select: "name code" },

@@ -347,11 +347,12 @@ function TrainersInner() {
           {/* 2026-08-11: batch-wise or monthly, fixed + performance incentive */}
           <div className="grid grid-cols-2 gap-3">
             <Field label="Compensation type">
+              {/* F-B1 (Manish): the model always knew all four — the dropdown offered two. */}
               <select className={inputCls} value={form.compensation_type ?? ""} onChange={(e) => set("compensation_type", e.target.value)}>
-                <option value="">—</option><option>Batch-wise</option><option>Monthly</option>
+                <option value="">—</option><option>Batch-wise</option><option>Monthly</option><option>Fixed</option><option>Incentive-based</option>
               </select>
             </Field>
-            <Field label={`Fixed amount (₹${form.compensation_type === "Monthly" ? "/month" : form.compensation_type === "Batch-wise" ? "/batch" : ""})`}>
+            <Field label={`Fixed amount (₹${form.compensation_type === "Monthly" ? "/month" : form.compensation_type === "Batch-wise" ? "/batch" : form.compensation_type === "Fixed" ? " flat" : ""})`}>
               <input type="number" className={inputCls} value={form.compensation_fixed ?? ""} onChange={(e) => set("compensation_fixed", +e.target.value)} />
             </Field>
           </div>
