@@ -896,6 +896,24 @@ function Gap({ r }: any) {
 }
 
 // ---------- Closure tab (Rules 34–36, 41–47) ----------
+// F-A4 (Manish): result_file / certificate_file lived in the schema with no way to put
+// anything in them. A slot renders the file when present and offers Upload/Replace until
+// the batch closes (post-completion the closure PUT is frozen anyway — DEC-6).
+function ClosureFileSlot({ label, value, onUpload, disabled }: any) {
+  return (
+    <div className="mt-2 flex items-center gap-2 text-xs">
+      <span className="text-gray-500">{label}:</span>
+      {value ? <a className="text-blue-600 underline" href={value} target="_blank" rel="noreferrer">view file</a> : <span className="text-gray-400">none</span>}
+      {!disabled && (
+        <label className="cursor-pointer rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50">
+          {value ? "Replace" : "Upload"}
+          <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.webp,.xlsx,.xls,.csv" onChange={onUpload} />
+        </label>
+      )}
+    </div>
+  );
+}
+
 function ClosureTab({ batchId, batch, setError, onChanged }: any) {
   const [closure, setClosure] = useState<any>(null);
   const [invoice, setInvoice] = useState<any>(null);
@@ -921,6 +939,17 @@ function ClosureTab({ batchId, batch, setError, onChanged }: any) {
   async function saveInvoice(patch: any) {
     try { await api(`/api/batches/${batchId}/invoice`, { method: "PATCH", json: patch }); load(); }
     catch (e: any) { setError(e.message); }
+  }
+  async function uploadClosureFile(e: any, field: "result_file" | "certificate_file") {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch(`${BASE_PATH}/api/upload`, { method: "POST", body: fd });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) { setError(d.error ?? "Upload failed"); return; }
+    saveClosure({ [field]: d.url });
   }
 
   const closed = ["Completed", "Cancelled"].includes(batch?.status);
@@ -964,6 +993,7 @@ function ClosureTab({ batchId, batch, setError, onChanged }: any) {
           <Btn small kind="ghost" onClick={() => saveClosure({ assessment_date: form.assessment_date, ...(legacy && !perCandidate ? { appeared: form.appeared, passed: form.passed } : {}) })}>Save</Btn>
           <Btn small onClick={() => saveClosure({ assessment_status: "Completed", assessment_date: form.assessment_date ?? new Date(), ...(legacy && !perCandidate ? { appeared: form.appeared, passed: form.passed } : {}) })} disabled={closure?.assessment_status === "Completed"}>Mark Completed</Btn>
         </div>
+        <ClosureFileSlot label="Result sheet" value={closure?.result_file} disabled={closed} onUpload={(e: any) => uploadClosureFile(e, "result_file")} />
       </Section>
       <Section title={`Certification — ${closure?.certification_status ?? "Pending"}`}>
         <div className="grid grid-cols-2 gap-3">
@@ -979,6 +1009,7 @@ function ClosureTab({ batchId, batch, setError, onChanged }: any) {
           <Btn small kind="ghost" onClick={() => saveClosure({ certification_date: form.certification_date, ...(legacy ? { certificates_issued: form.certificates_issued } : {}) })}>Save</Btn>
           <Btn small onClick={() => saveClosure({ certification_status: "Completed", certification_date: form.certification_date ?? new Date(), ...(legacy ? { certificates_issued: form.certificates_issued } : {}) })} disabled={closure?.certification_status === "Completed"}>Mark Completed</Btn>
         </div>
+        <ClosureFileSlot label="Certificate bundle" value={closure?.certificate_file} disabled={closed} onUpload={(e: any) => uploadClosureFile(e, "certificate_file")} />
       </Section>
       <Section title={`Invoice — ${invoice?.status ?? "Not Ready"}`}>
         <div className="space-y-3">

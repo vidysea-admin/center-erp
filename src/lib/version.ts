@@ -3,10 +3,10 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-14";
+export const RELEASE = "2026.08.14-15";
 export const RELEASE_NOTE =
-  "F-A9 (Manish): the readiness screen's empty trainer slots become TrainerRequests " +
-  "in one click - new POST /api/trainer-requests/from-shortfall scans centre x job-role " +
-  "rows whose pipeline is empty, skips halted/unapproved centres and existing Open " +
-  "requests (each skip named), notifies Ops per request; 'Raise requests for gaps' " +
-  "button on the centre's Trainer-slots panel.";
+  "F-A4 (Manish): the closure evidence files finally have a UI - the Assessment " +
+  "section gets a Result-sheet slot and the Certification section a Certificate-" +
+  "bundle slot (view link when present, Upload/Replace until the batch closes; " +
+  "post-completion the closure stays frozen per DEC-6). Fields existed in the " +
+  "schema since day one with no way to fill them.";
