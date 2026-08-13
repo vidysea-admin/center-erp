@@ -2,7 +2,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/client";
-import { Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, ShareLinkPanel, SourceCell, copyText, inputCls } from "@/components/ui";
+import { Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, ShareLinkPanel, SourceCell, copyText, inputCls , Tabs} from "@/components/ui";
 import { useLocationCtx } from "@/components/shell";
 import { BASE_PATH } from "@/lib/base-path";
 import { bulkSmsCsv, smsLink, unsendableCount, waLink } from "@/lib/messaging";
@@ -25,6 +25,9 @@ function CandidatesInner() {
   // "Not Certified". Pills filter client-side so every count is visible at once; deep links
   // /candidates?lifecycle_status=Enrolled and ?program=null preset the pill.
   const [tag, setTag] = useState(sp.get("lifecycle_status") ?? (sp.get("program") === "null" ? "No programme" : ""));
+  // Bucket deep-links: /candidates?bucket=Enrolled, and lifecycle presets pick their bucket.
+  const [bucket, setBucket] = useState<"Fresh" | "Enrolled">(
+    sp.get("bucket") === "Enrolled" || ["Assigned", "Enrolled", "Completed", "Not Certified"].includes(sp.get("lifecycle_status") ?? "") ? "Enrolled" : "Fresh");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [shareLink, setShareLink] = useState("");
@@ -62,18 +65,37 @@ function CandidatesInner() {
   };
   useEffect(() => { load(); }, [fLoc]);
 
-  const LIFECYCLE_TAGS = ["Unassigned", "Assigned", "Enrolled", "Dropped", "Completed", "Not Certified"];
+  // 2026-08-14 (CEO): "do bucket banao — FRESH (inquiry, jab tak batch assign nahi) aur
+  // ENROLLED (batch se billing tak ki poori journey, current status ke saath)".
+  const FRESH_STATES = ["Unassigned", "Dropped"];
+  const isFresh = (r: any) => FRESH_STATES.includes(r.lifecycle_status ?? "Unassigned");
+  const freshItems = items.filter(isFresh);
+  const enrolledItems = items.filter((r: any) => !isFresh(r));
+  const bucketItems = bucket === "Fresh" ? freshItems : enrolledItems;
+  // CEO's journey terminology for the Enrolled bucket — derived, never stored.
+  const journeyOf = (r: any): string => {
+    if (r.lifecycle_status === "Completed") return "Certified";
+    if (r.lifecycle_status === "Not Certified") return "Not Certified";
+    if (r.lifecycle_status === "Assigned") return "Enrollment in progress";
+    const bs = r.active_batch?.status;
+    if (bs === "Closing") return "Training Completed";
+    if (bs === "Completed") return "Result Awaited";
+    return "Training Ongoing";
+  };
+  const JOURNEY_TAGS = ["Enrollment in progress", "Training Ongoing", "Training Completed", "Result Awaited", "Certified", "Not Certified"];
+  const FRESH_TAGS = ["Unassigned", "Dropped"];
+  const LIFECYCLE_TAGS = bucket === "Fresh" ? FRESH_TAGS : JOURNEY_TAGS;
   // 2026-08-13 (Umesh): a candidate in a batch HAS that batch's programme — "No programme"
   // only when neither the row nor an active membership carries one.
   const progOf = (r: any) => r.program ?? r.active_batch?.program ?? null;
   const tagOf = (r: any): string[] => {
-    const tags = [r.lifecycle_status ?? "Unassigned"];
+    const tags = [bucket === "Fresh" ? (r.lifecycle_status ?? "Unassigned") : journeyOf(r)];
     if (!progOf(r)) tags.push("No programme");
     if ((r.interested_programs?.length ?? 0) > 1) tags.push("Multi-interest");
     return tags;
   };
-  const tagCount = (t: string) => items.filter((r) => tagOf(r).includes(t)).length;
-  const shown = tag ? items.filter((r) => tagOf(r).includes(tag)) : items;
+  const tagCount = (t: string) => bucketItems.filter((r) => tagOf(r).includes(t)).length;
+  const shown = tag ? bucketItems.filter((r) => tagOf(r).includes(tag)) : bucketItems;
 
   function toggle(id: string) {
     const s = new Set(selected);
@@ -249,9 +271,13 @@ function CandidatesInner() {
           hint="Share it on WhatsApp — candidates fill their own details."
           onDismiss={() => setShareLink("")} />
       )}
+      {/* CEO: Fresh = inquiry se batch-assign tak; Enrolled = batch se billing tak. */}
+      <Tabs tabs={[`Fresh Candidates (${freshItems.length})`, `Enrolled Candidates (${enrolledItems.length})`]}
+        active={bucket === "Fresh" ? `Fresh Candidates (${freshItems.length})` : `Enrolled Candidates (${enrolledItems.length})`}
+        onChange={(t) => { setBucket(t.startsWith("Fresh") ? "Fresh" : "Enrolled"); setTag(""); }} />
       <FilterPills active={tag} onChange={(v) => setTag(v === tag ? "" : v)}
         options={[
-          { value: "", label: "All", count: items.length },
+          { value: "", label: "All", count: bucketItems.length },
           ...LIFECYCLE_TAGS.map((t) => ({ value: t, label: t, count: tagCount(t) })),
           { value: "No programme", label: "No programme", count: tagCount("No programme") },
           { value: "Multi-interest", label: "Multi-interest", count: tagCount("Multi-interest") },
@@ -281,7 +307,15 @@ function CandidatesInner() {
                 ? <span title={`Via batch ${r.active_batch.code} — the row itself has no programme yet`}>{r.active_batch.program.name} <span className="text-[10px] text-gray-400">via {r.active_batch.code}</span></span>
                 : <Chip value="No programme" />),
           },
-          { key: "lifecycle_status", label: "Status", sortable: true, sortValue: (r: any) => r.lifecycle_status, render: (r: any) => <Chip value={r.lifecycle_status} /> },
+          {
+            // CEO terminology: Fresh bucket shows the pool state; Enrolled bucket shows the
+            // JOURNEY (Enrollment in progress → Training Ongoing → Training Completed →
+            // Result Awaited → Certified / Not Certified).
+            key: "lifecycle_status", label: bucket === "Fresh" ? "Status" : "Journey status", sortable: true,
+            sortValue: (r: any) => bucket === "Fresh" ? r.lifecycle_status : journeyOf(r),
+            filterText: (r: any) => bucket === "Fresh" ? r.lifecycle_status : journeyOf(r),
+            render: (r: any) => <Chip value={bucket === "Fresh" ? r.lifecycle_status : journeyOf(r)} />,
+          },
           {
             key: "eligibility", label: "Eligible",
             filterText: (r: any) => r.eligibility ? (r.eligibility.eligible ? (r.eligibility.unknown?.length ? "Unverified" : "Eligible") : "Not eligible") : "",

@@ -72,6 +72,11 @@ const CHIP_COLORS: Record<string, string> = {
   "NSDC Rejected": "bg-red-100 text-red-700",
   // 2026-08-13: schemes are shown as chips wherever a job role appears — one colour per scheme
   // so "which scheme is this" is answerable at a glance (Manish: "scheme ke bina confuse ho jate hain").
+  // 2026-08-14 (CEO journey terminology for the Enrolled candidates bucket)
+  "Enrollment in progress": "bg-amber-100 text-amber-700",
+  "Training Ongoing": "bg-blue-100 text-blue-700",
+  "Training Completed": "bg-blue-100 text-blue-700",
+  "Result Awaited": "bg-amber-100 text-amber-700",
   "RPL-AVPL": "bg-violet-100 text-violet-700", "RPL-HSL": "bg-cyan-100 text-cyan-700",
   "PMKVY-BECIL": "bg-indigo-100 text-indigo-700", "DDU-GKY2.0": "bg-teal-100 text-teal-700",
   "DDUGKY 2.0 SPH": "bg-teal-100 text-teal-700",
