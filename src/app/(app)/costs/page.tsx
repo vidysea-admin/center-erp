@@ -99,13 +99,14 @@ function CostsInner() {
             <DataTable rows={costs}
               cardTitle={(r: any) => `₹${r.amount} · ${r.category?.name}`}
               onRowClick={openEdit}
+              defaultSort={{ key: "entry_date", dir: "desc" }}
               columns={[
-                { key: "entry_date", label: "Date", render: (r: any) => fmtDate(r.entry_date) },
-                { key: "category", label: "Category", render: (r: any) => r.category?.name },
-                { key: "amount", label: "Amount", render: (r: any) => `₹${(r.amount ?? 0).toLocaleString("en-IN")}` },
-                { key: "location", label: "Location", render: (r: any) => r.location?.name ?? "—" },
-                { key: "batch", label: "Batch", render: (r: any) => r.batch?.code ?? "—" },
-                { key: "trainer", label: "Trainer", render: (r: any) => r.trainer?.name ?? "—" },
+                { key: "entry_date", label: "Date", sortable: true, sortValue: (r: any) => r.entry_date ? new Date(r.entry_date).getTime() : null, render: (r: any) => fmtDate(r.entry_date) },
+                { key: "category", label: "Category", sortable: true, sortValue: (r: any) => r.category?.name, render: (r: any) => r.category?.name },
+                { key: "amount", label: "Amount", sortable: true, render: (r: any) => `₹${(r.amount ?? 0).toLocaleString("en-IN")}` },
+                { key: "location", label: "Location", sortable: true, sortValue: (r: any) => r.location?.name, render: (r: any) => r.location?.name ?? "—" },
+                { key: "batch", label: "Batch", sortable: true, sortValue: (r: any) => r.batch?.code, render: (r: any) => r.batch?.code ?? "—" },
+                { key: "trainer", label: "Trainer", sortable: true, sortValue: (r: any) => r.trainer?.name, render: (r: any) => r.trainer?.name ?? "—" },
                 { key: "note", label: "Note", mobile: false },
               ]} empty="No cost entries." />
           </Section>
@@ -114,14 +115,15 @@ function CostsInner() {
         <Section title="Invoices">
           <DataTable rows={invoices}
             cardTitle={(r: any) => r.batch?.code}
+            defaultSort={{ key: "raised_on", dir: "desc" }}
             columns={[
-              { key: "batch", label: "Batch", render: (r: any) => r.batch?.code },
-              { key: "location", label: "Location", render: (r: any) => r.batch?.location?.name },
-              { key: "status", label: "Status", render: (r: any) => <Chip value={r.status} /> },
-              { key: "amount", label: "Amount", render: (r: any) => r.amount ? `₹${r.amount.toLocaleString("en-IN")}` : "—" },
-              { key: "invoice_no", label: "Invoice #", render: (r: any) => r.invoice_no ?? "—" },
-              { key: "raised_on", label: "Raised", render: (r: any) => fmtDate(r.raised_on) },
-              { key: "paid_on", label: "Paid", render: (r: any) => fmtDate(r.paid_on) },
+              { key: "batch", label: "Batch", sortable: true, sortValue: (r: any) => r.batch?.code, render: (r: any) => r.batch?.code },
+              { key: "location", label: "Location", sortable: true, sortValue: (r: any) => r.batch?.location?.name, render: (r: any) => r.batch?.location?.name },
+              { key: "status", label: "Status", sortable: true, render: (r: any) => <Chip value={r.status} /> },
+              { key: "amount", label: "Amount", sortable: true, render: (r: any) => r.amount ? `₹${r.amount.toLocaleString("en-IN")}` : "—" },
+              { key: "invoice_no", label: "Invoice #", sortable: true, render: (r: any) => r.invoice_no ?? "—" },
+              { key: "raised_on", label: "Raised", sortable: true, sortValue: (r: any) => r.raised_on ? new Date(r.raised_on).getTime() : null, render: (r: any) => fmtDate(r.raised_on) },
+              { key: "paid_on", label: "Paid", sortable: true, sortValue: (r: any) => r.paid_on ? new Date(r.paid_on).getTime() : null, render: (r: any) => fmtDate(r.paid_on) },
             ]} empty="No invoices yet — mark a batch Ready for Invoice from its Closure tab." />
           <p className="mt-2 text-xs text-gray-500">Raise/mark paid from the batch's Closure tab (Rule 36 enforced there).</p>
         </Section>

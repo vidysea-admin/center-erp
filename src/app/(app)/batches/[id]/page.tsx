@@ -2,7 +2,7 @@
 import { use, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { api, fmtDate, toInputDate } from "@/lib/client";
-import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, HealthBanner, NameCell, Section, Tabs, inputCls } from "@/components/ui";
+import { Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, HealthBanner, NameCell, Section, Tabs, inputCls } from "@/components/ui";
 import { Activity } from "@/components/activity";
 import { flushQueue, getQueue, uploadWithRetry } from "@/lib/upload";
 import { BASE_PATH } from "@/lib/base-path";
@@ -327,7 +327,7 @@ function Roster({ batchId, batch, setError, onChanged }: any) {
                 return (
                   <li key={t._id ?? t.token} className="flex items-center gap-2">
                     <span className="font-medium">{name}</span>
-                    <button className="text-blue-700 hover:underline" onClick={() => navigator.clipboard.writeText(url)}>copy link</button>
+                    <CopyBtn text={url} className="text-blue-700 hover:underline">copy link</CopyBtn>
                     {wa && <a className="text-green-700 hover:underline" href={wa} target="_blank" rel="noreferrer">WhatsApp</a>}
                     {sms && <a className="text-indigo-700 hover:underline" href={sms}>SMS</a>}
                     {!wa && <span className="text-gray-400">no mobile number</span>}
@@ -1059,7 +1059,7 @@ function FeedbackTab({ batchId, setError }: any) {
                 return (
                   <li key={t._id ?? t.token} className="flex items-center gap-2">
                     <span className="font-medium">{name}</span>
-                    <button className="text-blue-700 hover:underline" onClick={() => navigator.clipboard.writeText(url)}>copy link</button>
+                    <CopyBtn text={url} className="text-blue-700 hover:underline">copy link</CopyBtn>
                     {wa && <a className="text-green-700 hover:underline" href={wa} target="_blank" rel="noreferrer">WhatsApp</a>}
                     {sms && <a className="text-indigo-700 hover:underline" href={sms}>SMS</a>}
                     {!wa && <span className="text-gray-400">no mobile number</span>}

@@ -2,7 +2,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/client";
-import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, inputCls } from "@/components/ui";
+import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, ShareLinkPanel, copyText, inputCls } from "@/components/ui";
 import { useLocationCtx } from "@/components/shell";
 import { BASE_PATH } from "@/lib/base-path";
 import { bulkSmsCsv, smsLink, unsendableCount, waLink } from "@/lib/messaging";
@@ -17,7 +17,6 @@ function CandidatesInner() {
   const [locations, setLocations] = useState<any[]>([]);
   const [programs, setPrograms] = useState<any[]>([]);
   const [batches, setBatches] = useState<any[]>([]);
-  const [q, setQ] = useState(sp.get("q") ?? "");
   const [ctxLoc] = useLocationCtx();
   const [fLoc, setFLoc] = useState("");
   useEffect(() => { setFLoc(ctxLoc); }, [ctxLoc]);
@@ -27,6 +26,7 @@ function CandidatesInner() {
   // /candidates?lifecycle_status=Enrolled and ?program=null preset the pill.
   const [tag, setTag] = useState(sp.get("lifecycle_status") ?? (sp.get("program") === "null" ? "No programme" : ""));
   const [error, setError] = useState("");
+  const [shareLink, setShareLink] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [drawer, setDrawer] = useState<"" | "add" | "edit" | "import" | "assign">("");
   const [editId, setEditId] = useState<string>("");
@@ -48,7 +48,9 @@ function CandidatesInner() {
   }, [form.phone, form.name, form.dob, drawer]);
 
   const load = () => {
-    const params = new URLSearchParams({ q, limit: "2000" });
+    // Search moved into DataTable (all-column, client-side) — the fetch brings the full
+    // scoped set anyway. ?q= deep links from global search land via initialSearch below.
+    const params = new URLSearchParams({ limit: "2000" });
     if (fLoc) params.set("location", fLoc);
     return Promise.all([
       api(`/api/candidates?${params}`).then((d) => setItems(d.items)),
@@ -57,7 +59,7 @@ function CandidatesInner() {
       api("/api/batches").then((d) => setBatches(d.items.filter((b: any) => ["Planning", "Ready", "Active"].includes(b.status)))),
     ]).catch((e) => setError(e.message));
   };
-  useEffect(() => { load(); }, [q, fLoc]);
+  useEffect(() => { load(); }, [fLoc]);
 
   const LIFECYCLE_TAGS = ["Unassigned", "Assigned", "Enrolled", "Dropped", "Completed", "Not Certified"];
   const tagOf = (r: any): string[] => {
@@ -177,7 +179,8 @@ function CandidatesInner() {
     } catch (e: any) { setError(e.message); }
   }
 
-  // 2026-08-11: per-location public self-registration link.
+  // 2026-08-11: per-location public self-registration link. 2026-08-13 (Umesh): alert()
+  // text can't be selected — the link now lands in a panel with a selectable input.
   async function shareRegistrationLink() {
     if (!fLoc) { setError("Pick a location filter first — the link is per location."); return; }
     try {
@@ -185,8 +188,8 @@ function CandidatesInner() {
       const active = existing.items?.find((t: any) => t.active);
       const t = active ?? (await api("/api/public-tokens", { method: "POST", json: { purpose: "register", location: fLoc } })).item;
       const link = `${window.location.origin}${BASE_PATH}/p/register/${t.token}`;
-      await navigator.clipboard.writeText(link);
-      setError(""); alert(`Self-registration link copied:\n${link}\n\nShare it on WhatsApp — candidates fill their own details.`);
+      await copyText(link); // best-effort auto-copy; the panel is the guarantee
+      setError(""); setShareLink(link);
     } catch (e: any) { setError(e.message); }
   }
 
@@ -216,10 +219,9 @@ function CandidatesInner() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-xl font-semibold">Candidates <span className="text-sm font-normal text-gray-400">(pool)</span></h1>
         <div className="flex flex-wrap gap-2">
-          <input className={inputCls + " max-w-44"} placeholder="Search…" value={q} onChange={(e) => setQ(e.target.value)} />
-          <select className={inputCls + " max-w-40"} value={fLoc} onChange={(e) => setFLoc(e.target.value)}>
+          <select className={inputCls + " max-w-64"} value={fLoc} onChange={(e) => setFLoc(e.target.value)}>
             <option value="">All locations</option>
-            {locations.map((l) => <option key={l._id} value={l._id}>{l.name}</option>)}
+            {locations.map((l) => <option key={l._id} value={l._id} title={l.name}>{l.name}</option>)}
           </select>
           <Btn kind="ghost" onClick={() => { setImportState({}); setDrawer("import"); }}>Import Excel</Btn>
           <Btn kind="ghost" onClick={shareRegistrationLink}>Self-reg link</Btn>
@@ -233,6 +235,11 @@ function CandidatesInner() {
         </div>
       </div>
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
+      {shareLink && (
+        <ShareLinkPanel label="Self-registration link" link={shareLink}
+          hint="Share it on WhatsApp — candidates fill their own details."
+          onDismiss={() => setShareLink("")} />
+      )}
       <FilterPills active={tag} onChange={(v) => setTag(v === tag ? "" : v)}
         options={[
           { value: "", label: "All", count: items.length },
@@ -251,6 +258,7 @@ function CandidatesInner() {
         cardTitle={(r: any) => r.name}
         onRowClick={openEdit}
         defaultSort={{ key: "name", dir: "asc" }}
+        initialSearch={sp.get("q") ?? ""}
         columns={[
           { key: "_sel", label: "", mobile: false, render: (r: any) => <input type="checkbox" checked={selected.has(r._id)} onChange={() => toggle(r._id)} onClick={(e) => e.stopPropagation()} disabled={r.lifecycle_status !== "Unassigned" && r.lifecycle_status !== "Dropped"} /> },
           { key: "name", label: "Name", sortable: true, sortValue: (r: any) => r.name, render: (r: any) => <NameCell name={r.name} sub={r.gender} /> },
@@ -259,7 +267,9 @@ function CandidatesInner() {
           { key: "program", label: "Program", sortable: true, sortValue: (r: any) => r.program?.name ?? "", render: (r: any) => r.program?.name ?? <Chip value="No programme" /> },
           { key: "lifecycle_status", label: "Status", sortable: true, sortValue: (r: any) => r.lifecycle_status, render: (r: any) => <Chip value={r.lifecycle_status} /> },
           {
-            key: "eligibility", label: "Eligible", render: (r: any) => r.eligibility ? (
+            key: "eligibility", label: "Eligible",
+            filterText: (r: any) => r.eligibility ? (r.eligibility.eligible ? (r.eligibility.unknown?.length ? "Unverified" : "Eligible") : "Not eligible") : "",
+            render: (r: any) => r.eligibility ? (
               r.eligibility.eligible
                 ? (r.eligibility.unknown?.length
                   ? <span className="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] text-gray-500" title={r.eligibility.unknown.join("; ")}>Unverified</span>
@@ -324,13 +334,13 @@ function CandidatesInner() {
           <Field label="Location" required>
             <select className={inputCls} value={form.location ?? ""} onChange={(e) => set("location", e.target.value)}>
               <option value="">Select…</option>
-              {locations.map((l) => <option key={l._id} value={l._id}>{l.name}</option>)}
+              {locations.map((l) => <option key={l._id} value={l._id} title={l.name}>{l.name}</option>)}
             </select>
           </Field>
           <Field label="Program" required>
             <select className={inputCls} value={form.program ?? ""} onChange={(e) => set("program", e.target.value)}>
               <option value="">Select…</option>
-              {programs.map((p) => <option key={p._id} value={p._id}>{p.name}{p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}</option>)}
+              {programs.map((p) => { const t = `${p.name}${p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}`; return <option key={p._id} value={p._id} title={t}>{t}</option>; })}
             </select>
           </Field>
           <div className="grid grid-cols-2 gap-3">
@@ -347,21 +357,21 @@ function CandidatesInner() {
           <Field label="Portal Candidate ID (from the government portal, e.g. CAN_40918461)">
             <input className={inputCls} placeholder="CAN_…" value={form.sidh_candidate_id ?? ""} onChange={(e) => set("sidh_candidate_id", e.target.value)} />
           </Field>
-          {/* 2026-08-11: "कौन से program में interested… कौन-कौन सी location में" — for fast shortlisting later */}
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Interested programs (Ctrl-click for many)">
-              <select multiple className={inputCls + " h-20"} value={form.interested_programs ?? []}
-                onChange={(e) => set("interested_programs", Array.from(e.target.selectedOptions).map((o) => o.value))}>
-                {programs.map((p) => <option key={p._id} value={p._id}>{p.name}{p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}</option>)}
-              </select>
-            </Field>
-            <Field label="Interested locations">
-              <select multiple className={inputCls + " h-20"} value={form.interested_locations ?? []}
-                onChange={(e) => set("interested_locations", Array.from(e.target.selectedOptions).map((o) => o.value))}>
-                {locations.map((l) => <option key={l._id} value={l._id}>{l.name}</option>)}
-              </select>
-            </Field>
-          </div>
+          {/* 2026-08-11: "कौन से program में interested… कौन-कौन सी location में" — for fast shortlisting later.
+              2026-08-13 (Umesh): stacked full-width — side-by-side clipped "Govt. ITI Charthwal, Muzaff…"
+              and selection was guesswork; title = hover reveal for anything that still clips. */}
+          <Field label="Interested programs (Ctrl-click for many)">
+            <select multiple className={inputCls + " h-28"} value={form.interested_programs ?? []}
+              onChange={(e) => set("interested_programs", Array.from(e.target.selectedOptions).map((o) => o.value))}>
+              {programs.map((p) => { const t = `${p.name}${p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}`; return <option key={p._id} value={p._id} title={t}>{t}</option>; })}
+            </select>
+          </Field>
+          <Field label="Interested locations (Ctrl-click for many)">
+            <select multiple className={inputCls + " h-28"} value={form.interested_locations ?? []}
+              onChange={(e) => set("interested_locations", Array.from(e.target.selectedOptions).map((o) => o.value))}>
+              {locations.map((l) => <option key={l._id} value={l._id} title={l.name}>{l.name}</option>)}
+            </select>
+          </Field>
           <Field label="Source (mobiliser / campaign)"><input className={inputCls} value={form.source ?? ""} onChange={(e) => set("source", e.target.value)} /></Field>
           {/* Edit mode: location/program may legitimately be blank on a sheet-imported row — the
               save must not be held hostage to fields the user is not correcting. */}
@@ -389,13 +399,13 @@ function CandidatesInner() {
             <Field label="Location" required>
               <select className={inputCls} value={importState.location ?? ""} onChange={(e) => setImportState({ ...importState, location: e.target.value })}>
                 <option value="">Select…</option>
-                {locations.map((l) => <option key={l._id} value={l._id}>{l.name}</option>)}
+                {locations.map((l) => <option key={l._id} value={l._id} title={l.name}>{l.name}</option>)}
               </select>
             </Field>
             <Field label="Program" required>
               <select className={inputCls} value={importState.program ?? ""} onChange={(e) => setImportState({ ...importState, program: e.target.value })}>
                 <option value="">Select…</option>
-                {programs.map((p) => <option key={p._id} value={p._id}>{p.name}{p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}</option>)}
+                {programs.map((p) => { const t = `${p.name}${p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}`; return <option key={p._id} value={p._id} title={t}>{t}</option>; })}
               </select>
             </Field>
           </div>

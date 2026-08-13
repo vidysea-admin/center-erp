@@ -80,7 +80,9 @@ export function collectionRoutes(cfg: CrudConfig) {
     }
     const q = sp.get("q");
     if (q && cfg.searchFields?.length) {
-      filter.$or = cfg.searchFields.map((f) => ({ [f]: { $regex: q, $options: "i" } }));
+      // Escape regex metacharacters — raw user input reached $regex, so ?q=( was a 500.
+      const esc = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      filter.$or = cfg.searchFields.map((f) => ({ [f]: { $regex: esc, $options: "i" } }));
     }
     const page = Math.max(1, parseInt(sp.get("page") || "1", 10));
     // 2026-08-13, Umesh: "don't apply any capping — full scale banana hai." The 200 ceiling was

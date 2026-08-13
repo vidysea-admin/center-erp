@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { api, fmtDate } from "@/lib/client";
+import { api, fmtDT } from "@/lib/client";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, inputCls } from "@/components/ui";
 
 const ACTIONS = ["No action", "Update target", "Apply value", "Start location", "Put on hold", "Stop location", "Close location"];
@@ -73,7 +73,7 @@ export default function SyncInboxPage() {
           { key: "location", label: "About", render: (r: any) => rowLabel(r) ?? <span className="text-amber-600">Unmatched</span> },
           { key: "field_name", label: "Field" },
           { key: "change", label: "Old → New", render: (r: any) => <span className="text-xs">{r.old_value || "∅"} → <b>{r.new_value}</b></span> },
-          { key: "detected_at", label: "Detected", render: (r: any) => fmtDate(r.detected_at) },
+          { key: "detected_at", label: "Detected", render: (r: any) => fmtDT(r.detected_at) },
           { key: "status", label: "Status", render: (r: any) => <span className="flex items-center gap-1"><Chip value={r.status} />{r.pending_followups > 0 && <span className="text-xs text-amber-600">{r.pending_followups} follow-ups</span>}</span> },
           { key: "action_taken", label: "Action", render: (r: any) => r.action_taken ?? "—", mobile: false },
           {
@@ -99,7 +99,7 @@ export default function SyncInboxPage() {
             <div className="rounded-lg bg-gray-50 p-4 text-sm">
               <div className="font-medium">{rowLabel(review) ?? "Unmatched location"}</div>
               <div className="mt-1">Field <b>{review.field_name}</b>: <span className="text-gray-500">{review.old_value || "∅"}</span> → <b>{review.new_value}</b></div>
-              <div className="mt-1 text-xs text-gray-400">Detected {new Date(review.detected_at).toLocaleString("en-IN")}</div>
+              <div className="mt-1 text-xs text-gray-400">Detected {fmtDT(review.detected_at)}</div>
             </div>
             {review.impact_snapshot && review.impact_snapshot.active_batches !== undefined && (
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm">

@@ -28,7 +28,6 @@ function TrainersInner() {
   const [items, setItems] = useState<any[]>([]);
   const [requests, setRequests] = useState<any[]>([]);
   const [locations, setLocations] = useState<any[]>([]);
-  const [q, setQ] = useState("");
   // Deep-link presets: /trainers?tag=Available (pill) or ?status=/?pipeline_status= (API-side).
   const [tag, setTag] = useState(sp.get("tag") ?? "");
   const [reqFilter, setReqFilter] = useState("open"); // KPI counts open ones — the list defaults to match
@@ -43,11 +42,12 @@ function TrainersInner() {
 
   const load = () => Promise.all([
     // ?status=/?pipeline_status= presets ride through to the API (already filterable there).
-    api(`/api/trainers?q=${encodeURIComponent(q)}${sp.get("status") ? `&status=${encodeURIComponent(sp.get("status")!)}` : ""}${sp.get("pipeline_status") ? `&pipeline_status=${encodeURIComponent(sp.get("pipeline_status")!)}` : ""}&limit=2000`).then((d) => setItems(d.items)),
+    // Text search moved into DataTable (all-column, client-side over the full 2000-row fetch).
+    api(`/api/trainers?${sp.get("status") ? `status=${encodeURIComponent(sp.get("status")!)}&` : ""}${sp.get("pipeline_status") ? `pipeline_status=${encodeURIComponent(sp.get("pipeline_status")!)}&` : ""}limit=2000`).then((d) => setItems(d.items)),
     api("/api/trainer-requests?limit=2000").then((d) => setRequests(d.items)),
     api("/api/locations?limit=2000").then((d) => setLocations(d.items)),
   ]).catch((e) => setError(e.message));
-  useEffect(() => { load(); }, [q]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const tagCounts = new Map<string, number>();
   for (const t of items) tagCounts.set(availabilityTag(t), (tagCounts.get(availabilityTag(t)) ?? 0) + 1);
@@ -104,7 +104,6 @@ function TrainersInner() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-xl font-semibold">Trainers</h1>
         <div className="flex gap-2">
-          <input className={inputCls + " max-w-52"} placeholder="Search…" value={q} onChange={(e) => setQ(e.target.value)} />
           <Btn onClick={() => { setEdit(null); setForm({ max_concurrent_batches: 4, status: "Available", pipeline_status: "Applied" }); setDrawer(true); }}>Add Trainer</Btn>
         </div>
       </div>
@@ -189,7 +188,7 @@ function TrainersInner() {
           <Field label="Home location">
             <select className={inputCls} value={form.home_location ?? ""} onChange={(e) => set("home_location", e.target.value)}>
               <option value="">—</option>
-              {locations.map((l) => <option key={l._id} value={l._id}>{l.name}</option>)}
+              {locations.map((l) => <option key={l._id} value={l._id} title={l.name}>{l.name}</option>)}
               {/* 2026-08-13 (Manish): a trainer's home town is usually not one of our centres */}
               <option value="__other__">Other…</option>
             </select>
@@ -222,7 +221,7 @@ function TrainersInner() {
           <Field label="Can train at (2026-08-11: one, two or ten locations)">
             <select multiple className={inputCls + " h-28"} value={form.capable_locations ?? []}
               onChange={(e) => set("capable_locations", Array.from(e.target.selectedOptions).map((o) => o.value))}>
-              {locations.map((l) => <option key={l._id} value={l._id}>{l.name}</option>)}
+              {locations.map((l) => <option key={l._id} value={l._id} title={l.name}>{l.name}</option>)}
             </select>
           </Field>
           <div className="grid grid-cols-2 gap-3">

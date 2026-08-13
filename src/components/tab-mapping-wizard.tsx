@@ -5,7 +5,7 @@
 // new rows become records, changed rows become Sync-Inbox review items, and rows it cannot
 // place are named in the run report. No operator, no code change, no Claude on the server.
 import { useEffect, useState } from "react";
-import { api } from "@/lib/client";
+import { api, fmtDT } from "@/lib/client";
 import { Btn, Chip, Field, inputCls } from "@/components/ui";
 
 const ENTITIES = ["Candidate", "Trainer", "Location"];
@@ -130,7 +130,7 @@ export function TabMappings({ setError }: any) {
             <li key={m._id} className="rounded-lg border border-gray-100 p-3">
               <div className="flex flex-wrap items-center gap-2">
                 <b>{m.tab}</b> → {m.entity_type} <Chip value={m.active ? "Active" : "Paused"} />
-                <span className="text-xs text-gray-500">{m.columns.length} columns · key: {m.key_field}{m.last_run_at ? ` · last run ${new Date(m.last_run_at).toLocaleString("en-IN")}` : ""}</span>
+                <span className="text-xs text-gray-500">{m.columns.length} columns · key: {m.key_field}{m.last_run_at ? ` · last run ${fmtDT(m.last_run_at)}` : ""}</span>
                 <span className="ml-auto flex gap-2">
                   <Btn small kind="ghost" onClick={() => openTab(m.tab)}>Edit</Btn>
                   <Btn small kind="ghost" onClick={() => toggleActive(m)}>{m.active ? "Pause" : "Resume"}</Btn>

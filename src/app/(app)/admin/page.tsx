@@ -1,6 +1,6 @@
 "use client";
 import { Fragment, useEffect, useState } from "react";
-import { api, fmtDate } from "@/lib/client";
+import { api, fmtDT, fmtDate } from "@/lib/client";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
 
 const TABS = ["Programs", "Users & Access", "Permissions", "Sync Source", "Approvals", "Master Lists", "Defaults"];
@@ -72,16 +72,17 @@ function Programs({ setError }: any) {
     <Section title="Programs & Courses" actions={<Btn small onClick={() => open()}>Add Program</Btn>}>
       <DataTable rows={items} onRowClick={open}
         cardTitle={(r: any) => r.name}
+        defaultSort={{ key: "name", dir: "asc" }}
         columns={[
-          { key: "code", label: "Code" },
-          { key: "name", label: "Name" },
-          { key: "default_batch_size", label: "Batch size" },
-          { key: "duration_days", label: "Duration (d)" },
+          { key: "code", label: "Code", sortable: true },
+          { key: "name", label: "Name", sortable: true },
+          { key: "default_batch_size", label: "Batch size", sortable: true },
+          { key: "duration_days", label: "Duration (d)", sortable: true },
           { key: "buffer_days", label: "Buffer (d)" },
           { key: "completion_deadline_days", label: "Deadline (d)" },
-          { key: "trainer_skill", label: "Trainer skill" },
-          { key: "requires_lab", label: "Lab?", render: (r: any) => (r.requires_lab ? "Yes" : "No") },
-          { key: "active", label: "Active", render: (r: any) => <Chip value={r.active ? "Active" : "Closed"} /> },
+          { key: "trainer_skill", label: "Trainer skill", sortable: true },
+          { key: "requires_lab", label: "Lab?", filterText: (r: any) => (r.requires_lab ? "Yes" : "No"), render: (r: any) => (r.requires_lab ? "Yes" : "No") },
+          { key: "active", label: "Active", filterText: (r: any) => (r.active ? "Active" : "Closed"), render: (r: any) => <Chip value={r.active ? "Active" : "Closed"} /> },
         ]} empty="No programs — every computed value depends on these." />
       <Drawer open={drawer} onClose={() => setDrawer(false)} title={edit ? `Edit ${edit.name}` : "Add Program"}>
         <div className="space-y-3">
@@ -185,14 +186,15 @@ function Users({ setError }: any) {
       )}
       <DataTable rows={items.filter((u) => u.approval_status !== "Pending")} onRowClick={open}
         cardTitle={(r: any) => r.name}
+        defaultSort={{ key: "name", dir: "asc" }}
         columns={[
-          { key: "name", label: "Name" },
-          { key: "email", label: "Email" },
-          { key: "role", label: "Role", render: (r: any) => <Chip value={r.role} /> },
-          { key: "location_scope", label: "Scope", render: (r: any) => ["Location", "Trainer"].includes(r.role) ? (r.location_scope ?? []).map((l: any) => l.name ?? l.code).join(", ") || "none" : "All" },
-          { key: "can_edit", label: "Can edit", render: (r: any) => (r.can_edit ? "Yes" : "View only") },
+          { key: "name", label: "Name", sortable: true },
+          { key: "email", label: "Email", sortable: true },
+          { key: "role", label: "Role", sortable: true, render: (r: any) => <Chip value={r.role} /> },
+          { key: "location_scope", label: "Scope", filterText: (r: any) => ["Location", "Trainer"].includes(r.role) ? (r.location_scope ?? []).map((l: any) => l.name ?? l.code).join(", ") || "none" : "All", render: (r: any) => ["Location", "Trainer"].includes(r.role) ? (r.location_scope ?? []).map((l: any) => l.name ?? l.code).join(", ") || "none" : "All" },
+          { key: "can_edit", label: "Can edit", filterText: (r: any) => (r.can_edit ? "Yes" : "View only"), render: (r: any) => (r.can_edit ? "Yes" : "View only") },
           { key: "extra_permissions", label: "Special rights", render: (r: any) => (r.extra_permissions ?? []).length ? `${r.extra_permissions.length} extra` : "—", mobile: false },
-          { key: "active", label: "Active", render: (r: any) => (r.active ? "Yes" : r.approval_status === "Rejected" ? "Rejected" : "No") },
+          { key: "active", label: "Active", filterText: (r: any) => (r.active ? "Yes" : r.approval_status === "Rejected" ? "Rejected" : "No"), render: (r: any) => (r.active ? "Yes" : r.approval_status === "Rejected" ? "Rejected" : "No") },
         ]} empty="No users." />
       <Drawer open={drawer} onClose={() => setDrawer(false)} title={edit ? `Edit ${edit.name}` : "Add User"}>
         <div className="space-y-3">
@@ -210,7 +212,7 @@ function Users({ setError }: any) {
             <Field label="Location scope (Rule 38 — server-enforced)">
               <select multiple className={inputCls + " h-32"} value={form.location_scope ?? []}
                 onChange={(e) => set("location_scope", [...e.target.selectedOptions].map((o) => o.value))}>
-                {locations.map((l) => <option key={l._id} value={l._id}>{l.name}</option>)}
+                {locations.map((l) => <option key={l._id} value={l._id} title={l.name}>{l.name}</option>)}
               </select>
               {/* 2026-08-12: an approved Trainer/Location user with no scope signs in to a
                   completely empty app and cannot tell why. Say so at the moment of approval. */}
@@ -392,11 +394,11 @@ function SyncSources({ setError }: any) {
         <DataTable rows={items} onRowClick={open}
           cardTitle={(r: any) => r.name}
           columns={[
-            { key: "name", label: "Name" },
+            { key: "name", label: "Name", sortable: true },
             { key: "mode", label: "Mode", render: (r: any) => r.mode === "watch" ? <span className="rounded-full border border-purple-200 bg-purple-50 px-2 py-0.5 text-[11px] font-semibold text-purple-700">Watch · {r.interval_minutes ?? 30}m</span> : <span className="text-xs text-gray-500">Mapped</span> },
-            { key: "source_url", label: "URL", render: (r: any) => <span className="block max-w-64 truncate text-xs">{r.source_url}</span> },
+            { key: "source_url", label: "URL", render: (r: any) => <span className="block max-w-64 truncate text-xs" title={r.source_url}>{r.source_url}</span> },
             { key: "frequency", label: "Frequency", mobile: false },
-            { key: "last_synced_at", label: "Last sync", render: (r: any) => fmtDate(r.last_synced_at) },
+            { key: "last_synced_at", label: "Last sync", sortable: true, sortValue: (r: any) => r.last_synced_at ? new Date(r.last_synced_at).getTime() : null, render: (r: any) => fmtDT(r.last_synced_at) },
             { key: "last_status", label: "Status", render: (r: any) => <Chip value={r.last_status} /> },
             { key: "_run", label: "", render: (r: any) => <Btn small disabled={running === r._id} onClick={() => run(r._id)}>{running === r._id ? "Syncing…" : "Sync Now"}</Btn> },
           ]} empty="No sync source configured yet — add the SDP sheet CSV URL when access is available." />
@@ -510,7 +512,7 @@ function Approvals({ setError }: any) {
                   <div>
                     <div className="text-sm font-medium">{r.summary}</div>
                     <div className="text-xs text-gray-500">
-                      {r.location?.name ? `${r.location.name} · ` : ""}requested by {r.initiator?.name} · {new Date(r.createdAt).toLocaleString("en-IN")}
+                      {r.location?.name ? `${r.location.name} · ` : ""}requested by {r.initiator?.name} · {fmtDT(r.createdAt)}
                       {r.decided_by?.name ? ` · decided by ${r.decided_by.name}` : ""}
                     </div>
                   </div>

@@ -10,7 +10,7 @@
 // background poller: it looks configured and nothing ever arrives. Testing up front also lets the
 // screen show the tabs and columns it found, which is how you know it is the right sheet.
 import { useEffect, useState } from "react";
-import { api } from "@/lib/client";
+import { api, fmtDT } from "@/lib/client";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, inputCls } from "@/components/ui";
 
 const BLANK = { name: "", source_url: "", mode: "watch", interval_minutes: 30, key_columns: "", active: true };
@@ -87,7 +87,7 @@ export function SheetSources({ onChanged }: { onChanged?: () => void }) {
         {
           key: "last_status", label: "Last run", render: (r: any) => (
             <span className={r.last_status === "Failed" ? "text-red-600" : "text-gray-600"} title={r.last_error ?? ""}>
-              {r.last_synced_at ? new Date(r.last_synced_at).toLocaleString() : "never"}
+              {r.last_synced_at ? fmtDT(r.last_synced_at) : "never"}
               {r.last_status ? ` · ${r.last_status}` : ""}
             </span>
           ),

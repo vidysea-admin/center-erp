@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { api, fmtDate } from "@/lib/client";
+import { api, fmtDT, fmtDate } from "@/lib/client";
 import { Chip, KPI, Section, Btn, ErrorBanner } from "@/components/ui";
 import { IconPin, IconCap, IconUsers, IconUser, IconAlert } from "@/components/icons";
 
@@ -199,7 +199,7 @@ export default function HomePage() {
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-medium">{u.name}</span>
                       <Chip value={u.requested_role ?? u.role} />
-                      <span className="ml-auto text-xs text-gray-400">{fmtDate(u.createdAt)}</span>
+                      <span className="ml-auto text-xs text-gray-400">{fmtDT(u.createdAt)}</span>
                     </div>
                     <div className="mt-0.5 text-xs text-gray-500">
                       {u.email}{u.phone ? ` · ${u.phone}` : ""}
@@ -218,14 +218,17 @@ export default function HomePage() {
 
 function FollowUpButtons({ id, onDone }: { id: string; onDone: () => void }) {
   const [busy, setBusy] = useState(false);
+  // Local error, not the page-level one — that state replaces the whole page with a banner.
+  const [err, setErr] = useState("");
   const act = async (status: string) => {
-    setBusy(true);
+    setBusy(true); setErr("");
     try { await api(`/api/follow-ups/${id}`, { method: "POST", json: { status } }); onDone(); }
-    catch (e: any) { alert(e.message); }
+    catch (e: any) { setErr(e.message); }
     setBusy(false);
   };
   return (
-    <div className="flex shrink-0 gap-1.5">
+    <div className="flex shrink-0 items-center gap-1.5">
+      {err && <span className="max-w-40 truncate text-xs text-red-600" title={err}>{err}</span>}
       <Btn small disabled={busy} onClick={() => act("Done")}>Done</Btn>
       <Btn small kind="ghost" disabled={busy} onClick={() => act("Skipped")}>Skip</Btn>
     </div>

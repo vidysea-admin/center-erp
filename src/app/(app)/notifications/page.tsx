@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { api } from "@/lib/client";
+import { api, fmtDT } from "@/lib/client";
 import { Btn, Chip, ErrorBanner, Section, Tabs } from "@/components/ui";
 
 const SEVERITY_STYLE: Record<string, string> = {
@@ -43,7 +43,7 @@ export default function NotificationsPage() {
                   <div className="text-sm font-medium">{n.message}</div>
                   <div className="mt-0.5 text-xs opacity-70">
                     {n.location?.name ? `${n.location.name} · ` : ""}
-                    {new Date(n.createdAt).toLocaleString("en-IN")}
+                    {fmtDT(n.createdAt)}
                     {n.acknowledged_by?.name ? ` · acknowledged by ${n.acknowledged_by.name}` : ""}
                   </div>
                 </div>

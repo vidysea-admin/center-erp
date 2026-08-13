@@ -3,7 +3,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { api, fmtDate } from "@/lib/client";
-import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthChip, Tabs, inputCls } from "@/components/ui";
+import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthChip, Tabs, inputCls, useCopied } from "@/components/ui";
 import { useLocationCtx } from "@/components/shell";
 
 export default function BatchesPage() {
@@ -36,6 +36,7 @@ function BatchesInner() {
   const set = (k: string, v: unknown) => setForm((f: any) => ({ ...f, [k]: v }));
   // 2026-08-11: standalone backward-plan calculator — the shareable "इस-इस date तक ये काम" sheet
   const [planner, setPlanner] = useState<{ open: boolean; start?: string; plan?: any[] }>({ open: false });
+  const { copied: planCopied, copy: copyPlan } = useCopied();
   const [info, setInfo] = useState("");
 
   // Status is filtered CLIENT-side now so the pill counts always show the whole picture.
@@ -206,7 +207,7 @@ function BatchesInner() {
           <Field label="Location" required>
             <select className={inputCls} value={form.location ?? ""} onChange={(e) => set("location", e.target.value)}>
               <option value="">Select…</option>
-              {locations.map((l) => <option key={l._id} value={l._id}>{l.name} ({l.approval_status})</option>)}
+              {locations.map((l) => <option key={l._id} value={l._id} title={`${l.name} (${l.approval_status})`}>{l.name} ({l.approval_status})</option>)}
             </select>
           </Field>
           <Field label="Program" required>
@@ -214,7 +215,7 @@ function BatchesInner() {
               <option value="">Select…</option>
               {/* 2026-08-13 (Manish saw "Drone Service Technician" twice): the same job role
                   exists once per SCHEME — show the scheme so the twins are tellable apart. */}
-              {programs.map((p) => <option key={p._id} value={p._id}>{p.name}{p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}</option>)}
+              {programs.map((p) => { const t = `${p.name}${p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}`; return <option key={p._id} value={p._id} title={t}>{t}</option>; })}
             </select>
           </Field>
           <div className="grid grid-cols-2 gap-3">
@@ -237,12 +238,12 @@ function BatchesInner() {
               <option value="">— assign later —</option>
               {readyTrainers.length > 0 && (
                 <optgroup label="Certified — has a TR ID and is cleared for this centre">
-                  {readyTrainers.map((t) => <option key={t._id} value={t._id}>{t.name} · TR {t.tr_id}</option>)}
+                  {readyTrainers.map((t) => <option key={t._id} value={t._id} title={`${t.name} · TR ${t.tr_id}`}>{t.name} · TR {t.tr_id}</option>)}
                 </optgroup>
               )}
               {otherTrainers.length > 0 && (
                 <optgroup label="Not yet certified — NSDC will not accept these on a batch">
-                  {otherTrainers.map((t) => <option key={t._id} value={t._id}>{t.name} ({t.pipeline_status ?? t.status})</option>)}
+                  {otherTrainers.map((t) => <option key={t._id} value={t._id} title={`${t.name} (${t.pipeline_status ?? t.status})`}>{t.name} ({t.pipeline_status ?? t.status})</option>)}
                 </optgroup>
               )}
             </select>
@@ -323,8 +324,8 @@ function BatchesInner() {
               <div className="flex gap-2">
                 <Btn kind="ghost" onClick={() => {
                   const lines = planner.plan!.map((m: any) => `${fmtDate(m.due_date)} — ${m.label}`);
-                  navigator.clipboard.writeText(`Batch plan (start ${fmtDate(planner.start!)}):\n${lines.join("\n")}\n${fmtDate(planner.start!)} — Batch starts`);
-                }}>Copy as text</Btn>
+                  copyPlan(`Batch plan (start ${fmtDate(planner.start!)}):\n${lines.join("\n")}\n${fmtDate(planner.start!)} — Batch starts`);
+                }}>{planCopied ? "Copied ✓" : "Copy as text"}</Btn>
                 <Btn kind="ghost" onClick={() => window.print()}>Print</Btn>
               </div>
               <p className="text-xs text-gray-500">Lead times are configurable in Admin → Defaults. Creating a batch stores this checklist on the batch, tick-off-able.</p>

@@ -15,9 +15,22 @@ export async function api<T = any>(path: string, opts: RequestInit & { json?: un
   return data as T;
 }
 
+// Business dates are stored at UTC midnight — pinning the zone keeps the calendar date
+// stable for a viewer west of UTC instead of showing yesterday.
 export function fmtDate(d?: string | Date | null): string {
   if (!d) return "—";
-  return new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+  return new Date(d).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric" });
+}
+
+// Timestamps (detected_at, imported_at, …) always render as IST wall-clock with am/pm —
+// "13 Aug 2026, 2:45 pm" — the format the team reads, wherever the browser is.
+export function fmtDT(d?: string | Date | null): string {
+  if (!d) return "—";
+  return new Date(d).toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "2-digit", month: "short", year: "numeric",
+    hour: "numeric", minute: "2-digit", hour12: true,
+  });
 }
 
 export function toInputDate(d?: string | Date | null): string {

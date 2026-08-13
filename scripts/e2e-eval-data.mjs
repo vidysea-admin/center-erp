@@ -101,6 +101,20 @@ ok("[best] program-less import row can join a matching batch", joined.status ===
 const inherited = (await req(admin, "GET", `/api/candidates/${bare2.insertedId}`, undefined, 200)).data.item;
 ok("[best] …and inherits the batch's programme on enrol (2026-08-13)", String(inherited.program?._id ?? inherited.program) === String(prog._id), JSON.stringify(inherited.program).slice(0, 80));
 
+// ---- search contract (2026-08-13 table-UX cycle): q is escaped, and the broadened
+// candidate searchFields (source, sidh id, alt phone) actually find rows ----
+const paren = await req(admin, "GET", "/api/candidates?q=%28&limit=5");
+ok("[worst] a regex metacharacter in ?q= is literal, not a 500", paren.status === 200, `got ${paren.status}: ${JSON.stringify(paren.data).slice(0, 100)}`);
+const srcKey = "SRC-" + s;
+const searchable = (await req(admin, "POST", "/api/candidates", {
+  name: "TEST-ED Search " + s, phone: phone("74"), location: loc._id, program: prog._id,
+  source: srcKey, sidh_candidate_id: "CAN_" + s, alt_phone: phone("73"),
+}, 201)).data.item;
+const bySrc = (await req(admin, "GET", `/api/candidates?q=${encodeURIComponent(srcKey)}&limit=10`, undefined, 200)).data.items ?? [];
+ok("[avg] candidate is findable by source (mobiliser/campaign)", bySrc.some((c) => c._id === searchable._id), `${bySrc.length} hits`);
+const bySidh = (await req(admin, "GET", `/api/candidates?q=${encodeURIComponent("CAN_" + s)}&limit=10`, undefined, 200)).data.items ?? [];
+ok("[avg] candidate is findable by portal CAN_ id", bySidh.some((c) => c._id === searchable._id), `${bySidh.length} hits`);
+
 // ---- cleanup: this suite deletes exactly what it planted ----
 await db.collection("batchmembers").deleteMany({ batch: new ObjectId(String(apiBatch._id)) });
 await db.collection("batches").deleteMany({ _id: new ObjectId(String(apiBatch._id)) });
