@@ -37,7 +37,7 @@ for (const s of SOURCES) {
       $set: {
         source_url: s.url,
         mode: "watch",
-        interval_minutes: 30,
+        interval_minutes: 5, // 2026-08-13, Umesh: "make it 5 minute sync"
         key_columns: s.key_columns,
         frequency: "Manual only", // watch mode ignores the daily schedule; poller uses interval_minutes
         active: true,
@@ -48,4 +48,29 @@ for (const s of SOURCES) {
   );
   console.log(`${s.name}: ${res.upsertedCount ? "created" : "updated"}`);
 }
+
+// Manish created "AVPL workbook" himself (mapped mode) by pasting the OneDrive link — with no
+// field mappings it could never run ("AVPL sheet sync isn't working"). Configure it the way he
+// expected it to work: TC ID is the row identity, and the columns whose changes should land in
+// the Sync Inbox for OK-per-change review. tc_password is deliberately not mapped — a change row
+// would print the credential to every reviewer.
+const avpl = await db.collection("syncsources").updateOne(
+  { name: "AVPL workbook" },
+  {
+    $set: {
+      mode: "mapped",
+      frequency: "Daily",
+      sync_time: "07:00",
+      active: true,
+      field_mappings: {
+        "TC ID": "external_id",
+        "Institution Name": "name",
+        "State": "state",
+        "SPOC Name": "spoc_name",
+        "TC Status": "tc_status",
+      },
+    },
+  },
+);
+console.log(`AVPL workbook (mapped): ${avpl.matchedCount ? "configured" : "not present — skipped"}`);
 await mongoose.disconnect();

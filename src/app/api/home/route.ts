@@ -17,6 +17,13 @@ export const GET = apiHandler(async () => {
   const scopedBatchIds = isScoped(user) ? await Batch.find(scope).distinct("_id") : null;
   const batchScope = scopedBatchIds ? { batch: { $in: scopedBatchIds } } : {};
 
+  // 2026-08-13, found live after the data reset: a scoped user whose centres no longer exist
+  // (their demo centre was purged) signs in to a wall of zeros with no explanation. Nothing is
+  // broken — but a blank app reads as broken, so say WHY it is empty.
+  const scopedNoCentres = isScoped(user)
+    ? (await Location.countDocuments({ ...locationFilter(user, "_id") })) === 0
+    : false;
+
   const [activeLocations, activeBatches, enrolledMembers, openRequests] = await Promise.all([
     Location.countDocuments({ operational_status: "Active", ...locationFilter(user, "_id") }),
     Batch.countDocuments({ status: "Active", ...scope }),
@@ -96,5 +103,6 @@ export const GET = apiHandler(async () => {
       pending_users: pendingUsers,
     },
     thresholds: { amber: defaults.attendance_gap_amber, red: defaults.attendance_gap_red },
+    scoped_no_centres: scopedNoCentres,
   });
 });

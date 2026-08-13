@@ -6,6 +6,8 @@ import {
 import { audit } from "@/lib/audit";
 import { HttpError } from "@/lib/authz";
 import { safeFetch } from "@/lib/safe-fetch";
+import * as XLSX from "xlsx";
+import { fetchWorkbook } from "@/lib/workbook";
 
 const ACTIVE_BATCH_STATUSES = ["Planning", "Ready", "Active", "Closing"];
 
@@ -33,9 +35,14 @@ export function parseCsv(text: string): string[][] {
 }
 
 // Fields on Location a sheet may own. "approved_target:<PROGRAM_CODE>" targets LocationTarget.
+// tc_status added 2026-08-13 — the government's verdict on a centre changes in the client's
+// sheet first, and the review inbox is exactly where that change should surface.
+// tc_password is deliberately NOT mappable: a SheetChange row prints old/new values to every
+// reviewer, which would leak a live portal credential the location routes go out of their way
+// to mask.
 const LOCATION_FIELDS = new Set([
   "external_id", "name", "city", "state", "address",
-  "approval_status", "spoc_name", "spoc_phone", "principal_name", "principal_phone",
+  "approval_status", "spoc_name", "spoc_phone", "principal_name", "principal_phone", "tc_status",
 ]);
 
 async function impactSnapshot(locationId: unknown) {
@@ -56,12 +63,24 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
   const mappedCols = Object.keys(mappings);
   if (!mappedCols.length) throw new HttpError(400, "No field mappings configured.");
 
-  let text: string;
+  // 2026-08-13: mapped mode only understood CSV text with the header on row 1, so pasting the
+  // client's OneDrive/Google-Sheets link — the thing the Admin screen invites, and exactly what
+  // Manish did — could never work: those links return an xlsx binary, and the client's sheet
+  // keeps a totals row ABOVE its header. Both engines now share the workbook fetcher, and the
+  // header is found by looking for the mapped columns rather than assuming row 1.
+  let allRows: string[][];
   try {
-    // Same SSRF guard as the watch engine — this URL is user-supplied too (2026-08-12).
-    const res = await safeFetch(src.source_url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    text = await res.text();
+    if (/docs\.google\.com|drive\.google\.com|onedrive\.live\.com|1drv\.ms|sharepoint\.com|\.xlsx($|\?)/i.test(src.source_url)) {
+      const wb = await fetchWorkbook(src.source_url);
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      allRows = (XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "" }) as unknown[][])
+        .map((r) => r.map((c) => String(c ?? "")));
+    } else {
+      // Same SSRF guard as the watch engine — this URL is user-supplied too (2026-08-12).
+      const res = await safeFetch(src.source_url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      allRows = parseCsv(await res.text());
+    }
   } catch (e) {
     src.last_status = "Failed";
     src.last_error = e instanceof Error ? e.message : String(e);
@@ -70,22 +89,27 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
     return { created: 0, status: "Failed", error: src.last_error ?? undefined };
   }
 
-  const rows = parseCsv(text);
-  if (!rows.length) {
+  if (!allRows.length) {
     src.last_status = "Failed"; src.last_error = "Empty sheet"; src.last_synced_at = new Date();
     await src.save();
     return { created: 0, status: "Failed", error: "Empty sheet" };
   }
-  const header = rows[0].map((h) => h.trim());
-  const missing = mappedCols.filter((c) => !header.includes(c));
-  if (missing.length) {
+
+  // The header is the first row that carries every mapped column — never assumed to be row 1,
+  // because the client's sheet keeps a totals row above it.
+  const headerIdx = allRows.findIndex((r) => mappedCols.every((c) => r.map((h) => String(h).trim()).includes(c)));
+  if (headerIdx === -1) {
     // Rule 2: column set mismatch → stop, Partial, no changes
+    const probe = (allRows[0] ?? []).map((h) => String(h).trim());
+    const missing = mappedCols.filter((c) => !probe.includes(c));
     src.last_status = "Partial";
     src.last_error = "Missing columns: " + missing.join(", ");
     src.last_synced_at = new Date();
     await src.save();
     return { created: 0, status: "Partial", error: src.last_error ?? undefined };
   }
+  const rows = allRows.slice(headerIdx);
+  const header = rows[0].map((h) => String(h).trim());
 
   const idCol = mappedCols.find((c) => mappings[c] === "external_id");
   if (!idCol) throw new HttpError(400, "field_mappings must map one column to external_id.");

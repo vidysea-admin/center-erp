@@ -18,13 +18,16 @@ export default function AdminPage() {
   // Deep links land here from notifications ("New signup awaiting approval" → ?tab=Users),
   // so the query parameter has to choose the tab — it was previously ignored and every
   // link dropped the user on Programs. Prefixes match so ?tab=Users finds "Users & Access".
-  const [tab, setTab] = useState(() => {
-    if (typeof window === "undefined") return "Programs";
+  // Read the query in an effect, not the initializer: the server renders "Programs" and a
+  // window-dependent initial state made every deep link a hydration mismatch (React #418,
+  // seen in the production console on /admin?tab=Users, 2026-08-13).
+  const [tab, setTab] = useState("Programs");
+  useEffect(() => {
     const want = new URLSearchParams(window.location.search).get("tab");
-    return TABS.find((t) => t === want)
-      ?? TABS.find((t) => want && t.toLowerCase().startsWith(want.toLowerCase()))
-      ?? "Programs";
-  });
+    const match = TABS.find((t) => t === want)
+      ?? TABS.find((t) => want && t.toLowerCase().startsWith(want.toLowerCase()));
+    if (match) setTab(match);
+  }, []);
   const [error, setError] = useState("");
   return (
     <div className="space-y-4">
