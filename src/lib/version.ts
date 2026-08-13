@@ -3,10 +3,10 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-13";
+export const RELEASE = "2026.08.14-14";
 export const RELEASE_NOTE =
-  "F-A3 (Manish): 'TOT done at least three days before batch start' is a HARD " +
-  "readiness gate now, not advisory — a batch cannot go Ready while its trainer's " +
-  "TOT completion date is inside the lead window (Defaults.lead_tot_done_days, 3 " +
-  "by default). Applies only when the TOT date is on record; trainers who predate " +
-  "the pipeline are not retro-blocked.";
+  "F-A9 (Manish): the readiness screen's empty trainer slots become TrainerRequests " +
+  "in one click - new POST /api/trainer-requests/from-shortfall scans centre x job-role " +
+  "rows whose pipeline is empty, skips halted/unapproved centres and existing Open " +
+  "requests (each skip named), notifies Ops per request; 'Raise requests for gaps' " +
+  "button on the centre's Trainer-slots panel.";

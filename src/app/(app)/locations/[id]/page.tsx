@@ -350,6 +350,17 @@ function TrainersInfra({ locationId, setError }: any) {
     try { await api("/api/trainer-requests", { method: "POST", json: { ...reqForm, location: locationId } }); setReqForm({}); load(); }
     catch (e: any) { setError(e.message); }
   }
+  // F-A9: one click turns this centre's empty trainer slots into TrainerRequests —
+  // the endpoint refuses halted/unapproved centres and never doubles an Open request.
+  const [shortfallMsg, setShortfallMsg] = useState("");
+  async function raiseShortfall() {
+    try {
+      const res = await api("/api/trainer-requests/from-shortfall", { method: "POST", json: { location: locationId } });
+      const skipNote = res.skipped?.length ? ` · ${res.skipped.length} skipped: ${res.skipped[0].reason}` : "";
+      setShortfallMsg(`${res.summary?.created ?? 0} request${(res.summary?.created ?? 0) === 1 ? "" : "s"} raised${skipNote}`);
+      load();
+    } catch (e: any) { setError(e.message); }
+  }
 
   return (
     <div className="space-y-4">
@@ -357,7 +368,11 @@ function TrainersInfra({ locationId, setError }: any) {
           dikhne lag jaye ki kya-kya kahani hai." One slot per required trainer, each filled by a
           named person at their pipeline stage; an empty slot is unstarted hiring, said plainly. */}
       {readiness.length > 0 && (
-        <Section title="Trainer slots — required vs who is actually filling them">
+        <Section title="Trainer slots — required vs who is actually filling them"
+          actions={<span className="flex items-center gap-2">
+            {shortfallMsg && <span className="text-xs text-green-700">{shortfallMsg}</span>}
+            <Btn small kind="ghost" onClick={raiseShortfall}>⚑ Raise requests for gaps</Btn>
+          </span>}>
           <div className="space-y-3">
             {readiness.map((r: any) => {
               const progId = r.program?._id;

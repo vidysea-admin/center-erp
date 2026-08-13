@@ -358,6 +358,19 @@ const capTargets = (await req("GET", `/api/locations/${loc._id}/targets`)).data.
 ok("capacity exposes both constraint terms", capTargets[0]?.capacity?.by_deadline === 2 && capTargets[0]?.capacity?.by_concurrency === 2, JSON.stringify(capTargets[0]?.capacity));
 ok("targets expose achieved counts", capTargets[0]?.achieved?.enrolled >= 0 && capTargets[0]?.achieved?.remaining_by_certified >= 0, JSON.stringify(capTargets[0]?.achieved));
 
+// ---- F-A9: readiness shortfall → TrainerRequests in one click ----
+const p2 = (await req("POST", "/api/programs", { code: "SF" + stamp, name: "Shortfall Prog " + stamp, trainer_skill: "SF" + stamp }, 201)).data.item;
+await req("PUT", `/api/locations/${loc._id}/targets`, { program: p2._id, approved_target: 30, trainers_required: 1 }, 200);
+const sf1 = await req("POST", "/api/trainer-requests/from-shortfall", { location: loc._id }, 201);
+ok("F-A9: the empty trainer slot became a TrainerRequest", sf1.data.created?.some((c) => c.program === p2.name), JSON.stringify(sf1.data.created));
+const sf2 = await req("POST", "/api/trainer-requests/from-shortfall", { location: loc._id }, 200);
+ok("F-A9: rerun doubles nothing — Open requests are skipped by name",
+  sf2.data.summary?.created === 0 && sf2.data.skipped?.some((s) => /already exists/.test(s.reason)), JSON.stringify(sf2.data));
+await req("PUT", `/api/locations/${gateLoc._id}/targets`, { program: p2._id, approved_target: 30, trainers_required: 1 }, 200);
+const sf3 = await req("POST", "/api/trainer-requests/from-shortfall", { location: gateLoc._id }, 200);
+ok("F-A9: a halted centre's gap is skipped with the F-B5 reason",
+  sf3.data.summary?.created === 0 && sf3.data.skipped?.some((s) => /Stopped/.test(s.reason)), JSON.stringify(sf3.data.skipped));
+
 // ================= Per-candidate assessment & certification (Rules 41–47) =================
 // Runs on its own batch so the legacy batch-level path above stays untouched.
 const b4 = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, room: room._id, planned_start: today, target_size: 3 }, 201)).data.item;

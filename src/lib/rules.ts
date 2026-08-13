@@ -1569,6 +1569,8 @@ export async function mappingReadinessBulk(targetFilter: Record<string, unknown>
       location: {
         _id: t.location._id, name: t.location.name, code: t.location.code,
         tc_id: tcView.tc_id ?? null, tc_status: tcView.tc_status ?? null,
+        // F-A9: from-shortfall filters on these — the blockers strings alone are not a contract.
+        approval_status: t.location.approval_status ?? null, operational_status: t.location.operational_status ?? null,
       },
       program: { _id: t.program._id, name: t.program.name, code: t.program.code, scheme: t.program.scheme ?? null },
       approved_target: t.approved_target ?? null,
