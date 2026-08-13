@@ -27,6 +27,52 @@ ok("[avg] re-PUT updates the same row (no duplicate target)", targets2.length ==
 // [worst] a target for a nonexistent program is refused.
 await req(admin, "PUT", `/api/locations/${loc._id}/targets`, { program: "000000000000000000000000", approved_target: 10 }, 400);
 
+// ---- 2026-08-13 (Manish: "31 approved hain, 10 nahi"): approval is per centre×job-role ----
+await req(admin, "PUT", `/api/locations/${loc._id}/targets`, { program: prog._id, tc_id: "TCROW" + s, tc_status: "Approved" }, 200);
+const tRow = ((await req(admin, "GET", `/api/locations/${loc._id}/targets`, undefined, 200)).data.items ?? [])[0];
+ok("[best] per-job-role TC id + status round-trip on the target", tRow?.tc_id === "TCROW" + s && tRow?.tc_status === "Approved", JSON.stringify({ id: tRow?.tc_id, st: tRow?.tc_status }));
+// [best] readiness must READ the per-row TC, not only the centre-level one: blank the centre's
+// own TC and the row must stay unblocked on TC grounds because its own row is approved.
+await req(admin, "PATCH", `/api/locations/${loc._id}`, { tc_status: "Pending" }, 200);
+const rdy = ((await req(admin, "GET", `/api/mapping/readiness?location=${loc._id}`, undefined, 200)).data.items ?? [])
+  .find((r) => String(r.program?._id) === String(prog._id));
+ok("[best] readiness prefers the target's own TC status over the centre's", !(rdy?.blockers ?? []).some((b) => /TC status/.test(b)),
+  JSON.stringify(rdy?.blockers).slice(0, 160));
+ok("[avg] …and surfaces that row's own TC id", rdy?.location?.tc_id === "TCROW" + s, String(rdy?.location?.tc_id));
+// [avg] the locations LIST carries scheme + job-role approval counts for the new columns.
+const locRow = ((await req(admin, "GET", "/api/locations?limit=2000", undefined, 200)).data.items ?? []).find((l) => String(l._id) === String(loc._id));
+ok("[avg] locations list exposes job_roles + schemes + approved_job_roles", Array.isArray(locRow?.job_roles) && Array.isArray(locRow?.schemes) && typeof locRow?.approved_job_roles === "number",
+  JSON.stringify({ jr: locRow?.job_roles?.length, s: locRow?.schemes, a: locRow?.approved_job_roles }));
+
+// ---- 2026-08-13 (OneDrive sheet-format cycle): sheet claims stored beside OUR live counts ----
+// [best] the sheet's three claimed trainer counts round-trip through the targets PUT.
+await req(admin, "PUT", `/api/locations/${loc._id}/targets`, { program: prog._id, nominations_received_reported: 3, nominated_nsdc_reported: 2, trainers_certified_reported: 1 }, 200);
+const tClaim = ((await req(admin, "GET", `/api/locations/${loc._id}/targets`, undefined, 200)).data.items ?? [])[0];
+ok("[best] sheet-claimed trainer counts round-trip on the target", tClaim?.nominations_received_reported === 3 && tClaim?.nominated_nsdc_reported === 2 && tClaim?.trainers_certified_reported === 1,
+  JSON.stringify({ n: tClaim?.nominations_received_reported, d: tClaim?.nominated_nsdc_reported, c: tClaim?.trainers_certified_reported }));
+
+// [best] the list join carries the sheet-format rollups the one-row-per-centre table renders.
+const fetchRow = async () => ((await req(admin, "GET", "/api/locations?limit=2000", undefined, 200)).data.items ?? []).find((l) => String(l._id) === String(loc._id));
+const locRow2 = await fetchRow();
+ok("[best] list rollups: total target + trainer required + claimed certified", locRow2?.total_target === 140 && locRow2?.trainers_required_total === 4 && locRow2?.trainers_certified_reported_total === 1,
+  JSON.stringify({ t: locRow2?.total_target, req: locRow2?.trainers_required_total, cert: locRow2?.trainers_certified_reported_total }));
+ok("[avg] list carries the distinct per-row TC ids", (locRow2?.tc_ids ?? []).includes("TCROW" + s), JSON.stringify(locRow2?.tc_ids));
+ok("[avg] before any trainer exists the LIVE count is an honest zero", locRow2?.trainers_certified_total === 0, String(locRow2?.trainers_certified_total));
+
+// [best] OUR count is DERIVED — certifying a nominated trainer moves the list the moment the
+// pipeline does (Umesh: "jaise-jaise trainer approve honge, count update ho jana chahiye").
+// Created at TOT In Progress (a legal creation state) so ONE legal transition reaches
+// Certified — TRAINER_FLOW forbids jumping there from Applied, by design.
+const trEl = (await req(admin, "POST", "/api/trainers", { name: "TEST-EL Trainer " + s, phone: phone("97"), skills: ["ELSkill" + s], nominated_for_location: loc._id, nominated_for_program: prog._id, pipeline_status: "TOT In Progress" }, 201)).data.item;
+const locRowMid = await fetchRow();
+ok("[avg] a nominated-but-uncertified trainer counts as nominated, not certified", locRowMid?.trainers_certified_total === 0 && locRowMid?.trainers_nominated_total === 1,
+  JSON.stringify({ cert: locRowMid?.trainers_certified_total, nom: locRowMid?.trainers_nominated_total }));
+await req(admin, "POST", `/api/trainers/${trEl._id}/transition`, { target: "Certified", payload: { tr_id: "TREL" + s } }, 200);
+const locRow3 = await fetchRow();
+ok("[best] certifying the nominated trainer bumps the live count by exactly 1", locRow3?.trainers_certified_total === 1 && locRow3?.job_roles?.[0]?.trainers_certified === 1,
+  JSON.stringify({ total: locRow3?.trainers_certified_total, row: locRow3?.job_roles?.[0]?.trainers_certified }));
+ok("[avg] …while the sheet's claim stays its own separate column, never merged", locRow3?.trainers_certified_reported_total === 1, String(locRow3?.trainers_certified_reported_total));
+
 // ---- TC identity fields (the govt portal credentials the sheet carries) ----
 await req(admin, "PATCH", `/api/locations/${loc._id}`, { district: "Meerut", tc_id: "TC" + s, tc_status: "Approved", tc_password: "secret-" + s, operating_partner: "Vidysea", cluster_head_name: "TEST-EL Head", cluster_head_phone: phone("70") }, 200);
 const asAdmin = (await req(admin, "GET", `/api/locations/${loc._id}`, undefined, 200)).data.item;

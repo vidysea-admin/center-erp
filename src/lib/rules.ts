@@ -1407,7 +1407,9 @@ export async function transitionTrainer(
 // The two sheets already disagree with each other (nominated 23 vs 20, certified 18 vs 16),
 // which is what happens when the same number is kept in two places; computing it here makes the
 // ERP the source of truth and leaves each sheet as a cross-check.
-const NOMINATED_STATES = ["Nomination Prepared", "Submitted to NSDC", "NSDC Approved", "NSDC Rejected",
+// Exported since 2026-08-13: the locations LIST derives the same live per-centre×job-role
+// counts (Umesh: "jaise-jaise trainer approve honge, count update ho jana chahiye").
+export const NOMINATED_STATES = ["Nomination Prepared", "Submitted to NSDC", "NSDC Approved", "NSDC Rejected",
   "Payment Done", "TOT Scheduled", "TOT In Progress", "Certified"];
 
 export async function trainerCountsFor(locationId: unknown, programId: unknown) {
@@ -1511,12 +1513,19 @@ export async function mappingReadinessBulk(targetFilter: Record<string, unknown>
     const needed = t.program.default_batch_size ?? 30;
     const counts = { nominated: tc.nominated, certified: tc.certified, in_pipeline: tc.in_pipeline };
     const rc = byRoom.get(String(t.location._id)) ?? { rooms: 0, labs: 0 };
-    const blockers = readinessBlockers(t.location, counts, cc.registered, needed,
+    // 2026-08-13 (Manish: "31 approved"): the government approves each centre×job-role ROW with
+    // its own TC ID — a per-target TC wins over the centre-level one when the target carries it.
+    const tcView = {
+      ...t.location,
+      tc_id: t.tc_id ?? t.location.tc_id,
+      tc_status: t.tc_status ?? t.location.tc_status,
+    };
+    const blockers = readinessBlockers(tcView, counts, cc.registered, needed,
       { rooms: rc.rooms, labs: rc.labs, requires_lab: !!t.program.requires_lab });
     return {
       location: {
         _id: t.location._id, name: t.location.name, code: t.location.code,
-        tc_id: t.location.tc_id ?? null, tc_status: t.location.tc_status ?? null,
+        tc_id: tcView.tc_id ?? null, tc_status: tcView.tc_status ?? null,
       },
       program: { _id: t.program._id, name: t.program.name, code: t.program.code, scheme: t.program.scheme ?? null },
       approved_target: t.approved_target ?? null,
@@ -1545,14 +1554,16 @@ export async function mappingReadiness(locationId: string, programId: string) {
 
   const rooms = await Room.find({ location: locationId, active: { $ne: false } }).select("type").lean<any[]>();
   const needed = prog.default_batch_size ?? 30;
-  const blockers = readinessBlockers(loc, counts, registered, needed, {
+  // Per-target TC (own id + approval per job role) wins over the centre-level fallback.
+  const tcView = { ...loc, tc_id: target?.tc_id ?? loc.tc_id, tc_status: target?.tc_status ?? loc.tc_status };
+  const blockers = readinessBlockers(tcView, counts, registered, needed, {
     rooms: rooms.length,
     labs: rooms.filter((r) => r.type === "Lab").length,
     requires_lab: !!prog.requires_lab,
   });
 
   return {
-    location: { _id: loc._id, name: loc.name, code: loc.code, tc_id: loc.tc_id ?? null, tc_status: loc.tc_status ?? null },
+    location: { _id: loc._id, name: loc.name, code: loc.code, tc_id: tcView.tc_id ?? null, tc_status: tcView.tc_status ?? null },
     program: { _id: prog._id, name: prog.name, code: prog.code, scheme: prog.scheme ?? null },
     approved_target: target?.approved_target ?? null,
     trainers: { required: target?.trainers_required ?? null, ...counts },

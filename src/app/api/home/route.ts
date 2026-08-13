@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, locationFilter, isScoped } from "@/lib/authz";
-import { Batch, BatchMember, Candidate, DailyLog, FollowUpAction, Invoice, Location, SheetChange, TrainerRequest, User } from "@/models";
+import { Batch, BatchMember, Candidate, DailyLog, FollowUpAction, Invoice, Location, LocationTarget, Program, SheetChange, Trainer, TrainerRequest, User } from "@/models";
 import { missingLogQueue } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 
@@ -41,6 +41,44 @@ export const GET = apiHandler(async () => {
     TrainerRequest.countDocuments({ status: { $in: ["Open", "In Progress"] }, ...scope }),
     TrainerRequest.countDocuments({ status: "Fulfilled", ...scope }),
   ]);
+
+  // 2026-08-13 (Manish walkthrough): the government approves each centre×scheme×job-role ROW
+  // ("31 approved hain, 10 nahi") — the headline counts approved TARGETS, centres become the sub.
+  const [approvedTargets, targetsTotal] = await Promise.all([
+    LocationTarget.countDocuments({ tc_status: "Approved", ...locationFilter(user) }),
+    LocationTarget.countDocuments({ ...locationFilter(user) }),
+  ]);
+
+  // "Total Active Trainers — job role wise": certified trainers grouped by the job role they
+  // are nominated for (the same key readiness counts on).
+  const trainerRoleRows = await Trainer.aggregate([
+    { $match: { active: true, pipeline_status: "Certified", ...(isScoped(user) ? { nominated_for_location: { $in: (user.location_scope ?? []) } } : {}) } },
+    { $group: { _id: "$nominated_for_program", count: { $sum: 1 } } },
+  ]);
+  const roleProgs = await Program.find({ _id: { $in: trainerRoleRows.map((r) => r._id).filter(Boolean) } }).select("name code scheme").lean<any[]>();
+  const progById = new Map(roleProgs.map((p) => [String(p._id), p]));
+  const trainersByRole = trainerRoleRows
+    .map((r) => ({ program: r._id ? (progById.get(String(r._id))?.name ?? "?") : "No role assigned", code: r._id ? progById.get(String(r._id))?.code ?? null : null, scheme: r._id ? progById.get(String(r._id))?.scheme ?? null : null, count: r.count }))
+    .sort((a, b) => b.count - a.count);
+
+  // "Total Attendance" — one aggregate over the daily logs (man-days), plus today's row.
+  // internal_present/roster_count are both required at save (Rule 28), so the sums are honest.
+  const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+  const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+  const [attAll] = await DailyLog.aggregate([
+    { $match: { ...batchScope } },
+    { $group: {
+      _id: null,
+      present: { $sum: "$internal_present" }, roster: { $sum: "$roster_count" },
+      today_present: { $sum: { $cond: [{ $and: [{ $gte: ["$log_date", todayStart] }, { $lte: ["$log_date", todayEnd] }] }, "$internal_present", 0] } },
+      today_roster: { $sum: { $cond: [{ $and: [{ $gte: ["$log_date", todayStart] }, { $lte: ["$log_date", todayEnd] }] }, "$roster_count", 0] } },
+    } },
+  ]);
+  const attendance = {
+    present: attAll?.present ?? 0, roster: attAll?.roster ?? 0,
+    pct: attAll?.roster ? Math.round((100 * attAll.present) / attAll.roster) : null,
+    today_present: attAll?.today_present ?? 0, today_roster: attAll?.today_roster ?? 0,
+  };
 
   // Queue 1: missing daily logs (Rule 33)
   const missingLogs = await missingLogQueue(scope);
@@ -104,10 +142,14 @@ export const GET = apiHandler(async () => {
   return NextResponse.json({
     kpis: {
       approved_locations: approvedLocations, pending_locations: pendingLocations,
+      approved_targets: approvedTargets, targets_total: targetsTotal,
       active_batches: activeBatches, completed_batches: completedBatches,
       enrolled_students: enrolledMembers, pool_candidates: poolCandidates,
       open_trainer_requests: openRequests, fulfilled_trainer_requests: fulfilledRequests,
       pending_followups: followUps.length,
+      trainers_by_role: trainersByRole,
+      trainers_active_total: trainersByRole.reduce((s, r) => s + r.count, 0),
+      attendance,
     },
     queues: {
       missing_logs: missingLogs,

@@ -218,7 +218,17 @@ function Targets({ locationId, setError }: any) {
         <DataTable rows={items}
           cardTitle={(r: any) => r.program?.name}
           columns={[
-            { key: "program", label: "Program", render: (r: any) => r.program?.name ?? "?" },
+            { key: "program", label: "Program", render: (r: any) => <span>{r.program?.name ?? "?"}{r.program?.scheme ? <span className="text-xs text-gray-400"> ({r.program.scheme})</span> : null}</span> },
+            {
+              // 2026-08-13 (Manish: "31 approved"): each job-role row has its OWN TC id + verdict.
+              key: "tc", label: "TC (per job role)", filterText: (r: any) => `${r.tc_id ?? ""} ${r.tc_status ?? ""}`,
+              render: (r: any) => (
+                <span className="text-xs">
+                  {r.tc_id ?? <span className="text-gray-400">no TC ID</span>}
+                  <span className="block">{r.tc_status ? <Chip value={r.tc_status} /> : <span className="text-gray-400">status —</span>}</span>
+                </span>
+              ),
+            },
             { key: "approved_target", label: "Approved (external)" },
             { key: "allocated_target", label: "Allocated (internal)" },
             {
@@ -235,7 +245,7 @@ function Targets({ locationId, setError }: any) {
             },
             {
               // Trainers counted from our own records, with the sheet's requirement beside them.
-              key: "trainers", label: "Trainers", render: (r: any) => r.trainers ? (
+              key: "trainers", label: "Trainers (ours)", render: (r: any) => r.trainers ? (
                 <span className="text-xs">
                   <span className={`font-medium ${r.trainers.shortfall ? "text-amber-700" : "text-gray-900"}`}>
                     {r.trainers.certified}
@@ -246,6 +256,23 @@ function Targets({ locationId, setError }: any) {
                   </span>
                 </span>
               ) : "—",
+            },
+            {
+              // 2026-08-13 (Karunn): the sheet's CLAIMED trainer counts, shown beside ours so
+              // the match/variance reads at a glance — soft data, never merged into our figure.
+              key: "trainers_sheet", label: "Trainers (sheet says)", mobile: false,
+              render: (r: any) => (r.nominations_received_reported ?? r.nominated_nsdc_reported ?? r.trainers_certified_reported) == null
+                ? <span className="text-xs text-gray-400">—</span> : (
+                  <span className="text-xs text-gray-600">
+                    {r.trainers_certified_reported ?? 0} certified
+                    <span className="block text-gray-400">
+                      {r.nominations_received_reported ?? 0} nominations · {r.nominated_nsdc_reported ?? 0} to NSDC
+                    </span>
+                    {r.trainers && r.trainers_certified_reported != null && r.trainers_certified_reported !== r.trainers.certified && (
+                      <span className="block font-medium text-amber-700">ours: {r.trainers.certified}</span>
+                    )}
+                  </span>
+                ),
             },
             {
               // The client sheet's own figure, never merged into ours. A variance is the story.

@@ -3,7 +3,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { api, fmtDate } from "@/lib/client";
-import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthChip, Tabs, inputCls, useCopied } from "@/components/ui";
+import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthChip, SourceCell, Tabs, inputCls, useCopied } from "@/components/ui";
 import { useLocationCtx } from "@/components/shell";
 
 export default function BatchesPage() {
@@ -161,6 +161,8 @@ function BatchesInner() {
               { key: "roster", label: "Enrolled / Roster / Target", render: (r: any) => `${r.enrolled_count} / ${r.roster_count} / ${r.target_size}` },
               { key: "trainer", label: "Trainer", sortable: true, sortValue: (r: any) => r.trainer?.name ?? null, render: (r: any) => r.trainer?.name ?? "—" },
               { key: "planned_start", label: "Start", sortable: true, sortValue: (r: any) => r.planned_start ? new Date(r.planned_start).getTime() : null, render: (r: any) => fmtDate(r.planned_start) },
+              // 2026-08-13 (Manish): source link per row — click lands on that sheet tab.
+              { key: "source", label: "Source", mobile: false, filterable: true, filterText: (r: any) => r.source ?? "Entered in ERP", render: (r: any) => <SourceCell source={r.source} /> },
             ]} empty="No batches — plan the first one." />
         </>
       ) : (
