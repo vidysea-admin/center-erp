@@ -1,6 +1,7 @@
 "use client";
 import { use, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { useSession } from "next-auth/react";
 import { api, fmtDate, toInputDate } from "@/lib/client";
 import { Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, HealthBanner, NameCell, Section, Tabs, inputCls } from "@/components/ui";
 import { Activity } from "@/components/activity";
@@ -13,6 +14,12 @@ const TABS = ["Overview", "Candidates", "Enrollment", "Daily Execution", "Closur
 export default function BatchDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const sp = useSearchParams();
+  // 2026-08-13 (Umesh role matrix): the tabs a login cannot use are not shown to it —
+  // Costs is finance-only (a Location user only ever got a 403 banner from it), and the
+  // server remains the real gate either way.
+  const { data: session } = useSession();
+  const role = (session?.user as any)?.role;
+  const tabs = TABS.filter((t) => t !== "Costs" || role === "Admin" || role === "Operations");
   const [tab, setTab] = useState(sp.get("tab") && TABS.includes(sp.get("tab")!) ? sp.get("tab")! : "Overview");
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState("");
@@ -32,22 +39,25 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
       </div>
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
       <HealthBanner health={data.health} />
-      <Tabs tabs={TABS} active={tab} onChange={setTab} />
-      {tab === "Overview" && <Overview data={data} onChanged={load} setError={setError} />}
+      <Tabs tabs={tabs} active={tab} onChange={setTab} />
+      {tab === "Overview" && <Overview data={data} role={role} onChanged={load} setError={setError} />}
       {tab === "Candidates" && <Roster batchId={id} batch={b} setError={setError} onChanged={load} />}
       {tab === "Enrollment" && <Enrollment batchId={id} setError={setError} />}
-      {tab === "Daily Execution" && <DailyExecution batchId={id} batch={b} setError={setError} />}
+      {tab === "Daily Execution" && <DailyExecution batchId={id} batch={b} role={role} setError={setError} />}
       {tab === "Closure" && <ClosureTab batchId={id} batch={b} setError={setError} onChanged={load} />}
       {tab === "Feedback" && <FeedbackTab batchId={id} setError={setError} />}
-      {tab === "Costs" && <CostsTab batchId={id} batch={b} setError={setError} />}
+      {tab === "Costs" && (role === "Admin" || role === "Operations") && <CostsTab batchId={id} batch={b} setError={setError} />}
       {tab === "Activity" && <Activity entity="Batch" id={id} />}
     </div>
   );
 }
 
 // ---------- Overview: readiness checklist (Rule 16) + transitions ----------
-function Overview({ data, onChanged, setError }: any) {
+function Overview({ data, role, onChanged, setError }: any) {
   const b = data.item;
+  // Umesh role matrix: "no batch edit" for principal/SPOC — the server 403s regardless
+  // (batches.manage removed from the Location role); the buttons simply are not offered.
+  const canTransition = role !== "Location" && role !== "Trainer" && role !== "Enrollment";
   const r = data.readiness;
   const [reason, setReason] = useState("");
   const [confirmCancel, setConfirmCancel] = useState(false);
@@ -83,14 +93,18 @@ function Overview({ data, onChanged, setError }: any) {
             Enrolled ≥ threshold for start ({r.enrolled_count}/{r.enrollment_threshold})
           </li>
         </ul>
-        <div className="mt-4 flex flex-wrap gap-2">
-          {b.status === "Planning" && <Btn onClick={() => transition("Ready")} disabled={!r.ready}>Mark Ready</Btn>}
-          {b.status === "Ready" && <Btn onClick={() => transition("Active")}>Start Batch</Btn>}
-          {b.status === "Ready" && <Btn kind="ghost" onClick={() => transition("Planning")}>Back to Planning</Btn>}
-          {b.status === "Active" && <Btn onClick={() => transition("Closing")}>Move to Closing</Btn>}
-          {b.status === "Closing" && <Btn onClick={() => transition("Completed")}>Complete Batch</Btn>}
-          {["Planning", "Ready", "Active"].includes(b.status) && <Btn kind="danger" onClick={() => setConfirmCancel(true)}>Cancel Batch</Btn>}
-        </div>
+        {canTransition ? (
+          <div className="mt-4 flex flex-wrap gap-2">
+            {b.status === "Planning" && <Btn onClick={() => transition("Ready")} disabled={!r.ready}>Mark Ready</Btn>}
+            {b.status === "Ready" && <Btn onClick={() => transition("Active")}>Start Batch</Btn>}
+            {b.status === "Ready" && <Btn kind="ghost" onClick={() => transition("Planning")}>Back to Planning</Btn>}
+            {b.status === "Active" && <Btn onClick={() => transition("Closing")}>Move to Closing</Btn>}
+            {b.status === "Closing" && <Btn onClick={() => transition("Completed")}>Complete Batch</Btn>}
+            {["Planning", "Ready", "Active"].includes(b.status) && <Btn kind="danger" onClick={() => setConfirmCancel(true)}>Cancel Batch</Btn>}
+          </div>
+        ) : (
+          <p className="mt-4 text-xs text-gray-400">Batch status is moved by Operations/Admin.</p>
+        )}
       </Section>
       <Section title="Details">
         <EditDetails b={b} onChanged={onChanged} setError={setError} />
@@ -470,7 +484,12 @@ function Enrollment({ batchId, setError }: any) {
 }
 
 // ---------- Daily Execution (phone-first; Rules 26–33) ----------
-function DailyExecution({ batchId, batch, setError }: any) {
+// role: a Location (principal/SPOC) login VIEWS attendance like an admin but never marks
+// it — "no attendance, attendance trainer karega" (Umesh role matrix, 2026-08-13). The
+// entry form and the +Round/Edit affordances are simply not rendered; the server 403s
+// regardless (batches.daily_log removed from the Location role).
+function DailyExecution({ batchId, batch, role, setError }: any) {
+  const canMark = role !== "Location";
   const [logs, setLogs] = useState<any[]>([]);
   const [members, setMembers] = useState<any[]>([]);
   const [form, setForm] = useState<any>({ log_date: toInputDate(new Date()), present: new Set<string>(), biometric: new Set<string>(), photos: [], videos: [] });
@@ -545,7 +564,12 @@ function DailyExecution({ batchId, batch, setError }: any) {
 
   return (
     <div className="space-y-4">
-      <Section title="Today's entry">
+      {!canMark && (
+        <p className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-2.5 text-xs text-gray-500">
+          Attendance is marked by the batch trainer — this view is read-only for your role.
+        </p>
+      )}
+      {canMark && <Section title="Today's entry">
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <Field label="Date" required><input type="date" className={inputCls} value={form.log_date} onChange={(e) => setForm({ ...form, log_date: e.target.value })} /></Field>
@@ -608,16 +632,19 @@ function DailyExecution({ batchId, batch, setError }: any) {
             )}
           </div>
         </div>
-      </Section>
+      </Section>}
 
       {/* 2026-08-13: "har batch ke andar daily basis pe upload attendance" — the portal CSV
           imports from here with this batch preselected (the engine batch-scopes the match).
           Umesh (13/08): "bulk sheet upload wali functionality show nahi ho rahi" — a text link
           was invisible; it is a real button now. */}
       <Section title="History" actions={
-        <a className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700" href={`${BASE_PATH}/govt-attendance?batch=${batchId}`}>
-          ⬆ Upload attendance sheet (bulk)
-        </a>
+        // Bulk portal import is Admin/Ops work (attendance.govt) — not the trainer's, not the principal's.
+        (role === "Admin" || role === "Operations") ? (
+          <a className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700" href={`${BASE_PATH}/govt-attendance?batch=${batchId}`}>
+            ⬆ Upload attendance sheet (bulk)
+          </a>
+        ) : undefined
       }>
         <DataTable rows={logs}
           cardTitle={(r: any) => fmtDate(r.log_date)}
@@ -645,12 +672,12 @@ function DailyExecution({ batchId, batch, setError }: any) {
             { key: "gap", label: "Gap", render: (r: any) => <Gap r={r} /> },
             { key: "actual_topic", label: "Topic", render: (r: any) => r.actual_topic ?? r.planned_topic ?? "—", mobile: false },
             { key: "photos", label: "Media", render: (r: any) => <MediaCell r={r} /> },
-            { key: "_edit", label: "", render: (r: any) => (
+            { key: "_edit", label: "", render: (r: any) => canMark ? (
               <span className="flex gap-1.5">
                 <Btn small kind="ghost" onClick={() => setRoundLog(r)}>+ Round</Btn>
                 <Btn small kind="ghost" onClick={() => setEditLog(r)}>Edit</Btn>
               </span>
-            ) },
+            ) : null },
           ]} empty="No logs yet." />
       </Section>
       <LogEditDrawer log={editLog} members={members} onClose={() => setEditLog(null)} onSaved={() => { setEditLog(null); load(); }} setError={setError} />

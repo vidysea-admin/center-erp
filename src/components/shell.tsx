@@ -20,7 +20,8 @@ const NAV = [
   { href: "/candidates", label: "Candidates", Icon: IconUsers },
   { href: "/batches", label: "Batches", Icon: IconCap },
   // 2026-08-12: the portal attendance export Manish uploads, reconciled against our daily logs.
-  { href: "/govt-attendance", label: "Govt Attendance", Icon: IconCap, roles: ["Admin", "Operations", "Location"] },
+  // 2026-08-13 (Umesh): attendance is OFF the principal/SPOC plate entirely — Location removed.
+  { href: "/govt-attendance", label: "Govt Attendance", Icon: IconCap, roles: ["Admin", "Operations"] },
   { href: "/costs", label: "Costs", Icon: IconWallet, roles: ["Admin", "Operations"] },
 ];
 

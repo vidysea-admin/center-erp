@@ -38,9 +38,12 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "candidates.manage", "candidates.assign", "batches.manage", "batches.daily_log",
     "closure.manage", "attendance.govt", "costs.manage", "invoices.manage", "feedback.links", "approvals.decide",
   ],
+  // 2026-08-13 (Umesh + CEO): principal/SPOC = "same admin access limited to their location —
+  // trainer, candidate and all; NO attendance (trainer karega); NO batch edit; certificate
+  // upload YES (closure.manage carries it); NO accounts (never granted here)".
   Location: [
-    "locations.manage", "candidates.manage", "candidates.assign",
-    "batches.manage", "batches.daily_log", "closure.manage", "attendance.govt", "feedback.links",
+    "locations.manage", "trainers.manage", "candidates.manage", "candidates.assign",
+    "closure.manage", "feedback.links",
   ],
   Enrollment: ["candidates.manage", "candidates.assign", "batches.daily_log"],
   Trainer: ["batches.daily_log"],
