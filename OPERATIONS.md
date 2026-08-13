@@ -124,11 +124,17 @@ every scoped user. There is a regression test in `scripts/e2e-roles.mjs` (`F-000
 
 ## ⚠️ Infra flag for devops (2026-08-13, report-only)
 
-The shared prod Mongo at 13.202.206.101:27017 is **world-open without authentication**,
+The shared prod Mongo at 13.202.206.101:27017 is **reachable without authentication**,
 hosts 40+ Vidysea databases, and carries a `READ__ME_TO_RECOVER_YOUR_DATA` ransomware
-calling-card database — evidence it has already been scanned/hit. Needs: bind to private
-IP / security-group restriction + `--auth` with per-app users + a look at what (if
-anything) that ransom DB touched. Outside this repo's scope; raised 2026-08-13.
+calling-card database — evidence scanners have reached it at some point. Needs: bind to
+private IP / security-group restriction + `--auth` with per-app users + a look at what
+(if anything) that ransom DB touched. Outside this repo's scope; raised 2026-08-13.
+
+Note (Umesh, 2026-08-13): the Claude Code dev machine's access to this Mongo is
+**IP-based locked** (security-group allowlist). When devops tightens the SG / adds auth,
+preserve that dev-IP allowlist entry (plus the ECS app's access) so tooling and deploys
+keep working — and have devops verify the CURRENT inbound rules, since the ransom-note DB
+implies 27017 was world-open at least once.
 
 ## How to verify a release end-to-end
 
