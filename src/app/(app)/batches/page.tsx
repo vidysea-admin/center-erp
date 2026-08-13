@@ -143,7 +143,9 @@ function BatchesInner() {
           <Field label="Program" required>
             <select className={inputCls} value={form.program ?? ""} onChange={(e) => set("program", e.target.value)}>
               <option value="">Select…</option>
-              {programs.map((p) => <option key={p._id} value={p._id}>{p.name}</option>)}
+              {/* 2026-08-13 (Manish saw "Drone Service Technician" twice): the same job role
+                  exists once per SCHEME — show the scheme so the twins are tellable apart. */}
+              {programs.map((p) => <option key={p._id} value={p._id}>{p.name}{p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}</option>)}
             </select>
           </Field>
           <div className="grid grid-cols-2 gap-3">
@@ -159,6 +161,8 @@ function BatchesInner() {
             <Field label="Time slot start (optional)"><input type="time" className={inputCls} value={form.slot_start ?? ""} onChange={(e) => set("slot_start", e.target.value)} /></Field>
             <Field label="Time slot end"><input type="time" className={inputCls} value={form.slot_end ?? ""} onChange={(e) => set("slot_end", e.target.value)} /></Field>
           </div>
+          {/* 2026-08-13 (Manish): "ya toh 4 ghante ka rakho ya 8 ghante ka" */}
+          <p className="-mt-1 text-xs text-gray-500">Scheme rule: a slot is exactly 4 or 8 hours, inside 09:00–18:00.</p>
           <Field label={`Trainer${program ? ` (skill: ${program.trainer_skill})` : ""}`}>
             <select className={inputCls} value={form.trainer ?? ""} onChange={(e) => set("trainer", e.target.value)}>
               <option value="">— assign later —</option>

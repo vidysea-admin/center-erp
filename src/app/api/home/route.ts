@@ -24,8 +24,12 @@ export const GET = apiHandler(async () => {
     ? (await Location.countDocuments({ ...locationFilter(user, "_id") })) === 0
     : false;
 
-  const [activeLocations, activeBatches, enrolledMembers, openRequests] = await Promise.all([
-    Location.countDocuments({ operational_status: "Active", ...locationFilter(user, "_id") }),
+  // 2026-08-13 (Manish): "approved location mein aap yeh tab ka naam approved location kar
+  // sakte hain" — the headline KPI counts centres the scheme has APPROVED (approval_status),
+  // not merely operationally-active ones. Job-role-wise approval detail is the existing
+  // "Centres Ready to Start" section (location × program readiness) below it.
+  const [approvedLocations, activeBatches, enrolledMembers, openRequests] = await Promise.all([
+    Location.countDocuments({ approval_status: "Approved", ...locationFilter(user, "_id") }),
     Batch.countDocuments({ status: "Active", ...scope }),
     BatchMember.countDocuments({ left_on: null, enrollment_status: "Completed", ...batchScope }),
     TrainerRequest.countDocuments({ status: { $in: ["Open", "In Progress"] }, ...scope }),
@@ -91,7 +95,7 @@ export const GET = apiHandler(async () => {
     : [];
 
   return NextResponse.json({
-    kpis: { active_locations: activeLocations, active_batches: activeBatches, enrolled_students: enrolledMembers, open_trainer_requests: openRequests, pending_followups: followUps.length },
+    kpis: { approved_locations: approvedLocations, active_batches: activeBatches, enrolled_students: enrolledMembers, open_trainer_requests: openRequests, pending_followups: followUps.length },
     queues: {
       missing_logs: missingLogs,
       sheet_changes: openChanges,

@@ -85,6 +85,10 @@ const ProgramSchema = new Schema({
   code: { type: String, required: true, unique: true, trim: true },
   name: { type: String, required: true },
   duration_days: { type: Number, required: true, default: 15 },
+  // 2026-08-13 (Manish walkthrough): exam eligibility is hours-based — "120 mein se 60 ghante
+  // attendance karenge tabhi qualify". QP-wise hours arrive with the real programme list
+  // (H-PROGRAMMES); until set, readers derive duration_days × 8 (the full-day session length).
+  hours: Number,
   buffer_days: { type: Number, required: true, default: 5 },
   default_batch_size: { type: Number, required: true, default: 30 },
   requires_lab: { type: Boolean, default: false },
@@ -194,6 +198,9 @@ const TrainerSchema = new Schema({
   email: String,
   skills: { type: [String], required: true },
   home_location: oid("Location"),
+  // 2026-08-13 (Manish): "Others ka option bhi hona chahiye" — a trainer's home town is
+  // usually NOT one of our centres. Free text used when home_location is unset.
+  home_location_other: String,
   status: { type: String, enum: TRAINER_STATUS, required: true, default: "Available" },
   // Hiring pipeline (2026-08-11). Existing trainers predate the pipeline — they default to
   // Ready to Train so nothing operational changes for them.
@@ -370,6 +377,11 @@ const DailyLogSchema = new Schema({
   log_date: { type: Date, required: true },
   planned_topic: String, actual_topic: String,
   present_member_ids: { type: [Schema.Types.ObjectId], default: [] },
+  // 2026-08-13 (Manish): the government portal only accepts student attendance for a day on
+  // which the trainer's own (biometric) attendance exists — "trainer attendance banayega tabhi
+  // batch shuru hogi". Mirrored here: a log with students present must assert the trainer was
+  // in. Absent on legacy rows (pre-field) — validation applies at write time only.
+  trainer_present: Boolean,
   internal_present: { type: Number, required: true },
   roster_count: { type: Number, required: true }, // frozen at save (Rule 28)
   govt_present: { type: Number, default: null },
@@ -438,6 +450,10 @@ const ClosureSchema = new Schema({
   batch: { ...oid("Batch", true), unique: true },
   assessment_status: { type: String, enum: PENDING_DONE, default: "Pending" },
   assessment_date: Date, appeared: Number, passed: Number, result_file: String,
+  // DEC-4 (Umesh, 2026-08-13): dropped-but-passed candidates do NOT count for invoicing.
+  // `passed` stays the true pass count (Rule 42 readers unchanged); these two carry the split
+  // so the invoice flow bills off billable_passed, never raw passed.
+  dropped_passed: Number, billable_passed: Number,
   certification_status: { type: String, enum: PENDING_DONE, default: "Pending" },
   certification_date: Date, certificates_issued: Number, certificate_file: String,
   ready_for_invoice: { type: Boolean, default: false },
@@ -666,8 +682,10 @@ NotificationSchema.index({ status: 1, createdAt: -1 });
 
 // ---------- Public tokens (2026-08-11: self-registration + candidate feedback) ----------
 // Capability URLs: the random token IS the credential. register tokens are per-location
-// (Admin/Ops generate and share); feedback tokens are per batch-member.
-export const PUBLIC_TOKEN_PURPOSE = ["register", "feedback"] as const;
+// (Admin/Ops generate and share); feedback and attendance tokens are per batch-member
+// (attendance added 2026-08-13: "bacche puchte hain sir mera kitna ho gaya attendance" —
+// each student gets a link showing their own days/hours/eligibility, nobody else's).
+export const PUBLIC_TOKEN_PURPOSE = ["register", "feedback", "attendance"] as const;
 const PublicTokenSchema = new Schema({
   token: { type: String, required: true, unique: true },
   purpose: { type: String, enum: PUBLIC_TOKEN_PURPOSE, required: true },
@@ -770,13 +788,17 @@ const DefaultsSchema = new Schema({
   // actually persisted (the fallback default masked it).
   drive_root_url: { type: String, default: "https://drive.google.com/drive/folders/1NOfRCw9lIyRoJTEFAg4--HIJiTG-Of0G" },
   snapshot_retention_per_tab: { type: Number, default: 100 },
-  // Scheme timing guidelines, confirmed by Manish 2026-08-12: the training day runs 9 to 6; a
-  // session may be up to 4 hours; two 4-hour batches a day is the sanctioned pattern (three
-  // 3-hour batches was asked for and refused); no minimum break is prescribed.
+  // Scheme timing guidelines. 2026-08-13 (Manish, meeting): a session is EXACTLY 4 hours or
+  // EXACTLY 8 hours inside the 9-to-6 day — "ya toh 4 ghante ka rakho ya 8 ghante ka… beech
+  // ka tod-mod nahi" (supersedes the 2026-08-12 ≤4h ceiling; max_session_hours is no longer
+  // consulted by slot validation and remains only for back-compat with stored Defaults docs).
   day_start_time: { type: String, default: "09:00" },
   day_end_time: { type: String, default: "18:00" },
   max_session_hours: { type: Number, default: 4 },
   max_batches_per_day: { type: Number, default: 2 },
+  // 2026-08-13 (Manish): "60 plus hona mandatory hai" — minimum attendance, as a percent of
+  // programme hours, to qualify for the assessment. Contract-tunable like the counters below.
+  min_attendance_pct: { type: Number, default: 50 },
   // Client-contract counting rules, confirmed by Manish 2026-08-12.
   // "Appeared" is NOT reduced by absentees — the client counts everyone who reached assessment
   // stage. Kept as a toggle because it is a contract term, not a scheme rule, and the next

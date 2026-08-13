@@ -68,8 +68,15 @@ const b1 = (await req(admin, "POST", "/api/batches", { location: loc._id, progra
 ok("slot batch created", b1.status === 201);
 const b2 = await req(admin, "POST", "/api/batches", { location: loc._id, program: prog._id, trainer: tr._id, planned_start: start, target_size: 3, slot_start: "13:00", slot_end: "17:00" });
 ok("back-to-back slot (13:00 start after 13:00 end) allowed", b2.status === 201, `got ${b2.status}: ${JSON.stringify(b2.data).slice(0, 80)}`);
+// 2026-08-13: sub-4-hour slots are invalid outright, so containment is tested with a 4h slot
+// inside an 8h one, on a window clear of b1/b2's ~35-day ranges.
 const b3 = await req(admin, "POST", "/api/batches", { location: loc._id, program: prog._id, trainer: tr._id, planned_start: start, target_size: 3, slot_start: "10:00", slot_end: "11:00" });
-ok("contained slot (10–11 inside 9–13) blocked", b3.status === 409, `got ${b3.status}`);
+ok("a 1-hour slot refused outright (sessions are exactly 4 or 8 hours)", b3.status === 400, `got ${b3.status}`);
+const start2 = "2027-09-01";
+const b8 = await req(admin, "POST", "/api/batches", { location: loc._id, program: prog._id, trainer: tr._id, planned_start: start2, target_size: 3, slot_start: "09:00", slot_end: "17:00" });
+ok("8-hour slot batch created", b8.status === 201, `got ${b8.status}: ${JSON.stringify(b8.data).slice(0, 80)}`);
+const b9 = await req(admin, "POST", "/api/batches", { location: loc._id, program: prog._id, trainer: tr._id, planned_start: start2, target_size: 3, slot_start: "10:00", slot_end: "14:00" });
+ok("contained slot (10–14 inside 9–17) blocked", b9.status === 409, `got ${b9.status}`);
 
 // ---- 4. Capability warning (CEO: कहाँ-कहाँ training ले सकता है) ----
 const bCap = await req(admin, "POST", "/api/batches", { location: loc2._id, program: prog._id, trainer: tr._id, planned_start: "2027-08-01", target_size: 3 });

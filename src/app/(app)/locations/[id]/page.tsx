@@ -271,7 +271,7 @@ function Targets({ locationId, setError }: any) {
           <Field label="Program" required>
             <select className={inputCls} value={form.program ?? ""} onChange={(e) => setForm({ ...form, program: e.target.value })}>
               <option value="">Select…</option>
-              {programs.map((p) => <option key={p._id} value={p._id}>{p.name}</option>)}
+              {programs.map((p) => <option key={p._id} value={p._id}>{p.name}{p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}</option>)}
             </select>
           </Field>
           <Field label="Approved target"><input type="number" className={inputCls} value={form.approved_target ?? ""} onChange={(e) => setForm({ ...form, approved_target: +e.target.value })} /></Field>
@@ -389,7 +389,7 @@ function TrainersInfra({ locationId, setError }: any) {
           <Field label="Program" required>
             <select className={inputCls} value={reqForm.program ?? ""} onChange={(e) => setReqForm({ ...reqForm, program: e.target.value })}>
               <option value="">Select…</option>
-              {programs.map((p) => <option key={p._id} value={p._id}>{p.name}</option>)}
+              {programs.map((p) => <option key={p._id} value={p._id}>{p.name}{p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}</option>)}
             </select>
           </Field>
           <Field label="Required by" required><input type="date" className={inputCls} value={reqForm.required_by_date ?? ""} onChange={(e) => setReqForm({ ...reqForm, required_by_date: e.target.value })} /></Field>

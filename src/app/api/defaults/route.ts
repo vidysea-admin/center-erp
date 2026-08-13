@@ -30,6 +30,8 @@ export const PUT = apiHandler(async (req: NextRequest) => {
     // 2026-08-12: scheme timing guidelines + client-contract counting rules (Manish)
     "day_start_time", "day_end_time", "max_session_hours", "max_batches_per_day",
     "absent_counts_as_appeared", "dropped_pass_is_billable", "max_upload_mb",
+    // 2026-08-13: exam-eligibility attendance floor (Manish: "60 plus hona mandatory hai")
+    "min_attendance_pct",
   ]) {
     if (body[f] !== undefined) set[f] = body[f];
   }

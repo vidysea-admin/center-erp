@@ -197,22 +197,31 @@ const early = await mkBatch({ slot_start: "07:00", slot_end: "11:00" });
 ok("07:00 start refused — the day runs 09:00–18:00", early.status === 400 && /09:00/.test(early.data.error ?? ""), JSON.stringify(early.data).slice(0, 160));
 const late = await mkBatch({ slot_start: "15:00", slot_end: "19:00" });
 ok("a slot running past 18:00 refused", late.status === 400, JSON.stringify(late.data).slice(0, 160));
+// 2026-08-13 (Manish walkthrough): "ya toh 4 ghante ka rakho ya 8 ghante ka… beech ka tod-mod
+// nahi" — a session is EXACTLY 4 or 8 hours (supersedes the ≤4h ceiling; 5h was asked and refused).
 const tooLong = await mkBatch({ slot_start: "09:00", slot_end: "14:00" });
-ok("a 5-hour session refused — 4 hours is the ceiling", tooLong.status === 400 && /4 hours/.test(tooLong.data.error ?? ""), JSON.stringify(tooLong.data).slice(0, 160));
+ok("a 5-hour session refused — sessions are exactly 4 or 8 hours", tooLong.status === 400 && /exactly 4/.test(tooLong.data.error ?? ""), JSON.stringify(tooLong.data).slice(0, 160));
+const oneHour = await mkBatch({ slot_start: "13:00", slot_end: "14:00" });
+ok("a 1-hour session refused too — sub-4h slots no longer sneak past", oneHour.status === 400 && /exactly 4/.test(oneHour.data.error ?? ""), JSON.stringify(oneHour.data).slice(0, 160));
+const eight = await mkBatch({ slot_start: "09:00", slot_end: "17:00" });
+ok("an 8-hour 09:00–17:00 session is allowed ('8 ghante ka ek')", eight.status === 201, JSON.stringify(eight.data).slice(0, 160));
 const four = await mkBatch({ slot_start: "09:00", slot_end: "13:00", trainer: trainer._id });
 ok("a 4-hour 09:00–13:00 batch is allowed (Manish: '4 Hour Batch You can Create')", four.status === 201, JSON.stringify(four.data).slice(0, 160));
 const second = await mkBatch({ slot_start: "14:00", slot_end: "18:00", trainer: trainer._id });
 ok("a second 4-hour batch the same day is allowed ('4-4 Hour's 2 batch')", second.status === 201, JSON.stringify(second.data).slice(0, 160));
-const third = await mkBatch({ slot_start: "13:00", slot_end: "14:00", trainer: trainer._id });
-ok("a third same-day session refused — 2 per day is the sanctioned pattern",
-  third.status === 409 && /2 sessions/.test(third.data.error ?? ""), JSON.stringify(third.data).slice(0, 200));
+// With exact 4/8 durations inside the 9-hour day, any third same-day session must collide —
+// the "two a day" pattern is now enforced by geometry (clash) rather than a counter.
+const third = await mkBatch({ slot_start: "13:00", slot_end: "17:00", trainer: trainer._id });
+ok("a third same-day session refused — two 4-hour sessions fill the day",
+  third.status === 409, JSON.stringify(third.data).slice(0, 200));
 const noSlot = await mkBatch({});
 ok("a batch with no slot at all still saves (legacy batches carry none)", noSlot.status === 201, JSON.stringify(noSlot.data).slice(0, 160));
 
 // ---------------------------------------------------------------- contract counting (Manish 2026-08-12)
 const defaults = (await req(admin, "GET", "/api/defaults")).data.item;
 ok("Defaults expose the scheme window", defaults.day_start_time === "09:00" && defaults.day_end_time === "18:00");
-ok("Defaults: 4-hour sessions, 2 a day", defaults.max_session_hours === 4 && defaults.max_batches_per_day === 2);
+ok("Defaults still expose the legacy session knobs (slot rule itself is exact 4/8 in code)", defaults.max_session_hours === 4 && defaults.max_batches_per_day === 2);
+ok("Defaults: exam-eligibility attendance floor is 50%", defaults.min_attendance_pct === 50, String(defaults.min_attendance_pct));
 ok("Defaults: absentees are NOT deducted from 'appeared'", defaults.absent_counts_as_appeared === true);
 ok("Defaults: a dropout who passed is not billable", defaults.dropped_pass_is_billable === false);
 ok("Defaults: upload ceiling raised off 25 MB", defaults.max_upload_mb === 100, String(defaults.max_upload_mb));
@@ -251,6 +260,108 @@ const readd = await req(admin, "POST", `/api/batches/${batch._id}/members`, {
   candidate: replacement._id, joined_on: new Date().toISOString().slice(0, 10),
 });
 ok("mid-batch replacement allowed on a later joining date (Manish: yes)", readd.status === 201, JSON.stringify(readd.data).slice(0, 200));
+
+// ---------------------------------------------------------------- DEC-4 (2026-08-13): the billable split is PERSISTED on the closure
+const closure0 = (await req(admin, "GET", `/api/batches/${batch._id}/closure`)).data.closure;
+ok("Closure carries billable_passed (2, dropped-but-passed excluded)", closure0?.billable_passed === 2, JSON.stringify(closure0).slice(0, 200));
+ok("Closure names the exclusion (dropped_passed = 1)", closure0?.dropped_passed === 1, String(closure0?.dropped_passed));
+ok("Closure.passed stays the true pass count (Rule 42 readers unchanged)", closure0?.passed === 3, String(closure0?.passed));
+
+// ---------------------------------------------------------------- FIX-1 (2026-08-13): roster takes only this centre's + this job role's candidates
+const otherLoc = (await req(admin, "POST", "/api/locations", {
+  name: `${NAME} Other Centre`, code: `GO${STAMP}`, city: "Jaipur", approval_status: "Approved", operational_status: "Active",
+})).data.item;
+const foreignCand = (await req(admin, "POST", "/api/candidates", {
+  name: `${NAME} Foreign`, phone: `9${STAMP}2001`, location: otherLoc._id, program: program._id,
+})).data.item;
+const crossLoc = await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: foreignCand._id });
+ok("another centre's candidate refused even for Admin (Prem Kumar/Lalit fix)", crossLoc.status === 409 && /another centre/.test(crossLoc.data.error ?? ""), JSON.stringify(crossLoc.data).slice(0, 160));
+const otherProg = (await req(admin, "POST", "/api/programs", { code: `GP${STAMP}`, name: `${NAME} Other Prog`, trainer_skill: "OtherSkill" + STAMP })).data.item;
+const wrongProgCand = (await req(admin, "POST", "/api/candidates", {
+  name: `${NAME} WrongRole`, phone: `9${STAMP}2002`, location: loc._id, program: otherProg._id,
+})).data.item;
+const crossProg = await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: wrongProgCand._id });
+ok("a different job role/scheme refused (the scheme-twin trap)", crossProg.status === 409 && /job role/.test(crossProg.data.error ?? ""), JSON.stringify(crossProg.data).slice(0, 160));
+// (The program-less-candidate path can't be built over HTTP — the create API requires a
+// programme; only bulk imports produce such rows. That case is pinned in e2e-eval-data.mjs,
+// the one suite allowed to plant raw shapes.)
+
+// ---------------------------------------------------------------- F-N4 (2026-08-13): trainer-first attendance (portal rule)
+// Today's log already exists (the only loggable date for this batch), so the rule is proven
+// through the edit path — same validator.
+const log1 = logRes.data.item;
+const noTrainerEdit = await req(admin, "PATCH", `/api/logs/${log1._id}`, {
+  present_member_ids: log1.present_member_ids, trainer_present: false,
+});
+ok("students cannot be marked present on a trainer-absent day", noTrainerEdit.status === 400 && /trainer/i.test(noTrainerEdit.data.error ?? ""), JSON.stringify(noTrainerEdit.data).slice(0, 200));
+const okEdit = await req(admin, "PATCH", `/api/logs/${log1._id}`, {
+  present_member_ids: log1.present_member_ids, trainer_present: true,
+});
+ok("with the trainer present the same edit saves", okEdit.status === 200 && okEdit.data.item?.trainer_present === true, JSON.stringify(okEdit.data).slice(0, 160));
+
+// ---------------------------------------------------------------- F-N6 (2026-08-13): per-student attendance links
+const attLinks = await req(admin, "POST", "/api/public-tokens", { purpose: "attendance", batch: batch._id });
+ok("attendance links fan out one per active member", attLinks.status === 201 && (attLinks.data.items?.length ?? 0) >= 5, String(attLinks.data.items?.length));
+const tokA = attLinks.data.items?.[0], tokB = attLinks.data.items?.[1];
+const pubA = await fetch(`${BASE}/api/public/attendance/${tokA?.token}`).then(async (r) => ({ status: r.status, data: await r.json().catch(() => ({})) }));
+ok("a student opens their link with NO login", pubA.status === 200 && !!pubA.data.candidate, JSON.stringify(pubA.data).slice(0, 200));
+ok("the payload answers 'kitna ho gaya': hours + required + eligible verdict",
+  typeof pubA.data.attended_hours === "number" && typeof pubA.data.required_hours === "number" && typeof pubA.data.eligible === "boolean",
+  JSON.stringify({ a: pubA.data.attended_hours, r: pubA.data.required_hours, e: pubA.data.eligible }));
+ok("the day-wise centre log rides along", Array.isArray(pubA.data.days), String(pubA.data.days?.length));
+const pubB = await fetch(`${BASE}/api/public/attendance/${tokB?.token}`).then(async (r) => ({ status: r.status, data: await r.json().catch(() => ({})) }));
+ok("token isolation: B's link shows B, not A", pubB.status === 200 && pubB.data.candidate !== pubA.data.candidate, `${pubA.data.candidate} vs ${pubB.data.candidate}`);
+const pubBad = await fetch(`${BASE}/api/public/attendance/deadbeef00000000deadbeef00000000`);
+ok("a made-up token 404s", pubBad.status === 404, String(pubBad.status));
+const feedbackTokenOnAttendance = await fetch(`${BASE}/api/public/attendance/${(await req(admin, "POST", "/api/public-tokens", { purpose: "feedback", batch: batch._id })).data.items?.[0]?.token}`);
+ok("a FEEDBACK token does not open the attendance view (purpose-bound)", feedbackTokenOnAttendance.status === 404, String(feedbackTokenOnAttendance.status));
+
+// ---------------------------------------------------------------- F-N2 (2026-08-13): assessment date raises an in-app alert
+const assessDate = new Date(Date.now() + 7 * 864e5).toISOString().slice(0, 10);
+const closurePut = await req(admin, "PUT", `/api/batches/${batch._id}/closure`, { assessment_date: assessDate });
+ok("assessment date lands on the closure", closurePut.status === 200, JSON.stringify(closurePut.data).slice(0, 160));
+const schedList = (await req(admin, "GET", "/api/notifications?type=assessment_scheduled")).data.items ?? [];
+const schedNotif = schedList.find((n) => n.type === "assessment_scheduled" && String(n.entity_id) === String(batch._id));
+ok("an assessment_scheduled notification is raised for the batch", !!schedNotif, JSON.stringify(schedList.map((n) => n.type)).slice(0, 200));
+ok("…and it tells people to inform the candidates", /inform the candidates/.test(schedNotif?.message ?? ""), schedNotif?.message);
+ok("…and the student link shows the assessment date",
+  String((await fetch(`${BASE}/api/public/attendance/${tokA?.token}`).then((r) => r.json()).catch(() => ({}))).assessment_date ?? "").slice(0, 10) === assessDate);
+
+// ---------------------------------------------------------------- DEC-6 (2026-08-13): a Completed batch is LOCKED — no override
+// Walk a one-candidate batch all the way to Completed, then prove the two paths that used to
+// leak past the lock (certificate-field PATCH, closure PUT) are shut, while invoice-readiness
+// still works (invoicing naturally happens after completion).
+const t2 = (await req(admin, "POST", "/api/trainers", { name: `${NAME} LockTrainer`, phone: `9${STAMP}0002`, skills: ["Testing"] })).data.item;
+const room2 = (await req(admin, "POST", `/api/locations/${loc._id}/rooms`, { name: `${NAME} Lab 2`, type: "Lab", capacity: 30 })).data.item;
+const mk2 = await req(admin, "POST", "/api/batches", {
+  location: loc._id, program: program._id, trainer: t2._id, room: room2._id,
+  planned_start: new Date().toISOString().slice(0, 10), target_size: 1,
+});
+ok("lock fixture: batch2 created", mk2.status === 201, JSON.stringify(mk2.data).slice(0, 200));
+const batch2 = mk2.data.item;
+const c2 = (await req(admin, "POST", "/api/candidates", { name: `${NAME} Lockcase`, phone: `9${STAMP}2004`, location: loc._id, program: program._id })).data.item;
+const m2 = (await req(admin, "POST", `/api/batches/${batch2._id}/members`, { candidate: c2._id })).data.item;
+await req(admin, "PATCH", `/api/members/${m2._id}`, { reg_done: true, kyc_done: true, accept_done: true });
+await req(admin, "POST", `/api/batches/${batch2._id}/transition`, { target: "Ready" });
+await req(admin, "POST", `/api/batches/${batch2._id}/transition`, { target: "Active" });
+await req(admin, "PUT", `/api/batches/${batch2._id}/results`, { rows: [{ member: m2._id, result: "Pass" }] });
+const rrow = ((await req(admin, "GET", `/api/batches/${batch2._id}/results`)).data.items ?? []).find((i) => i.result)?.result;
+await req(admin, "PATCH", `/api/results/${rrow._id}`, { certificate_status: "Processing" });
+await req(admin, "PATCH", `/api/results/${rrow._id}`, { certificate_status: "Generated", certificate_no: `CERT-${STAMP}-1`, certificate_date: new Date().toISOString().slice(0, 10) });
+await req(admin, "PATCH", `/api/results/${rrow._id}`, { certificate_status: "Issued" });
+await req(admin, "PUT", `/api/batches/${batch2._id}/closure`, { assessment_status: "Completed", assessment_date: new Date().toISOString().slice(0, 10) });
+await req(admin, "PUT", `/api/batches/${batch2._id}/closure`, { certification_status: "Completed", certification_date: new Date().toISOString().slice(0, 10) });
+await req(admin, "POST", `/api/batches/${batch2._id}/transition`, { target: "Closing" });
+const toDone = await req(admin, "POST", `/api/batches/${batch2._id}/transition`, { target: "Completed" });
+ok("lock fixture: batch walked to Completed", toDone.status === 200, JSON.stringify(toDone.data).slice(0, 200));
+
+const certEdit = await req(admin, "PATCH", `/api/results/${rrow._id}`, { certificate_no: `CERT-${STAMP}-TYPO` });
+ok("a mistyped certificate number CANNOT be corrected after completion (stays locked, Umesh)",
+  certEdit.status === 409 && /closed/i.test(certEdit.data.error ?? ""), JSON.stringify(certEdit.data).slice(0, 200));
+const closureEdit = await req(admin, "PUT", `/api/batches/${batch2._id}/closure`, { assessment_date: new Date(Date.now() + 864e5).toISOString().slice(0, 10) });
+ok("closure fields are frozen after completion too", closureEdit.status === 409, JSON.stringify(closureEdit.data).slice(0, 200));
+const readyInv = await req(admin, "PUT", `/api/batches/${batch2._id}/closure`, { ready_for_invoice: true });
+ok("…but invoice-readiness may still be marked (invoicing follows completion)", readyInv.status === 200, JSON.stringify(readyInv.data).slice(0, 160));
 
 // ---------------------------------------------------------------- rules Manish confirmed should NOT change
 const perms = (await req(admin, "GET", "/api/permissions")).data;

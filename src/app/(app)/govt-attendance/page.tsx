@@ -29,11 +29,23 @@ function Inner() {
   const [error, setError] = useState("");
   const [upload, setUpload] = useState<any>(null); // { file, preview, counts… }
   const [busy, setBusy] = useState(false);
+  // 2026-08-13: per-batch import ("har batch ke andar daily basis pe upload attendance") —
+  // arriving via a batch page carries ?batch=, which scopes the match to that batch's roster.
+  const batchParam = sp.get("batch");
+  const [batchInfo, setBatchInfo] = useState<any>(null);
+  // …and a manual centre picker, because a file whose TC ID is not on any location used to
+  // dead-end with "Pick the centre manually" while the page offered no way to do that.
+  const [manualLoc, setManualLoc] = useState("");
+  const [locations, setLocations] = useState<any[]>([]);
 
   const load = () =>
     api(`/api/govt-attendance${ctxLoc ? `?location=${ctxLoc}` : ""}`)
       .then((d) => setImports(d.items)).catch((e) => setError(e.message));
   useEffect(() => { load(); }, [ctxLoc]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { api("/api/locations?limit=2000").then((d) => setLocations(d.items)).catch(() => {}); }, []);
+  useEffect(() => {
+    if (batchParam) api(`/api/batches/${batchParam}`).then((d) => setBatchInfo(d.item)).catch(() => {});
+  }, [batchParam]);
 
   useEffect(() => {
     if (!open) { setDetail(null); return; }
@@ -47,6 +59,8 @@ function Inner() {
     setBusy(true); setError("");
     const fd = new FormData();
     fd.append("file", file);
+    if (batchParam) fd.append("batch", batchParam);
+    if (manualLoc) fd.append("location", manualLoc);
     try {
       const res = await api("/api/govt-attendance", { method: "POST", body: fd });
       setUpload({ file, ...res });
@@ -58,6 +72,8 @@ function Inner() {
     setBusy(true);
     const fd = new FormData();
     fd.append("file", upload.file); fd.append("confirm", "1");
+    if (batchParam) fd.append("batch", batchParam);
+    if (manualLoc) fd.append("location", manualLoc);
     if (upload.period_label) fd.append("period_label", upload.period_label);
     try {
       const res = await api("/api/govt-attendance", { method: "POST", body: fd });
@@ -76,13 +92,24 @@ function Inner() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3">
         <h1 className="text-xl font-semibold">Government Attendance</h1>
-        <label className="ml-auto">
-          <input type="file" accept=".csv,.xlsx,.xls" className="hidden" disabled={busy}
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) preview(f); e.currentTarget.value = ""; }} />
-          <span className="cursor-pointer rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700">
-            {busy ? "Reading…" : "Upload portal export"}
+        {batchParam && (
+          <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700">
+            importing for batch {batchInfo?.code ?? "…"}
           </span>
-        </label>
+        )}
+        <div className="ml-auto flex items-center gap-2">
+          <select className={inputCls + " max-w-56 text-xs"} value={manualLoc} onChange={(e) => setManualLoc(e.target.value)} title="Used when the file's TC ID matches no centre">
+            <option value="">Centre: auto-detect from file</option>
+            {locations.map((l: any) => <option key={l._id} value={l._id}>{l.name}</option>)}
+          </select>
+          <label>
+            <input type="file" accept=".csv,.xlsx,.xls" className="hidden" disabled={busy}
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) preview(f); e.currentTarget.value = ""; }} />
+            <span className="cursor-pointer rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700">
+              {busy ? "Reading…" : "Upload portal export"}
+            </span>
+          </label>
+        </div>
       </div>
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
 

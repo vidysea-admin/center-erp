@@ -22,22 +22,36 @@ export const POST = apiHandler(async (req: NextRequest) => {
   if (!batch) throw new HttpError(404, "Batch not found");
   assertLocationInScope(user, String(batch.location)); // Rule 38
   if (["Completed", "Cancelled"].includes(batch.status)) throw new HttpError(409, "Batch is closed.");
-  if (user.role === "Location") {
-    const cands = await Candidate.find({ _id: { $in: candidate_ids } }).select("location").lean<any[]>();
-    for (const c of cands) assertLocationInScope(user, String(c.location)); // Rule 38 on candidates too
-  }
 
   // 2026-08-11: assignment of an ineligible candidate warns (eligibility flips month to
   // month); enrollment completion is where the hard gate sits.
   const defaults = await getDefaults();
   const candDocs = await Candidate.find({ _id: { $in: candidate_ids } })
-    .select("name dob education last_training_date").lean<any[]>();
+    .select("name dob education last_training_date location program").lean<any[]>();
   const byId = new Map(candDocs.map((c) => [String(c._id), c]));
 
   const results: { candidate: string; ok: boolean; error?: string; warning?: string }[] = [];
   for (const cid of candidate_ids) {
     try {
+      // 2026-08-13 (Manish walkthrough — Prem Kumar/Lalit on the wrong roster): a candidate
+      // must belong to the batch's OWN centre and job role. This used to be checked only for
+      // the Location role (Rule 38 scope), so Admin/Operations could file any centre's
+      // candidate into any batch. Now an equality check for everyone, per candidate so one
+      // wrong row does not abort the other 29.
+      const c0 = byId.get(String(cid));
+      if (!c0) throw new HttpError(404, "Candidate not found");
+      if (String(c0.location) !== String(batch.location)) {
+        throw new HttpError(409, `${c0.name ?? "Candidate"} belongs to another centre — move them to this location first.`);
+      }
+      if (c0.program && batch.program && String(c0.program) !== String(batch.program)) {
+        throw new HttpError(409, `${c0.name ?? "Candidate"} is registered under a different job role/scheme than this batch.`);
+      }
       const m = await addMemberChecked(batchId, cid, joined_on ? new Date(joined_on) : new Date());
+      // Import convention: program-less candidates (bulk/portal imports) inherit the batch's
+      // programme on enrolment.
+      if (!c0.program && batch.program) {
+        await Candidate.updateOne({ _id: cid }, { $set: { program: batch.program } });
+      }
       await audit({ entity: "BatchMember", entityId: m._id, newValue: "assigned", actor: user.id });
       const c = byId.get(String(cid));
       const elig = c ? candidateEligibility(c, defaults) : null;

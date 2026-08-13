@@ -25,7 +25,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   const body = await req.json();
   const before = log.toObject();
   const patch: Record<string, unknown> = {};
-  for (const f of ["planned_topic", "actual_topic", "present_member_ids", "govt_present", "govt_source", "govt_screenshot", "photos", "videos", "note"]) {
+  for (const f of ["planned_topic", "actual_topic", "present_member_ids", "trainer_present", "govt_present", "govt_source", "govt_screenshot", "photos", "videos", "note"]) {
     if (body[f] !== undefined) patch[f] = body[f];
   }
   // 2026-08-12 audit F-007 (S1): this used to re-validate the STORED present list against the
@@ -38,6 +38,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
     const check = await validateDailyLog(String(log.batch), log.log_date, {
       present_member_ids: patch.present_member_ids as string[],
       govt_present: (patch.govt_present as number | null) ?? log.govt_present,
+      trainer_present: (patch.trainer_present as boolean | undefined) ?? log.trainer_present,
     });
     patch.internal_present = check.internal_present; // Rule 29
     // Rule 28: roster_count stays frozen — deliberately NOT recomputed

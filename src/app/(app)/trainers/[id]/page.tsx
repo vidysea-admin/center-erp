@@ -171,7 +171,7 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
             <dt className="text-gray-500">Phone</dt><dd>{t.phone}</dd>
             <dt className="text-gray-500">Email</dt><dd>{t.email || "—"}</dd>
             <dt className="text-gray-500">Job roles</dt><dd>{(t.skills ?? []).join(", ") || "—"}</dd>
-            <dt className="text-gray-500">Home centre</dt><dd>{t.home_location?.name ?? "—"}</dd>
+            <dt className="text-gray-500">Home centre</dt><dd>{t.home_location?.name ?? t.home_location_other ?? "—"}</dd>
             <dt className="text-gray-500">Qualification</dt><dd>{t.qualification || "—"}</dd>
             <dt className="text-gray-500">Industry experience</dt><dd>{t.industry_experience_years != null ? `${t.industry_experience_years} yrs` : "—"}</dd>
             <dt className="text-gray-500">Teaching experience</dt><dd>{t.teaching_experience_years != null ? `${t.teaching_experience_years} yrs` : "—"}</dd>

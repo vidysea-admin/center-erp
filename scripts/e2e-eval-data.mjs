@@ -91,7 +91,19 @@ ok("[best] limit=5000 is honoured (no hidden 200-cap regression)", all.items.len
 const over = await req(admin, "GET", "/api/candidates?limit=999999");
 ok("[worst] a runaway limit is clamped, not honoured", over.status === 200 && over.data.items.length <= 5000, `items=${over.data?.items?.length}`);
 
+// ---- shape 5 (2026-08-13, roster fix): a program-less import row joins a matching batch and
+// inherits its programme — the exact path the 572 prod rows take from the pool drawer.
+const { ObjectId } = await import("mongodb");
+const apiBatch = (await req(admin, "POST", "/api/batches", { location: loc._id, program: prog._id, target_size: 5, planned_start: new Date().toISOString().slice(0, 10) }, 201)).data.item;
+const bare2 = await db.collection("candidates").insertOne({ name: "TEST-ED NoProg " + s, phone: phone("75"), location: new ObjectId(String(loc._id)), lifecycle_status: "Unassigned", createdAt: new Date(), updatedAt: new Date() });
+const joined = await req(admin, "POST", `/api/batches/${apiBatch._id}/members`, { candidate: String(bare2.insertedId) });
+ok("[best] program-less import row can join a matching batch", joined.status === 201, `got ${joined.status}: ${JSON.stringify(joined.data).slice(0, 120)}`);
+const inherited = (await req(admin, "GET", `/api/candidates/${bare2.insertedId}`, undefined, 200)).data.item;
+ok("[best] …and inherits the batch's programme on enrol (2026-08-13)", String(inherited.program?._id ?? inherited.program) === String(prog._id), JSON.stringify(inherited.program).slice(0, 80));
+
 // ---- cleanup: this suite deletes exactly what it planted ----
+await db.collection("batchmembers").deleteMany({ batch: new ObjectId(String(apiBatch._id)) });
+await db.collection("batches").deleteMany({ _id: new ObjectId(String(apiBatch._id)) });
 await db.collection("candidates").deleteMany({ name: { $regex: `^TEST-ED .*${s}$` } });
 await db.collection("batches").deleteMany({ code: "ED-" + s });
 await client.close();
