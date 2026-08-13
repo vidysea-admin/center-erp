@@ -24,8 +24,9 @@ export default function SyncInboxPage() {
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
+  const [loading, setLoading] = useState(true);
 
-  const load = () => api(`/api/sheet-changes?status=${status}`).then((d) => { setItems(d.items); setSelected(new Set()); }).catch((e) => setError(e.message));
+  const load = () => api(`/api/sheet-changes?status=${status}`).then((d) => { setItems(d.items); setSelected(new Set()); }).catch((e) => setError(e.message)).finally(() => setLoading(false));
   useEffect(() => { load(); }, [status]);
 
   function toggle(id: string) {
@@ -66,7 +67,7 @@ export default function SyncInboxPage() {
           <Btn small kind="ghost" onClick={bulkIgnore}>Bulk Ignore (No action)</Btn>
         </div>
       )}
-      <DataTable rows={items} onRowClick={(r: any) => r.status === "Open" && setReview(r)}
+      <DataTable rows={items} loading={loading} onRowClick={(r: any) => r.status === "Open" && setReview(r)}
         cardTitle={(r: any) => rowLabel(r) ?? "Unmatched row"}
         columns={[
           { key: "_sel", label: "", mobile: false, render: (r: any) => r.status === "Open" ? <input type="checkbox" checked={selected.has(r._id)} onChange={() => toggle(r._id)} onClick={(e) => e.stopPropagation()} /> : null },

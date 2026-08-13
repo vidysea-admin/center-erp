@@ -31,6 +31,7 @@ function BatchesInner() {
   const [prep, setPrep] = useState<any>(null);
   const [prepFilter, setPrepFilter] = useState("");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   const [drawer, setDrawer] = useState(false);
   const [form, setForm] = useState<any>({ session: "Full Day" });
   const set = (k: string, v: unknown) => setForm((f: any) => ({ ...f, [k]: v }));
@@ -46,7 +47,7 @@ function BatchesInner() {
     api("/api/programs?limit=1000").then((d) => setPrograms(d.items)),
     api("/api/trainers?limit=2000").then((d) => setTrainers(d.items)),
     api(`/api/mapping/readiness${fLoc ? `?location=${fLoc}` : ""}`).then(setPrep).catch(() => setPrep(null)),
-  ]).catch((e) => setError(e.message));
+  ]).catch((e) => setError(e.message)).finally(() => setLoading(false));
   useEffect(() => { load(); }, [fLoc]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const BATCH_STATUSES = ["Planning", "Ready", "Active", "Closing", "Completed", "Cancelled"];
@@ -147,6 +148,7 @@ function BatchesInner() {
               ...BATCH_STATUSES.map((s) => ({ value: s, label: s, count: statusCount(s) }))]} />
           <DataTable rows={shown} onRowClick={(r) => router.push(`/batches/${r._id}`)}
             cardTitle={(r: any) => <>{r.code} <Chip value={r.status} /></>}
+            loading={loading}
             defaultSort={{ key: "planned_start", dir: "desc" }}
             columns={[
               { key: "code", label: "Code", mobile: false, sortable: true, sortValue: (r: any) => r.code },
@@ -174,6 +176,7 @@ function BatchesInner() {
             ]} />
           <DataTable
             rows={(prep?.items ?? []).filter((r: any) => prepFilter === "ready" ? r.ready : prepFilter === "blocked" ? !r.ready : true)}
+            loading={loading}
             cardTitle={(r: any) => `${r.location?.name} · ${r.program?.name}`}
             columns={[
               { key: "location", label: "Location", sortable: true, sortValue: (r: any) => r.location?.name, render: (r: any) => r.location?.name },
@@ -290,7 +293,15 @@ function BatchesInner() {
             </p>
           )}
           <p className="text-xs text-gray-500">Planned end auto-computes: start + duration + buffer (Rule 15). Trainer/room conflicts are hard-blocked on save (Rules 10, 13).</p>
-          <Btn onClick={save} disabled={!form.location || !form.program || !form.planned_start}>Create Batch</Btn>
+          {/* 2026-08-13 (Umesh): "2 buttons — create batch AND create plan" — the backward plan
+              ("itti date tak ye sab ho jana chahiye") straight from the same form, shareable. */}
+          <div className="flex gap-2">
+            <Btn onClick={save} disabled={!form.location || !form.program || !form.planned_start}>Create Batch</Btn>
+            <Btn kind="ghost" disabled={!form.planned_start}
+              onClick={() => { setDrawer(false); setPlanner({ open: true, start: form.planned_start }); runPlanner(form.planned_start); }}>
+              Create backward plan
+            </Btn>
+          </div>
         </div>
       </Drawer>
 
@@ -321,11 +332,16 @@ function BatchesInner() {
                   </tbody>
                 </table>
               </div>
-              <div className="flex gap-2">
+              <div className="flex items-center gap-2">
                 <Btn kind="ghost" onClick={() => {
                   const lines = planner.plan!.map((m: any) => `${fmtDate(m.due_date)} — ${m.label}`);
                   copyPlan(`Batch plan (start ${fmtDate(planner.start!)}):\n${lines.join("\n")}\n${fmtDate(planner.start!)} — Batch starts`);
                 }}>{planCopied ? "Copied ✓" : "Copy as text"}</Btn>
+                {/* Shareable = it reaches the team where they talk, not just the clipboard. */}
+                <a className="rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-medium text-green-700 hover:bg-green-50" target="_blank" rel="noreferrer"
+                  href={`https://wa.me/?text=${encodeURIComponent(`Batch plan (start ${fmtDate(planner.start!)}):\n${planner.plan!.map((m: any) => `${fmtDate(m.due_date)} — ${m.label}`).join("\n")}\n${fmtDate(planner.start!)} — Batch starts`)}`}>
+                  WhatsApp
+                </a>
                 <Btn kind="ghost" onClick={() => window.print()}>Print</Btn>
               </div>
               <p className="text-xs text-gray-500">Lead times are configurable in Admin → Defaults. Creating a batch stores this checklist on the batch, tick-off-able.</p>

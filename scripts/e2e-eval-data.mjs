@@ -100,6 +100,10 @@ const joined = await req(admin, "POST", `/api/batches/${apiBatch._id}/members`, 
 ok("[best] program-less import row can join a matching batch", joined.status === 201, `got ${joined.status}: ${JSON.stringify(joined.data).slice(0, 120)}`);
 const inherited = (await req(admin, "GET", `/api/candidates/${bare2.insertedId}`, undefined, 200)).data.item;
 ok("[best] …and inherits the batch's programme on enrol (2026-08-13)", String(inherited.program?._id ?? inherited.program) === String(prog._id), JSON.stringify(inherited.program).slice(0, 80));
+// 2026-08-13 (Umesh: "enrolled hai to No programme kyun"): the LIST attaches the active batch,
+// so a program-less row sitting in a batch still shows the batch's programme.
+const listed = ((await req(admin, "GET", `/api/candidates?q=${inherited.phone}&limit=5`, undefined, 200)).data.items ?? []).find((c) => String(c._id) === String(bare2.insertedId));
+ok("[avg] candidates list carries active_batch {code, program} for enrolled rows", listed?.active_batch?.code === apiBatch.code && !!listed?.active_batch?.program, JSON.stringify(listed?.active_batch).slice(0, 100));
 
 // ---- search contract (2026-08-13 table-UX cycle): q is escaped, and the broadened
 // candidate searchFields (source, sidh id, alt phone) actually find rows ----

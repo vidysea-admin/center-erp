@@ -32,6 +32,7 @@ function TrainersInner() {
   const [tag, setTag] = useState(sp.get("tag") ?? "");
   const [reqFilter, setReqFilter] = useState("open"); // KPI counts open ones — the list defaults to match
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   const [drawer, setDrawer] = useState(false);
   const [edit, setEdit] = useState<any>(null);
   const [form, setForm] = useState<any>({ max_concurrent_batches: 1, status: "Available" });
@@ -46,7 +47,7 @@ function TrainersInner() {
     api(`/api/trainers?${sp.get("status") ? `status=${encodeURIComponent(sp.get("status")!)}&` : ""}${sp.get("pipeline_status") ? `pipeline_status=${encodeURIComponent(sp.get("pipeline_status")!)}&` : ""}limit=2000`).then((d) => setItems(d.items)),
     api("/api/trainer-requests?limit=2000").then((d) => setRequests(d.items)),
     api("/api/locations?limit=2000").then((d) => setLocations(d.items)),
-  ]).catch((e) => setError(e.message));
+  ]).catch((e) => setError(e.message)).finally(() => setLoading(false));
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const tagCounts = new Map<string, number>();
@@ -119,6 +120,7 @@ function TrainersInner() {
               explicit button so the journey stops being unreachable. */}
           <DataTable rows={shown} onRowClick={(r: any) => router.push(`/trainers/${r._id}`)}
             cardTitle={(r: any) => r.name}
+            loading={loading}
             defaultSort={{ key: "name", dir: "asc" }}
             columns={[
               { key: "name", label: "Name", mobile: false, sortable: true, sortValue: (r: any) => r.name, render: (r: any) => <NameCell name={r.name} sub={r.phone} /> },
@@ -160,7 +162,7 @@ function TrainersInner() {
               { value: "Cancelled", label: "Cancelled", count: requests.filter((r) => r.status === "Cancelled").length },
               { value: "", label: "All", count: requests.length },
             ]} />
-          <DataTable rows={shownReq} onRowClick={openReqEdit}
+          <DataTable rows={shownReq} onRowClick={openReqEdit} loading={loading}
             cardTitle={(r: any) => `${r.location?.name} · ${r.program?.name}`}
             defaultSort={{ key: "required_by_date", dir: "asc" }}
             columns={[

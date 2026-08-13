@@ -27,6 +27,7 @@ function Inner() {
   const [detail, setDetail] = useState<any>(null);
   const [filter, setFilter] = useState("");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   const [upload, setUpload] = useState<any>(null); // { file, preview, counts… }
   const [busy, setBusy] = useState(false);
   // 2026-08-13: per-batch import ("har batch ke andar daily basis pe upload attendance") —
@@ -40,7 +41,7 @@ function Inner() {
 
   const load = () =>
     api(`/api/govt-attendance${ctxLoc ? `?location=${ctxLoc}` : ""}`)
-      .then((d) => setImports(d.items)).catch((e) => setError(e.message));
+      .then((d) => setImports(d.items)).catch((e) => setError(e.message)).finally(() => setLoading(false));
   useEffect(() => { load(); }, [ctxLoc]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { api("/api/locations?limit=2000").then((d) => setLocations(d.items)).catch(() => {}); }, []);
   useEffect(() => {
@@ -116,6 +117,7 @@ function Inner() {
       {!open && (
         <Section title="Imports">
           <DataTable rows={imports} onRowClick={(r: any) => { setFilter(""); setOpen(r._id); }}
+            loading={loading}
             defaultSort={{ key: "imported_at", dir: "desc" }} columns={[
             { key: "period_label", label: "Period", sortable: true, sortValue: (r: any) => r.period_label || r.file_name, render: (r: any) => <span className="font-medium">{r.period_label || r.file_name}</span> },
             { key: "location", label: "Centre", sortable: true, sortValue: (r: any) => r.location?.name, render: (r: any) => `${r.location?.name ?? "—"}${r.tc_id ? ` · ${r.tc_id}` : ""}` },
