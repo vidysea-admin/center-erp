@@ -178,8 +178,30 @@ function autoKeyIndexes(header: string[]): number[] {
   return usable.slice(0, 3).map((x) => x.i); // composite of the first real columns, never just one
 }
 
+// 2026-08-14 (Umesh: "sync khud sahi values kyun track nahi kar paya?"): the client's
+// workbook MERGES cells — Institution spans all of a centre's rows. XLSX yields a merge's
+// value only in its FIRST cell, so every consumer of the raw grid saw blank continuation
+// cells: Sheet Watch built row keys like "· Solar Panel…" (no institution) and dropped/
+// mis-keyed rows, and counts drifted until a human re-ran the seed. Every grid in the app
+// now goes through this — merge values are expanded into every cell they visually cover,
+// which is exactly what a human looking at Excel sees.
+export function gridFromSheet(sheet: XLSX.WorkSheet): string[][] {
+  const grid = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false }) as string[][];
+  for (const m of sheet["!merges"] ?? []) {
+    const v = sheet[XLSX.utils.encode_cell({ r: m.s.r, c: m.s.c })]?.v;
+    if (v === undefined || v === "") continue;
+    const s = String(v);
+    for (let r = m.s.r; r <= m.e.r; r++) {
+      for (let c = m.s.c; c <= m.e.c; c++) {
+        if (grid[r] && (grid[r][c] === "" || grid[r][c] === undefined)) grid[r][c] = s;
+      }
+    }
+  }
+  return grid;
+}
+
 export function snapshotTab(sheet: XLSX.WorkSheet, keyColumns: string[]): TabSnap {
-  const raw: string[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false }) as string[][];
+  const raw: string[][] = gridFromSheet(sheet);
   const headerRow = detectHeaderRow(raw, keyColumns);
   const header = (raw[headerRow] ?? []).map((h) => String(h).trim());
   const configured = keyColumns.map((k) => header.indexOf(k)).filter((i) => i >= 0);

@@ -5,6 +5,7 @@ import {
   CatalogEntity, FIELD_CATALOG, FieldSpec, LocationLite, ProgramLite,
   fieldSpec, normHeader, parseSheetDate, phone10, coerceEducation, resolveLocation, resolveProgram,
 } from "@/lib/field-catalog";
+import { gridFromSheet } from "@/lib/workbook";
 
 // The tab-mapping engine (2026-08-13). A TabMapping is a user-approved contract: "this tab's
 // columns mean these fields; this field identifies a row." Under that contract, every watch run:
@@ -89,7 +90,8 @@ export type ParsedTab = { header_row: number; header: string[]; rows: ParsedRow[
 // Header = the first row that carries every mapped column (normalized) — the client's tabs keep
 // totals rows above the header, same tolerance as the mapped sync and the watch.
 export function parseTab(sheet: XLSX.WorkSheet, tm: TabMappingSpec, ctx: ParseContext): ParsedTab {
-  const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false }) as string[][];
+  // Merged cells expanded (2026-08-14) — continuation rows carry their institution/etc.
+  const raw = gridFromSheet(sheet);
   const wanted = tm.columns.map((c) => normHeader(c.header));
   const headerRow = raw.slice(0, 10).findIndex((r) => {
     const cells = r.map((c) => normHeader(c));
