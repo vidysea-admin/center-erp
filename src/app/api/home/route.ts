@@ -28,11 +28,18 @@ export const GET = apiHandler(async () => {
   // sakte hain" — the headline KPI counts centres the scheme has APPROVED (approval_status),
   // not merely operationally-active ones. Job-role-wise approval detail is the existing
   // "Centres Ready to Start" section (location × program readiness) below it.
-  const [approvedLocations, activeBatches, enrolledMembers, openRequests] = await Promise.all([
+  // 2026-08-13 (Umesh): "ek ke baad do count — active kitne AUR complete kitne, approved
+  // AUR pending" — each KPI carries its natural second number so the card answers the
+  // follow-up question without a click.
+  const [approvedLocations, pendingLocations, activeBatches, completedBatches, enrolledMembers, poolCandidates, openRequests, fulfilledRequests] = await Promise.all([
     Location.countDocuments({ approval_status: "Approved", ...locationFilter(user, "_id") }),
+    Location.countDocuments({ approval_status: "Pending", ...locationFilter(user, "_id") }),
     Batch.countDocuments({ status: "Active", ...scope }),
+    Batch.countDocuments({ status: "Completed", ...scope }),
     BatchMember.countDocuments({ left_on: null, enrollment_status: "Completed", ...batchScope }),
+    Candidate.countDocuments({ ...scope }),
     TrainerRequest.countDocuments({ status: { $in: ["Open", "In Progress"] }, ...scope }),
+    TrainerRequest.countDocuments({ status: "Fulfilled", ...scope }),
   ]);
 
   // Queue 1: missing daily logs (Rule 33)
@@ -95,7 +102,13 @@ export const GET = apiHandler(async () => {
     : [];
 
   return NextResponse.json({
-    kpis: { approved_locations: approvedLocations, active_batches: activeBatches, enrolled_students: enrolledMembers, open_trainer_requests: openRequests, pending_followups: followUps.length },
+    kpis: {
+      approved_locations: approvedLocations, pending_locations: pendingLocations,
+      active_batches: activeBatches, completed_batches: completedBatches,
+      enrolled_students: enrolledMembers, pool_candidates: poolCandidates,
+      open_trainer_requests: openRequests, fulfilled_trainer_requests: fulfilledRequests,
+      pending_followups: followUps.length,
+    },
     queues: {
       missing_logs: missingLogs,
       sheet_changes: openChanges,

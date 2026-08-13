@@ -27,6 +27,19 @@ export function maskTrainerSecrets(items: any[], canManage: boolean) {
 
 export const { GET, POST } = collectionRoutes({
   model: Trainer, entity: "Trainer", scopeField: null,
+  // 2026-08-13 (Umesh, testing the view-only principal): masking pay was not enough — a
+  // scoped user saw the ENTIRE trainer directory. A trainer belongs to a centre through
+  // nomination, capability or home; scoped users see only trainers tied to their centres.
+  scopeFilter: (user) => {
+    const ids = (user.location_scope ?? []).map(String);
+    return {
+      $or: [
+        { nominated_for_location: { $in: ids } },
+        { capable_locations: { $in: ids } },
+        { home_location: { $in: ids } },
+      ],
+    };
+  },
   async mapItems(items, user) {
     return maskTrainerSecrets(items, await hasPermission(user, "trainers.manage"));
   },

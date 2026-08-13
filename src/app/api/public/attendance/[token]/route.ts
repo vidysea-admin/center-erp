@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, HttpError } from "@/lib/authz";
-import { Closure, DailyLog, GovtAttendanceRow, PublicToken } from "@/models";
+import { CandidateResult, Closure, DailyLog, GovtAttendanceRow, PublicToken } from "@/models";
 import { getDefaults } from "@/lib/defaults";
 
 // Public per-student attendance view (2026-08-13, Manish: "bacche baar-baar request karte hain
@@ -10,6 +10,10 @@ import { getDefaults } from "@/lib/defaults";
 // links: the 32-hex token IS the credential, GET only, and the payload carries THIS member's
 // days and totals only — never another student's, and no phone/PII beyond the first name the
 // student already knows is theirs.
+// 2026-08-13 (Umesh: "candidate ke liye bhi ek hoga jahan wo apni relevant information dekh
+// payenge — ye requirement hai"): this IS that portal. The same link now carries the whole
+// "My Training" picture — centre, trainer, dates, SIDH registration, exam date, result and
+// certificate — still only this one candidate's own facts.
 
 export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ token: string }> }) => {
   await dbConnect();
@@ -18,10 +22,14 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     .populate({
       path: "batch_member",
       populate: [
-        { path: "candidate", select: "name" },
+        { path: "candidate", select: "name sidh_status" },
         {
-          path: "batch", select: "code status slot_start slot_end actual_start planned_end",
-          populate: { path: "program", select: "name hours duration_days" },
+          path: "batch", select: "code status slot_start slot_end actual_start planned_start planned_end trainer location",
+          populate: [
+            { path: "program", select: "name hours duration_days" },
+            { path: "location", select: "name" },
+            { path: "trainer", select: "name" },
+          ],
         },
       ],
     }).lean<any>();
@@ -62,12 +70,29 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     : Math.round(internalDays * hoursPerDay);
 
   const closure = await Closure.findOne({ batch: batch._id }).select("assessment_date").lean<any>();
+  // Result & certificate — the "aage kya hua" answer once the exam happens.
+  const result = await CandidateResult.findOne({ batch: batch._id, candidate: m.candidate?._id })
+    .select("result certificate_status certificate_no certificate_date reassessment_required reassessment_date")
+    .lean<any>();
 
   return NextResponse.json({
     candidate: m.candidate?.name,
     batch: batch?.code,
     program: batch?.program?.name,
     batch_status: batch?.status,
+    centre: batch?.location?.name ?? null,
+    trainer: batch?.trainer?.name ?? null,
+    start_date: batch?.actual_start ?? batch?.planned_start ?? null,
+    end_date: batch?.planned_end ?? null,
+    sidh_status: m.candidate?.sidh_status ?? null,
+    result: result ? {
+      result: result.result ?? null,
+      certificate_status: result.certificate_status ?? null,
+      certificate_no: result.certificate_no ?? null,
+      certificate_date: result.certificate_date ?? null,
+      reassessment_required: !!result.reassessment_required,
+      reassessment_date: result.reassessment_date ?? null,
+    } : null,
     days,
     internal_days_present: internalDays,
     days_held: days.length,

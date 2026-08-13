@@ -316,6 +316,24 @@ ok("a made-up token 404s", pubBad.status === 404, String(pubBad.status));
 const feedbackTokenOnAttendance = await fetch(`${BASE}/api/public/attendance/${(await req(admin, "POST", "/api/public-tokens", { purpose: "feedback", batch: batch._id })).data.items?.[0]?.token}`);
 ok("a FEEDBACK token does not open the attendance view (purpose-bound)", feedbackTokenOnAttendance.status === 404, String(feedbackTokenOnAttendance.status));
 
+// ---------------------------------------------------------------- Candidate portal /p/me (2026-08-13, Umesh: "candidate ke liye bhi ek hoga — ye requirement hai")
+const lookup = (json) => fetch(`${BASE}/api/public/portal-lookup`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(json) })
+  .then(async (r) => ({ status: r.status, data: await r.json().catch(() => ({})) }));
+const cPort = (await req(admin, "POST", "/api/candidates", { name: `${NAME} Portal`, phone: `9${STAMP}3007`, location: loc._id, program: program._id, dob: "2000-01-15" }, 201)).data.item;
+await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: cPort._id }, 201);
+const lk = await lookup({ phone: cPort.phone, dob: "2000-01-15" });
+ok("portal lookup: registered phone + DOB opens own My Training url", lk.status === 200 && lk.data.enrolled === true && /\/p\/attendance\//.test(lk.data.url ?? ""), JSON.stringify(lk.data).slice(0, 120));
+ok("portal lookup: DOB on file but not supplied → generic refusal", (await lookup({ phone: cPort.phone })).status === 404);
+ok("portal lookup: wrong DOB → same generic refusal", (await lookup({ phone: cPort.phone, dob: "1999-09-09" })).status === 404);
+ok("portal lookup: unknown number → same generic refusal (no enumeration)", (await lookup({ phone: "9000000001" })).status === 404);
+const myTok = lk.data.url?.split("/").pop();
+const myPage = await fetch(`${BASE}/api/public/attendance/${myTok}`).then((r) => r.json()).catch(() => ({}));
+ok("…and the portal payload carries the full training picture (centre/trainer/sidh/result keys)",
+  "centre" in myPage && "trainer" in myPage && "sidh_status" in myPage && "result" in myPage, JSON.stringify({ c: myPage.centre, t: myPage.trainer }).slice(0, 120));
+const cPool = (await req(admin, "POST", "/api/candidates", { name: `${NAME} PoolPortal`, phone: `9${STAMP}3008`, location: loc._id, program: program._id }, 201)).data.item;
+const plk = await lookup({ phone: cPool.phone });
+ok("portal lookup: a pool candidate learns their registration status, not a dead end", plk.status === 200 && plk.data.enrolled === false && typeof plk.data.sidh_status === "string", JSON.stringify(plk.data).slice(0, 120));
+
 // ---------------------------------------------------------------- F-N2 (2026-08-13): assessment date raises an in-app alert
 const assessDate = new Date(Date.now() + 7 * 864e5).toISOString().slice(0, 10);
 const closurePut = await req(admin, "PUT", `/api/batches/${batch._id}/closure`, { assessment_date: assessDate });

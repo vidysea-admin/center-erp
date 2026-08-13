@@ -2,7 +2,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/client";
-import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, ShareLinkPanel, copyText, inputCls } from "@/components/ui";
+import { Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, ShareLinkPanel, copyText, inputCls } from "@/components/ui";
 import { useLocationCtx } from "@/components/shell";
 import { BASE_PATH } from "@/lib/base-path";
 import { bulkSmsCsv, smsLink, unsendableCount, waLink } from "@/lib/messaging";
@@ -229,6 +229,11 @@ function CandidatesInner() {
           </select>
           <Btn kind="ghost" onClick={() => { setImportState({}); setDrawer("import"); }}>Import Excel</Btn>
           <Btn kind="ghost" onClick={shareRegistrationLink}>Self-reg link</Btn>
+          {/* 2026-08-13 (Umesh): one public door for every candidate — share it anywhere. */}
+          <CopyBtn text={`${typeof window !== "undefined" ? window.location.origin : ""}${BASE_PATH}/p/me`}
+            className="rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 whitespace-nowrap">
+            Candidate portal link
+          </CopyBtn>
           <Btn kind="ghost" onClick={downloadBulkSms}>Bulk SMS file</Btn>
           <a href={`${BASE_PATH}/api/candidates/export-sidh${fLoc ? `?location=${fLoc}` : ""}`}
             className="flex h-9 items-center rounded-lg border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 hover:border-blue-300 hover:text-blue-700"
@@ -270,7 +275,7 @@ function CandidatesInner() {
           { key: "phone", label: "Phone" },
           { key: "location", label: "Location", sortable: true, sortValue: (r: any) => r.location?.name, render: (r: any) => r.location?.name },
           {
-            key: "program", label: "Program", sortable: true, sortValue: (r: any) => progOf(r)?.name ?? "",
+            key: "program", label: "Program", sortable: true, filterable: true, sortValue: (r: any) => progOf(r)?.name ?? "",
             render: (r: any) => r.program?.name
               ?? (r.active_batch?.program
                 ? <span title={`Via batch ${r.active_batch.code} — the row itself has no programme yet`}>{r.active_batch.program.name} <span className="text-[10px] text-gray-400">via {r.active_batch.code}</span></span>

@@ -251,6 +251,21 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
     JSON.stringify(seen?.nominated_for_program));
   ok("…while the personnel fields beside it stay hidden",
     seen?.nsdc_remarks === undefined && seen?.qualification === undefined && seen?.payment_reference === undefined);
+
+  // 2026-08-13 (Umesh, testing the view-only principal): masking pay was not enough — a
+  // scoped user saw the ENTIRE trainer directory. Scoped users see only trainers tied to
+  // their centres (nominated / capable / home).
+  const spocTrainers = (await req(spoc, "GET", "/api/trainers?limit=2000")).data.items ?? [];
+  const jprId = (await req(spoc, "GET", "/api/locations?limit=1")).data.items[0]._id;
+  const tied = (t) => [t.nominated_for_location?._id ?? t.nominated_for_location,
+    t.home_location?._id ?? t.home_location, ...(t.capable_locations ?? []).map((l) => l?._id ?? l)]
+    .filter(Boolean).map(String).includes(String(jprId));
+  ok("Rule 38: scoped SPOC sees only trainers tied to their centre", spocTrainers.every(tied), `${spocTrainers.length} rows, untied: ${spocTrainers.filter((t) => !tied(t)).map((t) => t.name).slice(0, 3).join(", ")}`);
+  if (String(loc._id) !== String(jprId)) {
+    ok("…and the elsewhere-nominated trainer is not in their list", !spocTrainers.some((t) => t._id === nom._id));
+  }
+  const adminAll = (await req(admin, "GET", "/api/trainers?limit=2000")).data.items ?? [];
+  ok("…while Admin still sees the full directory", adminAll.length > spocTrainers.length, `${adminAll.length} vs ${spocTrainers.length}`);
 }
 
 // 2026-08-12 audit F-000 (S0): the generic list route copied every ?key=value into the Mongo

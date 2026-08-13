@@ -14,6 +14,9 @@ export type CrudConfig = {
   fields: string[]; // writable field whitelist
   searchFields?: string[];
   scopeField?: string | null; // Rule 38 — null disables location scoping
+  // Rule 38 for entities whose "location" is not one field (trainers: nominated/capable/home).
+  // Applied for scoped users as an AND-clause; return null to leave the user unscoped.
+  scopeFilter?: (user: SessionUser) => Record<string, unknown> | null;
   writeRoles?: Role[]; // roles allowed to create/update (edit flag still applies)
   readRoles?: Role[]; // optional read restriction (Rule 40)
   // Togglable right required to READ. Reading and writing a screen are governed by the
@@ -77,6 +80,12 @@ export function collectionRoutes(cfg: CrudConfig) {
       if (requested === undefined || !allowed.includes(String(requested))) {
         Object.assign(filter, locationFilter(user, scopeField));
       }
+    }
+    // Multi-field scoping (2026-08-13, Umesh: a Jaipur-scoped principal saw ALL trainers) —
+    // an AND-clause so it can carry its own $or without colliding with the search $or below.
+    if (cfg.scopeFilter && isScoped(user)) {
+      const f = cfg.scopeFilter(user);
+      if (f) filter.$and = [...((filter.$and as unknown[]) ?? []), f];
     }
     const q = sp.get("q");
     if (q && cfg.searchFields?.length) {
