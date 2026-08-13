@@ -257,6 +257,7 @@ const TrainerSchema = new Schema({
   tot_certificate_no: String,
   pipeline_note: String,
   dropped_reason: String,               // required to reach the terminal "Dropped" state
+  dropped_from_stage: String,           // CEO: which stage the journey ended at ("Dropped at CV Reviewed")
 }, { timestamps: true });
 // 2026-08-12 audit: this schema declared NO indexes, so the same trainer could be created any
 // number of times and a TR ID could be duplicated across people. A TR ID is issued by NSDC and

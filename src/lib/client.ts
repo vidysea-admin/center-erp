@@ -67,6 +67,16 @@ export function sourceLink(source?: string | null): { tab: string; url: string }
   return null;
 }
 
+// CEO 13/08 stage terminology — DISPLAY labels only, the stored enum never changes:
+// "Applied ko Fresh Lead likho; Shortlisted = for TOT; Payment Done = TOT Payment Done."
+export const PIPELINE_LABELS: Record<string, string> = {
+  "Applied": "Fresh Lead",
+  "Shortlisted": "Shortlisted (for TOT)",
+  "Payment Done": "TOT Payment Done",
+  "Certified": "Certified (Ready to Train)",
+};
+export const pipelineLabel = (s?: string | null) => (s ? PIPELINE_LABELS[s] ?? s : "—");
+
 export function toInputDate(d?: string | Date | null): string {
   if (!d) return "";
   const x = new Date(d);

@@ -1390,6 +1390,9 @@ export async function transitionTrainer(
     }
     case "Dropped": {
       if (!opts.reason) throw new HttpError(400, "Rule T6: dropping a trainer needs a reason.");
+      // CEO 13/08: "har stage pe Accepted/Rejected dikhna chahiye" — record WHERE the
+      // journey ended, so the profile can say "Dropped at CV Reviewed" instead of a bare tag.
+      t.dropped_from_stage = from;
       // Rule T7: dropping someone who is still running a batch stranded it silently — the batch
       // kept pointing at a trainer who had left, the readiness screen still counted them, and
       // nobody found out until the day the class did not start. Name the batches and make the

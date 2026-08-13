@@ -176,7 +176,9 @@ ok("a duplicate trainer phone is refused", dup.status >= 400, `got ${dup.status}
 // ---- terminal state needs a reason ----
 const t2 = (await req("POST", "/api/trainers", { name: "Drop Me " + stamp, phone: "8" + Date.now().toString().slice(-9), skills: ["x" + stamp] }, 201)).data.item;
 await req("POST", `/api/trainers/${t2._id}/transition`, { target: "Dropped" }, 400);
-await req("POST", `/api/trainers/${t2._id}/transition`, { target: "Dropped", reason: "Took another offer" }, 200);
+const droppedRes = await req("POST", `/api/trainers/${t2._id}/transition`, { target: "Dropped", reason: "Took another offer" }, 200);
+// CEO 13/08: "har stage pe Accepted/Rejected dikhe" — the profile records WHERE it died.
+ok("dropping records the stage the journey ended at", droppedRes.data.item.dropped_from_stage === "Applied", droppedRes.data.item.dropped_from_stage);
 const reopened = await req("POST", `/api/trainers/${t2._id}/transition`, { target: "Applied" }, 200);
 ok("a dropped trainer can be re-opened if they come back", reopened.data.item.pipeline_status === "Applied" && reopened.data.item.active === true);
 

@@ -3,11 +3,10 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-4";
+export const RELEASE = "2026.08.14-5";
 export const RELEASE_NOTE =
-  "Candidate buckets (CEO): the Candidates page is now TWO buckets — Fresh (inquiry " +
-  "se batch-assign tak) and Enrolled (batch se aage ki poori journey). The Enrolled " +
-  "bucket speaks the CEO's terminology — Enrollment in progress → Training Ongoing → " +
-  "Training Completed → Result Awaited → Certified / Not Certified — derived live from " +
-  "the batch and results, never stored. Pills, counts and the status column follow the " +
-  "active bucket; deep links pick their bucket automatically.";
+  "Pipeline speaks the CEO's words: Applied shows as Fresh Lead, Shortlisted as " +
+  "Shortlisted (for TOT), Payment Done as TOT Payment Done — display labels only, " +
+  "the stored stages never change. A Dropped trainer now NAMES the stage the journey " +
+  "ended at (chip says Dropped at CV Reviewed; the journey rail marks rejected here) " +
+  "— har stage pe accepted/rejected ab dikhta hai.";

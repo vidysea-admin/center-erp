@@ -1,7 +1,7 @@
 "use client";
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { api, fmtDate, toInputDate } from "@/lib/client";
+import { api, fmtDate, pipelineLabel, toInputDate } from "@/lib/client";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, ShareLinkPanel, SourceCell, Tabs, inputCls } from "@/components/ui";
 import { BASE_PATH } from "@/lib/base-path";
 
@@ -178,9 +178,11 @@ function TrainersInner() {
                   const tone = s === "Certified" ? "border-green-200 bg-green-50 text-green-700"
                     : s === "NSDC Rejected" || s === "Dropped" ? "border-red-200 bg-red-50 text-red-700"
                       : "border-amber-200 bg-amber-50 text-amber-700";
-                  {/* GD-39: "Ready to Train ka status bhi capture karna hai" — same state, said in
-                      the operator's words, so nobody wonders whether Certified means usable. */}
-                  return <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${tone}`}>{s === "Certified" ? "Certified (Ready to Train)" : s}</span>;
+                  {/* GD-39 + CEO 13/08: stages speak the operator's words (Fresh Lead, TOT
+                      Payment Done…), and a Dropped profile NAMES the stage it died at. */}
+                  return <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${tone}`}>
+                    {s === "Dropped" && r.dropped_from_stage ? `Dropped (at ${pipelineLabel(r.dropped_from_stage)})` : pipelineLabel(s)}
+                  </span>;
                 },
               },
               { key: "tr_id", label: "TR ID", render: (r: any) => r.tr_id || "—", mobile: false },
