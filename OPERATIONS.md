@@ -141,5 +141,22 @@ implies 27017 was world-open at least once.
     curl https://www.vidysea.com/erp/api/public/version          # RELEASE running
     # login round-trip: GET /api/auth/csrf → POST /api/auth/callback/credentials → GET /api/auth/session
 
+## Post-deploy LIVE SMOKE — run after EVERY merge (Umesh, 2026-08-14)
+
+Version stamp alone is not verification. After the release stamp flips, run the
+authenticated read-only smoke (curl, never Playwright against Umesh's own Chrome):
+
+1. `GET /api/public/version` — release matches the merged PR's version.ts.
+2. Admin login → `GET /api/home` — KPIs sane (no zeros where data exists, counts match
+   the OneDrive sheet's arithmetic: job-role rows vs centres both).
+3. `GET /api/locations?limit=5` — rollups present (job_roles, trainers_*_total, tc_ids).
+4. One detail page's API (`/api/locations/[id]/targets` or `/api/batches/[id]`) — 200 +
+   shape.
+5. One NON-admin role login (principal/trainer) — scoped list + one gate that must 403.
+6. Eyeball the release's OWN feature via its API surface (whatever the PR shipped).
+
+Record the result in qa/STATE.md with the release number. A UI click-through happens
+with Umesh's go-ahead (Playwright drives his browser) or by Umesh himself.
+
 See `d:\erp\qa\STATE.md` for the full remediation ledger (every fix, where, and its test) and
 `d:\erp\qa\CHANGELOG.jsonl` for the machine-readable one-row-per-fix log.

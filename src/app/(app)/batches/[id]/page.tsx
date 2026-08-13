@@ -3,7 +3,7 @@ import { use, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { api, fmtDate, toInputDate } from "@/lib/client";
-import { Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, HealthBanner, NameCell, Section, Tabs, inputCls } from "@/components/ui";
+import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, HealthBanner, NameCell, Section, Tabs, inputCls } from "@/components/ui";
 import { Activity } from "@/components/activity";
 import { flushQueue, getQueue, uploadWithRetry } from "@/lib/upload";
 import { BASE_PATH } from "@/lib/base-path";
@@ -33,6 +33,7 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3">
+        <BackLink fallback="/batches" label="Batches" />
         <h1 className="text-xl font-semibold">{b.code}</h1>
         <Chip value={b.status} />
         <span className="text-sm text-gray-500">{b.program?.name} · {fmtDate(b.planned_start)} → {fmtDate(b.planned_end)}</span>

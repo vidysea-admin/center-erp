@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { api, fmtDT } from "@/lib/client";
-import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, inputCls } from "@/components/ui";
+import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, RouteTabs, inputCls } from "@/components/ui";
 
 const ACTIONS = ["No action", "Update target", "Apply value", "Start location", "Put on hold", "Stop location", "Close location"];
 // Entity changes (tab mappings on trainers/candidates) are value swaps — the location status
@@ -59,6 +59,11 @@ export default function SyncInboxPage() {
           {["Open", "Actioned", "Ignored", "all"].map((s) => <option key={s}>{s}</option>)}
         </select>
       </div>
+      {/* 2026-08-14 (Umesh): one nav entry "Sheet Sync" — this page is its second tab. */}
+      <RouteTabs active="/sync" tabs={[
+        { href: "/sheet-watch", label: "Sheet Watch (cell changes)" },
+        { href: "/sync", label: "Sync Inbox (apply suggestions)" },
+      ]} />
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
       {info && <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-2.5 text-sm text-green-700">{info} <button className="ml-2 font-bold" onClick={() => setInfo("")}>×</button></div>}
       {selected.size > 0 && (

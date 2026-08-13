@@ -1,7 +1,7 @@
 "use client";
 import { use, useEffect, useState } from "react";
 import { api, fmtDate } from "@/lib/client";
-import { Btn, Chip, CopyBtn, DataTable, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
+import { BackLink, Btn, Chip, CopyBtn, DataTable, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
 import { Activity } from "@/components/activity";
 import Link from "next/link";
 
@@ -21,6 +21,7 @@ export default function LocationDetail({ params }: { params: Promise<{ id: strin
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3">
+        <BackLink fallback="/locations" label="Locations" />
         <h1 className="text-xl font-semibold">{loc.name} <span className="text-sm font-normal text-gray-400">({loc.code})</span></h1>
         <Chip value={loc.approval_status} />
         <Chip value={loc.operational_status} />

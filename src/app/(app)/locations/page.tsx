@@ -41,11 +41,22 @@ function LocationsInner() {
         </div>
       </div>
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
+      {/* 2026-08-14 (Umesh: "31 approved / 57 total vs tumhara 13/21 — blunder?"): the pills
+          count CENTRES; the sheet's own arithmetic counts ROWS. Show BOTH, named, from the
+          same API rollups — so the two countings can never look like a contradiction again. */}
       <FilterPills active={tag} onChange={(v) => setTag(v === tag ? "" : v)}
         options={[
-          { value: "", label: "All", count: items.length },
-          ...["Approved", "Pending", "Rejected"].map((s) => ({ value: s, label: s, count: items.filter((l) => l.approval_status === s).length })),
+          { value: "", label: "All centres", count: items.length },
+          ...["Approved", "Pending", "Rejected"].map((s) => ({ value: s, label: `${s} centres`, count: items.filter((l) => l.approval_status === s).length })),
         ]} />
+      {items.length > 0 && (
+        <p className="text-xs text-gray-500">
+          Sheet arithmetic:{" "}
+          <span className="font-semibold text-gray-900">{items.reduce((s, l) => s + (l.job_roles?.length ?? 0), 0)}</span> job-role rows ·{" "}
+          <span className="font-semibold text-green-700">{items.reduce((s, l) => s + (l.approved_job_roles ?? 0), 0)} approved rows</span> ·{" "}
+          {items.length} centres ({items.filter((l) => l.approval_status === "Approved").length} with ≥1 approved row)
+        </p>
+      )}
       {/* 2026-08-13 (Umesh): "iss [OneDrive] sheet ke exact column and data chahiye iss
           Location Master mein, aur koi nahi." Columns mirror Vidysea-RPL.xlsx in ITS order
           (S.N. dropped — a row number). One row per centre = the sheet's merged cells;

@@ -65,11 +65,25 @@ const meta = await (await fetch(
   { headers: { Authorization: "Badger " + tok.token, Prefer: "autoredeem", "User-Agent": "Mozilla/5.0" } },
 )).json();
 const wb = XLSX.read(Buffer.from(await (await fetch(meta["@content.downloadUrl"])).arrayBuffer()), { type: "buffer" });
-const grid = XLSX.utils.sheet_to_json(wb.Sheets["Location_Master"] ?? wb.Sheets[wb.SheetNames[0]], { header: 1, defval: "" });
+const sheetObj = wb.Sheets["Location_Master"] ?? wb.Sheets[wb.SheetNames[0]];
+const grid = XLSX.utils.sheet_to_json(sheetObj, { header: 1, defval: "" });
+// Same merged-cell semantics as seed-rpl (2026-08-14): the Institution cell is MERGED per
+// centre; expand merges + carry blank institutions forward, or every continuation row's
+// target would be false-flagged as "not in sheet" and deleted.
+for (const m of sheetObj["!merges"] ?? []) {
+  const v = sheetObj[XLSX.utils.encode_cell({ r: m.s.r, c: m.s.c })]?.v;
+  if (v === undefined || v === "") continue;
+  for (let r = m.s.r; r <= m.e.r; r++) for (let c = m.s.c; c <= m.e.c; c++) {
+    if (grid[r] && (grid[r][c] === "" || grid[r][c] === undefined)) grid[r][c] = v;
+  }
+}
 const norm = (s) => S(s).toLowerCase().replace(/[^a-z0-9]/g, "");
 const sheetPairs = new Set();
+let lastInst = "";
 for (const r of grid.slice(2)) {
-  const inst = S(r[5]), scheme = SCHEME_ALIASES[S(r[8])], role = S(r[9]);
+  const inst = S(r[5]) || lastInst;
+  if (S(r[5])) lastInst = S(r[5]);
+  const scheme = SCHEME_ALIASES[S(r[8])], role = S(r[9]);
   if (inst && scheme && role) sheetPairs.add(`${norm(inst)}|${scheme}|${norm(role)}`);
 }
 console.log(`\nOneDrive pairs (centre×scheme×job-role): ${sheetPairs.size}`);
