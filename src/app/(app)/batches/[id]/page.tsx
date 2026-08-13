@@ -473,10 +473,11 @@ function Enrollment({ batchId, setError }: any) {
 function DailyExecution({ batchId, batch, setError }: any) {
   const [logs, setLogs] = useState<any[]>([]);
   const [members, setMembers] = useState<any[]>([]);
-  const [form, setForm] = useState<any>({ log_date: toInputDate(new Date()), present: new Set<string>(), photos: [], videos: [] });
+  const [form, setForm] = useState<any>({ log_date: toInputDate(new Date()), present: new Set<string>(), biometric: new Set<string>(), photos: [], videos: [] });
   const [busy, setBusy] = useState(false);
   const [queued, setQueued] = useState(0);
   const [editLog, setEditLog] = useState<any>(null);
+  const [roundLog, setRoundLog] = useState<any>(null); // "mark another round" target (Karunn: P-P-P multiple times a day)
 
   const load = () => Promise.all([
     api(`/api/batches/${batchId}/logs`).then((d) => setLogs(d.items)),
@@ -486,8 +487,15 @@ function DailyExecution({ batchId, batch, setError }: any) {
 
   function togglePresent(id: string) {
     const s = new Set<string>(form.present);
-    if (s.has(id)) s.delete(id); else s.add(id);
-    setForm({ ...form, present: s });
+    const b = new Set<string>(form.biometric);
+    if (s.has(id)) { s.delete(id); b.delete(id); } // Rule 51: un-presenting clears the biometric tick
+    else s.add(id);
+    setForm({ ...form, present: s, biometric: b });
+  }
+  function toggleBiometric(id: string) {
+    const b = new Set<string>(form.biometric);
+    if (b.has(id)) b.delete(id); else if (form.present.has(id)) b.add(id); // biometric only when present
+    setForm({ ...form, biometric: b });
   }
 
   async function uploadFile(file: File, kind: "photos" | "videos" | "govt_screenshot") {
@@ -518,13 +526,14 @@ function DailyExecution({ batchId, batch, setError }: any) {
           log_date: form.log_date,
           planned_topic: form.planned_topic, actual_topic: form.actual_topic,
           present_member_ids: [...form.present],
+          biometric_member_ids: [...form.biometric], // Rule 51: subset of present, UI enforces too
           trainer_present: form.trainer_present !== false, // default true; unticking blocks student marks (portal rule)
           govt_present: form.govt_present === "" || form.govt_present == null ? null : +form.govt_present,
           govt_screenshot: form.govt_screenshot,
           photos: form.photos, videos: form.videos, note: form.note,
         },
       });
-      setForm({ log_date: toInputDate(new Date()), present: new Set(), photos: [], videos: [] });
+      setForm({ log_date: toInputDate(new Date()), present: new Set(), biometric: new Set(), photos: [], videos: [] });
       load();
     } catch (e: any) { setError(e.message); }
     setBusy(false);
@@ -553,12 +562,27 @@ function DailyExecution({ batchId, batch, setError }: any) {
             <span className="text-xs text-gray-400">(portal rule: students can be marked only when the trainer attended)</span>
           </label>
           <div>
-            <div className="mb-1.5 text-xs font-medium text-gray-600">Attendance — tap present ({form.present.size}/{members.length})</div>
+            <div className="mb-1.5 text-xs font-medium text-gray-600">
+              Attendance — tap present ({form.present.size}/{members.length})
+              <span className="ml-2 font-normal text-gray-400">then tap “Bio” if their biometric was done ({form.biometric.size})</span>
+            </div>
             <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 md:grid-cols-4">
+              {/* Karunn 2026-08-13: per-student biometric tick — "done & present" / "not done &
+                  present" allowed; "done & NOT present" impossible (Rule 51, server-enforced;
+                  the Bio chip only even appears once the student is marked present). */}
               {members.map((m) => (
                 <button key={m._id} onClick={() => togglePresent(m._id)}
                   className={`rounded-lg border px-2 py-2.5 text-left text-sm ${form.present.has(m._id) ? "border-green-300 bg-green-50 text-green-800" : "border-gray-200 bg-white text-gray-500"}`}>
-                  {form.present.has(m._id) ? "✓ " : ""}{m.candidate?.name}
+                  <span className="flex items-center justify-between gap-1">
+                    <span className="min-w-0 truncate">{form.present.has(m._id) ? "✓ " : ""}{m.candidate?.name}</span>
+                    {form.present.has(m._id) && (
+                      <span onClick={(e) => { e.stopPropagation(); toggleBiometric(m._id); }}
+                        title="Biometric done on the govt app?"
+                        className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${form.biometric.has(m._id) ? "border-blue-300 bg-blue-100 text-blue-700" : "border-gray-300 bg-white text-gray-400"}`}>
+                        Bio{form.biometric.has(m._id) ? " ✓" : ""}
+                      </span>
+                    )}
+                  </span>
                 </button>
               ))}
             </div>
@@ -602,15 +626,89 @@ function DailyExecution({ batchId, batch, setError }: any) {
             { key: "log_date", label: "Date", render: (r: any) => fmtDate(r.log_date), mobile: false },
             { key: "trainer_present", label: "Trainer", mobile: false, render: (r: any) => r.trainer_present === false ? <span className="font-semibold text-red-600">✗</span> : r.trainer_present ? <span className="text-green-700">✓</span> : <span className="text-gray-400">—</span> },
             { key: "internal_present", label: "Internal", render: (r: any) => `${r.internal_present}/${r.roster_count} (${r.roster_count ? Math.round((100 * r.internal_present) / r.roster_count) : 0}%)` },
+            {
+              // Karunn: rounds with timestamps + who has biometric done — visible per day.
+              key: "sessions", label: "Rounds / Bio", mobile: false,
+              filterText: (r: any) => `${(r.sessions ?? []).length} rounds`,
+              render: (r: any) => (
+                <span className="text-xs">
+                  {(r.sessions ?? []).length
+                    ? <span title={(r.sessions ?? []).map((s: any) => `${new Date(s.at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" })}${s.correction ? " (correction)" : ""}: ${s.present_member_ids?.length ?? 0} present`).join("\n")}>
+                        {(r.sessions ?? []).length}× <span className="text-gray-400">last {new Date(r.sessions[r.sessions.length - 1].at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" })}</span>
+                      </span>
+                    : <span className="text-gray-400">—</span>}
+                  <span className="block text-gray-400">Bio {(r.biometric_member_ids ?? []).length}/{r.internal_present}</span>
+                </span>
+              ),
+            },
             { key: "govt_present", label: "Govt", render: (r: any) => r.govt_present == null ? <span className="text-gray-400">Not verified</span> : `${r.govt_present}/${r.roster_count} (${Math.round((100 * r.govt_present) / r.roster_count)}%)` },
             { key: "gap", label: "Gap", render: (r: any) => <Gap r={r} /> },
             { key: "actual_topic", label: "Topic", render: (r: any) => r.actual_topic ?? r.planned_topic ?? "—", mobile: false },
             { key: "photos", label: "Media", render: (r: any) => <MediaCell r={r} /> },
-            { key: "_edit", label: "", render: (r: any) => <Btn small kind="ghost" onClick={() => setEditLog(r)}>Edit</Btn> },
+            { key: "_edit", label: "", render: (r: any) => (
+              <span className="flex gap-1.5">
+                <Btn small kind="ghost" onClick={() => setRoundLog(r)}>+ Round</Btn>
+                <Btn small kind="ghost" onClick={() => setEditLog(r)}>Edit</Btn>
+              </span>
+            ) },
           ]} empty="No logs yet." />
       </Section>
       <LogEditDrawer log={editLog} members={members} onClose={() => setEditLog(null)} onSaved={() => { setEditLog(null); load(); }} setError={setError} />
+      <RoundDrawer log={roundLog} members={members} onClose={() => setRoundLog(null)} onSaved={() => { setRoundLog(null); load(); }} setError={setError} />
     </div>
+  );
+}
+
+// Karunn 2026-08-13: "din mein do baar, teen baar, jitni baar bhi P-P-P" — a fresh marking
+// round for an existing day. Unions into the day server-side; timestamps kept per round.
+function RoundDrawer({ log, members, onClose, onSaved, setError }: any) {
+  const [present, setPresent] = useState<Set<string>>(new Set());
+  const [biometric, setBiometric] = useState<Set<string>>(new Set());
+  useEffect(() => { setPresent(new Set()); setBiometric(new Set()); }, [log]);
+  if (!log) return null;
+  const already = new Set((log.present_member_ids ?? []).map(String));
+  const toggleP = (id: string) => {
+    const s = new Set(present), b = new Set(biometric);
+    if (s.has(id)) { s.delete(id); b.delete(id); } else s.add(id);
+    setPresent(s); setBiometric(b);
+  };
+  const toggleB = (id: string) => {
+    const b = new Set(biometric);
+    if (b.has(id)) b.delete(id); else if (present.has(id)) b.add(id);
+    setBiometric(b);
+  };
+  async function save() {
+    try {
+      await api(`/api/logs/${log._id}/sessions`, { method: "POST", json: { present_member_ids: [...present], biometric_member_ids: [...biometric] } });
+      onSaved();
+    } catch (e: any) { setError(e.message); onClose(); }
+  }
+  return (
+    <Drawer open onClose={onClose} title={`Marking round — ${fmtDate(log.log_date)}`} wide>
+      <div className="space-y-4">
+        <p className="text-xs text-gray-500">
+          Round {(log.sessions?.length ?? 0) + 1} of the day, timestamped now. A student present in ANY round counts present for the day —
+          already marked today: <span className="font-medium text-gray-700">{already.size}</span>. Tap “Bio” where the govt-app biometric was done.
+        </p>
+        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
+          {members.map((m: any) => (
+            <button key={m._id} onClick={() => toggleP(String(m._id))}
+              className={`rounded-lg border px-2 py-2 text-left text-sm ${present.has(String(m._id)) ? "border-green-300 bg-green-50 text-green-800" : already.has(String(m._id)) ? "border-gray-200 bg-gray-50 text-gray-400" : "border-gray-200 bg-white text-gray-500"}`}>
+              <span className="flex items-center justify-between gap-1">
+                <span className="min-w-0 truncate">{present.has(String(m._id)) ? "✓ " : already.has(String(m._id)) ? "· " : ""}{m.candidate?.name}</span>
+                {present.has(String(m._id)) && (
+                  <span onClick={(e) => { e.stopPropagation(); toggleB(String(m._id)); }} title="Biometric done on the govt app?"
+                    className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${biometric.has(String(m._id)) ? "border-blue-300 bg-blue-100 text-blue-700" : "border-gray-300 bg-white text-gray-400"}`}>
+                    Bio{biometric.has(String(m._id)) ? " ✓" : ""}
+                  </span>
+                )}
+              </span>
+            </button>
+          ))}
+        </div>
+        <Btn onClick={save} disabled={present.size === 0 && biometric.size === 0}>Save round ({present.size} present · {biometric.size} bio)</Btn>
+      </div>
+    </Drawer>
   );
 }
 
@@ -623,14 +721,22 @@ function LogEditDrawer({ log, members, onClose, onSaved, setError }: any) {
       govt_present: log.govt_present ?? "", note: log.note ?? "",
       trainer_present: log.trainer_present,
       present: new Set((log.present_member_ids ?? []).map(String)),
+      biometric: new Set((log.biometric_member_ids ?? []).map(String)),
     });
   }, [log]);
   if (!log || !form) return null;
 
   const toggle = (id: string) => {
     const s = new Set<string>(form.present);
-    if (s.has(id)) s.delete(id); else s.add(id);
-    setForm({ ...form, present: s });
+    const b = new Set<string>(form.biometric);
+    if (s.has(id)) { s.delete(id); b.delete(id); } // Rule 51: un-presenting clears biometric
+    else s.add(id);
+    setForm({ ...form, present: s, biometric: b });
+  };
+  const toggleBio = (id: string) => {
+    const b = new Set<string>(form.biometric);
+    if (b.has(id)) b.delete(id); else if (form.present.has(id)) b.add(id);
+    setForm({ ...form, biometric: b });
   };
 
   async function save() {
@@ -640,6 +746,7 @@ function LogEditDrawer({ log, members, onClose, onSaved, setError }: any) {
         json: {
           planned_topic: form.planned_topic, actual_topic: form.actual_topic,
           present_member_ids: [...form.present],
+          biometric_member_ids: [...form.biometric],
           trainer_present: form.trainer_present !== false,
           govt_present: form.govt_present === "" ? null : +form.govt_present,
           note: form.note,
@@ -665,12 +772,20 @@ function LogEditDrawer({ log, members, onClose, onSaved, setError }: any) {
           <span className="font-medium">Trainer present</span>
         </label>
         <div>
-          <div className="mb-1.5 text-xs font-medium text-gray-600">Present ({form.present.size})</div>
+          <div className="mb-1.5 text-xs font-medium text-gray-600">Present ({form.present.size}) <span className="font-normal text-gray-400">· Bio done ({form.biometric.size})</span></div>
           <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
             {members.map((m: any) => (
               <button key={m._id} onClick={() => toggle(String(m._id))}
                 className={`rounded-lg border px-2 py-2 text-left text-sm ${form.present.has(String(m._id)) ? "border-green-300 bg-green-50 text-green-800" : "border-gray-200 bg-white text-gray-500"}`}>
-                {form.present.has(String(m._id)) ? "✓ " : ""}{m.candidate?.name}
+                <span className="flex items-center justify-between gap-1">
+                  <span className="min-w-0 truncate">{form.present.has(String(m._id)) ? "✓ " : ""}{m.candidate?.name}</span>
+                  {form.present.has(String(m._id)) && (
+                    <span onClick={(e) => { e.stopPropagation(); toggleBio(String(m._id)); }} title="Biometric done on the govt app?"
+                      className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${form.biometric.has(String(m._id)) ? "border-blue-300 bg-blue-100 text-blue-700" : "border-gray-300 bg-white text-gray-400"}`}>
+                      Bio{form.biometric.has(String(m._id)) ? " ✓" : ""}
+                    </span>
+                  )}
+                </span>
               </button>
             ))}
           </div>

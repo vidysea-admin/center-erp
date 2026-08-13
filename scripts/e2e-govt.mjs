@@ -135,6 +135,39 @@ const logRes = await req(admin, "POST", `/api/batches/${batch._id}/logs`, {
 // as "portal says N, we logged 0" and the reconciliation checks would pass for the wrong reason.
 ok("daily log written for the reconciliation baseline", logRes.status === 201, JSON.stringify(logRes.data).slice(0, 250));
 
+// ---- Trainer-role marking scope (Karunn 2026-08-13: "attendance trainer karega — apne batch ki") ----
+{
+  // can_edit true — a trainer's whole job here is writing the daily log (the signup approval
+  // path auto-grants it for Trainer role; direct admin creation must say so explicitly).
+  const mk = (email, scope) => req(admin, "POST", "/api/users", { name: "TEST-GT " + email, email, password: "Vidysea@123", role: "Trainer", can_edit: true, location_scope: scope });
+  const inEmail = `gt.trainer.in.${STAMP}@vidysea-test.local`, outEmail = `gt.trainer.out.${STAMP}@vidysea-test.local`;
+  const farLoc = (await req(admin, "POST", "/api/locations", { code: "GTF" + STAMP, name: "TEST-GT Far " + STAMP, approval_status: "Approved", operational_status: "Active", city: "Elsewhere" }, 201)).data.item;
+  await mk(inEmail, [loc._id]);
+  await mk(outEmail, [farLoc._id]);
+  const tIn = await login(inEmail, "Vidysea@123");
+  const tOut = await login(outEmail, "Vidysea@123");
+  ok("trainer-role logins available", !!tIn && !!tOut);
+  if (tIn && tOut) {
+    // The scoped trainer marks a fresh ROUND on their own batch's day log — allowed.
+    // members[3] (a Twin) on purpose: the twins stay Ambiguous in the reconciliation below,
+    // so this extra presence cannot disturb Alpha/Bravo/Charlie's variance expectations.
+    const round = await req(tIn, "POST", `/api/logs/${logRes.data.item._id}/sessions`, { present_member_ids: [members[3].member._id] });
+    ok("scoped trainer can add a marking round to their own batch", round.status === 201, `got ${round.status}: ${JSON.stringify(round.data).slice(0, 120)}`);
+    ok("…and the round unioned into the day", round.data.item?.internal_present === 3, String(round.data.item?.internal_present));
+    // A trainer scoped to a DIFFERENT centre cannot touch this batch's log (Rule 38).
+    const foreign = await req(tOut, "POST", `/api/logs/${logRes.data.item._id}/sessions`, { present_member_ids: [members[3].member._id] });
+    ok("out-of-scope trainer is refused (Rule 38)", foreign.status === 403 || foreign.status === 404, `got ${foreign.status}`);
+    // Rule 51 holds for trainer submissions too.
+    const bad = await req(tIn, "POST", `/api/logs/${logRes.data.item._id}/sessions`, { present_member_ids: [], biometric_member_ids: [members[4].member._id] });
+    ok("Rule 51 refuses biometric-without-present from a trainer", bad.status === 400, `got ${bad.status}`);
+  }
+  // leave no live logins behind (same discipline as eval-home's ghost)
+  for (const email of [inEmail, outEmail]) {
+    const u = ((await req(admin, "GET", `/api/users?limit=500`)).data.items ?? []).find((x) => x.email === email);
+    if (u) await req(admin, "PATCH", `/api/users/${u._id}`, { active: false });
+  }
+}
+
 // ---------------------------------------------------------------- parse + match (preview)
 const pre = await upload(admin, { file: csvFile() });
 ok("preview accepted the portal-shaped CSV", pre.status === 200, JSON.stringify(pre.data).slice(0, 300));

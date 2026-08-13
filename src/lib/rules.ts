@@ -389,6 +389,9 @@ export async function dropMemberChecked(memberId: string, left_on: Date, drop_re
   const staleLogs = await DailyLog.find({ batch: m.batch, log_date: { $gte: lo }, present_member_ids: m._id });
   for (const log of staleLogs) {
     log.present_member_ids = log.present_member_ids.filter((id: any) => String(id) !== String(m._id));
+    // Rule 51 invariant: biometric ⊆ present — the tidy-up must strip both, or every later
+    // edit of that day would be refused for a member who is no longer even on the roster.
+    log.biometric_member_ids = (log.biometric_member_ids ?? []).filter((id: any) => String(id) !== String(m._id));
     log.internal_present = log.present_member_ids.length; // Rule 29; roster_count stays frozen (Rule 28)
     await log.save();
   }
@@ -506,9 +509,10 @@ export async function transitionBatch(batchId: string, target: string, opts: { i
   return batch;
 }
 
-// ---------- Daily log (Rules 27–33) ----------
+// ---------- Daily log (Rules 27–33, 51) ----------
 export async function validateDailyLog(batchId: string, log_date: Date, payload: {
   present_member_ids: string[]; govt_present?: number | null; trainer_present?: boolean;
+  biometric_member_ids?: string[];
 }) {
   const batch = await Batch.findById(batchId).lean<any>();
   if (!batch) throw new HttpError(404, "Batch not found");
@@ -541,6 +545,17 @@ export async function validateDailyLog(batchId: string, log_date: Date, payload:
       throw new HttpError(400, m?.left_on
         ? `Rule 29: ${who} left this batch on ${new Date(m.left_on).toLocaleDateString("en-IN")}, so they were not on the roster on ${when}. Untick them to save.`
         : `Rule 29: ${who} was not on this batch's roster on ${when}.`);
+    }
+  }
+  // Rule 51 (Karunn 2026-08-13): "biometric done & present" and "not done & present" are both
+  // fine; "biometric done & NOT present" cannot happen — biometric attendance IS presence.
+  if (payload.biometric_member_ids?.length) {
+    const presentSet = new Set(payload.present_member_ids.map(String));
+    for (const id of payload.biometric_member_ids) {
+      if (!presentSet.has(String(id))) {
+        const m = await BatchMember.findById(id).populate("candidate", "name").lean<any>();
+        throw new HttpError(400, `Rule 51: ${m?.candidate?.name ?? "That student"} is marked "biometric done" but not present — biometric done & not present cannot happen. Tick them present first, or clear the biometric tick.`);
+      }
     }
   }
   const internal_present = payload.present_member_ids.length; // Rule 29
