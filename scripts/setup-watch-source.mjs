@@ -19,7 +19,7 @@ const SOURCES = [
     // "RPL Project - Required Trainers List" — the individual-trainer master (10-15 tabs).
     // key_columns left EMPTY on purpose: one list cannot fit fifteen differently-shaped tabs,
     // so each tab picks its own identifying columns (see autoKeyIndexes in lib/workbook.ts).
-    name: "RPL Required Trainers List",
+    name: "AVPL-RPL Project (13-tab master)",
     url: process.env.TRAINER_SHEET_URL ||
       "https://docs.google.com/spreadsheets/d/1f9veYSwuLktmggOJdUlspl_yydotdqnf/edit",
     key_columns: [],
