@@ -106,6 +106,30 @@ every scoped user. There is a regression test in `scripts/e2e-roles.mjs` (`F-000
   workbook; the scheduler then polls every 30 min.
 - **Backup:** confirm `scripts/backup.sh` runs nightly and note where backups land.
 
+## Sync sources — single-truth policy (2026-08-13)
+
+- **Location Master's only source of truth is the client's OneDrive `Vidysea-RPL.xlsx`**
+  (Umesh: "iss sheet ke exact column and data chahiye, aur koi nahi"). Prod keeps exactly
+  two sync sources, BOTH pointing at that workbook: `Vidysea-RPL (OneDrive)` (mapped →
+  Sync Inbox) and `Vidysea-RPL (client workbook)` (watch → Sheet Watch cell history).
+- The Google-workbook watches (`AVPL-RPL Project (13-tab master)`, `Trainer hiring`) were
+  DELETED via the app API on 2026-08-13 (4,925 tracked changes + 63 snapshots cascaded;
+  audit-logged). Do not re-add them — two masters race. The Google export stays reachable
+  only for manual comparison (`seed-rpl.mjs --google`).
+- Remnant sweeps: `node scripts/cleanup-sync-remnants.mjs` (dry-run; `--apply` to write) —
+  orphaned watch data, stale target pairs vs the truth sheet, leaked `@vidysea-test.local`
+  users. Never touches `counters` (batch-code sequence) or `sheetchanges` (audit trail).
+- Backup taken before this cleanup: `backups/2026-08-13-pre-sync-cleanup/` (full
+  `center_erp` mongodump, 5.2 MB, 38 collections).
+
+## ⚠️ Infra flag for devops (2026-08-13, report-only)
+
+The shared prod Mongo at 13.202.206.101:27017 is **world-open without authentication**,
+hosts 40+ Vidysea databases, and carries a `READ__ME_TO_RECOVER_YOUR_DATA` ransomware
+calling-card database — evidence it has already been scanned/hit. Needs: bind to private
+IP / security-group restriction + `--auth` with per-app users + a look at what (if
+anything) that ransom DB touched. Outside this repo's scope; raised 2026-08-13.
+
 ## How to verify a release end-to-end
 
     curl https://www.vidysea.com/erp/api/public/version          # RELEASE running
