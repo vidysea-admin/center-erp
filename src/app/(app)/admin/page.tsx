@@ -76,6 +76,8 @@ function Programs({ setError }: any) {
         columns={[
           { key: "code", label: "Code", sortable: true },
           { key: "name", label: "Name", sortable: true },
+          // 2026-08-13 (Manish): the same job role exists once per SCHEME — never show one without the other.
+          { key: "scheme", label: "Scheme", sortable: true, filterable: true, render: (r: any) => r.scheme ? <Chip value={r.scheme} /> : <span className="text-gray-400">—</span> },
           { key: "default_batch_size", label: "Batch size", sortable: true },
           { key: "duration_days", label: "Duration (d)", sortable: true },
           { key: "buffer_days", label: "Buffer (d)" },

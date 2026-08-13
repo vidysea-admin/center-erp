@@ -1,5 +1,5 @@
 import { collectionRoutes } from "@/lib/crud";
-import { Location } from "@/models";
+import { Location, LocationTarget } from "@/models";
 import { hasPermission } from "@/lib/permissions";
 
 // 2026-08-12: tc_password is a LIVE government portal credential — "us location ke TC ID aur
@@ -23,7 +23,31 @@ export const { GET, POST } = collectionRoutes({
   searchFields: ["code", "name", "city", "external_id", "tc_id", "district"],
   writeRoles: ["Admin", "Operations"],
   permission: "locations.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
+  // 2026-08-13 (Manish: "Ongoing scheme bhi saath mein dikhana MUST hai — warna pata hi nahi
+  // chalega"): each centre carries its job roles WITH their scheme, plus the per-row TC verdict
+  // that decides the "31 approved". One extra query per page, same shape as candidates' batch join.
   async mapItems(items, user) {
-    return maskLocationSecrets(items, await hasPermission(user, "locations.manage"));
+    const masked = maskLocationSecrets(items, await hasPermission(user, "locations.manage"));
+    const targets = await LocationTarget.find({ location: { $in: items.map((l: any) => l._id) } })
+      .select("location program tc_status tc_id approved_target")
+      .populate("program", "name code scheme")
+      .lean<any[]>();
+    const byLoc = new Map<string, any[]>();
+    for (const t of targets) {
+      const k = String(t.location);
+      byLoc.set(k, [...(byLoc.get(k) ?? []), {
+        program: t.program?.name ?? null, code: t.program?.code ?? null, scheme: t.program?.scheme ?? null,
+        tc_id: t.tc_id ?? null, tc_status: t.tc_status ?? null, approved_target: t.approved_target ?? null,
+      }]);
+    }
+    return masked.map((l: any) => {
+      const rows = byLoc.get(String(l._id)) ?? [];
+      return {
+        ...l,
+        job_roles: rows,
+        schemes: [...new Set(rows.map((r) => r.scheme).filter(Boolean))],
+        approved_job_roles: rows.filter((r) => r.tc_status === "Approved").length,
+      };
+    });
   },
 });

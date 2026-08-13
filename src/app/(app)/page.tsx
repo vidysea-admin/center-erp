@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useSession } from "next-auth/react";
 import { api, fmtDT, fmtDate } from "@/lib/client";
 import { Chip, KPI, Section, Btn, ErrorBanner } from "@/components/ui";
 import { IconPin, IconCap, IconUsers, IconUser, IconAlert } from "@/components/icons";
@@ -10,6 +11,11 @@ import { IconPin, IconCap, IconUsers, IconUser, IconAlert } from "@/components/i
 export default function HomePage() {
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState("");
+  // 2026-08-13 (Manish walkthrough): the cards are ROLE-wise — Admin/Ops get the project
+  // picture, a principal gets exactly their centre's three numbers. Same client-side role
+  // mechanism as shell.tsx.
+  const { data: session } = useSession();
+  const role = (session?.user as any)?.role as string | undefined;
   // The three-way mapping queue (2026-08-12). Fetched on its own rather than folded into
   // /api/home, because it walks every target and must not slow down the rest of the page.
   const [mapping, setMapping] = useState<any>(null);
@@ -21,6 +27,8 @@ export default function HomePage() {
   if (error) return <ErrorBanner msg={error} />;
   if (!data) return <div className="p-8 text-center text-sm text-gray-400">Loading…</div>;
   const q = data.queues;
+  // A centre principal/SPOC signs in as a Location-scoped user.
+  const isPrincipal = role === "Location";
 
   const Row = ({ href, left, right }: { href: string; left: React.ReactNode; right?: React.ReactNode }) => (
     <li>
@@ -48,19 +56,51 @@ export default function HomePage() {
       )}
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-        {/* 2026-08-13 (Manish): headline counts APPROVED centres; job-role detail = readiness section below.
-            Every KPI deep-links to the SAME filtered population it counted (list-UX cycle). */}
-        {/* 2026-08-13 (Umesh): "ek ke baad do count" — the paired figure on each card. */}
-        <KPI label="Approved Locations" value={data.kpis.approved_locations} tone="blue" icon={<IconPin size={19} />} href="/locations?approval_status=Approved"
-          sub={`${data.kpis.pending_locations ?? 0} pending approval`} />
-        <KPI label="Active Batches" value={data.kpis.active_batches} tone="violet" icon={<IconCap size={19} />} href="/batches?status=Active"
+        {/* 2026-08-13 (Manish, role-wise cards): Admin/Operations get the project picture —
+            ongoing + completed batches, active trainers job-role-wise, total attendance,
+            approved centre×job-role (the sheet's "31", not the 10 centres). A principal gets
+            the three that are theirs; everything is already location-scoped server-side.
+            Umesh's "ek ke baad do count" stays: every card carries its paired figure. */}
+        <KPI label="Ongoing Batches" value={data.kpis.active_batches} tone="violet" icon={<IconCap size={19} />} href="/batches?status=Active"
           sub={`${data.kpis.completed_batches ?? 0} completed`} />
-        <KPI label="Enrolled Students" value={data.kpis.enrolled_students} tone="green" icon={<IconUsers size={19} />} href="/candidates?lifecycle_status=Enrolled"
-          sub={`of ${data.kpis.pool_candidates ?? 0} in the pool`} />
-        <KPI label="Open Trainer Requests" value={data.kpis.open_trainer_requests} tone="amber" icon={<IconUser size={19} />} href="/trainers?tab=Requests"
-          sub={`${data.kpis.fulfilled_trainer_requests ?? 0} fulfilled`} />
-        <KPI label="Pending Follow-ups" value={data.kpis.pending_followups} tone="red" icon={<IconAlert size={19} />} href="/sync" />
+        <KPI label="Completed Batches" value={data.kpis.completed_batches ?? 0} tone="green" icon={<IconCap size={19} />} href="/batches?status=Completed"
+          sub={`${data.kpis.active_batches} ongoing`} />
+        <KPI label="Total Attendance" tone="blue" icon={<IconUsers size={19} />} href="/govt-attendance"
+          value={data.kpis.attendance?.pct != null ? `${data.kpis.attendance.pct}%` : "—"}
+          sub={data.kpis.attendance?.today_roster
+            ? `today ${data.kpis.attendance.today_present}/${data.kpis.attendance.today_roster} · ${data.kpis.attendance.present} of ${data.kpis.attendance.roster} student-days`
+            : `${data.kpis.attendance?.present ?? 0} of ${data.kpis.attendance?.roster ?? 0} student-days`} />
+
+        {!isPrincipal && (
+          <KPI label="Active Trainers" value={data.kpis.trainers_active_total ?? 0} tone="amber" icon={<IconUser size={19} />} href="/trainers?tag=Available"
+            sub={(data.kpis.trainers_by_role ?? []).slice(0, 3).map((r: any) => `${r.code ?? r.program} ${r.count}`).join(" · ") || "none certified yet"} />
+        )}
+        {!isPrincipal && (
+          <KPI label="Approved (centre × job role)" value={data.kpis.approved_targets ?? 0} tone="blue" icon={<IconPin size={19} />} href="/batches?tab=Preparation"
+            sub={`of ${data.kpis.targets_total ?? 0} job-role targets · ${data.kpis.approved_locations} centres`} />
+        )}
+        {!isPrincipal && (
+          <KPI label="Enrolled Students" value={data.kpis.enrolled_students} tone="green" icon={<IconUsers size={19} />} href="/candidates?lifecycle_status=Enrolled"
+            sub={`of ${data.kpis.pool_candidates ?? 0} in the pool`} />
+        )}
+        {!isPrincipal && (
+          <KPI label="Open Trainer Requests" value={data.kpis.open_trainer_requests} tone="amber" icon={<IconUser size={19} />} href="/trainers?tab=Requests"
+            sub={`${data.kpis.fulfilled_trainer_requests ?? 0} fulfilled`} />
+        )}
+        {!isPrincipal && (
+          <KPI label="Pending Follow-ups" value={data.kpis.pending_followups} tone="red" icon={<IconAlert size={19} />} href="/sync" />
+        )}
       </div>
+      {!isPrincipal && (data.kpis.trainers_by_role ?? []).length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
+          <span className="font-medium text-gray-600">Certified trainers by job role:</span>
+          {data.kpis.trainers_by_role.map((r: any) => (
+            <Link key={r.program} href={`/trainers?tag=Available`} className="rounded-full border border-gray-200 px-2.5 py-0.5 hover:bg-gray-50">
+              {r.program}{r.scheme ? <span className="text-gray-400"> ({r.scheme})</span> : null} <b className="text-gray-700">{r.count}</b>
+            </Link>
+          ))}
+        </div>
+      )}
 
       {/* Manish, 2026-08-12: "location, trainer aur candidate — ye teeno map ho gaye to batch form
           ho jaata hai." This queue answers exactly that, and names the one thing still missing. */}

@@ -263,6 +263,7 @@ const batches = [];
     if (statusText && !status) note(tab, `batch ${code}: unknown Batch Status "${statusText}" — left untouched`);
     batches.push({
       code, location: loc._id, program: prog._id,
+      source: `AVPL ${tab}`, // provenance → the Source column links back to this tab
       _status: status,
       _trainerPhone: tr?.phone,
       target_size: Number(pick(m, r, "Capacity")) || 45,

@@ -82,8 +82,10 @@ export const PUT = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   const set: Record<string, unknown> = {};
   // 2026-08-12: the client sheet also states how many trainers this centre x job role needs, and
   // what they believe is already enrolled — kept separate from our own computed figure.
+  // tc_id/tc_status: per-row government identity (2026-08-13, "31 approved") — editable so a
+  // fresh approval reaches the board without waiting for the next sheet sync.
   for (const f of ["approved_target", "allocated_target", "start_date", "end_date",
-    "trainers_required", "enrolled_reported", "pending_reported"]) {
+    "trainers_required", "enrolled_reported", "pending_reported", "tc_id", "tc_status"]) {
     if (body[f] !== undefined) set[f] = body[f];
   }
   const doc = await LocationTarget.findOneAndUpdate(

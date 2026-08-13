@@ -2,7 +2,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/client";
-import { Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, ShareLinkPanel, copyText, inputCls } from "@/components/ui";
+import { Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, ShareLinkPanel, SourceCell, copyText, inputCls } from "@/components/ui";
 import { useLocationCtx } from "@/components/shell";
 import { BASE_PATH } from "@/lib/base-path";
 import { bulkSmsCsv, smsLink, unsendableCount, waLink } from "@/lib/messaging";
@@ -319,7 +319,7 @@ function CandidatesInner() {
               </span>
             ),
           },
-          { key: "source", label: "Source", mobile: false },
+          { key: "source", label: "Source", mobile: false, filterable: true, filterText: (r: any) => r.source ?? "Entered in ERP", render: (r: any) => <SourceCell source={r.source} /> },
         ]} empty="No candidates — add or import." />
 
       <Drawer open={drawer === "add" || drawer === "edit"} onClose={() => { setDrawer(""); setEditId(""); }}

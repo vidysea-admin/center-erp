@@ -2,6 +2,7 @@
 import { ReactNode, useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent } from "react";
 import Link from "next/link";
 import { IconTrendDown, IconTrendUp } from "@/components/icons";
+import { sourceLink } from "@/lib/client";
 
 // ---- StatusChip: status colours per UI spec (grey/blue/green/red/amber) ----
 const CHIP_COLORS: Record<string, string> = {
@@ -40,6 +41,11 @@ const CHIP_COLORS: Record<string, string> = {
   "TOT Scheduled": "bg-blue-100 text-blue-700", "TOT In Progress": "bg-blue-100 text-blue-700",
   "TOT Passed": "bg-blue-100 text-blue-700", "Certified": "bg-green-100 text-green-700",
   "NSDC Rejected": "bg-red-100 text-red-700",
+  // 2026-08-13: schemes are shown as chips wherever a job role appears — one colour per scheme
+  // so "which scheme is this" is answerable at a glance (Manish: "scheme ke bina confuse ho jate hain").
+  "RPL-AVPL": "bg-violet-100 text-violet-700", "RPL-HSL": "bg-cyan-100 text-cyan-700",
+  "PMKVY-BECIL": "bg-indigo-100 text-indigo-700", "DDU-GKY2.0": "bg-teal-100 text-teal-700",
+  "DDUGKY 2.0 SPH": "bg-teal-100 text-teal-700",
 };
 
 // Health is never shown as a bare colour — the reasons always travel with it.
@@ -525,6 +531,21 @@ export function ShareLinkPanel({ label, link, hint, onDismiss }: {
       <button onClick={onDismiss} className="ml-1 font-bold text-blue-400 hover:text-blue-700">×</button>
       {hint && <span className="w-full text-xs text-blue-700/80">{hint}</span>}
     </div>
+  );
+}
+
+// 2026-08-13 (Manish): every row says where it came from, and the source opens the exact sheet
+// tab — "us source pe click karte hi us sheet ke us tab pe chale jayen, taaki pata rahe accha
+// yeh data galat hai, hallucinated hai, ya exact accurate hai". Rows born in the app say so.
+export function SourceCell({ source, fallback = "Entered in ERP" }: { source?: string | null; fallback?: string }) {
+  const link = sourceLink(source);
+  if (!link) return <span className="text-xs text-gray-400">{source || fallback}</span>;
+  return (
+    <a href={link.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
+      title={`Open the "${link.tab}" tab in the client workbook`}
+      className="text-xs font-medium text-blue-700 hover:underline">
+      {link.tab} <span className="text-gray-400">↗</span>
+    </a>
   );
 }
 

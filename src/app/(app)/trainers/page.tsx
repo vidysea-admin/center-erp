@@ -2,7 +2,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, fmtDate, toInputDate } from "@/lib/client";
-import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, Tabs, inputCls } from "@/components/ui";
+import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, SourceCell, Tabs, inputCls } from "@/components/ui";
 
 // 2026-08-13 (Umesh): "10 mein se 5 available, 2 under preparation, 3 not available — sab ke
 // saath proper tag with filters". One derived availability tag per trainer: the pipeline says
@@ -143,6 +143,8 @@ function TrainersInner() {
               { key: "status", label: "Status", sortable: true, sortValue: (r: any) => availabilityTag(r), render: (r: any) => <Chip value={availabilityTag(r) === "Under preparation" ? "Under preparation" : r.status} /> },
               { key: "available_from", label: "Available from", sortable: true, sortValue: (r: any) => r.available_from ? new Date(r.available_from).getTime() : null, render: (r: any) => fmtDate(r.available_from), mobile: false },
               { key: "max_concurrent_batches", label: "Max batches", mobile: false },
+              // 2026-08-13 (Manish): where this row came from, one click to that sheet tab.
+              { key: "source", label: "Source", mobile: false, filterable: true, filterText: (r: any) => r.source ?? "Entered in ERP", render: (r: any) => <SourceCell source={r.source} /> },
               {
                 key: "_edit", label: "", render: (r: any) => (
                   <span onClick={(e) => e.stopPropagation()}>
