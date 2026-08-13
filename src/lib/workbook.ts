@@ -1,12 +1,15 @@
 // Workbook Watch engine (2026-08-11 meeting): fetch the client's live workbook, snapshot
 // every tab/column, and turn each difference into a reviewable WorkbookChange.
 // The client edits the sheet directly and tells nobody — this is the tracking that replaces
-// the manual "किसने क्या बदला" hunt. Advisory only: nothing here writes to ERP entities.
+// the manual "किसने क्या बदला" hunt. The watch itself is advisory (WorkbookChanges never touch
+// entities); entity writes happen only through user-approved TabMappings (lib/tab-mapping.ts),
+// and even those turn changes to existing records into review items, never silent overwrites.
 import * as XLSX from "xlsx";
 import { Location, Notification, SyncSource, WorkbookChange, WorkbookSnapshot } from "@/models";
 import { HttpError } from "@/lib/authz";
 import { safeFetch } from "@/lib/safe-fetch";
 import { getDefaults } from "@/lib/defaults";
+import { runTabMappings } from "@/lib/tab-mapping";
 
 // Content hash for change detection only (not security) — cyrb53, dependency-free so the
 // Edge instrumentation trace stays clean (node:crypto is not Edge-safe).
@@ -266,11 +269,13 @@ export async function runWatch(sourceId: string): Promise<WatchResult> {
   const seenTabs = new Set(wb.SheetNames);
 
   let totalChanges = 0;
+  const changedTabs = new Set<string>(); // tabs that got a new snapshot — tab mappings re-run for these
   for (const tab of wb.SheetNames) {
     const snap = snapshotTab(wb.Sheets[tab], keyColumns);
     const prev = await WorkbookSnapshot.findOne({ sync_source: src._id, tab }).sort({ taken_at: -1 }).lean<any>();
 
     if (prev && prev.hash === snap.hash) continue; // unchanged tab — keep the old snapshot
+    changedTabs.add(tab);
 
     if (!prev && !isFirstRun) {
       // A tab that did not exist last time. Announce the tab once and baseline its rows —
@@ -312,6 +317,10 @@ export async function runWatch(sourceId: string): Promise<WatchResult> {
     );
     await WorkbookSnapshot.deleteMany({ sync_source: src._id, tab });
   }
+
+  // Approved tab mappings ingest on the same fetch: new rows become entities, changed rows
+  // become Sync-Inbox review items. Runs only for tabs whose content moved this cycle.
+  await runTabMappings(src, wb, changedTabs);
 
   src.last_status = "OK";
   src.last_error = undefined;

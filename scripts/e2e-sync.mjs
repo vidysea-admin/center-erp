@@ -352,5 +352,104 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
   await req("PUT", "/api/approvals", { action: "location.stop", enabled: false });
 }
 
+// ---- tab mappings (2026-08-13): user-approved column→field ingestion, no operator needed ----
+{
+  const s3 = "TM" + Date.now().toString().slice(-6);
+  const locT = (await req("POST", "/api/locations", { code: "TML" + s3, name: "TabMap Loc " + s3, approval_status: "Approved", city: "Gurugram" }, 201)).data.item;
+  const progT = (await req("POST", "/api/programs", { code: "TMQ" + s3, name: "TabMap Prog " + s3, trainer_skill: "TMSkill" + s3 }, 201)).data.item;
+
+  // A candidate tab shaped like the client's real ones: totals row ABOVE the header, an "age"
+  // column instead of DOB, "Enrolled" as the status word, and one row with an unusable phone.
+  // Every name/phone is run-stamped — key collisions with a previous run would read as
+  // "existing entity" and turn creations into review items (the e2e-govt.mjs lesson).
+  const d8 = Date.now().toString().slice(-8);
+  const nAsha = `Asha ${s3}`, nBinod = `Binod ${s3}`, nBadPhone = `BadPhone ${s3}`, nTrOne = `TabTrainer ${s3}`;
+  const candTab = [
+    ["Registrations till 30th", "", "", "", ""],
+    ["Name", "Mobile", "What is your age?", "Enrolled Status", "Qualification"],
+    [nAsha, "98" + d8, "22", "Enrolled", "12th"],
+    [nBinod, "97" + d8, "25", "", "Graduate"],
+    [nBadPhone, "98111", "30", "", "10th"], // 5 digits — unusable, must be flagged + skipped by name
+  ];
+  const trTab = [
+    ["Trainer Name", "Mobile Number", "Email", "Education Attained"],
+    [nTrOne, "96" + d8, "one@example.com", "B.Tech"],
+  ];
+  const srcTm = (await req("POST", "/api/sync-sources", {
+    name: "TabMap source " + s3, source_url: wbDataUrl({ "Reg July": candTab, "Trainer_Master": trTab }), mode: "watch", interval_minutes: 5,
+  }, 201)).data.item;
+  await req("POST", `/api/sync-sources/${srcTm._id}/run`, undefined, 200); // baseline snapshots
+
+  // The wizard's proposal: obvious columns matched, header found below the totals row, and the
+  // required-but-uncovered fields named so the user knows what a constant must supply.
+  const sug = (await req("POST", `/api/sync-sources/${srcTm._id}/tab-mappings/suggest`, { tab: "Reg July", entity_type: "Candidate" }, 200)).data;
+  const sugMap = Object.fromEntries(sug.suggestions.map((s) => [s.header, s.field]));
+  ok("suggest: Name→name, Mobile→phone, age→dob", sugMap["Name"] === "name" && sugMap["Mobile"] === "phone" && sugMap["What is your age?"] === "dob", JSON.stringify(sugMap));
+  ok("suggest: header found below the totals row", sug.header_row === 1, String(sug.header_row));
+  ok("suggest: names location+program as still required", sug.required_missing.includes("location") && sug.required_missing.includes("program"), JSON.stringify(sug.required_missing));
+  ok("suggest: preview flags the unusable phone by row", (sug.preview ?? []).some((p) => p.label === nBadPhone && p.warnings.length > 0), JSON.stringify(sug.preview?.map((p) => p.warnings)));
+
+  const cols = [
+    { header: "Name", field: "name" }, { header: "Mobile", field: "phone" },
+    { header: "What is your age?", field: "dob" }, { header: "Enrolled Status", field: "sidh_status" },
+    { header: "Qualification", field: "education" },
+  ];
+  // Approval refuses a mapping that cannot actually create rows (required fields uncovered),
+  // a key supplied as a constant, and an unknown field.
+  await req("PUT", `/api/sync-sources/${srcTm._id}/tab-mappings`, { tab: "Reg July", entity_type: "Candidate", columns: cols, constants: {}, key_field: "phone" }, 400);
+  await req("PUT", `/api/sync-sources/${srcTm._id}/tab-mappings`, { tab: "Reg July", entity_type: "Candidate", columns: cols.slice(0, 1), constants: { phone: "9", location: locT._id, program: progT._id }, key_field: "phone" }, 400);
+  await req("PUT", `/api/sync-sources/${srcTm._id}/tab-mappings`, { tab: "Reg July", entity_type: "Candidate", columns: [...cols, { header: "X", field: "not_a_field" }], constants: { location: locT._id, program: progT._id }, key_field: "phone" }, 400);
+  // Approve with tab-level constants for centre + job role → import runs on the next watch.
+  await req("PUT", `/api/sync-sources/${srcTm._id}/tab-mappings`, { tab: "Reg July", entity_type: "Candidate", columns: cols, constants: { location: locT._id, program: progT._id }, key_field: "phone" }, 200);
+  await req("POST", `/api/sync-sources/${srcTm._id}/run`, undefined, 200);
+
+  const tms1 = (await req("GET", `/api/sync-sources/${srcTm._id}/tab-mappings`, undefined, 200)).data.items;
+  const repC = tms1.find((m) => m.tab === "Reg July")?.last_report;
+  ok("initial import: 2 candidates created", repC?.created === 2, JSON.stringify(repC));
+  ok("initial import: the phone-less row is skipped BY NAME, never silently", (repC?.skipped ?? []).some((s) => s.includes(nBadPhone)), JSON.stringify(repC?.skipped));
+
+  const cands = (await req("GET", `/api/candidates?location=${locT._id}&limit=100`)).data.items ?? [];
+  const asha = cands.find((c) => c.name === nAsha);
+  ok("created row carries constants + transforms (program, Enrolled→Registered, 12th→12th Pass)",
+    !!asha && String(asha.program?._id ?? asha.program) === String(progT._id) && asha.sidh_status === "Registered" && asha.education === "12th Pass",
+    JSON.stringify({ prog: asha?.program?.name, sidh: asha?.sidh_status, edu: asha?.education }));
+  ok("…and the age column became an approximate DOB", !!asha?.dob && new Date().getFullYear() - new Date(asha.dob).getFullYear() === 22, String(asha?.dob));
+
+  // The client edits a cell → the change is a REVIEW ITEM on the existing candidate, not a
+  // silent overwrite. Apply writes it; revert puts it back.
+  candTab[3][0] = nBinod + " Singh";
+  await req("PATCH", `/api/sync-sources/${srcTm._id}`, { source_url: wbDataUrl({ "Reg July": candTab, "Trainer_Master": trTab }) }, 200);
+  await req("POST", `/api/sync-sources/${srcTm._id}/run`, undefined, 200);
+  const openTm = ((await req("GET", "/api/sheet-changes?status=Open")).data.items ?? [])
+    .find((c) => c.entity_type === "Candidate" && c.field_name === "name" && c.new_value === nBinod + " Singh");
+  ok("edited cell became a Candidate review item with tab + row label", !!openTm && openTm.tab === "Reg July" && openTm.impact_snapshot?.row_label === nBinod + " Singh", JSON.stringify({ tab: openTm?.tab, label: openTm?.impact_snapshot?.row_label }));
+  if (openTm) {
+    const binod = cands.find((c) => c.name === nBinod);
+    ok("…and the entity still holds the OLD value until a human applies", !!binod, "pre-change Binod not found in list");
+    await req("POST", `/api/sheet-changes/${openTm._id}/apply`, { action: "Apply value" }, 200);
+    const afterApply = (await req("GET", `/api/candidates/${openTm.entity}`)).data.item;
+    ok("Apply value writes the sheet's value onto the candidate", afterApply?.name === nBinod + " Singh", afterApply?.name);
+    await req("POST", `/api/sheet-changes/${openTm._id}/revert`, {}, 200);
+    const afterRevert = (await req("GET", `/api/candidates/${openTm.entity}`)).data.item;
+    ok("Revert restores the previous value exactly", afterRevert?.name === nBinod, afterRevert?.name);
+  }
+
+  // A second mapping on the SAME source, different tab, different entity — trainers.
+  await req("PUT", `/api/sync-sources/${srcTm._id}/tab-mappings`, {
+    tab: "Trainer_Master", entity_type: "Trainer", key_field: "phone",
+    columns: [{ header: "Trainer Name", field: "name" }, { header: "Mobile Number", field: "phone" }, { header: "Email", field: "email" }, { header: "Education Attained", field: "qualification" }],
+    constants: {},
+  }, 200);
+  await req("POST", `/api/sync-sources/${srcTm._id}/run`, undefined, 200);
+  const tms2 = (await req("GET", `/api/sync-sources/${srcTm._id}/tab-mappings`, undefined, 200)).data.items;
+  ok("trainer tab imported by its own mapping", tms2.find((m) => m.tab === "Trainer_Master")?.last_report?.created === 1, JSON.stringify(tms2.find((m) => m.tab === "Trainer_Master")?.last_report));
+  const trNew = ((await req("GET", `/api/trainers?q=${encodeURIComponent(nTrOne)}&limit=10`)).data.items ?? [])[0];
+  ok("created trainer is a real Trainer with the mapped fields", !!trNew && trNew.qualification === "B.Tech", JSON.stringify({ q: trNew?.qualification }));
+
+  // Tab mappings ride on watch sources only — a mapped-mode source must refuse.
+  const srcMapped = (await req("POST", "/api/sync-sources", { name: "TabMap mapped " + s3, source_url: wbDataUrl({ X: [["A"], ["1"]] }), mode: "mapped", field_mappings: { A: "external_id" } }, 201)).data.item;
+  await req("PUT", `/api/sync-sources/${srcMapped._id}/tab-mappings`, { tab: "X", entity_type: "Candidate", columns: [{ header: "A", field: "phone" }], constants: {}, key_field: "phone" }, 400);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

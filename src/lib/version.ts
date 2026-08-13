@@ -3,10 +3,11 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.12-9";
+export const RELEASE = "2026.08.13-1";
 export const RELEASE_NOTE =
-  "The RPL business, modelled: schemes and TC identity, the 14-stage trainer hiring journey " +
-  "(documents gate incl. per-job-role extras, NSDC round-trip, ₹3250 auto-costed, TOT, TR ID), " +
-  "the location×trainer×candidate readiness with a Home queue, TR-ID-gated trainer dropdowns, " +
-  "SIDH batch id + Drive folder, registration-failed queue, per-candidate attendance, and both " +
-  "client sheets watched with derived counters cross-checking them";
+  "Self-serve sheet ingestion: the tab-mapping wizard (propose → user approves columns → the " +
+  "5-minute watch imports the tab on its own; changes to existing records stay human-gated with " +
+  "Apply value + revert). Edit-after-import: candidate edit drawer, batch centre/role correction " +
+  "window, cost entry edit/delete, TC identity fields, targets behind locations.manage. Eval " +
+  "refresh: 15 suites / ~1,100 assertions via scripts/run-e2e.mjs — which found and fixed the " +
+  "severity-sort, stage-jump-by-PATCH, dropped-Defaults-writes, negative-cost and Sync-Now-gating defects";

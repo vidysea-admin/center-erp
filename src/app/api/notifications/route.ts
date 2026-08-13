@@ -25,7 +25,11 @@ export const GET = apiHandler(async (req: NextRequest) => {
   }
 
   if (countOnly) return NextResponse.json({ count: await Notification.countDocuments(filter) });
-  const items = await Notification.find(filter).sort({ severity: -1, createdAt: -1 }).limit(500)
-    .populate("location", "name code").populate("acknowledged_by", "name").lean();
+  // 2026-08-13 (eval sweep): sort({severity: -1}) was LEXICOGRAPHIC — "warning" > "info" >
+  // "critical", so the most severe alerts sorted to the BOTTOM of the inbox. Rank explicitly.
+  const rank: Record<string, number> = { critical: 0, warning: 1, info: 2 };
+  const items = (await Notification.find(filter).sort({ createdAt: -1 }).limit(500)
+    .populate("location", "name code").populate("acknowledged_by", "name").lean<any[]>())
+    .sort((a, b) => (rank[a.severity] ?? 3) - (rank[b.severity] ?? 3));
   return NextResponse.json({ items });
 });

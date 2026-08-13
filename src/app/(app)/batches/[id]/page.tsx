@@ -137,23 +137,36 @@ function Overview({ data, onChanged, setError }: any) {
 function EditDetails({ b, onChanged, setError }: any) {
   const [trainers, setTrainers] = useState<any[]>([]);
   const [rooms, setRooms] = useState<any[]>([]);
+  const [allLocations, setAllLocations] = useState<any[]>([]);
+  const [allPrograms, setAllPrograms] = useState<any[]>([]);
   const [form, setForm] = useState<any>({
     trainer: b.trainer?._id ?? "", room: b.room?._id ?? "", session: b.session,
     planned_start: toInputDate(b.planned_start), planned_end: toInputDate(b.planned_end), target_size: b.target_size,
     slot_start: b.slot_start ?? "", slot_end: b.slot_end ?? "",
     govt_batch_id: b.govt_batch_id ?? "", drive_folder_url: b.drive_folder_url ?? "",
+    location: b.location?._id ?? b.location ?? "", program: b.program?._id ?? b.program ?? "",
   });
   const [driveRoot, setDriveRoot] = useState("");
+  const planning = b.status === "Planning";
   useEffect(() => {
     api("/api/trainers?limit=2000").then((d) => setTrainers(d.items)).catch(() => {});
     const locId = b.location?._id ?? b.location;
     api(`/api/locations/${locId}/rooms`).then((d) => setRooms(d.items)).catch(() => {});
     api("/api/defaults").then((d) => setDriveRoot(d.item?.drive_root_url ?? "")).catch(() => {});
+    if (planning) {
+      api("/api/locations?limit=2000").then((d) => setAllLocations(d.items)).catch(() => {});
+      api("/api/programs?limit=1000").then((d) => setAllPrograms(d.items)).catch(() => {});
+    }
   }, [b]);
 
   async function save() {
     try {
-      await api(`/api/batches/${b._id}`, { method: "PATCH", json: { ...form, trainer: form.trainer || null, room: form.room || null } });
+      const json: any = { ...form, trainer: form.trainer || null, room: form.room || null };
+      // location/program travel only when actually changed — otherwise every ordinary save on a
+      // Planning batch with a roster would trip the empty-roster guard on the API.
+      if (json.location === String(b.location?._id ?? b.location ?? "")) delete json.location;
+      if (json.program === String(b.program?._id ?? b.program ?? "")) delete json.program;
+      await api(`/api/batches/${b._id}`, { method: "PATCH", json });
       onChanged();
     } catch (e: any) { setError(e.message); }
   }
@@ -171,6 +184,22 @@ function EditDetails({ b, onChanged, setError }: any) {
 
   return (
     <div className="space-y-3">
+      {planning && (
+        <div className="grid grid-cols-2 gap-3 rounded-lg border border-amber-200 bg-amber-50/50 p-3">
+          {/* Sheet-imported batches can carry a wrong fuzzy match for centre or job role.
+              Correctable only while Planning with an empty roster — the API enforces the roster. */}
+          <Field label="Location (correct a wrong import match)">
+            <select className={inputCls} value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })}>
+              {allLocations.map((l) => <option key={l._id} value={l._id}>{l.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Program / job role">
+            <select className={inputCls} value={form.program} onChange={(e) => setForm({ ...form, program: e.target.value })}>
+              {allPrograms.map((p) => <option key={p._id} value={p._id}>{p.name}</option>)}
+            </select>
+          </Field>
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-3">
         {/* Same TR-ID gate as batch creation — reassigning a trainer here must not quietly
             sidestep the rule the create drawer enforces. */}

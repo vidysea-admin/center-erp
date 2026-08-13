@@ -69,7 +69,7 @@ export const INVOICE_STATUS = ["Not Ready", "Ready", "Raised", "Paid"] as const;
 export const SYNC_FREQUENCY = ["Daily", "Manual only"] as const;
 export const SYNC_STATUS = ["OK", "Failed", "Partial"] as const;
 export const SHEET_CHANGE_STATUS = ["Open", "Actioned", "Ignored"] as const;
-export const SHEET_CHANGE_ACTION = ["No action", "Update target", "Start location", "Put on hold", "Stop location", "Close location"] as const;
+export const SHEET_CHANGE_ACTION = ["No action", "Update target", "Start location", "Put on hold", "Stop location", "Close location", "Apply value"] as const;
 export const FOLLOWUP_TYPE = ["Stop batch", "Release trainer", "Cancel trainer request", "Return candidates to pool", "Review target"] as const;
 export const FOLLOWUP_STATUS = ["Pending", "Done", "Skipped"] as const;
 // "Trainer" added 2026-08-11 (CEO): trainers sign up themselves, choose the role, and wait
@@ -526,9 +526,16 @@ const SyncSourceSchema = new Schema({
 }, { timestamps: true });
 
 // ---------- SheetChange ----------
+// 2026-08-13: generalized beyond Location. A tab mapping (user-approved column→field mapping on
+// a watched tab) can target Trainers and Candidates too; entity_type/entity say what the change
+// is about, `location` stays for the original mapped sync and for scoping the inbox.
+export const SHEET_CHANGE_ENTITY = ["Location", "Trainer", "Candidate"] as const;
 const SheetChangeSchema = new Schema({
   sync_source: oid("SyncSource", true),
   location: oid("Location"),
+  entity_type: { type: String, enum: SHEET_CHANGE_ENTITY, default: "Location" },
+  entity: { type: Schema.Types.ObjectId, refPath: "entity_type" },
+  tab: String, // which tab of the workbook produced this change (tab mappings only)
   field_name: { type: String, required: true },
   old_value: String, new_value: String,
   detected_at: { type: Date, required: true, default: () => new Date() },
@@ -538,6 +545,31 @@ const SheetChangeSchema = new Schema({
   note: String,
   actor: oid("User"), actioned_at: Date,
 }, { timestamps: true });
+
+// ---------- TabMapping (2026-08-13) ----------
+// User-approved column→field mapping for ONE tab of a watched workbook. This is what makes the
+// system self-sufficient on a server with no operator: when a new tab appears, anyone with
+// sheet.sources opens the wizard, validates the proposed mapping, and from then on the 5-minute
+// watch ingests that tab — new rows are created outright (that IS what approving the mapping
+// means), changed rows become SheetChange review items (a human said OK before anything is
+// overwritten), unresolvable rows are named in last_report. Never guessed, never silent.
+const TabMappingSchema = new Schema({
+  sync_source: oid("SyncSource", true),
+  tab: { type: String, required: true },
+  entity_type: { type: String, enum: SHEET_CHANGE_ENTITY, required: true },
+  // [{header: "Mobile Number", field: "phone"}] — headers not listed are ignored.
+  columns: { type: [{ header: String, field: String, _id: false }], default: [] },
+  // Fixed values applied to every row of this tab — e.g. {location: "<id>", program: "<id>"}
+  // for a per-district candidate tab where centre/job role are facts about the tab, not columns.
+  constants: { type: Schema.Types.Mixed, default: {} },
+  key_field: { type: String, required: true }, // which mapped field identifies a row (phone, external_id…)
+  active: { type: Boolean, default: true },
+  approved_by: oid("User"), approved_at: Date,
+  initial_imported: { type: Boolean, default: false },
+  last_run_at: Date,
+  last_report: { type: Schema.Types.Mixed, default: {} }, // {created, updated_review, unchanged, skipped: [reason…]}
+}, { timestamps: true });
+TabMappingSchema.index({ sync_source: 1, tab: 1 }, { unique: true });
 
 // ---------- Workbook Watch (2026-08-11 meeting) ----------
 // The client edits their sheet in place and tells nobody. Every `interval_minutes` the full
@@ -733,6 +765,11 @@ const DefaultsSchema = new Schema({
   lead_trainer_found_days: { type: Number, default: 20 },
   min_daily_evidence: { type: Number, default: 2 },
   sidh_url: { type: String, default: "https://www.skillindiadigital.gov.in/" },
+  // 2026-08-13 eval sweep: these two were in the PUT whitelist and in DEFAULT_VALUES but NOT in
+  // this schema — strict mode silently dropped every write, so the Admin panel's knob never
+  // actually persisted (the fallback default masked it).
+  drive_root_url: { type: String, default: "https://drive.google.com/drive/folders/1NOfRCw9lIyRoJTEFAg4--HIJiTG-Of0G" },
+  snapshot_retention_per_tab: { type: Number, default: 100 },
   // Scheme timing guidelines, confirmed by Manish 2026-08-12: the training day runs 9 to 6; a
   // session may be up to 4 hours; two 4-hour batches a day is the sanctioned pattern (three
   // 3-hour batches was asked for and refused); no minimum break is prescribed.
@@ -774,6 +811,7 @@ export const Invoice = models.Invoice || model("Invoice", InvoiceSchema);
 export const CostEntry = models.CostEntry || model("CostEntry", CostEntrySchema);
 export const SyncSource = models.SyncSource || model("SyncSource", SyncSourceSchema);
 export const SheetChange = models.SheetChange || model("SheetChange", SheetChangeSchema);
+export const TabMapping = models.TabMapping || model("TabMapping", TabMappingSchema);
 export const WorkbookSnapshot = models.WorkbookSnapshot || model("WorkbookSnapshot", WorkbookSnapshotSchema);
 export const WorkbookChange = models.WorkbookChange || model("WorkbookChange", WorkbookChangeSchema);
 export const PublicToken = models.PublicToken || model("PublicToken", PublicTokenSchema);

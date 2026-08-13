@@ -22,9 +22,9 @@ Login: `admin@vidysea.com` (see SECURITY.md — rotate the bootstrap password).
 |---|---|
 | `scripts/seed.mjs` | Core seed: defaults (§8), cost categories, drop reasons, admin user |
 | `scripts/seed-sample.mjs` | Demo dataset via the live API (8 locations, 5 programs, batches in every lifecycle state). Server must be running |
-| `scripts/e2e.mjs` | 65 assertions: full lifecycle + Rules 10–37 against the live server |
-| `scripts/e2e-sync.mjs` | 33 assertions: sheet sync engine, Rules 1–9 |
-| `scripts/e2e-roles.mjs` | 16 assertions: role scoping + permissions, Rules 38–40 |
+| `scripts/run-e2e.mjs` | **`npm test`** — runs all 15 e2e suites (no fail-fast), prints a per-suite table. ~1,100 assertions total. The suite list lives only in this file; the coverage map is `d:\erp\qa\EVAL-MATRIX.md` |
+| `scripts/e2e-*.mjs` | Individual suites (each also has an `npm run test:<name>` alias): lifecycle/rules · roles/permissions · sheet sync + tab mappings · edge cases · govt attendance · trainer pipeline · RPL/flow gaps · 7 section-wise eval suites (home, notifications, trainers-ui, candidates, enrollment, locations-admin, data shapes) |
+| `scripts/e2e-lib.mjs` | Shared harness for the eval suites (login/req/ok/stamp) |
 
 ## Wiring the real SDP sheet
 Admin → Sync Source → add the sheet's **CSV export URL** + field mappings

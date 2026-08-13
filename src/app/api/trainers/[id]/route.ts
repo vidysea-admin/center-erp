@@ -10,9 +10,12 @@ export const { GET, PATCH } = itemRoutes({
   async mapItems(items, user) {
     return maskTrainerSecrets(items, await hasPermission(user, "trainers.manage"));
   },
-  // The hiring-journey fields have to be writable here too — the detail page and the transition
-  // routes both PATCH through this route, and a field missing from this list is silently dropped.
-  fields: ["name", "phone", "email", "skills", "home_location", "status", "available_from", "day_rate", "incentive_note", "max_concurrent_batches", "active", "pipeline_status", "tr_id", "capable_locations", "programs_applied", "compensation_type", "compensation_fixed", "govt_candidate_id",
+  // The hiring-journey fields have to be writable here too — the detail page PATCHes through
+  // this route, and a field missing from this list is silently dropped. pipeline_status is
+  // deliberately NOT here (2026-08-13 eval sweep): a plain PATCH could jump a trainer straight
+  // to "Certified", skipping every TRAINER_FLOW guard — document gates, the NSDC round-trip,
+  // Rule T7. Stages move only through /transition; creation may still set an initial stage.
+  fields: ["name", "phone", "email", "skills", "home_location", "status", "available_from", "day_rate", "incentive_note", "max_concurrent_batches", "active", "tr_id", "capable_locations", "programs_applied", "compensation_type", "compensation_fixed", "govt_candidate_id",
     "nominated_for_location", "nominated_for_program", "source", "qualification",
     "industry_experience_years", "teaching_experience_years", "nsdc_remarks",
     "eligibility_payment_amount", "payment_reference", "tot_certificate_no", "pipeline_note"],

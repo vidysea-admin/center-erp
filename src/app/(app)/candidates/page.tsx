@@ -24,7 +24,8 @@ function CandidatesInner() {
   const [fStatus, setFStatus] = useState(sp.get("lifecycle_status") ?? "");
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [drawer, setDrawer] = useState<"" | "add" | "import" | "assign">("");
+  const [drawer, setDrawer] = useState<"" | "add" | "edit" | "import" | "assign">("");
+  const [editId, setEditId] = useState<string>("");
   const [form, setForm] = useState<any>({});
   const [importState, setImportState] = useState<any>({});
   const [dupes, setDupes] = useState<any[]>([]);
@@ -62,8 +63,32 @@ function CandidatesInner() {
   }
 
   async function saveCandidate() {
-    try { await api("/api/candidates", { method: "POST", json: form }); setDrawer(""); setForm({}); load(); }
-    catch (e: any) { setError(e.message); }
+    try {
+      if (drawer === "edit" && editId) {
+        // PATCH is partial: a blank select/date means "not changing this", never "cast '' to
+        // ObjectId/Date" (imported rows legitimately have location/program/dob still empty).
+        const json = Object.fromEntries(Object.entries(form).filter(([, v]) => v !== ""));
+        await api(`/api/candidates/${editId}`, { method: "PATCH", json });
+      } else await api("/api/candidates", { method: "POST", json: form });
+      setDrawer(""); setForm({}); setEditId(""); load();
+    } catch (e: any) { setError(e.message); }
+  }
+
+  // Sheet-imported rows carry sheet mistakes (wrong phone, synthetic DOB from an "age" column,
+  // fuzzy-matched location) — the row itself opens the same form for correction.
+  function openEdit(r: any) {
+    setEditId(r._id);
+    setForm({
+      name: r.name ?? "", phone: r.phone ?? "", alt_phone: r.alt_phone ?? "", gender: r.gender ?? "",
+      dob: r.dob ? String(r.dob).slice(0, 10) : "",
+      location: r.location?._id ?? r.location ?? "", program: r.program?._id ?? r.program ?? "",
+      education: r.education ?? "", source: r.source ?? "",
+      last_training_date: r.last_training_date ? String(r.last_training_date).slice(0, 10) : "",
+      sidh_candidate_id: r.sidh_candidate_id ?? "",
+      interested_programs: (r.interested_programs ?? []).map((x: any) => x?._id ?? x),
+      interested_locations: (r.interested_locations ?? []).map((x: any) => x?._id ?? x),
+    });
+    setDrawer("edit");
   }
 
   async function bulkAssign(batchId: string) {
@@ -208,6 +233,7 @@ function CandidatesInner() {
       )}
       <DataTable rows={items}
         cardTitle={(r: any) => r.name}
+        onRowClick={openEdit}
         columns={[
           { key: "_sel", label: "", mobile: false, render: (r: any) => <input type="checkbox" checked={selected.has(r._id)} onChange={() => toggle(r._id)} onClick={(e) => e.stopPropagation()} disabled={r.lifecycle_status !== "Unassigned" && r.lifecycle_status !== "Dropped"} /> },
           { key: "name", label: "Name", render: (r: any) => <NameCell name={r.name} sub={r.gender} /> },
@@ -253,7 +279,8 @@ function CandidatesInner() {
           { key: "source", label: "Source", mobile: false },
         ]} empty="No candidates — add or import." />
 
-      <Drawer open={drawer === "add"} onClose={() => setDrawer("")} title="Add Candidate">
+      <Drawer open={drawer === "add" || drawer === "edit"} onClose={() => { setDrawer(""); setEditId(""); }}
+        title={drawer === "edit" ? `Edit Candidate — ${form.name || ""}` : "Add Candidate"}>
         <div className="space-y-3">
           <Field label="Name" required><input className={inputCls} value={form.name ?? ""} onChange={(e) => set("name", e.target.value)} /></Field>
           <div className="grid grid-cols-2 gap-3">
@@ -319,7 +346,11 @@ function CandidatesInner() {
             </Field>
           </div>
           <Field label="Source (mobiliser / campaign)"><input className={inputCls} value={form.source ?? ""} onChange={(e) => set("source", e.target.value)} /></Field>
-          <Btn onClick={saveCandidate} disabled={!form.name || !form.phone || !form.location || !form.program}>Add</Btn>
+          {/* Edit mode: location/program may legitimately be blank on a sheet-imported row — the
+              save must not be held hostage to fields the user is not correcting. */}
+          <Btn onClick={saveCandidate} disabled={drawer === "add" ? (!form.name || !form.phone || !form.location || !form.program) : (!form.name || !form.phone)}>
+            {drawer === "edit" ? "Save changes" : "Add"}
+          </Btn>
         </div>
       </Drawer>
 

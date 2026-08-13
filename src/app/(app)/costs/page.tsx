@@ -13,6 +13,7 @@ function CostsInner() {
   const [locations, setLocations] = useState<any[]>([]);
   const [trainers, setTrainers] = useState<any[]>([]);
   const [form, setForm] = useState<any>({ entry_date: toInputDate(new Date()) });
+  const [editId, setEditId] = useState("");
   const [error, setError] = useState("");
 
   const load = () => Promise.all([
@@ -26,9 +27,32 @@ function CostsInner() {
 
   async function addCost() {
     try {
-      await api("/api/costs", { method: "POST", json: { ...form, location: form.location || undefined, trainer: form.trainer || undefined } });
-      setForm({ entry_date: toInputDate(new Date()) }); load();
+      if (editId) {
+        // blank select = "not changing this" (imported entries may anchor on batch, not location)
+        const json = Object.fromEntries(Object.entries(form).filter(([, v]) => v !== "" && v !== undefined));
+        await api(`/api/costs/${editId}`, { method: "PATCH", json });
+      } else {
+        await api("/api/costs", { method: "POST", json: { ...form, location: form.location || undefined, trainer: form.trainer || undefined } });
+      }
+      setForm({ entry_date: toInputDate(new Date()) }); setEditId(""); load();
     } catch (e: any) { setError(e.message); }
+  }
+
+  // Sheet-imported cost rows (Batch_Master's cost columns) can carry wrong amounts — row click
+  // loads the entry into the form for correction or removal (costs.manage holders only; the API
+  // 403s everyone else).
+  function openEdit(r: any) {
+    setEditId(r._id);
+    setForm({
+      entry_date: toInputDate(r.entry_date), amount: r.amount, note: r.note ?? "",
+      category: r.category?._id ?? "", location: r.location?._id ?? "", trainer: r.trainer?._id ?? "",
+    });
+  }
+
+  async function deleteCost() {
+    if (!editId || !window.confirm("Delete this cost entry? The amount disappears from every total.")) return;
+    try { await api(`/api/costs/${editId}`, { method: "DELETE" }); setForm({ entry_date: toInputDate(new Date()) }); setEditId(""); load(); }
+    catch (e: any) { setError(e.message); }
   }
 
   const total = costs.reduce((s, c) => s + (c.amount ?? 0), 0);
@@ -40,7 +64,7 @@ function CostsInner() {
       <Tabs tabs={["Costs", "Invoices"]} active={tab} onChange={setTab} />
       {tab === "Costs" ? (
         <>
-          <Section title="Add cost entry">
+          <Section title={editId ? "Edit cost entry" : "Add cost entry"}>
             <div className="grid gap-3 md:grid-cols-6">
               <Field label="Date"><input type="date" className={inputCls} value={form.entry_date} onChange={(e) => setForm({ ...form, entry_date: e.target.value })} /></Field>
               <Field label="Location">
@@ -62,13 +86,19 @@ function CostsInner() {
                 </select>
               </Field>
               <Field label="Amount (₹)" required><input type="number" className={inputCls} value={form.amount ?? ""} onChange={(e) => setForm({ ...form, amount: +e.target.value })} /></Field>
-              <div className="flex items-end"><Btn onClick={addCost} disabled={!form.category || !form.amount}>Add</Btn></div>
+              <div className="flex items-end gap-2">
+                <Btn onClick={addCost} disabled={!form.category || !form.amount}>{editId ? "Save" : "Add"}</Btn>
+                {editId && <Btn kind="ghost" onClick={() => { setEditId(""); setForm({ entry_date: toInputDate(new Date()) }); }}>Cancel</Btn>}
+                {editId && <Btn kind="danger" onClick={deleteCost}>Delete</Btn>}
+              </div>
             </div>
+            {editId && <Field label="Note"><input className={inputCls + " mt-2"} value={form.note ?? ""} onChange={(e) => setForm({ ...form, note: e.target.value })} /></Field>}
             <p className="mt-2 text-xs text-gray-500">Rule 37: at least one of location / batch / trainer. Batch-level costs are added from the batch's Costs tab.</p>
           </Section>
           <Section title={`All cost entries — total ₹${total.toLocaleString("en-IN")}`}>
             <DataTable rows={costs}
               cardTitle={(r: any) => `₹${r.amount} · ${r.category?.name}`}
+              onRowClick={openEdit}
               columns={[
                 { key: "entry_date", label: "Date", render: (r: any) => fmtDate(r.entry_date) },
                 { key: "category", label: "Category", render: (r: any) => r.category?.name },

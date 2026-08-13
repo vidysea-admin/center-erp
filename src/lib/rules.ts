@@ -1077,9 +1077,14 @@ export async function updateInvoiceChecked(batchId: string, patch: Record<string
 }
 
 // Rule 37
-export function assertCostEntryValid(e: { location?: unknown; batch?: unknown; trainer?: unknown }) {
+export function assertCostEntryValid(e: { location?: unknown; batch?: unknown; trainer?: unknown; amount?: unknown }) {
   if (!e.location && !e.batch && !e.trainer) {
     throw new HttpError(400, "Rule 37: cost entry needs at least a location, batch, or trainer.");
+  }
+  // 2026-08-13 (eval sweep): a negative or zero amount was accepted and silently shrank the
+  // totals. Money entered here feeds the invoice conversation — refuse what cannot be spent.
+  if (!(Number(e.amount) > 0)) {
+    throw new HttpError(400, "Rule 37: amount must be a positive number.");
   }
 }
 

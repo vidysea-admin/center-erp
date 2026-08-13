@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
-import { Batch, Program } from "@/models";
+import { Batch, BatchMember, Program } from "@/models";
 import { assertBatchInScope, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, batchReadiness, planBatchBackward, trainerBookingWarnings } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { auditDiff } from "@/lib/audit";
@@ -38,6 +38,18 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   for (const f of ["trainer", "room", "session", "target_size", "planned_start", "planned_end", "slot_start", "slot_end",
     "govt_batch_id", "drive_folder_url"]) {
     if (body[f] !== undefined) patch[f] = body[f];
+  }
+
+  // Sheet-imported batches can carry a wrong fuzzy match for centre or job role. Both are
+  // correctable, but only while the batch is still Planning with an empty roster — after that,
+  // rosters/conflict checks/readiness have all been computed against the old pair.
+  if (body.location !== undefined || body.program !== undefined) {
+    const rosterCount = await BatchMember.countDocuments({ batch: id });
+    if (batch.status !== "Planning" || rosterCount > 0) {
+      throw new HttpError(409, "Location/program can only be changed while the batch is in Planning with an empty roster.");
+    }
+    if (body.location !== undefined) patch.location = body.location;
+    if (body.program !== undefined) patch.program = body.program;
   }
 
   const newStart = patch.planned_start ? new Date(patch.planned_start as string) : batch.planned_start;

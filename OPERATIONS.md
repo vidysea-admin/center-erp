@@ -22,8 +22,10 @@ Verify what is deployed at any time, no login needed:
   `/api/public/version` tells you exactly what is running.
 - **Database:** MongoDB at `mongodb://13.202.206.101:27017`, db `center_erp`. (Auth on the DB and
   file/upload storage are tracked as deferred infra — see DEFERRED.)
-- **CI:** `.github/workflows/ci.yml` builds AND now runs all five e2e suites against a mongo:7
-  service container on every push/PR. `deploy.yml` is a no-op until EC2 secrets are set.
+- **CI:** `.github/workflows/ci.yml` builds AND runs `npm test` (`scripts/run-e2e.mjs` — all 15
+  e2e suites, ~1,100 assertions, per-suite summary table, no fail-fast) against a mongo:7
+  service container on every push/PR. Coverage map: `d:\erp\qa\EVAL-MATRIX.md`.
+  `deploy.yml` auto-deploys pushes to `master`.
 
 ## Logins (seeded)
 
