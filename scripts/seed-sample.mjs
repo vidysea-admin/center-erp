@@ -111,7 +111,14 @@ const PW = "Vidysea@123";
 for (const u of [
   { name: "Operations Lead", email: "ops@vidysea.com", role: "Operations", can_edit: true },
   { name: "Neha Sharma", email: "spoc.jpr03@vidysea.com", role: "Location", can_edit: true, location_scope: [locations.JPR03._id] },
-  { name: "Dr. R. K. Gupta", email: "principal.jpr03@vidysea.com", role: "Location", can_edit: false, location_scope: [locations.JPR03._id] },
+  // 2026-08-13 (Umesh role matrix): principal = admin-like within their centre (trainer/
+  // candidate add, certificate upload) — that needs can_edit; the ROLE now fences what
+  // they cannot do (attendance, batch moves, accounts).
+  { name: "Dr. R. K. Gupta", email: "principal.jpr03@vidysea.com", role: "Location", can_edit: true, location_scope: [locations.JPR03._id] },
+  // The trainer login from Umesh's matrix: own batches, daily log, candidate marking.
+  { name: "Batch Trainer JPR03", email: "trainer.jpr03@vidysea.com", role: "Trainer", can_edit: true, location_scope: [locations.JPR03._id] },
+  // Rule 39's view-only persona moved to its own login (the principal is a WRITER now).
+  { name: "View-only Reviewer", email: "viewer.jpr03@vidysea.com", role: "Location", can_edit: false, location_scope: [locations.JPR03._id] },
   { name: "Shubham Enrollment", email: "enroll@vidysea.com", role: "Enrollment", can_edit: true },
 ]) {
   await req("POST", "/api/users", { ...u, password: PW });
@@ -237,5 +244,5 @@ await req("POST", "/api/costs", { category: cat("TOT Cost"), amount: 8000, train
 for (const col of ["programs", "locations", "rooms", "trainers", "candidates", "batches", "batchmembers", "dailylogs", "users", "trainerrequests", "costentries"]) {
   console.log(col.padEnd(16), await db.collection(col).countDocuments());
 }
-console.log("\nSample users (password " + PW + "): ops@vidysea.com · spoc.jpr03@vidysea.com · principal.jpr03@vidysea.com (view-only) · enroll@vidysea.com");
+console.log("\nSample users (password " + PW + "): ops@vidysea.com · spoc.jpr03@vidysea.com · principal.jpr03@vidysea.com · trainer.jpr03@vidysea.com · enroll@vidysea.com");
 await mongoose.disconnect();

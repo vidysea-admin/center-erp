@@ -30,9 +30,13 @@ const PW = "Vidysea@123";
 const admin = await login("admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
 const ops = await login("ops@vidysea.com", PW);
 const spoc = await login("spoc.jpr03@vidysea.com", PW);
+// 2026-08-13 (Umesh role matrix): the principal is a WRITER now (admin-like within their
+// centre); Rule 39's view-only persona lives on its own login.
 const principal = await login("principal.jpr03@vidysea.com", PW);
+const viewer = await login("viewer.jpr03@vidysea.com", PW);
+const trainer = await login("trainer.jpr03@vidysea.com", PW);
 const enroll = await login("enroll@vidysea.com", PW);
-ok("all five role users can log in", admin && ops && spoc && principal && enroll);
+ok("all seven role users can log in", admin && ops && spoc && principal && viewer && trainer && enroll);
 
 // Rule 38: Location user sees only scoped locations
 const spocLocs = await req(spoc, "GET", "/api/locations?limit=200");
@@ -52,12 +56,12 @@ ok("fixture: the foreign location KOT02 exists (run seed:sample first)", !!other
 const spocForeign = await req(spoc, "GET", `/api/locations/${otherLoc._id}`);
 ok("Rule 38: SPOC blocked from foreign location detail (403)", spocForeign.status === 403, `got ${spocForeign.status}`);
 
-// Rule 39: view-only principal cannot write
+// Rule 39: the view-only login cannot write
 const jpr = spocLocs.data.items[0];
-const principalWrite = await req(principal, "PATCH", `/api/locations/${jpr._id}`, { city: "Hacked" });
-ok("Rule 39: view-only principal PATCH blocked (403)", principalWrite.status === 403, `got ${principalWrite.status}`);
-const principalRead = await req(principal, "GET", `/api/locations/${jpr._id}`);
-ok("Rule 39: view-only principal can still read", principalRead.status === 200);
+const viewerWrite = await req(viewer, "PATCH", `/api/locations/${jpr._id}`, { city: "Hacked" });
+ok("Rule 39: view-only user PATCH blocked (403)", viewerWrite.status === 403, `got ${viewerWrite.status}`);
+const viewerRead = await req(viewer, "GET", `/api/locations/${jpr._id}`);
+ok("Rule 39: view-only user can still read", viewerRead.status === 200);
 // SPOC (can_edit) CAN write own location
 const spocWrite = await req(spoc, "PATCH", `/api/locations/${jpr._id}`, { spoc_phone: "9876500001" });
 ok("SPOC with can_edit can write own location", spocWrite.status === 200, `got ${spocWrite.status}`);
@@ -127,7 +131,7 @@ if (foreignBatch) {
 const ownActive = spocBatches.data.items.find((b) => !["Completed", "Cancelled"].includes(b.status));
 if (ownActive) {
   ok("SPOC can read results for own batch", (await req(spoc, "GET", `/api/batches/${ownActive._id}/results`)).status === 200);
-  ok("view-only principal cannot mark results", (await req(principal, "PUT", `/api/batches/${ownActive._id}/results`, { rows: [{ member: "000000000000000000000000", result: "Pass" }] })).status === 403);
+  ok("view-only user cannot mark results", (await req(viewer, "PUT", `/api/batches/${ownActive._id}/results`, { rows: [{ member: "000000000000000000000000", result: "Pass" }] })).status === 403);
 }
 
 // Alerts: the by-ID action route must be location-scoped exactly like the list
@@ -158,7 +162,7 @@ ok("Ops can read workbook changes", (await req(ops, "GET", "/api/workbook-change
 const ownLocId = spocLocs.data.items[0]._id;
 ok("SPOC can add a meeting note at own location", (await req(spoc, "POST", `/api/locations/${ownLocId}/notes`, { note: "role-test note" })).status === 201);
 ok("SPOC cannot read another location's notes", (await req(spoc, "GET", `/api/locations/${otherLoc._id}/notes`)).status === 403);
-ok("view-only principal cannot add notes", (await req(principal, "POST", `/api/locations/${ownLocId}/notes`, { note: "nope" })).status === 403);
+ok("view-only user cannot add notes", (await req(viewer, "POST", `/api/locations/${ownLocId}/notes`, { note: "nope" })).status === 403);
 // Public-token creation is scoped too
 ok("SPOC cannot mint a register link for a foreign location", (await req(spoc, "POST", "/api/public-tokens", { purpose: "register", location: otherLoc._id })).status === 403);
 // …and so is the token LIST — tokens are credentials, a foreign location's must never leak
@@ -306,14 +310,14 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
 // 2026-08-12 audit (auth S1-9, sync S2-11): Rule 39 says can_edit=false is view-and-nothing-else
 // everywhere. Seven write routes gated on a GRANTABLE right but never called requireEdit, so a
 // view-only reviewer holding sheet.approve could close a centre, and the same shape could edit
-// defaults, costs and users. The principal below is a real view-only Location account.
+// defaults, costs and users. The viewer below is a real view-only Location account.
 {
   const jprId = spocLocs.data.items[0]._id;
-  ok("Rule 39: view-only cannot add a cost entry", (await req(principal, "POST", "/api/costs", { entry_date: "2026-08-12", location: jprId, category: "000000000000000000000000", amount: 1 })).status === 403);
-  ok("Rule 39: view-only cannot edit Defaults", (await req(principal, "PUT", "/api/defaults", { batch_size: 99 })).status === 403);
-  ok("Rule 39: view-only cannot create a user", (await req(principal, "POST", "/api/users", { name: "x", email: `vo${Date.now()}@t.local`, password: "Test@12345", role: "Location" })).status === 403);
-  ok("Rule 39: view-only cannot bulk-ignore sheet changes", (await req(principal, "POST", "/api/sheet-changes/bulk-ignore", { ids: ["000000000000000000000000"] })).status === 403);
-  ok("Rule 39: view-only cannot apply a sheet change", (await req(principal, "POST", "/api/sheet-changes/000000000000000000000000/apply", { action: "Close location", note: "x" })).status === 403);
+  ok("Rule 39: view-only cannot add a cost entry", (await req(viewer, "POST", "/api/costs", { entry_date: "2026-08-12", location: jprId, category: "000000000000000000000000", amount: 1 })).status === 403);
+  ok("Rule 39: view-only cannot edit Defaults", (await req(viewer, "PUT", "/api/defaults", { batch_size: 99 })).status === 403);
+  ok("Rule 39: view-only cannot create a user", (await req(viewer, "POST", "/api/users", { name: "x", email: `vo${Date.now()}@t.local`, password: "Test@12345", role: "Location" })).status === 403);
+  ok("Rule 39: view-only cannot bulk-ignore sheet changes", (await req(viewer, "POST", "/api/sheet-changes/bulk-ignore", { ids: ["000000000000000000000000"] })).status === 403);
+  ok("Rule 39: view-only cannot apply a sheet change", (await req(viewer, "POST", "/api/sheet-changes/000000000000000000000000/apply", { action: "Close location", note: "x" })).status === 403);
   // auth S1-8: the invoice route was the only by-id batch route with no scope assertion at all
   const foreign = allBatches.data.items.find((b) => b.location?.code && b.location.code !== "JPR03");
   if (foreign) {
@@ -401,14 +405,14 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   // auth S3-6: revoking locations.manage must also stop room writes
   const rooms = (await req(spoc, "GET", `/api/locations/${jprId}/rooms`)).data.items ?? [];
   if (rooms[0]) {
-    ok("auth S3-6: view-only cannot edit a room", (await req(principal, "PATCH", `/api/rooms/${rooms[0]._id}`, { capacity: 99 })).status === 403);
+    ok("auth S3-6: view-only cannot edit a room", (await req(viewer, "PATCH", `/api/rooms/${rooms[0]._id}`, { capacity: 99 })).status === 403);
   }
 
   // auth S2-13: editing a log is where the government figure is set — same right as creating one
   const ownB = spocBatches.data.items.find((b) => ["Active", "Closing"].includes(b.status));
   if (ownB) {
     const lg = (await req(spoc, "GET", `/api/batches/${ownB._id}/logs`)).data.items?.[0];
-    if (lg) ok("auth S2-13: view-only cannot edit a daily log", (await req(principal, "PATCH", `/api/logs/${lg._id}`, { note: "nope" })).status === 403);
+    if (lg) ok("auth S2-13: view-only cannot edit a daily log", (await req(viewer, "PATCH", `/api/logs/${lg._id}`, { note: "nope" })).status === 403);
   }
 
   // auth S2-15: a 500 must not hand the client the raw exception text
@@ -423,6 +427,55 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
     body: JSON.stringify({ name: "Probe", email: "admin@vidysea.com", password: "Test@12345", role: "Trainer" }),
   });
   ok("auth S2-16: signup does not reveal that an address is already registered", dup.status !== 409, `got ${dup.status}`);
+}
+
+// ---- 2026-08-13 (Umesh role matrix): principal/SPOC = admin-like within their centre;
+// NO attendance, NO batch edit, certificate upload yes, NO accounts. Trainer = own batch
+// daily log only. Operations = trainer + trainee data. ----
+{
+  const stampR = String(Date.now()).slice(-8); // 2-digit prefix + 8 = the 10-digit phone validation wants
+  // Principal ADDS a trainer at their centre (trainers.manage newly granted to Location).
+  const trAdd = await req(principal, "POST", "/api/trainers", { name: "TEST-RM Trainer " + stampR, phone: `96${stampR}`, skills: ["RMSkill"], home_location: jpr._id });
+  ok("matrix: principal can ADD a trainer", trAdd.status === 201, `got ${trAdd.status}: ${JSON.stringify(trAdd.data).slice(0, 100)}`);
+  // …and a candidate (candidates.manage kept). program is mandatory on direct creation.
+  const progRM = spocBatches.data.items[0]?.program?._id
+    ?? ((await req(principal, "GET", "/api/programs")).data.items ?? [])[0]?._id;
+  const cAdd = await req(principal, "POST", "/api/candidates", { name: "TEST-RM Cand " + stampR, phone: `95${stampR}`, location: jpr._id, program: progRM });
+  ok("matrix: principal can ADD a candidate", cAdd.status === 201, `got ${cAdd.status}: ${JSON.stringify(cAdd.data).slice(0, 80)}`);
+  // NO attendance: daily-log POST and marking rounds are refused for the Location role.
+  const anyBatch = spocBatches.data.items.find((b) => ["Active", "Closing"].includes(b.status));
+  if (anyBatch) {
+    const dl = await req(principal, "POST", `/api/batches/${anyBatch._id}/logs`, { log_date: new Date().toISOString().slice(0, 10), present_member_ids: [] });
+    ok("matrix: principal CANNOT enter a daily log (attendance is the trainer's)", dl.status === 403, `got ${dl.status}`);
+    const gv = await req(principal, "POST", "/api/govt-attendance", {});
+    ok("matrix: principal CANNOT import govt attendance", gv.status === 403, `got ${gv.status}`);
+  }
+  // NO batch edit: transition + PATCH both 403 (batches.manage removed).
+  const anyB = spocBatches.data.items[0];
+  if (anyB) {
+    ok("matrix: principal CANNOT transition a batch", (await req(principal, "POST", `/api/batches/${anyB._id}/transition`, { target: "Ready" })).status === 403);
+    ok("matrix: principal CANNOT edit batch fields", (await req(principal, "PATCH", `/api/batches/${anyB._id}`, { target_size: 99 })).status === 403);
+  }
+  // Certificate upload path stays open (closure.manage kept): PUT closure on own batch is
+  // not 403 — it may 409 on business rules, which is fine; the GATE is what we assert.
+  if (anyB) {
+    const cl = await req(principal, "PUT", `/api/batches/${anyB._id}/closure`, { certificate_file: "/files/rm-test.pdf" });
+    ok("matrix: principal's certificate-upload gate is OPEN (not 403)", cl.status !== 403, `got ${cl.status}`);
+  }
+  // NO accounts: unchanged 403.
+  ok("matrix: principal still blocked from costs", (await req(principal, "GET", "/api/costs")).status === 403);
+
+  // Trainer: daily log right only — no trainer/candidate management.
+  ok("matrix: trainer CANNOT add trainers", (await req(trainer, "POST", "/api/trainers", { name: "x", phone: "9000000000", skills: ["y"] })).status === 403);
+  ok("matrix: trainer CANNOT edit candidates", (await req(trainer, "POST", "/api/candidates", { name: "x", phone: "9000000001", location: jpr._id })).status === 403);
+
+  // Operations: trainer + trainee data updates work.
+  if (trAdd.status === 201) {
+    ok("matrix: Operations can update trainer data", (await req(ops, "PATCH", `/api/trainers/${trAdd.data.item._id}`, { qualification: "B.Tech" })).status === 200);
+  }
+  if (cAdd.status === 201) {
+    ok("matrix: Operations can update trainee data", (await req(ops, "PATCH", `/api/candidates/${cAdd.data.item._id}`, { education: "12th Pass" })).status === 200);
+  }
 }
 
 // unauthenticated → 401
