@@ -73,7 +73,7 @@ export default function SyncInboxPage() {
           { key: "_sel", label: "", mobile: false, render: (r: any) => r.status === "Open" ? <input type="checkbox" checked={selected.has(r._id)} onChange={() => toggle(r._id)} onClick={(e) => e.stopPropagation()} /> : null },
           { key: "location", label: "About", render: (r: any) => rowLabel(r) ?? <span className="text-amber-600">Unmatched</span> },
           { key: "field_name", label: "Field" },
-          { key: "change", label: "Old → New", render: (r: any) => <span className="text-xs">{r.old_value || "∅"} → <b>{r.new_value}</b></span> },
+          { key: "change", label: "Old → New", minWidth: 280, filterText: (r: any) => `${r.old_value ?? ""} ${r.new_value ?? ""}`, render: (r: any) => <span className="text-xs">{r.old_value || "∅"} → <b>{r.new_value}</b></span> },
           { key: "detected_at", label: "Detected", render: (r: any) => fmtDT(r.detected_at) },
           { key: "status", label: "Status", render: (r: any) => <span className="flex items-center gap-1"><Chip value={r.status} />{r.pending_followups > 0 && <span className="text-xs text-amber-600">{r.pending_followups} follow-ups</span>}</span> },
           { key: "action_taken", label: "Action", render: (r: any) => r.action_taken ?? "—", mobile: false },
