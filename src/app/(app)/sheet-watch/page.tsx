@@ -5,7 +5,7 @@
 // entity writes happen only through approved tab mappings ("Map tabs"), and even those route
 // changes to existing records through the Sync Inbox for a human OK.
 import { useEffect, useState } from "react";
-import { api, fmtDate } from "@/lib/client";
+import { api, fmtDT } from "@/lib/client";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, inputCls } from "@/components/ui";
 import { SheetSources } from "@/components/sheet-sources";
 import { TabMappings } from "@/components/tab-mapping-wizard";
@@ -112,7 +112,9 @@ export default function SheetWatchPage() {
           { key: "change_type", label: "Type", render: (r: any) => <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${TYPE_STYLE[r.change_type] ?? ""}`}>{r.change_type}</span> },
           { key: "column", label: "Column", render: (r: any) => r.column ?? <span className="text-gray-400">whole row</span> },
           {
-            key: "change", label: "Old → New", render: (r: any) => (
+            key: "change", label: "Old → New",
+            filterText: (r: any) => `${r.old_value ?? ""} ${r.new_value ?? ""}`,
+            render: (r: any) => (
               <span className="text-xs">
                 <span className="rounded bg-red-50 px-1 text-red-700 line-through decoration-red-300">{r.old_value || "∅"}</span>
                 {" → "}
@@ -120,7 +122,7 @@ export default function SheetWatchPage() {
               </span>
             ),
           },
-          { key: "detected_at", label: "Detected", render: (r: any) => fmtDate(r.detected_at), mobile: false },
+          { key: "detected_at", label: "Detected", render: (r: any) => fmtDT(r.detected_at), mobile: false },
           { key: "status", label: "Status", render: (r: any) => <Chip value={r.status} /> },
           {
             key: "_act", label: "", render: (r: any) => (
@@ -199,7 +201,7 @@ function VersionHistory({ setError }: any) {
     try { setDiff(await api(`/api/sync-sources/${src}/snapshots?tab=${encodeURIComponent(histTab)}&from=${from}&to=${to}`)); }
     catch (e: any) { setError(e.message); }
   }
-  const when = (d: string) => new Date(d).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+  const when = fmtDT;
 
   return (
     <div className="rounded-lg border border-gray-200 p-4">

@@ -12,7 +12,6 @@ function LocationsInner() {
   const router = useRouter();
   const sp = useSearchParams();
   const [items, setItems] = useState<any[]>([]);
-  const [q, setQ] = useState("");
   // 2026-08-13: the Approved-Locations KPI deep-links here — the pill presets from the URL so
   // the number clicked and the rows shown are the same population.
   const [tag, setTag] = useState(sp.get("approval_status") ?? "");
@@ -21,8 +20,9 @@ function LocationsInner() {
   const [form, setForm] = useState<any>({ approval_status: "Pending" });
   const set = (k: string, v: unknown) => setForm((f: any) => ({ ...f, [k]: v }));
 
-  const load = () => api(`/api/locations?q=${encodeURIComponent(q)}&limit=2000`).then((d) => setItems(d.items)).catch((e) => setError(e.message));
-  useEffect(() => { load(); }, [q]);
+  // Text search moved into DataTable (all-column, client-side over the full fetch).
+  const load = () => api(`/api/locations?limit=2000`).then((d) => setItems(d.items)).catch((e) => setError(e.message));
+  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function save() {
     try {
@@ -36,7 +36,6 @@ function LocationsInner() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-xl font-semibold">Locations</h1>
         <div className="flex gap-2">
-          <input className={inputCls + " max-w-52"} placeholder="Search…" value={q} onChange={(e) => setQ(e.target.value)} />
           <Btn onClick={() => setDrawer(true)}>New Location</Btn>
         </div>
       </div>

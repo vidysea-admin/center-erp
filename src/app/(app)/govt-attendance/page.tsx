@@ -5,7 +5,7 @@
 // where the portal and the centre's own daily logs disagree about who attended.
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { api, fmtDate } from "@/lib/client";
+import { api, fmtDT, fmtDate } from "@/lib/client";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, inputCls } from "@/components/ui";
 import { useLocationCtx } from "@/components/shell";
 
@@ -115,16 +115,17 @@ function Inner() {
 
       {!open && (
         <Section title="Imports">
-          <DataTable rows={imports} onRowClick={(r: any) => { setFilter(""); setOpen(r._id); }} columns={[
-            { key: "period_label", label: "Period", render: (r: any) => <span className="font-medium">{r.period_label || r.file_name}</span> },
-            { key: "location", label: "Centre", render: (r: any) => `${r.location?.name ?? "—"}${r.tc_id ? ` · ${r.tc_id}` : ""}` },
-            { key: "row_count", label: "Rows" },
-            { key: "matched_count", label: "Matched", render: (r: any) => `${r.matched_count}/${r.row_count}` },
+          <DataTable rows={imports} onRowClick={(r: any) => { setFilter(""); setOpen(r._id); }}
+            defaultSort={{ key: "imported_at", dir: "desc" }} columns={[
+            { key: "period_label", label: "Period", sortable: true, sortValue: (r: any) => r.period_label || r.file_name, render: (r: any) => <span className="font-medium">{r.period_label || r.file_name}</span> },
+            { key: "location", label: "Centre", sortable: true, sortValue: (r: any) => r.location?.name, render: (r: any) => `${r.location?.name ?? "—"}${r.tc_id ? ` · ${r.tc_id}` : ""}` },
+            { key: "row_count", label: "Rows", sortable: true },
+            { key: "matched_count", label: "Matched", sortable: true, render: (r: any) => `${r.matched_count}/${r.row_count}` },
             {
-              key: "variance_count", label: "Variance", render: (r: any) =>
+              key: "variance_count", label: "Variance", sortable: true, render: (r: any) =>
                 r.variance_count ? <span className="font-semibold text-amber-700">{r.variance_count}</span> : <span className="text-gray-400">none</span>,
             },
-            { key: "imported_at", label: "Imported", mobile: false, render: (r: any) => `${fmtDate(r.imported_at)} · ${r.imported_by?.name ?? "—"}` },
+            { key: "imported_at", label: "Imported", mobile: false, sortable: true, sortValue: (r: any) => r.imported_at ? new Date(r.imported_at).getTime() : null, render: (r: any) => `${fmtDT(r.imported_at)} · ${r.imported_by?.name ?? "—"}` },
           ]} empty="No portal attendance imported yet — upload the export Manish downloads from the portal." />
         </Section>
       )}
@@ -146,21 +147,21 @@ function Inner() {
               </button>
             ))}
           </div>
-          <DataTable rows={detail.rows} columns={[
-            { key: "name", label: "Name", render: (r: any) => <span className="font-medium">{r.name}</span> },
-            { key: "govt_candidate_id", label: "Portal ID", mobile: false },
-            { key: "candidate_type", label: "Type", mobile: false },
-            { key: "total_days_present", label: "Portal days", render: (r: any) => `${r.total_days_present ?? "—"} / ${r.total_working_days ?? "—"}` },
-            { key: "internal_days_present", label: "Our logs", render: (r: any) => r.internal_days_present ?? <span className="text-gray-400">—</span> },
+          <DataTable rows={detail.rows} defaultSort={{ key: "name", dir: "asc" }} columns={[
+            { key: "name", label: "Name", sortable: true, render: (r: any) => <span className="font-medium">{r.name}</span> },
+            { key: "govt_candidate_id", label: "Portal ID", mobile: false, sortable: true },
+            { key: "candidate_type", label: "Type", mobile: false, sortable: true },
+            { key: "total_days_present", label: "Portal days", sortable: true, render: (r: any) => `${r.total_days_present ?? "—"} / ${r.total_working_days ?? "—"}` },
+            { key: "internal_days_present", label: "Our logs", sortable: true, render: (r: any) => r.internal_days_present ?? <span className="text-gray-400">—</span> },
             {
-              key: "variance_days", label: "Variance", render: (r: any) =>
+              key: "variance_days", label: "Variance", sortable: true, render: (r: any) =>
                 r.variance_days == null ? <span className="text-gray-400">—</span>
                   : r.variance_days === 0 ? <span className="text-green-700">0</span>
                     : <span className="font-semibold text-amber-700">{r.variance_days > 0 ? `+${r.variance_days}` : r.variance_days}</span>,
             },
             { key: "total_hours_raw", label: "Hours", mobile: false },
             {
-              key: "match_status", label: "Match", render: (r: any) => (
+              key: "match_status", label: "Match", sortable: true, render: (r: any) => (
                 <span title={r.match_note ?? ""} className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${MATCH_STYLE[r.match_status]}`}>
                   {r.match_status}{r.match_by ? ` · ${r.match_by}` : ""}
                 </span>

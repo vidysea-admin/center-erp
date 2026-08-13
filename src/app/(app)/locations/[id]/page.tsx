@@ -1,7 +1,7 @@
 "use client";
 import { use, useEffect, useState } from "react";
 import { api, fmtDate } from "@/lib/client";
-import { Btn, Chip, DataTable, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
+import { Btn, Chip, CopyBtn, DataTable, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
 import { Activity } from "@/components/activity";
 import Link from "next/link";
 
@@ -178,7 +178,7 @@ function ContactsNotes({ loc, onSaved, setError }: any) {
                   {n.met_with && <span>· with <b>{n.met_with}</b></span>}
                   <span className="ml-auto flex items-center gap-2">
                     {/* 2026-08-11: "उनको notes भेज पाऊं" */}
-                    <button className="font-medium text-blue-700 hover:underline" onClick={() => navigator.clipboard.writeText(shareText)}>Copy</button>
+                    <CopyBtn text={shareText} />
                     <a className="font-medium text-green-700 hover:underline" target="_blank" rel="noreferrer"
                       href={`https://wa.me/?text=${encodeURIComponent(shareText)}`}>WhatsApp</a>
                     <span>logged by {n.logged_by?.name ?? "—"}</span>
