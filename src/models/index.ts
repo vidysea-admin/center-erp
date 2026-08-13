@@ -185,6 +185,13 @@ const LocationTargetSchema = new Schema({
   // stays as the fallback for pre-migration rows.
   tc_id: String,
   tc_status: String, // free text from the sheet ("Approved", blank, …)
+  // 2026-08-13 (Karunn: "chaaron cheezein le lo, soft data ki tarah — hamare data ko hum
+  // MATCH karenge"): the sheet's three CLAIMED trainer counts, enrolled_reported-pattern —
+  // stored BESIDE our derived counts (trainerCountsFor), never merged, so claim-vs-ours
+  // variance stays visible. Our figure remains derived from Trainer rows, never typed.
+  nominations_received_reported: Number,
+  nominated_nsdc_reported: Number,
+  trainers_certified_reported: Number,
 }, { timestamps: true });
 LocationTargetSchema.index({ location: 1, program: 1 }, { unique: true });
 

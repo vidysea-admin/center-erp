@@ -85,7 +85,9 @@ export const PUT = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   // tc_id/tc_status: per-row government identity (2026-08-13, "31 approved") — editable so a
   // fresh approval reaches the board without waiting for the next sheet sync.
   for (const f of ["approved_target", "allocated_target", "start_date", "end_date",
-    "trainers_required", "enrolled_reported", "pending_reported", "tc_id", "tc_status"]) {
+    "trainers_required", "enrolled_reported", "pending_reported", "tc_id", "tc_status",
+    // 2026-08-13 (Karunn): the sheet's claimed trainer counts — soft data kept beside ours.
+    "nominations_received_reported", "nominated_nsdc_reported", "trainers_certified_reported"]) {
     if (body[f] !== undefined) set[f] = body[f];
   }
   const doc = await LocationTarget.findOneAndUpdate(

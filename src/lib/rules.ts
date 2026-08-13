@@ -1407,7 +1407,9 @@ export async function transitionTrainer(
 // The two sheets already disagree with each other (nominated 23 vs 20, certified 18 vs 16),
 // which is what happens when the same number is kept in two places; computing it here makes the
 // ERP the source of truth and leaves each sheet as a cross-check.
-const NOMINATED_STATES = ["Nomination Prepared", "Submitted to NSDC", "NSDC Approved", "NSDC Rejected",
+// Exported since 2026-08-13: the locations LIST derives the same live per-centre×job-role
+// counts (Umesh: "jaise-jaise trainer approve honge, count update ho jana chahiye").
+export const NOMINATED_STATES = ["Nomination Prepared", "Submitted to NSDC", "NSDC Approved", "NSDC Rejected",
   "Payment Done", "TOT Scheduled", "TOT In Progress", "Certified"];
 
 export async function trainerCountsFor(locationId: unknown, programId: unknown) {

@@ -179,7 +179,9 @@ export function FilterPills({ options, active, onChange }: {
 // sortValue when the raw row[key] is not the thing to compare.
 // 2026-08-13 (table-UX cycle): built-in all-column search, per-column value filters and
 // drag-to-resize columns — built HERE so every call site gets them ("jha jha table aayegi").
-export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClick, empty, cardTitle, pageSize = 25, defaultSort, searchable, initialSearch, resizable = true, loading }: {
+// 2026-08-13 (Umesh): per-table column picker — "jo column select nahi kiya vo na dikhe,
+// only selected visible ho". Same build-once placement, so all 28 tables get it for free.
+export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClick, empty, cardTitle, pageSize = 25, defaultSort, searchable, initialSearch, resizable = true, loading, storageKey }: {
   columns: {
     key: string; label: string; render?: (row: T) => ReactNode; mobile?: boolean;
     sortable?: boolean; sortValue?: (row: T) => string | number | null | undefined;
@@ -191,6 +193,9 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
     // Room this column needs to stay readable (px). Feeds the table's min-width floor —
     // heavy columns (old→new diffs, note text) declare more than the 130 default.
     minWidth?: number;
+    // Starts invisible; still searchable and offered in the Columns picker. For wide
+    // sheet-format tables whose long tail matters but should not open by default.
+    hidden?: boolean;
   }[];
   rows: T[];
   onRowClick?: (row: T) => void;
@@ -202,6 +207,7 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
   initialSearch?: string; // seeds (and follows) the ?q= deep link from global search
   resizable?: boolean;
   loading?: boolean;      // true while the page's fetch is in flight — skeleton, not "empty"
+  storageKey?: string;    // stable identity for the saved column choice (falls back to colSig)
 }) {
   type Col = (typeof columns)[0];
   const [page, setPage] = useState(1);
@@ -215,17 +221,41 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
   const [openFilter, setOpenFilter] = useState<{ key: string; x: number; y: number } | null>(null);
   const [widths, setWidths] = useState<Record<string, number>>({});
 
+  // ---- column visibility (2026-08-13, Umesh: "only selected columns visible ho") ----
+  // Only EXPLICIT user choices are stored; an unchosen column follows its hidden default —
+  // so a page that later adds a column shows it without fighting a stale saved map.
+  // localStorage is read in an effect, not the initializer: this component SSR-prerenders,
+  // and a server/client visibility mismatch would be a hydration error.
+  const colSig = columns.map((c) => c.key).join("|");
+  const storeId = `dt-cols:${storageKey ?? colSig}`;
+  const [colChoice, setColChoice] = useState<Record<string, boolean>>({});
+  const [pickerAt, setPickerAt] = useState<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    try { const raw = localStorage.getItem(storeId); setColChoice(raw ? JSON.parse(raw) : {}); } catch { setColChoice({}); }
+  }, [storeId]);
+  const setColVisible = (key: string, v: boolean) => setColChoice((c) => {
+    const next = { ...c, [key]: v };
+    try { localStorage.setItem(storeId, JSON.stringify(next)); } catch { /* private mode */ }
+    return next;
+  });
+  const resetCols = () => { setColChoice({}); try { localStorage.removeItem(storeId); } catch { /* private mode */ } };
+  // Label-less columns are action cells (checkboxes, edit buttons) — hiding one would break
+  // the row's function, so they are always visible and never offered in the picker.
+  const isColVisible = (c: Col) => !c.label || (colChoice[c.key] ?? !c.hidden);
+  const visCols = columns.filter(isColVisible);
+  const pickable = columns.filter((c) => c.label);
+
   useEffect(() => { if (initialSearch !== undefined) setQuery(initialSearch); }, [initialSearch]);
   // A different result set, ordering, search or filter all belong on page 1 — the old clamp
   // kept a stale page number when a filter shrank the rows.
   const filterSig = Object.entries(filters).map(([k, v]) => `${k}:${v.join(",")}`).join(";");
   useEffect(() => { setPage(1); }, [rows.length, sort?.key, sort?.dir, query, filterSig]);
   useEffect(() => {
-    if (!openFilter) return;
-    const h = (e: Event) => { if (!(e.target as HTMLElement)?.closest?.("[data-dt-pop]")) setOpenFilter(null); };
+    if (!openFilter && !pickerAt) return;
+    const h = (e: Event) => { if (!(e.target as HTMLElement)?.closest?.("[data-dt-pop]")) { setOpenFilter(null); setPickerAt(null); } };
     document.addEventListener("pointerdown", h);
     return () => document.removeEventListener("pointerdown", h);
-  }, [openFilter]);
+  }, [openFilter, pickerAt]);
 
   // One text accessor feeds search AND filters: filterText ?? sortValue ?? raw value, with
   // populated refs ({name}/{code}) and arrays flattened — location/program/trainer columns
@@ -242,7 +272,6 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
 
   // Distinct values per column decide which headers get a funnel. Memo keys on the data +
   // column keys — a filterText closing over other page state would show stale counts.
-  const colSig = columns.map((c) => c.key).join("|");
   const distincts = useMemo(() => {
     const m: Record<string, Map<string, number>> = {};
     for (const c of columns) {
@@ -351,14 +380,17 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
   // scroller daal jahan needful hai" — without a floor, wide tables crushed every column
   // into unreadable slivers instead of scrolling). Below the floor the overflow-x-auto
   // wrapper scrolls; on a wide screen nothing changes. Resizing keeps its fixed layout.
+  // The floor counts only VISIBLE columns — hiding half the sheet should shrink the scroll.
   const colFloor = (c: Col) => c.minWidth ?? (c.label ? 130 : 48);
   const tableStyle = anyWidth ? {
     tableLayout: "fixed" as const,
-    minWidth: Object.values(widths).reduce((s, w) => s + w, 0) + columns.filter((c) => !widths[c.key]).reduce((s, c) => s + colFloor(c), 0),
-  } : { minWidth: columns.reduce((s, c) => s + colFloor(c), 0) };
+    minWidth: visCols.reduce((s, c) => s + (widths[c.key] ?? colFloor(c)), 0),
+  } : { minWidth: visCols.reduce((s, c) => s + colFloor(c), 0) };
   const activeFilters = Object.entries(filters).filter(([, v]) => v.length);
   const showSearch = searchable ?? rows.length > 10;
-  const toolbar = (showSearch || activeFilters.length > 0) && (
+  const hiddenCount = pickable.length - pickable.filter(isColVisible).length;
+  // The toolbar always renders now — the Columns picker lives on every table by design.
+  const toolbar = (
     <div className="mb-2 flex flex-wrap items-center gap-2">
       {showSearch && (
         <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search all columns…"
@@ -373,11 +405,38 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
       {(query || activeFilters.length > 0) && (
         <button className="text-xs font-medium text-blue-700 hover:underline" onClick={clearAll}>Clear</button>
       )}
-      {view.length !== rows.length && <span className="ml-auto text-xs text-gray-400">{view.length} of {rows.length}</span>}
+      <span className="ml-auto flex items-center gap-2">
+        {view.length !== rows.length && <span className="text-xs text-gray-400">{view.length} of {rows.length}</span>}
+        <button data-dt-pop type="button" title="Choose which columns are visible"
+          className={`rounded-lg border px-2.5 py-1 text-xs font-medium ${hiddenCount ? "border-blue-300 bg-blue-50 text-blue-700" : "border-gray-200 text-gray-500 hover:bg-gray-50"}`}
+          onClick={(e) => {
+            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            setPickerAt(pickerAt ? null : { x: Math.max(8, Math.min(r.right - 240, window.innerWidth - 248)), y: r.bottom + 4 });
+          }}>
+          Columns{hiddenCount ? ` (${hiddenCount} hidden)` : ""} ⏷
+        </button>
+      </span>
     </div>
   );
   const noMatch = (
     <>No rows match — <button className="font-medium text-blue-700 hover:underline" onClick={clearAll}>clear search &amp; filters</button></>
+  );
+  // The picker lists every labelled column with a checkbox; unticked = hidden. Action
+  // columns never appear here. Reset returns to the page's own defaults.
+  const pickerPop = pickerAt && (
+    <div data-dt-pop style={{ position: "fixed", left: pickerAt.x, top: pickerAt.y }}
+      className="z-50 max-h-72 w-60 overflow-y-auto rounded-lg border border-gray-200 bg-white p-2 text-xs shadow-lg">
+      <div className="px-1.5 pb-1 font-semibold uppercase tracking-wider text-gray-400">Visible columns</div>
+      {pickable.map((c) => (
+        <label key={c.key} className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 hover:bg-gray-50">
+          <input type="checkbox" checked={colChoice[c.key] ?? !c.hidden} onChange={(e) => setColVisible(c.key, e.target.checked)} />
+          <span className="min-w-0 flex-1 truncate text-gray-700" title={c.label}>{c.label}</span>
+        </label>
+      ))}
+      <button className="mt-1 w-full rounded border px-2 py-1 font-medium text-gray-600 hover:bg-gray-50" onClick={resetCols}>
+        Reset to default
+      </button>
+    </div>
   );
   const filterPop = openFilter && distincts[openFilter.key] && (
     <div data-dt-pop style={{ position: "fixed", left: openFilter.x, top: openFilter.y }}
@@ -419,10 +478,10 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
       <div className="hidden overflow-hidden rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(16,24,40,.04)] md:block">
         <div className="overflow-x-auto">
           <table className="w-full text-sm" style={tableStyle}>
-            {anyWidth && <colgroup>{columns.map((c) => <col key={c.key} style={widths[c.key] ? { width: widths[c.key] } : undefined} />)}</colgroup>}
+            {anyWidth && <colgroup>{visCols.map((c) => <col key={c.key} style={widths[c.key] ? { width: widths[c.key] } : undefined} />)}</colgroup>}
             <thead className="bg-gray-50/80 text-left text-[11px] uppercase tracking-wider text-gray-400">
               <tr>
-                {columns.map((c) => (
+                {visCols.map((c) => (
                   <th key={c.key} className="relative px-3.5 py-3 font-semibold">
                     <span className="flex items-center gap-1">
                       {headerCell(c)}
@@ -440,12 +499,12 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
             </thead>
             <tbody className="divide-y divide-gray-100">
               {slice.length === 0 ? (
-                <tr><td colSpan={columns.length} className="px-3.5 py-8 text-center text-sm text-gray-400">{noMatch}</td></tr>
+                <tr><td colSpan={visCols.length} className="px-3.5 py-8 text-center text-sm text-gray-400">{noMatch}</td></tr>
               ) : slice.map((r, i) => (
                 <tr key={r._id ?? i} onClick={() => onRowClick?.(r)} className={onRowClick ? "cursor-pointer transition-colors hover:bg-blue-50/40" : ""}>
                   {/* align-top: a tall cell (multi-line old→new diff) reads row-wise only if
                       its siblings start at the same line, not floating mid-air. */}
-                  {columns.map((c) => <td key={c.key} className="break-words px-3.5 py-3 align-top">{cell(c, r)}</td>)}
+                  {visCols.map((c) => <td key={c.key} className="break-words px-3.5 py-3 align-top">{cell(c, r)}</td>)}
                 </tr>
               ))}
             </tbody>
@@ -464,7 +523,7 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
               {/* A label-less column (the actions cell) used to render a bare ": " before its
                   button, and a column already shown as the card title was repeated underneath
                   it — "07 Aug 2026" with "Date: 07 Aug 2026" below (audit F-005 screenshots). */}
-              {columns.filter((c) => c.mobile !== false).map((c) => (
+              {visCols.filter((c) => c.mobile !== false).map((c) => (
                 <div key={c.key}>
                   {c.label ? <span className="text-xs text-gray-400">{c.label}: </span> : null}
                   {cell(c, r)}
@@ -476,6 +535,7 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
         {pager}
       </div>
       {filterPop}
+      {pickerPop}
     </>
   );
 }
