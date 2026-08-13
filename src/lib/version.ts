@@ -3,13 +3,13 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.13-7";
+export const RELEASE = "2026.08.13-8";
 export const RELEASE_NOTE =
-  "Manish walkthrough round-3: dashboard cards are ROLE-wise (Admin/Ops: ongoing + completed " +
-  "batches, active trainers job-role-wise, total attendance, approved centre×job-role; a " +
-  "principal sees their centre's three). Approval is now counted per centre×scheme×job-role — " +
-  "each sheet row carries its OWN TC ID and verdict (the '31 approved', not 10 centres), and " +
-  "readiness reads that row's TC before the centre's. Ongoing scheme is visible wherever job " +
-  "roles appear (locations list, admin programmes, target rows) and filterable. Every " +
-  "sheet-imported row now shows its Source and links straight to that tab of the client " +
-  "workbook — candidates, trainers, locations, batches.";
+  "Locations = the OneDrive truth sheet: the list mirrors Vidysea-RPL.xlsx column-for-column " +
+  "in its order (SPOC, cluster contact, state, district, institution, operational, partner, " +
+  "scheme, job role, targets, enrolment claims, per-row TC id/password/status, trainer " +
+  "required + the sheet's three claimed trainer counts), with our LIVE trainer fulfilment " +
+  "derived from Trainer rows beside the claims — it updates the moment a pipeline moves. " +
+  "Every table now has a Columns picker (only selected columns show; choice persists per " +
+  "table). seed-rpl's default source is the OneDrive workbook again — Umesh: 'this one is " +
+  "the only source of truth' — with the Google export demoted to --google comparison.";

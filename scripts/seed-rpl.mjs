@@ -50,11 +50,21 @@ const slug = (name) => {
 };
 
 // ---- fetch the workbook ----
-// 2026-08-13: the LIVE master moved to the Google workbook (Sonbhadra was approved there
-// today and the OneDrive copy never saw it). Default = the Google export's Location_Master
-// tab, same as seed-avpl-master; the legacy OneDrive badger flow stays behind --onedrive.
+// 2026-08-13 (Umesh, superseding the same morning's Google switch): "iss [OneDrive] sheet
+// ke exact column and data chahiye iss Location Master mein, aur koi nahi — this one is
+// the only source of truth." Default = the client's OneDrive workbook (badger flow);
+// verified before flipping back that Sonbhadra's approval now exists there too (55 rows,
+// 30 approved per-row, single tab "Sheet1"). The Google export stays behind --google for
+// comparison only — never as the write source for Location Master.
 let wb, sourceName;
-if (process.argv.includes("--onedrive")) {
+if (process.argv.includes("--google")) {
+  const GURL = process.env.AVPL_SHEET_URL
+    || "https://docs.google.com/spreadsheets/d/1f9veYSwuLktmggOJdUlspl_yydotdqnf/export?format=xlsx";
+  const buf = Buffer.from(await (await fetch(GURL, { redirect: "follow" })).arrayBuffer());
+  if (buf.slice(0, 2).toString() !== "PK") { console.error("Google sheet not readable (got HTML) — check sharing, or drop --google for the OneDrive truth sheet."); process.exit(2); }
+  wb = XLSX.read(buf, { type: "buffer" });
+  sourceName = "AVPL Google workbook (comparison only — NOT the source of truth)";
+} else {
   const b64 = "u!" + Buffer.from(SHARE).toString("base64").replace(/=+$/, "").replace(/\//g, "_").replace(/\+/g, "-");
   const tok = await (await fetch("https://api-badgerp.svc.ms/v1.0/token", {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -66,13 +76,6 @@ if (process.argv.includes("--onedrive")) {
   )).json();
   wb = XLSX.read(Buffer.from(await (await fetch(meta["@content.downloadUrl"])).arrayBuffer()), { type: "buffer" });
   sourceName = meta.name;
-} else {
-  const GURL = process.env.AVPL_SHEET_URL
-    || "https://docs.google.com/spreadsheets/d/1f9veYSwuLktmggOJdUlspl_yydotdqnf/export?format=xlsx";
-  const buf = Buffer.from(await (await fetch(GURL, { redirect: "follow" })).arrayBuffer());
-  if (buf.slice(0, 2).toString() !== "PK") { console.error("Google sheet not readable (got HTML) — check sharing, or use --onedrive."); process.exit(2); }
-  wb = XLSX.read(buf, { type: "buffer" });
-  sourceName = "AVPL Google workbook";
 }
 const sheet = wb.Sheets["Location_Master"] ?? wb.Sheets[wb.SheetNames[0]];
 const grid = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
@@ -89,6 +92,11 @@ const IDX = {
   target: col("Total Target"), enrolled: col("Already Enrolled"), pending: col("Pending Enrollment"),
   tcId: col("TC ID"), tcPw: col("TC Password"), tcStatus: col("TC Status"),
   trReq: col("Trainer Required"),
+  // The sheet's three CLAIMED trainer counts (Karunn: "chaaron cheezein le lo, soft data
+  // ki tarah") — stored as *_reported beside our derived counts, never merged.
+  nomRecv: col("Trainer Nomination received"),
+  nomNsdc: col("Trainer Nominated to NSDC / SSC"),
+  trCert: col("Trainer Certified"),
 };
 const missingCols = Object.entries(IDX).filter(([, i]) => i < 0).map(([k]) => k);
 if (missingCols.length) { console.error("Sheet columns changed — not found:", missingCols.join(", ")); process.exit(2); }
@@ -165,6 +173,10 @@ for (const r of rows) {
     // (Charthwal: TC353328 AVPL vs TC352938 HSL) — this is what "31 approved" counts.
     tc_id: S(r[IDX.tcId]) || undefined,
     tc_status: S(r[IDX.tcStatus]) || undefined,
+    // Sheet-claimed trainer counts (blank cell = no claim, so undefined — never null).
+    nominations_received_reported: N(r[IDX.nomRecv]) ?? undefined,
+    nominated_nsdc_reported: N(r[IDX.nomNsdc]) ?? undefined,
+    trainers_certified_reported: N(r[IDX.trCert]) ?? undefined,
   });
 }
 const approvedTargets = targets.filter((t) => t.tc_status === "Approved").length;
@@ -176,9 +188,13 @@ console.log(`workbook   ${meta.name}`);
 console.log(`mode       ${APPLY ? "APPLY" : "dry run"}\n`);
 console.log(`locations  ${locations.size}`);
 console.log(`programmes ${programs.size}   ${[...programs.values()].map((p) => p.code).join(", ")}`);
-console.log(`targets    ${targets.length}   (${approvedTargets} approved per-row — the "31" Manish counts)`);
+console.log(`targets    ${targets.length}   (${approvedTargets} approved per-row — Manish's approved count, from THIS sheet)`);
 console.log(`sum target ${sumTarget}`);
 console.log(`sum trainers required ${sumTrainers}`);
+// The sheet's claimed trainer counts, reported so the dry run can be checked against the
+// sheet's own header totals before anything is written.
+const sumClaim = (k) => targets.reduce((s, t) => s + (t[k] ?? 0), 0);
+console.log(`sheet claims  nominations received ${sumClaim("nominations_received_reported")} · nominated to NSDC ${sumClaim("nominated_nsdc_reported")} · certified ${sumClaim("trainers_certified_reported")}`);
 
 // The states actually present — Manish says "abhi do hi hain, Haryana aur Uttar Pradesh", but
 // the sheet is the master. If it still carries others, say so; do not silently seed a surprise.
@@ -225,6 +241,9 @@ for (const t of targets) {
       approved_target: t.approved_target, trainers_required: t.trainers_required,
       enrolled_reported: t.enrolled_reported, pending_reported: t.pending_reported,
       tc_id: t.tc_id, tc_status: t.tc_status,
+      nominations_received_reported: t.nominations_received_reported,
+      nominated_nsdc_reported: t.nominated_nsdc_reported,
+      trainers_certified_reported: t.trainers_certified_reported,
       reported_at: new Date(), updatedAt: new Date(),
     }), $setOnInsert: { createdAt: new Date() } },
     { upsert: true },
