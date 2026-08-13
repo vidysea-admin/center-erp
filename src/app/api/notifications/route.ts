@@ -25,7 +25,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
   }
 
   if (countOnly) return NextResponse.json({ count: await Notification.countDocuments(filter) });
-  const items = await Notification.find(filter).sort({ severity: -1, createdAt: -1 }).limit(100)
+  const items = await Notification.find(filter).sort({ severity: -1, createdAt: -1 }).limit(500)
     .populate("location", "name code").populate("acknowledged_by", "name").lean();
   return NextResponse.json({ items });
 });

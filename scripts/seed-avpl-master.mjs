@@ -40,6 +40,18 @@ const headerAt = (rows, marker) => rows.findIndex((r) => r.some((c) => norm(c) =
 const colMap = (header) => { const m = new Map(); header.forEach((h, i) => { if (h) m.set(norm(h), i); }); return m; };
 const pick = (m, row, ...names) => { for (const n of names) { const i = m.get(norm(n)); if (i != null && S(row[i])) return S(row[i]); } return ""; };
 
+// "6th July" / "12th Aug" / "30th July" — the team writes dates as spoken. The project year is
+// 2026; a month has to be present, the ordinal suffix is noise.
+const MONTHS = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+function spokenDate(text) {
+  const t = norm(text);
+  if (!t) return null;
+  const day = (t.match(/\b(\d{1,2})(st|nd|rd|th)?\b/) ?? [])[1];
+  const mon = Object.keys(MONTHS).find((m) => t.includes(m));
+  if (!day || mon == null) return null;
+  return new Date(Date.UTC(2026, MONTHS[mon], Number(day)));
+}
+
 // "DST" / "SPIT" / "BSRT" / "DSWT" are the codes the team writes in the sheet.
 const SKILL_TO_ROLE = {
   dst: "Drone Service Technician", spit: "Solar Panel Installation Technician",
@@ -343,13 +355,48 @@ for (const c of candidates.values()) {
     { $set: { ...doc, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } }, { upsert: true });
   w.candidates++;
 }
+// Cost categories the sheet actually tracks, found-or-created once.
+const catIds = {};
+for (const nm of ["Mobilisation", "Trainer fee", "Assessor evaluation", "Other"]) {
+  const r = await db.collection("costcategories").findOneAndUpdate(
+    { name: nm }, { $setOnInsert: { name: nm, active: true } }, { upsert: true, returnDocument: "after" });
+  catIds[nm] = (r.value ?? r)._id;
+}
+const adminUser = await db.collection("users").findOne({ email: "admin@vidysea.com" });
+
 for (const b of batches) {
   const { _trainerPhone, _startText, _endText, _enrollment, _certification, _costs, _mobilisation, ...doc } = b;
+  // "6th July" → a real date. Where the start is already past, the batch has actually begun —
+  // stamp actual_start so daily screens and health read it correctly; statuses stay for humans.
+  const start = spokenDate(_startText);
+  const end = spokenDate(_endText);
+  const dates = {};
+  if (start) { dates.planned_start = start; if (start <= new Date()) dates.actual_start = start; }
+  if (end) dates.planned_end = end;
   await db.collection("batches").updateOne({ code: doc.code },
-    { $set: { ...doc, trainer: _trainerPhone ? trainerIds.get(_trainerPhone) : undefined, updatedAt: new Date() },
+    { $set: { ...doc, ...dates, trainer: _trainerPhone ? trainerIds.get(_trainerPhone) : undefined, updatedAt: new Date() },
       $setOnInsert: { createdAt: new Date(), status: "Planning", session: "Full Day", milestones: [] } },
     { upsert: true });
   w.batches++;
+
+  // "har stage pe cost capture karni hai" — the sheet's money lands in the cost model, one entry
+  // per batch+category, deduped so a re-run never books the same rupee twice.
+  const saved = await db.collection("batches").findOne({ code: doc.code }, { projection: { _id: 1, location: 1 } });
+  const lines = [
+    ["Mobilisation", _costs.mobilisation, _mobilisation ? `Mobilisation (${_mobilisation})` : "Mobilisation"],
+    ["Trainer fee", _costs.trainer, "Trainer cost"],
+    ["Assessor evaluation", _costs.assessor, "Accessor evaluation"],
+    ["Other", _costs.other, "Other cost"],
+  ];
+  for (const [cat, amount, note] of lines) {
+    if (!amount) continue;
+    await db.collection("costentries").updateOne(
+      { batch: saved._id, category: catIds[cat] },
+      { $set: { amount, note: `${note} — from AVPL Batch_Master`, entry_date: start ?? new Date(), location: saved.location, updatedAt: new Date() },
+        $setOnInsert: { createdAt: new Date(), entered_by: adminUser?._id } },
+      { upsert: true });
+    w.costs = (w.costs ?? 0) + 1;
+  }
 }
-console.log(`\nWrote: ${w.trainers} trainers · ${w.candidates} candidates · ${w.batches} batches.`);
+console.log(`\nWrote: ${w.trainers} trainers · ${w.candidates} candidates · ${w.batches} batches · ${w.costs ?? 0} cost entries.`);
 await mongoose.disconnect();

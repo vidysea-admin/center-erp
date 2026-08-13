@@ -25,9 +25,9 @@ function TrainersInner() {
   const setReq = (k: string, v: unknown) => setReqForm((f: any) => ({ ...f, [k]: v }));
 
   const load = () => Promise.all([
-    api(`/api/trainers?q=${encodeURIComponent(q)}&limit=200`).then((d) => setItems(d.items)),
-    api("/api/trainer-requests?limit=200").then((d) => setRequests(d.items)),
-    api("/api/locations?limit=200").then((d) => setLocations(d.items)),
+    api(`/api/trainers?q=${encodeURIComponent(q)}&limit=2000`).then((d) => setItems(d.items)),
+    api("/api/trainer-requests?limit=2000").then((d) => setRequests(d.items)),
+    api("/api/locations?limit=2000").then((d) => setLocations(d.items)),
   ]).catch((e) => setError(e.message));
   useEffect(() => { load(); }, [q]);
 

@@ -43,13 +43,13 @@ function CandidatesInner() {
   }, [form.phone, form.name, form.dob, drawer]);
 
   const load = () => {
-    const params = new URLSearchParams({ q, limit: "200" });
+    const params = new URLSearchParams({ q, limit: "2000" });
     if (fLoc) params.set("location", fLoc);
     if (fStatus) params.set("lifecycle_status", fStatus);
     return Promise.all([
       api(`/api/candidates?${params}`).then((d) => setItems(d.items)),
-      api("/api/locations?limit=200").then((d) => setLocations(d.items)),
-      api("/api/programs?limit=100").then((d) => setPrograms(d.items)),
+      api("/api/locations?limit=2000").then((d) => setLocations(d.items)),
+      api("/api/programs?limit=1000").then((d) => setPrograms(d.items)),
       api("/api/batches").then((d) => setBatches(d.items.filter((b: any) => ["Planning", "Ready", "Active"].includes(b.status)))),
     ]).catch((e) => setError(e.message));
   };

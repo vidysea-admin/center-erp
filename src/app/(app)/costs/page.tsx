@@ -19,8 +19,8 @@ function CostsInner() {
     api("/api/costs").then((d) => setCosts(d.items)),
     api("/api/invoices").then((d) => setInvoices(d.items)),
     api("/api/master-lists/cost-categories").then((d) => setCats(d.items)),
-    api("/api/locations?limit=200").then((d) => setLocations(d.items)),
-    api("/api/trainers?limit=200").then((d) => setTrainers(d.items)),
+    api("/api/locations?limit=2000").then((d) => setLocations(d.items)),
+    api("/api/trainers?limit=2000").then((d) => setTrainers(d.items)),
   ]).catch((e) => setError(e.message));
   useEffect(() => { load(); }, []);
 

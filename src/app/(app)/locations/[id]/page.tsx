@@ -185,7 +185,7 @@ function Targets({ locationId, setError }: any) {
 
   const load = () => Promise.all([
     api(`/api/locations/${locationId}/targets`).then((d) => setItems(d.items)),
-    api("/api/programs?limit=100").then((d) => setPrograms(d.items)),
+    api("/api/programs?limit=1000").then((d) => setPrograms(d.items)),
   ]).catch((e) => setError(e.message));
   useEffect(() => { load(); }, [locationId]);
 
@@ -280,9 +280,9 @@ function TrainersInfra({ locationId, setError }: any) {
   const load = () => Promise.all([
     api(`/api/locations/${locationId}/rooms`).then((d) => setRooms(d.items)),
     api(`/api/trainer-requests?location=${locationId}`).then((d) => setRequests(d.items)),
-    api("/api/programs?limit=100").then((d) => setPrograms(d.items)),
+    api("/api/programs?limit=1000").then((d) => setPrograms(d.items)),
     api(`/api/mapping/readiness?location=${locationId}`).then((d) => setReadiness(d.items ?? [])).catch(() => setReadiness([])),
-    api(`/api/trainers?nominated_for_location=${locationId}&limit=100`).then((d) => setTrainers(d.items ?? [])).catch(() => setTrainers([])),
+    api(`/api/trainers?nominated_for_location=${locationId}&limit=1000`).then((d) => setTrainers(d.items ?? [])).catch(() => setTrainers([])),
   ]).catch((e) => setError(e.message));
   useEffect(() => { load(); }, [locationId]);
 

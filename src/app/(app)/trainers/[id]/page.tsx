@@ -41,7 +41,7 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
         api(`/api/trainers/${id}/documents`),
       ]);
       setT(item); setDocs(d);
-      const b = await api(`/api/batches?trainer=${id}&limit=50`).catch(() => ({ items: [] }));
+      const b = await api(`/api/batches?trainer=${id}&limit=1000`).catch(() => ({ items: [] }));
       setBatches(b.items ?? []);
     } catch (e: any) { setErr(e.message); }
   }

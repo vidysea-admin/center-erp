@@ -85,6 +85,22 @@ await req("POST", `/api/sheet-changes/${tChange._id}/apply`, { action: "Update t
 const targets = (await req("GET", `/api/locations/${loc._id}/targets`)).data.items;
 ok("Rule 4: approved_target written from sheet", targets[0]?.approved_target === 210, JSON.stringify(targets[0]?.approved_target));
 
+// ---- rollback (2026-08-13): an applied target update can be put back exactly ----
+{
+  const reverted = await req("POST", `/api/sheet-changes/${tChange._id}/revert`, {}, 200);
+  const after = (await req("GET", `/api/locations/${loc._id}/targets`)).data.items;
+  ok("revert restores the previous target value",
+    String(after[0]?.approved_target ?? "") === String(tChange.old_value ?? ""),
+    JSON.stringify({ now: after[0]?.approved_target, wanted: tChange.old_value }));
+  ok("…and the change row records who reverted and to what",
+    /Reverted to/.test(reverted.data.item?.note ?? ""), reverted.data.item?.note);
+  // A status action is NOT a value swap — the button must refuse, not guess.
+  await req("POST", `/api/sheet-changes/${tChange._id}/revert`, {}, 400); // already reverted (status no longer Actioned)
+  // Re-apply so the rest of the suite continues against the sheet's value.
+  // (the change is Ignored now; apply requires Open — set the target back by hand instead)
+  await req("PUT", `/api/locations/${loc._id}/targets`, { program: (targets[0].program?._id ?? targets[0].program), approved_target: 210 }, 200);
+}
+
 // apply Close location on the status change → follow-ups generated, change stays Open (Rule 7)
 const sChange = changes.find((c) => c.field_name === "approval_status");
 await req("POST", `/api/sheet-changes/${sChange._id}/apply`, { action: "Close location" }, 400); // no reason
@@ -162,6 +178,27 @@ await req("PATCH", `/api/sync-sources/${dynSrc._id}`, { source_url: wbDataUrl({ 
 await req("POST", `/api/sync-sources/${dynSrc._id}/run`, {}, 200);
 const ch3 = mine((await req("GET", "/api/workbook-changes?status=New")).data.items, dynSrc._id);
 ok("row edits inside the newly-added tab are tracked", ch3.some((c) => c.tab === "Planning 2027" && c.column === "Target" && c.old_value === "300" && c.new_value === "350"));
+
+// ---- version history (2026-08-13): every content change keeps a full copy of the tab ----
+{
+  const hist = (await req("GET", `/api/sync-sources/${dynSrc._id}/snapshots?tab=${encodeURIComponent("Batch Plan")}`)).data;
+  ok("each change stores a browsable version", (hist.items?.length ?? 0) >= 2, `versions=${hist.items?.length}`);
+  const [newer, older] = hist.items;
+  const d = (await req("GET", `/api/sync-sources/${dynSrc._id}/snapshots?tab=${encodeURIComponent("Batch Plan")}&from=${older._id}&to=${newer._id}`)).data;
+  ok("the diff between two versions names the exact cell",
+    d.changes?.some((x) => x.column === "Target" && x.old_value === "100" && x.new_value === "150"), JSON.stringify(d.changes));
+  const dRev = (await req("GET", `/api/sync-sources/${dynSrc._id}/snapshots?tab=${encodeURIComponent("Batch Plan")}&from=${newer._id}&to=${older._id}`)).data;
+  ok("…and clicking the versions in the wrong order still reads old → new",
+    dRev.changes?.some((x) => x.column === "Target" && x.old_value === "100" && x.new_value === "150"), JSON.stringify(dRev.changes));
+  const csvRes = await fetch(`${BASE}/api/sync-sources/${dynSrc._id}/snapshots?snap=${older._id}&format=csv`, { headers: { cookie } });
+  const csv = await csvRes.text();
+  ok("any version downloads as CSV — the practical rollback of the sheet's data",
+    csvRes.headers.get("content-type")?.includes("text/csv") && csv.includes("Institution Name") && csv.includes("100"),
+    csv.slice(0, 80));
+  const tabsList = (await req("GET", `/api/sync-sources/${dynSrc._id}/snapshots`)).data;
+  ok("the history browser lists every tab with its version count",
+    (tabsList.tabs ?? []).some((t) => t.tab === "Batch Plan" && t.versions >= 2), JSON.stringify(tabsList.tabs));
+}
 
 // Run 4 — client DELETES a tab.
 await req("PATCH", `/api/sync-sources/${dynSrc._id}`, { source_url: wbDataUrl({ "Batch Plan": T1b, "Planning 2027": T3b }) }, 200);

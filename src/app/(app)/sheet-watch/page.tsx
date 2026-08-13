@@ -23,6 +23,7 @@ export default function SheetWatchPage() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [showSources, setShowSources] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
 
   const load = () =>
     api(`/api/workbook-changes?status=${status}${tab ? `&tab=${encodeURIComponent(tab)}` : ""}`)
@@ -76,6 +77,7 @@ export default function SheetWatchPage() {
         </div>
         <div className="flex gap-2">
           <Btn small kind="ghost" onClick={() => setShowSources((s) => !s)}>{showSources ? "Hide sheets" : "Manage sheets"}</Btn>
+          <Btn small kind="ghost" onClick={() => setShowHistory((s) => !s)}>{showHistory ? "Hide history" : "Version history"}</Btn>
           <select className={inputCls + " max-w-40"} value={tab} onChange={(e) => setTab(e.target.value)}>
             <option value="">All tabs</option>
             {tabs.map((t) => <option key={t}>{t}</option>)}
@@ -88,6 +90,7 @@ export default function SheetWatchPage() {
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
       {/* 2026-08-12: any sheet can be added here — the feature is no longer one hard-coded URL. */}
       {showSources && <SheetSources onChanged={load} />}
+      {showHistory && <VersionHistory setError={setError} />}
       {selected.size > 0 && (
         <div className="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm">
           <span className="font-medium">{selected.size} selected</span>
@@ -156,6 +159,102 @@ export default function SheetWatchPage() {
           </div>
         )}
       </Drawer>
+    </div>
+  );
+}
+
+
+// 2026-08-13 (Umesh): "Excel ki version history jaisa — before kya tha, after kya tha, rollback
+// kar paayein." Every content change stores a full snapshot of the tab; this browses them,
+// diffs any two versions with the same engine the watcher uses, and downloads any version as
+// CSV — the practical rollback, since the client's own file is not ours to write.
+function VersionHistory({ setError }: any) {
+  const [sources, setSources] = useState<any[]>([]);
+  const [src, setSrc] = useState("");
+  const [histTabs, setHistTabs] = useState<any[]>([]);
+  const [histTab, setHistTab] = useState("");
+  const [versions, setVersions] = useState<any[]>([]);
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [diff, setDiff] = useState<any>(null);
+
+  useEffect(() => { api("/api/sync-sources?limit=1000").then((d) => setSources((d.items ?? []).filter((s: any) => s.mode === "watch"))).catch((e) => setError(e.message)); }, []);
+  useEffect(() => {
+    setHistTab(""); setVersions([]); setDiff(null);
+    if (src) api(`/api/sync-sources/${src}/snapshots`).then((d) => setHistTabs(d.tabs ?? [])).catch((e) => setError(e.message));
+    else setHistTabs([]);
+  }, [src]);
+  useEffect(() => {
+    setDiff(null); setFrom(""); setTo("");
+    if (src && histTab) api(`/api/sync-sources/${src}/snapshots?tab=${encodeURIComponent(histTab)}`).then((d) => setVersions(d.items ?? [])).catch((e) => setError(e.message));
+    else setVersions([]);
+  }, [histTab]);
+
+  async function runDiff() {
+    try { setDiff(await api(`/api/sync-sources/${src}/snapshots?tab=${encodeURIComponent(histTab)}&from=${from}&to=${to}`)); }
+    catch (e: any) { setError(e.message); }
+  }
+  const when = (d: string) => new Date(d).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+
+  return (
+    <div className="rounded-lg border border-gray-200 p-4">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <span className="text-sm font-medium">Version history</span>
+        <select className={inputCls + " max-w-64"} value={src} onChange={(e) => setSrc(e.target.value)}>
+          <option value="">Pick a sheet…</option>
+          {sources.map((s) => <option key={s._id} value={s._id}>{s.name}</option>)}
+        </select>
+        <select className={inputCls + " max-w-56"} value={histTab} onChange={(e) => setHistTab(e.target.value)} disabled={!src}>
+          <option value="">Pick a tab…</option>
+          {histTabs.map((t) => <option key={t.tab} value={t.tab}>{t.tab} ({t.versions} version{t.versions === 1 ? "" : "s"})</option>)}
+        </select>
+      </div>
+      {versions.length > 0 && (
+        <div className="space-y-3">
+          <ul className="divide-y divide-gray-100 text-sm">
+            {versions.map((v, i) => (
+              <li key={v._id} className="flex items-center justify-between gap-2 py-1.5">
+                <span>
+                  <b>{i === 0 ? "Current" : `Version −${i}`}</b>
+                  <span className="text-gray-500"> · {when(v.taken_at)} · {v.rows} rows · {v.columns} columns</span>
+                </span>
+                <a className="text-xs font-medium text-blue-700 hover:underline"
+                  href={`/erp/api/sync-sources/${src}/snapshots?snap=${v._id}&format=csv`}>Download CSV</a>
+              </li>
+            ))}
+          </ul>
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="text-gray-500">Compare</span>
+            <select className={inputCls + " max-w-48"} value={from} onChange={(e) => setFrom(e.target.value)}>
+              <option value="">older version…</option>
+              {versions.map((v, i) => <option key={v._id} value={v._id}>{i === 0 ? "Current" : `Version −${i}`} ({when(v.taken_at)})</option>)}
+            </select>
+            <span className="text-gray-500">→</span>
+            <select className={inputCls + " max-w-48"} value={to} onChange={(e) => setTo(e.target.value)}>
+              <option value="">newer version…</option>
+              {versions.map((v, i) => <option key={v._id} value={v._id}>{i === 0 ? "Current" : `Version −${i}`} ({when(v.taken_at)})</option>)}
+            </select>
+            <Btn small disabled={!from || !to || from === to} onClick={runDiff}>Show changes</Btn>
+          </div>
+          {diff && (
+            <div className="rounded-lg bg-gray-50 p-3 text-sm">
+              <div className="mb-2 text-xs text-gray-500">{when(diff.from.taken_at)} → {when(diff.to.taken_at)} · {diff.changes.length} change{diff.changes.length === 1 ? "" : "s"}</div>
+              {diff.changes.length === 0 ? <div className="text-gray-400">These two versions are identical.</div> : (
+                <ul className="max-h-72 space-y-1 overflow-y-auto">
+                  {diff.changes.map((c: any, i: number) => (
+                    <li key={i} className="text-xs">
+                      <Chip value={c.change_type} /> <b>{c.row_key}</b>{c.column ? <> · {c.column}</> : null}:{" "}
+                      <span className="rounded bg-red-50 px-1 text-red-700 line-through decoration-red-300">{c.old_value || "∅"}</span>
+                      {" → "}
+                      <span className="rounded bg-green-50 px-1 font-semibold text-green-800">{c.new_value || "∅"}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

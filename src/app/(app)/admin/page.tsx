@@ -52,7 +52,7 @@ function Programs({ setError }: any) {
   const [form, setForm] = useState<any>({});
   const set = (k: string, v: unknown) => setForm((f: any) => ({ ...f, [k]: v }));
 
-  const load = () => api("/api/programs?limit=100").then((d) => setItems(d.items)).catch((e: any) => setError(e.message));
+  const load = () => api("/api/programs?limit=1000").then((d) => setItems(d.items)).catch((e: any) => setError(e.message));
   useEffect(() => { load(); }, []);
 
   function open(p?: any) {
@@ -132,7 +132,7 @@ function Users({ setError }: any) {
 
   const load = () => Promise.all([
     api("/api/users").then((d) => setItems(d.items)),
-    api("/api/locations?limit=200").then((d) => setLocations(d.items)),
+    api("/api/locations?limit=2000").then((d) => setLocations(d.items)),
   ]).catch((e: any) => setError(e.message));
   useEffect(() => { load(); }, []);
 

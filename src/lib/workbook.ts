@@ -6,6 +6,7 @@ import * as XLSX from "xlsx";
 import { Location, Notification, SyncSource, WorkbookChange, WorkbookSnapshot } from "@/models";
 import { HttpError } from "@/lib/authz";
 import { safeFetch } from "@/lib/safe-fetch";
+import { getDefaults } from "@/lib/defaults";
 
 // Content hash for change detection only (not security) — cyrb53, dependency-free so the
 // Edge instrumentation trace stays clean (node:crypto is not Edge-safe).
@@ -205,6 +206,37 @@ export function snapshotTab(sheet: XLSX.WorkSheet, keyColumns: string[]): TabSna
   return { header, header_row: headerRow, rows, hash };
 }
 
+export type SnapDiff = {
+  row_key: string; column: string | null;
+  old_value: string; new_value: string;
+  change_type: "Added" | "Modified" | "Removed";
+};
+
+// One diff, two consumers: the watch engine records these as WorkbookChanges, and the history
+// viewer shows the same diff between any two stored versions. Shared so they can never disagree.
+export function diffSnapshots(prevRows: SnapRow[], currRows: SnapRow[]): SnapDiff[] {
+  const prevMap = new Map<string, SnapRow>(prevRows.map((r) => [r.key, r]));
+  const currMap = new Map<string, SnapRow>(currRows.map((r) => [r.key, r]));
+  const out: SnapDiff[] = [];
+  for (const [key, curr] of currMap) {
+    const old = prevMap.get(key);
+    if (!old) {
+      out.push({ row_key: key, column: null, old_value: "", new_value: summarizeRow(curr), change_type: "Added" });
+      continue;
+    }
+    const columns = new Set([...Object.keys(old.cells), ...Object.keys(curr.cells)]);
+    for (const col of columns) {
+      const before = old.cells[col] ?? "";
+      const after = curr.cells[col] ?? "";
+      if (before !== after) out.push({ row_key: key, column: col, old_value: before, new_value: after, change_type: "Modified" });
+    }
+  }
+  for (const [key, old] of prevMap) {
+    if (!currMap.has(key)) out.push({ row_key: key, column: null, old_value: summarizeRow(old), new_value: "", change_type: "Removed" });
+  }
+  return out;
+}
+
 export type WatchResult = { status: "OK" | "Failed"; tabs: number; changes: number; error?: string };
 
 // Fetch → per-tab snapshot → diff against the previous snapshot → persist changes.
@@ -251,35 +283,17 @@ export async function runWatch(sourceId: string): Promise<WatchResult> {
     }
 
     if (prev) {
-      const prevRows = new Map<string, SnapRow>((prev.rows as SnapRow[]).map((r) => [r.key, r]));
-      const currRows = new Map<string, SnapRow>(snap.rows.map((r) => [r.key, r]));
-
-      for (const [key, curr] of currRows) {
-        const old = prevRows.get(key);
-        if (!old) {
-          totalChanges += await recordChange(src._id, tab, key, null, "", summarizeRow(curr), "Added");
-          continue;
-        }
-        const columns = new Set([...Object.keys(old.cells), ...Object.keys(curr.cells)]);
-        for (const col of columns) {
-          const before = old.cells[col] ?? "";
-          const after = curr.cells[col] ?? "";
-          if (before !== after) {
-            totalChanges += await recordChange(src._id, tab, key, col, before, after, "Modified");
-          }
-        }
-      }
-      for (const [key, old] of prevRows) {
-        if (!currRows.has(key)) {
-          totalChanges += await recordChange(src._id, tab, key, null, summarizeRow(old), "", "Removed");
-        }
+      for (const d of diffSnapshots(prev.rows as SnapRow[], snap.rows)) {
+        totalChanges += await recordChange(src._id, tab, d.row_key, d.column, d.old_value, d.new_value, d.change_type);
       }
     }
 
     await WorkbookSnapshot.create({ sync_source: src._id, tab, ...snap, taken_at: new Date() });
-    // Retention: last 10 snapshots per tab.
+    // Retention: a snapshot is only taken when the tab's content actually changed, so this is
+    // version-history depth, not poll count. Umesh wants Excel-style history — Defaults-tunable.
+    const keep = (await getDefaults()).snapshot_retention_per_tab ?? 100;
     const stale = await WorkbookSnapshot.find({ sync_source: src._id, tab })
-      .sort({ taken_at: -1 }).skip(10).select("_id").lean<any[]>();
+      .sort({ taken_at: -1 }).skip(keep).select("_id").lean<any[]>();
     if (stale.length) await WorkbookSnapshot.deleteMany({ _id: { $in: stale.map((s) => s._id) } });
   }
 
