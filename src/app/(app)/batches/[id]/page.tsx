@@ -1041,7 +1041,29 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
   const [certDrawer, setCertDrawer] = useState(false);
   const [certForm, setCertForm] = useState<any>({});
   const [idx, setIdx] = useState(0);
+  const [certUpload, setCertUpload] = useState<any>(null); // last bulk-upload report
+  const [uploading, setUploading] = useState(false);
   const closed = ["Completed", "Cancelled"].includes(batch?.status);
+
+  // 2026-08-14 (CEO 49:33): "sare certificate ek folder mein ID ke saath — upload hote
+  // hi bachche ke saamne assign." Multi-file picker → the CAN id in each FILENAME joins
+  // to the roster's sidh_candidate_id server-side; the report below names every file
+  // that could not be placed and why. Available on Completed batches too — the endpoint
+  // only ever FILLS an absent certificate_file there (DEC-6 stays intact).
+  async function uploadCertificates(list: FileList | null) {
+    if (!list?.length) return;
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      for (const f of Array.from(list)) fd.append("files", f);
+      const res = await fetch(`${BASE_PATH}/api/batches/${batchId}/certificates`, { method: "POST", body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? `Upload failed (${res.status})`);
+      setCertUpload(data);
+      await load(); onChanged();
+    } catch (e: any) { setError(e.message); }
+    finally { setUploading(false); }
+  }
 
   const load = () => Promise.all([
     api(`/api/batches/${batchId}/results`).then((d) => { setItems(d.items); setSummary(d.summary); }),
@@ -1150,6 +1172,34 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
         </div>
       )}
 
+      {batch?.status !== "Cancelled" && (
+        <div className="mb-3 rounded-lg border border-gray-200 bg-white p-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <label className={`cursor-pointer rounded-lg px-3 py-1.5 text-xs font-medium text-white ${uploading ? "bg-gray-400" : "bg-blue-600 hover:bg-blue-700"}`}>
+              {uploading ? "Uploading…" : "⬆ Upload certificates (bulk)"}
+              <input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" disabled={uploading}
+                onChange={(e) => { uploadCertificates(e.target.files); e.target.value = ""; }} />
+            </label>
+            <span className="text-xs text-gray-500">
+              File names carry the candidate id — <span className="font-mono">CAN_12345.pdf</span> lands on that candidate automatically. Pass results only (Rule 45).
+            </span>
+          </div>
+          {certUpload && (
+            <div className="mt-2 space-y-1 text-xs">
+              <p className="font-medium text-gray-700">
+                {certUpload.summary?.matched ?? 0} placed · {certUpload.summary?.unmatched ?? 0} not placed (of {certUpload.summary?.received ?? 0})
+              </p>
+              {(certUpload.matched ?? []).map((m: any, i: number) => (
+                <p key={`m${i}`} className="text-green-700">✓ {m.original} → {m.candidate} ({m.can_id})</p>
+              ))}
+              {(certUpload.unmatched ?? []).map((u: any, i: number) => (
+                <p key={`u${i}`} className="text-amber-700">✗ {u.filename} — {u.reason}</p>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {view === "review" ? (
         <DataTable rows={items}
           cardTitle={(r: any) => r.candidate?.name}
@@ -1159,7 +1209,12 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
             { key: "score", label: "Score", render: (r: any) => r.result?.score ?? "—" },
             { key: "assessor", label: "Assessor", render: (r: any) => r.result?.assessor ?? "—", mobile: false },
             { key: "failure_reason", label: "Failure reason", render: (r: any) => r.result?.failure_reason ?? "—" },
-            { key: "cert", label: "Certificate", render: (r: any) => r.result?.certificate_no ? `${r.result.certificate_no} (${r.result.certificate_status})` : (r.result?.certificate_status ?? "—") },
+            { key: "cert", label: "Certificate", render: (r: any) => (
+              <span className="inline-flex items-center gap-1.5">
+                {r.result?.certificate_no ? `${r.result.certificate_no} (${r.result.certificate_status})` : (r.result?.certificate_status ?? "—")}
+                {r.result?.certificate_file && <a className="text-blue-600 underline" href={r.result.certificate_file} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>file</a>}
+              </span>
+            ) },
           ]} empty="No members on this batch." />
       ) : (
         <>

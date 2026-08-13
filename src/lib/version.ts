@@ -3,10 +3,11 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-8";
+export const RELEASE = "2026.08.14-9";
 export const RELEASE_NOTE =
-  "SPOC directory: Locations page gets a derived one-row-per-person directory " +
-  "(keyed by phone) showing each SPOC's centres — the CEO's 'ek SPOC, multiple " +
-  "locations pe mapping, Om Prakash das mat banana'. Same phone under different " +
-  "name spellings, or same name under multiple phones, is flagged with a warning " +
-  "badge for correction — never silently merged. Read-only lens; no data changes.";
+  "Certificates bulk upload: pick a whole folder's files on the batch Closure tab; " +
+  "each filename's CAN id joins to the roster's SIDH candidate id and the certificate " +
+  "lands on that candidate automatically — files with no id, no roster match, an " +
+  "ambiguous id, or a non-Pass result are reported by name with the reason, never " +
+  "guessed. On a Completed batch only an ABSENT certificate file may be filled " +
+  "(the DEC-6 freeze stays intact for everything recorded).";

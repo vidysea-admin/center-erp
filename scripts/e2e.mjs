@@ -379,6 +379,38 @@ await req("PATCH", `/api/results/${passRow._id}`, { result: "Fail", failure_reas
 const certd = (await req("GET", `/api/batches/${b4._id}/closure`)).data;
 ok("Rule 42: certificates_issued derived", certd.closure.certificates_issued === 1, String(certd.closure.certificates_issued));
 
+// ---- Certificates bulk upload by CAN id (2026-08-14, CEO: "folder mein ID ke saath —
+// upload hote hi bachche ke saamne assign"). Filenames carry the CAN id; the roster's
+// sidh_candidate_id is the join key; everything unplaceable is reported with a reason.
+await req("PATCH", `/api/candidates/${b4Cands[0]._id}`, { sidh_candidate_id: `CAN77${stamp.slice(-4)}1` }, 200);
+await req("PATCH", `/api/candidates/${b4Cands[1]._id}`, { sidh_candidate_id: `CAN77${stamp.slice(-4)}2` }, 200);
+async function certUpload(batchId, files, expect) {
+  const fd = new FormData();
+  for (const [name, bytes] of files) fd.append("files", new File([bytes], name, { type: "application/pdf" }));
+  const res = await fetch(`${BASE}/api/batches/${batchId}/certificates`, { method: "POST", headers: { cookie }, body: fd });
+  const data = await res.json().catch(() => ({}));
+  if (expect !== undefined) ok(`POST certificates bulk → ${expect}`, res.status === expect, `(got ${res.status}: ${JSON.stringify(data).slice(0, 140)})`);
+  return data;
+}
+const pdf = new Uint8Array([0x25, 0x50, 0x44, 0x46]); // "%PDF"
+const up1 = await certUpload(b4._id, [
+  [`CAN_77${stamp.slice(-4)}1.pdf`, pdf],      // → Pass candidate
+  ["junk-no-id.pdf", pdf],                      // no CAN id
+  [`CAN_77${stamp.slice(-4)}2.pdf`, pdf],      // → Fail candidate (Rule 45)
+  ["CAN_000000009.pdf", pdf],                   // no roster match
+], 200);
+ok("cert bulk: exactly the Pass candidate placed", up1.summary?.matched === 1 && up1.matched?.[0]?.candidate === b4Cands[0].name, JSON.stringify(up1.summary));
+ok("cert bulk: the 3 unplaceable files each carry a reason",
+  up1.summary?.unmatched === 3 && up1.unmatched?.every((u) => u.reason?.length > 5),
+  JSON.stringify(up1.unmatched));
+ok("cert bulk: Rule 45 names the Fail refusal",
+  up1.unmatched?.some((u) => /Rule 45/.test(u.reason)), JSON.stringify(up1.unmatched));
+const afterUp = (await req("GET", `/api/batches/${b4._id}/results`)).data.items;
+const upPassRow = afterUp.find((i) => i.result?.result === "Pass").result;
+ok("cert bulk: certificate_file landed on the result row", /\/api\/files\//.test(upPassRow.certificate_file ?? ""), upPassRow.certificate_file);
+// same CAN id again while file exists + batch still Closing → upsert path allows overwrite
+// pre-completion; the freeze is tested after Completed below.
+
 await req("PUT", `/api/batches/${b4._id}/closure`, { certification_status: "Completed", certification_date: today }, 200);
 await req("PUT", `/api/batches/${b4._id}/closure`, { ready_for_invoice: true }, 200);
 ok("invoice linkage unchanged by per-candidate mode", (await req("GET", `/api/batches/${b4._id}/closure`)).data.invoice?.status === "Ready");
@@ -395,6 +427,45 @@ ok("Rule 47: Pass → Completed, Fail/Absent → Not Certified",
 await req("PUT", `/api/batches/${b4._id}/results`, { rows: [{ member: b4Members[0]._id, result: "Pass" }] }, 400); // Rule 41: closed batch
 const candHistory = (await req("GET", `/api/candidates/${b4Cands[0]._id}/results`, undefined, 200)).data;
 ok("candidate result history available", candHistory.items?.length >= 1 && candHistory.items[0].batch?.code === b4.code, JSON.stringify(candHistory.items?.[0]?.batch));
+
+// ---- Cert bulk upload vs DEC-6 on Completed batches ----
+// Rewriting an existing certificate file after completion is refused by name.
+const upFrozen = await certUpload(b4._id, [[`CAN_77${stamp.slice(-4)}1.pdf`, pdf]], 200);
+ok("cert bulk: Completed + existing file → frozen (DEC-6)",
+  upFrozen.summary?.matched === 0 && /DEC-6/.test(upFrozen.unmatched?.[0]?.reason ?? ""), JSON.stringify(upFrozen.unmatched));
+
+// But FILLING an absent file on a Completed batch is the CEO's own flow (the Gurgaon
+// case: batch long done, certificates arrive later as a folder) — allowed, once.
+const b5 = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, room: room._id, planned_start: today, target_size: 2 }, 201)).data.item;
+const c5a = (await req("POST", "/api/candidates", { name: `LateCert A ${stamp}`, phone: `67${stamp}7`, location: loc._id, program: prog._id, sidh_candidate_id: `CAN88${stamp.slice(-4)}` }, 201)).data.item;
+const c5b = (await req("POST", "/api/candidates", { name: `LateCert B ${stamp}`, phone: `67${stamp}8`, location: loc._id, program: prog._id }, 201)).data.item;
+const m5 = [];
+for (const c of [c5a, c5b]) m5.push((await req("POST", `/api/batches/${b5._id}/members`, { candidate: c._id }, 201)).data.item);
+for (const m of m5) await req("PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+await req("POST", `/api/batches/${b5._id}/transition`, { target: "Ready" }, 200);
+await req("POST", `/api/batches/${b5._id}/transition`, { target: "Active" }, 200);
+await req("PUT", `/api/batches/${b5._id}/results`, { rows: [
+  { member: m5[0]._id, result: "Pass", score: 81, assessed_on: today, assessor: "NCVET" },
+  { member: m5[1]._id, result: "Fail", failure_reason: "Below cut-off", score: 22 },
+] }, 200);
+await req("PUT", `/api/batches/${b5._id}/closure`, { assessment_status: "Completed", assessment_date: today }, 200);
+await req("POST", `/api/batches/${b5._id}/transition`, { target: "Closing" }, 200);
+const r5 = (await req("GET", `/api/batches/${b5._id}/results`)).data.items.find((i) => i.result?.result === "Pass").result;
+await req("PATCH", `/api/results/${r5._id}`, { certificate_status: "Processing" }, 200);
+await req("PATCH", `/api/results/${r5._id}`, { certificate_status: "Generated", certificate_no: "LC-" + stamp, certificate_date: today }, 200);
+await req("PATCH", `/api/results/${r5._id}`, { certificate_status: "Issued" }, 200);
+await req("PUT", `/api/batches/${b5._id}/closure`, { certification_status: "Completed", certification_date: today }, 200);
+await req("PUT", `/api/batches/${b5._id}/closure`, { ready_for_invoice: true }, 200);
+await req("POST", `/api/batches/${b5._id}/transition`, { target: "Completed" }, 200);
+
+const upLate = await certUpload(b5._id, [[`can-88${stamp.slice(-4)}.pdf`, pdf]], 200); // lowercase/dash — id match is case/separator-proof
+ok("cert bulk: absent file FILLED on a Completed batch (DEC-6 exception)",
+  upLate.summary?.matched === 1 && upLate.matched?.[0]?.candidate === c5a.name, JSON.stringify(upLate));
+const r5after = (await req("GET", `/api/batches/${b5._id}/results`)).data.items.find((i) => i.result?.result === "Pass").result;
+ok("cert bulk: late certificate visible on the result row", /\/api\/files\//.test(r5after.certificate_file ?? ""), r5after.certificate_file);
+const upLate2 = await certUpload(b5._id, [[`CAN_88${stamp.slice(-4)}.pdf`, pdf]], 200);
+ok("cert bulk: second late upload refused — the fill is once (DEC-6)",
+  upLate2.summary?.matched === 0 && /DEC-6/.test(upLate2.unmatched?.[0]?.reason ?? ""), JSON.stringify(upLate2.unmatched));
 
 // ---- Batch Health Score (score always travels with reasons) ----
 const healthBatch = (await req("GET", `/api/batches/${capBatch._id}`)).data;
