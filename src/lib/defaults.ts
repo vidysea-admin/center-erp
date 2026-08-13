@@ -30,6 +30,8 @@ export type AppDefaults = {
   sidh_url: string;
   // Manish's Drive: RPL project → All Locations → District — the evidence backup root.
   drive_root_url: string;
+  // How many changed versions of each sheet tab to keep — the Excel-style version-history depth.
+  snapshot_retention_per_tab: number;
   // Scheme timing guidelines (Manish, 2026-08-12)
   day_start_time: string;      // "9 to 6" — a 07:00 start was asked for and refused
   day_end_time: string;
@@ -69,6 +71,7 @@ export const DEFAULT_VALUES: AppDefaults = {
   min_daily_evidence: 2,
   sidh_url: "https://www.skillindiadigital.gov.in/",
   drive_root_url: "https://drive.google.com/drive/folders/1NOfRCw9lIyRoJTEFAg4--HIJiTG-Of0G",
+  snapshot_retention_per_tab: 100,
   day_start_time: "09:00",
   day_end_time: "18:00",
   max_session_hours: 4,

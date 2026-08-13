@@ -30,9 +30,9 @@ function BatchesInner() {
 
   const load = () => Promise.all([
     api(`/api/batches?${new URLSearchParams({ ...(fStatus ? { status: fStatus } : {}), ...(ctxLoc ? { location: ctxLoc } : {}) })}`).then((d) => setItems(d.items)),
-    api("/api/locations?limit=200").then((d) => setLocations(d.items)),
-    api("/api/programs?limit=100").then((d) => setPrograms(d.items)),
-    api("/api/trainers?limit=200").then((d) => setTrainers(d.items)),
+    api("/api/locations?limit=2000").then((d) => setLocations(d.items)),
+    api("/api/programs?limit=1000").then((d) => setPrograms(d.items)),
+    api("/api/trainers?limit=2000").then((d) => setTrainers(d.items)),
   ]).catch((e) => setError(e.message));
   useEffect(() => { load(); }, [fStatus, ctxLoc]);
 

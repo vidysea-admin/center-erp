@@ -66,6 +66,21 @@ export default function SyncInboxPage() {
           { key: "detected_at", label: "Detected", render: (r: any) => fmtDate(r.detected_at) },
           { key: "status", label: "Status", render: (r: any) => <span className="flex items-center gap-1"><Chip value={r.status} />{r.pending_followups > 0 && <span className="text-xs text-amber-600">{r.pending_followups} follow-ups</span>}</span> },
           { key: "action_taken", label: "Action", render: (r: any) => r.action_taken ?? "—", mobile: false },
+          {
+            // 2026-08-13 (Umesh): rollback. Only an applied target update is a plain value swap;
+            // status actions carry follow-ups and are undone on the location screen with a reason.
+            key: "_revert", label: "", mobile: false, render: (r: any) =>
+              r.status === "Actioned" && r.action_taken === "Update target" ? (
+                <button className="text-[11px] font-medium text-red-600 hover:underline"
+                  title={`Put the target back to "${r.old_value || "unset"}"`}
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    if (!window.confirm(`Revert ${r.location?.name ?? "this centre"}'s target back to "${r.old_value || "unset"}"?`)) return;
+                    try { await api(`/api/sheet-changes/${r._id}/revert`, { method: "POST", json: {} }); load(); }
+                    catch (err: any) { setError(err.message); }
+                  }}>↩ Revert</button>
+              ) : null,
+          },
         ]} empty="Inbox zero — no changes to review." />
 
       <Drawer open={!!review} onClose={() => setReview(null)} title="Review change" wide>

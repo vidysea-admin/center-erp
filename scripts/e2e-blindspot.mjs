@@ -125,6 +125,57 @@ const wcsOps = (await req(ops, "GET", "/api/workbook-changes?status=New")).data.
 const pwChangeOps = wcsOps.find((c) => c.column === "TC Password");
 ok("Operations sees TC Password MASKED", pwChangeOps?.new_value === "••••••", JSON.stringify(pwChangeOps?.new_value));
 
+// ---- 6b. MANY tabs, differently shaped, and tabs coming and going (2026-08-13) ----
+// "10-15 tabs saare sync hone chahiye… kal koi nayi tab aaye ya hate, system dynamic ho."
+// Also proves per-tab row identity: a tab whose columns don't match key_columns must key on its
+// OWN identifying columns, not on the serial number (which renumbers and makes every row "change").
+{
+  const trainersV1 = [
+    ["S.No", "Trainer Name", "Job Role", "Status"],
+    [1, "Ramesh " + stamp, "Drone Tech", "Nominated"],
+    [2, "Suresh " + stamp, "Solar Tech", "Certified"],
+  ];
+  const centresV1 = [["Centre Code", "Centre Name"], ["C1", "ITI A " + stamp], ["C2", "ITI B " + stamp]];
+  const multi = (await req(admin, "POST", "/api/sync-sources", {
+    name: "Multi-tab " + stamp,
+    source_url: wbUrl({ Trainers: trainersV1, Centres: centresV1 }),
+    mode: "watch", key_columns: ["Institution Name", "Job role"], // deliberately matches NEITHER tab
+  })).data.item;
+  const m1 = (await req(admin, "POST", `/api/sync-sources/${multi._id}/run`, {})).data;
+  ok("every tab is snapshotted, not just the first", m1.status === "OK" && m1.tabs === 2, JSON.stringify(m1));
+
+  // Insert a row at the TOP of Trainers: every serial number below shifts. With serial-number
+  // keying this reported a change on every row; keyed on the trainer's own columns it is 1 add.
+  const trainersV2 = [
+    ["S.No", "Trainer Name", "Job Role", "Status"],
+    [1, "Naya " + stamp, "Drone Tech", "Applied"],
+    [2, "Ramesh " + stamp, "Drone Tech", "Nominated"],
+    [3, "Suresh " + stamp, "Solar Tech", "Certified"],
+  ];
+  await req(admin, "PATCH", `/api/sync-sources/${multi._id}`, { source_url: wbUrl({ Trainers: trainersV2, Centres: centresV1 }) });
+  const m2 = (await req(admin, "POST", `/api/sync-sources/${multi._id}/run`, {})).data;
+  const mc = (await req(admin, "GET", `/api/workbook-changes?status=New`)).data.items ?? [];
+  // Scope to THIS run's rows — the inbox also holds changes from earlier suite runs.
+  const added = mc.filter((c) => c.tab === "Trainers" && c.change_type === "Added" && String(c.row_key ?? "").includes(stamp));
+  ok("a row inserted at the top is ONE addition, not a renumbering flood",
+    m2.changes === 1 && added.length === 1 && /Naya/.test(added[0]?.row_key ?? ""), JSON.stringify({ changes: m2.changes, keys: mc.map((c) => c.row_key).slice(0, 5) }));
+
+  // A brand-new tab tomorrow must be picked up on its own, and a deleted one announced.
+  await req(admin, "PATCH", `/api/sync-sources/${multi._id}`, {
+    source_url: wbUrl({ Trainers: trainersV2, Batches: [["Batch Code", "Centre"], ["B1", "ITI A " + stamp]] }),
+  });
+  const m3 = (await req(admin, "POST", `/api/sync-sources/${multi._id}/run`, {})).data;
+  const mc3 = (await req(admin, "GET", `/api/workbook-changes?status=New`)).data.items ?? [];
+  ok("a tab added later is discovered on the next poll",
+    mc3.some((c) => c.change_type === "Added" && /New tab "Batches"/.test(String(c.new_value ?? ""))), JSON.stringify(m3));
+  ok("…and a tab that disappears is announced, not silently forgotten",
+    mc3.some((c) => c.change_type === "Removed" && /Tab "Centres" is gone/.test(String(c.new_value ?? ""))), JSON.stringify(m3));
+  // The serial column itself must never be treated as data.
+  ok("a renumbered serial column is not reported as an edit",
+    !mc3.some((c) => c.column === "S.No" && String(c.row_key ?? "").includes(stamp)),
+    JSON.stringify(mc3.filter((c) => c.column === "S.No" && String(c.row_key ?? "").includes(stamp)).slice(0, 2)));
+}
+
 // ---- 7. REAL OneDrive fetch through the server (the badger flow, end to end) ----
 const realSrc = (await req(admin, "POST", "/api/sync-sources", {
   name: "Watch Source " + stamp + " REAL",

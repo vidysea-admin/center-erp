@@ -38,6 +38,15 @@ export default function HomePage() {
         <p className="text-sm text-gray-500">Action Center — operational overview and pending actions</p>
       </div>
 
+      {/* A scoped account whose centres were removed sees zeros everywhere — say why, or the
+          blank app reads as broken (live finding, 2026-08-13). */}
+      {data.scoped_no_centres && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+          <b>Your account isn't linked to any active centre.</b> Everything below will stay empty
+          until an Admin updates your location scope (Admin → Users &amp; Access → your account).
+        </div>
+      )}
+
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
         <KPI label="Active Locations" value={data.kpis.active_locations} tone="blue" icon={<IconPin size={19} />} href="/locations" />
         <KPI label="Active Batches" value={data.kpis.active_batches} tone="violet" icon={<IconCap size={19} />} href="/batches?status=Active" />

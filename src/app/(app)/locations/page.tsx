@@ -13,7 +13,7 @@ export default function LocationsPage() {
   const [form, setForm] = useState<any>({ approval_status: "Pending" });
   const set = (k: string, v: unknown) => setForm((f: any) => ({ ...f, [k]: v }));
 
-  const load = () => api(`/api/locations?q=${encodeURIComponent(q)}&limit=200`).then((d) => setItems(d.items)).catch((e) => setError(e.message));
+  const load = () => api(`/api/locations?q=${encodeURIComponent(q)}&limit=2000`).then((d) => setItems(d.items)).catch((e) => setError(e.message));
   useEffect(() => { load(); }, [q]);
 
   async function save() {

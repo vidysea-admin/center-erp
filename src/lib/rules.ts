@@ -1401,7 +1401,7 @@ function readinessBlockers(
 // awaited each in turn — about five queries per row, run sequentially, which measured 10.3s for 81
 // rows on a laptop. Home calls this on every load for every user, so that was a real outage in
 // waiting. This does the same work in three aggregations regardless of how many targets exist.
-export async function mappingReadinessBulk(targetFilter: Record<string, unknown>, limit = 400) {
+export async function mappingReadinessBulk(targetFilter: Record<string, unknown>, limit = 2000) {
   const targets = await LocationTarget.find(targetFilter)
     .populate("location", "name code tc_id tc_status approval_status operational_status")
     .populate("program", "name code scheme default_batch_size requires_lab")

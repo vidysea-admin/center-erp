@@ -277,10 +277,19 @@ const gTest = await req(admin, "POST", "/api/sync-sources/test", {
 ok("a Google Sheets browser link is rewritten to its export URL",
   gTest.data.normalized_url === "https://docs.google.com/spreadsheets/d/1f9veYSwuLktmggOJdUlspl_yydotdqnf/export?format=xlsx",
   gTest.data.normalized_url);
-ok("a private sheet fails the probe instead of being saved as a dead source", gTest.data.ok === false, JSON.stringify(gTest.data).slice(0, 200));
-ok("and the failure names the sharing fix rather than a generic error",
-  /anyone with the link/i.test(gTest.data.hint ?? "") && /private/i.test(gTest.data.error ?? ""),
-  JSON.stringify({ e: gTest.data.error, h: gTest.data.hint }).slice(0, 300));
+// 2026-08-13: this sheet WAS the private fixture until Umesh opened its sharing — reality
+// changed under the test. It now proves the happy path (probe succeeds, tabs listed); the
+// private-failure path is proven against an ID that cannot exist.
+ok("the (now shared) sheet probes clean with its tabs listed",
+  gTest.data.ok === true && (gTest.data.tabs?.length ?? 0) >= 1, JSON.stringify(gTest.data).slice(0, 160));
+const privTest = await req(admin, "POST", "/api/sync-sources/test", {
+  source_url: "https://docs.google.com/spreadsheets/d/1PrivateFixture_DoesNotExist_0000000000000000/edit",
+});
+ok("a sheet the server cannot read fails the probe instead of being saved as a dead source",
+  privTest.data.ok === false, JSON.stringify(privTest.data).slice(0, 200));
+ok("and the failure explains what to do rather than a generic error",
+  /anyone with the link|moved, renamed or deleted|sign-?in/i.test(`${privTest.data.error ?? ""} ${privTest.data.hint ?? ""}`),
+  JSON.stringify({ e: privTest.data.error, h: privTest.data.hint }).slice(0, 300));
 
 const dTest = await req(admin, "POST", "/api/sync-sources/test", { source_url: "https://drive.google.com/file/d/ABC123def/view?usp=sharing" });
 ok("a Drive file link is rewritten to its download URL",

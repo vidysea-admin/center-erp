@@ -145,7 +145,7 @@ function EditDetails({ b, onChanged, setError }: any) {
   });
   const [driveRoot, setDriveRoot] = useState("");
   useEffect(() => {
-    api("/api/trainers?limit=200").then((d) => setTrainers(d.items)).catch(() => {});
+    api("/api/trainers?limit=2000").then((d) => setTrainers(d.items)).catch(() => {});
     const locId = b.location?._id ?? b.location;
     api(`/api/locations/${locId}/rooms`).then((d) => setRooms(d.items)).catch(() => {});
     api("/api/defaults").then((d) => setDriveRoot(d.item?.drive_root_url ?? "")).catch(() => {});
@@ -242,7 +242,7 @@ function Roster({ batchId, batch, setError, onChanged }: any) {
 
   const load = () => Promise.all([
     api(`/api/batches/${batchId}/members`).then((d) => setMembers(d.items)),
-    api(`/api/candidates?location=${batch.location?._id ?? batch.location}&limit=200`).then((d) =>
+    api(`/api/candidates?location=${batch.location?._id ?? batch.location}&limit=2000`).then((d) =>
       setPool(d.items.filter((c: any) => ["Unassigned", "Dropped"].includes(c.lifecycle_status)))),
     api("/api/master-lists/drop-reasons").then((d) => setDropReasons(d.items)),
   ]).catch((e: any) => setError(e.message));
