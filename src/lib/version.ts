@@ -3,12 +3,10 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.13-11";
+export const RELEASE = "2026.08.13-12";
 export const RELEASE_NOTE =
-  "Umesh's screenshot round: the sheet's MERGED Institution cells are now resolved, so the " +
-  "two dropped Basti rows are back — the dashboard says 31 approved job-role rows exactly " +
-  "like the sheet's own count (Excel Count 32 = header + 31). Placeholder text ('Pending') " +
-  "typed into TC ID/password cells is blanked, never stored as an identifier. Counts are " +
-  "labelled so rows-vs-centres can never read as a contradiction. One 'Sheet Sync' nav " +
-  "entry hosts Sheet Watch + Sync Inbox as tabs. Every drill-down page has a Back button. " +
-  "OPERATIONS.md gains the post-deploy live-smoke checklist (run after every merge).";
+  "The sync ENGINE now resolves merged cells itself (Umesh: 'ye kaam code ko karna chahiye " +
+  "tha') — every grid the app reads (Sheet Watch diffs, mapped sync, tab-mapping imports) " +
+  "goes through one merge-expanding reader, so continuation rows carry their institution " +
+  "instead of appearing as '· Solar Panel…' keys, and the 30-minute sync tracks the same " +
+  "values a human sees in Excel. No more manual re-seeds to correct counts.";

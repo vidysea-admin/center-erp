@@ -7,7 +7,7 @@ import { audit } from "@/lib/audit";
 import { HttpError } from "@/lib/authz";
 import { safeFetch } from "@/lib/safe-fetch";
 import * as XLSX from "xlsx";
-import { fetchWorkbook } from "@/lib/workbook";
+import { fetchWorkbook, gridFromSheet } from "@/lib/workbook";
 import { fieldSpec } from "@/lib/field-catalog";
 
 const ACTIVE_BATCH_STATUSES = ["Planning", "Ready", "Active", "Closing"];
@@ -75,8 +75,9 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
     if (/docs\.google\.com|drive\.google\.com|onedrive\.live\.com|1drv\.ms|sharepoint\.com|\.xlsx($|\?)/i.test(src.source_url)) {
       const wb = await fetchWorkbook(src.source_url);
       const sheet = wb.Sheets[wb.SheetNames[0]];
-      allRows = (XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: "" }) as unknown[][])
-        .map((r) => r.map((c) => String(c ?? "")));
+      // gridFromSheet expands MERGED cells (2026-08-14) — without it the mapped sync read
+      // blank institutions on continuation rows and could never track those rows' values.
+      allRows = gridFromSheet(sheet).map((r) => r.map((c) => String(c ?? "")));
     } else {
       // Same SSRF guard as the watch engine — this URL is user-supplied too (2026-08-12).
       const res = await safeFetch(src.source_url);
