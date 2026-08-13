@@ -5,8 +5,10 @@
 // surface the exact commit.
 export const RELEASE = "2026.08.13-6";
 export const RELEASE_NOTE =
-  "Table readability: every table now has a per-column min-width floor, so a wide table " +
-  "(Sheet Watch with paragraph-long old→new diffs) scrolls horizontally instead of crushing " +
-  "every column into slivers; heavy columns (Sheet Watch/Sync old→new, row keys) declare the " +
-  "room they need; cells top-align so tall rows read row-wise. Sync inbox old→new is now " +
-  "searchable text too.";
+  "Evening bundle: candidate portal (/p/me — registered mobile (+DOB when on file) opens the " +
+  "candidate's own My Training page: centre, trainer, dates, SIDH registration, attendance + " +
+  "eligibility, exam date, result & certificate; pool candidates see their registration " +
+  "status). Tables get a min-width floor (wide tables scroll instead of crushing columns; " +
+  "Sheet Watch/Sync diffs get room; cells top-align). Home KPIs carry paired counts (active+" +
+  "completed, approved+pending, enrolled of pool, open+fulfilled). Program funnels always-on. " +
+  "Rule 38: scoped users now see only trainers tied to their centres.";

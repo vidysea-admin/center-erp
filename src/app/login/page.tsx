@@ -42,6 +42,10 @@ function LoginForm() {
       <p className="text-center text-xs text-gray-500">
         New here? <a href="signup" className="font-medium text-blue-700 hover:underline">Create an account</a> — an Admin approves it before first login.
       </p>
+      {/* 2026-08-13 (Umesh): candidates get their own portal, not a staff account. */}
+      <p className="text-center text-xs text-gray-500">
+        Training candidate? <a href="p/me" className="font-medium text-blue-700 hover:underline">Apni training yahan dekhein</a> — no account needed.
+      </p>
     </form>
   );
 }

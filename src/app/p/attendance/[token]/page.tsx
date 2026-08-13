@@ -27,7 +27,8 @@ export default function PublicAttendancePage({ params }: { params: Promise<{ tok
     <div className="mx-auto min-h-screen w-full max-w-md bg-white px-5 py-8">
       <div className="mb-6 text-center">
         <span className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-blue-600 text-xl font-bold text-white">V</span>
-        <h1 className="text-xl font-semibold">My Attendance</h1>
+        {/* 2026-08-13 (Umesh): the candidate's ONE page — training, attendance, exam, result. */}
+        <h1 className="text-xl font-semibold">My Training</h1>
         {data?.batch && (
           <p className="mt-1 text-sm text-gray-500">
             {data.program} · Batch {data.batch}{data.candidate ? ` · ${data.candidate}` : ""}
@@ -44,6 +45,35 @@ export default function PublicAttendancePage({ params }: { params: Promise<{ tok
 
       {state === "ok" && data && (
         <div className="space-y-5">
+          {/* The training itself — centre, trainer, dates, registration */}
+          <div className="rounded-lg border border-gray-200 p-4 text-sm">
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+              {data.centre && <><span className="text-gray-500">Centre</span><span className="font-medium">{data.centre}</span></>}
+              {data.trainer && <><span className="text-gray-500">Trainer</span><span className="font-medium">{data.trainer}</span></>}
+              {data.start_date && <><span className="text-gray-500">Start</span><span className="font-medium">{new Date(data.start_date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</span></>}
+              {data.end_date && <><span className="text-gray-500">End (planned)</span><span className="font-medium">{new Date(data.end_date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</span></>}
+              {data.sidh_status && <><span className="text-gray-500">Skill India reg.</span>
+                <span className={`font-medium ${data.sidh_status === "Registered" ? "text-green-700" : "text-amber-700"}`}>{data.sidh_status}</span></>}
+            </div>
+          </div>
+
+          {/* Result & certificate — "aage kya hua" once the exam happens */}
+          {data.result && (
+            <div className={`rounded-xl border p-4 text-sm ${data.result.result === "Pass" ? "border-green-200 bg-green-50" : data.result.result === "Fail" ? "border-red-200 bg-red-50" : "border-gray-200"}`}>
+              <p className="mb-1 font-semibold">Exam result</p>
+              <p>
+                {data.result.result === "Pass" && <>✅ Pass — badhai ho{data.result.certificate_no ? <>! Certificate no: <b>{data.result.certificate_no}</b></> : "! Certificate process mein hai."}</>}
+                {data.result.result === "Fail" && (data.result.reassessment_required
+                  ? <>Re-assessment hoga{data.result.reassessment_date ? <> — <b>{new Date(data.result.reassessment_date).toLocaleDateString("en-IN", { day: "numeric", month: "long" })}</b></> : ", date jald milegi."}</>
+                  : <>Result: Fail — centre coordinator se baat karein.</>)}
+                {!["Pass", "Fail"].includes(data.result.result) && <>Result: {data.result.result ?? "aane wala hai"}</>}
+              </p>
+              {data.result.certificate_status && data.result.result === "Pass" && (
+                <p className="mt-1 text-xs text-gray-500">Certificate status: {data.result.certificate_status}{data.result.certificate_date ? ` · ${new Date(data.result.certificate_date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}` : ""}</p>
+              )}
+            </div>
+          )}
+
           {/* Eligibility verdict — the question every student is actually asking */}
           <div className={`rounded-xl border p-5 text-center ${data.eligible ? "border-green-200 bg-green-50" : "border-amber-200 bg-amber-50"}`}>
             <div className="mb-1 text-3xl">{data.eligible ? "✅" : "⏳"}</div>
