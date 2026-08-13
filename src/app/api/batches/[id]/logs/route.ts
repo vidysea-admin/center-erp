@@ -37,11 +37,13 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   const { roster_count, internal_present } = await validateDailyLog(id, D, {
     present_member_ids: body.present_member_ids ?? [],
     govt_present: body.govt_present ?? null,
+    trainer_present: body.trainer_present,
   });
   const doc = await DailyLog.create({
     batch: id, log_date: D,
     planned_topic: body.planned_topic, actual_topic: body.actual_topic,
     present_member_ids: body.present_member_ids ?? [],
+    trainer_present: body.trainer_present,
     internal_present, roster_count, // Rule 28: frozen
     govt_present: body.govt_present ?? null,
     govt_source: body.govt_source ?? "Manual",

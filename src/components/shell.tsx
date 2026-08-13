@@ -90,7 +90,8 @@ function GlobalSearch() {
           ...locs.items.map((x: any) => ({ kind: "Location", label: x.name, sub: x.code, href: `/locations/${x._id}` })),
           ...bq.map((x: any) => ({ kind: "Batch", label: x.code, sub: x.location?.name, href: `/batches/${x._id}` })),
           ...cands.items.map((x: any) => ({ kind: "Candidate", label: x.name, sub: x.phone, href: `/candidates?q=${encodeURIComponent(x.name)}` })),
-          ...trainers.items.map((x: any) => ({ kind: "Trainer", label: x.name, sub: (x.skills ?? []).join(", "), href: `/trainers` })),
+          // 2026-08-13: a trainer hit lands on the trainer's own page (journey + TOT), not the list.
+          ...trainers.items.map((x: any) => ({ kind: "Trainer", label: x.name, sub: (x.skills ?? []).join(", "), href: `/trainers/${x._id}` })),
         ]);
         setOpen(true);
       } catch { /* ignore */ }

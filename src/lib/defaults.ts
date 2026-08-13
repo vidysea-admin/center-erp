@@ -42,6 +42,8 @@ export type AppDefaults = {
   dropped_pass_is_billable: boolean;  // a dropout who passed is not billable
   // Evidence uploads
   max_upload_mb: number;
+  // Exam eligibility: minimum attendance as a percent of programme hours (2026-08-13)
+  min_attendance_pct: number;
 };
 
 // Fallbacks for every tunable. A Defaults document written before a field existed simply
@@ -79,6 +81,8 @@ export const DEFAULT_VALUES: AppDefaults = {
   absent_counts_as_appeared: true,
   dropped_pass_is_billable: false,
   max_upload_mb: 100,
+  // 2026-08-13 (Manish): exam eligibility = this percent of programme hours attended.
+  min_attendance_pct: 50,
 };
 
 export async function getDefaults(): Promise<AppDefaults> {

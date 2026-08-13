@@ -10,6 +10,9 @@ import { audit } from "@/lib/audit";
 // Admin/Ops management of public capability links (2026-08-11):
 //   POST {purpose:"register", location, program?}  → one shareable self-registration link
 //   POST {purpose:"feedback", batch}               → one link per active roster member
+//   POST {purpose:"attendance", batch}             → one link per active roster member
+//     (2026-08-13, Manish: "bacche puchte hain sir mera kitna ho gaya" — each student gets a
+//      link to their own days/hours/eligibility; same fan-out machinery as feedback)
 // GET ?purpose=&location=&batch= lists tokens; PATCH is on the [id] route (deactivate).
 
 export const GET = apiHandler(async (req: NextRequest) => {
@@ -62,14 +65,14 @@ export const POST = apiHandler(async (req: NextRequest) => {
     return NextResponse.json({ item: doc }, { status: 201 });
   }
 
-  if (purpose === "feedback") {
-    if (!body.batch) throw new HttpError(400, "batch is required for feedback links");
+  if (purpose === "feedback" || purpose === "attendance") {
+    if (!body.batch) throw new HttpError(400, `batch is required for ${purpose} links`);
     await assertBatchInScope(user, String(body.batch));
     const members = await BatchMember.find({ batch: body.batch, left_on: null })
       .populate("candidate", "name phone").lean<any[]>();
     const items = [];
     for (const m of members) {
-      const existing = await PublicToken.findOne({ purpose: "feedback", batch_member: m._id, active: true }).lean<any>();
+      const existing = await PublicToken.findOne({ purpose, batch_member: m._id, active: true }).lean<any>();
       if (existing) { items.push({ ...existing, batch_member: m }); continue; }
       const doc = await PublicToken.create({
         token: crypto.randomBytes(16).toString("hex"),
@@ -77,9 +80,9 @@ export const POST = apiHandler(async (req: NextRequest) => {
       });
       items.push({ ...doc.toObject(), batch_member: m });
     }
-    await audit({ entity: "Batch", entityId: body.batch, field: "feedback_links", newValue: `${items.length} link(s)`, actor: user.id });
+    await audit({ entity: "Batch", entityId: body.batch, field: `${purpose}_links`, newValue: `${items.length} link(s)`, actor: user.id });
     return NextResponse.json({ items }, { status: 201 });
   }
 
-  throw new HttpError(400, "purpose must be register or feedback");
+  throw new HttpError(400, "purpose must be register, feedback or attendance");
 });

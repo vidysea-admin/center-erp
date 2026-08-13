@@ -8,14 +8,16 @@ const s = stamp("EH");
 
 // ---- fixtures: one centre with a full batch walked to Active ----
 const prog = (await req(admin, "POST", "/api/programs", { code: s, name: "EvalHome Prog " + s, trainer_skill: "EHSkill" + s }, 201)).data.item;
-const loc = (await req(admin, "POST", "/api/locations", { code: "L" + s, name: "TEST-EvalHome Loc " + s, approval_status: "Approved", city: "Jaipur" }, 201)).data.item;
+// Created Pending so the KPI delta below can watch approval flip it (2026-08-13: the headline
+// KPI counts APPROVED centres, not operationally-active ones).
+const loc = (await req(admin, "POST", "/api/locations", { code: "L" + s, name: "TEST-EvalHome Loc " + s, approval_status: "Pending", city: "Jaipur" }, 201)).data.item;
 const room = (await req(admin, "POST", `/api/locations/${loc._id}/rooms`, { name: "CR1", type: "Classroom" }, 201)).data.item;
 const trainer = (await req(admin, "POST", "/api/trainers", { name: "TEST-EH Trainer " + s, phone: phone("9"), skills: ["EHSkill" + s] }, 201)).data.item;
 
 const before = (await req(admin, "GET", "/api/home", undefined, 200)).data;
 
 // [best] KPI deltas: each fixture moves exactly its own counter.
-await req(admin, "PATCH", `/api/locations/${loc._id}`, { operational_status: "Active", status_reason: "eval fixture" }, 200);
+await req(admin, "PATCH", `/api/locations/${loc._id}`, { approval_status: "Approved", operational_status: "Active", status_reason: "eval fixture" }, 200);
 const treq = (await req(admin, "POST", "/api/trainer-requests", { location: loc._id, program: prog._id, required_by_date: today() }, 201)).data.item;
 
 const batch = (await req(admin, "POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, room: room._id, planned_start: today(), target_size: 1 }, 201)).data.item;
@@ -26,7 +28,7 @@ await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Read
 await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Active" }, 200);
 
 const after = (await req(admin, "GET", "/api/home", undefined, 200)).data;
-ok("[best] KPI active_locations counts the newly Active centre", after.kpis.active_locations === before.kpis.active_locations + 1, `${before.kpis.active_locations} → ${after.kpis.active_locations}`);
+ok("[best] KPI approved_locations counts the newly Approved centre", after.kpis.approved_locations === before.kpis.approved_locations + 1, `${before.kpis.approved_locations} → ${after.kpis.approved_locations}`);
 ok("[best] KPI active_batches counts the batch walked to Active", after.kpis.active_batches === before.kpis.active_batches + 1, `${before.kpis.active_batches} → ${after.kpis.active_batches}`);
 ok("[best] KPI enrolled_students counts the completed 3-step enrollment", after.kpis.enrolled_students === before.kpis.enrolled_students + 1, `${before.kpis.enrolled_students} → ${after.kpis.enrolled_students}`);
 ok("[best] KPI open_trainer_requests counts the fresh request", after.kpis.open_trainer_requests === before.kpis.open_trainer_requests + 1, `${before.kpis.open_trainer_requests} → ${after.kpis.open_trainer_requests}`);
@@ -57,7 +59,7 @@ if (mkGhost.status === 201) {
   if (ghost) {
     const gHome = (await req(ghost, "GET", "/api/home", undefined, 200)).data;
     ok("[worst] Home says WHY it is empty (scoped_no_centres)", gHome.scoped_no_centres === true, JSON.stringify(gHome.scoped_no_centres));
-    ok("[worst] …and every KPI is an honest zero", gHome.kpis.active_locations === 0 && gHome.kpis.active_batches === 0, JSON.stringify(gHome.kpis));
+    ok("[worst] …and every KPI is an honest zero", gHome.kpis.approved_locations === 0 && gHome.kpis.active_batches === 0, JSON.stringify(gHome.kpis));
     ok("[worst] …with no other centre's queue rows leaking", (gHome.queues.registration_failed ?? []).length === 0 && (gHome.queues.missing_logs ?? []).length === 0);
   }
   await req(admin, "PATCH", `/api/users/${mkGhost.data.item._id}`, { active: false }, 200); // leave no live login behind

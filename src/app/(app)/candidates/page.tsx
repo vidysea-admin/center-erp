@@ -313,7 +313,7 @@ function CandidatesInner() {
           <Field label="Program" required>
             <select className={inputCls} value={form.program ?? ""} onChange={(e) => set("program", e.target.value)}>
               <option value="">Select…</option>
-              {programs.map((p) => <option key={p._id} value={p._id}>{p.name}</option>)}
+              {programs.map((p) => <option key={p._id} value={p._id}>{p.name}{p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}</option>)}
             </select>
           </Field>
           <div className="grid grid-cols-2 gap-3">
@@ -335,7 +335,7 @@ function CandidatesInner() {
             <Field label="Interested programs (Ctrl-click for many)">
               <select multiple className={inputCls + " h-20"} value={form.interested_programs ?? []}
                 onChange={(e) => set("interested_programs", Array.from(e.target.selectedOptions).map((o) => o.value))}>
-                {programs.map((p) => <option key={p._id} value={p._id}>{p.name}</option>)}
+                {programs.map((p) => <option key={p._id} value={p._id}>{p.name}{p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}</option>)}
               </select>
             </Field>
             <Field label="Interested locations">
@@ -378,7 +378,7 @@ function CandidatesInner() {
             <Field label="Program" required>
               <select className={inputCls} value={importState.program ?? ""} onChange={(e) => setImportState({ ...importState, program: e.target.value })}>
                 <option value="">Select…</option>
-                {programs.map((p) => <option key={p._id} value={p._id}>{p.name}</option>)}
+                {programs.map((p) => <option key={p._id} value={p._id}>{p.name}{p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}</option>)}
               </select>
             </Field>
           </div>

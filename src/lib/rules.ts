@@ -3,7 +3,7 @@
 import { Types } from "mongoose";
 import {
   Batch, BatchMember, Candidate, CandidateResult, Closure, CostCategory, CostEntry, DailyLog, Invoice, Location,
-  LocationTarget, Program, Room, Trainer, TrainerDocument,
+  LocationTarget, Notification, Program, Room, Trainer, TrainerDocument,
 } from "@/models";
 import { auditDiff } from "@/lib/audit";
 import { getDefaults } from "@/lib/defaults";
@@ -129,13 +129,14 @@ const toMin = (hhmm: string) => {
 };
 
 /**
- * Scheme timing guidelines, confirmed by Manish 2026-08-12:
- *   • the training day runs 09:00–18:00 — a 07:00 start was asked for and refused;
- *   • a session may run up to 4 hours (4 is explicitly permitted, not just 3);
- *   • the sanctioned pattern is two 4-hour batches a day — three 3-hour batches was refused;
- *   • no minimum break between sessions is prescribed, so none is enforced.
- * All four numbers live in Defaults, because a scheme circular can move them and that must not
- * need a deploy. Blocking (not warning) is deliberate: these are the guidelines an audit checks.
+ * Scheme timing guidelines. 2026-08-12 (Manish): the training day runs 09:00–18:00 — a 07:00
+ * start was asked for and refused; no minimum break is prescribed, so none is enforced.
+ * 2026-08-13 (Manish, walkthrough): a session is EXACTLY 4 hours or EXACTLY 8 hours — "ya toh
+ * 4 ghante ka rakho ya 8 ghante ka… aise aap beech ka tod-mod nahi kar sakte" (a 5-hour slot
+ * was asked about and refused). This supersedes the earlier ≤4h ceiling: max_session_hours is
+ * no longer consulted here. The day window stays in Defaults (a circular can move it without a
+ * deploy); the 4/8 pair is the scheme's own constant, so it is code, not a knob.
+ * Blocking (not warning) is deliberate: these are the guidelines an audit checks.
  */
 export function slotGuidelineErrors(
   slot: { slot_start?: string | null; slot_end?: string | null } | undefined,
@@ -152,9 +153,9 @@ export function slotGuidelineErrors(
   if (s < dayStart || e > dayEnd) {
     errs.push(`Scheme guideline: training runs ${defaults.day_start_time ?? "09:00"}–${defaults.day_end_time ?? "18:00"}. This slot (${slot.slot_start}–${slot.slot_end}) falls outside it.`);
   }
-  const maxH = defaults.max_session_hours ?? 4;
-  if (e - s > maxH * 60) {
-    errs.push(`Scheme guideline: a session may not exceed ${maxH} hours. This slot is ${((e - s) / 60).toFixed(1)} hours.`);
+  const durMin = e - s;
+  if (durMin !== 240 && durMin !== 480) {
+    errs.push(`Scheme guideline: a session is exactly 4 hours or exactly 8 hours. This slot is ${(durMin / 60).toFixed(1)} hours.`);
   }
   return errs;
 }
@@ -507,7 +508,7 @@ export async function transitionBatch(batchId: string, target: string, opts: { i
 
 // ---------- Daily log (Rules 27–33) ----------
 export async function validateDailyLog(batchId: string, log_date: Date, payload: {
-  present_member_ids: string[]; govt_present?: number | null;
+  present_member_ids: string[]; govt_present?: number | null; trainer_present?: boolean;
 }) {
   const batch = await Batch.findById(batchId).lean<any>();
   if (!batch) throw new HttpError(404, "Batch not found");
@@ -515,6 +516,13 @@ export async function validateDailyLog(batchId: string, log_date: Date, payload:
     throw new HttpError(409, "Daily logs only for Active/Closing batches.");
   }
   await assertLocationOperational(batch.location, "Entering a daily log"); // Rule 1
+  // 2026-08-13 (Manish): the govt portal accepts a day's student attendance only when the
+  // trainer's own (biometric) attendance exists for that day — "trainer ka attendance must
+  // hai daily basis pe, tabhi bacche us date mein attendance bana sakte hain". Mirrored:
+  // students can be marked present only on a day the trainer is asserted present.
+  if (payload.present_member_ids.length > 0 && payload.trainer_present === false) {
+    throw new HttpError(400, "Students cannot be marked present on a day the trainer was absent — the government portal only accepts student attendance after the trainer's own attendance. Tick 'Trainer present' or clear the student ticks.");
+  }
   // F-008: compare calendar dates on one consistent footing. Mixing dayStart (server-local) with
   // the dayKey the log is stored under would shift the day by the server's UTC offset.
   const D = dayKey(log_date);
@@ -713,9 +721,13 @@ export async function recomputeClosureAggregates(batchId: string, actorId?: stri
   if (!rows.length) return { ...summary, legacy: true };
 
   const closure = (await Closure.findOne({ batch: batchId })) ?? new Closure({ batch: batchId });
-  const before = { appeared: closure.appeared, passed: closure.passed, certificates_issued: closure.certificates_issued };
+  const before = { appeared: closure.appeared, passed: closure.passed, certificates_issued: closure.certificates_issued, billable_passed: closure.billable_passed };
   closure.appeared = summary.appeared;
   closure.passed = summary.passed;
+  // DEC-4 (Umesh, 2026-08-13): dropped-but-passed candidates never count for invoicing. The raw
+  // pass count stays (Rule 42 readers unchanged); the billable split is what invoicing reads.
+  closure.dropped_passed = summary.dropped_passed;
+  closure.billable_passed = summary.billable_passed;
   closure.certificates_issued = summary.certificates_issued;
   if (!closure.assessment_date) {
     const dates = rows.map((r) => r.assessed_on).filter(Boolean).map((d) => new Date(d).getTime());
@@ -724,7 +736,7 @@ export async function recomputeClosureAggregates(batchId: string, actorId?: stri
   await closure.save();
   // Any previously hand-typed figure survives in the audit trail, attributed to derivation.
   await auditDiff("Closure", closure._id, before,
-    { appeared: summary.appeared, passed: summary.passed, certificates_issued: summary.certificates_issued },
+    { appeared: summary.appeared, passed: summary.passed, certificates_issued: summary.certificates_issued, billable_passed: summary.billable_passed },
     actorId ?? null, "SYSTEM");
   return { ...summary, legacy: false };
 }
@@ -839,6 +851,13 @@ export async function upsertCandidateResult(batchId: string, memberId: string, p
 export async function upsertCandidateCertificate(resultId: string, patch: Record<string, any>, userId: string) {
   const row = await CandidateResult.findById(resultId);
   if (!row) throw new HttpError(404, "Result not found");
+  // DEC-6 (Umesh, 2026-08-13): a Completed batch stays locked — no admin override, even for a
+  // mistyped certificate number. This path used to skip the batch-status check the assessment
+  // path already had, so `{certificate_no}` could be rewritten after completion.
+  const certBatch = await Batch.findById(row.batch).select("status").lean<any>();
+  if (["Completed", "Cancelled"].includes(certBatch?.status)) {
+    throw new HttpError(409, "The batch is closed — certificate details are frozen (2026-08-13 decision: a Completed batch stays locked).");
+  }
   if (row.result !== "Pass") {
     throw new HttpError(409, "Rule 45: no certificate without a Pass result.");
   }
@@ -935,6 +954,15 @@ export async function assertResultInScope(user: SessionUser, resultId: string) {
 export async function upsertClosureChecked(batchId: string, patch: Record<string, unknown>, userId: string) {
   const batch = await Batch.findById(batchId).lean<any>();
   if (!batch) throw new HttpError(404, "Batch not found");
+  // DEC-6 (Umesh, 2026-08-13): once the batch is Completed the closure record is frozen.
+  // ready_for_invoice alone stays writable — invoicing naturally happens after completion and
+  // Rule 35 already gates it on certification Completed.
+  if (["Completed", "Cancelled"].includes(batch.status)) {
+    const blocked = Object.keys(patch).filter((k) => patch[k] !== undefined && k !== "ready_for_invoice");
+    if (blocked.length) {
+      throw new HttpError(409, `The batch is closed — ${blocked.join(", ")} can no longer change (2026-08-13 decision: a Completed batch stays locked; only invoice-readiness may still be marked).`);
+    }
+  }
   let closure = await Closure.findOne({ batch: batchId });
   if (!closure) closure = new Closure({ batch: batchId });
 
@@ -1009,6 +1037,14 @@ export async function upsertClosureChecked(batchId: string, patch: Record<string
     throw new HttpError(409, "Rule 35: ready_for_invoice requires certification Completed.");
   }
 
+  // 2026-08-13 (Manish): "as an admin main assessment date daal paun, aur student ko notify
+  // kar paun". The date lands on the closure; setting or moving it raises an in-app alert for
+  // every role that faces candidates. (Direct-to-candidate outreach remains the manual
+  // WhatsApp/SMS links — no gateway is provisioned; the student attendance link shows the date.)
+  const newAssessDate = patch.assessment_date ? new Date(patch.assessment_date as any) : undefined;
+  const assessDateChanged = newAssessDate !== undefined
+    && (!closure.assessment_date || dayKey(newAssessDate).getTime() !== dayKey(new Date(closure.assessment_date)).getTime());
+
   Object.assign(closure, patch);
   if (settingReady) {
     closure.marked_ready_by = new Types.ObjectId(userId);
@@ -1025,6 +1061,25 @@ export async function upsertClosureChecked(batchId: string, patch: Record<string
     }
   }
   await closure.save();
+  if (assessDateChanged) {
+    const b = await Batch.findById(batchId).select("code location").lean<any>();
+    const when = new Date(closure.assessment_date!).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+    // One live alert per batch (same dedup contract as the scheduler's notifications).
+    await Notification.findOneAndUpdate(
+      { type: "assessment_scheduled", entity_id: closure.batch, status: "New" },
+      {
+        $set: {
+          severity: "info",
+          message: `Assessment for ${b?.code ?? "batch"} scheduled on ${when} — inform the candidates.`,
+          entity: "Batch", link: `/batches/${batchId}`,
+          role_target: ["Admin", "Operations", "Location", "Trainer"],
+          location: b?.location,
+        },
+        $setOnInsert: { type: "assessment_scheduled", entity_id: closure.batch, status: "New" },
+      },
+      { upsert: true },
+    );
+  }
   if (perCandidate) await recomputeClosureAggregates(batchId, userId); // Rule 42: derived wins
   return closure;
 }

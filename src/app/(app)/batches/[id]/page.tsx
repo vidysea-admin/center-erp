@@ -268,11 +268,28 @@ function Roster({ batchId, batch, setError, onChanged }: any) {
   const [dropTarget, setDropTarget] = useState<any>(null);
   const [dropForm, setDropForm] = useState<any>({});
   const [dropReasons, setDropReasons] = useState<any[]>([]);
+  const [attLinks, setAttLinks] = useState<any[] | null>(null);
+  const [attBusy, setAttBusy] = useState(false);
+
+  // 2026-08-13 (Manish): "bacche baar-baar puchte hain sir mera kitna ho gaya attendance" —
+  // one capability link per active member, student sees their own days/hours/eligibility.
+  async function generateAttendanceLinks() {
+    setAttBusy(true);
+    try {
+      const res = await api("/api/public-tokens", { method: "POST", json: { purpose: "attendance", batch: batchId } });
+      setAttLinks(res.items);
+    } catch (e: any) { setError(e.message); }
+    setAttBusy(false);
+  }
 
   const load = () => Promise.all([
     api(`/api/batches/${batchId}/members`).then((d) => setMembers(d.items)),
+    // 2026-08-13 (Manish hit this live — Prem Kumar/Lalit from another job role in the pool):
+    // the pool is this location AND this job role. Program-less candidates (bulk imports)
+    // stay eligible — they inherit the batch's programme on enrol; the server enforces both.
     api(`/api/candidates?location=${batch.location?._id ?? batch.location}&limit=2000`).then((d) =>
-      setPool(d.items.filter((c: any) => ["Unassigned", "Dropped"].includes(c.lifecycle_status)))),
+      setPool(d.items.filter((c: any) => ["Unassigned", "Dropped"].includes(c.lifecycle_status)
+        && (!c.program || String(c.program?._id ?? c.program) === String(batch.program?._id ?? batch.program))))),
     api("/api/master-lists/drop-reasons").then((d) => setDropReasons(d.items)),
   ]).catch((e: any) => setError(e.message));
   useEffect(() => { load(); }, [batchId]);
@@ -291,7 +308,43 @@ function Roster({ batchId, batch, setError, onChanged }: any) {
   const active = members.filter((m) => !m.left_on);
   return (
     <div className="space-y-4">
-      <Section title={`Roster (${active.length} active / ${members.length} total)`} actions={<Btn small onClick={() => setShowPool(true)}>Add from pool</Btn>}>
+      <Section title={`Roster (${active.length} active / ${members.length} total)`} actions={
+        <div className="flex items-center gap-2">
+          <Btn small kind="ghost" disabled={attBusy} onClick={generateAttendanceLinks}>Attendance links</Btn>
+          <Btn small onClick={() => setShowPool(true)}>Add from pool</Btn>
+        </div>
+      }>
+        {attLinks && (
+          <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm">
+            <div className="mb-2 font-medium text-blue-800">One attendance link per candidate — student sees their own days, hours and exam eligibility:</div>
+            <ul className="max-h-56 space-y-1 overflow-y-auto text-xs">
+              {attLinks.map((t: any) => {
+                const name = t.batch_member?.candidate?.name ?? "?";
+                const phone = t.batch_member?.candidate?.phone;
+                const url = `${window.location.origin}${BASE_PATH}/p/attendance/${t.token}`;
+                const msg = `Namaste ${name}! Apni attendance aur exam eligibility yahan dekhein: ${url}`;
+                const wa = waLink(phone, msg), sms = smsLink(phone, msg);
+                return (
+                  <li key={t._id ?? t.token} className="flex items-center gap-2">
+                    <span className="font-medium">{name}</span>
+                    <button className="text-blue-700 hover:underline" onClick={() => navigator.clipboard.writeText(url)}>copy link</button>
+                    {wa && <a className="text-green-700 hover:underline" href={wa} target="_blank" rel="noreferrer">WhatsApp</a>}
+                    {sms && <a className="text-indigo-700 hover:underline" href={sms}>SMS</a>}
+                    {!wa && <span className="text-gray-400">no mobile number</span>}
+                  </li>
+                );
+              })}
+            </ul>
+            <button className="mt-2 text-xs font-medium text-indigo-700 hover:underline"
+              onClick={() => {
+                const targets = attLinks.map((t: any) => ({ name: t.batch_member?.candidate?.name, phone: t.batch_member?.candidate?.phone, url: `${window.location.origin}${BASE_PATH}/p/attendance/${t.token}` }));
+                const csv = bulkSmsCsv(targets, (t: any) => `Namaste ${t.name}! Apni attendance aur exam eligibility yahan dekhein: ${t.url}`);
+                const a = document.createElement("a");
+                a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+                a.download = "sms-attendance-links.csv"; a.click();
+              }}>Download bulk SMS file</button>
+          </div>
+        )}
         <DataTable rows={members}
           cardTitle={(r: any) => r.candidate?.name}
           columns={[
@@ -305,6 +358,12 @@ function Roster({ batchId, batch, setError, onChanged }: any) {
                 ? <span className={`text-xs tabular-nums ${r.attendance.pct < 70 ? "font-semibold text-red-600" : "text-gray-700"}`}>
                     {r.attendance.present}/{r.attendance.days_held} ({r.attendance.pct}%)
                   </span>
+                : <span className="text-xs text-gray-400">—</span>,
+            },
+            {
+              // 2026-08-13: the portal's cumulative meter beside the internal one.
+              key: "govt_attendance", label: "Govt days", mobile: false, render: (r: any) => r.govt_attendance
+                ? <span className="text-xs tabular-nums text-gray-700">{r.govt_attendance.days_present}/{r.govt_attendance.working_days}</span>
                 : <span className="text-xs text-gray-400">—</span>,
             },
             { key: "left_on", label: "Left", render: (r: any) => r.left_on ? `${fmtDate(r.left_on)} (${r.drop_reason})` : "—" },
@@ -459,6 +518,7 @@ function DailyExecution({ batchId, batch, setError }: any) {
           log_date: form.log_date,
           planned_topic: form.planned_topic, actual_topic: form.actual_topic,
           present_member_ids: [...form.present],
+          trainer_present: form.trainer_present !== false, // default true; unticking blocks student marks (portal rule)
           govt_present: form.govt_present === "" || form.govt_present == null ? null : +form.govt_present,
           govt_screenshot: form.govt_screenshot,
           photos: form.photos, videos: form.videos, note: form.note,
@@ -484,6 +544,14 @@ function DailyExecution({ batchId, batch, setError }: any) {
             <Field label="Planned topic"><input className={inputCls} value={form.planned_topic ?? ""} onChange={(e) => setForm({ ...form, planned_topic: e.target.value })} /></Field>
             <Field label="Actual topic"><input className={inputCls} value={form.actual_topic ?? ""} onChange={(e) => setForm({ ...form, actual_topic: e.target.value })} /></Field>
           </div>
+          {/* 2026-08-13 (Manish): the govt portal takes student attendance only on a day the
+              trainer's own attendance exists — same ordering here. Default ticked. */}
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={form.trainer_present !== false}
+              onChange={(e) => setForm({ ...form, trainer_present: e.target.checked })} />
+            <span className="font-medium">Trainer present today</span>
+            <span className="text-xs text-gray-400">(portal rule: students can be marked only when the trainer attended)</span>
+          </label>
           <div>
             <div className="mb-1.5 text-xs font-medium text-gray-600">Attendance — tap present ({form.present.size}/{members.length})</div>
             <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 md:grid-cols-4">
@@ -518,12 +586,19 @@ function DailyExecution({ batchId, batch, setError }: any) {
         </div>
       </Section>
 
-      <Section title="History">
+      {/* 2026-08-13: "har batch ke andar daily basis pe upload attendance" — the portal CSV
+          imports from here with this batch preselected (the engine batch-scopes the match). */}
+      <Section title="History" actions={
+        <a className="text-xs font-medium text-blue-700 hover:underline" href={`${BASE_PATH}/govt-attendance?batch=${batchId}`}>
+          Import portal attendance →
+        </a>
+      }>
         <DataTable rows={logs}
           cardTitle={(r: any) => fmtDate(r.log_date)}
           columns={[
             // mobile:false — the card already leads with this date as its title (audit F-005).
             { key: "log_date", label: "Date", render: (r: any) => fmtDate(r.log_date), mobile: false },
+            { key: "trainer_present", label: "Trainer", mobile: false, render: (r: any) => r.trainer_present === false ? <span className="font-semibold text-red-600">✗</span> : r.trainer_present ? <span className="text-green-700">✓</span> : <span className="text-gray-400">—</span> },
             { key: "internal_present", label: "Internal", render: (r: any) => `${r.internal_present}/${r.roster_count} (${r.roster_count ? Math.round((100 * r.internal_present) / r.roster_count) : 0}%)` },
             { key: "govt_present", label: "Govt", render: (r: any) => r.govt_present == null ? <span className="text-gray-400">Not verified</span> : `${r.govt_present}/${r.roster_count} (${Math.round((100 * r.govt_present) / r.roster_count)}%)` },
             { key: "gap", label: "Gap", render: (r: any) => <Gap r={r} /> },
@@ -544,6 +619,7 @@ function LogEditDrawer({ log, members, onClose, onSaved, setError }: any) {
     if (log) setForm({
       planned_topic: log.planned_topic ?? "", actual_topic: log.actual_topic ?? "",
       govt_present: log.govt_present ?? "", note: log.note ?? "",
+      trainer_present: log.trainer_present,
       present: new Set((log.present_member_ids ?? []).map(String)),
     });
   }, [log]);
@@ -562,6 +638,7 @@ function LogEditDrawer({ log, members, onClose, onSaved, setError }: any) {
         json: {
           planned_topic: form.planned_topic, actual_topic: form.actual_topic,
           present_member_ids: [...form.present],
+          trainer_present: form.trainer_present !== false,
           govt_present: form.govt_present === "" ? null : +form.govt_present,
           note: form.note,
         },
@@ -580,6 +657,11 @@ function LogEditDrawer({ log, members, onClose, onSaved, setError }: any) {
           <Field label="Govt present (blank = not verified)"><input type="number" className={inputCls} value={form.govt_present} onChange={(e) => setForm({ ...form, govt_present: e.target.value })} /></Field>
           <Field label="Note"><input className={inputCls} value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} /></Field>
         </div>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={form.trainer_present !== false}
+            onChange={(e) => setForm({ ...form, trainer_present: e.target.checked })} />
+          <span className="font-medium">Trainer present</span>
+        </label>
         <div>
           <div className="mb-1.5 text-xs font-medium text-gray-600">Present ({form.present.size})</div>
           <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
@@ -685,6 +767,12 @@ function ClosureTab({ batchId, batch, setError, onChanged }: any) {
             </>
           )}
         </div>
+        {/* DEC-4 (2026-08-13): dropped-but-passed never bill. Show the split whenever it exists. */}
+        {!legacy && (closure?.dropped_passed ?? 0) > 0 && (
+          <p className="mt-2 text-xs text-amber-700">
+            {closure.dropped_passed} passed candidate(s) had dropped out — billable passed is <span className="font-semibold">{closure.billable_passed ?? Math.max(0, (closure.passed ?? 0) - closure.dropped_passed)}</span>, not {closure.passed} (dropped-but-passed are never invoiced).
+          </p>
+        )}
         {legacy && !perCandidate && (
           <p className="mt-2 text-xs text-gray-500">Batch-level figures (recorded before per-candidate marking existed).</p>
         )}
@@ -714,6 +802,11 @@ function ClosureTab({ batchId, batch, setError, onChanged }: any) {
             <Btn onClick={() => saveClosure({ ready_for_invoice: true })} disabled={closure?.certification_status !== "Completed"}>
               Mark Ready for Invoice {closure?.certification_status !== "Completed" && "(needs certification)"}
             </Btn>
+          )}
+          {invoice && (closure?.billable_passed != null || closure?.passed != null) && (
+            <p className="text-xs text-gray-600">
+              Invoice for <span className="font-semibold">{closure?.billable_passed ?? closure?.passed}</span> billable passed candidate(s){(closure?.dropped_passed ?? 0) > 0 ? ` — ${closure.dropped_passed} dropped-but-passed excluded (2026-08-13 decision)` : ""}.
+            </p>
           )}
           {invoice && (
             <div className="grid grid-cols-2 gap-3">

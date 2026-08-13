@@ -1,6 +1,6 @@
 "use client";
 import { Suspense, useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { api, fmtDate, toInputDate } from "@/lib/client";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, NameCell, Tabs, inputCls } from "@/components/ui";
 
@@ -10,6 +10,7 @@ export default function TrainersPage() {
 
 function TrainersInner() {
   const sp = useSearchParams();
+  const router = useRouter();
   const [tab, setTab] = useState(sp.get("tab") === "Requests" ? "Requests" : "Trainers");
   const [items, setItems] = useState<any[]>([]);
   const [requests, setRequests] = useState<any[]>([]);
@@ -33,7 +34,12 @@ function TrainersInner() {
 
   function openEdit(t: any) {
     setEdit(t);
-    setForm({ ...t, home_location: t.home_location?._id ?? "", skills: t.skills ?? [], capable_locations: (t.capable_locations ?? []).map((l: any) => l?._id ?? l) });
+    setForm({
+      ...t,
+      home_location: t.home_location?._id ?? (t.home_location_other ? "__other__" : ""),
+      home_location_other: t.home_location_other ?? "",
+      skills: t.skills ?? [], capable_locations: (t.capable_locations ?? []).map((l: any) => l?._id ?? l),
+    });
     setDrawer(true);
   }
 
@@ -42,7 +48,9 @@ function TrainersInner() {
       const json = {
         ...form,
         skills: typeof form.skills === "string" ? form.skills.split(",").map((s: string) => s.trim()).filter(Boolean) : form.skills,
-        home_location: form.home_location || undefined,
+        // "Others" (2026-08-13): home is free text when it is not one of our centres.
+        home_location: form.home_location && form.home_location !== "__other__" ? form.home_location : null,
+        home_location_other: form.home_location === "__other__" ? (form.home_location_other || null) : null,
         compensation_type: form.compensation_type || undefined,
       };
       if (edit) await api(`/api/trainers/${edit._id}`, { method: "PATCH", json });
@@ -80,12 +88,15 @@ function TrainersInner() {
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
       <Tabs tabs={["Trainers", `Requests (${requests.filter((r) => ["Open", "In Progress"].includes(r.status)).length})`]} active={tab.startsWith("Requests") ? `Requests (${requests.filter((r) => ["Open", "In Progress"].includes(r.status)).length})` : tab} onChange={(t) => setTab(t.startsWith("Requests") ? "Requests" : t)} />
       {tab === "Trainers" ? (
-        <DataTable rows={items} onRowClick={openEdit}
+        // 2026-08-13 (Manish couldn't find the hiring journey): a row now opens the trainer's
+        // detail page — the ONLY host of the journey rail + TOT panel; editing moved to the
+        // explicit button so the journey stops being unreachable.
+        <DataTable rows={items} onRowClick={(r: any) => router.push(`/trainers/${r._id}`)}
           cardTitle={(r: any) => r.name}
           columns={[
             { key: "name", label: "Name", mobile: false, render: (r: any) => <NameCell name={r.name} sub={r.phone} /> },
             { key: "skills", label: "Skills", render: (r: any) => (r.skills ?? []).join(", ") },
-            { key: "home_location", label: "Home location", render: (r: any) => r.home_location?.name ?? "—", mobile: false },
+            { key: "home_location", label: "Home location", render: (r: any) => r.home_location?.name ?? r.home_location_other ?? "—", mobile: false },
             {
               // 2026-08-12: three states now, not two — a rejected profile and a dropped applicant
               // are not "in progress", and showing them amber hides the ones needing action.
@@ -103,6 +114,13 @@ function TrainersInner() {
             { key: "status", label: "Status", render: (r: any) => <Chip value={r.status} /> },
             { key: "available_from", label: "Available from", render: (r: any) => fmtDate(r.available_from), mobile: false },
             { key: "max_concurrent_batches", label: "Max batches", mobile: false },
+            {
+              key: "_edit", label: "", render: (r: any) => (
+                <span onClick={(e) => e.stopPropagation()}>
+                  <Btn small kind="ghost" onClick={() => openEdit(r)}>Edit</Btn>
+                </span>
+              ),
+            },
           ]} empty="No trainers yet." />
       ) : (
         <DataTable rows={requests} onRowClick={openReqEdit}
@@ -132,7 +150,13 @@ function TrainersInner() {
             <select className={inputCls} value={form.home_location ?? ""} onChange={(e) => set("home_location", e.target.value)}>
               <option value="">—</option>
               {locations.map((l) => <option key={l._id} value={l._id}>{l.name}</option>)}
+              {/* 2026-08-13 (Manish): a trainer's home town is usually not one of our centres */}
+              <option value="__other__">Other…</option>
             </select>
+            {form.home_location === "__other__" && (
+              <input className={inputCls + " mt-1.5"} placeholder="Type the trainer's home town/city"
+                value={form.home_location_other ?? ""} onChange={(e) => set("home_location_other", e.target.value)} />
+            )}
           </Field>
           {/* 2026-08-12: the real journey (Manish) — CV → docs → nomination → NSDC → ₹3250 → TOT →
               TR ID. The stage is shown here for reference but is MOVED BY the transition endpoint,

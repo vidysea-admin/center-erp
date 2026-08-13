@@ -48,7 +48,8 @@ export default function HomePage() {
       )}
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-        <KPI label="Active Locations" value={data.kpis.active_locations} tone="blue" icon={<IconPin size={19} />} href="/locations" />
+        {/* 2026-08-13 (Manish): headline counts APPROVED centres; job-role detail = readiness section below */}
+        <KPI label="Approved Locations" value={data.kpis.approved_locations} tone="blue" icon={<IconPin size={19} />} href="/locations" />
         <KPI label="Active Batches" value={data.kpis.active_batches} tone="violet" icon={<IconCap size={19} />} href="/batches?status=Active" />
         <KPI label="Enrolled Students" value={data.kpis.enrolled_students} tone="green" icon={<IconUsers size={19} />} href="/candidates?lifecycle_status=Enrolled" />
         <KPI label="Open Trainer Requests" value={data.kpis.open_trainer_requests} tone="amber" icon={<IconUser size={19} />} href="/trainers?tab=Requests" />

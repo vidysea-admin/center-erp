@@ -15,7 +15,7 @@ export const { GET, PATCH } = itemRoutes({
   // deliberately NOT here (2026-08-13 eval sweep): a plain PATCH could jump a trainer straight
   // to "Certified", skipping every TRAINER_FLOW guard — document gates, the NSDC round-trip,
   // Rule T7. Stages move only through /transition; creation may still set an initial stage.
-  fields: ["name", "phone", "email", "skills", "home_location", "status", "available_from", "day_rate", "incentive_note", "max_concurrent_batches", "active", "tr_id", "capable_locations", "programs_applied", "compensation_type", "compensation_fixed", "govt_candidate_id",
+  fields: ["name", "phone", "email", "skills", "home_location", "home_location_other", "status", "available_from", "day_rate", "incentive_note", "max_concurrent_batches", "active", "tr_id", "capable_locations", "programs_applied", "compensation_type", "compensation_fixed", "govt_candidate_id",
     "nominated_for_location", "nominated_for_program", "source", "qualification",
     "industry_experience_years", "teaching_experience_years", "nsdc_remarks",
     "eligibility_payment_amount", "payment_reference", "tot_certificate_no", "pipeline_note"],

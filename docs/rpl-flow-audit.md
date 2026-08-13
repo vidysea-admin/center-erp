@@ -65,12 +65,16 @@ attendance statuses, and server-side pagination (needed before candidates pass ~
 ## Questions for Manish / boss — these change behaviour, so they were not guessed
 
 1. **`appeared`** currently excludes Absent candidates. Correct for the client contract?
-2. **Mid-batch replacement** — the doc never defines it. Can a dropout's seat be refilled on the
-   government portal? Current behaviour allows it with a later joining date.
-3. **Reassessment after Closing** — currently blocked once a certificate exists or the batch is
-   Completed. Right call?
-4. **Dropped-but-passed candidates** — do they count for invoicing?
-5. **Video evidence** — uploads cap at 25MB and only images are compressed. Raise the cap, or
-   state a "photos and short clips only" policy?
-6. **Batch reopening** — a Completed batch is frozen, so a mistyped certificate number has no fix
-   path. Add an Admin-only override, or accept?
+2. **Mid-batch replacement** — ANSWERED (Umesh, 2026-08-13): allowed, with a later joining
+   date. Current behaviour already allowed it — confirmed.
+3. **Reassessment after Closing** — ANSWERED (2026-08-13): the block once a certificate exists
+   or the batch is Completed is correct.
+4. **Dropped-but-passed candidates** — ANSWERED (2026-08-13): they do NOT count for invoicing.
+   Enforced: `Closure.billable_passed`/`dropped_passed` carry the split; the Closure tab and
+   invoice section bill off `billable_passed`.
+5. **Video evidence** — ANSWERED (2026-08-13): media's home is the shared Google Drive, not the
+   ERP ("no limit — Drive mein push hota hai"). ERP uploads stay a stopgap behind the
+   Admin-tunable `Defaults.max_upload_mb` (100 default); server-side Drive upload awaits the
+   service-account credential.
+6. **Batch reopening** — ANSWERED (2026-08-13): stays LOCKED, no Admin override. The two paths
+   that leaked past the lock (certificate-field PATCH, closure PUT) are now guarded.
