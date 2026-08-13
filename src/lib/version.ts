@@ -3,10 +3,10 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-7";
+export const RELEASE = "2026.08.14-8";
 export const RELEASE_NOTE =
-  "Visibility polish: the trainer journey is a stage-count strip (har stage pe kitne, " +
-  "aur us stage pe kitne REJECTED — click filters the list); every batch shows the " +
-  "CEO's 3-way attendance — Expected so far (operating days × roster, with hours) vs " +
-  "our trainer-marked days vs the govt portal, gaps amber; and settled (Closed) " +
-  "batches finally have their own pill on the Batches list.";
+  "SPOC directory: Locations page gets a derived one-row-per-person directory " +
+  "(keyed by phone) showing each SPOC's centres — the CEO's 'ek SPOC, multiple " +
+  "locations pe mapping, Om Prakash das mat banana'. Same phone under different " +
+  "name spellings, or same name under multiple phones, is flagged with a warning " +
+  "badge for correction — never silently merged. Read-only lens; no data changes.";

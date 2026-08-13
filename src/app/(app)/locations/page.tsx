@@ -18,6 +18,7 @@ function LocationsInner() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [drawer, setDrawer] = useState(false);
+  const [spocOpen, setSpocOpen] = useState(false);
   const [form, setForm] = useState<any>({ approval_status: "Pending" });
   const set = (k: string, v: unknown) => setForm((f: any) => ({ ...f, [k]: v }));
 
@@ -41,11 +42,44 @@ function LocationsInner() {
     .map((j: any, i: number) => ({ _id: `${l._id}:${i}`, loc: l, jr: j, first: i === 0 })));
   const rep = (r: any, v: any) => r.first ? (v ?? <span className="text-gray-400">—</span>) : <span className="text-gray-300">〃</span>;
 
+  // 2026-08-14 (CEO 09:46: "Om Prakash das mat banana — ek SPOC, multiple locations pe
+  // mapping"): a derived directory of UNIQUE SPOCs across all centres. Key = normalized
+  // phone (digits only, last 10) because the phone is the person; name spellings drift.
+  // No-phone SPOCs fall back to a normalized-name key. Nothing is merged in the data —
+  // this is a read-only lens; the ⚠ badges SURFACE the "das Om Prakash" smell instead of
+  // silently resolving it.
+  const normPhone = (p: any) => String(p ?? "").replace(/\D/g, "").slice(-10);
+  const normName = (n: any) => String(n ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  const spocDir = (() => {
+    const byKey = new Map<string, { name: string; phone: string; centres: any[]; names: Set<string>; phones: Set<string> }>();
+    const nameToPhones = new Map<string, Set<string>>(); // same person-name under 2+ phones?
+    for (const l of items) {
+      if (!l.spoc_name && !l.spoc_phone) continue;
+      const ph = normPhone(l.spoc_phone);
+      const key = ph || `name:${normName(l.spoc_name)}`;
+      if (!byKey.has(key)) byKey.set(key, { name: l.spoc_name ?? "(no name)", phone: l.spoc_phone ?? "", centres: [], names: new Set(), phones: new Set() });
+      const e = byKey.get(key)!;
+      e.centres.push(l);
+      if (l.spoc_name) e.names.add(normName(l.spoc_name));
+      if (ph) e.phones.add(ph);
+      const nk = normName(l.spoc_name);
+      if (nk) { if (!nameToPhones.has(nk)) nameToPhones.set(nk, new Set()); if (ph) nameToPhones.get(nk)!.add(ph); }
+    }
+    return [...byKey.values()]
+      .map((e) => ({
+        ...e,
+        multiSpelling: e.names.size > 1, // one phone, 2+ name spellings
+        multiPhone: [...e.names].some((n) => (nameToPhones.get(n)?.size ?? 0) > 1), // one name, 2+ phones
+      }))
+      .sort((a, b) => b.centres.length - a.centres.length || a.name.localeCompare(b.name));
+  })();
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-xl font-semibold">Locations</h1>
         <div className="flex gap-2">
+          <Btn kind="ghost" onClick={() => setSpocOpen(true)}>SPOC directory{spocDir.length ? ` (${spocDir.length})` : ""}</Btn>
           <Btn onClick={() => setDrawer(true)}>New Location</Btn>
         </div>
       </div>
@@ -134,6 +168,39 @@ function LocationsInner() {
         ]}
         empty="No locations yet — create the first one."
       />
+      <Drawer open={spocOpen} onClose={() => setSpocOpen(false)} title="SPOC directory" wide>
+        <div className="space-y-3">
+          <p className="text-xs text-gray-500">
+            One row per person — {spocDir.length} unique SPOC{spocDir.length === 1 ? "" : "s"} across {items.filter((l) => l.spoc_name || l.spoc_phone).length} centres,
+            keyed by phone. ⚠ marks the same phone under different name spellings, or the same name under multiple phones —
+            surfaced for correction, never auto-merged.
+          </p>
+          {spocDir.length === 0 && <p className="text-sm text-gray-400">No SPOCs recorded yet.</p>}
+          {spocDir.map((s, i) => (
+            <div key={i} className="rounded-lg border border-gray-200 p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-medium text-gray-900">{s.name}</span>
+                {s.phone && <span className="font-mono text-xs text-gray-500">{s.phone}</span>}
+                <span className="ml-auto text-xs text-gray-500">{s.centres.length} centre{s.centres.length === 1 ? "" : "s"}</span>
+              </div>
+              {(s.multiSpelling || s.multiPhone) && (
+                <p className="mt-1 text-xs font-medium text-amber-600">
+                  {s.multiSpelling && <>⚠ this phone appears under {s.names.size} name spellings: {[...s.names].join(" · ")}. </>}
+                  {s.multiPhone && <>⚠ this name also appears under other phone numbers — possibly the same person entered twice.</>}
+                </p>
+              )}
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {s.centres.map((l: any) => (
+                  <button key={l._id} type="button" onClick={() => router.push(`/locations/${l._id}`)}
+                    className="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-xs text-gray-700 hover:bg-gray-100">
+                    {l.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </Drawer>
       <Drawer open={drawer} onClose={() => setDrawer(false)} title="New Location">
         <div className="space-y-3">
           <Field label="Code" required><input className={inputCls} value={form.code ?? ""} onChange={(e) => set("code", e.target.value)} /></Field>
