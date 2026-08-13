@@ -1,13 +1,21 @@
 "use client";
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/lib/client";
-import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, inputCls } from "@/components/ui";
+import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, inputCls } from "@/components/ui";
 
 export default function LocationsPage() {
+  return <Suspense><LocationsInner /></Suspense>;
+}
+
+function LocationsInner() {
   const router = useRouter();
+  const sp = useSearchParams();
   const [items, setItems] = useState<any[]>([]);
   const [q, setQ] = useState("");
+  // 2026-08-13: the Approved-Locations KPI deep-links here — the pill presets from the URL so
+  // the number clicked and the rows shown are the same population.
+  const [tag, setTag] = useState(sp.get("approval_status") ?? "");
   const [error, setError] = useState("");
   const [drawer, setDrawer] = useState(false);
   const [form, setForm] = useState<any>({ approval_status: "Pending" });
@@ -33,16 +41,22 @@ export default function LocationsPage() {
         </div>
       </div>
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
+      <FilterPills active={tag} onChange={(v) => setTag(v === tag ? "" : v)}
+        options={[
+          { value: "", label: "All", count: items.length },
+          ...["Approved", "Pending", "Rejected"].map((s) => ({ value: s, label: s, count: items.filter((l) => l.approval_status === s).length })),
+        ]} />
       <DataTable
-        rows={items}
+        rows={tag ? items.filter((l) => l.approval_status === tag) : items}
         onRowClick={(r) => router.push(`/locations/${r._id}`)}
         cardTitle={(r: any) => <>{r.name} <span className="text-xs text-gray-400">({r.code})</span></>}
+        defaultSort={{ key: "name", dir: "asc" }}
         columns={[
-          { key: "code", label: "Code", mobile: false },
-          { key: "name", label: "Name", mobile: false },
-          { key: "city", label: "City", mobile: false },
-          { key: "approval_status", label: "Approval", render: (r: any) => <Chip value={r.approval_status} /> },
-          { key: "operational_status", label: "Operational", render: (r: any) => <Chip value={r.operational_status} /> },
+          { key: "code", label: "Code", mobile: false, sortable: true, sortValue: (r: any) => r.code },
+          { key: "name", label: "Name", mobile: false, sortable: true, sortValue: (r: any) => r.name },
+          { key: "city", label: "City", mobile: false, sortable: true, sortValue: (r: any) => r.city },
+          { key: "approval_status", label: "Approval", sortable: true, sortValue: (r: any) => r.approval_status, render: (r: any) => <Chip value={r.approval_status} /> },
+          { key: "operational_status", label: "Operational", sortable: true, sortValue: (r: any) => r.operational_status, render: (r: any) => <Chip value={r.operational_status} /> },
           { key: "spoc_name", label: "SPOC" },
         ]}
         empty="No locations yet — create the first one."

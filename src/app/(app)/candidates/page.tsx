@@ -2,7 +2,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/client";
-import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, NameCell, inputCls } from "@/components/ui";
+import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, inputCls } from "@/components/ui";
 import { useLocationCtx } from "@/components/shell";
 import { BASE_PATH } from "@/lib/base-path";
 import { bulkSmsCsv, smsLink, unsendableCount, waLink } from "@/lib/messaging";
@@ -21,7 +21,11 @@ function CandidatesInner() {
   const [ctxLoc] = useLocationCtx();
   const [fLoc, setFLoc] = useState("");
   useEffect(() => { setFLoc(ctxLoc); }, [ctxLoc]);
-  const [fStatus, setFStatus] = useState(sp.get("lifecycle_status") ?? "");
+  // 2026-08-13 (Umesh): status TAG pills with counts instead of a dropdown — including the
+  // states nobody could see before: "No programme" (bulk-imported rows), "Multi-interest",
+  // "Not Certified". Pills filter client-side so every count is visible at once; deep links
+  // /candidates?lifecycle_status=Enrolled and ?program=null preset the pill.
+  const [tag, setTag] = useState(sp.get("lifecycle_status") ?? (sp.get("program") === "null" ? "No programme" : ""));
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [drawer, setDrawer] = useState<"" | "add" | "edit" | "import" | "assign">("");
@@ -46,7 +50,6 @@ function CandidatesInner() {
   const load = () => {
     const params = new URLSearchParams({ q, limit: "2000" });
     if (fLoc) params.set("location", fLoc);
-    if (fStatus) params.set("lifecycle_status", fStatus);
     return Promise.all([
       api(`/api/candidates?${params}`).then((d) => setItems(d.items)),
       api("/api/locations?limit=2000").then((d) => setLocations(d.items)),
@@ -54,7 +57,17 @@ function CandidatesInner() {
       api("/api/batches").then((d) => setBatches(d.items.filter((b: any) => ["Planning", "Ready", "Active"].includes(b.status)))),
     ]).catch((e) => setError(e.message));
   };
-  useEffect(() => { load(); }, [q, fLoc, fStatus]);
+  useEffect(() => { load(); }, [q, fLoc]);
+
+  const LIFECYCLE_TAGS = ["Unassigned", "Assigned", "Enrolled", "Dropped", "Completed", "Not Certified"];
+  const tagOf = (r: any): string[] => {
+    const tags = [r.lifecycle_status ?? "Unassigned"];
+    if (!r.program) tags.push("No programme");
+    if ((r.interested_programs?.length ?? 0) > 1) tags.push("Multi-interest");
+    return tags;
+  };
+  const tagCount = (t: string) => items.filter((r) => tagOf(r).includes(t)).length;
+  const shown = tag ? items.filter((r) => tagOf(r).includes(tag)) : items;
 
   function toggle(id: string) {
     const s = new Set(selected);
@@ -208,10 +221,6 @@ function CandidatesInner() {
             <option value="">All locations</option>
             {locations.map((l) => <option key={l._id} value={l._id}>{l.name}</option>)}
           </select>
-          <select className={inputCls + " max-w-36"} value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
-            <option value="">All statuses</option>
-            {["Unassigned", "Assigned", "Enrolled", "Dropped", "Completed"].map((s) => <option key={s}>{s}</option>)}
-          </select>
           <Btn kind="ghost" onClick={() => { setImportState({}); setDrawer("import"); }}>Import Excel</Btn>
           <Btn kind="ghost" onClick={shareRegistrationLink}>Self-reg link</Btn>
           <Btn kind="ghost" onClick={downloadBulkSms}>Bulk SMS file</Btn>
@@ -224,6 +233,13 @@ function CandidatesInner() {
         </div>
       </div>
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
+      <FilterPills active={tag} onChange={(v) => setTag(v === tag ? "" : v)}
+        options={[
+          { value: "", label: "All", count: items.length },
+          ...LIFECYCLE_TAGS.map((t) => ({ value: t, label: t, count: tagCount(t) })),
+          { value: "No programme", label: "No programme", count: tagCount("No programme") },
+          { value: "Multi-interest", label: "Multi-interest", count: tagCount("Multi-interest") },
+        ]} />
       {selected.size > 0 && (
         <div className="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm">
           <span className="font-medium">{selected.size} selected</span>
@@ -231,16 +247,17 @@ function CandidatesInner() {
           <Btn small kind="ghost" onClick={() => setSelected(new Set())}>Clear</Btn>
         </div>
       )}
-      <DataTable rows={items}
+      <DataTable rows={shown}
         cardTitle={(r: any) => r.name}
         onRowClick={openEdit}
+        defaultSort={{ key: "name", dir: "asc" }}
         columns={[
           { key: "_sel", label: "", mobile: false, render: (r: any) => <input type="checkbox" checked={selected.has(r._id)} onChange={() => toggle(r._id)} onClick={(e) => e.stopPropagation()} disabled={r.lifecycle_status !== "Unassigned" && r.lifecycle_status !== "Dropped"} /> },
-          { key: "name", label: "Name", render: (r: any) => <NameCell name={r.name} sub={r.gender} /> },
+          { key: "name", label: "Name", sortable: true, sortValue: (r: any) => r.name, render: (r: any) => <NameCell name={r.name} sub={r.gender} /> },
           { key: "phone", label: "Phone" },
-          { key: "location", label: "Location", render: (r: any) => r.location?.name },
-          { key: "program", label: "Program", render: (r: any) => r.program?.name },
-          { key: "lifecycle_status", label: "Status", render: (r: any) => <Chip value={r.lifecycle_status} /> },
+          { key: "location", label: "Location", sortable: true, sortValue: (r: any) => r.location?.name, render: (r: any) => r.location?.name },
+          { key: "program", label: "Program", sortable: true, sortValue: (r: any) => r.program?.name ?? "", render: (r: any) => r.program?.name ?? <Chip value="No programme" /> },
+          { key: "lifecycle_status", label: "Status", sortable: true, sortValue: (r: any) => r.lifecycle_status, render: (r: any) => <Chip value={r.lifecycle_status} /> },
           {
             key: "eligibility", label: "Eligible", render: (r: any) => r.eligibility ? (
               r.eligibility.eligible

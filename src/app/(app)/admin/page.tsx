@@ -585,6 +585,10 @@ function DefaultsTab({ setError }: any) {
   ];
   const LEADS: [string, string][] = [
     ["lead_trainer_found_days", "Trainer identified (days before start)"],
+    // 2026-08-13 parity: two of the seven planner milestones had no knob here — the API
+    // accepted them, so only script users could tune them.
+    ["lead_trainer_ready_for_tot_days", "Trainer ready for TOT (days before start)"],
+    ["lead_tot_start_days", "TOT begins (days before start)"],
     ["lead_tot_done_days", "TOT done (days before start)"],
     ["lead_mobilization_days", "Mobilization done (days before start)"],
     ["lead_trainer_ready_days", "Trainer ready (days before start)"],

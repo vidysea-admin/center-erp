@@ -60,4 +60,25 @@ ok("[avg] full-scale fetch returns every trainer (no hidden cap)", pageAll.items
 const applied = (await req(admin, "GET", "/api/trainers?pipeline_status=CV%20Reviewed&limit=2000", undefined, 200)).data.items ?? [];
 ok("[avg] pipeline_status filter returns only that stage", applied.length > 0 && applied.every((t) => t.pipeline_status === "CV Reviewed"), JSON.stringify([...new Set(applied.map((t) => t.pipeline_status))]));
 
+
+// ---- 2026-08-13 list-UX cycle: preset filter contracts + the nomination input (F-A1) ----
+// [best] ?status= narrows server-side (the Available pill's deep-link contract).
+const avail = (await req(admin, "GET", "/api/trainers?status=Available&limit=2000", undefined, 200)).data.items ?? [];
+ok("[best] status filter returns only that status", avail.length > 0 && avail.every((t) => t.status === "Available"), JSON.stringify([...new Set(avail.map((t) => t.status))]));
+
+// [best] F-A1: the nomination pair (centre x job role) is settable through plain PATCH — the
+// new "Set nomination" form's exact call — and drives the nominated_for_location filter.
+const nprog = (await req(admin, "POST", "/api/programs", { code: "NP" + s, name: "EvalTr NomProg " + s, trainer_skill: "ETSkill" + s }, 201)).data.item;
+await req(admin, "PATCH", `/api/trainers/${t3._id}`, { nominated_for_location: loc2._id, nominated_for_program: nprog._id }, 200);
+const nomRead = (await req(admin, "GET", `/api/trainers/${t3._id}`, undefined, 200)).data.item;
+ok("[best] nomination pair lands and reads back populated",
+  String(nomRead.nominated_for_location?._id ?? nomRead.nominated_for_location) === String(loc2._id)
+  && String(nomRead.nominated_for_program?._id ?? nomRead.nominated_for_program) === String(nprog._id),
+  JSON.stringify({ l: nomRead.nominated_for_location?.name, p: nomRead.nominated_for_program?.name }));
+const byNom = (await req(admin, "GET", `/api/trainers?nominated_for_location=${loc2._id}&limit=100`, undefined, 200)).data.items ?? [];
+ok("[best] the location page's trainer-slots query finds them by nomination", byNom.some((t) => String(t._id) === String(t3._id)), `${byNom.length} hits`);
+await req(admin, "PATCH", `/api/trainers/${t3._id}`, { nominated_for_location: null, nominated_for_program: null }, 200);
+const nomCleared = (await req(admin, "GET", `/api/trainers/${t3._id}`, undefined, 200)).data.item;
+ok("[avg] nomination can be cleared again (wrong pick is reversible)", nomCleared.nominated_for_location == null && nomCleared.nominated_for_program == null, JSON.stringify(nomCleared.nominated_for_location));
+
 finish();

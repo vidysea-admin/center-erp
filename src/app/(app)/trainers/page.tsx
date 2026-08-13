@@ -2,7 +2,20 @@
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, fmtDate, toInputDate } from "@/lib/client";
-import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, NameCell, Tabs, inputCls } from "@/components/ui";
+import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, Tabs, inputCls } from "@/components/ui";
+
+// 2026-08-13 (Umesh): "10 mein se 5 available, 2 under preparation, 3 not available — sab ke
+// saath proper tag with filters". One derived availability tag per trainer: the pipeline says
+// whether they are USABLE yet, the status says whether they are FREE.
+const TAG_ORDER = ["Available", "Under preparation", "Assigned", "Unavailable", "Rejected/Dropped"] as const;
+function availabilityTag(t: any): (typeof TAG_ORDER)[number] {
+  const p = t.pipeline_status ?? "Applied";
+  if (p === "NSDC Rejected" || p === "Dropped") return "Rejected/Dropped";
+  if (p !== "Certified") return "Under preparation";
+  if (t.status === "Assigned") return "Assigned";
+  if (t.status === "Unavailable") return "Unavailable";
+  return "Available";
+}
 
 export default function TrainersPage() {
   return <Suspense><TrainersInner /></Suspense>;
@@ -16,6 +29,9 @@ function TrainersInner() {
   const [requests, setRequests] = useState<any[]>([]);
   const [locations, setLocations] = useState<any[]>([]);
   const [q, setQ] = useState("");
+  // Deep-link presets: /trainers?tag=Available (pill) or ?status=/?pipeline_status= (API-side).
+  const [tag, setTag] = useState(sp.get("tag") ?? "");
+  const [reqFilter, setReqFilter] = useState("open"); // KPI counts open ones — the list defaults to match
   const [error, setError] = useState("");
   const [drawer, setDrawer] = useState(false);
   const [edit, setEdit] = useState<any>(null);
@@ -26,11 +42,18 @@ function TrainersInner() {
   const setReq = (k: string, v: unknown) => setReqForm((f: any) => ({ ...f, [k]: v }));
 
   const load = () => Promise.all([
-    api(`/api/trainers?q=${encodeURIComponent(q)}&limit=2000`).then((d) => setItems(d.items)),
+    // ?status=/?pipeline_status= presets ride through to the API (already filterable there).
+    api(`/api/trainers?q=${encodeURIComponent(q)}${sp.get("status") ? `&status=${encodeURIComponent(sp.get("status")!)}` : ""}${sp.get("pipeline_status") ? `&pipeline_status=${encodeURIComponent(sp.get("pipeline_status")!)}` : ""}&limit=2000`).then((d) => setItems(d.items)),
     api("/api/trainer-requests?limit=2000").then((d) => setRequests(d.items)),
     api("/api/locations?limit=2000").then((d) => setLocations(d.items)),
   ]).catch((e) => setError(e.message));
-  useEffect(() => { load(); }, [q]);
+  useEffect(() => { load(); }, [q]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const tagCounts = new Map<string, number>();
+  for (const t of items) tagCounts.set(availabilityTag(t), (tagCounts.get(availabilityTag(t)) ?? 0) + 1);
+  const shown = tag ? items.filter((t) => availabilityTag(t) === tag) : items;
+  const openReq = requests.filter((r) => ["Open", "In Progress"].includes(r.status));
+  const shownReq = reqFilter === "open" ? openReq : reqFilter ? requests.filter((r) => r.status === reqFilter) : requests;
 
   function openEdit(t: any) {
     setEdit(t);
@@ -88,52 +111,69 @@ function TrainersInner() {
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
       <Tabs tabs={["Trainers", `Requests (${requests.filter((r) => ["Open", "In Progress"].includes(r.status)).length})`]} active={tab.startsWith("Requests") ? `Requests (${requests.filter((r) => ["Open", "In Progress"].includes(r.status)).length})` : tab} onChange={(t) => setTab(t.startsWith("Requests") ? "Requests" : t)} />
       {tab === "Trainers" ? (
-        // 2026-08-13 (Manish couldn't find the hiring journey): a row now opens the trainer's
-        // detail page — the ONLY host of the journey rail + TOT panel; editing moved to the
-        // explicit button so the journey stops being unreachable.
-        <DataTable rows={items} onRowClick={(r: any) => router.push(`/trainers/${r._id}`)}
-          cardTitle={(r: any) => r.name}
-          columns={[
-            { key: "name", label: "Name", mobile: false, render: (r: any) => <NameCell name={r.name} sub={r.phone} /> },
-            { key: "skills", label: "Skills", render: (r: any) => (r.skills ?? []).join(", ") },
-            { key: "home_location", label: "Home location", render: (r: any) => r.home_location?.name ?? r.home_location_other ?? "—", mobile: false },
-            {
-              // 2026-08-12: three states now, not two — a rejected profile and a dropped applicant
-              // are not "in progress", and showing them amber hides the ones needing action.
-              key: "pipeline_status", label: "Pipeline", render: (r: any) => {
-                const s = r.pipeline_status ?? "Applied";
-                const tone = s === "Certified" ? "border-green-200 bg-green-50 text-green-700"
-                  : s === "NSDC Rejected" || s === "Dropped" ? "border-red-200 bg-red-50 text-red-700"
-                    : "border-amber-200 bg-amber-50 text-amber-700";
-                {/* GD-39: "Ready to Train ka status bhi capture karna hai" — same state, said in
-                    the operator's words, so nobody wonders whether Certified means usable. */}
-                return <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${tone}`}>{s === "Certified" ? "Certified (Ready to Train)" : s}</span>;
+        <>
+          <FilterPills active={tag} onChange={(v) => setTag(v === tag ? "" : v)}
+            options={[{ value: "", label: "All", count: items.length },
+              ...TAG_ORDER.map((t) => ({ value: t, label: t, count: tagCounts.get(t) ?? 0 }))]} />
+          {/* 2026-08-13 (Manish couldn't find the hiring journey): a row now opens the trainer's
+              detail page — the ONLY host of the journey rail + TOT panel; editing moved to the
+              explicit button so the journey stops being unreachable. */}
+          <DataTable rows={shown} onRowClick={(r: any) => router.push(`/trainers/${r._id}`)}
+            cardTitle={(r: any) => r.name}
+            defaultSort={{ key: "name", dir: "asc" }}
+            columns={[
+              { key: "name", label: "Name", mobile: false, sortable: true, sortValue: (r: any) => r.name, render: (r: any) => <NameCell name={r.name} sub={r.phone} /> },
+              { key: "skills", label: "Skills", render: (r: any) => (r.skills ?? []).join(", ") },
+              { key: "home_location", label: "Home location", sortable: true, sortValue: (r: any) => r.home_location?.name ?? r.home_location_other ?? null, render: (r: any) => r.home_location?.name ?? r.home_location_other ?? "—", mobile: false },
+              {
+                // 2026-08-12: three states now, not two — a rejected profile and a dropped applicant
+                // are not "in progress", and showing them amber hides the ones needing action.
+                key: "pipeline_status", label: "Pipeline", sortable: true, sortValue: (r: any) => r.pipeline_status ?? "Applied", render: (r: any) => {
+                  const s = r.pipeline_status ?? "Applied";
+                  const tone = s === "Certified" ? "border-green-200 bg-green-50 text-green-700"
+                    : s === "NSDC Rejected" || s === "Dropped" ? "border-red-200 bg-red-50 text-red-700"
+                      : "border-amber-200 bg-amber-50 text-amber-700";
+                  {/* GD-39: "Ready to Train ka status bhi capture karna hai" — same state, said in
+                      the operator's words, so nobody wonders whether Certified means usable. */}
+                  return <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${tone}`}>{s === "Certified" ? "Certified (Ready to Train)" : s}</span>;
+                },
               },
-            },
-            { key: "tr_id", label: "TR ID", render: (r: any) => r.tr_id || "—", mobile: false },
-            { key: "status", label: "Status", render: (r: any) => <Chip value={r.status} /> },
-            { key: "available_from", label: "Available from", render: (r: any) => fmtDate(r.available_from), mobile: false },
-            { key: "max_concurrent_batches", label: "Max batches", mobile: false },
-            {
-              key: "_edit", label: "", render: (r: any) => (
-                <span onClick={(e) => e.stopPropagation()}>
-                  <Btn small kind="ghost" onClick={() => openEdit(r)}>Edit</Btn>
-                </span>
-              ),
-            },
-          ]} empty="No trainers yet." />
+              { key: "tr_id", label: "TR ID", render: (r: any) => r.tr_id || "—", mobile: false },
+              { key: "status", label: "Status", sortable: true, sortValue: (r: any) => availabilityTag(r), render: (r: any) => <Chip value={availabilityTag(r) === "Under preparation" ? "Under preparation" : r.status} /> },
+              { key: "available_from", label: "Available from", sortable: true, sortValue: (r: any) => r.available_from ? new Date(r.available_from).getTime() : null, render: (r: any) => fmtDate(r.available_from), mobile: false },
+              { key: "max_concurrent_batches", label: "Max batches", mobile: false },
+              {
+                key: "_edit", label: "", render: (r: any) => (
+                  <span onClick={(e) => e.stopPropagation()}>
+                    <Btn small kind="ghost" onClick={() => openEdit(r)}>Edit</Btn>
+                  </span>
+                ),
+              },
+            ]} empty="No trainers yet." />
+        </>
       ) : (
-        <DataTable rows={requests} onRowClick={openReqEdit}
-          cardTitle={(r: any) => `${r.location?.name} · ${r.program?.name}`}
-          columns={[
-            { key: "location", label: "Location", render: (r: any) => r.location?.name },
-            { key: "program", label: "Program", render: (r: any) => r.program?.name },
-            { key: "required_by_date", label: "Required by", render: (r: any) => fmtDate(r.required_by_date) },
-            { key: "status", label: "Status", render: (r: any) => <Chip value={r.status} /> },
-            { key: "hiring_target_date", label: "Hiring by", render: (r: any) => fmtDate(r.hiring_target_date), mobile: false },
-            { key: "tot_done_on", label: "TOT", render: (r: any) => r.tot_done_on ? `Done ${fmtDate(r.tot_done_on)}` : r.tot_scheduled_on ? `Sched ${fmtDate(r.tot_scheduled_on)}` : "—" },
-            { key: "fulfilled_by_trainer", label: "Fulfilled by", render: (r: any) => r.fulfilled_by_trainer?.name ?? "—" },
-          ]} empty="No trainer requests." />
+        <>
+          {/* Default = the open ones, so the Home KPI's count and this list agree. */}
+          <FilterPills active={reqFilter} onChange={(v) => setReqFilter(v)}
+            options={[
+              { value: "open", label: "Open + In Progress", count: openReq.length },
+              { value: "Fulfilled", label: "Fulfilled", count: requests.filter((r) => r.status === "Fulfilled").length },
+              { value: "Cancelled", label: "Cancelled", count: requests.filter((r) => r.status === "Cancelled").length },
+              { value: "", label: "All", count: requests.length },
+            ]} />
+          <DataTable rows={shownReq} onRowClick={openReqEdit}
+            cardTitle={(r: any) => `${r.location?.name} · ${r.program?.name}`}
+            defaultSort={{ key: "required_by_date", dir: "asc" }}
+            columns={[
+              { key: "location", label: "Location", sortable: true, sortValue: (r: any) => r.location?.name, render: (r: any) => r.location?.name },
+              { key: "program", label: "Program", sortable: true, sortValue: (r: any) => r.program?.name, render: (r: any) => r.program?.name },
+              { key: "required_by_date", label: "Required by", sortable: true, sortValue: (r: any) => r.required_by_date ? new Date(r.required_by_date).getTime() : null, render: (r: any) => fmtDate(r.required_by_date) },
+              { key: "status", label: "Status", sortable: true, render: (r: any) => <Chip value={r.status} /> },
+              { key: "hiring_target_date", label: "Hiring by", render: (r: any) => fmtDate(r.hiring_target_date), mobile: false },
+              { key: "tot_done_on", label: "TOT", render: (r: any) => r.tot_done_on ? `Done ${fmtDate(r.tot_done_on)}` : r.tot_scheduled_on ? `Sched ${fmtDate(r.tot_scheduled_on)}` : "—" },
+              { key: "fulfilled_by_trainer", label: "Fulfilled by", render: (r: any) => r.fulfilled_by_trainer?.name ?? "—" },
+            ]} empty="No trainer requests." />
+        </>
       )}
 
       <Drawer open={drawer} onClose={() => setDrawer(false)} title={edit ? `Edit ${edit.name}` : "Add Trainer"}>
@@ -158,6 +198,16 @@ function TrainersInner() {
                 value={form.home_location_other ?? ""} onChange={(e) => set("home_location_other", e.target.value)} />
             )}
           </Field>
+          {/* 2026-08-13 parity: qualification/experience/source were sheet-only (display-only in
+              the app) — TVP eligibility hangs on them, so they are typeable now. */}
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Qualification"><input className={inputCls} value={form.qualification ?? ""} onChange={(e) => set("qualification", e.target.value)} /></Field>
+            <Field label="Where the CV came from"><input className={inputCls} placeholder="LinkedIn / Naukri / reference…" value={form.source ?? ""} onChange={(e) => set("source", e.target.value)} /></Field>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Industry experience (yrs)"><input type="number" className={inputCls} value={form.industry_experience_years ?? ""} onChange={(e) => set("industry_experience_years", e.target.value === "" ? undefined : +e.target.value)} /></Field>
+            <Field label="Teaching experience (yrs)"><input type="number" className={inputCls} value={form.teaching_experience_years ?? ""} onChange={(e) => set("teaching_experience_years", e.target.value === "" ? undefined : +e.target.value)} /></Field>
+          </div>
           {/* 2026-08-12: the real journey (Manish) — CV → docs → nomination → NSDC → ₹3250 → TOT →
               TR ID. The stage is shown here for reference but is MOVED BY the transition endpoint,
               which enforces the order and the preconditions; setting it freely from a dropdown

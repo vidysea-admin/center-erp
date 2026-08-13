@@ -28,6 +28,18 @@ const CHIP_COLORS: Record<string, string> = {
   "Ignored": "bg-gray-100 text-gray-500", "Actioned": "bg-green-100 text-green-700",
   // Batch health
   "Green": "bg-green-100 text-green-700", "Amber": "bg-amber-100 text-amber-700", "Red": "bg-red-100 text-red-700",
+  // 2026-08-13 (list-UX cycle): statuses that used to fall through to grey. Candidate
+  // post-batch states + every trainer-pipeline stage — the tag IS the information now.
+  "Not Certified": "bg-amber-100 text-amber-700",
+  "No programme": "bg-amber-100 text-amber-700",
+  "Under preparation": "bg-amber-100 text-amber-700",
+  "Applied": "bg-amber-100 text-amber-700", "CV Reviewed": "bg-amber-100 text-amber-700",
+  "Docs Requested": "bg-amber-100 text-amber-700", "Docs Complete": "bg-amber-100 text-amber-700",
+  "Nomination Prepared": "bg-amber-100 text-amber-700", "Nominated to NSDC": "bg-amber-100 text-amber-700",
+  "NSDC Approved": "bg-blue-100 text-blue-700", "Payment Done": "bg-blue-100 text-blue-700",
+  "TOT Scheduled": "bg-blue-100 text-blue-700", "TOT In Progress": "bg-blue-100 text-blue-700",
+  "TOT Passed": "bg-blue-100 text-blue-700", "Certified": "bg-green-100 text-green-700",
+  "NSDC Rejected": "bg-red-100 text-red-700",
 };
 
 // Health is never shown as a bare colour — the reasons always travel with it.
@@ -135,24 +147,81 @@ export function Tabs({ tabs, active, onChange }: { tabs: string[]; active: strin
   );
 }
 
+// One pill per status with its count — the shared "tag filter" affordance (2026-08-13,
+// generalized from the govt-attendance page's local pattern). Counts come from the fetched
+// set, so the pill row doubles as the at-a-glance summary Manish asked for.
+export function FilterPills({ options, active, onChange }: {
+  options: { value: string; label: string; count?: number }[];
+  active: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2 text-xs">
+      {options.map((o) => (
+        <button key={o.value} onClick={() => onChange(o.value)}
+          className={`rounded-full border px-3 py-1 font-medium ${active === o.value ? "border-blue-300 bg-blue-50 text-blue-700" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>
+          {o.label}{o.count != null ? ` ${o.count}` : ""}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 // Responsive table: real table ≥768px, stacked cards below (spec §0 Rule A). Client pagination.
-export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClick, empty, cardTitle, pageSize = 25 }: {
-  columns: { key: string; label: string; render?: (row: T) => ReactNode; mobile?: boolean }[];
+// 2026-08-13: optional per-column sorting (client-side — every list fetches its full set and
+// paginates in the browser already). Cells render JSX, so a sortable column supplies
+// sortValue when the raw row[key] is not the thing to compare.
+export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClick, empty, cardTitle, pageSize = 25, defaultSort }: {
+  columns: { key: string; label: string; render?: (row: T) => ReactNode; mobile?: boolean; sortable?: boolean; sortValue?: (row: T) => string | number | null | undefined }[];
   rows: T[];
   onRowClick?: (row: T) => void;
   empty?: string;
   cardTitle?: (row: T) => ReactNode;
   pageSize?: number;
+  defaultSort?: { key: string; dir: "asc" | "desc" };
 }) {
   const [page, setPage] = useState(1);
-  const pages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const [sort, setSort] = useState<{ key: string; dir: 1 | -1 } | null>(
+    defaultSort ? { key: defaultSort.key, dir: defaultSort.dir === "desc" ? -1 : 1 } : null,
+  );
+  // A different result set or a different ordering both belong on page 1 — the old clamp kept
+  // a stale page number when a filter shrank the rows.
+  useEffect(() => { setPage(1); }, [rows.length, sort?.key, sort?.dir]);
+
+  let view = rows;
+  if (sort) {
+    const col = columns.find((c) => c.key === sort.key);
+    const val = (r: T) => (col?.sortValue ? col.sortValue(r) : (r as any)[sort.key]);
+    view = [...rows].sort((a, b) => {
+      const va = val(a), vb = val(b);
+      if (va == null && vb == null) return 0;
+      if (va == null) return 1; // empties last, both directions
+      if (vb == null) return -1;
+      const cmp = typeof va === "number" && typeof vb === "number" ? va - vb : String(va).localeCompare(String(vb));
+      return cmp * sort.dir;
+    });
+  }
+
+  const pages = Math.max(1, Math.ceil(view.length / pageSize));
   const cur = Math.min(page, pages);
-  const slice = rows.slice((cur - 1) * pageSize, cur * pageSize);
+  const slice = view.slice((cur - 1) * pageSize, cur * pageSize);
   if (!rows.length) return <div className="rounded-xl border border-dashed bg-white p-10 text-center text-sm text-gray-400">{empty ?? "Nothing here yet"}</div>;
   const cell = (c: (typeof columns)[0], r: T) => c.render ? c.render(r) : String((r as any)[c.key] ?? "—");
+  const headerCell = (c: (typeof columns)[0]) => {
+    if (!c.sortable) return c.label;
+    const is = sort?.key === c.key;
+    return (
+      <button className="flex items-center gap-1 font-semibold uppercase tracking-wider hover:text-gray-600"
+        onClick={() => setSort(is && sort!.dir === -1 ? null : { key: c.key, dir: is ? -1 : 1 })}
+        title="Sort">
+        {c.label}
+        <span className={is ? "text-blue-600" : "text-gray-300"}>{is ? (sort!.dir === 1 ? "▲" : "▼") : "↕"}</span>
+      </button>
+    );
+  };
   const pager = pages > 1 && (
     <div className="flex items-center justify-between border-t bg-white px-3 py-2 text-xs text-gray-500">
-      <span>Showing {(cur - 1) * pageSize + 1}–{Math.min(cur * pageSize, rows.length)} of {rows.length}</span>
+      <span>Showing {(cur - 1) * pageSize + 1}–{Math.min(cur * pageSize, view.length)} of {view.length}</span>
       <span className="flex items-center gap-1">
         <button disabled={cur === 1} onClick={() => setPage(cur - 1)} className="rounded-md border px-2 py-1 disabled:opacity-40">‹</button>
         {Array.from({ length: Math.min(pages, 5) }, (_, i) => {
@@ -172,7 +241,7 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-gray-50/80 text-left text-[11px] uppercase tracking-wider text-gray-400">
-              <tr>{columns.map((c) => <th key={c.key} className="px-3.5 py-3 font-semibold">{c.label}</th>)}</tr>
+              <tr>{columns.map((c) => <th key={c.key} className="px-3.5 py-3 font-semibold">{headerCell(c)}</th>)}</tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {slice.map((r, i) => (

@@ -48,8 +48,9 @@ export default function HomePage() {
       )}
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-        {/* 2026-08-13 (Manish): headline counts APPROVED centres; job-role detail = readiness section below */}
-        <KPI label="Approved Locations" value={data.kpis.approved_locations} tone="blue" icon={<IconPin size={19} />} href="/locations" />
+        {/* 2026-08-13 (Manish): headline counts APPROVED centres; job-role detail = readiness section below.
+            Every KPI deep-links to the SAME filtered population it counted (list-UX cycle). */}
+        <KPI label="Approved Locations" value={data.kpis.approved_locations} tone="blue" icon={<IconPin size={19} />} href="/locations?approval_status=Approved" />
         <KPI label="Active Batches" value={data.kpis.active_batches} tone="violet" icon={<IconCap size={19} />} href="/batches?status=Active" />
         <KPI label="Enrolled Students" value={data.kpis.enrolled_students} tone="green" icon={<IconUsers size={19} />} href="/candidates?lifecycle_status=Enrolled" />
         <KPI label="Open Trainer Requests" value={data.kpis.open_trainer_requests} tone="amber" icon={<IconUser size={19} />} href="/trainers?tab=Requests" />
@@ -61,8 +62,8 @@ export default function HomePage() {
       {mapping && mapping.total > 0 && (
         <Section
           title={`Centres Ready to Start (${mapping.ready_count} of ${mapping.total})`}
-          titleHref="/batches"
-          actions={<Link href="/batches"><Btn kind="ghost" small>Batches</Btn></Link>}
+          titleHref="/batches?tab=Preparation"
+          actions={<Link href="/batches?tab=Preparation"><Btn kind="ghost" small>Preparation board</Btn></Link>}
         >
           <ul className="divide-y divide-gray-100 text-sm">
             {mapping.items.slice(0, 8).map((r: any) => (
@@ -79,7 +80,13 @@ export default function HomePage() {
               />
             ))}
           </ul>
-          {mapping.total > 8 && <p className="mt-2 text-xs text-gray-400">{mapping.total - 8} more centre/job-role pairs not shown.</p>}
+          {mapping.total > 8 && (
+            <p className="mt-2 text-xs">
+              <Link className="font-medium text-blue-700 hover:underline" href="/batches?tab=Preparation">
+                {mapping.total - 8} more centre/job-role pairs — see the full Preparation board →
+              </Link>
+            </p>
+          )}
         </Section>
       )}
 
