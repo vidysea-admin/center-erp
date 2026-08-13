@@ -473,7 +473,8 @@ function CandidatesInner() {
                   <Field key={c} label={c}>
                     <select className={inputCls} value={importState.mapping?.[c] ?? ""} onChange={(e) => setImportState({ ...importState, mapping: { ...importState.mapping, [c]: e.target.value } })}>
                       <option value="">Ignore</option>
-                      {["name", "phone", "alt_phone", "gender", "source"].map((f) => <option key={f}>{f}</option>)}
+                      {/* F-B4: the eligibility fields (dob · education · last_training_date) are mappable now. */}
+                      {["name", "phone", "alt_phone", "gender", "source", "id_reference", "dob", "education", "last_training_date"].map((f) => <option key={f}>{f}</option>)}
                     </select>
                   </Field>
                 ))}
@@ -484,6 +485,12 @@ function CandidatesInner() {
               </div>
               {importState.preview && (
                 <p className="text-sm text-gray-600">{importState.preview.valid} valid, {importState.preview.skipped} skipped (missing name/phone).</p>
+              )}
+              {importState.preview?.education_unmatched?.length > 0 && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  Education values not recognised (left blank, never guessed): {importState.preview.education_unmatched.join(" · ")} —
+                  valid values are Below 10th · 10th Pass · 12th Pass · Graduate · Post Graduate.
+                </div>
               )}
               {importState.preview?.duplicate_count > 0 && (
                 <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">

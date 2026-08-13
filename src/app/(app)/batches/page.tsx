@@ -2,7 +2,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { api, fmtDate } from "@/lib/client";
+import { api, fmtDate, toInputDate } from "@/lib/client";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthChip, SourceCell, Tabs, inputCls, useCopied } from "@/components/ui";
 import { useLocationCtx } from "@/components/shell";
 
@@ -34,6 +34,8 @@ function BatchesInner() {
   const [loading, setLoading] = useState(true);
   const [drawer, setDrawer] = useState(false);
   const [form, setForm] = useState<any>({ session: "Full Day" });
+  const [trainerReq, setTrainerReq] = useState(""); // F-A2: "" | "busy" | "done"
+  useEffect(() => { setTrainerReq(""); }, [form.location, form.program]); // a different centre/role = a different request
   const set = (k: string, v: unknown) => setForm((f: any) => ({ ...f, [k]: v }));
   // 2026-08-11: standalone backward-plan calculator — the shareable "इस-इस date तक ये काम" sheet
   const [planner, setPlanner] = useState<{ open: boolean; start?: string; plan?: any[] }>({ open: false });
@@ -260,10 +262,29 @@ function BatchesInner() {
               </p>
             )}
             {program && readyTrainers.length === 0 && (
-              <p className="mt-1 text-xs text-gray-500">
-                No certified trainer for {program.trainer_skill} at this centre yet — track the hiring
-                journey on the <Link href="/trainers" className="underline">Trainers</Link> screen.
-              </p>
+              <div className="mt-1 space-y-1.5">
+                <p className="text-xs text-gray-500">
+                  No certified trainer for {program.trainer_skill} at this centre yet — track the hiring
+                  journey on the <Link href="/trainers" className="underline">Trainers</Link> screen.
+                </p>
+                {/* F-A2 (Manish): the drawer used to dead-end here — raise the trainer request
+                    without leaving it. Ops/Admin get the in-app alert the moment it lands. */}
+                {trainerReq === "done" ? (
+                  <p className="text-xs font-medium text-green-700">✓ Trainer request raised — Operations has been alerted.</p>
+                ) : form.location ? (
+                  <Btn small kind="ghost" disabled={trainerReq === "busy"} onClick={async () => {
+                    setTrainerReq("busy");
+                    try {
+                      await api("/api/trainer-requests", { method: "POST", json: {
+                        location: form.location, program: form.program,
+                        required_by_date: form.planned_start || toInputDate(new Date()),
+                        note: "Raised from the New Batch drawer",
+                      } });
+                      setTrainerReq("done");
+                    } catch (e: any) { setTrainerReq(""); setError(e.message); }
+                  }}>{trainerReq === "busy" ? "Requesting…" : "⚑ Request a trainer for this centre"}</Btn>
+                ) : null}
+              </div>
             )}
           </Field>
           <Field label={`Room${program?.requires_lab ? " (program requires a Lab)" : ""}`}>

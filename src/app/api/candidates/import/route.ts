@@ -3,7 +3,7 @@ import * as XLSX from "xlsx";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
-import { Candidate } from "@/models";
+import { Candidate, EDUCATION_LEVEL } from "@/models";
 import { audit } from "@/lib/audit";
 import { findDuplicateCandidates, normalizePhone } from "@/lib/duplicates";
 
@@ -40,12 +40,25 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const phoneCol = Object.keys(mapping).find((c) => mapping[c] === "phone");
   if (!nameCol || !phoneCol) throw new HttpError(400, "Mapping must include name and phone");
 
+  // F-B4 (Manish): the eligibility fields arrive with the sheet — dob, education,
+  // last training date. Education is matched against the enum case-insensitively;
+  // a spelling we don't recognise stays null and is REPORTED, never guessed.
+  const eduUnmatched: string[] = [];
   const candidates = rows
     .map((r) => {
       const c: Record<string, unknown> = { location, program, lifecycle_status: "Unassigned", created_by: user.id };
       for (const [col, field] of Object.entries(mapping)) {
         if (["name", "phone", "alt_phone", "gender", "source", "id_reference"].includes(field)) c[field] = String(r[col] ?? "").trim();
-        if (field === "dob" && r[col]) c.dob = new Date(String(r[col]));
+        if (["dob", "last_training_date"].includes(field) && r[col]) {
+          const d = new Date(String(r[col]));
+          if (!isNaN(d.getTime())) c[field] = d;
+        }
+        if (field === "education" && r[col]) {
+          const raw = String(r[col]).trim();
+          const match = EDUCATION_LEVEL.find((e) => e.toLowerCase() === raw.toLowerCase());
+          if (match) c.education = match;
+          else if (raw) eduUnmatched.push(raw);
+        }
       }
       return c;
     })
@@ -73,6 +86,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
       preview: candidates.slice(0, 10), valid: candidates.length,
       skipped: rows.length - candidates.length,
       duplicates: duplicates.slice(0, 25), duplicate_count: duplicates.length,
+      education_unmatched: [...new Set(eduUnmatched)].slice(0, 25),
     });
   }
   const docs = await Candidate.insertMany(candidates);

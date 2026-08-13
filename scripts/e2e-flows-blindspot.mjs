@@ -194,9 +194,9 @@ console.log("\n--- FL5: a lab job role at a centre with no lab is named as block
 console.log("\n--- FL6: the import flags the file's own duplicates and refuses a blind mapping ---");
 {
   const rows = [
-    { "Student Name": `FL Imp A ${stamp}`, "Mobile": "9811100001", "Junk": "x" },
-    { "Student Name": `FL Imp B ${stamp}`, "Mobile": "9811100002", "Junk": "y" },
-    { "Student Name": `FL Imp C ${stamp}`, "Mobile": "9811100001", "Junk": "z" }, // same phone as A
+    { "Student Name": `FL Imp A ${stamp}`, "Mobile": "9811100001", "Junk": "x", "DOB": "2001-04-15", "Edu": "12th pass", "Last Training": "2025-11-20" },
+    { "Student Name": `FL Imp B ${stamp}`, "Mobile": "9811100002", "Junk": "y", "DOB": "1999-01-02", "Edu": "BTech", "Last Training": "" }, // BTech is not an enum value
+    { "Student Name": `FL Imp C ${stamp}`, "Mobile": "9811100001", "Junk": "z", "DOB": "", "Edu": "", "Last Training": "" }, // same phone as A
   ];
   const ws = XLSX.utils.json_to_sheet(rows);
   const wb = XLSX.utils.book_new();
@@ -222,6 +222,21 @@ console.log("\n--- FL6: the import flags the file's own duplicates and refuses a
     preview.data.duplicate_count >= 1 && (preview.data.duplicates ?? []).some((d) => /same number as row/.test(d)),
     JSON.stringify(preview.data.duplicates));
   ok("FL6: …and it is a flag, not a block — all 3 rows stay importable", preview.data.valid === 3, String(preview.data.valid));
+
+  // F-B4: the eligibility fields ride the same mapping — dob, education, last training.
+  const fullMap = JSON.stringify({ "Student Name": "name", "Mobile": "phone", "DOB": "dob", "Edu": "education", "Last Training": "last_training_date" });
+  const prev2 = await multipart(admin, "/api/candidates/import", { file, location: loc._id, program: prog._id, mapping: fullMap }, 200);
+  ok("FL6b: the unrecognised education spelling is reported, not guessed",
+    (prev2.data.education_unmatched ?? []).includes("BTech"), JSON.stringify(prev2.data.education_unmatched));
+  const done = await multipart(admin, "/api/candidates/import", { file, location: loc._id, program: prog._id, mapping: fullMap, confirm: "1" }, 201);
+  ok("FL6b: confirm imports all rows", done.data.imported === 3, String(done.data.imported));
+  const impA = (await req(admin, "GET", `/api/candidates?q=9811100001`)).data.items.find((c) => c.name === `FL Imp A ${stamp}`);
+  ok("FL6b: education normalised to the enum ('12th pass' → '12th Pass')", impA?.education === "12th Pass", impA?.education);
+  ok("FL6b: dob and last_training_date landed as dates",
+    (impA?.dob ?? "").startsWith("2001-04-15") && (impA?.last_training_date ?? "").startsWith("2025-11-20"),
+    JSON.stringify({ dob: impA?.dob, lt: impA?.last_training_date }));
+  const impB = (await req(admin, "GET", `/api/candidates?q=9811100002`)).data.items.find((c) => c.name === `FL Imp B ${stamp}`);
+  ok("FL6b: the BTech row imported with education left null", impB && impB.education == null, JSON.stringify(impB?.education));
 }
 
 console.log("\n--- FL7: an unregistered candidate can still be assigned (decoupled, by design) ---");
