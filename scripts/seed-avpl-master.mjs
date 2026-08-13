@@ -381,9 +381,16 @@ const trainerIds = new Map();
 for (const t of await db.collection("trainers").find({}).project({ phone: 1 }).toArray()) trainerIds.set(t.phone, t._id);
 
 for (const c of candidates.values()) {
-  const { _note, ...doc } = c;
+  // lifecycle_status and sidh_* are APP-owned once a candidate exists — enrolment flows and
+  // the SIDH queue move them, and the sheet's "Enrolled Status" column goes stale the moment
+  // they do. Re-running this script must never regress them (2026-08-13 incident: a re-run
+  // reset 57 Enrolled → Unassigned and 16 Registered → Not Registered; restored from backup
+  // via scripts/restore-candidate-fields.mjs). Insert-only.
+  const { _note, lifecycle_status, sidh_status, sidh_registered_on, ...doc } = c;
   await db.collection("candidates").updateOne({ phone: doc.phone },
-    { $set: clean({ ...doc, updatedAt: new Date() }), $setOnInsert: { createdAt: new Date() } }, { upsert: true });
+    { $set: clean({ ...doc, updatedAt: new Date() }),
+      $setOnInsert: clean({ createdAt: new Date(), lifecycle_status, sidh_status, sidh_registered_on }) },
+    { upsert: true });
   w.candidates++;
 }
 // Cost categories the sheet actually tracks, found-or-created once.
