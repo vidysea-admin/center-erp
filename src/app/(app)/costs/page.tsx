@@ -15,6 +15,7 @@ function CostsInner() {
   const [form, setForm] = useState<any>({ entry_date: toInputDate(new Date()) });
   const [editId, setEditId] = useState("");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
 
   const load = () => Promise.all([
     api("/api/costs").then((d) => setCosts(d.items)),
@@ -22,7 +23,7 @@ function CostsInner() {
     api("/api/master-lists/cost-categories").then((d) => setCats(d.items)),
     api("/api/locations?limit=2000").then((d) => setLocations(d.items)),
     api("/api/trainers?limit=2000").then((d) => setTrainers(d.items)),
-  ]).catch((e) => setError(e.message));
+  ]).catch((e) => setError(e.message)).finally(() => setLoading(false));
   useEffect(() => { load(); }, []);
 
   async function addCost() {
@@ -96,7 +97,7 @@ function CostsInner() {
             <p className="mt-2 text-xs text-gray-500">Rule 37: at least one of location / batch / trainer. Batch-level costs are added from the batch's Costs tab.</p>
           </Section>
           <Section title={`All cost entries — total ₹${total.toLocaleString("en-IN")}`}>
-            <DataTable rows={costs}
+            <DataTable rows={costs} loading={loading}
               cardTitle={(r: any) => `₹${r.amount} · ${r.category?.name}`}
               onRowClick={openEdit}
               defaultSort={{ key: "entry_date", dir: "desc" }}
@@ -113,7 +114,7 @@ function CostsInner() {
         </>
       ) : (
         <Section title="Invoices">
-          <DataTable rows={invoices}
+          <DataTable rows={invoices} loading={loading}
             cardTitle={(r: any) => r.batch?.code}
             defaultSort={{ key: "raised_on", dir: "desc" }}
             columns={[

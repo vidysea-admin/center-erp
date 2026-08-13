@@ -106,18 +106,28 @@ const trainers = new Map(); // phone → doc
     const prog = findProgram(pick(m, r, "Skill"));
     const loc = findLocation(pick(m, r, "Location (Nominated)", "Home/Location"));
     if (!loc) note(tab, `"${name}": location "${pick(m, r, "Location (Nominated)", "Home/Location")}" not matched`);
+    const sheetCode = pick(m, r, "Trainer Code");
+    const batchCode = pick(m, r, "Batch Code");
+    const inactive = /inactive/i.test(pick(m, r, "Status (Active/Inactive)"));
+    // 2026-08-13 (Umesh: "jo approved hain wo approved nahi aata — sab under preparation"):
+    // a trainer the client gave a TR code AND put on a batch is de-facto cleared and teaching —
+    // that is Certified/Assigned in our pipeline, not "Applied". The client's TR0001-style code
+    // fills tr_id until a real SIP id arrives (Trainer_Nomination's "Trainer SIP ID" wins later).
+    const teaching = !inactive && sheetCode && batchCode && batchCode !== "-";
     trainers.set(phone, {
       name, phone,
       email: pick(m, r, "Email") || undefined,
       source: "AVPL Trainer_Master",
       skills: prog ? [prog.trainer_skill] : [],
       nominated_for_location: loc?._id, nominated_for_program: prog?._id,
-      status: /inactive/i.test(pick(m, r, "Status (Active/Inactive)")) ? "Unavailable" : "Available",
-      active: !/inactive/i.test(pick(m, r, "Status (Active/Inactive)")),
-      pipeline_status: "Applied",
+      status: inactive ? "Unavailable" : teaching ? "Assigned" : "Available",
+      active: !inactive,
+      pipeline_status: teaching ? "Certified" : "Applied",
+      tr_id: teaching ? sheetCode : undefined,
+      pipeline_note: teaching ? `Client sheet: active on batch ${batchCode} (code ${sheetCode})` : undefined,
       incentive_note: [pick(m, r, "Salary/Batch"), pick(m, r, "Pass/Incentive (60%)"), pick(m, r, "Pass/Enroll (85%)")].filter(Boolean).join(" · ") || undefined,
-      _sheetCode: pick(m, r, "Trainer Code"),
-      _batchCode: pick(m, r, "Batch Code"),
+      _sheetCode: sheetCode,
+      _batchCode: batchCode,
     });
   }
   report[tab] = trainers.size;
@@ -137,13 +147,17 @@ const trainers = new Map(); // phone → doc
     const prev = trainers.get(phone);
     // Documents saved + experience cert + ok-for-TOT is a real stage: papers are in.
     const stage = /ok for tot|tot/i.test(docNotes) ? "Docs Complete" : /document/i.test(docNotes) ? "Docs Pending" : "Applied";
+    // Never DOWNGRADE: a Trainer_Master-certified (teaching) trainer also on this doc tab
+    // stays Certified — the doc chase is history for them, not their current stage.
+    const RANK = ["Applied", "Docs Pending", "Docs Complete", "Submitted to NSDC", "NSDC Approved", "Certified"];
+    const keepPrev = prev?.pipeline_status && RANK.indexOf(prev.pipeline_status) > RANK.indexOf(stage);
     trainers.set(phone, {
       ...(prev ?? { name, phone, source: "AVPL Registered Trainers", skills: [], active: true, status: "Available" }),
       email: prev?.email ?? (S(r[2]) || undefined),
       qualification: S(r[3]) || prev?.qualification,
       nominated_for_location: prev?.nominated_for_location ?? loc?._id,
-      pipeline_status: stage,
-      pipeline_note: docNotes || undefined,
+      pipeline_status: keepPrev ? prev.pipeline_status : stage,
+      pipeline_note: [prev?.pipeline_note, docNotes].filter(Boolean).join(" || ") || undefined,
     });
     if (!prev) added++;
   }
@@ -240,8 +254,16 @@ const batches = [];
         ?? [...trainers.values()].find((t) => { const a = norm(t.name), b = norm(trainerName); return a.startsWith(b + " ") || b.startsWith(a + " "); }))
       : null;
     if (trainerName && trainerName !== "-" && !tr) note(tab, `batch ${code}: trainer "${trainerName}" not found in any trainer tab`);
+    // 2026-08-13 (Umesh): the client added an explicit "Batch Status" column so counts stop
+    // depending on colour-coding. Their vocabulary → our enum; blank = not started (Planning).
+    const statusText = pick(m, r, "Batch Status");
+    const status = /complete/i.test(statusText) ? "Completed"
+      : /progress|ongoing|running|active/i.test(statusText) ? "Active"
+      : "";
+    if (statusText && !status) note(tab, `batch ${code}: unknown Batch Status "${statusText}" — left untouched`);
     batches.push({
       code, location: loc._id, program: prog._id,
+      _status: status,
       _trainerPhone: tr?.phone,
       target_size: Number(pick(m, r, "Capacity")) || 45,
       _startText: pick(m, r, "Start date"), _endText: pick(m, r, "End Date"),
@@ -328,6 +350,11 @@ console.log(`\nTOTALS → trainers ${trainers.size} · batches ${batches.length}
 const stages = {};
 for (const t of trainers.values()) stages[t.pipeline_status] = (stages[t.pipeline_status] ?? 0) + 1;
 console.log(`trainer stages: ${JSON.stringify(stages)}`);
+// 2026-08-13: the sheet's new "Batch Status" column — say exactly what would be stamped.
+const bStatuses = {};
+for (const b of batches) bStatuses[b._status || "(blank → Planning on insert only)"] = (bStatuses[b._status || "(blank → Planning on insert only)"] ?? 0) + 1;
+console.log(`batch statuses from sheet: ${JSON.stringify(bStatuses)}`);
+for (const b of batches.filter((x) => x._status)) console.log(`   ${b.code.padEnd(18)} → ${b._status}`);
 if (unmapped.length) {
   console.log(`\n⚠️  ${unmapped.length} row(s) could not be mapped:`);
   for (const u of unmapped.slice(0, 30)) console.log(`   ${u}`);
@@ -337,11 +364,15 @@ if (unmapped.length) {
 if (!APPLY) { console.log("\nDry run. Re-run with --apply to write."); await mongoose.disconnect(); process.exit(0); }
 
 // ---------------------------------------------------------------- write
+// Raw-driver $set writes undefined as null — which would CLOBBER values humans set in the
+// app since the last run (e.g. a nomination recorded via the new Set-nomination form when
+// the sheet row's location did not match). Strip undefined keys: absent = "no opinion".
+const clean = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined));
 let w = { trainers: 0, batches: 0, candidates: 0 };
 for (const t of trainers.values()) {
   const { _sheetCode, _batchCode, ...doc } = t;
   await db.collection("trainers").updateOne({ phone: doc.phone },
-    { $set: { ...doc, updatedAt: new Date() },
+    { $set: clean({ ...doc, updatedAt: new Date() }),
       $setOnInsert: { createdAt: new Date(), eligibility_payment_amount: 3250, max_concurrent_batches: 4, capable_locations: [], programs_applied: [] } },
     { upsert: true });
   w.trainers++;
@@ -352,7 +383,7 @@ for (const t of await db.collection("trainers").find({}).project({ phone: 1 }).t
 for (const c of candidates.values()) {
   const { _note, ...doc } = c;
   await db.collection("candidates").updateOne({ phone: doc.phone },
-    { $set: { ...doc, updatedAt: new Date() }, $setOnInsert: { createdAt: new Date() } }, { upsert: true });
+    { $set: clean({ ...doc, updatedAt: new Date() }), $setOnInsert: { createdAt: new Date() } }, { upsert: true });
   w.candidates++;
 }
 // Cost categories the sheet actually tracks, found-or-created once.
@@ -365,17 +396,26 @@ for (const nm of ["Mobilisation", "Trainer fee", "Assessor evaluation", "Other"]
 const adminUser = await db.collection("users").findOne({ email: "admin@vidysea.com" });
 
 for (const b of batches) {
-  const { _trainerPhone, _startText, _endText, _enrollment, _certification, _costs, _mobilisation, ...doc } = b;
+  const { _status, _trainerPhone, _startText, _endText, _enrollment, _certification, _costs, _mobilisation, ...doc } = b;
   // "6th July" → a real date. Where the start is already past, the batch has actually begun —
-  // stamp actual_start so daily screens and health read it correctly; statuses stay for humans.
+  // stamp actual_start so daily screens and health read it correctly.
   const start = spokenDate(_startText);
   const end = spokenDate(_endText);
   const dates = {};
   if (start) { dates.planned_start = start; if (start <= new Date()) dates.actual_start = start; }
   if (end) dates.planned_end = end;
+  // Status: the sheet is the system of record for these client-history batches. An explicit
+  // sheet status is written (Completed also stamps actual_end); a BLANK never regresses a
+  // status a human moved in the app — blank only lands as Planning on first insert.
+  // (Deliberately outside transitionBatch: these batches never had a Closure/readiness trail.)
+  const setDoc = { ...doc, ...dates, trainer: _trainerPhone ? trainerIds.get(_trainerPhone) : undefined, updatedAt: new Date() };
+  const insertDoc = { createdAt: new Date(), session: "Full Day", milestones: [] };
+  if (_status) {
+    setDoc.status = _status;
+    if (_status === "Completed" && end) setDoc.actual_end = end;
+  } else insertDoc.status = "Planning";
   await db.collection("batches").updateOne({ code: doc.code },
-    { $set: { ...doc, ...dates, trainer: _trainerPhone ? trainerIds.get(_trainerPhone) : undefined, updatedAt: new Date() },
-      $setOnInsert: { createdAt: new Date(), status: "Planning", session: "Full Day", milestones: [] } },
+    { $set: clean(setDoc), $setOnInsert: insertDoc },
     { upsert: true });
   w.batches++;
 

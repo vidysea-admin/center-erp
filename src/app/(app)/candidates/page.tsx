@@ -26,6 +26,7 @@ function CandidatesInner() {
   // /candidates?lifecycle_status=Enrolled and ?program=null preset the pill.
   const [tag, setTag] = useState(sp.get("lifecycle_status") ?? (sp.get("program") === "null" ? "No programme" : ""));
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   const [shareLink, setShareLink] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [drawer, setDrawer] = useState<"" | "add" | "edit" | "import" | "assign">("");
@@ -57,14 +58,17 @@ function CandidatesInner() {
       api("/api/locations?limit=2000").then((d) => setLocations(d.items)),
       api("/api/programs?limit=1000").then((d) => setPrograms(d.items)),
       api("/api/batches").then((d) => setBatches(d.items.filter((b: any) => ["Planning", "Ready", "Active"].includes(b.status)))),
-    ]).catch((e) => setError(e.message));
+    ]).catch((e) => setError(e.message)).finally(() => setLoading(false));
   };
   useEffect(() => { load(); }, [fLoc]);
 
   const LIFECYCLE_TAGS = ["Unassigned", "Assigned", "Enrolled", "Dropped", "Completed", "Not Certified"];
+  // 2026-08-13 (Umesh): a candidate in a batch HAS that batch's programme — "No programme"
+  // only when neither the row nor an active membership carries one.
+  const progOf = (r: any) => r.program ?? r.active_batch?.program ?? null;
   const tagOf = (r: any): string[] => {
     const tags = [r.lifecycle_status ?? "Unassigned"];
-    if (!r.program) tags.push("No programme");
+    if (!progOf(r)) tags.push("No programme");
     if ((r.interested_programs?.length ?? 0) > 1) tags.push("Multi-interest");
     return tags;
   };
@@ -257,6 +261,7 @@ function CandidatesInner() {
       <DataTable rows={shown}
         cardTitle={(r: any) => r.name}
         onRowClick={openEdit}
+        loading={loading}
         defaultSort={{ key: "name", dir: "asc" }}
         initialSearch={sp.get("q") ?? ""}
         columns={[
@@ -264,7 +269,13 @@ function CandidatesInner() {
           { key: "name", label: "Name", sortable: true, sortValue: (r: any) => r.name, render: (r: any) => <NameCell name={r.name} sub={r.gender} /> },
           { key: "phone", label: "Phone" },
           { key: "location", label: "Location", sortable: true, sortValue: (r: any) => r.location?.name, render: (r: any) => r.location?.name },
-          { key: "program", label: "Program", sortable: true, sortValue: (r: any) => r.program?.name ?? "", render: (r: any) => r.program?.name ?? <Chip value="No programme" /> },
+          {
+            key: "program", label: "Program", sortable: true, sortValue: (r: any) => progOf(r)?.name ?? "",
+            render: (r: any) => r.program?.name
+              ?? (r.active_batch?.program
+                ? <span title={`Via batch ${r.active_batch.code} — the row itself has no programme yet`}>{r.active_batch.program.name} <span className="text-[10px] text-gray-400">via {r.active_batch.code}</span></span>
+                : <Chip value="No programme" />),
+          },
           { key: "lifecycle_status", label: "Status", sortable: true, sortValue: (r: any) => r.lifecycle_status, render: (r: any) => <Chip value={r.lifecycle_status} /> },
           {
             key: "eligibility", label: "Eligible",

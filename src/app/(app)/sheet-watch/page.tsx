@@ -23,6 +23,7 @@ export default function SheetWatchPage() {
   const [tab, setTab] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [showSources, setShowSources] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -31,7 +32,7 @@ export default function SheetWatchPage() {
   const load = () =>
     api(`/api/workbook-changes?status=${status}${tab ? `&tab=${encodeURIComponent(tab)}` : ""}`)
       .then((d) => { setItems(d.items); setTabs(d.tabs ?? []); setSelected(new Set()); })
-      .catch((e) => setError(e.message));
+      .catch((e) => setError(e.message)).finally(() => setLoading(false));
   useEffect(() => { load(); }, [status, tab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function toggle(id: string) {
@@ -103,7 +104,7 @@ export default function SheetWatchPage() {
           <Btn small disabled={busy} onClick={() => mark("Accepted", [...selected])}>Accept</Btn>
         </div>
       )}
-      <DataTable rows={items}
+      <DataTable rows={items} loading={loading}
         cardTitle={(r: any) => r.row_key}
         columns={[
           { key: "_sel", label: "", mobile: false, render: (r: any) => r.status !== "Accepted" ? <input type="checkbox" checked={selected.has(r._id)} onChange={() => toggle(r._id)} onClick={(e) => e.stopPropagation()} /> : null },

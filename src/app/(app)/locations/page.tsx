@@ -16,12 +16,13 @@ function LocationsInner() {
   // the number clicked and the rows shown are the same population.
   const [tag, setTag] = useState(sp.get("approval_status") ?? "");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   const [drawer, setDrawer] = useState(false);
   const [form, setForm] = useState<any>({ approval_status: "Pending" });
   const set = (k: string, v: unknown) => setForm((f: any) => ({ ...f, [k]: v }));
 
   // Text search moved into DataTable (all-column, client-side over the full fetch).
-  const load = () => api(`/api/locations?limit=2000`).then((d) => setItems(d.items)).catch((e) => setError(e.message));
+  const load = () => api(`/api/locations?limit=2000`).then((d) => setItems(d.items)).catch((e) => setError(e.message)).finally(() => setLoading(false));
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function save() {
@@ -47,6 +48,7 @@ function LocationsInner() {
         ]} />
       <DataTable
         rows={tag ? items.filter((l) => l.approval_status === tag) : items}
+        loading={loading}
         onRowClick={(r) => router.push(`/locations/${r._id}`)}
         cardTitle={(r: any) => <>{r.name} <span className="text-xs text-gray-400">({r.code})</span></>}
         defaultSort={{ key: "name", dir: "asc" }}

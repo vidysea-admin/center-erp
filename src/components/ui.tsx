@@ -173,7 +173,7 @@ export function FilterPills({ options, active, onChange }: {
 // sortValue when the raw row[key] is not the thing to compare.
 // 2026-08-13 (table-UX cycle): built-in all-column search, per-column value filters and
 // drag-to-resize columns — built HERE so every call site gets them ("jha jha table aayegi").
-export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClick, empty, cardTitle, pageSize = 25, defaultSort, searchable, initialSearch, resizable = true }: {
+export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClick, empty, cardTitle, pageSize = 25, defaultSort, searchable, initialSearch, resizable = true, loading }: {
   columns: {
     key: string; label: string; render?: (row: T) => ReactNode; mobile?: boolean;
     sortable?: boolean; sortValue?: (row: T) => string | number | null | undefined;
@@ -192,6 +192,7 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
   searchable?: boolean;   // default: only tables with >10 rows get the search box
   initialSearch?: string; // seeds (and follows) the ?q= deep link from global search
   resizable?: boolean;
+  loading?: boolean;      // true while the page's fetch is in flight — skeleton, not "empty"
 }) {
   type Col = (typeof columns)[0];
   const [page, setPage] = useState(1);
@@ -281,6 +282,24 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
   const pages = Math.max(1, Math.ceil(view.length / pageSize));
   const cur = Math.min(page, pages);
   const slice = view.slice((cur - 1) * pageSize, cur * pageSize);
+  // While the fetch is in flight an empty list means "don't know yet", not "nothing here" —
+  // blanks-that-become-data read as broken (Umesh 2026-08-13). Pulse a skeleton instead.
+  if (!rows.length && loading) {
+    return (
+      <div className="animate-pulse rounded-xl border border-gray-200/80 bg-white p-4 shadow-[0_1px_2px_rgba(16,24,40,.04)]">
+        <div className="mb-3 h-4 w-1/3 rounded bg-gray-100" />
+        {Array.from({ length: 6 }, (_, i) => (
+          <div key={i} className="mb-2.5 flex gap-3">
+            <div className="h-3.5 w-1/4 rounded bg-gray-100" />
+            <div className="h-3.5 w-1/6 rounded bg-gray-100" />
+            <div className="h-3.5 w-1/3 rounded bg-gray-100" />
+            <div className="h-3.5 w-1/5 rounded bg-gray-100" />
+          </div>
+        ))}
+        <div className="mt-3 text-center text-xs text-gray-400">Loading…</div>
+      </div>
+    );
+  }
   if (!rows.length) return <div className="rounded-xl border border-dashed bg-white p-10 text-center text-sm text-gray-400">{empty ?? "Nothing here yet"}</div>;
   const cell = (c: Col, r: T) => c.render ? c.render(r) : String((r as any)[c.key] ?? "—");
   const headerCell = (c: Col) => {

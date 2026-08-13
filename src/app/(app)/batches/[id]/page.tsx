@@ -587,10 +587,12 @@ function DailyExecution({ batchId, batch, setError }: any) {
       </Section>
 
       {/* 2026-08-13: "har batch ke andar daily basis pe upload attendance" — the portal CSV
-          imports from here with this batch preselected (the engine batch-scopes the match). */}
+          imports from here with this batch preselected (the engine batch-scopes the match).
+          Umesh (13/08): "bulk sheet upload wali functionality show nahi ho rahi" — a text link
+          was invisible; it is a real button now. */}
       <Section title="History" actions={
-        <a className="text-xs font-medium text-blue-700 hover:underline" href={`${BASE_PATH}/govt-attendance?batch=${batchId}`}>
-          Import portal attendance →
+        <a className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700" href={`${BASE_PATH}/govt-attendance?batch=${batchId}`}>
+          ⬆ Upload attendance sheet (bulk)
         </a>
       }>
         <DataTable rows={logs}

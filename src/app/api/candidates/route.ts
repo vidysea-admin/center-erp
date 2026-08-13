@@ -1,5 +1,5 @@
 import { collectionRoutes } from "@/lib/crud";
-import { Candidate } from "@/models";
+import { BatchMember, Candidate } from "@/models";
 import { assertLocationInScope } from "@/lib/authz";
 import { candidateEligibility } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
@@ -22,8 +22,20 @@ export const { GET, POST } = collectionRoutes({
   },
   // 2026-08-11: eligibility (age / education / training cooldown) computed on read,
   // never stored — it flips on its own as the cooldown lapses.
+  // 2026-08-13 (Umesh: "enrolled hai to No programme kyun?"): a candidate sitting in a batch
+  // effectively HAS that batch's programme even when the imported row never carried one —
+  // attach the active membership (at most one: partial-unique index on {candidate, left_on:null})
+  // so the list can show the real programme instead of a false "No programme".
   async mapItems(items) {
     const defaults = await getDefaults();
-    return items.map((c) => ({ ...c, eligibility: candidateEligibility(c, defaults) }));
+    const members = await BatchMember.find({ candidate: { $in: items.map((c) => c._id) }, left_on: null })
+      .select("candidate batch")
+      .populate({ path: "batch", select: "code program status", populate: { path: "program", select: "name code scheme" } })
+      .lean();
+    const byCand = new Map(members.map((m: any) => [String(m.candidate), m.batch]));
+    return items.map((c) => {
+      const b: any = byCand.get(String(c._id));
+      return { ...c, eligibility: candidateEligibility(c, defaults), active_batch: b ? { code: b.code, status: b.status, program: b.program } : null };
+    });
   },
 });
