@@ -277,6 +277,10 @@ function Targets({ locationId, setError }: any) {
           <Field label="Approved target"><input type="number" className={inputCls} value={form.approved_target ?? ""} onChange={(e) => setForm({ ...form, approved_target: +e.target.value })} /></Field>
           <Field label="Allocated target"><input type="number" className={inputCls} value={form.allocated_target ?? ""} onChange={(e) => setForm({ ...form, allocated_target: +e.target.value })} /></Field>
           <Field label="Trainers required"><input type="number" className={inputCls} value={form.trainers_required ?? ""} onChange={(e) => setForm({ ...form, trainers_required: +e.target.value })} /></Field>
+          {/* 2026-08-13 parity: the "sheet says" reported figures were API-writable but had no
+              form — a centre working without the sheet could never key them. */}
+          <Field label="Enrolled (client-reported)"><input type="number" className={inputCls} value={form.enrolled_reported ?? ""} onChange={(e) => setForm({ ...form, enrolled_reported: e.target.value === "" ? undefined : +e.target.value })} /></Field>
+          <Field label="Pending (client-reported)"><input type="number" className={inputCls} value={form.pending_reported ?? ""} onChange={(e) => setForm({ ...form, pending_reported: e.target.value === "" ? undefined : +e.target.value })} /></Field>
           <div className="flex items-end"><Btn onClick={save} disabled={!form.program}>Save target</Btn></div>
         </div>
       </Section>
@@ -291,6 +295,7 @@ function TrainersInfra({ locationId, setError }: any) {
   const [readiness, setReadiness] = useState<any[]>([]);
   const [trainers, setTrainers] = useState<any[]>([]);
   const [roomForm, setRoomForm] = useState<any>({ type: "Classroom" });
+  const [roomEdit, setRoomEdit] = useState<any>(null);
   const [reqForm, setReqForm] = useState<any>({});
 
   const load = () => Promise.all([
@@ -305,6 +310,13 @@ function TrainersInfra({ locationId, setError }: any) {
   async function addRoom() {
     try { await api(`/api/locations/${locationId}/rooms`, { method: "POST", json: roomForm }); setRoomForm({ type: "Classroom" }); load(); }
     catch (e: any) { setError(e.message); }
+  }
+  async function saveRoom() {
+    try {
+      const { _id, ...patch } = roomEdit;
+      await api(`/api/rooms/${_id}`, { method: "PATCH", json: { ...patch, capacity: patch.capacity === "" ? undefined : patch.capacity } });
+      setRoomEdit(null); load();
+    } catch (e: any) { setError(e.message); }
   }
   async function addRequest() {
     try { await api("/api/trainer-requests", { method: "POST", json: { ...reqForm, location: locationId } }); setReqForm({}); load(); }
@@ -356,14 +368,38 @@ function TrainersInfra({ locationId, setError }: any) {
       )}
 
       <Section title="Rooms (identity matters for conflicts — Rule 13)">
+        {/* 2026-08-13 parity: the PATCH route existed with zero UI callers — a mistyped room
+            name or a room taken out of service could only be fixed in Mongo, while rooms are a
+            hard readiness blocker. Row click edits in place. */}
         <DataTable rows={rooms}
           cardTitle={(r: any) => r.name}
+          onRowClick={(r: any) => setRoomEdit({ _id: r._id, name: r.name, type: r.type, capacity: r.capacity ?? "", active: r.active !== false })}
           columns={[
             { key: "name", label: "Name" },
             { key: "type", label: "Type", render: (r: any) => <Chip value={r.type} /> },
             { key: "capacity", label: "Capacity" },
             { key: "active", label: "Active", render: (r: any) => (r.active ? "Yes" : "No") },
           ]} empty="No rooms yet." />
+        {roomEdit && (
+          <div className="mt-3 grid gap-3 rounded-lg border border-blue-200 bg-blue-50 p-3 md:grid-cols-5">
+            <Field label="Room name"><input className={inputCls} value={roomEdit.name} onChange={(e) => setRoomEdit({ ...roomEdit, name: e.target.value })} /></Field>
+            <Field label="Type">
+              <select className={inputCls} value={roomEdit.type} onChange={(e) => setRoomEdit({ ...roomEdit, type: e.target.value })}>
+                <option>Classroom</option><option>Lab</option>
+              </select>
+            </Field>
+            <Field label="Capacity"><input type="number" className={inputCls} value={roomEdit.capacity} onChange={(e) => setRoomEdit({ ...roomEdit, capacity: e.target.value === "" ? "" : +e.target.value })} /></Field>
+            <Field label="In service?">
+              <select className={inputCls} value={roomEdit.active ? "yes" : "no"} onChange={(e) => setRoomEdit({ ...roomEdit, active: e.target.value === "yes" })}>
+                <option value="yes">Yes</option><option value="no">No (out of service)</option>
+              </select>
+            </Field>
+            <div className="flex items-end gap-2">
+              <Btn small onClick={saveRoom} disabled={!roomEdit.name}>Save</Btn>
+              <Btn small kind="ghost" onClick={() => setRoomEdit(null)}>Cancel</Btn>
+            </div>
+          </div>
+        )}
         <div className="mt-3 grid gap-3 md:grid-cols-4">
           <Field label="Room name"><input className={inputCls} value={roomForm.name ?? ""} onChange={(e) => setRoomForm({ ...roomForm, name: e.target.value })} placeholder="Classroom 1" /></Field>
           <Field label="Type">

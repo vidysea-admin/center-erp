@@ -3,7 +3,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { api, fmtDate } from "@/lib/client";
-import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, HealthChip, inputCls } from "@/components/ui";
+import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthChip, Tabs, inputCls } from "@/components/ui";
 import { useLocationCtx } from "@/components/shell";
 
 export default function BatchesPage() {
@@ -20,6 +20,16 @@ function BatchesInner() {
   const [rooms, setRooms] = useState<any[]>([]);
   const [fStatus, setFStatus] = useState(sp.get("status") ?? "");
   const [ctxLoc] = useLocationCtx();
+  // B12 fix (2026-08-13): /batches?location=… — emitted by the location page and Home's
+  // readiness rows — used to be silently dropped (only localStorage context was read). The URL
+  // wins over the context switcher; the header select shows which centre is narrowing the list.
+  const [fLoc, setFLoc] = useState(sp.get("location") ?? "");
+  useEffect(() => { if (!sp.get("location")) setFLoc(ctxLoc); }, [ctxLoc]); // eslint-disable-line react-hooks/exhaustive-deps
+  // 2026-08-13 (Umesh): "Batches | Preparation" — the preparation tab is the full backward-
+  // planning view (every location×program target with its readiness gaps).
+  const [tab, setTab] = useState(sp.get("tab") === "Preparation" ? "Preparation" : "Batches");
+  const [prep, setPrep] = useState<any>(null);
+  const [prepFilter, setPrepFilter] = useState("");
   const [error, setError] = useState("");
   const [drawer, setDrawer] = useState(false);
   const [form, setForm] = useState<any>({ session: "Full Day" });
@@ -28,13 +38,19 @@ function BatchesInner() {
   const [planner, setPlanner] = useState<{ open: boolean; start?: string; plan?: any[] }>({ open: false });
   const [info, setInfo] = useState("");
 
+  // Status is filtered CLIENT-side now so the pill counts always show the whole picture.
   const load = () => Promise.all([
-    api(`/api/batches?${new URLSearchParams({ ...(fStatus ? { status: fStatus } : {}), ...(ctxLoc ? { location: ctxLoc } : {}) })}`).then((d) => setItems(d.items)),
+    api(`/api/batches?${new URLSearchParams({ ...(fLoc ? { location: fLoc } : {}) })}`).then((d) => setItems(d.items)),
     api("/api/locations?limit=2000").then((d) => setLocations(d.items)),
     api("/api/programs?limit=1000").then((d) => setPrograms(d.items)),
     api("/api/trainers?limit=2000").then((d) => setTrainers(d.items)),
+    api(`/api/mapping/readiness${fLoc ? `?location=${fLoc}` : ""}`).then(setPrep).catch(() => setPrep(null)),
   ]).catch((e) => setError(e.message));
-  useEffect(() => { load(); }, [fStatus, ctxLoc]);
+  useEffect(() => { load(); }, [fLoc]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const BATCH_STATUSES = ["Planning", "Ready", "Active", "Closing", "Completed", "Cancelled"];
+  const statusCount = (s: string) => items.filter((b) => b.status === s).length;
+  const shown = fStatus ? items.filter((b) => b.status === fStatus) : items;
 
   useEffect(() => {
     if (form.location) api(`/api/locations/${form.location}/rooms`).then((d) => setRooms(d.items)).catch(() => setRooms([]));
@@ -105,9 +121,9 @@ function BatchesInner() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-xl font-semibold">Batches</h1>
         <div className="flex gap-2">
-          <select className={inputCls + " max-w-36"} value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
-            <option value="">All statuses</option>
-            {["Planning", "Ready", "Active", "Closing", "Completed", "Cancelled"].map((s) => <option key={s}>{s}</option>)}
+          <select className={inputCls + " max-w-44"} value={fLoc} onChange={(e) => setFLoc(e.target.value)}>
+            <option value="">All locations</option>
+            {locations.map((l) => <option key={l._id} value={l._id}>{l.name}</option>)}
           </select>
           <Btn kind="ghost" onClick={() => setPlanner({ open: true })}>Plan a batch</Btn>
           <Btn onClick={() => setDrawer(true)}>New Batch</Btn>
@@ -119,18 +135,71 @@ function BatchesInner() {
           ⚠ {info} <button className="ml-2 font-bold" onClick={() => setInfo("")}>×</button>
         </div>
       )}
-      <DataTable rows={items} onRowClick={(r) => router.push(`/batches/${r._id}`)}
-        cardTitle={(r: any) => <>{r.code} <Chip value={r.status} /></>}
-        columns={[
-          { key: "code", label: "Code", mobile: false },
-          { key: "location", label: "Location", render: (r: any) => r.location?.name },
-          { key: "program", label: "Program", render: (r: any) => r.program?.name, mobile: false },
-          { key: "status", label: "Status", render: (r: any) => <Chip value={r.status} />, mobile: false },
-          { key: "health", label: "Health", render: (r: any) => <HealthChip health={r.health} /> },
-          { key: "roster", label: "Enrolled / Roster / Target", render: (r: any) => `${r.enrolled_count} / ${r.roster_count} / ${r.target_size}` },
-          { key: "trainer", label: "Trainer", render: (r: any) => r.trainer?.name ?? "—" },
-          { key: "planned_start", label: "Start", render: (r: any) => fmtDate(r.planned_start) },
-        ]} empty="No batches — plan the first one." />
+      <Tabs tabs={["Batches", `Preparation${prep ? ` (${prep.blocked_count ?? 0} blocked)` : ""}`]}
+        active={tab === "Preparation" ? `Preparation${prep ? ` (${prep.blocked_count ?? 0} blocked)` : ""}` : tab}
+        onChange={(t) => setTab(t.startsWith("Preparation") ? "Preparation" : "Batches")} />
+
+      {tab === "Batches" ? (
+        <>
+          <FilterPills active={fStatus} onChange={(v) => setFStatus(v === fStatus ? "" : v)}
+            options={[{ value: "", label: "All", count: items.length },
+              ...BATCH_STATUSES.map((s) => ({ value: s, label: s, count: statusCount(s) }))]} />
+          <DataTable rows={shown} onRowClick={(r) => router.push(`/batches/${r._id}`)}
+            cardTitle={(r: any) => <>{r.code} <Chip value={r.status} /></>}
+            defaultSort={{ key: "planned_start", dir: "desc" }}
+            columns={[
+              { key: "code", label: "Code", mobile: false, sortable: true, sortValue: (r: any) => r.code },
+              { key: "location", label: "Location", sortable: true, sortValue: (r: any) => r.location?.name, render: (r: any) => r.location?.name },
+              { key: "program", label: "Program", sortable: true, sortValue: (r: any) => r.program?.name, render: (r: any) => r.program?.name, mobile: false },
+              { key: "status", label: "Status", sortable: true, sortValue: (r: any) => r.status, render: (r: any) => <Chip value={r.status} />, mobile: false },
+              // A Planning batch's gaps show inline — "backward planning chal rahi hai,
+              // requirement incomplete" is visible from the LIST, not just the detail page.
+              { key: "health", label: "Health", render: (r: any) => <HealthChip health={r.health} inline={r.status === "Planning"} /> },
+              { key: "roster", label: "Enrolled / Roster / Target", render: (r: any) => `${r.enrolled_count} / ${r.roster_count} / ${r.target_size}` },
+              { key: "trainer", label: "Trainer", sortable: true, sortValue: (r: any) => r.trainer?.name ?? null, render: (r: any) => r.trainer?.name ?? "—" },
+              { key: "planned_start", label: "Start", sortable: true, sortValue: (r: any) => r.planned_start ? new Date(r.planned_start).getTime() : null, render: (r: any) => fmtDate(r.planned_start) },
+            ]} empty="No batches — plan the first one." />
+        </>
+      ) : (
+        <>
+          {/* 2026-08-13 (Umesh): the full backward-planning view — every location×program
+              target with what is still missing before a batch can start ("sirf location ready
+              hai, ya sirf trainer ready" — ab yahan dikhta hai). Home shows 8 rows; this is all. */}
+          <FilterPills active={prepFilter} onChange={(v) => setPrepFilter(v === prepFilter ? "" : v)}
+            options={[
+              { value: "", label: "All", count: prep?.items?.length ?? 0 },
+              { value: "ready", label: "Ready to start", count: prep?.ready_count ?? 0 },
+              { value: "blocked", label: "Blocked", count: prep?.blocked_count ?? 0 },
+            ]} />
+          <DataTable
+            rows={(prep?.items ?? []).filter((r: any) => prepFilter === "ready" ? r.ready : prepFilter === "blocked" ? !r.ready : true)}
+            cardTitle={(r: any) => `${r.location?.name} · ${r.program?.name}`}
+            columns={[
+              { key: "location", label: "Location", sortable: true, sortValue: (r: any) => r.location?.name, render: (r: any) => r.location?.name },
+              { key: "program", label: "Job role", sortable: true, sortValue: (r: any) => r.program?.name, render: (r: any) => <span>{r.program?.name}{r.program?.scheme ? <span className="text-xs text-gray-400"> ({r.program.scheme})</span> : null}</span> },
+              { key: "ready", label: "Ready?", sortable: true, sortValue: (r: any) => (r.ready ? 1 : 0), render: (r: any) => <Chip value={r.ready ? "Ready" : "Not Ready"} /> },
+              {
+                key: "blockers", label: "Missing before start", render: (r: any) => r.ready
+                  ? <span className="text-xs text-green-700">nothing — plan the batch</span>
+                  : <span className="flex flex-wrap gap-1">{(r.blockers ?? []).map((b: string, i: number) => (
+                      <span key={i} className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] text-amber-800">{b}</span>
+                    ))}</span>,
+              },
+              { key: "trainers", label: "Trainers", mobile: false, render: (r: any) => <span className="text-xs tabular-nums">{r.trainers?.certified ?? 0}/{r.trainers?.required ?? 1} certified{(r.trainers?.in_pipeline ?? 0) > 0 ? ` · ${r.trainers.in_pipeline} in pipeline` : ""}</span> },
+              { key: "candidates", label: "Candidates", mobile: false, render: (r: any) => <span className="text-xs tabular-nums">{r.candidates?.registered ?? 0}/{r.candidates?.needed ?? 0} registered · pool {r.candidates?.pool ?? 0}</span> },
+              { key: "approved_target", label: "Target", mobile: false, render: (r: any) => r.approved_target ?? "—" },
+              {
+                key: "_act", label: "", render: (r: any) => (
+                  <span onClick={(e) => e.stopPropagation()}>
+                    {r.ready
+                      ? <Btn small onClick={() => { setForm({ session: "Full Day", location: r.location?._id, program: r.program?._id }); setDrawer(true); }}>Plan batch</Btn>
+                      : <Link className="text-xs font-medium text-blue-700 hover:underline" href={`/locations/${r.location?._id}`}>Fix at centre →</Link>}
+                  </span>
+                ),
+              },
+            ]} empty="No location×programme targets yet — set targets on the locations." />
+        </>
+      )}
 
       <Drawer open={drawer} onClose={() => setDrawer(false)} title="New Batch">
         <div className="space-y-3">

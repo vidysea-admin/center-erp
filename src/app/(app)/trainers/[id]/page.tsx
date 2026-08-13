@@ -29,23 +29,44 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
   const [t, setT] = useState<any>(null);
   const [docs, setDocs] = useState<any>({ items: [], summary: null });
   const [batches, setBatches] = useState<any[]>([]);
+  const [locations, setLocations] = useState<any[]>([]);
+  const [programs, setPrograms] = useState<any[]>([]);
   const [err, setErr] = useState("");
   const [move, setMove] = useState<any>(null);   // the transition drawer
   const [docDrawer, setDocDrawer] = useState(false);
   const [busy, setBusy] = useState(false);
+  // F-A1 (2026-08-13): the nomination TARGET (which centre × job role this trainer is being
+  // hired FOR) finally gets an input. Rule T3 requires both before "Nomination Prepared", and
+  // the readiness engine counts trainers by exactly this pair — yet no screen could set it.
+  const [nom, setNom] = useState<{ location: string; program: string } | null>(null);
 
   async function load() {
     try {
-      const [{ item }, d] = await Promise.all([
+      const [{ item }, d, locs, progs] = await Promise.all([
         api(`/api/trainers/${id}`),
         api(`/api/trainers/${id}/documents`),
+        api("/api/locations?limit=2000").catch(() => ({ items: [] })),
+        api("/api/programs?limit=1000").catch(() => ({ items: [] })),
       ]);
       setT(item); setDocs(d);
+      setLocations(locs.items ?? []); setPrograms(progs.items ?? []);
       const b = await api(`/api/batches?trainer=${id}&limit=1000`).catch(() => ({ items: [] }));
       setBatches(b.items ?? []);
     } catch (e: any) { setErr(e.message); }
   }
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [id]);
+
+  async function saveNomination() {
+    if (!nom) return;
+    setBusy(true);
+    try {
+      await api(`/api/trainers/${id}`, {
+        method: "PATCH",
+        json: { nominated_for_location: nom.location || null, nominated_for_program: nom.program || null },
+      });
+      setNom(null); await load();
+    } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+  }
 
   async function doMove() {
     setBusy(true);
@@ -56,6 +77,7 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
           target: move.target,
           reason: move.reason || undefined,
           remarks: move.remarks || undefined,
+          date: move.date || undefined,
           payload: { tr_id: move.tr_id || undefined, tot_certificate_no: move.tot_certificate_no || undefined, payment_reference: move.payment_reference || undefined },
         },
       });
@@ -126,7 +148,35 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
             </div>
           </Section>
 
-          <Section title="Nomination & TOT">
+          <Section title="Nomination & TOT" actions={
+            <Btn small kind="ghost" onClick={() => setNom({
+              location: t.nominated_for_location?._id ?? "",
+              program: t.nominated_for_program?._id ?? "",
+            })}>Set nomination</Btn>
+          }>
+            {nom && (
+              <div className="mb-3 space-y-2 rounded-lg border border-blue-200 bg-blue-50 p-3">
+                <p className="text-xs text-blue-800">Which centre × job role is this trainer being hired for? (Rule T3 — required before "Nomination Prepared"; the Preparation board counts trainers by this.)</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <Field label="Centre" required>
+                    <select className={inputCls} value={nom.location} onChange={(e) => setNom({ ...nom, location: e.target.value })}>
+                      <option value="">—</option>
+                      {locations.map((l: any) => <option key={l._id} value={l._id}>{l.name}</option>)}
+                    </select>
+                  </Field>
+                  <Field label="Job role" required>
+                    <select className={inputCls} value={nom.program} onChange={(e) => setNom({ ...nom, program: e.target.value })}>
+                      <option value="">—</option>
+                      {programs.map((p: any) => <option key={p._id} value={p._id}>{p.name}{p.scheme ? ` (${p.scheme})` : ""}</option>)}
+                    </select>
+                  </Field>
+                </div>
+                <div className="flex gap-2">
+                  <Btn small onClick={saveNomination} disabled={busy}>{busy ? "Saving…" : "Save nomination"}</Btn>
+                  <Btn small kind="ghost" onClick={() => setNom(null)}>Cancel</Btn>
+                </div>
+              </div>
+            )}
             <dl className="grid grid-cols-2 gap-y-2 text-sm">
               <dt className="text-gray-500">Nominated for</dt>
               <dd>{t.nominated_for_program?.name ?? "—"}{t.nominated_for_location?.name ? ` at ${t.nominated_for_location.name}` : ""}</dd>
@@ -224,6 +274,11 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
           {move.target === "Dropped" && (
             <Field label="Reason" required><input className={inputCls} value={move.reason ?? ""} onChange={(e) => setMove({ ...move, reason: e.target.value })} /></Field>
           )}
+          {/* 2026-08-13 parity: the API always accepted a stage date (for entering history that
+              happened on paper first); the UI never offered it. Blank = today. */}
+          <Field label="When did this actually happen? (blank = today)">
+            <input type="date" className={inputCls} value={move.date ?? ""} onChange={(e) => setMove({ ...move, date: e.target.value })} />
+          </Field>
           <div className="mt-4"><Btn onClick={doMove} disabled={!move.target || busy}>{busy ? "Saving…" : "Move"}</Btn></div>
         </Drawer>
       )}

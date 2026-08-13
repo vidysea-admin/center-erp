@@ -98,4 +98,35 @@ ok("[best] deleted cost entry is gone", !costs2.some((c) => String(c._id) === St
 // [worst] deleting it twice is a clean 404, not a crash.
 await req(admin, "DELETE", `/api/costs/${cost._id}`, undefined, 404);
 
+
+// ---- 2026-08-13 list-UX cycle: KPI deep-link + manual-entry parity ----
+// [best] the Approved-Locations KPI's landing filter is honoured server-side.
+const approvedList = (await req(admin, "GET", "/api/locations?approval_status=Approved&limit=2000", undefined, 200)).data.items ?? [];
+ok("[best] ?approval_status=Approved returns only approved centres", approvedList.length > 0 && approvedList.every((l) => l.approval_status === "Approved"), JSON.stringify([...new Set(approvedList.map((l) => l.approval_status))]));
+
+// [best] client-reported target figures are keyable by hand (were API-only).
+await req(admin, "PUT", `/api/locations/${loc._id}/targets`, { program: prog._id, enrolled_reported: 37, pending_reported: 5 }, 200);
+const trep = ((await req(admin, "GET", `/api/locations/${loc._id}/targets`, undefined, 200)).data.items ?? [])[0];
+ok("[best] enrolled/pending reported figures round-trip", trep?.enrolled_reported === 37 && trep?.pending_reported === 5, JSON.stringify({ e: trep?.enrolled_reported, p: trep?.pending_reported }));
+
+// [best] rooms are editable and can be taken out of service (route existed, UI now calls it).
+const rm = (await req(admin, "POST", `/api/locations/${loc._id}/rooms`, { name: "EL Room " + s, type: "Classroom", capacity: 25 }, 201)).data.item;
+await req(admin, "PATCH", `/api/rooms/${rm._id}`, { name: "EL Room renamed " + s, type: "Lab", active: false }, 200);
+const rmAfter = ((await req(admin, "GET", `/api/locations/${loc._id}/rooms`, undefined, 200)).data.items ?? []).find((r) => String(r._id) === String(rm._id));
+ok("[best] room rename + type + out-of-service round-trip", rmAfter?.name === "EL Room renamed " + s && rmAfter?.type === "Lab" && rmAfter?.active === false, JSON.stringify(rmAfter));
+
+// [best] the two planner knobs that had no Admin field persist like the rest.
+await req(admin, "PUT", "/api/defaults", { lead_tot_start_days: 11, lead_trainer_ready_for_tot_days: 16 }, 200);
+const dknobs = (await req(admin, "GET", "/api/defaults", undefined, 200)).data.item;
+ok("[best] lead_tot_start_days + lead_trainer_ready_for_tot_days persist", dknobs.lead_tot_start_days === 11 && dknobs.lead_trainer_ready_for_tot_days === 16, JSON.stringify({ a: dknobs.lead_tot_start_days, b: dknobs.lead_trainer_ready_for_tot_days }));
+await req(admin, "PUT", "/api/defaults", { lead_tot_start_days: 10, lead_trainer_ready_for_tot_days: 15 }, 200); // restore
+
+// [best] the Preparation board's data contract: full list, each row carries the gap story.
+const prepAll = (await req(admin, "GET", "/api/mapping/readiness", undefined, 200)).data;
+ok("[best] readiness list returns every target row with counts", Array.isArray(prepAll.items) && typeof prepAll.ready_count === "number" && typeof prepAll.blocked_count === "number", JSON.stringify({ n: prepAll.items?.length, r: prepAll.ready_count, b: prepAll.blocked_count }));
+const prepRow = (prepAll.items ?? []).find((r) => String(r.location?._id) === String(loc._id));
+ok("[best] each row names its blockers + next action + trainer/candidate counts",
+  !!prepRow && Array.isArray(prepRow.blockers) && typeof prepRow.next_action === "string" && prepRow.trainers && prepRow.candidates,
+  JSON.stringify({ blockers: prepRow?.blockers?.length, na: prepRow?.next_action }).slice(0, 120));
+
 finish();
