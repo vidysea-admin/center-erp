@@ -32,6 +32,15 @@ function LocationsInner() {
     } catch (e: any) { setError(e.message); }
   }
 
+  // 2026-08-14 (Umesh: "sheet mein dekho kitni beautifully handled hai — club mat karo"):
+  // the list now uses the SHEET'S OWN GRAIN — one row per centre × job-role, exactly like
+  // the merged-cell workbook; repeated centre cells render dimmed ("〃"), the first row
+  // carries them. Centre pills still filter whole centres; search matches on every row.
+  const centres = tag ? items.filter((l: any) => l.approval_status === tag) : items;
+  const flatRows = centres.flatMap((l: any) => ((l.job_roles?.length ? l.job_roles : [null]) as any[])
+    .map((j: any, i: number) => ({ _id: `${l._id}:${i}`, loc: l, jr: j, first: i === 0 })));
+  const rep = (r: any, v: any) => r.first ? (v ?? <span className="text-gray-400">—</span>) : <span className="text-gray-300">〃</span>;
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -65,85 +74,63 @@ function LocationsInner() {
           The Columns picker trims; Code/City/Approval start hidden (Approval = TC Status). */}
       <DataTable
         storageKey="locations"
-        rows={tag ? items.filter((l) => l.approval_status === tag) : items}
+        rows={flatRows}
         loading={loading}
-        onRowClick={(r) => router.push(`/locations/${r._id}`)}
-        cardTitle={(r: any) => <>{r.name} <span className="text-xs text-gray-400">({r.code})</span></>}
+        onRowClick={(r: any) => router.push(`/locations/${r.loc._id}`)}
+        cardTitle={(r: any) => <>{r.loc.name} <span className="text-xs text-gray-400">· {r.jr?.program ?? "no targets"}</span></>}
         defaultSort={{ key: "name", dir: "asc" }}
         columns={[
-          { key: "spoc_name", label: "SPOC Name", sortable: true, sortValue: (r: any) => r.spoc_name },
-          { key: "cluster_head_phone", label: "Cluster Head Contact", mobile: false },
-          { key: "state", label: "State", mobile: false, sortable: true, sortValue: (r: any) => r.state },
-          { key: "district", label: "District", sortable: true, sortValue: (r: any) => r.district ?? r.city, render: (r: any) => r.district ?? r.city ?? "—" },
-          { key: "name", label: "Institution Name", sortable: true, sortValue: (r: any) => r.name, minWidth: 240 },
-          // Karunn 13/08: the sheet's Operational claim is unreliable ("chal raha bhi Operational,
-          // nahi chal raha bhi") — approval drives; column stays available via the picker.
-          { key: "operational_status", label: "Operational", hidden: true, sortable: true, sortValue: (r: any) => r.operational_status, render: (r: any) => <Chip value={r.operational_status} /> },
-          { key: "operating_partner", label: "Operating Partner", mobile: false },
+          { key: "spoc_name", label: "SPOC Name", sortable: true, sortValue: (r: any) => r.loc.spoc_name, filterText: (r: any) => r.loc.spoc_name, render: (r: any) => rep(r, r.loc.spoc_name) },
+          { key: "cluster_head_phone", label: "Cluster Head Contact", mobile: false, filterText: (r: any) => r.loc.cluster_head_phone, render: (r: any) => rep(r, r.loc.cluster_head_phone) },
+          { key: "state", label: "State", mobile: false, sortable: true, sortValue: (r: any) => r.loc.state, filterText: (r: any) => r.loc.state, render: (r: any) => rep(r, r.loc.state) },
+          { key: "district", label: "District", sortable: true, sortValue: (r: any) => r.loc.district ?? r.loc.city, filterText: (r: any) => r.loc.district ?? r.loc.city, render: (r: any) => rep(r, r.loc.district ?? r.loc.city) },
           {
-            // 2026-08-13 (Manish): "Ongoing scheme bhi saath mein dikhana must hai" — the scheme
-            // travels with every job role, and the funnel filters by it.
-            key: "schemes", label: "Ongoing Scheme", filterable: true,
-            filterText: (r: any) => (r.schemes ?? []).join(" · "),
-            render: (r: any) => (r.schemes ?? []).length
-              ? <span className="flex flex-wrap gap-1">{r.schemes.map((s: string) => <Chip key={s} value={s} />)}</span>
-              : <span className="text-gray-400">—</span>,
+            key: "name", label: "Institution Name", sortable: true, sortValue: (r: any) => r.loc.name, minWidth: 240,
+            filterText: (r: any) => r.loc.name,
+            render: (r: any) => r.first ? <span className="font-medium text-gray-900">{r.loc.name}</span> : <span className="text-gray-300" title={r.loc.name}>〃</span>,
+          },
+          { key: "operating_partner", label: "Operating Partner", mobile: false, filterText: (r: any) => r.loc.operating_partner, render: (r: any) => rep(r, r.loc.operating_partner) },
+          {
+            key: "scheme", label: "Ongoing Scheme", filterable: true,
+            filterText: (r: any) => r.jr?.scheme ?? "",
+            render: (r: any) => r.jr?.scheme ? <Chip value={r.jr.scheme} /> : <span className="text-gray-400">—</span>,
           },
           {
-            key: "job_roles", label: "Job Role", minWidth: 220,
-            filterText: (r: any) => (r.job_roles ?? []).map((j: any) => `${j.program} ${j.tc_status ?? ""}`).join(" · "),
-            render: (r: any) => (r.job_roles ?? []).length ? (
-              <span className="block text-xs text-gray-600">{r.job_roles.map((j: any) => j.code ?? j.program).join(" · ")}</span>
-            ) : <span className="text-gray-400">no targets</span>,
+            key: "job_role", label: "Job Role", minWidth: 220, filterable: true,
+            filterText: (r: any) => r.jr?.program ?? "",
+            render: (r: any) => r.jr ? <span className="text-sm">{r.jr.program}</span> : <span className="text-gray-400">no targets</span>,
           },
-          { key: "total_target", label: "Total Target", sortable: true, sortValue: (r: any) => r.total_target ?? 0 },
-          // Karunn 13/08: "Already Enrolled + Pending Enrollment dono hata do" — the sheet's
-          // enrolment claims are junk (only BECIL ever filled them; enrolment is OURS to count).
-          // Columns removed outright; the *_reported fields stay in DB/API for the detail tab.
+          { key: "total_target", label: "Total Target", sortable: true, sortValue: (r: any) => r.jr?.approved_target ?? 0, render: (r: any) => r.jr?.approved_target ?? "—" },
+          { key: "tc_id", label: "TC ID", mobile: false, filterText: (r: any) => r.jr?.tc_id ?? "", render: (r: any) => r.jr?.tc_id ? <span className="font-mono text-xs">{r.jr.tc_id}</span> : <span className="text-gray-400">—</span> },
           {
-            key: "tc_ids", label: "TC ID", mobile: false, minWidth: 150,
-            filterText: (r: any) => (r.tc_ids ?? []).join(" ") || (r.tc_id ?? ""),
-            render: (r: any) => { const ids = (r.tc_ids ?? []).length ? r.tc_ids : (r.tc_id ? [r.tc_id] : []);
-              return ids.length ? <span className="font-mono text-xs">{ids.join(" · ")}</span> : <span className="text-gray-400">—</span>; },
-          },
-          {
-            // Live credential — the server already strips it for anyone without
-            // locations.manage, so non-managers see a dash, never the secret.
             key: "tc_password", label: "TC Password", mobile: false, filterable: false,
-            render: (r: any) => r.tc_password ? <span className="font-mono text-xs">{r.tc_password}</span> : <span className="text-gray-300">—</span>,
+            render: (r: any) => r.loc.tc_password ? rep(r, <span className="font-mono text-xs">{r.loc.tc_password}</span>) : <span className="text-gray-300">—</span>,
           },
+          { key: "tc_status", label: "TC Status", filterable: true, filterText: (r: any) => r.jr?.tc_status ?? "", render: (r: any) => r.jr?.tc_status ? <Chip value={r.jr.tc_status} /> : <span className="text-gray-400">—</span> },
+          { key: "trainers_required", label: "Trainer Required", sortable: true, sortValue: (r: any) => r.jr?.trainers_required ?? 0, render: (r: any) => r.jr?.trainers_required ?? "—" },
+          { key: "nom_recv", label: "Nomination Received (sheet)", mobile: false, render: (r: any) => r.jr?.nominations_received_reported ?? "—" },
+          { key: "nom_nsdc", label: "Nominated to NSDC (sheet)", mobile: false, render: (r: any) => r.jr?.nominated_nsdc_reported ?? "—" },
+          { key: "cert_sheet", label: "Trainer Certified (sheet)", mobile: false, render: (r: any) => r.jr?.trainers_certified_reported ?? "—" },
           {
-            key: "tc_status_roll", label: "TC Status", filterable: true,
-            filterText: (r: any) => (r.job_roles ?? []).length ? `${r.approved_job_roles} of ${r.job_roles.length} approved` : (r.tc_status ?? ""),
-            render: (r: any) => (r.job_roles ?? []).length ? (
-              <span className="text-xs"><span className="font-medium text-gray-900">{r.approved_job_roles}</span> of {r.job_roles.length} approved</span>
-            ) : <Chip value={r.tc_status} />,
-          },
-          { key: "trainers_required_total", label: "Trainer Required", sortable: true, sortValue: (r: any) => r.trainers_required_total ?? 0 },
-          { key: "nominations_received_reported_total", label: "Nomination Received (sheet)", mobile: false },
-          { key: "nominated_nsdc_reported_total", label: "Nominated to NSDC (sheet)", mobile: false },
-          { key: "trainers_certified_reported_total", label: "Trainer Certified (sheet)", mobile: false },
-          {
-            // Umesh (voice note): "jaise-jaise hamare trainer approve hote jayenge, count
-            // update ho jana chahiye — kitne chahiye, kitne mil gaye". DERIVED from Trainer
-            // rows on every fetch; the sheet's claim sits in the three columns before this.
-            key: "trainers_ours", label: "Trainers (ours, live)", minWidth: 150,
-            sortable: true, sortValue: (r: any) => r.trainers_certified_total ?? 0,
-            filterText: (r: any) => `${r.trainers_certified_total ?? 0} certified of ${r.trainers_required_total ?? 0} required`,
-            render: (r: any) => { const need = r.trainers_required_total ?? 0, got = r.trainers_certified_total ?? 0;
+            // Umesh (voice note): live per-ROW fulfilment — sheet-grain makes this exact now.
+            key: "trainers_ours", label: "Trainers (ours, live)", minWidth: 140,
+            sortable: true, sortValue: (r: any) => r.jr?.trainers_certified ?? 0,
+            filterText: (r: any) => r.jr ? `${r.jr.trainers_certified} of ${r.jr.trainers_required ?? 0}` : "",
+            render: (r: any) => { if (!r.jr) return <span className="text-gray-400">—</span>;
+              const need = r.jr.trainers_required ?? 0, got = r.jr.trainers_certified ?? 0;
               return (
                 <span className={`text-xs font-medium ${need && got < need ? "text-amber-600" : "text-green-700"}`}>
-                  {got} certified / {need} required
-                  {(r.trainers_nominated_total ?? 0) > 0 && <span className="block font-normal text-gray-400">{r.trainers_nominated_total} nominated</span>}
+                  {got} / {need || "—"}
+                  {(r.jr.trainers_nominated ?? 0) > 0 && <span className="block font-normal text-gray-400">{r.jr.trainers_nominated} nominated</span>}
                 </span>
               ); },
           },
-          // Centres come from the OneDrive truth workbook; external_id is that row's TC ID.
-          { key: "source", label: "Source", mobile: false, filterText: (r: any) => r.external_id ? "Vidysea-RPL (OneDrive)" : "Entered in ERP", render: (r: any) => <SourceCell source={r.external_id ? "AVPL Location_Master" : ""} /> },
-          // ERP-internal columns — available in the picker, hidden by default.
-          { key: "code", label: "Code", mobile: false, hidden: true, sortable: true, sortValue: (r: any) => r.code },
-          { key: "city", label: "City", mobile: false, hidden: true, sortable: true, sortValue: (r: any) => r.city },
-          { key: "approval_status", label: "Approval", hidden: true, sortable: true, sortValue: (r: any) => r.approval_status, render: (r: any) => <Chip value={r.approval_status} /> },
+          { key: "source", label: "Source", mobile: false, filterText: (r: any) => r.loc.external_id ? "Vidysea-RPL (OneDrive)" : "Entered in ERP", render: (r: any) => r.first ? <SourceCell source={r.loc.external_id ? "AVPL Location_Master" : ""} /> : <span className="text-gray-300">〃</span> },
+          // ERP-internal columns — picker-selectable, hidden by default.
+          { key: "code", label: "Code", mobile: false, hidden: true, sortable: true, sortValue: (r: any) => r.loc.code, filterText: (r: any) => r.loc.code, render: (r: any) => rep(r, r.loc.code) },
+          { key: "city", label: "City", mobile: false, hidden: true, sortValue: (r: any) => r.loc.city, filterText: (r: any) => r.loc.city, render: (r: any) => rep(r, r.loc.city) },
+          { key: "approval_status", label: "Approval (centre)", hidden: true, sortable: true, sortValue: (r: any) => r.loc.approval_status, filterText: (r: any) => r.loc.approval_status, render: (r: any) => r.first ? <Chip value={r.loc.approval_status} /> : <span className="text-gray-300">〃</span> },
+          { key: "operational_status", label: "Operational", hidden: true, sortValue: (r: any) => r.loc.operational_status, filterText: (r: any) => r.loc.operational_status, render: (r: any) => r.first ? <Chip value={r.loc.operational_status} /> : <span className="text-gray-300">〃</span> },
         ]}
         empty="No locations yet — create the first one."
       />

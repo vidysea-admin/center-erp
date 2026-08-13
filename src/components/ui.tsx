@@ -1,5 +1,5 @@
 "use client";
-import { ReactNode, useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { ReactNode, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { IconTrendDown, IconTrendUp } from "@/components/icons";
@@ -249,6 +249,29 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
   // scroll container would be clipped by it.
   const [openFilter, setOpenFilter] = useState<{ key: string; x: number; y: number } | null>(null);
   const [widths, setWidths] = useState<Record<string, number>>({});
+
+  // ---- top scrollbar (2026-08-14, Umesh: "scroller sabse neeche hai — user ko dikhna
+  // chahiye ki scroll kar sakte hain") — a thin bar ABOVE the table, scroll-synced both
+  // ways with the real container; renders only when the table actually overflows. ----
+  const bodyScrollRef = useRef<HTMLDivElement | null>(null);
+  const topScrollRef = useRef<HTMLDivElement | null>(null);
+  const [scrollW, setScrollW] = useState(0);
+  useEffect(() => {
+    const el = bodyScrollRef.current;
+    if (!el) return;
+    const measure = () => setScrollW(el.scrollWidth > el.clientWidth + 2 ? el.scrollWidth : 0);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
+  const syncing = useRef(false);
+  const syncScroll = (from: HTMLDivElement | null, to: HTMLDivElement | null) => {
+    if (!from || !to || syncing.current) return;
+    syncing.current = true;
+    to.scrollLeft = from.scrollLeft;
+    syncing.current = false;
+  };
 
   // ---- column visibility (2026-08-13, Umesh: "only selected columns visible ho") ----
   // Only EXPLICIT user choices are stored; an unchosen column follows its hidden default —
@@ -505,7 +528,13 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
     <>
       {toolbar}
       <div className="hidden overflow-hidden rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(16,24,40,.04)] md:block">
-        <div className="overflow-x-auto">
+        {scrollW > 0 && (
+          <div ref={topScrollRef} onScroll={() => syncScroll(topScrollRef.current, bodyScrollRef.current)}
+            className="dt-scroll overflow-x-auto border-b border-gray-100" title="Scroll sideways — more columns">
+            <div style={{ width: scrollW, height: 8 }} />
+          </div>
+        )}
+        <div ref={bodyScrollRef} onScroll={() => syncScroll(bodyScrollRef.current, topScrollRef.current)} className="dt-scroll overflow-x-auto">
           <table className="w-full text-sm" style={tableStyle}>
             {anyWidth && <colgroup>{visCols.map((c) => <col key={c.key} style={widths[c.key] ? { width: widths[c.key] } : undefined} />)}</colgroup>}
             <thead className="bg-gray-50/80 text-left text-[11px] uppercase tracking-wider text-gray-400">

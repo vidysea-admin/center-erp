@@ -26,3 +26,12 @@ input, select, textarea {
   color: #111827;
   background-color: #ffffff;
 }
+
+/* 2026-08-14 (Umesh): the horizontal scrollbar hid at the page's very bottom — "user ko
+   pata hi nahi chalta ki scroll kar sakte hain". DataTable now shows a synced TOP
+   scrollbar and keeps both bars visibly styled instead of the OS's auto-hiding sliver. */
+.dt-scroll::-webkit-scrollbar { height: 10px; }
+.dt-scroll::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 6px; }
+.dt-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 6px; }
+.dt-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+.dt-scroll { scrollbar-width: thin; scrollbar-color: #cbd5e1 #f1f5f9; }
