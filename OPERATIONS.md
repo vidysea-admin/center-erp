@@ -16,16 +16,27 @@ Verify what is deployed at any time, no login needed:
 
 - **Public URL:** https://www.vidysea.com/erp  (the app is served under the `/erp` basePath; the
   bare host `vidysea.com` 301-redirects to `www`).
-- **Hosting:** Docker on an EC2 instance behind nginx. `cd /opt/center-erp && git pull &&
-  docker compose up -d --build`. An auto-deploy picks up pushes to `master` in ~5 minutes.
-- **Build marker:** `src/lib/version.ts` → `RELEASE`. Bump it every meaningful release so
-  `/api/public/version` tells you exactly what is running.
+- **Hosting & deployment (per the devops team, 2026-08-13):** the app runs on an **AWS ECS
+  cluster**. Deployments are AWS-native — **CodePipeline/CodeBuild build the Docker image, push
+  it to ECR, and CodeDeploy rolls it onto ECS** — triggered by pushes to `master`. Observed
+  end-to-end latency: a merge is live in ~4–10 minutes. **GitHub Actions has NO role in
+  deployment** (a legacy `deploy.yml` used to sit in the repo as a gated no-op — it skipped
+  whenever EC2 secrets were absent, so its green runs never deployed anything; removed
+  2026-08-13 to end the confusion).
+- **Build marker:** `src/lib/version.ts` → `RELEASE`. Bump it every meaningful release; the
+  release-stamp curl above is the ONLY reliable way to confirm a deploy landed — never infer
+  from pipeline/workflow status.
 - **Database:** MongoDB at `mongodb://13.202.206.101:27017`, db `center_erp`. (Auth on the DB and
   file/upload storage are tracked as deferred infra — see DEFERRED.)
-- **CI:** `.github/workflows/ci.yml` builds AND runs `npm test` (`scripts/run-e2e.mjs` — all 15
-  e2e suites, ~1,100 assertions, per-suite summary table, no fail-fast) against a mongo:7
-  service container on every push/PR. Coverage map: `d:\erp\qa\EVAL-MATRIX.md`.
-  `deploy.yml` auto-deploys pushes to `master`.
+- **CI (verification only, not deployment):** `.github/workflows/ci.yml` builds AND runs
+  `npm test` (`scripts/run-e2e.mjs` — all 15 e2e suites, ~1,100 assertions, per-suite summary
+  table, no fail-fast) against a mongo:7 service container on every push/PR. Coverage map:
+  `d:\erp\qa\EVAL-MATRIX.md`.
+- **Media storage decision (Umesh, 2026-08-13):** photos/videos for attendance evidence live in
+  the shared Google Drive (RPL project → All Locations → district folders) —
+  https://drive.google.com/drive/folders/1NOfRCw9lIyRoJTEFAg4--HIJiTG-Of0G (the
+  `Defaults.drive_root_url` default). Server-side auto-upload needs a Google service-account
+  credential — pending with devops/Umesh (goal.json H-DRIVE-CRED).
 
 ## Logins (seeded)
 
