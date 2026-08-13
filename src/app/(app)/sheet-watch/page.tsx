@@ -6,7 +6,7 @@
 // changes to existing records through the Sync Inbox for a human OK.
 import { useEffect, useState } from "react";
 import { api, fmtDT } from "@/lib/client";
-import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, inputCls } from "@/components/ui";
+import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, RouteTabs, inputCls } from "@/components/ui";
 import { SheetSources } from "@/components/sheet-sources";
 import { TabMappings } from "@/components/tab-mapping-wizard";
 
@@ -76,7 +76,7 @@ export default function SheetWatchPage() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h1 className="text-xl font-semibold">Sheet Watch</h1>
+          <h1 className="text-xl font-semibold">Sheet Sync</h1>
           <p className="text-sm text-gray-500">Every change the client makes in the shared workbook — row, column, old → new</p>
         </div>
         <div className="flex gap-2">
@@ -92,6 +92,12 @@ export default function SheetWatchPage() {
           </select>
         </div>
       </div>
+      {/* 2026-08-14 (Umesh): one sheet = one section. Watch (cell history) and Inbox
+          (apply-able field suggestions) are two views of the SAME workbook now. */}
+      <RouteTabs active="/sheet-watch" tabs={[
+        { href: "/sheet-watch", label: "Sheet Watch (cell changes)" },
+        { href: "/sync", label: "Sync Inbox (apply suggestions)" },
+      ]} />
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
       {/* 2026-08-12: any sheet can be added here — the feature is no longer one hard-coded URL. */}
       {showSources && <SheetSources onChanged={load} />}

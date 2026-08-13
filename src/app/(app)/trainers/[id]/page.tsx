@@ -2,7 +2,7 @@
 import { use, useEffect, useState } from "react";
 import Link from "next/link";
 import { api, fmtDate } from "@/lib/client";
-import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
+import { BackLink, Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
 import { uploadWithRetry } from "@/lib/upload";
 
 // Trainer detail (2026-08-12). The list + drawer had nowhere to show the hiring journey Manish
@@ -105,6 +105,7 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
       {err && <ErrorBanner msg={err} onDismiss={() => setErr("")} />}
 
       <div className="flex flex-wrap items-baseline gap-3">
+        <BackLink fallback="/trainers" label="Trainers" />
         <h1 className="font-serif text-2xl font-semibold">{t.name}</h1>
         <Chip value={t.status} />
         <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${

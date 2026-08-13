@@ -79,7 +79,27 @@ if (process.argv.includes("--google")) {
 }
 const sheet = wb.Sheets["Location_Master"] ?? wb.Sheets[wb.SheetNames[0]];
 const grid = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+// 2026-08-14 (Umesh caught this — "31 approved hain, tumhara 30"): the workbook MERGES the
+// Institution cell across each centre's rows; XLSX puts the value only in the merge's FIRST
+// row, so every continuation row read as blank-institution and was dropped (Basti Polytechnic
+// lost 2 rows, one of them Approved). Expand merge ranges into every covered cell.
+for (const m of sheet["!merges"] ?? []) {
+  const top = XLSX.utils.encode_cell({ r: m.s.r, c: m.s.c });
+  const v = sheet[top]?.v;
+  if (v === undefined || v === "") continue;
+  for (let r = m.s.r; r <= m.e.r; r++) {
+    for (let c = m.s.c; c <= m.e.c; c++) {
+      if (grid[r] && (grid[r][c] === "" || grid[r][c] === undefined)) grid[r][c] = v;
+    }
+  }
+}
 const meta = { name: sourceName };
+// "Pending"/"NA" typed into an ID or password cell is a STATUS someone wrote in the wrong
+// column, not an identifier — 7 live rows carry TC ID "Pending" (2026-08-14). Blank it and
+// report, never store it as a credential/id.
+const PLACEHOLDER = /^(pending|na|n\/a|nil|tbd|-+)$/i;
+let placeholders = 0;
+const ID = (v) => { const s = S(v); if (PLACEHOLDER.test(s)) { placeholders++; return ""; } return s; };
 
 // Header is on the SECOND row — the first carries the client's own totals.
 const H = grid[1].map(S);
@@ -101,17 +121,24 @@ const IDX = {
 const missingCols = Object.entries(IDX).filter(([, i]) => i < 0).map(([k]) => k);
 if (missingCols.length) { console.error("Sheet columns changed — not found:", missingCols.join(", ")); process.exit(2); }
 
-const rows = grid.slice(2).filter((r) => S(r[IDX.institution]));
+// A data row is one that names an institution OR carries row data (scheme/job-role/TC) under
+// a merged institution cell — the old institution-only filter silently dropped continuations.
+const rows = grid.slice(2).filter((r) => S(r[IDX.institution]) || S(r[IDX.jobRole]) || S(r[IDX.scheme]) || S(r[IDX.tcId]));
 
 // ---- build ----
 const locations = new Map(); // institution -> doc
 const programs = new Map();  // "SCHEME|Job role" -> doc
 const targets = [];
 const skipped = [];
-let lastDistrict = "", lastSpoc = "", lastPhone = "";
+let lastDistrict = "", lastSpoc = "", lastPhone = "", lastInstitution = "";
 
 for (const r of rows) {
-  const institution = S(r[IDX.institution]);
+  // Carry the institution forward exactly like district/SPOC — blank = "same centre as
+  // above", which is how the client's merged cells read (belt-and-braces on top of the
+  // merge expansion above, for rows where the merge was replaced by hand-blanks).
+  const institution = S(r[IDX.institution]) || lastInstitution;
+  if (!institution) continue;
+  lastInstitution = institution;
   const scheme = SCHEME_ALIASES[S(r[IDX.scheme])] ?? null;
   const jobRole = S(r[IDX.jobRole]);
 
@@ -123,9 +150,9 @@ for (const r of rows) {
   if (!locations.has(institution)) {
     const tcStatus = S(r[IDX.tcStatus]);
     locations.set(institution, {
-      code: slug(institution), name: institution, external_id: S(r[IDX.tcId]) || slug(institution),
+      code: slug(institution), name: institution, external_id: ID(r[IDX.tcId]) || slug(institution),
       state: S(r[IDX.state]), district: lastDistrict, city: lastDistrict,
-      tc_id: S(r[IDX.tcId]) || undefined, tc_password: S(r[IDX.tcPw]) || undefined,
+      tc_id: ID(r[IDX.tcId]) || undefined, tc_password: ID(r[IDX.tcPw]) || undefined,
       tc_status: tcStatus || undefined, operating_partner: S(r[IDX.partner]) || undefined,
       spoc_name: lastSpoc || undefined, cluster_head_name: lastSpoc || undefined,
       cluster_head_phone: lastPhone || undefined,
@@ -171,7 +198,7 @@ for (const r of rows) {
     pending_reported: N(r[IDX.pending]),
     // Per-row government identity: each centre×scheme×job-role has its OWN TC ID + status
     // (Charthwal: TC353328 AVPL vs TC352938 HSL) — this is what "31 approved" counts.
-    tc_id: S(r[IDX.tcId]) || undefined,
+    tc_id: ID(r[IDX.tcId]) || undefined,
     tc_status: S(r[IDX.tcStatus]) || undefined,
     // Sheet-claimed trainer counts (blank cell = no claim, so undefined — never null).
     nominations_received_reported: N(r[IDX.nomRecv]) ?? undefined,
@@ -195,6 +222,7 @@ console.log(`sum trainers required ${sumTrainers}`);
 // sheet's own header totals before anything is written.
 const sumClaim = (k) => targets.reduce((s, t) => s + (t[k] ?? 0), 0);
 console.log(`sheet claims  nominations received ${sumClaim("nominations_received_reported")} · nominated to NSDC ${sumClaim("nominated_nsdc_reported")} · certified ${sumClaim("trainers_certified_reported")}`);
+if (placeholders) console.log(`⚠️  ${placeholders} ID/password cell(s) held a placeholder ("Pending"/"NA"/…) — blanked, never stored as an identifier.`);
 
 // The states actually present — Manish says "abhi do hi hain, Haryana aur Uttar Pradesh", but
 // the sheet is the master. If it still carries others, say so; do not silently seed a surprise.

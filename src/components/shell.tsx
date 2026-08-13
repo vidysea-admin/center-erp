@@ -13,8 +13,9 @@ import {
 // Locked navigation (§1)
 const NAV = [
   { href: "/", label: "Home", Icon: IconHome },
-  { href: "/sync", label: "Sync Inbox", Icon: IconSync, badge: "sync" as string | undefined, roles: ["Admin", "Operations"] },
-  { href: "/sheet-watch", label: "Sheet Watch", Icon: IconSync, badge: "watch" as string | undefined, roles: ["Admin", "Operations"] },
+  // 2026-08-14 (Umesh): one sheet = one nav entry. Sheet Watch hosts the Sync Inbox as a
+  // tab; both routes stay alive for deep links. Badge = open items across both engines.
+  { href: "/sheet-watch", label: "Sheet Sync", Icon: IconSync, badge: "sheets" as string | undefined, roles: ["Admin", "Operations"] },
   { href: "/locations", label: "Locations", Icon: IconPin },
   { href: "/trainers", label: "Trainers", Icon: IconUser },
   { href: "/candidates", label: "Candidates", Icon: IconUsers },
@@ -198,7 +199,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     <nav className="flex flex-col gap-0.5 p-3">
       {nav.map(({ href, label, Icon, badge }) => {
         const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
-        const count = badge === "sync" ? syncCount : badge === "watch" ? watchCount : 0;
+        const count = badge === "sheets" ? syncCount + watchCount : badge === "sync" ? syncCount : badge === "watch" ? watchCount : 0;
         return (
           <Link key={href} href={href} onClick={() => setOpen(false)}
             className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13.5px] font-medium transition-colors ${active ? "bg-blue-50 text-blue-700" : "text-gray-500 hover:bg-gray-50 hover:text-gray-800"}`}>

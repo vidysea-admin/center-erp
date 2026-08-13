@@ -75,9 +75,11 @@ export default function HomePage() {
           <KPI label="Active Trainers" value={data.kpis.trainers_active_total ?? 0} tone="amber" icon={<IconUser size={19} />} href="/trainers?tag=Available"
             sub={(data.kpis.trainers_by_role ?? []).slice(0, 3).map((r: any) => `${r.code ?? r.program} ${r.count}`).join(" · ") || "none certified yet"} />
         )}
+        {/* 2026-08-14 (Umesh: "31 vs 13 — blunder?"): both countings, both NAMED — the
+            headline is job-role ROWS (the sheet's 31), the sub says centres explicitly. */}
         {!isPrincipal && (
           <KPI label="Approved (centre × job role)" value={data.kpis.approved_targets ?? 0} tone="blue" icon={<IconPin size={19} />} href="/batches?tab=Preparation"
-            sub={`of ${data.kpis.targets_total ?? 0} job-role targets · ${data.kpis.approved_locations} centres`} />
+            sub={`of ${data.kpis.targets_total ?? 0} job-role rows · centres: ${data.kpis.approved_locations} approved`} />
         )}
         {!isPrincipal && (
           <KPI label="Enrolled Students" value={data.kpis.enrolled_students} tone="green" icon={<IconUsers size={19} />} href="/candidates?lifecycle_status=Enrolled"

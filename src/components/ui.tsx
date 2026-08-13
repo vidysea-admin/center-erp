@@ -1,8 +1,37 @@
 "use client";
 import { ReactNode, useEffect, useMemo, useState, type PointerEvent as ReactPointerEvent } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { IconTrendDown, IconTrendUp } from "@/components/icons";
 import { sourceLink } from "@/lib/client";
+
+// 2026-08-14 (Umesh): "jahan bhi table se andar jaate hain, back button hi nahi hai" —
+// every drill-down header carries this. Browser-back when there is history (keeps scroll
+// and filters on the list), the fallback href when the page was opened directly.
+export function BackLink({ fallback, label = "Back" }: { fallback: string; label?: string }) {
+  const router = useRouter();
+  return (
+    <button type="button" title="Go back"
+      onClick={() => { if (window.history.length > 1) router.back(); else router.push(fallback); }}
+      className="flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-900">
+      <span aria-hidden>←</span> {label}
+    </button>
+  );
+}
+
+// Sibling-page switcher (2026-08-14): Sheet Watch ⇄ Sync Inbox live under ONE nav entry.
+export function RouteTabs({ tabs, active }: { tabs: { href: string; label: string; count?: number }[]; active: string }) {
+  return (
+    <div className="flex gap-1 border-b">
+      {tabs.map((t) => (
+        <Link key={t.href} href={t.href}
+          className={`whitespace-nowrap border-b-2 px-3.5 py-2.5 text-sm font-medium ${active === t.href ? "border-blue-600 text-blue-700" : "border-transparent text-gray-500 hover:text-gray-800"}`}>
+          {t.label}{t.count != null && t.count > 0 ? <span className="ml-1.5 rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-bold text-blue-700">{t.count}</span> : null}
+        </Link>
+      ))}
+    </div>
+  );
+}
 
 // ---- StatusChip: status colours per UI spec (grey/blue/green/red/amber) ----
 const CHIP_COLORS: Record<string, string> = {
