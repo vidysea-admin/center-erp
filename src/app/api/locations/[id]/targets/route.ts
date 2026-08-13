@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError } from "@/lib/authz";
+import { requirePerm } from "@/lib/permissions";
 import { Batch, BatchMember, Closure, LocationTarget, Program } from "@/models";
 import { capacitySummary, trainerCountsFor } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
@@ -70,6 +71,8 @@ export const PUT = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   await dbConnect();
   const user = await requireUser();
   requireEdit(user);
+  // Approved targets are contract numbers; can_edit alone was the only gate here (audit 2026-08-13).
+  await requirePerm(user, "locations.manage");
   const { id } = await ctx.params;
   assertLocationInScope(user, id);
   const body = await req.json();

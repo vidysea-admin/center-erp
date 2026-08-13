@@ -63,24 +63,9 @@ jobs:
       - name: Seed the sample dataset
         run: npm run seed:sample
 
-      # Each suite exits non-zero on any failed assertion.
-      - name: Lifecycle, rules and closure
-        run: npm run test:e2e
-      - name: Roles, scoping and permissions
-        run: npm run test:roles
-      - name: Sheet sync engine
-        run: npm run test:sync
-      - name: Edge cases
-        run: npm run test:blindspot
-      - name: Government attendance
-        run: npm run test:govt
-      - name: Trainer preparation pipeline
-        run: npm run test:trainer
-      # The awkward cases on the RPL surface, including a timing assertion on the readiness
-      # endpoint that Home calls on every load.
-      - name: RPL edge cases
-        run: npm run test:rpl-blindspot
-      # Transcript gap items (2026-08-12 evening): cost booking, pool notification, failed-
-      # registration queue, per-candidate attendance, infra blockers, import duplicates, slots.
-      - name: Flow gap items
-        run: npm run test:flows
+      # scripts/run-e2e.mjs runs EVERY suite (no fail-fast) and prints a per-suite table, so one
+      # broken suite no longer hides whether the rest passed. The suite list lives in that file —
+      # it was previously hand-duplicated here and in package.json and the copies drifted.
+      # Coverage map: qa/EVAL-MATRIX.md.
+      - name: All e2e suites
+        run: npm test

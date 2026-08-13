@@ -1,13 +1,14 @@
 // Sync engine — Rules 1–9 (§4 "Location and sync").
 // External sheet is fetched as CSV (Google Sheet "export?format=csv" URL or any CSV endpoint).
 import {
-  Batch, BatchMember, Candidate, FollowUpAction, Location, LocationTarget, Program, SheetChange, SyncSource, TrainerRequest,
+  Batch, BatchMember, Candidate, FollowUpAction, Location, LocationTarget, Program, SheetChange, SyncSource, Trainer, TrainerRequest,
 } from "@/models";
 import { audit } from "@/lib/audit";
 import { HttpError } from "@/lib/authz";
 import { safeFetch } from "@/lib/safe-fetch";
 import * as XLSX from "xlsx";
 import { fetchWorkbook } from "@/lib/workbook";
+import { fieldSpec } from "@/lib/field-catalog";
 
 const ACTIVE_BATCH_STATUSES = ["Planning", "Ready", "Active", "Closing"];
 
@@ -246,6 +247,30 @@ export async function applySheetChange(changeId: string, action: string, note: s
       loc.status_changed_on = new Date();
       if (change.field_name === "approval_status") loc.approval_status = (change.new_value as any) || loc.approval_status;
       await loc.save();
+      break;
+    }
+    case "Apply value": {
+      // 2026-08-13: the generic "write what the sheet says" action. Before this, a detected
+      // change on spoc_phone or a trainer's qualification had no action that wrote it — it could
+      // only be Ignored. A human clicking Apply IS the review; the write is audited and
+      // revertible (see /api/sheet-changes/[id]/revert).
+      const entityType = (change.entity_type as "Location" | "Trainer" | "Candidate") ?? "Location";
+      const Model = entityType === "Trainer" ? Trainer : entityType === "Candidate" ? Candidate : Location;
+      const targetId = change.entity ?? (entityType === "Location" ? change.location : null);
+      if (!targetId) throw new HttpError(400, "Change has no matched record to write to.");
+      // field_name is sheet data, not a free property path — only catalog/mapping fields may be
+      // written, and status fields must go through their own guarded actions above.
+      const blocked = ["approval_status", "operational_status", "pipeline_status", "lifecycle_status"];
+      const allowed = !blocked.includes(change.field_name) && !change.field_name.startsWith("approved_target:")
+        && (entityType === "Location" ? LOCATION_FIELDS.has(change.field_name) : !!fieldSpec(entityType, change.field_name));
+      if (!allowed) throw new HttpError(400, `"${change.field_name}" cannot be written by Apply value — use the specific action for it.`);
+      const doc = await Model.findById(targetId);
+      if (!doc) throw new HttpError(404, `${entityType} not found.`);
+      const snap = change.impact_snapshot as any;
+      const resolved = snap && snap.apply !== undefined ? snap.apply : change.new_value;
+      doc.set(change.field_name, resolved === "" ? undefined : resolved);
+      await doc.save({ validateModifiedOnly: true });
+      await audit({ entity: entityType, entityId: doc._id, field: change.field_name, oldValue: change.old_value, newValue: change.new_value, actor: actorId, actorType: "EXTERNAL_SYNC" });
       break;
     }
     case "Put on hold":

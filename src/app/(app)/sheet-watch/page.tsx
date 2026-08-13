@@ -1,12 +1,14 @@
 "use client";
 // Sheet Watch (2026-08-11 meeting): the client edits their workbook in place and tells
 // nobody. Every cell change the poller detects lands here — old → new, highlighted, with
-// row and column named — for the team to mark Seen/Accepted. Advisory only: nothing here
-// writes to ERP records.
+// row and column named — for the team to mark Seen/Accepted. The change list is advisory;
+// entity writes happen only through approved tab mappings ("Map tabs"), and even those route
+// changes to existing records through the Sync Inbox for a human OK.
 import { useEffect, useState } from "react";
 import { api, fmtDate } from "@/lib/client";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, inputCls } from "@/components/ui";
 import { SheetSources } from "@/components/sheet-sources";
+import { TabMappings } from "@/components/tab-mapping-wizard";
 
 const TYPE_STYLE: Record<string, string> = {
   Added: "bg-green-50 text-green-700 border-green-200",
@@ -24,6 +26,7 @@ export default function SheetWatchPage() {
   const [busy, setBusy] = useState(false);
   const [showSources, setShowSources] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [showMappings, setShowMappings] = useState(false);
 
   const load = () =>
     api(`/api/workbook-changes?status=${status}${tab ? `&tab=${encodeURIComponent(tab)}` : ""}`)
@@ -77,6 +80,7 @@ export default function SheetWatchPage() {
         </div>
         <div className="flex gap-2">
           <Btn small kind="ghost" onClick={() => setShowSources((s) => !s)}>{showSources ? "Hide sheets" : "Manage sheets"}</Btn>
+          <Btn small kind="ghost" onClick={() => setShowMappings((s) => !s)}>{showMappings ? "Hide mappings" : "Map tabs"}</Btn>
           <Btn small kind="ghost" onClick={() => setShowHistory((s) => !s)}>{showHistory ? "Hide history" : "Version history"}</Btn>
           <select className={inputCls + " max-w-40"} value={tab} onChange={(e) => setTab(e.target.value)}>
             <option value="">All tabs</option>
@@ -90,6 +94,7 @@ export default function SheetWatchPage() {
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
       {/* 2026-08-12: any sheet can be added here — the feature is no longer one hard-coded URL. */}
       {showSources && <SheetSources onChanged={load} />}
+      {showMappings && <TabMappings setError={setError} />}
       {showHistory && <VersionHistory setError={setError} />}
       {selected.size > 0 && (
         <div className="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm">

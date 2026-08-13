@@ -201,6 +201,12 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   for (const [path, label] of [["/api/costs", "costs"], ["/api/invoices", "invoices"], ["/api/sync-sources", "sync sources"]]) {
     ok(`revoking it closes ${label} again`, (await req(enroll, "GET", path)).status === 403, `${path}`);
   }
+  // The tab-mapping wizard (2026-08-13) is part of the same source-admin surface — every one of
+  // its routes answers to sheet.sources, permission checked before the id is even looked up.
+  ok("tab-mappings list is closed without sheet.sources", (await req(enroll, "GET", "/api/sync-sources/000000000000000000000000/tab-mappings")).status === 403);
+  ok("tab-mappings approve is closed without sheet.sources", (await req(enroll, "PUT", "/api/sync-sources/000000000000000000000000/tab-mappings", { tab: "X", entity_type: "Candidate", columns: [], constants: {}, key_field: "phone" })).status === 403);
+  ok("tab-mappings suggest is closed without sheet.sources", (await req(enroll, "POST", "/api/sync-sources/000000000000000000000000/tab-mappings/suggest", { tab: "X", entity_type: "Candidate" })).status === 403);
+  ok("Sync Now is closed without sheet.sources (was role-gated)", (await req(enroll, "POST", "/api/sync-sources/000000000000000000000000/run", {})).status === 403);
 }
 
 // Trainer pay is not directory data (2026-08-12): a signed-in user without trainers.manage

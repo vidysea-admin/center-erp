@@ -45,7 +45,11 @@ function Overview({ loc, onSaved, setError }: any) {
   async function save() {
     try {
       const patch: any = {};
-      for (const f of ["name", "city", "state", "address", "approval_status", "operational_status", "status_reason", "spoc_name", "spoc_phone", "principal_name", "principal_phone", "external_id"]) {
+      // Diff-based: only touched fields travel. That also protects tc_password — for readers
+      // without locations.manage the API strips it, the input stays empty, and an unchanged
+      // empty value is never sent (and their PATCH would 403 anyway).
+      for (const f of ["name", "city", "state", "address", "approval_status", "operational_status", "status_reason", "spoc_name", "spoc_phone", "principal_name", "principal_phone", "external_id",
+        "district", "tc_id", "tc_status", "tc_password", "operating_partner", "cluster_head_name", "cluster_head_phone"]) {
         if (form[f] !== loc[f]) patch[f] = form[f];
       }
       await api(`/api/locations/${loc._id}`, { method: "PATCH", json: patch });
@@ -80,6 +84,18 @@ function Overview({ loc, onSaved, setError }: any) {
         <Field label="Principal name"><input className={inputCls} value={form.principal_name ?? ""} onChange={(e) => set("principal_name", e.target.value)} /></Field>
         <Field label="Principal phone"><input className={inputCls} value={form.principal_phone ?? ""} onChange={(e) => set("principal_phone", e.target.value)} /></Field>
         <Field label="Address"><input className={inputCls} value={form.address ?? ""} onChange={(e) => set("address", e.target.value)} /></Field>
+        <Field label="District"><input className={inputCls} value={form.district ?? ""} onChange={(e) => set("district", e.target.value)} /></Field>
+        {/* Government-portal identity for this centre (sheet columns TC ID / TC Status / TC
+            Password). The password is a live portal credential: the API strips it for anyone
+            without locations.manage, so this input is simply empty for them. */}
+        <Field label="TC ID (govt portal)"><input className={inputCls} value={form.tc_id ?? ""} onChange={(e) => set("tc_id", e.target.value)} /></Field>
+        <Field label="TC status"><input className={inputCls} value={form.tc_status ?? ""} onChange={(e) => set("tc_status", e.target.value)} placeholder="Approved / …" /></Field>
+        <Field label="TC password (visible to locations.manage only)">
+          <input type="password" className={inputCls} value={form.tc_password ?? ""} onChange={(e) => set("tc_password", e.target.value)} />
+        </Field>
+        <Field label="Operating partner"><input className={inputCls} value={form.operating_partner ?? ""} onChange={(e) => set("operating_partner", e.target.value)} /></Field>
+        <Field label="Cluster head"><input className={inputCls} value={form.cluster_head_name ?? ""} onChange={(e) => set("cluster_head_name", e.target.value)} /></Field>
+        <Field label="Cluster head phone"><input className={inputCls} value={form.cluster_head_phone ?? ""} onChange={(e) => set("cluster_head_phone", e.target.value)} /></Field>
       </div>
     </Section>
   );

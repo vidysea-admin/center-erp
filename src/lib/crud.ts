@@ -152,7 +152,9 @@ export function itemRoutes(cfg: CrudConfig) {
     if (cfg.beforeUpdate) await cfg.beforeUpdate(id, data, existing, user);
     const before = existing.toObject();
     Object.assign(existing, data);
-    await existing.save();
+    // validateModifiedOnly: sheet-imported rows (raw-driver seed) can lack required fields the
+    // user is not touching — full-document validation would 400 a plain phone correction on them.
+    await existing.save({ validateModifiedOnly: true });
     await auditDiff(cfg.entity, existing._id, before, data, user.id); // audit each field (Rule 27 spirit)
     if (cfg.afterWrite) await cfg.afterWrite(existing, user);
     return NextResponse.json({ item: existing });
