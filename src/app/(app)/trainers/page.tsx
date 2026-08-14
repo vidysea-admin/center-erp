@@ -1,5 +1,6 @@
 "use client";
 import { Suspense, useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, fmtDate, pipelineLabel, toInputDate } from "@/lib/client";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, ShareLinkPanel, SourceCell, Tabs, inputCls } from "@/components/ui";
@@ -64,6 +65,10 @@ function TrainersInner() {
   }
   const [positions, setPositions] = useState<any[]>([]);   // CEO: Open Positions tab
   const [posFilter, setPosFilter] = useState("Open");      // default = only what needs hiring
+  // R-G (CEO [09:12]): "by default only approved selected, but I should be able to change
+  // to show not approved also" — and [09:01]: a stage count is clickable to SEE the people.
+  const [posApproved, setPosApproved] = useState<"approved" | "all">("approved");
+  const [posDetail, setPosDetail] = useState<{ pos: any; bucket: string; label: string } | null>(null);
   const [reqEdit, setReqEdit] = useState<any>(null);
   const [reqForm, setReqForm] = useState<any>({});
   const setReq = (k: string, v: unknown) => setReqForm((f: any) => ({ ...f, [k]: v }));
@@ -74,9 +79,13 @@ function TrainersInner() {
     api(`/api/trainers?${sp.get("status") ? `status=${encodeURIComponent(sp.get("status")!)}&` : ""}${sp.get("pipeline_status") ? `pipeline_status=${encodeURIComponent(sp.get("pipeline_status")!)}&` : ""}limit=2000`).then((d) => setItems(d.items)),
     api("/api/trainer-requests?limit=2000").then((d) => setRequests(d.items)),
     api("/api/locations?limit=2000").then((d) => setLocations(d.items)),
-    api("/api/open-positions").then((d) => setPositions(d.items)),
   ]).catch((e) => setError(e.message)).finally(() => setLoading(false));
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Positions load separately so the approved/all toggle refetches just the board.
+  useEffect(() => {
+    api(`/api/open-positions${posApproved === "all" ? "?approved=all" : ""}`)
+      .then((d) => setPositions(d.items)).catch((e) => setError(e.message));
+  }, [posApproved]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const tagCounts = new Map<string, number>();
   for (const t of items) tagCounts.set(availabilityTag(t), (tagCounts.get(availabilityTag(t)) ?? 0) + 1);
@@ -179,15 +188,23 @@ function TrainersInner() {
         onChange={(t) => setTab(t.startsWith("Requests") ? "Requests" : t.startsWith("Open Positions") ? "Open Positions" : t)} />
       {tab === "Open Positions" && (
         <>
-          <FilterPills active={posFilter} onChange={(v) => setPosFilter(v === posFilter ? "" : v)}
-            options={[
-              { value: "Open", label: "Open", count: openPos.length },
-              { value: "Closed", label: "Closed (filled)", count: positions.filter((p) => p.status === "Closed").length },
-              { value: "", label: "All", count: positions.length },
-            ]} />
+          <div className="flex flex-wrap items-center gap-3">
+            <FilterPills active={posFilter} onChange={(v) => setPosFilter(v === posFilter ? "" : v)}
+              options={[
+                { value: "Open", label: "Open", count: openPos.length },
+                { value: "Closed", label: "Filled", count: positions.filter((p) => p.status === "Closed").length },
+                { value: "", label: "All", count: positions.length },
+              ]} />
+            {/* R-G approved toggle — the CEO's default stays approved-only. */}
+            <FilterPills active={posApproved} onChange={(v) => setPosApproved((v || "approved") as any)}
+              options={[
+                { value: "approved", label: "Approved centres", count: positions.filter((p) => p.approved).length },
+                { value: "all", label: "Show not approved too", count: posApproved === "all" ? positions.length : undefined as any },
+              ]} />
+          </div>
           <p className="text-xs text-gray-500">
-            Only approved centres with an approved job role appear here. A position closes by itself the
-            moment the required number of trainers is certified for that centre × job role.
+            A position fills by itself the moment the required number of trainers is certified for that
+            centre × job role. Click a stage count to see exactly who is there.
           </p>
           <DataTable rows={shownPos} storageKey="open-positions"
             cardTitle={(r: any) => <>{r.location?.name} <span className="text-xs text-gray-400">· {r.program?.name}</span></>}
@@ -211,9 +228,53 @@ function TrainersInner() {
               { key: "balance", label: "Balance to hire", sortable: true, sortValue: (r: any) => r.balance ?? -1,
                 render: (r: any) => r.balance == null ? <span className="text-gray-400">—</span>
                   : <span className={`font-semibold ${r.balance > 0 ? "text-amber-600" : "text-green-700"}`}>{r.balance}</span> },
-              { key: "status", label: "Status", sortable: true, sortValue: (r: any) => r.status, render: (r: any) => <Chip value={r.status} /> },
+              {
+                // R-G (CEO [07:56]): the pipeline mapped against each position — "then we
+                // can see which position needs our focus more than others". Click = names.
+                key: "stages", label: "Pipeline", mobile: false, minWidth: 300,
+                render: (r: any) => (
+                  <div className="flex flex-wrap gap-1">
+                    {([["fresh", "Fresh"], ["shortlisted", "Short"], ["docs", "Docs"], ["sent", "NSDC"], ["approved", "Appr"], ["certified", "Cert"]] as const).map(([k, lbl]) => {
+                      const n = r.stages?.[k] ?? 0;
+                      const FULL: Record<string, string> = { fresh: "Fresh Lead", shortlisted: "Shortlisted", docs: "Documents Completed", sent: "Sent to NSDC (incl. rejected-and-fixing)", approved: "NSDC Approved (incl. TOT prep)", certified: "Certified" };
+                      return (
+                        <button key={k} disabled={!n}
+                          title={`${FULL[k]}: ${n}`}
+                          onClick={(e) => { e.stopPropagation(); if (n) setPosDetail({ pos: r, bucket: k, label: FULL[k] }); }}
+                          className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${n ? (k === "certified" ? "bg-green-100 text-green-700 hover:bg-green-200" : "bg-blue-50 text-blue-700 hover:bg-blue-100") : "bg-gray-50 text-gray-300"}`}>
+                          {lbl} {n}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ),
+              },
+              ...(posApproved === "all" ? [{
+                key: "approved", label: "Approved", sortable: true, sortValue: (r: any) => (r.approved ? 1 : 0),
+                render: (r: any) => r.approved ? <span className="text-green-700">✓</span>
+                  : <span className="text-amber-700" title={r.approved_reason ?? ""}>✗ {r.approved_reason}</span>,
+              }] : []),
+              // CEO [08:43] could not parse "Closed" — the word on the board is "Filled".
+              { key: "status", label: "Status", sortable: true, sortValue: (r: any) => r.status,
+                render: (r: any) => <Chip value={r.status === "Closed" ? "Filled" : r.status} /> },
             ]}
             empty="No open positions — every approved centre × job role has its trainers." />
+          <Drawer open={!!posDetail} onClose={() => setPosDetail(null)}
+            title={posDetail ? `${posDetail.pos.location?.name} · ${posDetail.pos.program?.name} — ${posDetail.label}` : ""}>
+            {posDetail && (
+              <ul className="space-y-2">
+                {(posDetail.pos.stage_trainers?.[posDetail.bucket] ?? []).map((t: any) => (
+                  <li key={t._id}>
+                    <Link className="text-sm font-medium text-blue-700 hover:underline" href={`/trainers/${t._id}`}>{t.name}</Link>
+                    <span className="ml-2 text-xs text-gray-500">{t.stage}</span>
+                  </li>
+                ))}
+                {(posDetail.pos.stage_trainers?.[posDetail.bucket] ?? []).length === 0 && (
+                  <li className="text-sm text-gray-400">Nobody here right now.</li>
+                )}
+              </ul>
+            )}
+          </Drawer>
         </>
       )}
       {tab === "Trainers" ? (

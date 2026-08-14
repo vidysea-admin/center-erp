@@ -132,6 +132,27 @@ ok("…and the room blocker cleared once a room exists", !row?.blockers?.some((b
 ok("…and blocks on candidates, since the centre and trainer are now ready",
   row && row.ready === false && /candidates/.test(row.next_action), JSON.stringify(row?.next_action));
 
+// ---- R-G (CEO 14/08 [07:56, 09:01, 09:12]): the Open Positions board maps the pipeline ----
+{
+  // The target above was written without a TC approval — the DEFAULT board must not list it…
+  const def = await req("GET", "/api/open-positions", undefined, 200);
+  ok("R-G: an unapproved position stays off the default board",
+    !(def.data.items ?? []).some((p) => String(p.location._id) === String(loc._id)), `${def.data.items?.length} rows`);
+  // …but ?approved=all shows it, with the reason named.
+  const all = await req("GET", "/api/open-positions?approved=all", undefined, 200);
+  const mineAll = (all.data.items ?? []).find((p) => String(p.location._id) === String(loc._id));
+  ok("R-G: ?approved=all surfaces it with the reason named",
+    !!mineAll && mineAll.approved === false && /TC status/.test(mineAll.approved_reason ?? ""), JSON.stringify(mineAll?.approved_reason));
+  // Approve the row; the position appears with the pipeline mapped and the trainer named.
+  await req("PUT", `/api/locations/${loc._id}/targets`, { program: prog._id, tc_status: "Approved" }, 200);
+  const board = await req("GET", "/api/open-positions", undefined, 200);
+  const mine = (board.data.items ?? []).find((p) => String(p.location._id) === String(loc._id));
+  ok("R-G: the approved position lists with the pipeline mapped",
+    !!mine && mine.stages?.certified === 1 && mine.status === "Open" && mine.balance === 1, JSON.stringify(mine?.stages));
+  ok("R-G: a stage count is backed by the actual people (clickable)",
+    (mine?.stage_trainers?.certified ?? []).some((t) => t.name === tr.name), JSON.stringify(mine?.stage_trainers?.certified));
+}
+
 // a second trainer must not be creatable on the same phone (the model had no unique index at all)
 const dup = await req("POST", "/api/trainers", { name: "Dup", phone: tr.phone, skills: ["x"] });
 ok("a duplicate trainer phone is refused", dup.status >= 400, `got ${dup.status}`);

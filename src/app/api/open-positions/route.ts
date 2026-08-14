@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, locationFilter } from "@/lib/authz";
 import { LocationTarget, Trainer } from "@/models";
-import { NOMINATED_STATES } from "@/lib/rules";
 
 // Open Positions (CEO, 13/08 walkthrough): "ek tab — kahan-kahan trainer hire karne hain.
 // Location se sort karun toh kaun se program, kitne chahiye, kitne balance; job role select
@@ -10,44 +9,86 @@ import { NOMINATED_STATES } from "@/lib/rules";
 // certify ho gaye toh wo position CLOSED." Everything here is DERIVED per request from
 // LocationTarget (requirement) minus live Trainer counts — never stored, so a trainer
 // moving to Certified closes the position on the very next load.
-export const GET = apiHandler(async (_req: NextRequest) => {
+//
+// R-G (CEO 14/08 [07:56, 09:01, 09:12]): each position also maps the trainer PIPELINE —
+// "fresh applications, then documentation complete, sent to NSDC, NSDC approved, certified
+// … then we can see which position needs our focus" — with the actual trainers named so a
+// count is clickable, plus ?approved=all to "show not approved also" (default stays
+// approved-only, exactly as he asked).
+
+// The CEO's five buckets, from the stored stage names (R-A). The NSDC round-trip
+// (Rejected) sits with "Sent to NSDC" — it is still at the government's door — and the
+// post-approval prep states (payment/TOT) sit with "NSDC Approved".
+const STAGE_BUCKETS: Record<string, string> = {
+  "Fresh Lead": "fresh",
+  "Shortlisted": "shortlisted",
+  "Documents Completed": "docs",
+  "Sent to NSDC": "sent",
+  "NSDC Rejected": "sent",
+  "NSDC Approved": "approved",
+  "TOT Payment Done": "approved",
+  "TOT Scheduled": "approved",
+  "TOT In Progress": "approved",
+  "Certified": "certified",
+};
+const BUCKET_KEYS = ["fresh", "shortlisted", "docs", "sent", "approved", "certified"] as const;
+
+export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
-  // Only per-row-approved targets (tc_status is the government's verdict on that
-  // centre×job-role), scoped by the caller's centres (Rule 38).
-  const targets = await LocationTarget.find({ tc_status: "Approved", ...locationFilter(user) })
+  const showAll = req.nextUrl.searchParams.get("approved") === "all";
+  // Default: only per-row-approved targets (tc_status is the government's verdict on that
+  // centre×job-role) at approved locations, scoped by the caller's centres (Rule 38).
+  const targets = await LocationTarget.find({ ...(showAll ? {} : { tc_status: "Approved" }), ...locationFilter(user) })
     .populate("location", "name code approval_status")
     .populate("program", "name code scheme")
     .lean<any[]>();
-  // …AND only approved locations ("approved location WITH approved course, keval wahi").
-  const rows = targets.filter((t) => t.location?.approval_status === "Approved" && t.program);
+  const rows = targets.filter((t) => t.program && t.location && (showAll || t.location.approval_status === "Approved"));
 
-  const locIds = [...new Set(rows.map((t) => String(t.location._id)))];
-  const counts = new Map<string, { nominated: number; certified: number }>();
-  if (locIds.length) {
+  const byPosition = new Map<string, { counts: Record<string, number>; names: Record<string, { _id: string; name: string; stage: string }[]> }>();
+  if (rows.length) {
     const agg = await Trainer.aggregate([
       { $match: { nominated_for_location: { $in: rows.map((t) => t.location._id) }, active: true } },
       { $group: {
         _id: { l: "$nominated_for_location", p: "$nominated_for_program" },
-        nominated: { $sum: { $cond: [{ $in: ["$pipeline_status", NOMINATED_STATES] }, 1, 0] } },
-        certified: { $sum: { $cond: [{ $eq: ["$pipeline_status", "Certified"] }, 1, 0] } },
+        trainers: { $push: { _id: "$_id", name: "$name", stage: "$pipeline_status" } },
       } },
     ]);
-    for (const r of agg) counts.set(`${String(r._id.l)}|${String(r._id.p)}`, { nominated: r.nominated, certified: r.certified });
+    for (const r of agg) {
+      const counts: Record<string, number> = {};
+      const names: Record<string, { _id: string; name: string; stage: string }[]> = {};
+      for (const t of r.trainers) {
+        const bucket = STAGE_BUCKETS[t.stage ?? "Fresh Lead"];
+        if (!bucket) continue; // Dropped never counts toward a position
+        counts[bucket] = (counts[bucket] ?? 0) + 1;
+        (names[bucket] ??= []).push(t);
+      }
+      byPosition.set(`${String(r._id.l)}|${String(r._id.p)}`, { counts, names });
+    }
   }
 
   const items = rows.map((t) => {
-    const c = counts.get(`${String(t.location._id)}|${String(t.program._id)}`) ?? { nominated: 0, certified: 0 };
+    const pos = byPosition.get(`${String(t.location._id)}|${String(t.program._id)}`) ?? { counts: {}, names: {} };
+    const certified = pos.counts.certified ?? 0;
+    // "Nominated" keeps its meaning from the preparation board: documents done onward.
+    const nominated = (pos.counts.docs ?? 0) + (pos.counts.sent ?? 0) + (pos.counts.approved ?? 0) + certified;
     const required = t.trainers_required ?? null;
     // CEO: "do certify ho gaye toh wo location close ho gayi — mere ko wo trainer nahi
     // chahiye." No stated requirement = the position cannot close on its own.
-    const balance = required != null ? Math.max(0, required - c.certified) : null;
+    const balance = required != null ? Math.max(0, required - certified) : null;
+    const approved = t.tc_status === "Approved" && t.location.approval_status === "Approved";
     return {
       _id: t._id,
       location: { _id: t.location._id, name: t.location.name, code: t.location.code },
       program: { _id: t.program._id, name: t.program.name, code: t.program.code, scheme: t.program.scheme },
-      required, nominated: c.nominated, certified: c.certified, balance,
-      status: required != null && c.certified >= required ? "Closed" : "Open",
+      required, nominated, certified, balance,
+      stages: Object.fromEntries(BUCKET_KEYS.map((k) => [k, pos.counts[k] ?? 0])),
+      stage_trainers: pos.names,
+      approved,
+      approved_reason: approved ? null
+        : t.location.approval_status !== "Approved" ? `centre ${t.location.approval_status ?? "Pending"}`
+        : `TC status ${t.tc_status ?? "Pending"}`,
+      status: required != null && certified >= required ? "Closed" : "Open",
     };
   });
   return NextResponse.json({ items });

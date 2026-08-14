@@ -60,6 +60,8 @@ const CHIP_COLORS: Record<string, string> = {
   "Ignored": "bg-gray-100 text-gray-500", "Actioned": "bg-green-100 text-green-700",
   // Batch health
   "Green": "bg-green-100 text-green-700", "Amber": "bg-amber-100 text-amber-700", "Red": "bg-red-100 text-red-700",
+  "Filled": "bg-green-100 text-green-700", // R-G: the CEO's word for a position with its trainers
+
   // 2026-08-13 (list-UX cycle): statuses that used to fall through to grey. Candidate
   // post-batch states + every trainer-pipeline stage — the tag IS the information now.
   "Dropout": "bg-red-100 text-red-700", // ("Failed" already maps red above)

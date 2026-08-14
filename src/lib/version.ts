@@ -3,13 +3,12 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-38";
+export const RELEASE = "2026.08.14-39";
 export const RELEASE_NOTE =
-  "R-F: a SPOC helps with centre details, the Admin approves. The centre's " +
-  "identity and master-sheet truth - ten fields: code, external/TC ids, name, " +
-  "city, state, TC password/status, approval and operational status - are " +
-  "FIXED for a centre login (403 naming the field). Everything else, including " +
-  "'approved for a programme' target changes, PARKS as a location.edit " +
-  "approval; the change is applied only by the Admin's approval, and the fixed " +
-  "ten are stripped again at replay as the guarantee. Enable per environment: " +
-  "approval rule location.edit (ships OFF by design).";
+  "R-G: the Open Positions board maps the whole trainer pipeline against every " +
+  "position - Fresh / Shortlisted / Docs / NSDC / Approved / Certified counts " +
+  "per centre x job role, so 'which position needs our focus' is readable at a " +
+  "glance. Every stage count is CLICKABLE and opens the actual people (each " +
+  "linking to their profile). New approved/not-approved toggle - the default " +
+  "stays approved-only exactly as asked, and a not-approved row names WHY " +
+  "(centre pending vs TC status pending). 'Closed' now reads 'Filled'.";
