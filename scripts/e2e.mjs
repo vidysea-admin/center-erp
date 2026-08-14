@@ -1075,6 +1075,10 @@ ok("…with the contact details an approver needs", !!queued && queued.phone ===
 const verRes = await fetch(BASE + "/api/public/version");
 const verBody = await verRes.json().catch(() => ({}));
 ok("version endpoint is public and names the release", verRes.status === 200 && !!verBody.release, `status=${verRes.status} ${JSON.stringify(verBody).slice(0, 80)}`);
+// QA-099 (15/08): the app sends security headers now — frame-deny, sniff-deny, HSTS.
+ok("QA-099: X-Frame-Options DENY", verRes.headers.get("x-frame-options") === "DENY", String(verRes.headers.get("x-frame-options")));
+ok("QA-099: nosniff", verRes.headers.get("x-content-type-options") === "nosniff");
+ok("QA-099: HSTS present", /max-age=\d+/.test(verRes.headers.get("strict-transport-security") ?? ""), String(verRes.headers.get("strict-transport-security")));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -299,6 +299,23 @@ const TrainerDocumentSchema = new Schema({
 }, { timestamps: true });
 TrainerDocumentSchema.index({ trainer: 1, doc_type: 1 });
 
+// ---------- CandidateDocument (QA-105, 15/08) ----------
+// Candidates had no document store at all — no model, no route, no screen — while the
+// SIDH walk needs Aadhaar/photo/education proofs on file. Full mirror of the trainer
+// pattern, delete included from day one (QA-112's lesson: a wrong file must be removable).
+export const CANDIDATE_DOC_TYPE = [
+  "Aadhaar", "PAN", "Photo", "Educational Qualification", "Bank Passbook", "Other",
+] as const;
+const CandidateDocumentSchema = new Schema({
+  candidate: oid("Candidate", true),
+  doc_type: { type: String, enum: CANDIDATE_DOC_TYPE, required: true },
+  file_url: { type: String, required: true },
+  original_name: String,
+  uploaded_by: oid("User"),
+  note: String,
+}, { timestamps: true });
+CandidateDocumentSchema.index({ candidate: 1, doc_type: 1 });
+
 // ---------- TrainerRequest ----------
 const TrainerRequestSchema = new Schema({
   location: oid("Location", true),
@@ -988,6 +1005,7 @@ const JobRoleSchema = new Schema({
 }, { timestamps: true });
 export const Scheme = models.Scheme || model("Scheme", SchemeSchema);
 export const JobRole = models.JobRole || model("JobRole", JobRoleSchema);
+export const CandidateDocument = models.CandidateDocument || model("CandidateDocument", CandidateDocumentSchema);
 export const Defaults = models.Defaults || model("Defaults", DefaultsSchema);
 
 export { mongoose };

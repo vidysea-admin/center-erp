@@ -8,6 +8,7 @@ import { Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills,
 import { useLocationCtx } from "@/components/shell";
 import { BASE_PATH } from "@/lib/base-path";
 import { bulkSmsCsv, smsLink, unsendableCount, waLink } from "@/lib/messaging";
+import { uploadWithRetry } from "@/lib/upload";
 
 export default function CandidatesPage() {
   return <Suspense><CandidatesInner /></Suspense>;
@@ -243,6 +244,55 @@ function CandidatesInner() {
       await copyText(link); // best-effort auto-copy; the panel is the guarantee
       setError(""); setShareLink(link);
     } catch (e: any) { setError(e.message); }
+  }
+
+  // QA-105: document section for the edit drawer — list + multi-upload + delete.
+  function CandidateDocs({ candidateId, setError }: { candidateId: string; setError: (m: string) => void }) {
+    const [docs, setDocs] = useState<any[]>([]);
+    const [busy, setBusy] = useState(false);
+    const loadDocs = () => api(`/api/candidates/${candidateId}/documents`).then((d) => setDocs(d.items ?? [])).catch(() => setDocs([]));
+    useEffect(() => { loadDocs(); }, [candidateId]); // eslint-disable-line react-hooks/exhaustive-deps
+    const guess = (name: string): string => {
+      const n = name.toLowerCase();
+      if (/aadhaar|aadhar/.test(n)) return "Aadhaar";
+      if (/pan/.test(n)) return "PAN";
+      if (/photo|passport|selfie/.test(n)) return "Photo";
+      if (/edu|degree|marksheet|certificate|qual/.test(n)) return "Educational Qualification";
+      if (/bank|passbook/.test(n)) return "Bank Passbook";
+      return "Other";
+    };
+    async function addFiles(files: FileList | null) {
+      if (!files?.length) return;
+      setBusy(true);
+      try {
+        for (const file of Array.from(files)) {
+          const url = await uploadWithRetry(file, "candidate-doc");
+          await api(`/api/candidates/${candidateId}/documents`, { method: "POST", json: { doc_type: guess(file.name), file_url: url, original_name: file.name } });
+        }
+        await loadDocs();
+      } catch (e: any) { setError(e.message); }
+      setBusy(false);
+    }
+    return (
+      <div className="rounded-lg border border-gray-200 px-3 py-2">
+        <div className="mb-1 text-xs font-medium text-gray-500">Documents</div>
+        {docs.length === 0 && <p className="mb-1 text-xs text-gray-400">No documents yet.</p>}
+        <ul className="mb-2 space-y-1 text-sm">
+          {docs.map((d) => (
+            <li key={d._id} className="flex items-center justify-between gap-2">
+              <a className="min-w-0 truncate text-blue-700 underline" href={d.file_url} target="_blank" rel="noreferrer">{d.doc_type}{d.original_name ? ` — ${d.original_name}` : ""}</a>
+              <button type="button" className="shrink-0 text-xs text-red-600 hover:underline" onClick={async () => {
+                if (!window.confirm(`Delete this ${d.doc_type}? The audit log keeps a record.`)) return;
+                try { await api(`/api/candidates/${candidateId}/documents/${d._id}`, { method: "DELETE" }); await loadDocs(); }
+                catch (e: any) { setError(e.message); }
+              }}>Delete</button>
+            </li>
+          ))}
+        </ul>
+        <input type="file" multiple disabled={busy} accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,.heic" onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }} />
+        <p className="mt-1 text-[11px] text-gray-400">Pick several files at once — the type is detected from each filename. Wrong type? Delete the document and upload it again.</p>
+      </div>
+    );
   }
 
   // Excel import steps
@@ -493,6 +543,10 @@ function CandidatesInner() {
           <Field label="Source (mobiliser / campaign)"><input className={inputCls} value={form.source ?? ""} onChange={(e) => set("source", e.target.value)} /></Field>
           {/* 15/08 (Umesh): no candidate fee in this programme — the fee inputs left the
               drawer. Schema + Rule 54 toggle stay dormant for a future paid scheme. */}
+          {/* QA-105 (15/08): the candidate document store — multi-pick, type guessed from
+              each filename (trainer pattern), delete from day one. Edit mode only: the
+              candidate must exist before files can hang on them. */}
+          {drawer === "edit" && editId && <CandidateDocs candidateId={editId} setError={setError} />}
           {/* 15/08 (Umesh): columns the import didn't recognise, accepted by the operator —
               shown as facts, edited only by re-import. */}
           {form.custom_fields && Object.keys(form.custom_fields).length > 0 && (

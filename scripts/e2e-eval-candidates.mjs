@@ -77,12 +77,33 @@ const cT = (await req(admin, "POST", "/api/candidates", { name: "TEST-EC Cooldow
 const cTRead = (await req(admin, "GET", `/api/candidates/${cT._id}`, undefined, 200)).data.item;
 ok("[avg] training today → cooldown makes them ineligible", cTRead.eligibility?.eligible === false, JSON.stringify(cTRead.eligibility));
 
+// ---- QA-105 (15/08): the candidate document store — mirror of the trainer pattern ----
+{
+  const d1 = await req(admin, "POST", `/api/candidates/${c1._id}/documents`, { doc_type: "Aadhaar", file_url: "/erp/api/files/qa105a.pdf", original_name: "aadhaar.pdf" });
+  ok("QA-105: a document attaches", d1.status === 201, `got ${d1.status}`);
+  await req(admin, "POST", `/api/candidates/${c1._id}/documents`, { doc_type: "Photo", file_url: "/erp/api/files/qa105b.jpg" }, 201);
+  const list1 = (await req(admin, "GET", `/api/candidates/${c1._id}/documents`, undefined, 200)).data.items ?? [];
+  ok("QA-105: both documents list", list1.length === 2, `${list1.length}`);
+  // Re-uploading a type REPLACES it — the trainer rule, same here.
+  await req(admin, "POST", `/api/candidates/${c1._id}/documents`, { doc_type: "Aadhaar", file_url: "/erp/api/files/qa105c.pdf" }, 201);
+  const list2 = (await req(admin, "GET", `/api/candidates/${c1._id}/documents`, undefined, 200)).data.items ?? [];
+  ok("QA-105: re-upload replaces, never stacks", list2.filter((d) => d.doc_type === "Aadhaar").length === 1, JSON.stringify(list2.map((d) => d.doc_type)));
+  ok("QA-105: an unknown doc_type is refused", (await req(admin, "POST", `/api/candidates/${c1._id}/documents`, { doc_type: "Ration Card", file_url: "/erp/api/files/x.pdf" })).status === 400);
+  // Delete from day one (QA-112's lesson).
+  const aad = list2.find((d) => d.doc_type === "Aadhaar");
+  ok("QA-105: delete works", (await req(admin, "DELETE", `/api/candidates/${c1._id}/documents/${aad._id}`)).status === 200);
+  ok("QA-105: gone is gone", (await req(admin, "DELETE", `/api/candidates/${c1._id}/documents/${aad._id}`)).status === 404);
+}
+
 // ---- scoping on the edit surface ----
 // [worst] a scoped user cannot edit another centre's candidate by ID.
 const spoc = await login("spoc.jpr03@vidysea.com", "CiOnly@123");
 if (spoc) {
   const r = await req(spoc, "PATCH", `/api/candidates/${c1._id}`, { name: "hijacked" });
   ok("[worst] out-of-scope candidate edit → 403", r.status === 403, `got ${r.status}`);
+  // QA-105 scope: the document store honours Rule 38 like everything else.
+  ok("QA-105: out-of-scope candidate's documents unreadable → 403", (await req(spoc, "GET", `/api/candidates/${c1._id}/documents`)).status === 403);
+  ok("QA-105: out-of-scope document attach → 403", (await req(spoc, "POST", `/api/candidates/${c1._id}/documents`, { doc_type: "Photo", file_url: "/erp/api/files/x.jpg" })).status === 403);
 }
 
 

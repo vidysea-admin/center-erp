@@ -50,6 +50,7 @@ function Overview({ loc, onSaved, setError }: any) {
       // without locations.manage the API strips it, the input stays empty, and an unchanged
       // empty value is never sent (and their PATCH would 403 anyway).
       for (const f of ["name", "city", "state", "address", "approval_status", "operational_status", "status_reason", "spoc_name", "spoc_phone", "principal_name", "principal_phone", "external_id",
+        "institution_id", // QA-117
         "district", "tc_id", "tc_status", "tc_password", "operating_partner", "cluster_head_name", "cluster_head_phone"]) {
         if (form[f] !== loc[f]) patch[f] = form[f];
       }
@@ -65,6 +66,7 @@ function Overview({ loc, onSaved, setError }: any) {
       <div className="grid gap-3 md:grid-cols-3">
         <Field label="Name"><input className={inputCls} value={form.name ?? ""} onChange={(e) => set("name", e.target.value)} /></Field>
         <Field label="External ID"><input className={inputCls} value={form.external_id ?? ""} onChange={(e) => set("external_id", e.target.value)} /></Field>
+        <Field label="Institution ID (unique)"><input className={inputCls} placeholder="e.g. INST-0001" value={form.institution_id ?? ""} onChange={(e) => set("institution_id", e.target.value)} /></Field>
         <Field label="Approval status">
           <select className={inputCls} value={form.approval_status} onChange={(e) => set("approval_status", e.target.value)}>
             {["Pending", "Approved", "Rejected"].map((s) => <option key={s}>{s}</option>)}

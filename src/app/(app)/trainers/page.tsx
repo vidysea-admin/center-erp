@@ -1,6 +1,7 @@
 "use client";
 import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
+import { useSession } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, fmtDate, pipelineLabel, toInputDate } from "@/lib/client";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, ShareLinkPanel, SourceCell, Tabs, inputCls } from "@/components/ui";
@@ -44,6 +45,11 @@ function TrainersInner() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [drawer, setDrawer] = useState(false);
+  // QA-065: write affordances only for people the server will actually let write —
+  // edit-flag on, and not a role whose writes are refused (Enrollment/Trainer).
+  const { data: session } = useSession();
+  const su: any = session?.user ?? {};
+  const canWrite = !!su.can_edit && !["Enrollment", "Trainer"].includes(su.role);
   const [edit, setEdit] = useState<any>(null);
   const [form, setForm] = useState<any>({ max_concurrent_batches: 1, status: "Available" });
   const set = (k: string, v: unknown) => setForm((f: any) => ({ ...f, [k]: v }));
@@ -176,12 +182,16 @@ function TrainersInner() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-xl font-semibold">Trainers</h1>
+        {/* QA-065: no buttons that exist only to bounce — a view-only user or a role the
+            server refuses (Enrollment/Trainer) gets no Add/Import/Quick-add affordance. */}
+        {canWrite && (
         <div className="flex gap-2">
           {/* CEO 13/08: "naam-email-phone dala, link bana, WhatsApp chala gaya — trainer khud bhare" */}
           <Btn kind="ghost" onClick={() => setImp({})}>Import (Excel)</Btn>
           <Btn kind="ghost" onClick={() => setInvite({ form: {} })}>Quick add + send link</Btn>
           <Btn onClick={() => { setEdit(null); setForm({ max_concurrent_batches: 4, status: "Available", pipeline_status: "Fresh Lead" }); setDrawer(true); }}>Add Trainer</Btn>
         </div>
+        )}
       </div>
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
       {/* CEO 13/08: "Open Positions — kahan-kahan trainer hire karne hain" — Divya's tab. */}
