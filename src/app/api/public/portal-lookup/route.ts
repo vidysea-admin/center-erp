@@ -23,7 +23,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const body = await req.json().catch(() => ({}));
   const phone = String(body.phone ?? "").replace(/\D/g, "").slice(-10);
   const dob = String(body.dob ?? "").trim(); // yyyy-mm-dd from the date input
-  const fail = () => new HttpError(404, "Details match nahi hue. Number wahi daalein jo registration mein diya tha — ya apne centre coordinator se apna link maangein.");
+  const fail = () => new HttpError(404, "These details did not match. Enter the number you used at registration — or ask your centre coordinator for your link.");
 
   if (phone.length !== 10) throw fail();
   const cand = await Candidate.findOne({ phone: { $regex: phone + "$" } }).select("name dob sidh_status lifecycle_status").lean<any>();

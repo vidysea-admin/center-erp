@@ -339,7 +339,7 @@ function Roster({ batchId, batch, setError, onChanged }: any) {
                 const name = t.batch_member?.candidate?.name ?? "?";
                 const phone = t.batch_member?.candidate?.phone;
                 const url = `${window.location.origin}${BASE_PATH}/p/attendance/${t.token}`;
-                const msg = `Namaste ${name}! Apni attendance aur exam eligibility yahan dekhein: ${url}`;
+                const msg = `Hello ${name}! View your attendance and exam eligibility here: ${url}`;
                 const wa = waLink(phone, msg), sms = smsLink(phone, msg);
                 return (
                   <li key={t._id ?? t.token} className="flex items-center gap-2">
@@ -355,7 +355,7 @@ function Roster({ batchId, batch, setError, onChanged }: any) {
             <button className="mt-2 text-xs font-medium text-indigo-700 hover:underline"
               onClick={() => {
                 const targets = attLinks.map((t: any) => ({ name: t.batch_member?.candidate?.name, phone: t.batch_member?.candidate?.phone, url: `${window.location.origin}${BASE_PATH}/p/attendance/${t.token}` }));
-                const csv = bulkSmsCsv(targets, (t: any) => `Namaste ${t.name}! Apni attendance aur exam eligibility yahan dekhein: ${t.url}`);
+                const csv = bulkSmsCsv(targets, (t: any) => `Hello ${t.name}! View your attendance and exam eligibility here: ${t.url}`);
                 const a = document.createElement("a");
                 a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
                 a.download = "sms-attendance-links.csv"; a.click();
@@ -1342,7 +1342,7 @@ function FeedbackTab({ batchId, setError }: any) {
                 const name = t.batch_member?.candidate?.name ?? "?";
                 const phone = t.batch_member?.candidate?.phone;
                 const url = linkFor(t);
-                const msg = `Namaste ${name}! Please share your training feedback: ${url}`;
+                const msg = `Hello ${name}! Please share your training feedback: ${url}`;
                 const wa = waLink(phone, msg), sms = smsLink(phone, msg);
                 return (
                   <li key={t._id ?? t.token} className="flex items-center gap-2">
@@ -1358,7 +1358,7 @@ function FeedbackTab({ batchId, setError }: any) {
             <button className="mt-2 text-xs font-medium text-indigo-700 hover:underline"
               onClick={() => {
                 const targets = links.map((t: any) => ({ name: t.batch_member?.candidate?.name, phone: t.batch_member?.candidate?.phone, url: linkFor(t) }));
-                const csv = bulkSmsCsv(targets, (t: any) => `Namaste ${t.name}! Please share your training feedback: ${t.url}`);
+                const csv = bulkSmsCsv(targets, (t: any) => `Hello ${t.name}! Please share your training feedback: ${t.url}`);
                 const a = document.createElement("a");
                 a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
                 a.download = "sms-feedback-links.csv"; a.click();

@@ -62,11 +62,11 @@ export default function PublicAttendancePage({ params }: { params: Promise<{ tok
             <div className={`rounded-xl border p-4 text-sm ${data.result.result === "Pass" ? "border-green-200 bg-green-50" : data.result.result === "Fail" ? "border-red-200 bg-red-50" : "border-gray-200"}`}>
               <p className="mb-1 font-semibold">Exam result</p>
               <p>
-                {data.result.result === "Pass" && <>✅ Pass — badhai ho{data.result.certificate_no ? <>! Certificate no: <b>{data.result.certificate_no}</b></> : "! Certificate process mein hai."}</>}
+                {data.result.result === "Pass" && <>✅ Pass — congratulations{data.result.certificate_no ? <>! Certificate no: <b>{data.result.certificate_no}</b></> : "! Your certificate is being processed."}</>}
                 {data.result.result === "Fail" && (data.result.reassessment_required
-                  ? <>Re-assessment hoga{data.result.reassessment_date ? <> — <b>{new Date(data.result.reassessment_date).toLocaleDateString("en-IN", { day: "numeric", month: "long" })}</b></> : ", date jald milegi."}</>
-                  : <>Result: Fail — centre coordinator se baat karein.</>)}
-                {!["Pass", "Fail"].includes(data.result.result) && <>Result: {data.result.result ?? "aane wala hai"}</>}
+                  ? <>A re-assessment is scheduled{data.result.reassessment_date ? <> — <b>{new Date(data.result.reassessment_date).toLocaleDateString("en-IN", { day: "numeric", month: "long" })}</b></> : "; the date will be shared soon."}</>
+                  : <>Result: Fail — please contact your centre coordinator.</>)}
+                {!["Pass", "Fail"].includes(data.result.result) && <>Result: {data.result.result ?? "awaited"}</>}
               </p>
               {data.result.certificate_status && data.result.result === "Pass" && (
                 <p className="mt-1 text-xs text-gray-500">Certificate status: {data.result.certificate_status}{data.result.certificate_date ? ` · ${new Date(data.result.certificate_date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}` : ""}</p>

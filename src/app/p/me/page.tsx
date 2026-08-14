@@ -28,38 +28,38 @@ export default function CandidatePortalEntry() {
     <div className="mx-auto min-h-screen w-full max-w-md bg-white px-5 py-8">
       <div className="mb-6 text-center">
         <span className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-blue-600 text-xl font-bold text-white">V</span>
-        <h1 className="text-xl font-semibold">My Training / मेरी ट्रेनिंग</h1>
-        <p className="mt-1 text-sm text-gray-500">Apna registered mobile number daalein — apni attendance, exam date aur certificate ki jaankari dekhein.</p>
+        <h1 className="text-xl font-semibold">My Training</h1>
+        <p className="mt-1 text-sm text-gray-500">Enter your registered mobile number to see your attendance, exam date and certificate details.</p>
       </div>
 
       <div className="space-y-3">
         <label className="block">
-          <span className="mb-1 block text-xs font-medium text-gray-600">Mobile number (jo registration mein diya tha) *</span>
+          <span className="mb-1 block text-xs font-medium text-gray-600">Mobile number (the one used at registration) *</span>
           <input inputMode="numeric" autoComplete="tel" className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none"
             placeholder="10 digit mobile number" value={phone} onChange={(e) => setPhone(e.target.value)} />
         </label>
         <label className="block">
-          <span className="mb-1 block text-xs font-medium text-gray-600">Date of birth (agar poochha jaye)</span>
+          <span className="mb-1 block text-xs font-medium text-gray-600">Date of birth (if asked)</span>
           <input type="date" className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none"
             value={dob} onChange={(e) => setDob(e.target.value)} />
         </label>
         <button onClick={lookup} disabled={busy || phone.replace(/\D/g, "").length < 10}
           className="w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:bg-blue-300">
-          {busy ? "Dekh rahe hain…" : "Meri training dekhein"}
+          {busy ? "Checking…" : "View my training"}
         </button>
         {error && <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">{error}</p>}
         {pool && (
           <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-            <p className="font-semibold">Namaste {pool.name}! Aap abhi kisi batch mein enrol nahi hue hain.</p>
+            <p className="font-semibold">Hello {pool.name}! You are not enrolled in a batch yet.</p>
             <p className="mt-1">
               Skill India registration: <b>{pool.sidh_status}</b>.
-              {pool.sidh_status !== "Registered" && " Registration ke liye centre coordinator aapki madad karenge."}
+              {pool.sidh_status !== "Registered" && " Your centre coordinator will help you complete the registration."}
             </p>
-            <p className="mt-1 text-xs text-amber-700">Batch lagne par aapko WhatsApp/SMS se link milega — ya yahin dobara check karein.</p>
+            <p className="mt-1 text-xs text-amber-700">You will receive a WhatsApp/SMS link when your batch starts — or check back here.</p>
           </div>
         )}
         <p className="pt-2 text-center text-[11px] text-gray-400">
-          Yeh page sirf aapki apni jaankari dikhata hai. Koi dikkat ho to apne centre coordinator se baat karein.
+          This page shows only your own information. If anything looks wrong, please contact your centre coordinator.
         </p>
       </div>
     </div>

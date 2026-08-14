@@ -339,9 +339,9 @@ function TrainersInner() {
         {invite && (
           <div className="space-y-3">
             <p className="text-xs text-gray-500">
-              Naam + phone dalo — ek application link banega jise WhatsApp/SMS se bhej do. Trainer
-              khud apni qualification, experience aur skills bharega; profile pipeline mein
-              "Applied" pe aayegi. Link single-use hai.
+              Enter a name and phone number — an application link is generated for you to send over
+              WhatsApp/SMS. The trainer fills in their own qualification, experience and skills;
+              the profile enters the pipeline at "Applied". The link is single-use.
             </p>
             <Field label="Full name" required><input className={inputCls} value={invite.form.name ?? ""} onChange={(e) => setInvite({ ...invite, form: { ...invite.form, name: e.target.value } })} /></Field>
             <div className="grid grid-cols-2 gap-3">
@@ -350,7 +350,7 @@ function TrainersInner() {
             </div>
             {invite.link ? (
               <ShareLinkPanel label="Application link" link={invite.link}
-                hint="Single-use — trainer ke form submit karte hi band ho jayega. Dobara bhejo toh naya link banao."
+                hint="Single-use — the link stops working the moment the trainer submits the form. To send it again, generate a new link."
                 onDismiss={() => { setInvite(null); load(); }} />
             ) : (
               <Btn disabled={!invite.form.name || !(invite.form.phone ?? "").trim()} onClick={async () => {

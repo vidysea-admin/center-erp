@@ -150,7 +150,7 @@ function CandidatesInner() {
     try {
       const d = await api("/api/defaults");
       const url = d.item?.sidh_url || "https://www.skillindiadigital.gov.in/";
-      const msg = `Namaste ${c.name}! Please register for your training on the Skill India portal: ${url}`;
+      const msg = `Hello ${c.name}! Please register for your training on the Skill India portal: ${url}`;
       const href = channel === "wa" ? waLink(c.phone, msg) : smsLink(c.phone, msg);
       if (!href) { setError(`${c.name} has no usable 10-digit mobile number.`); return; }
       window.open(href, "_blank");
@@ -167,7 +167,7 @@ function CandidatesInner() {
       const url = d.item?.sidh_url || "https://www.skillindiadigital.gov.in/";
       const targets = items.filter((r: any) => r.sidh_status !== "Registered");
       if (!targets.length) { setError("Every candidate in this view is already registered."); return; }
-      const csv = bulkSmsCsv(targets, (t: any) => `Namaste ${t.name}! Please register for your training on the Skill India portal: ${url}`);
+      const csv = bulkSmsCsv(targets, (t: any) => `Hello ${t.name}! Please register for your training on the Skill India portal: ${url}`);
       const skipped = unsendableCount(targets);
       const a = document.createElement("a");
       a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));

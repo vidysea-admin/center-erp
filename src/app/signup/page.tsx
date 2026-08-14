@@ -20,14 +20,14 @@ export default function SignupPage() {
 
         <a href={`${BASE_PATH}/p/me`}
           className="block rounded-xl border border-blue-200 bg-blue-50 p-4 transition-colors hover:border-blue-400">
-          <div className="font-semibold text-blue-900">🎓 Main student / candidate hoon</div>
-          <p className="mt-0.5 text-sm text-blue-800/80">Apni training, attendance aur enrollment yahan dekhein — phone number se.</p>
+          <div className="font-semibold text-blue-900">🎓 I am a student / candidate</div>
+          <p className="mt-0.5 text-sm text-blue-800/80">View your training, attendance and enrollment — just your phone number is needed.</p>
         </a>
 
         <a href={`${BASE_PATH}/p/trainer-apply`}
           className="block rounded-xl border border-violet-200 bg-violet-50 p-4 transition-colors hover:border-violet-400">
-          <div className="font-semibold text-violet-900">🧑‍🏫 Main trainer banna chahta hoon</div>
-          <p className="mt-0.5 text-sm text-violet-800/80">Trainer application form bharein — CV review ke baad team sampark karegi.</p>
+          <div className="font-semibold text-violet-900">🧑‍🏫 I want to become a trainer</div>
+          <p className="mt-0.5 text-sm text-violet-800/80">Fill in the trainer application form — our team will contact you after the CV review.</p>
         </a>
 
         <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
