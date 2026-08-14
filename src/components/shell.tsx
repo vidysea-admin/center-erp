@@ -166,7 +166,7 @@ function HelpButton() {
   const pathname = usePathname();
   return (
     <button
-      title="User Manual — is screen ki help"
+      title="User Manual — help for this screen"
       onClick={() => window.open(`${BASE_PATH}/manual.html#${manualAnchor(pathname, window.location.search)}`, "_blank")}
       className="flex h-9 items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 text-sm font-semibold text-gray-500 hover:border-blue-300 hover:text-blue-600">
       <span className="flex h-5 w-5 items-center justify-center rounded-full border-[1.5px] border-current text-[11px]">?</span>

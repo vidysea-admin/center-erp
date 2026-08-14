@@ -171,6 +171,20 @@ function LocationsInner() {
                 </span>
               ); },
           },
+          {
+            // QA-122 (15/08): the sheet's claim and OUR live count were both on screen but
+            // nobody subtracted — reconciliation is a COLUMN now. Positive = the sheet
+            // claims more certified trainers than the system can find; that gap is what
+            // Manish reconciles against the master sheet.
+            key: "cert_variance", label: "Certified Δ (sheet − ours)", mobile: false,
+            sortable: true,
+            sortValue: (r: any) => (r.jr?.trainers_certified_reported ?? 0) - (r.jr?.trainers_certified ?? 0),
+            render: (r: any) => {
+              if (!r.jr || r.jr.trainers_certified_reported == null) return <span className="text-gray-400">—</span>;
+              const d = (r.jr.trainers_certified_reported ?? 0) - (r.jr.trainers_certified ?? 0);
+              return <span className={`text-xs font-semibold ${d === 0 ? "text-green-700" : d > 0 ? "text-amber-600" : "text-blue-700"}`}>{d > 0 ? `+${d}` : d}</span>;
+            },
+          },
           { key: "source", label: "Source", mobile: false, filterText: (r: any) => r.loc.external_id ? "Vidysea-RPL (OneDrive)" : "Entered in ERP", render: (r: any) => r.first ? <SourceCell source={r.loc.external_id ? "AVPL Location_Master" : ""} /> : <span className="text-gray-300">〃</span> },
           // ERP-internal columns — picker-selectable, hidden by default.
           { key: "code", label: "Code", mobile: false, hidden: true, sortable: true, sortValue: (r: any) => r.loc.code, filterText: (r: any) => r.loc.code, render: (r: any) => rep(r, r.loc.code) },

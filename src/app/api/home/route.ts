@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, locationFilter, isScoped } from "@/lib/authz";
 import { Batch, BatchMember, Candidate, DailyLog, FollowUpAction, Invoice, Location, LocationTarget, Program, SheetChange, Trainer, TrainerRequest, User } from "@/models";
-import { addDays, dayStart, missingLogQueue } from "@/lib/rules";
+import { addDays, dayStart, istToday, missingLogQueue } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 
 // Home Action Center: the three real conditions by name (§5) + operational queues.
@@ -93,15 +93,18 @@ export const GET = apiHandler(async () => {
 
   // "Total Attendance" — one aggregate over the daily logs (man-days), plus today's row.
   // internal_present/roster_count are both required at save (Rule 28), so the sums are honest.
-  const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-  const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+  // QA-101 (15/08): "today" here was the SERVER's calendar day (UTC in the container)
+  // while log_date is stored as the IST dayKey — between 00:00 and 05:30 IST the Home
+  // card showed yesterday as today. log_date IS a dayKey, so the match is exact equality
+  // with istToday(), the one definition of "today" the daily-log path already uses.
+  const todayKey = istToday();
   const [attAll] = await DailyLog.aggregate([
     { $match: { ...batchScope } },
     { $group: {
       _id: null,
       present: { $sum: "$internal_present" }, roster: { $sum: "$roster_count" },
-      today_present: { $sum: { $cond: [{ $and: [{ $gte: ["$log_date", todayStart] }, { $lte: ["$log_date", todayEnd] }] }, "$internal_present", 0] } },
-      today_roster: { $sum: { $cond: [{ $and: [{ $gte: ["$log_date", todayStart] }, { $lte: ["$log_date", todayEnd] }] }, "$roster_count", 0] } },
+      today_present: { $sum: { $cond: [{ $eq: ["$log_date", todayKey] }, "$internal_present", 0] } },
+      today_roster: { $sum: { $cond: [{ $eq: ["$log_date", todayKey] }, "$roster_count", 0] } },
     } },
   ]);
   // QA-012 (checker): "0 of 0 student-days" while the batch page computed 390 expected —

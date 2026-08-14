@@ -170,6 +170,18 @@ function Overview({ data, role, onChanged, setError }: any) {
           server refuses (403). Editors get the form; everyone else gets the same facts
           read-only — no button that only exists to bounce. */}
       <Section title="Details">
+        {/* QA-007 (15/08): a finished batch with no portal id, no Drive folder or no time
+            slot is an evidence gap the client can ask about — name what is missing instead
+            of leaving blanks nobody notices. */}
+        {["Closing", "Completed"].includes(b.status) && (!b.govt_batch_id || !b.drive_folder_url || !b.slot_start) && (
+          <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            Still missing on this finished batch: {[
+              !b.govt_batch_id && "the SIDH batch ID",
+              !b.drive_folder_url && "the Drive evidence folder",
+              !b.slot_start && "the time slot",
+            ].filter(Boolean).join(" · ")} — fill them below so the record stands on its own.
+          </div>
+        )}
         {canTransition
           ? <EditDetails b={b} onChanged={onChanged} setError={setError} />
           : (
