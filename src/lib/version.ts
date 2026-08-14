@@ -3,16 +3,17 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-56";
+export const RELEASE = "2026.08.14-57";
 export const RELEASE_NOTE =
-  "QA-069 + QA-011 (both S1). The Enrolled journey now tells the truth: " +
-  "a candidate whose assessment is RECORDED shows Certified / Failed / " +
-  "Absent at Assessment from the result itself (latest_result rides on " +
-  "every row) - no more 'Result Awaited' for people the register says " +
-  "were certified, because the journey no longer waits on a " +
-  "lifecycle_status that historical imports never wrote back. And the " +
-  "Active Trainers KPI stops lying to scoped users: a centre's SPOC " +
-  "receives their own centre's scope-aware trainer count (the same " +
-  "nomination/capability/home/batch union their trainers page uses), " +
-  "the card renders on key presence, and the central unscoped " +
-  "Enrollment login still gets no organisation-wide figure.";
+  "Masters round (CEO's first-three-minutes asks): QA-117 - every centre " +
+  "gets a unique Institution ID (editable, searchable, unique-enforced; " +
+  "whether it derives from the TC id is Karunn's pending call - the " +
+  "field is not waiting). QA-118 - a job-roles master anyone (Admin) can " +
+  "edit, feeding the programme form's skill suggestions. QA-119 - a " +
+  "schemes master carrying each scheme's total hours, minimum required " +
+  "hours and amount received; the five known schemes seed themselves. " +
+  "QA-093 - the assessment threshold stops being a guess: when a " +
+  "scheme's hours are filled in, min/total from the MASTER sets the " +
+  "percentage for that scheme's batches (both the batch tab and the " +
+  "student attendance link), honestly labelled 'scheme' vs 'defaults'. " +
+  "Structure is live today; Manish fills the hours.";

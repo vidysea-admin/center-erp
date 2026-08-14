@@ -19,8 +19,8 @@ export function maskLocationSecrets(items: any[], isAdmin: boolean) {
 
 export const { GET, POST } = collectionRoutes({
   model: Location, entity: "Location", scopeField: "_id",
-  fields: ["code", "external_id", "name", "city", "state", "address", "approval_status", "operational_status", "status_reason", "status_changed_on", "spoc_name", "spoc_phone", "spoc_user", "principal_name", "principal_phone", "principal_user", "contacts", "district", "tc_id", "tc_password", "tc_status", "operating_partner", "cluster_head_name", "cluster_head_phone"],
-  searchFields: ["code", "name", "city", "external_id", "tc_id", "district"],
+  fields: ["code", "external_id", "institution_id", "name", "city", "state", "address", "approval_status", "operational_status", "status_reason", "status_changed_on", "spoc_name", "spoc_phone", "spoc_user", "principal_name", "principal_phone", "principal_user", "contacts", "district", "tc_id", "tc_password", "tc_status", "operating_partner", "cluster_head_name", "cluster_head_phone"],
+  searchFields: ["code", "name", "city", "external_id", "institution_id", "tc_id", "district"],
   // QA-095: the CEO shut the Trainer's locations door — the API answers 403 now, not with
   // the centre's commercials. Batch/home surfaces carry the centre NAME on their own.
   readRoles: ["Admin", "Operations", "Location", "Enrollment"],

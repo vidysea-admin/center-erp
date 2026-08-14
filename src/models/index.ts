@@ -129,6 +129,10 @@ const ProgramSchema = new Schema({
 const LocationSchema = new Schema({
   code: { type: String, required: true, unique: true, trim: true },
   external_id: { type: String },
+  // QA-117 (CEO, first three minutes): every institution gets ONE unique id of its own.
+  // Sparse: legacy rows without one stay valid; the value's naming scheme (TC-id-derived
+  // or its own series) is Karunn's pending call — the FIELD does not wait for it.
+  institution_id: { type: String, unique: true, sparse: true, trim: true },
   name: { type: String, required: true },
   city: String, state: String, address: String,
   // 2026-08-12: the fields the client's RPL workbook actually carries for a centre. Without the
@@ -965,6 +969,25 @@ export const AuditLog = models.AuditLog || model("AuditLog", AuditLogSchema);
 export const CostCategory = models.CostCategory || model("CostCategory", NamedActiveSchema);
 export const DropReason = models.DropReason || model("DropReason", (NamedActiveSchema as any).clone?.() ?? NamedActiveSchema);
 export const FailureReason = models.FailureReason || model("FailureReason", (NamedActiveSchema as any).clone?.() ?? NamedActiveSchema);
+// QA-118/119 (CEO, 15/08): editable masters instead of hardcoded strings. The SCHEME
+// master carries the money-and-hours facts (Manish fills the data; the STRUCTURE is what
+// unblocks QA-093's honest assessment threshold). Scheme names mirror the SCHEME enum —
+// the enum stays the write-guard on Program.scheme; this master holds each scheme's facts.
+const SchemeSchema = new Schema({
+  name: { type: String, required: true, unique: true },
+  code: String,
+  total_hours: Number,          // QP total hours for the scheme's programmes
+  min_required_hours: Number,   // minimum attended hours to sit the assessment
+  amount_received: Number,      // what the client pays per certified candidate (₹)
+  active: { type: Boolean, default: true },
+}, { timestamps: true });
+const JobRoleSchema = new Schema({
+  name: { type: String, required: true, unique: true },
+  code: String,
+  active: { type: Boolean, default: true },
+}, { timestamps: true });
+export const Scheme = models.Scheme || model("Scheme", SchemeSchema);
+export const JobRole = models.JobRole || model("JobRole", JobRoleSchema);
 export const Defaults = models.Defaults || model("Defaults", DefaultsSchema);
 
 export { mongoose };

@@ -217,6 +217,10 @@ function LocationsInner() {
         <div className="space-y-3">
           <Field label="Code" required><input className={inputCls} value={form.code ?? ""} onChange={(e) => set("code", e.target.value)} /></Field>
           <Field label="External ID (sheet key)"><input className={inputCls} value={form.external_id ?? ""} onChange={(e) => set("external_id", e.target.value)} /></Field>
+          {/* QA-117 (CEO): one unique institution ID per centre. Whether it derives from
+              the TC id or gets its own series is Karunn's pending call — the field is not
+              waiting for it. */}
+          <Field label="Institution ID (unique)"><input className={inputCls} placeholder="e.g. INST-0001" value={form.institution_id ?? ""} onChange={(e) => set("institution_id", e.target.value)} /></Field>
           <Field label="Name" required><input className={inputCls} value={form.name ?? ""} onChange={(e) => set("name", e.target.value)} /></Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="City"><input className={inputCls} value={form.city ?? ""} onChange={(e) => set("city", e.target.value)} /></Field>

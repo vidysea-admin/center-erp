@@ -169,6 +169,40 @@ ok("[avg] deactivated user shows active=false", offRow?.active === false, JSON.s
 }
 
 // ---- cost entries: the 2026-08-13 edit/delete surface (sheet-imported costs can be wrong) ----
+// ---- QA-117/118/119 (15/08): masters + institution identity ----
+{
+  // Schemes master lazy-seeds from the SCHEME enum — every Program.scheme value has a row.
+  const schemes = (await req(admin, "GET", "/api/master-lists/schemes", undefined, 200)).data.items ?? [];
+  ok("QA-119: schemes master carries the enum's five schemes", schemes.length >= 5 && schemes.some((x) => x.name === "RPL-AVPL"), JSON.stringify(schemes.map((x) => x.name)));
+  // Hours + amount are editable facts (Manish's data) — pick the unused DDU scheme so no
+  // other fixture's threshold shifts.
+  const ddu = schemes.find((x) => x.name === "DDU-GKY2.0");
+  const upd = await req(admin, "PATCH", `/api/master-lists/schemes/${ddu._id}`, { total_hours: 300, min_required_hours: 180, amount_received: 8000 });
+  ok("QA-119: scheme hours + amount round-trip", upd.status === 200 && upd.data.item.total_hours === 300 && upd.data.item.min_required_hours === 180 && upd.data.item.amount_received === 8000, JSON.stringify(upd.data.item));
+  // QA-093: a batch under that scheme derives its threshold from the master (180/300 = 60%).
+  const sProg = (await req(admin, "POST", "/api/programs", { code: "SM" + s, name: "SchemeMaster Prog " + s, trainer_skill: "SM" + s, scheme: "DDU-GKY2.0", duration_days: 10, buffer_days: 2 }, 201)).data.item;
+  const sBatch = (await req(admin, "POST", "/api/batches", { location: loc._id, program: sProg._id, planned_start: today() }, 201)).data.item;
+  const att = (await req(admin, "GET", `/api/batches/${sBatch._id}/attendance`, undefined, 200)).data;
+  ok("QA-093: threshold derives from the scheme master (60%, source 'scheme')", att.min_attendance_pct === 60 && att.min_attendance_source === "scheme", JSON.stringify({ pct: att.min_attendance_pct, src: att.min_attendance_source }));
+  // A scheme WITHOUT hours still falls back to the Defaults percentage, honestly labelled.
+  const dflt = (await req(admin, "GET", "/api/defaults", undefined, 200)).data.item;
+  const rProg = (await req(admin, "POST", "/api/programs", { code: "SN" + s, name: "NoHours Prog " + s, trainer_skill: "SN" + s, scheme: "RPL-HSL", duration_days: 10, buffer_days: 2 }, 201)).data.item;
+  const rBatch = (await req(admin, "POST", "/api/batches", { location: loc._id, program: rProg._id, planned_start: today() }, 201)).data.item;
+  const att2 = (await req(admin, "GET", `/api/batches/${rBatch._id}/attendance`, undefined, 200)).data;
+  ok("QA-093: hour-less scheme falls back to Defaults, labelled 'defaults'", att2.min_attendance_pct === (dflt.min_attendance_pct ?? 50) && att2.min_attendance_source === "defaults", JSON.stringify({ pct: att2.min_attendance_pct, src: att2.min_attendance_source }));
+  // Job-roles master: unique, editable, feeds the programme form's suggestions.
+  const jr = await req(admin, "POST", "/api/master-lists/job-roles", { name: "QA Job Role " + s });
+  ok("QA-118: job role lands in the master", jr.status === 201, `got ${jr.status}`);
+  ok("QA-118: duplicate job role (case-insensitive) → 409", (await req(admin, "POST", "/api/master-lists/job-roles", { name: ("qa job role " + s).toUpperCase() })).status === 409);
+  // QA-117: institution_id — unique, editable, searchable.
+  const instId = "INST-" + s;
+  const patched = await req(admin, "PATCH", `/api/locations/${loc._id}`, { institution_id: instId });
+  ok("QA-117: institution_id round-trips on the centre", patched.status === 200 && patched.data.item.institution_id === instId, JSON.stringify(patched.data.item?.institution_id));
+  const loc2i = (await req(admin, "POST", "/api/locations", { code: "I" + s, name: "TEST-EL Inst2 " + s, approval_status: "Approved" }, 201)).data.item;
+  ok("QA-117: a second centre cannot take the same institution_id", (await req(admin, "PATCH", `/api/locations/${loc2i._id}`, { institution_id: instId })).status >= 400);
+  ok("QA-117: centres are searchable by institution_id", ((await req(admin, "GET", `/api/locations?q=${instId}&limit=5`, undefined, 200)).data.items ?? []).some((l) => String(l._id) === String(loc._id)));
+}
+
 const cost = (await req(admin, "POST", "/api/costs", { location: loc._id, category: (await pickCategory()), amount: 5000, note: "TEST-EL mobilisation " + s }, 201)).data.item;
 async function pickCategory() {
   const cats = (await req(admin, "GET", "/api/master-lists/cost-categories", undefined, 200)).data.items ?? [];

@@ -54,6 +54,10 @@ function Programs({ setError }: any) {
 
   const load = () => api("/api/programs?limit=1000").then((d) => setItems(d.items)).catch((e: any) => setError(e.message));
   useEffect(() => { load(); }, []);
+  // QA-118: the job-roles master feeds the skill input as suggestions (free text stays
+  // allowed — legacy programmes carry skills the master may not list yet).
+  const [jobRoles, setJobRoles] = useState<any[]>([]);
+  useEffect(() => { api("/api/master-lists/job-roles").then((d) => setJobRoles(d.items ?? [])).catch(() => {}); }, []);
 
   function open(p?: any) {
     setEdit(p ?? null);
@@ -92,7 +96,10 @@ function Programs({ setError }: any) {
             <Field label="Code" required><input className={inputCls} value={form.code ?? ""} onChange={(e) => set("code", e.target.value)} /></Field>
             <Field label="Name" required><input className={inputCls} value={form.name ?? ""} onChange={(e) => set("name", e.target.value)} /></Field>
           </div>
-          <Field label="Trainer skill (matched to Trainer.skills)" required><input className={inputCls} value={form.trainer_skill ?? ""} onChange={(e) => set("trainer_skill", e.target.value)} /></Field>
+          <Field label="Trainer skill (matched to Trainer.skills)" required>
+            <input className={inputCls} list="job-roles-master" value={form.trainer_skill ?? ""} onChange={(e) => set("trainer_skill", e.target.value)} />
+            <datalist id="job-roles-master">{jobRoles.map((j: any) => <option key={j._id} value={j.name} />)}</datalist>
+          </Field>
           {/* R-H (CEO [02:56-03:14]): the scheme/job-role master carries its own basic data —
               scheme, QP training hours (drives the assessment-qualification threshold), and
               the amount we receive, which the API shows to Admin alone. */}
@@ -649,8 +656,11 @@ function Approvals({ setError }: any) {
 }
 
 function MasterLists({ setError }: any) {
-  const [lists, setLists] = useState<any>({ "cost-categories": [], "drop-reasons": [] });
+  // QA-118/119 (15/08): job roles and schemes join the editable masters. Schemes carry
+  // the hours-and-money facts (Manish's data) that make the assessment threshold honest.
+  const [lists, setLists] = useState<any>({ "cost-categories": [], "drop-reasons": [], "job-roles": [], "schemes": [] });
   const [names, setNames] = useState<any>({});
+  const TITLES: Record<string, string> = { "cost-categories": "Cost Categories", "drop-reasons": "Drop Reasons", "job-roles": "Job Roles", "schemes": "Schemes (hours & amount)" };
 
   const load = () => Promise.all(
     Object.keys(lists).map((l) => api(`/api/master-lists/${l}`).then((d) => ({ l, items: d.items }))),
@@ -661,14 +671,32 @@ function MasterLists({ setError }: any) {
     try { await api(`/api/master-lists/${list}`, { method: "POST", json: { name: names[list] } }); setNames({ ...names, [list]: "" }); load(); }
     catch (e: any) { setError(e.message); }
   }
+  async function saveScheme(id: string, patch: any) {
+    try { await api(`/api/master-lists/schemes/${id}`, { method: "PATCH", json: patch }); load(); }
+    catch (e: any) { setError(e.message); }
+  }
 
   return (
     <div className="grid gap-4 md:grid-cols-2">
       {Object.entries(lists).map(([list, items]: any) => (
-        <Section key={list} title={list === "cost-categories" ? "Cost Categories" : "Drop Reasons"}>
-          <ul className="mb-3 flex flex-wrap gap-1.5">
-            {items.map((i: any) => <li key={i._id} className="rounded-full bg-gray-100 px-3 py-1 text-xs">{i.name}</li>)}
-          </ul>
+        <Section key={list} title={TITLES[list] ?? list}>
+          {list === "schemes" ? (
+            <div className="mb-3 overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead><tr className="text-left text-xs text-gray-500">
+                  <th className="py-1 pr-2">Scheme</th><th className="py-1 pr-2">Total hrs</th><th className="py-1 pr-2">Min hrs</th><th className="py-1 pr-2">Amount (₹)</th><th></th>
+                </tr></thead>
+                <tbody>
+                  {items.map((s: any) => <SchemeRow key={s._id} s={s} onSave={saveScheme} />)}
+                </tbody>
+              </table>
+              <p className="mt-2 text-xs text-gray-500">Min ÷ total hours sets the assessment threshold for that scheme's batches; blank = the Defaults percentage applies.</p>
+            </div>
+          ) : (
+            <ul className="mb-3 flex flex-wrap gap-1.5">
+              {items.map((i: any) => <li key={i._id} className="rounded-full bg-gray-100 px-3 py-1 text-xs">{i.name}</li>)}
+            </ul>
+          )}
           <div className="flex gap-2">
             <input className={inputCls} placeholder="New entry…" value={names[list] ?? ""} onChange={(e) => setNames({ ...names, [list]: e.target.value })} />
             <Btn small onClick={() => add(list)} disabled={!names[list]}>Add</Btn>
@@ -676,6 +704,21 @@ function MasterLists({ setError }: any) {
         </Section>
       ))}
     </div>
+  );
+}
+
+function SchemeRow({ s, onSave }: { s: any; onSave: (id: string, patch: any) => void }) {
+  const [f, setF] = useState<any>({ total_hours: s.total_hours ?? "", min_required_hours: s.min_required_hours ?? "", amount_received: s.amount_received ?? "" });
+  const dirty = String(f.total_hours) !== String(s.total_hours ?? "") || String(f.min_required_hours) !== String(s.min_required_hours ?? "") || String(f.amount_received) !== String(s.amount_received ?? "");
+  const cell = "w-20 rounded border border-gray-200 px-2 py-1 text-sm";
+  return (
+    <tr className="border-t border-gray-100">
+      <td className="py-1.5 pr-2 font-medium">{s.name}</td>
+      <td className="py-1.5 pr-2"><input type="number" className={cell} value={f.total_hours} onChange={(e) => setF({ ...f, total_hours: e.target.value })} /></td>
+      <td className="py-1.5 pr-2"><input type="number" className={cell} value={f.min_required_hours} onChange={(e) => setF({ ...f, min_required_hours: e.target.value })} /></td>
+      <td className="py-1.5 pr-2"><input type="number" className={cell} value={f.amount_received} onChange={(e) => setF({ ...f, amount_received: e.target.value })} /></td>
+      <td className="py-1.5">{dirty && <Btn small onClick={() => onSave(s._id, f)}>Save</Btn>}</td>
+    </tr>
   );
 }
 

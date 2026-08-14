@@ -3,7 +3,7 @@
 import { Types } from "mongoose";
 import {
   Batch, BatchMember, Candidate, CandidateResult, Closure, CostCategory, CostEntry, DailyLog, Invoice, Location,
-  LocationTarget, Notification, Program, Room, TRAINER_PIPELINE, Trainer, TrainerDocument,
+  LocationTarget, Notification, Program, Room, Scheme, TRAINER_PIPELINE, Trainer, TrainerDocument,
 } from "@/models";
 import { auditDiff } from "@/lib/audit";
 import { getDefaults } from "@/lib/defaults";
@@ -68,6 +68,20 @@ export async function assertTrainerInScope(user: SessionUser, trainerId: string)
   if (!isScoped(user)) return;
   const t = await Trainer.findById(trainerId).select("nominated_for_location home_location capable_locations").lean<any>();
   assertTrainerDocInScope(user, t);
+}
+
+// QA-093/119 (15/08): the assessment threshold stops being "a guess wearing a number"
+// the moment the scheme master carries real hours — min/total from the SCHEME row wins,
+// the Defaults percentage stays the honest fallback until Manish's data lands.
+export async function minAttendancePctForScheme(scheme: string | undefined, fallbackPct: number): Promise<{ pct: number; source: "scheme" | "defaults" }> {
+  if (scheme) {
+    const s = await Scheme.findOne({ name: scheme, active: true }).select("total_hours min_required_hours").lean<any>();
+    if (s && Number.isFinite(s.total_hours) && Number.isFinite(s.min_required_hours)
+      && s.total_hours > 0 && s.min_required_hours > 0 && s.min_required_hours <= s.total_hours) {
+      return { pct: Math.round((s.min_required_hours / s.total_hours) * 100), source: "scheme" };
+    }
+  }
+  return { pct: fallbackPct, source: "defaults" };
 }
 
 export function addDays(d: Date, days: number): Date {

@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, HttpError } from "@/lib/authz";
 import { CandidateResult, Closure, DailyLog, GovtAttendanceRow, PublicToken } from "@/models";
 import { getDefaults } from "@/lib/defaults";
-import { requiredAssessmentHours, slotHoursPerDay } from "@/lib/rules";
+import { minAttendancePctForScheme, requiredAssessmentHours, slotHoursPerDay } from "@/lib/rules";
 
 // Public per-student attendance view (2026-08-13, Manish: "bacche baar-baar request karte hain
 // sir hamein attendance dekhiye… 60 plus hona mandatory hai" — eligibility is min_attendance_pct
@@ -27,7 +27,7 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
         {
           path: "batch", select: "code status slot_start slot_end actual_start planned_start planned_end trainer location",
           populate: [
-            { path: "program", select: "name hours duration_days" },
+            { path: "program", select: "name hours duration_days scheme" },
             { path: "location", select: "name" },
             { path: "trainer", select: "name" },
           ],
@@ -52,7 +52,8 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     .lean<any>();
 
   const defaults = await getDefaults();
-  const minPct = defaults.min_attendance_pct ?? 50;
+  // QA-093: scheme-master hours outrank the Defaults guess — same rule as the batch tab.
+  const { pct: minPct } = await minAttendancePctForScheme(batch?.program?.scheme, defaults.min_attendance_pct ?? 50);
   // Shared with the batch Attendance tab (R-D) — one threshold formula, not two.
   const requiredHours = requiredAssessmentHours(batch?.program, minPct);
   const hoursPerDay = slotHoursPerDay(batch); // null when the batch has no slot (QA-085)

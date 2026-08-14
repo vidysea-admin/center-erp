@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, HttpError } from "@/lib/authz";
 import { Batch, BatchMember, DailyLog, GovtAttendanceRow } from "@/models";
-import { assertBatchInScope, requiredAssessmentHours, slotHoursPerDay } from "@/lib/rules";
+import { assertBatchInScope, minAttendancePctForScheme, requiredAssessmentHours, slotHoursPerDay } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 
 // R-D (CEO 14/08): the batch's own "Attendance" tab — day-wise per student, BOTH meters
@@ -17,7 +17,7 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   const { id } = await ctx.params;
   await assertBatchInScope(user, id); // Rule 38 — scope is the only gate
 
-  const batch = await Batch.findById(id).populate("program", "name hours duration_days").lean<any>();
+  const batch = await Batch.findById(id).populate("program", "name hours duration_days scheme").lean<any>();
   if (!batch) throw new HttpError(404, "Batch not found");
 
   const [members, logs, defaults] = await Promise.all([
@@ -26,7 +26,8 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     getDefaults(),
   ]);
 
-  const minPct = defaults.min_attendance_pct ?? 50;
+  // QA-093: the scheme master's hours outrank the Defaults guess once they exist.
+  const { pct: minPct, source: minPctSource } = await minAttendancePctForScheme(batch.program?.scheme, defaults.min_attendance_pct ?? 50);
   const requiredHours = requiredAssessmentHours(batch.program, minPct);
   const hoursPerDay = slotHoursPerDay(batch);
 
@@ -78,6 +79,7 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     members: rows,
     program_hours: batch.program?.hours || (batch.program?.duration_days ?? 15) * 8,
     min_attendance_pct: minPct,
+    min_attendance_source: minPctSource, // "scheme" once the master carries hours, else "defaults"
     required_hours: requiredHours,
     hours_per_day: hoursPerDay,
     qualified_count: rows.filter((r) => r.qualified && !r.left_on).length,
