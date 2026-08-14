@@ -80,8 +80,13 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   // the key that links our row to the portal's, and the Drive folder is the evidence backup
   // Manish keeps in parallel with the NSDC upload; a field the API cannot write does not exist.
   for (const f of ["trainer", "room", "session", "target_size", "planned_start", "planned_end", "slot_start", "slot_end",
-    "govt_batch_id", "drive_folder_url"]) {
+    "govt_batch_id", "drive_folder_url", "relevant_skills"]) {
     if (body[f] !== undefined) patch[f] = body[f];
+  }
+  // QA-133: operator-picked list, recorded, never a filter — but never a free-form blob either.
+  if (patch.relevant_skills !== undefined) {
+    if (!Array.isArray(patch.relevant_skills)) throw new HttpError(400, "relevant_skills must be a list of skill names.");
+    patch.relevant_skills = patch.relevant_skills.filter((s: unknown) => typeof s === "string" && (s as string).trim()).slice(0, 50);
   }
 
   // Sheet-imported batches can carry a wrong fuzzy match for centre or job role. Both are

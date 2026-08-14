@@ -1,7 +1,11 @@
+import { NextRequest, NextResponse } from "next/server";
 import { itemRoutes } from "@/lib/crud";
-import { Trainer } from "@/models";
+import { dbConnect } from "@/lib/db";
+import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { Batch, Trainer, TrainerDocument } from "@/models";
 import { hasPermission } from "@/lib/permissions";
 import { assertLocationOperational, assertTrainerDocInScope, TRAINER_FLOW } from "@/lib/rules";
+import { audit } from "@/lib/audit";
 import { maskTrainerSecrets } from "../route";
 
 // Same masking as the list route (2026-08-12) — opening one trainer by id was the obvious way
@@ -40,5 +44,33 @@ export const { GET, PATCH } = itemRoutes({
     { path: "home_location", select: "name code" },
     { path: "nominated_for_location", select: "name code" },
     { path: "nominated_for_program", select: "name code scheme" },
+    // QA-130 rider (Umesh: "kisne banaya"): the answer rides on the record, not just the audit log.
+    { path: "created_by", select: "name email" },
   ],
+});
+
+// QA-130 (checker, 15/08): trainers had no delete verb at all, so junk rows — QA probes,
+// duplicate imports — could only be Dropped and sat in every list forever (the QA-087
+// disposal ended up waiting on a mongosh one-liner nobody ran). Deletion is Admin-only and
+// refuses anyone referenced by a batch: a person with real history gets Dropped, not erased.
+// Documents cascade; the audit row names what was removed.
+export const DELETE = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
+  await dbConnect();
+  const user = await requireUser();
+  requireEdit(user);
+  if (user.role !== "Admin") throw new HttpError(403, "Only an Admin may delete a trainer.");
+  const { id } = await ctx.params;
+  const t = await Trainer.findById(id);
+  if (!t) throw new HttpError(404, "Trainer not found");
+  if (await Batch.exists({ trainer: id })) {
+    throw new HttpError(409, `${t.name} is referenced by a batch — drop the trainer instead of deleting them.`);
+  }
+  const docs = await TrainerDocument.deleteMany({ trainer: id });
+  await t.deleteOne();
+  await audit({
+    entity: "Trainer", entityId: t._id,
+    newValue: `deleted (${t.name}, ${t.phone}${docs.deletedCount ? `, ${docs.deletedCount} document${docs.deletedCount === 1 ? "" : "s"}` : ""})`,
+    actor: user.id,
+  });
+  return NextResponse.json({ ok: true });
 });

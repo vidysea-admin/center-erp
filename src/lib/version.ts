@@ -3,12 +3,16 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-60";
+export const RELEASE = "2026.08.14-61";
 export const RELEASE_NOTE =
-  "QA-125 follow-up (checker design note): trainer document DELETE is " +
-  "now narrower than read/upload. capable_locations is a teaching tie - " +
-  "it no longer grants every capable centre's SPOC the right to erase a " +
-  "trainer's Aadhaar/PAN. Deletion belongs to the nominating or home " +
-  "centre; a capable-only trainer (the quick-invite window) falls back " +
-  "to the union so a mis-upload stays fixable without an Admin. Reads " +
-  "and uploads keep the wide union.";
+  "QA-133/134/135/130: the batch trainer dropdown stops lying. The " +
+  "unrequested skill-string filter is gone (it hid a certified trainer " +
+  "over a two-word difference); both batch forms share ONE predicate; a " +
+  "trainer that fails a gate is OFFERED with the failing gate named, " +
+  "never hidden; Dropped/inactive are not offered at all. Which skills " +
+  "matter for a batch is the operator's recorded multi-select now, not " +
+  "a hidden string match. The bypass asks for the TR ID it skips " +
+  "(optional - warn, never block) and Certified-without-TR-ID carries a " +
+  "standing flag. Trainers get an Admin-only DELETE verb (batch-" +
+  "referenced rows refuse; documents cascade) and created_by survives " +
+  "the schema.";

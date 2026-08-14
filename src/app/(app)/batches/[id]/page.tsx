@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { api, fmtDate, toInputDate } from "@/lib/client";
+import { trainerSelectGroups } from "@/lib/trainer-select";
 import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, HealthBanner, NameCell, Section, Tabs, inputCls } from "@/components/ui";
 import { Activity } from "@/components/activity";
 import { flushQueue, getQueue, uploadWithRetry } from "@/lib/upload";
@@ -253,6 +254,7 @@ function EditDetails({ b, onChanged, setError }: any) {
     trainer: b.trainer?._id ?? "", room: b.room?._id ?? "", session: b.session,
     planned_start: toInputDate(b.planned_start), planned_end: toInputDate(b.planned_end), target_size: b.target_size,
     slot_start: b.slot_start ?? "", slot_end: b.slot_end ?? "",
+    relevant_skills: b.relevant_skills ?? [],
     govt_batch_id: b.govt_batch_id ?? "", drive_folder_url: b.drive_folder_url ?? "",
     location: b.location?._id ?? b.location ?? "", program: b.program?._id ?? b.program ?? "",
   });
@@ -283,14 +285,17 @@ function EditDetails({ b, onChanged, setError }: any) {
 
   const idOf = (v: any) => (v?._id ?? v) as string | undefined;
   const locId = idOf(b.location), progId = idOf(b.program);
-  const eligible = (t: any) => {
-    if (t.pipeline_status !== "Certified" || !t.tr_id) return false;
-    const nomLoc = idOf(t.nominated_for_location), nomProg = idOf(t.nominated_for_program);
-    if (nomLoc || nomProg) return nomLoc === locId && nomProg === progId;
-    return (t.capable_locations ?? []).some((l: any) => idOf(l) === locId);
-  };
-  const certified = trainers.filter(eligible);
-  const others = trainers.filter((t) => !eligible(t));
+  // QA-133/134: the ONE shared predicate both batch forms use (trainer-select.ts) — this
+  // form used to carry its own diverging copy, which is exactly how the create drawer grew
+  // an unrequested skill filter without anyone noticing.
+  const { ready: certified, others } = trainerSelectGroups(trainers, {
+    locationId: locId, programId: progId, currentTrainerId: form.trainer,
+  });
+  const skillOptions = Array.from(new Set([
+    ...(b.program?.trainer_skill ? [b.program.trainer_skill] : []),
+    ...trainers.flatMap((t: any) => t.skills ?? []),
+    ...(form.relevant_skills ?? []),
+  ])).sort();
 
   return (
     <div className="space-y-3">
@@ -311,19 +316,19 @@ function EditDetails({ b, onChanged, setError }: any) {
         </div>
       )}
       <div className="grid grid-cols-2 gap-3">
-        {/* Same TR-ID gate as batch creation — reassigning a trainer here must not quietly
-            sidestep the rule the create drawer enforces. */}
+        {/* Same gates as batch creation (shared predicate) — reassigning a trainer here must
+            not quietly sidestep what the create drawer enforces. */}
         <Field label="Trainer">
           <select className={inputCls} value={form.trainer} onChange={(e) => setForm({ ...form, trainer: e.target.value })}>
             <option value="">—</option>
             {certified.length > 0 && (
               <optgroup label="Certified — has a TR ID and is cleared for this centre">
-                {certified.map((t) => <option key={t._id} value={t._id}>{t.name} · TR {t.tr_id}</option>)}
+                {certified.map((t: any) => <option key={t._id} value={t._id}>{t.name} · TR {t.tr_id}</option>)}
               </optgroup>
             )}
             {others.length > 0 && (
-              <optgroup label="Not yet certified — NSDC will not accept these on a batch">
-                {others.map((t) => <option key={t._id} value={t._id}>{t.name} ({t.pipeline_status ?? t.status})</option>)}
+              <optgroup label="Not portal-ready — the reason is next to each name">
+                {others.map(({ t, reason }) => <option key={t._id} value={t._id}>{t.name} — {reason}</option>)}
               </optgroup>
             )}
           </select>
@@ -345,6 +350,13 @@ function EditDetails({ b, onChanged, setError }: any) {
         <Field label="Time slot start"><input type="time" className={inputCls} value={form.slot_start} onChange={(e) => setForm({ ...form, slot_start: e.target.value })} /></Field>
         <Field label="Time slot end"><input type="time" className={inputCls} value={form.slot_end} onChange={(e) => setForm({ ...form, slot_end: e.target.value })} /></Field>
       </div>
+      {/* QA-133 (Umesh, 15/08): recorded operator pick, never a filter. */}
+      <Field label="Skills relevant to this batch (optional — your pick, never a filter)">
+        <select multiple className={inputCls + " h-24"} value={form.relevant_skills ?? []}
+          onChange={(e) => setForm({ ...form, relevant_skills: Array.from(e.target.selectedOptions).map((o) => o.value) })}>
+          {skillOptions.map((s: string) => <option key={s} value={s}>{s}</option>)}
+        </select>
+      </Field>
       {/* The portal's own identifiers. Batch formation happens on SIDH, so the ERP has to hold
           the key that links our row to theirs — and the Drive folder Manish keeps in parallel
           with the NSDC upload, which is the only copy if the portal upload is ever questioned. */}

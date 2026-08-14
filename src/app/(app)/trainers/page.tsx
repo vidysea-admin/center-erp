@@ -369,7 +369,15 @@ function TrainersInner() {
                   </span>;
                 },
               },
-              { key: "tr_id", label: "TR ID", render: (r: any) => r.tr_id || "—", mobile: false },
+              {
+                // QA-135: a Certified trainer without a TR ID is the state the bypass leaves
+                // behind — flag it right in the list until the fact is recorded. Never blocks.
+                key: "tr_id", label: "TR ID", mobile: false,
+                render: (r: any) => r.tr_id
+                  || (r.pipeline_status === "Certified"
+                    ? <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">TR ID pending</span>
+                    : "—"),
+              },
               {
                 // QA-045 (third reopen — checker): the COLUMN still leaked the stale stored
                 // status for certified trainers (4 of 6 wrong) while the pills were already
@@ -385,8 +393,17 @@ function TrainersInner() {
               { key: "source", label: "Source", mobile: false, filterable: true, filterText: (r: any) => r.source ?? "Entered in ERP", render: (r: any) => <SourceCell source={r.source} /> },
               {
                 key: "_edit", label: "", render: (r: any) => (
-                  <span onClick={(e) => e.stopPropagation()}>
+                  <span onClick={(e) => e.stopPropagation()} className="flex items-center gap-1">
                     <Btn small kind="ghost" onClick={() => openEdit(r)}>Edit</Btn>
+                    {/* QA-130: deletion is for junk rows (probes, duplicate imports) — Admin
+                        only; the API refuses anyone referenced by a batch (drop those instead). */}
+                    {su.role === "Admin" && (
+                      <Btn small kind="ghost" onClick={async () => {
+                        if (!window.confirm(`Delete ${r.name} (${r.phone}) permanently? Their documents go too. A trainer with real history should be Dropped, not deleted.`)) return;
+                        try { await api(`/api/trainers/${r._id}`, { method: "DELETE" }); load(); }
+                        catch (e: any) { setError(e.message); }
+                      }}>Delete</Btn>
+                    )}
                   </span>
                 ),
               },
@@ -528,7 +545,8 @@ function TrainersInner() {
             <Field label="Phone" required><input className={inputCls} value={form.phone ?? ""} onChange={(e) => set("phone", e.target.value)} /></Field>
             <Field label="Email"><input className={inputCls} value={form.email ?? ""} onChange={(e) => set("email", e.target.value)} /></Field>
           </div>
-          <Field label="Skills (comma-separated, must match Program trainer skills)" required>
+          {/* QA-133: skills no longer gate any dropdown — free text is honest labelling now. */}
+          <Field label="Skills (comma-separated)" required>
             <input className={inputCls} value={Array.isArray(form.skills) ? form.skills.join(", ") : form.skills ?? ""} onChange={(e) => set("skills", e.target.value)} />
           </Field>
           <Field label="Home location">

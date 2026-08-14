@@ -270,6 +270,10 @@ const TrainerSchema = new Schema({
   pipeline_note: String,
   dropped_reason: String,               // required to reach the terminal "Dropped" state
   dropped_from_stage: String,           // CEO: which stage the journey ended at ("Dropped at Shortlisted")
+  // QA-130 rider (15/08, Umesh: "kisne banaya, user-wise, backtracking ke liye"): crud.ts has
+  // always SET created_by on create — this schema just never declared it, so mongoose dropped
+  // it silently and only the audit row kept the answer. Declared, it shows on the row itself.
+  created_by: oid("User"),
   // 15/08 (Umesh): columns the bulk upload didn't recognise, kept when the operator accepts
   // them ("restrict mat karo — data mil jaye"). {columnName: stringValue}, read-only facts.
   custom_fields: { type: Schema.Types.Mixed, default: undefined },
@@ -385,6 +389,10 @@ const BatchSchema = new Schema({
   trainer: oid("Trainer"),
   room: oid("Room"),
   session: { type: String, enum: BATCH_SESSION, default: "Full Day" },
+  // QA-133 (Umesh, 15/08): which skills matter for THIS batch is the operator's recorded
+  // choice at batch time — it never filters the trainer dropdown. Replaces the unrequested
+  // trainer-skill string match that hid a certified trainer over a two-word difference.
+  relevant_skills: [String],
   // 2026-08-11 meeting: a trainer runs up to 4 parallel batches with the day divided by time
   // ("7 से 11, 12 से 4, 5 से 9"). Optional "HH:mm" pair; when both batches carry slots, a
   // same-time overlap for one trainer is hard-blocked.

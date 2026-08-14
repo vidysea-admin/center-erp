@@ -4,6 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { api, fmtDate, toInputDate } from "@/lib/client";
+import { trainerSelectGroups } from "@/lib/trainer-select";
 import { BASE_PATH } from "@/lib/base-path";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthChip, SourceCell, Tabs, inputCls, useCopied } from "@/components/ui";
 import { useLocationCtx } from "@/components/shell";
@@ -93,25 +94,23 @@ function BatchesInner() {
   }, [form.location]);
 
   const program = programs.find((p) => p._id === form.program);
-  const matchingTrainers = trainers.filter((t) => !program || (t.skills ?? []).includes(program.trainer_skill));
 
-  // 2026-08-12 (Manish): "dropdown se choose kar lijiye unke TR ID ke basis pe". NSDC only accepts
-  // a certified trainer carrying a TR ID, and only at the centre and job role they were nominated
-  // for — the nomination is what makes the TR ID usable there. So nomination is the gate, and
-  // capable_locations is only a fallback for trainers who predate the hiring pipeline and were
-  // never nominated through it. Keying on capable_locations alone hid every certified trainer,
-  // because nothing in the journey ever writes that field.
-  const idOf = (v: any) => (v?._id ?? v) as string | undefined;
-  const eligible = (t: any) => {
-    if (t.pipeline_status !== "Certified" || !t.tr_id) return false;
-    const nomLoc = idOf(t.nominated_for_location), nomProg = idOf(t.nominated_for_program);
-    if (nomLoc || nomProg) {
-      return (!form.location || nomLoc === form.location) && (!form.program || nomProg === form.program);
-    }
-    return !form.location || (t.capable_locations ?? []).some((l: any) => idOf(l) === form.location);
-  };
-  const readyTrainers = matchingTrainers.filter(eligible);
-  const otherTrainers = matchingTrainers.filter((t) => !eligible(t));
+  // QA-133 (15/08): the skill-string filter that used to sit here is GONE — nobody asked for
+  // it (CEO transcript checked), it duplicated what the nomination already says precisely,
+  // and its exact match silently hid a certified trainer over a two-word difference. The
+  // gates that remain — TR ID (Manish: "dropdown se choose kar lijiye unke TR ID ke basis
+  // pe") and the nomination centre×role tie — live in the ONE shared predicate both batch
+  // forms use, and nothing is ever hidden: a trainer that fails a gate is offered with the
+  // failing gate named. Which skills matter for the batch is the operator's own recorded
+  // pick now (relevant_skills below), not a hidden string comparison.
+  const { ready: readyTrainers, others: otherTrainers } = trainerSelectGroups(trainers, {
+    locationId: form.location, programId: form.program, currentTrainerId: form.trainer,
+  });
+  // The multi-select's option pool: every skill the system has seen, operator decides.
+  const skillOptions = Array.from(new Set([
+    ...programs.map((p) => p.trainer_skill).filter(Boolean),
+    ...trainers.flatMap((t) => t.skills ?? []),
+  ])).sort();
 
   // The three-way mapping, answered before the batch is created rather than after it fails.
   const [readiness, setReadiness] = useState<any>(null);
@@ -325,7 +324,7 @@ function BatchesInner() {
           </div>
           {/* 2026-08-13 (Manish): "ya toh 4 ghante ka rakho ya 8 ghante ka" */}
           <p className="-mt-1 text-xs text-gray-500">Scheme rule: a slot is exactly 4 or 8 hours, inside 09:00–18:00.</p>
-          <Field label={`Trainer${program ? ` (skill: ${program.trainer_skill})` : ""}`}>
+          <Field label="Trainer">
             <select className={inputCls} value={form.trainer ?? ""} onChange={(e) => set("trainer", e.target.value)}>
               <option value="">— assign later —</option>
               {readyTrainers.length > 0 && (
@@ -334,21 +333,31 @@ function BatchesInner() {
                 </optgroup>
               )}
               {otherTrainers.length > 0 && (
-                <optgroup label="Not yet certified — NSDC will not accept these on a batch">
-                  {otherTrainers.map((t) => <option key={t._id} value={t._id} title={`${t.name} (${t.pipeline_status ?? t.status})`}>{t.name} ({t.pipeline_status ?? t.status})</option>)}
+                // QA-133: the reason sits next to each name — nobody is silently dropped.
+                <optgroup label="Not portal-ready — the reason is next to each name">
+                  {otherTrainers.map(({ t, reason }) => <option key={t._id} value={t._id} title={`${t.name} — ${reason}`}>{t.name} — {reason}</option>)}
                 </optgroup>
               )}
             </select>
-            {form.trainer && otherTrainers.some((t) => t._id === form.trainer) && (
+            {form.trainer && otherTrainers.some(({ t }) => t._id === form.trainer) && (
               <p className="mt-1 text-xs font-medium text-amber-700">
-                ⚠ This trainer has no TR ID yet. You can plan the batch, but the portal will refuse
-                them until the TOT certificate is recorded.
+                ⚠ {otherTrainers.find(({ t }) => t._id === form.trainer)?.reason} — you can plan the
+                batch, but NSDC&apos;s portal will refuse this trainer until they are Certified with a TR ID.
               </p>
             )}
-            {program && readyTrainers.length === 0 && (
+            {/* QA-133: the old message said "no certified trainer at this centre" while one stood
+                right there, filtered out — it must never claim an absence it did not check. */}
+            {program && readyTrainers.length === 0 && otherTrainers.length > 0 && (
+              <p className="mt-1 text-xs text-gray-500">
+                {otherTrainers.length} trainer{otherTrainers.length === 1 ? " is" : "s are"} listed above but
+                not portal-ready yet — the reason sits next to each name. Fix their journey on the{" "}
+                <Link href="/trainers" className="underline">Trainers</Link> screen.
+              </p>
+            )}
+            {program && readyTrainers.length === 0 && otherTrainers.length === 0 && (
               <div className="mt-1 space-y-1.5">
                 <p className="text-xs text-gray-500">
-                  No certified trainer for {program.trainer_skill} at this centre yet — track the hiring
+                  No trainer for this centre yet — track the hiring
                   journey on the <Link href="/trainers" className="underline">Trainers</Link> screen.
                 </p>
                 {/* F-A2 (Manish): the drawer used to dead-end here — raise the trainer request
@@ -370,6 +379,14 @@ function BatchesInner() {
                 ) : null}
               </div>
             )}
+          </Field>
+          {/* QA-133 (Umesh, 15/08): which skills matter for this batch is the operator's own
+              multi-select — a recorded fact on the batch, never a filter on the dropdown. */}
+          <Field label="Skills relevant to this batch (optional — your pick, never a filter)">
+            <select multiple className={inputCls + " h-24"} value={form.relevant_skills ?? []}
+              onChange={(e) => set("relevant_skills", Array.from(e.target.selectedOptions).map((o) => o.value))}>
+              {skillOptions.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
           </Field>
           <Field label={`Room${program?.requires_lab ? " (program requires a Lab)" : ""}`}>
             <select className={inputCls} value={form.room ?? ""} onChange={(e) => set("room", e.target.value)}>

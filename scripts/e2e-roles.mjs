@@ -359,6 +359,45 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   ok("QA-125: admin (unscoped) still deletes fine", clean.status === 200, `got ${clean.status}`);
 }
 
+// ---- QA-130 (-61): trainers get a DELETE verb — Admin-only, batch-referenced rows refuse,
+// documents cascade. Junk rows (QA probes, duplicate imports) stop living forever in every
+// list; a person with real history still gets Dropped, never erased. Plus the QA-130 rider:
+// created_by now survives the schema, and QA-133's relevant_skills is recorded on the batch.
+{
+  const stamp61 = Date.now().toString().slice(-6);
+  const p130 = (n) => "94" + Date.now().toString().slice(-7) + n;
+  const jpr = (await req(spoc, "GET", "/api/locations?limit=1")).data.items[0];
+  const prog = (await req(admin, "GET", "/api/programs?limit=1")).data.items[0];
+
+  const mk = await req(admin, "POST", "/api/trainers", { name: `Q130 Junk ${stamp61}`, phone: p130(1), skills: ["Q130"], home_location: jpr._id });
+  ok("QA-130: fixture trainer created", mk.status === 201, `got ${mk.status}`);
+  const tid = mk.data.item?._id;
+  const got = await req(admin, "GET", `/api/trainers/${tid}`);
+  ok("QA-130 rider: created_by rides on the row (schema stopped dropping it)", !!got.data.item?.created_by, JSON.stringify(got.data.item?.created_by ?? null));
+
+  ok("QA-130: Location SPOC cannot delete a trainer", (await req(spoc, "DELETE", `/api/trainers/${tid}`)).status === 403);
+  ok("QA-130: Operations cannot delete either — Admin-only verb", (await req(ops, "DELETE", `/api/trainers/${tid}`)).status === 403);
+
+  const bat = await req(admin, "POST", "/api/batches", { location: jpr._id, program: prog._id, planned_start: "2026-09-01", trainer: tid });
+  ok("QA-130: batch fixture referencing the trainer", bat.status < 300, `got ${bat.status}`);
+  if (bat.status < 300) {
+    ok("QA-130: referenced by a batch → 409 (drop, don't erase)", (await req(admin, "DELETE", `/api/trainers/${tid}`)).status === 409);
+    // QA-133: relevant_skills — the operator's recorded pick, never a filter; list-only, junk filtered.
+    const rs = await req(admin, "PATCH", `/api/batches/${bat.data.item._id}`, { relevant_skills: ["Drone Service Technician", "  ", 42] });
+    ok("QA-133: relevant_skills recorded on the batch (junk entries filtered)",
+      rs.status === 200 && JSON.stringify(rs.data.item?.relevant_skills) === JSON.stringify(["Drone Service Technician"]),
+      JSON.stringify(rs.data.item?.relevant_skills ?? null));
+    ok("QA-133: relevant_skills refuses a non-list", (await req(admin, "PATCH", `/api/batches/${bat.data.item._id}`, { relevant_skills: "x" })).status === 400);
+    const detach = await req(admin, "PATCH", `/api/batches/${bat.data.item._id}`, { trainer: null });
+    ok("QA-130: batch detached for the delete path", detach.status === 200, `got ${detach.status}`);
+  }
+  const doc = await req(admin, "POST", `/api/trainers/${tid}/documents`, { doc_type: "PAN", file_url: "/erp/api/files/q130.pdf", original_name: "q130.pdf" });
+  const del = await req(admin, "DELETE", `/api/trainers/${tid}`);
+  ok("QA-130: admin deletes the junk row (documents cascade)", doc.status === 201 && del.status === 200, `${doc.status}/${del.status}`);
+  ok("QA-130: the row is gone", (await req(admin, "GET", `/api/trainers/${tid}`)).status === 404);
+  ok("QA-130: re-delete → 404, not a crash", (await req(admin, "DELETE", `/api/trainers/${tid}`)).status === 404);
+}
+
 // 2026-08-12 audit F-000 (S0): the generic list route copied every ?key=value into the Mongo
 // filter AFTER the Rule 38 scope filter, so ?location=<other centre> simply overwrote it and a
 // scoped user could read every centre's candidate PII. Scope is now applied last, client keys

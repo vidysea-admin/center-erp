@@ -28,6 +28,8 @@ export const POST = apiHandler(async (req: NextRequest) => {
       name, phone, email: email || undefined,
       skills: ["(to be filled by the applicant)"], // model requires skills; the form replaces this
       pipeline_status: "Fresh Lead", status: "Available", source: "Quick invite",
+      created_by: user.id, // QA-130 rider: "kisne banaya" rides on the row
+
       // QA-125: a scoped inviter's trainer is tied to their own centre(s) — otherwise the
       // invitee would be invisible to the very person who invited them (and untied rows
       // are now 403 for every scoped user, by design).

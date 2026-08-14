@@ -140,7 +140,8 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
           stage === "Certified" ? "border-green-200 bg-green-50 text-green-700"
             : isOff ? "border-red-200 bg-red-50 text-red-700"
               : "border-amber-200 bg-amber-50 text-amber-700"}`}>{stage === "Dropped" && t.dropped_from_stage ? `Dropped (at ${pipelineLabel(t.dropped_from_stage)})` : pipelineLabel(stage)}</span>
-        <span className="text-sm text-gray-500">{t.phone}{t.tr_id ? ` · TR ID ${t.tr_id}` : ""}</span>
+        {/* QA-130 rider (Umesh): who brought this row in, on the row itself. */}
+        <span className="text-sm text-gray-500">{t.phone}{t.tr_id ? ` · TR ID ${t.tr_id}` : ""}{t.created_by?.name ? ` · added by ${t.created_by.name}` : ""}</span>
       </div>
 
       {/* The rejection is the thing an operator must act on, so it is stated, not buried. */}
@@ -149,6 +150,20 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
           <div className="font-semibold text-red-800">NSDC sent this profile back</div>
           <div className="mt-1 text-red-700">{t.nsdc_remarks || "No remarks recorded."}</div>
           <div className="mt-2 text-red-700">Correct the documents, then move back to <strong>Shortlisted</strong>, fix the papers, and resubmit.</div>
+        </div>
+      )}
+
+      {/* QA-135 (Umesh, 15/08: "TR ID maang lo, par block kuch mat karo"): a Certified trainer
+          with no TR ID — the bypass leaves exactly this state — carries a standing flag until
+          the fact is recorded. The flag is the nudge; nothing is ever blocked on it. */}
+      {stage === "Certified" && !t.tr_id && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm">
+          <div className="font-semibold text-amber-800">TR ID pending</div>
+          <div className="mt-1 text-amber-700">
+            NSDC issues the TR ID after TOT certification, and the SIDH portal asks for it when a
+            batch is formed. Record it here (Edit → TR ID) as soon as it arrives — batches can be
+            planned meanwhile, but the portal will refuse this trainer until then.
+          </div>
         </div>
       )}
 
@@ -187,8 +202,14 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
                     if (!window.confirm(`Are you sure? You are BYPASSING the pipeline steps — the document, NSDC and TOT gates will NOT run. ${t.name} will be set to "${target}" directly.`)) return;
                     const reason = target === "Dropped" ? (window.prompt("Reason for dropping (required):") ?? "") : undefined;
                     if (target === "Dropped" && !reason) return;
+                    // QA-135: the bypass skips the very gate that collects the TR ID, so ask for
+                    // the fact right here. Optional on purpose — NSDC may not have issued it yet;
+                    // the profile stays flagged (banner + list chip) until it is recorded.
+                    const trId = target === "Certified"
+                      ? (window.prompt("TR ID (from NSDC) — optional. Leave blank if not issued yet; the profile stays flagged until it is recorded.") ?? "")
+                      : "";
                     try {
-                      await api(`/api/trainers/${id}/transition`, { method: "POST", json: { target, bypass: true, reason } });
+                      await api(`/api/trainers/${id}/transition`, { method: "POST", json: { target, bypass: true, reason, ...(trId.trim() ? { payload: { tr_id: trId.trim() } } : {}) } });
                       await load();
                     } catch (er: any) { setErr(er.message); }
                   }}>

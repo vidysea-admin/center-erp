@@ -93,6 +93,10 @@ export const POST = apiHandler(async (req: NextRequest) => {
     session,
     slot_start: slot.slot_start || undefined, slot_end: slot.slot_end || undefined,
     target_size: body.target_size ?? program.default_batch_size,
+    // QA-133: operator-picked, recorded, never a filter.
+    relevant_skills: Array.isArray(body.relevant_skills)
+      ? body.relevant_skills.filter((s: unknown) => typeof s === "string" && (s as string).trim()).slice(0, 50)
+      : undefined,
     planned_start: start, planned_end: end,
     // 2026-08-11: backward plan generated at creation — the checklist the boss hands out.
     milestones: planBatchBackward(start, defaults),
