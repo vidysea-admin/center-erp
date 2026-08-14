@@ -1,4 +1,5 @@
 "use client";
+import { BASE_PATH } from "@/lib/base-path";
 
 // Client-side image compression (spec §0: budget for compression + retry on weak connections).
 // Downscales to max 1600px and re-encodes JPEG q0.75. Non-images pass through untouched.
@@ -41,7 +42,11 @@ async function blobToDataUrl(b: Blob): Promise<string> {
 async function post(blob: Blob, name: string): Promise<string> {
   const fd = new FormData();
   fd.append("file", new File([blob], name, { type: blob.type }));
-  const res = await fetch("/api/upload", { method: "POST", body: fd });
+  // TEAM-BLOCKER root cause (15/08): this was the ONE fetch in the app without the
+  // basePath prefix — on production every UI upload went to /api/upload (the marketing
+  // site's 404) instead of /erp/api/upload, retried three times and died. The API-level
+  // smokes always hit /erp directly, which is exactly why they never caught it.
+  const res = await fetch(`${BASE_PATH}/api/upload`, { method: "POST", body: fd });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `Upload failed (${res.status})`);
   return data.url as string;

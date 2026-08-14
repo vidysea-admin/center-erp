@@ -1090,7 +1090,7 @@ function ClosureFileSlot({ label, value, onUpload, disabled }: any) {
       {!disabled && (
         <label className="cursor-pointer rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50">
           {value ? "Replace" : "Upload"}
-          <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.webp,.xlsx,.xls,.csv" onChange={onUpload} />
+          <input type="file" className="hidden" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,.heic,.xlsx,.xls,.csv" onChange={onUpload} />
         </label>
       )}
     </div>
@@ -1421,7 +1421,7 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
           <div className="flex flex-wrap items-center gap-3">
             <label className={`cursor-pointer rounded-lg px-3 py-1.5 text-xs font-medium text-white ${uploading ? "bg-gray-400" : "bg-blue-600 hover:bg-blue-700"}`}>
               {uploading ? "Uploading…" : "⬆ Upload certificates (bulk)"}
-              <input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" disabled={uploading}
+              <input type="file" multiple accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,.heic" className="hidden" disabled={uploading}
                 onChange={(e) => { uploadCertificates(e.target.files); e.target.value = ""; }} />
             </label>
             <span className="text-xs text-gray-500">

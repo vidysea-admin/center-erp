@@ -1019,6 +1019,20 @@ ok("…with the contact details an approver needs", !!queued && queued.phone ===
   }
 }
 
+// ---- T1 (15/08 team feedback): the upload endpoint takes every promised type ----
+{
+  const up = async (name, type) => {
+    const fd = new FormData();
+    fd.append("file", new File([Buffer.from("probe")], name, { type }));
+    const res = await fetch(BASE + "/api/upload", { method: "POST", headers: { cookie }, body: fd });
+    return res.status;
+  };
+  ok("T1: png uploads", (await up("t.png", "image/png")) === 200);
+  ok("T1: docx uploads", (await up("t.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")) === 200);
+  ok("T1: heic uploads (iPhone default)", (await up("t.heic", "image/heic")) === 200);
+  ok("T1: an executable is refused", (await up("t.exe", "application/octet-stream")) === 400);
+}
+
 // ---- public build marker (deploy verification, no auth) ----
 const verRes = await fetch(BASE + "/api/public/version");
 const verBody = await verRes.json().catch(() => ({}));

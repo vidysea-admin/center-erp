@@ -3,13 +3,14 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-48";
+export const RELEASE = "2026.08.14-49";
 export const RELEASE_NOTE =
-  "QA-076: batch codes speak all FOUR of the CEO's parts - centre code, " +
-  "course, skill, number (AVP-GURU-RPLAVP-DST-01; the programme code is " +
-  "already course-and-skill fused) - the checker caught the dropped third " +
-  "part before the bulk batch-planning wave could mint 8-10k codes in the " +
-  "short form. QA-089: district and operating_partner join the fixed set on " +
-  "both the park side and the approval replay - everything the AVPL master " +
-  "sheet writes is now protected the same way, so the next rebase can never " +
-  "silently undo an approved SPOC edit.";
+  "THE upload fix (team-reported, live-reproduced): the upload helper was " +
+  "the one fetch in the app without the /erp basePath, so on production " +
+  "every UI upload - trainer documents, daily-log photos and videos, " +
+  "certificates - went to the marketing site's 404, retried three times and " +
+  "died. One prefix, everything works. Riding along: several documents in " +
+  "one pick (type auto-detected from the filename, duplicate names refused " +
+  "by name), PDF/Word/photo/HEIC accepted on every document surface, and " +
+  "an honest message when a file over ~8 MB hits the platform's multipart " +
+  "cap instead of 'something went wrong'.";

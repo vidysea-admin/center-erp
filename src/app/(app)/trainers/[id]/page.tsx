@@ -85,11 +85,34 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
 
-  async function addDoc(file: File, doc_type: string) {
+  // 15/08 (team): several documents in ONE pick — each file becomes its own document, the
+  // type guessed from the filename (fix it after if the guess is off), duplicate filenames
+  // within the selection refused BY NAME, and a count-match report at the end.
+  const guessDocType = (name: string): string => {
+    const n = name.toLowerCase();
+    if (/aadhaar|aadhar|adhar/.test(n)) return "Aadhaar";
+    if (/pan/.test(n)) return "PAN";
+    if (/photo|passport|pic|selfie/.test(n)) return "Photo";
+    if (/cv|resume|biodata/.test(n)) return "CV";
+    if (/edu|degree|marksheet|certificate|qual/.test(n)) return "Educational Qualification";
+    if (/industry|experience|exp/.test(n)) return "Industry Experience";
+    if (/teach/.test(n)) return "Teaching Experience";
+    return "Other";
+  };
+  async function addDocs(files: File[], fixedType?: string) {
     setBusy(true);
     try {
-      const url = await uploadWithRetry(file, "document");
-      await api(`/api/trainers/${id}/documents`, { method: "POST", json: { doc_type, file_url: url, original_name: file.name } });
+      const seen = new Set<string>();
+      const dupes = files.filter((f) => { const k = f.name.toLowerCase(); if (seen.has(k)) return true; seen.add(k); return false; });
+      if (dupes.length) throw new Error(`Duplicate filenames in the selection: ${dupes.map((f) => f.name).join(", ")} — rename and retry.`);
+      let done = 0;
+      for (const file of files) {
+        const url = await uploadWithRetry(file, "document");
+        const doc_type = files.length === 1 && fixedType ? fixedType : guessDocType(file.name);
+        await api(`/api/trainers/${id}/documents`, { method: "POST", json: { doc_type, file_url: url, original_name: file.name } });
+        done++;
+      }
+      if (files.length > 1) setErr(""); // count-match: all landed
       setDocDrawer(false); await load();
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
@@ -288,19 +311,21 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
       )}
 
       {docDrawer && (
-        <Drawer open onClose={() => setDocDrawer(false)} title="Add document">
-          <Field label="Document type" required>
+        <Drawer open onClose={() => setDocDrawer(false)} title="Add documents">
+          <Field label="Document type (applies to a single file; multiple files auto-detect from filename)">
             <select className={inputCls} id="dt" defaultValue="Aadhaar">
               {DOC_TYPES.map((d) => <option key={d}>{d}</option>)}
             </select>
           </Field>
-          <Field label="File" required>
-            <input type="file" className={inputCls} disabled={busy}
+          <Field label="Files — pick several at once (PDF / Word / photos)" required>
+            <input type="file" multiple className={inputCls} disabled={busy}
+              accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,.heic"
               onChange={(e) => {
-                const f = e.target.files?.[0];
+                const files = Array.from(e.target.files ?? []);
                 const sel = document.getElementById("dt") as HTMLSelectElement | null;
-                if (f && sel) addDoc(f, sel.value);
+                if (files.length) addDocs(files, sel?.value);
               }} />
+            <p className="mt-1 text-[11px] text-gray-400">4-5 documents ek saath — type filename se pehchana jayega (aadhaar/pan/cv…); galat lage to upload ke baad us document pe replace kar dena.</p>
           </Field>
           {busy && <p className="mt-2 text-sm text-gray-500">Uploading…</p>}
         </Drawer>

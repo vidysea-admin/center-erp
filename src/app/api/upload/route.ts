@@ -12,13 +12,22 @@ import { getDefaults } from "@/lib/defaults";
 // disk without a deploy. .mov/.3gp added — that is what the field phones actually record.
 // 2026-08-12: .doc/.docx added — a trainer's industry and teaching experience certificates arrive
 // as Word files, and without these the mandatory-document gate could never be satisfied.
-const ALLOWED = new Set([".jpg", ".jpeg", ".png", ".webp", ".pdf", ".mp4", ".mov", ".3gp", ".xlsx", ".xls", ".csv", ".doc", ".docx"]);
+// 15/08 (team feedback): .heic added — iPhones hand photos over as HEIC by default.
+const ALLOWED = new Set([".jpg", ".jpeg", ".png", ".webp", ".heic", ".pdf", ".mp4", ".mov", ".3gp", ".xlsx", ".xls", ".csv", ".doc", ".docx"]);
 
 // POST multipart { file } → { url } (served from /uploads via next.config rewrite-free public dir)
 export const POST = apiHandler(async (req: NextRequest) => {
   const user = await requireUser();
   requireEdit(user);
-  const form = await req.formData();
+  // 15/08 live probe: multipart bodies over ~8-10 MB die inside the platform's form parse
+  // with a bare exception, which apiHandler turned into "Something went wrong". Name the
+  // real situation instead — the operator's move is a smaller file, not a retry.
+  let form: FormData;
+  try {
+    form = await req.formData();
+  } catch {
+    throw new HttpError(413, "The upload failed on the server — files over ~8 MB currently fail here (infra cap under investigation). Compress the video or split the upload.");
+  }
   const file = form.get("file") as File | null;
   if (!file) throw new HttpError(400, "file required");
   await dbConnect();
