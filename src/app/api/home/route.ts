@@ -191,28 +191,38 @@ export const GET = apiHandler(async () => {
         .sort({ createdAt: -1 }).limit(10).lean()
     : [];
 
-  return NextResponse.json({
-    kpis: {
+  // QA-096 (checker round 5): the lean Home hid the org-wide CARDS but the API still
+  // handed their numbers over — an unscoped Enrollment login read the organisation's
+  // centre-approval and target position off the wire. A figure a role is not shown is
+  // not sent to it either; the lean roles keep exactly what their Home renders.
+  const lean = ["Location", "Trainer", "Enrollment"].includes(user.role);
+  const kpis: Record<string, unknown> = {
+    active_batches: activeBatches, completed_batches: completedBatches,
+    enrolled_students: enrolledMembers, pool_candidates: poolCandidates,
+    attendance,
+    ...(lean ? {} : {
       approved_locations: approvedLocations, pending_locations: pendingLocations,
       approved_targets: approvedTargets, targets_total: targetsTotal,
-      active_batches: activeBatches, completed_batches: completedBatches,
-      enrolled_students: enrolledMembers, pool_candidates: poolCandidates,
       open_trainer_requests: openRequests, fulfilled_trainer_requests: fulfilledRequests,
       pending_followups: followUps.length,
       trainers_by_role: trainersByRole,
       trainers_active_total: trainersByRole.reduce((s, r) => s + r.count, 0),
       trainers_on_approved_positions: trainersOnApprovedPositions,
-      attendance,
-    },
+    }),
+  };
+  return NextResponse.json({
+    kpis,
     queues: {
       missing_logs: missingLogs,
-      sheet_changes: openChanges,
       attendance_gaps: gaps,
       enrollment_failures: failures,
       registration_failed: regFailed,
-      follow_ups: followUps,
-      invoices_pending: invoices,
       pending_users: pendingUsers,
+      ...(lean ? {} : {
+        sheet_changes: openChanges,
+        follow_ups: followUps,
+        invoices_pending: invoices,
+      }),
     },
     thresholds: { amber: defaults.attendance_gap_amber, red: defaults.attendance_gap_red },
     scoped_no_centres: scopedNoCentres,

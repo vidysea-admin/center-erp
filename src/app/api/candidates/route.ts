@@ -10,6 +10,10 @@ export const { GET, POST } = collectionRoutes({
   // 2026-08-13 (Umesh: "search should allow all the columns"): the global shell search
   // rides this too — alt numbers, mobiliser/campaign and the portal CAN_ id all findable.
   searchFields: ["name", "phone", "alt_phone", "source", "sidh_candidate_id"],
+  // QA-060/095 (CEO [38:43] "I shouldn't see all the candidates … just my batch-wise
+  // details"): a Trainer never reads the centre's candidate pool — their lens is the
+  // batch roster and the Attendance tab, which stay open to them.
+  readRoles: ["Admin", "Operations", "Location", "Enrollment"],
   writeRoles: ["Admin", "Operations", "Location", "Enrollment"],
   permission: "candidates.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
   populate: [

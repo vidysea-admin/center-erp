@@ -5,6 +5,7 @@ import { assertLocationOperational } from "@/lib/rules";
 export const { GET, POST } = collectionRoutes({
   model: TrainerRequest, entity: "TrainerRequest",
   fields: ["location", "program", "required_by_date", "status", "hiring_target_date", "tot_scheduled_on", "tot_done_on", "expected_available_from", "fulfilled_by_trainer", "note"],
+  readRoles: ["Admin", "Operations", "Location"], // QA-091: the hiring surface is not for Trainer/Enrollment
   writeRoles: ["Admin", "Operations", "Location"],
   permission: "trainers.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
   // F-B5 (Manish): a halted centre must stop hiring — no new trainer requests for it.

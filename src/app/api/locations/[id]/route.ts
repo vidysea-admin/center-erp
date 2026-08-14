@@ -12,6 +12,7 @@ export const { GET, PATCH } = itemRoutes({
     return maskLocationSecrets(items, user.role === "Admin");
   },
   fields: ["code", "external_id", "name", "city", "state", "address", "approval_status", "operational_status", "status_reason", "status_changed_on", "spoc_name", "spoc_phone", "spoc_user", "principal_name", "principal_phone", "principal_user", "contacts", "district", "tc_id", "tc_password", "tc_status", "operating_partner", "cluster_head_name", "cluster_head_phone"],
+  readRoles: ["Admin", "Operations", "Location", "Enrollment"], // QA-095: not the Trainer's door
   writeRoles: ["Admin", "Operations", "Location"],
   permission: "locations.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
   async beforeUpdate(id, data, existing, user) {

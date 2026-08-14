@@ -59,7 +59,10 @@ if (mkGhost.status === 201) {
   if (ghost) {
     const gHome = (await req(ghost, "GET", "/api/home", undefined, 200)).data;
     ok("[worst] Home says WHY it is empty (scoped_no_centres)", gHome.scoped_no_centres === true, JSON.stringify(gHome.scoped_no_centres));
-    ok("[worst] …and every KPI is an honest zero", gHome.kpis.approved_locations === 0 && gHome.kpis.active_batches === 0, JSON.stringify(gHome.kpis));
+    // QA-096: a lean role's payload no longer carries the org-wide keys at all — the
+    // honest zero applies to what they ARE sent, and the org figure is simply absent.
+    ok("[worst] …and every KPI they receive is an honest zero (org keys absent)",
+      gHome.kpis.active_batches === 0 && gHome.kpis.approved_locations === undefined, JSON.stringify(gHome.kpis));
     ok("[worst] …with no other centre's queue rows leaking", (gHome.queues.registration_failed ?? []).length === 0 && (gHome.queues.missing_logs ?? []).length === 0);
   }
   await req(admin, "PATCH", `/api/users/${mkGhost.data.item._id}`, { active: false }, 200); // leave no live login behind

@@ -25,6 +25,12 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   const { id } = await ctx.params;
   await assertBatchInScope(user, id); // Rule 38
   const body = await req.json();
+  // QA-082 (CEO [41:31] "I don't think they will have it"): the govt figures left the
+  // Trainer's FORM in R-C but not their API — a hand-crafted request could still write
+  // them. The portal numbers come from the reconciliation import, never from a trainer.
+  if (user.role === "Trainer") {
+    delete body.govt_present; delete body.govt_source; delete body.govt_screenshot;
+  }
   if (!body.log_date) throw new HttpError(400, "log_date is required");
   // F-008: store the calendar date itself (UTC midnight), not midnight in whatever timezone this
   // process happens to run in — otherwise the same day written by two processes is two instants.

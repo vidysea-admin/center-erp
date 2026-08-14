@@ -69,9 +69,12 @@ function BatchesInner() {
   // Status is filtered CLIENT-side now so the pill counts always show the whole picture.
   const load = () => Promise.all([
     api(`/api/batches?${new URLSearchParams({ ...(fLoc ? { location: fLoc } : {}) })}`).then((d) => setItems(d.items)),
-    api("/api/locations?limit=2000").then((d) => setLocations(d.items)),
+    // QA-095/R2: Trainer (and Enrollment, for trainers) get 403 on these directories now —
+    // they only feed the create-form dropdowns those roles cannot use, so an empty list is
+    // the right answer, not an error banner.
+    api("/api/locations?limit=2000").then((d) => setLocations(d.items)).catch(() => setLocations([])),
     api("/api/programs?limit=1000").then((d) => setPrograms(d.items)),
-    api("/api/trainers?limit=2000").then((d) => setTrainers(d.items)),
+    api("/api/trainers?limit=2000").then((d) => setTrainers(d.items)).catch(() => setTrainers([])),
     api(`/api/mapping/readiness${fLoc ? `?location=${fLoc}` : ""}`).then(setPrep).catch(() => setPrep(null)),
   ]).catch((e) => setError(e.message)).finally(() => setLoading(false));
   useEffect(() => { load(); }, [fLoc]); // eslint-disable-line react-hooks/exhaustive-deps

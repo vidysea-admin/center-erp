@@ -22,7 +22,9 @@ const NAV = [
   // other trainers … why new location tab is here — this all should be disabled … I should
   // just see my batch-wise details." A Trainer's doors are Home and Batches, full stop.
   { href: "/locations", label: "Locations", Icon: IconPin, roles: ["Admin", "Operations", "Location", "Enrollment"] },
-  { href: "/trainers", label: "Trainers", Icon: IconUser, roles: ["Admin", "Operations", "Location", "Enrollment"] },
+  // QA-061/065: Enrollment's brief is candidates — the Trainers door (whose page offered
+  // them Add/Import buttons the server refuses anyway) closes for them too.
+  { href: "/trainers", label: "Trainers", Icon: IconUser, roles: ["Admin", "Operations", "Location"] },
   // Karunn 13/08 [25:28]: "Open Positions kahan-kahan hain — side me chahiye" — the
   // hiring board gets its own door instead of hiding as the third Trainers tab.
   { href: "/trainers?tab=Open%20Positions", label: "Open Positions", Icon: IconUser, roles: ["Admin", "Operations"] },

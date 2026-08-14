@@ -33,10 +33,15 @@ export const PERMISSIONS: { key: string; label: string; group: string }[] = [
 // seeding these changes nothing on day one.
 export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   Admin: PERMISSIONS.map((p) => p.key),
+  // QA-083/084/037 (checker round 5): Operations lost the sheet machinery (CEO: "remove
+  // sheet sync, all of these things" — the nav went in R-E, the API rights go now) and
+  // approvals.decide (the queue handed the same ledger figures back that R-E shut away;
+  // their own submissions live under ?mine=1, which needs no right).
+  // NOTE (QA-036 pattern): this default changes nothing on live until the matrix PUT runs.
   Operations: [
-    "sheet.approve", "sheet.sources", "locations.manage", "trainers.manage",
+    "locations.manage", "trainers.manage",
     "candidates.manage", "candidates.assign", "batches.manage", "batches.daily_log",
-    "closure.manage", "attendance.govt", "costs.manage", "invoices.manage", "feedback.links", "approvals.decide",
+    "closure.manage", "attendance.govt", "costs.manage", "invoices.manage", "feedback.links",
   ],
   // 2026-08-13 (Umesh + CEO): principal/SPOC = "same admin access limited to their location —
   // trainer, candidate and all; NO attendance (trainer karega); NO batch edit; certificate

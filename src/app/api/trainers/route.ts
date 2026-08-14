@@ -66,6 +66,11 @@ export const { GET, POST } = collectionRoutes({
     "industry_experience_years", "teaching_experience_years", "nsdc_remarks",
     "eligibility_payment_amount", "payment_reference", "tot_certificate_no", "pipeline_note"],
   searchFields: ["name", "phone", "email", "tr_id"],
+  // QA-095/091/061 (checker round 5, "the sixth time in this pattern"): the CEO closed the
+  // Trainer's doors in the MENU; the server now closes them too. A Trainer never reads the
+  // trainer directory ("I shouldn't be able to see other trainers"), and Enrollment's brief
+  // is candidates, not the hiring surface.
+  readRoles: ["Admin", "Operations", "Location"],
   writeRoles: ["Admin", "Operations"],
   permission: "trainers.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
   // F-B5 (Manish): a halted centre must stop hiring — no nominating trainers for it.

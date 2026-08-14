@@ -23,6 +23,10 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
     throw new HttpError(403, "Rule 27: edit window expired — only Operations/Admin may edit now.");
   }
   const body = await req.json();
+  // QA-082: same strip as the create route — a Trainer never writes the govt figures.
+  if (user.role === "Trainer") {
+    delete body.govt_present; delete body.govt_source; delete body.govt_screenshot;
+  }
   const before = log.toObject();
   const patch: Record<string, unknown> = {};
   for (const f of ["planned_topic", "actual_topic", "present_member_ids", "biometric_member_ids", "trainer_present", "govt_present", "govt_source", "govt_screenshot", "photos", "videos", "note"]) {

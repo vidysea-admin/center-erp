@@ -72,7 +72,7 @@ ok("Rule 40: Enrollment role blocked from Sync Inbox (403)", enrollChanges.statu
 const spocCosts = await req(spoc, "GET", "/api/costs");
 ok("Rule 40: Location role blocked from Costs (403)", spocCosts.status === 403, `got ${spocCosts.status}`);
 const opsChanges = await req(ops, "GET", "/api/sheet-changes");
-ok("Rule 40: Operations can read Sync Inbox", opsChanges.status === 200);
+ok("Rule 40/QA-083: Operations is OUT of the Sync Inbox now", opsChanges.status === 403, `got ${opsChanges.status}`);
 const opsUsers = await req(ops, "GET", "/api/users");
 ok("Rule 40: non-Admin blocked from Users (403)", opsUsers.status === 403, `got ${opsUsers.status}`);
 const opsPrograms = await req(ops, "POST", "/api/programs", { code: "XX", name: "X", trainer_skill: "X" });
@@ -157,7 +157,7 @@ ok("Home queues leak nothing outside SPOC scope", leaks.length === 0, `leaked ${
 // 2026-08-11 routes — scoping and role gates
 // Sheet Watch is Admin/Operations only
 ok("SPOC cannot read workbook changes", (await req(spoc, "GET", "/api/workbook-changes")).status === 403);
-ok("Ops can read workbook changes", (await req(ops, "GET", "/api/workbook-changes")).status === 200);
+ok("Ops cannot read workbook changes either (QA-083)", (await req(ops, "GET", "/api/workbook-changes")).status === 403);
 // Meeting notes follow location scope; view-only principal cannot write
 const ownLocId = spocLocs.data.items[0]._id;
 ok("SPOC can add a meeting note at own location", (await req(spoc, "POST", `/api/locations/${ownLocId}/notes`, { note: "role-test note" })).status === 201);
@@ -179,14 +179,16 @@ ok("planner endpoint readable by SPOC", (await req(spoc, "GET", "/api/plan-batch
 // and the gate closes for that role; restore it and it reopens. No re-login either way.
 const permsBefore = (await req(admin, "GET", "/api/permissions")).data;
 const opsSet = permsBefore.roles.find((r) => r.role === "Operations")?.permissions ?? [];
-ok("permission matrix lists roles + catalog", permsBefore.catalog?.length >= 10 && opsSet.includes("sheet.approve"));
-await req(admin, "PUT", "/api/permissions", { role: "Operations", permissions: opsSet.filter((p) => p !== "sheet.approve") });
+// QA-083: sheet.approve is OUT of the Operations defaults now — the toggle test runs the
+// other way: granting it opens the door, removing it closes again.
+ok("permission matrix lists roles + catalog (Ops trimmed of sheet.approve)", permsBefore.catalog?.length >= 10 && !opsSet.includes("sheet.approve"));
+await req(admin, "PUT", "/api/permissions", { role: "Operations", permissions: [...opsSet, "sheet.approve"] });
 await new Promise((r) => setTimeout(r, 5200)); // permission cache TTL
-ok("revoking sheet.approve from Operations closes Sheet Watch", (await req(ops, "GET", "/api/workbook-changes")).status === 403);
-ok("…and the Sync Inbox", (await req(ops, "GET", "/api/sheet-changes")).status === 403);
+ok("granting sheet.approve to Operations opens Sheet Watch", (await req(ops, "GET", "/api/workbook-changes")).status === 200);
+ok("…and the Sync Inbox", (await req(ops, "GET", "/api/sheet-changes")).status === 200);
 await req(admin, "PUT", "/api/permissions", { role: "Operations", permissions: opsSet });
 await new Promise((r) => setTimeout(r, 5200));
-ok("restoring the right reopens it", (await req(ops, "GET", "/api/workbook-changes")).status === 200);
+ok("removing the right closes it again", (await req(ops, "GET", "/api/workbook-changes")).status === 403);
 ok("Admin role toggles are refused (lockout-proof)", (await req(admin, "PUT", "/api/permissions", { role: "Admin", permissions: [] })).status === 400);
 ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permissions")).status === 403);
 
@@ -220,16 +222,23 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   // one: the roster is capped, so "some trainer in the list has pay" quietly becomes false once
   // enough pay-less trainers exist, and the assertion then passes or fails on unrelated data.
   const stamp = Date.now().toString().slice(-6);
+  // R2: Enrollment no longer reads the trainer directory AT ALL, so the mask is proven on
+  // a Location-role reader whose trainers.manage is REVOKED per-user (the R-B deny list) —
+  // read allowed by role, money hidden by the missing right.
+  const viewerUser = ((await req(admin, "GET", "/api/users")).data.items ?? []).find((u) => u.email === "viewer.jpr03@vidysea.com");
+  if (viewerUser) await req(admin, "PATCH", `/api/users/${viewerUser._id}`, { revoked_permissions: ["trainers.manage"] });
+  const progForMask = (await req(admin, "GET", "/api/programs?limit=1")).data.items[0];
   const paid = (await req(admin, "POST", "/api/trainers", {
     name: `PayCheck Trainer ${stamp}`, phone: `97${stamp}00`, skills: ["PayCheck"],
     day_rate: 1234, compensation_type: "Batch-wise", compensation_fixed: 5678, incentive_note: "secret",
+    nominated_for_location: jpr._id, nominated_for_program: progForMask._id, // tie to JPR so the scoped viewer can see the row
   })).data.item;
 
-  const list = (await req(enroll, "GET", "/api/trainers")).data.items ?? [];
+  const list = (await req(viewer, "GET", "/api/trainers")).data.items ?? [];
   ok("trainer roster is readable without the manage right", list.length > 0);
   ok("…but day rate is hidden", list.every((t) => t.day_rate === undefined), JSON.stringify(list[0]?.day_rate));
   ok("…and compensation fields are hidden", list.every((t) => t.compensation_type === undefined && t.compensation_fixed === undefined && t.incentive_note === undefined));
-  const one = (await req(enroll, "GET", `/api/trainers/${paid._id}`)).data.item;
+  const one = (await req(viewer, "GET", `/api/trainers/${paid._id}`)).data.item;
   ok("…opening the paid trainer by id does not leak them either",
     one?.day_rate === undefined && one?.compensation_fixed === undefined && one?.incentive_note === undefined, JSON.stringify(one?.day_rate));
   const adminOne = (await req(admin, "GET", `/api/trainers/${paid._id}`)).data.item;
@@ -248,7 +257,7 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
     name: `Nominated Trainer ${stamp}`, phone: `96${stamp}00`, skills: ["PayCheck"],
     nominated_for_location: loc._id, nominated_for_program: prog._id,
   })).data.item;
-  const seen = (await req(enroll, "GET", `/api/trainers/${nom._id}`)).data.item;
+  const seen = (await req(viewer, "GET", `/api/trainers/${nom._id}`)).data.item;
   ok("the nomination target stays visible without trainers.manage",
     (seen?.nominated_for_location?._id ?? seen?.nominated_for_location) === loc._id,
     JSON.stringify(seen?.nominated_for_location));
@@ -257,6 +266,7 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
     JSON.stringify(seen?.nominated_for_program));
   ok("…while the personnel fields beside it stay hidden",
     seen?.nsdc_remarks === undefined && seen?.qualification === undefined && seen?.payment_reference === undefined);
+  if (viewerUser) await req(admin, "PATCH", `/api/users/${viewerUser._id}`, { revoked_permissions: [] }); // restore for later suites
 
   // 2026-08-13 (Umesh, testing the view-only principal): masking pay was not enough — a
   // scoped user saw the ENTIRE trainer directory. Scoped users see only trainers tied to
@@ -601,6 +611,48 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   ok("QA-088: the SPOC of the very centre never sees it", !!asSpoc && asSpoc.tc_password === undefined);
   const listOps = (await req(ops, "GET", "/api/locations?limit=200")).data.items ?? [];
   ok("QA-088: the list masks it for every centre", listOps.every((l) => l.tc_password === undefined));
+}
+
+// ---- R2 (QA-095/091/060/061/083/084/096): the doors are shut on the SERVER now ----
+{
+  // Trainer: every directory the CEO closed answers 403, not with data.
+  for (const p of ["/api/trainers", "/api/candidates", "/api/locations", "/api/open-positions", "/api/trainer-requests"]) {
+    ok(`R2: Trainer is refused at ${p}`, (await req(trainer, "GET", p)).status === 403, p);
+  }
+  // Enrollment: candidates & locations are their brief; the hiring surface is not.
+  ok("R2: Enrollment still reads candidates", (await req(enroll, "GET", "/api/candidates?limit=1")).status === 200);
+  ok("R2: Enrollment still reads locations", (await req(enroll, "GET", "/api/locations?limit=1")).status === 200);
+  ok("R2: Enrollment is refused the trainer directory", (await req(enroll, "GET", "/api/trainers?limit=1")).status === 403);
+  ok("R2: Enrollment is refused the hiring board", (await req(enroll, "GET", "/api/open-positions")).status === 403);
+  // Operations: the sheet machinery and the approvals queue left with the matrix trim.
+  ok("R2/QA-083: Operations refused at sheet-changes", (await req(ops, "GET", "/api/sheet-changes")).status === 403);
+  ok("R2/QA-084: Operations refused at the approvals queue", (await req(ops, "GET", "/api/approvals")).status === 403);
+  ok("R2: Operations still reads their own submissions (?mine=1)", (await req(ops, "GET", "/api/approvals?mine=1")).status === 200);
+  // QA-096: a figure a lean role is not shown is not SENT either.
+  const enrollHome = (await req(enroll, "GET", "/api/home")).data;
+  ok("QA-096: the lean Home payload carries no org-wide KPIs",
+    enrollHome?.kpis && enrollHome.kpis.approved_targets === undefined && enrollHome.kpis.targets_total === undefined
+    && enrollHome.kpis.approved_locations === undefined && enrollHome.queues?.sheet_changes === undefined,
+    JSON.stringify(Object.keys(enrollHome?.kpis ?? {})));
+  const adminHome = (await req(admin, "GET", "/api/home")).data;
+  ok("QA-096: the Admin payload still carries them", adminHome?.kpis?.targets_total !== undefined);
+  // QA-082: a Trainer's daily-log write cannot smuggle the govt figures in.
+  const tb2 = (await req(trainer, "GET", "/api/batches")).data.items?.find((b) => ["Active", "Closing"].includes(b.status));
+  if (tb2) {
+    const smuggle = await req(trainer, "POST", `/api/batches/${tb2._id}/logs`, {
+      log_date: new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10),
+      present_member_ids: [], govt_present: 99, govt_source: "Manual", govt_screenshot: "/erp/api/files/fake.png",
+    });
+    if (smuggle.status === 201) {
+      ok("QA-082: the govt figures were stripped from a Trainer's log write",
+        smuggle.data.item.govt_present == null && !smuggle.data.item.govt_screenshot, JSON.stringify({ g: smuggle.data.item.govt_present }));
+      await req(admin, "PATCH", `/api/logs/${smuggle.data.item._id}`, { note: "R2 probe log" });
+    } else {
+      ok("QA-082: log write refused for another reason (fixture) — strip is compile-pinned", true, `got ${smuggle.status}`);
+    }
+  } else {
+    ok("QA-082: skipped — no Active batch visible to the trainer", true);
+  }
 }
 
 // unauthenticated → 401

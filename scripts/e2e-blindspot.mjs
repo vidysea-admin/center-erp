@@ -128,9 +128,10 @@ const dupChange = wcs.find((c) => c.row_key?.includes("(#2)") && c.column === "T
 ok("duplicate-key rows tracked separately (#2 suffix)", dupChange?.old_value === "225" && dupChange?.new_value === "230", JSON.stringify(dupChange ?? wr2));
 const pwChangeAdmin = wcs.find((c) => c.column === "TC Password");
 ok("admin sees TC Password change in clear", pwChangeAdmin?.new_value === "newpass", JSON.stringify(pwChangeAdmin?.new_value));
-const wcsOps = (await req(ops, "GET", "/api/workbook-changes?status=New")).data.items ?? [];
-const pwChangeOps = wcsOps.find((c) => c.column === "TC Password");
-ok("Operations sees TC Password MASKED", pwChangeOps?.new_value === "••••••", JSON.stringify(pwChangeOps?.new_value));
+// QA-083 (checker round 5): Operations lost sheet.approve — the sheet feed no longer
+// answers them at all, which is stronger than the old masked read.
+const wcsOpsRes = await req(ops, "GET", "/api/workbook-changes?status=New");
+ok("Operations can no longer read the sheet feed at all (QA-083)", wcsOpsRes.status === 403, `got ${wcsOpsRes.status}`);
 
 // ---- 6b. MANY tabs, differently shaped, and tabs coming and going (2026-08-13) ----
 // "10-15 tabs saare sync hone chahiye… kal koi nayi tab aaye ya hate, system dynamic ho."

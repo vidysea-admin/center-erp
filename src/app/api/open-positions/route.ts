@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, locationFilter } from "@/lib/authz";
+import { requirePerm } from "@/lib/permissions";
 import { LocationTarget, Trainer } from "@/models";
 
 // Open Positions (CEO, 13/08 walkthrough): "ek tab — kahan-kahan trainer hire karne hain.
@@ -36,6 +37,10 @@ const BUCKET_KEYS = ["fresh", "shortlisted", "docs", "sent", "approved", "certif
 export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
+  // QA-091 (checker round 5): the hiring board is a trainers.manage surface — without a
+  // gate, a Trainer read other trainers BY NAME through stage_trainers and an Enrollment
+  // login read the whole 21-centre hiring plan.
+  await requirePerm(user, "trainers.manage");
   const showAll = req.nextUrl.searchParams.get("approved") === "all";
   // Default: only per-row-approved targets (tc_status is the government's verdict on that
   // centre×job-role) at approved locations, scoped by the caller's centres (Rule 38).

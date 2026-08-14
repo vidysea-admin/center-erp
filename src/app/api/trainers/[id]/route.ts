@@ -20,6 +20,7 @@ export const { GET, PATCH } = itemRoutes({
     "nominated_for_location", "nominated_for_program", "source", "qualification",
     "industry_experience_years", "teaching_experience_years", "nsdc_remarks",
     "eligibility_payment_amount", "payment_reference", "tot_certificate_no", "pipeline_note"],
+  readRoles: ["Admin", "Operations", "Location"], // QA-095: same door as the list
   writeRoles: ["Admin", "Operations"],
   permission: "trainers.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
   // F-B5: re-pointing a trainer's nomination at a halted centre is also hiring for it.
