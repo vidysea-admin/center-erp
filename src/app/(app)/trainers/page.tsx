@@ -299,6 +299,8 @@ function TrainersInner() {
       <Drawer open={!!imp} onClose={() => setImp(null)} title="Import trainers (Excel)" wide>
         {imp && (
           <div className="space-y-3">
+            {/* QA-028: every importer offers its sample sheet. */}
+            <a href={`${BASE_PATH}/templates/trainers-sample.csv`} download className="inline-block text-sm font-medium text-blue-700 hover:underline">⬇ Download sample sheet format</a>
             <input type="file" accept=".xlsx,.xls,.csv" onChange={async (e) => {
               const file = e.target.files?.[0]; e.target.value = "";
               if (!file) return;

@@ -168,7 +168,8 @@ function BatchesInner() {
               { key: "source", label: "Source", mobile: false, filterable: true, filterText: (r: any) => r.source ?? "Entered in ERP", render: (r: any) => <SourceCell source={r.source} /> },
               // 2026-08-14 (Umesh): "entered into ERP dikhana is really not right — KISNE
               // daala, 4 me se kaun". The creator by name; seeded rows honestly say so.
-              { key: "created_by", label: "Entered by", mobile: false, hidden: true, filterable: true,
+              // Checker caught the first ship hiding this behind the picker — visible by default.
+              { key: "created_by", label: "Entered by", mobile: false, filterable: true,
                 sortValue: (r: any) => r.created_by?.name ?? "", filterText: (r: any) => r.created_by?.name ?? "(seed/import)",
                 render: (r: any) => r.created_by?.name ?? <span className="text-gray-400">(seed/import)</span> },
             ]} empty="No batches — plan the first one." />

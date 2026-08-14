@@ -45,7 +45,7 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
       {tab === "Candidates" && <Roster batchId={id} batch={b} setError={setError} onChanged={load} />}
       {tab === "Enrollment" && <Enrollment batchId={id} setError={setError} />}
       {tab === "Daily Execution" && <DailyExecution batchId={id} batch={b} role={role} setError={setError} />}
-      {tab === "Closure" && <ClosureTab batchId={id} batch={b} setError={setError} onChanged={load} />}
+      {tab === "Closure" && <ClosureTab batchId={id} batch={b} role={role} setError={setError} onChanged={load} />}
       {tab === "Feedback" && <FeedbackTab batchId={id} setError={setError} />}
       {tab === "Costs" && (role === "Admin" || role === "Operations") && <CostsTab batchId={id} batch={b} setError={setError} />}
       {tab === "Activity" && <Activity entity="Batch" id={id} />}
@@ -300,8 +300,12 @@ function Roster({ batchId, batch, setError, onChanged }: any) {
   }
 
   const [loaded, setLoaded] = useState(false);
+  // QA-043 (checker): a completed batch's roster showed enrollment but never the outcome —
+  // result + certificate ride along from the per-candidate rows.
+  const [resultsByCand, setResultsByCand] = useState<Map<string, any>>(new Map());
   const load = () => Promise.all([
     api(`/api/batches/${batchId}/members`).then((d) => setMembers(d.items)),
+    api(`/api/batches/${batchId}/results`).then((d) => setResultsByCand(new Map((d.items ?? []).filter((i: any) => i.result).map((i: any) => [String(i.result.candidate?._id ?? i.result.candidate), i.result])))).catch(() => {}),
     // 2026-08-13 (Manish hit this live — Prem Kumar/Lalit from another job role in the pool):
     // the pool is this location AND this job role. Program-less candidates (bulk imports)
     // stay eligible — they inherit the batch's programme on enrol; the server enforces both.
@@ -384,6 +388,27 @@ function Roster({ batchId, batch, setError, onChanged }: any) {
                 ? <span className="text-xs tabular-nums text-gray-700">{r.govt_attendance.days_present}/{r.govt_attendance.working_days}</span>
                 : <span className="text-xs text-gray-400">—</span>,
             },
+            {
+              // QA-043: the outcome, on the roster itself.
+              key: "result", label: "Result", mobile: false, filterable: true,
+              filterText: (r: any) => resultsByCand.get(String(r.candidate?._id))?.result ?? "—",
+              render: (r: any) => {
+                const res = resultsByCand.get(String(r.candidate?._id));
+                return res?.result ? <Chip value={res.result} /> : <span className="text-xs text-gray-400">—</span>;
+              },
+            },
+            {
+              key: "certificate", label: "Certificate", mobile: false,
+              render: (r: any) => {
+                const res = resultsByCand.get(String(r.candidate?._id));
+                if (!res) return <span className="text-xs text-gray-400">—</span>;
+                return res.certificate_file
+                  ? <a className="text-xs font-medium text-blue-700 hover:underline" href={res.certificate_file} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>{res.certificate_status ?? "View"} ↗</a>
+                  : <span className="text-xs text-gray-500">{res.certificate_status ?? "—"}</span>;
+              },
+            },
+            // QA-039: provenance on the roster too.
+            { key: "source", label: "Source", mobile: false, hidden: true, filterable: true, render: (r: any) => r.source ?? <span className="text-gray-400">—</span> },
             { key: "left_on", label: "Left", render: (r: any) => r.left_on ? `${fmtDate(r.left_on)} (${r.drop_reason})` : "—" },
             { key: "_act", label: "", render: (r: any) => !r.left_on ? <Btn small kind="ghost" onClick={() => setDropTarget(r)}>Drop</Btn> : null },
           ]} empty="No members yet — add from the candidate pool." />
@@ -916,7 +941,7 @@ function ClosureFileSlot({ label, value, onUpload, disabled }: any) {
   );
 }
 
-function ClosureTab({ batchId, batch, setError, onChanged }: any) {
+function ClosureTab({ batchId, batch, role, setError, onChanged }: any) {
   const [closure, setClosure] = useState<any>(null);
   const [invoice, setInvoice] = useState<any>(null);
   const [form, setForm] = useState<any>({});
@@ -956,8 +981,21 @@ function ClosureTab({ batchId, batch, setError, onChanged }: any) {
 
   const closed = ["Completed", "Cancelled"].includes(batch?.status);
 
+  // QA-044: legacy batch with per-candidate rows but NO closure record — the cards below
+  // would read 0 while the rows hold real passes/certificates. One click derives.
+  async function derive() {
+    try { await api(`/api/batches/${batchId}/closure/recompute`, { method: "POST" }); load(); onChanged(); }
+    catch (e: any) { setError(e.message); }
+  }
+
   return (
     <div className="space-y-4">
+      {!closure && (summary?.total ?? 0) > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          <span>{summary.passed} passed and {summary.certificates_issued} certificate(s) exist on per-candidate rows, but this batch has no closure record — the figures below read 0.</span>
+          <Btn small onClick={derive}>Derive figures from rows</Btn>
+        </div>
+      )}
       {/* Per-candidate marking gets the full width — it is a data-entry grid, not a side panel. */}
       {perCandidate && (
         <CandidateResults batchId={batchId} batch={batch} setError={setError} onChanged={() => { load(); onChanged(); }} />
@@ -1013,6 +1051,9 @@ function ClosureTab({ batchId, batch, setError, onChanged }: any) {
         </div>
         <ClosureFileSlot label="Certificate bundle" value={closure?.certificate_file} disabled={closed} onUpload={(e: any) => uploadClosureFile(e, "certificate_file")} />
       </Section>
+      {/* QA-038 (checker): a Location/SPOC login saw the whole Invoice section with buttons the
+          server refuses — money surfaces render only for the roles that hold them. */}
+      {["Admin", "Operations"].includes(role) && (
       <Section title={`Invoice — ${invoice?.status ?? "Not Ready"}`}>
         <div className="space-y-3">
           {!closure?.ready_for_invoice && (
@@ -1059,6 +1100,7 @@ function ClosureTab({ batchId, batch, setError, onChanged }: any) {
           </div>
         </div>
       </Section>
+      )}
       </div>
     </div>
   );

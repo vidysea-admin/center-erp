@@ -18,6 +18,9 @@ const NAV = [
   { href: "/sheet-watch", label: "Sheet Sync", Icon: IconSync, badge: "sheets" as string | undefined, roles: ["Admin", "Operations"] },
   { href: "/locations", label: "Locations", Icon: IconPin },
   { href: "/trainers", label: "Trainers", Icon: IconUser },
+  // Karunn 13/08 [25:28]: "Open Positions kahan-kahan hain — side me chahiye" — the
+  // hiring board gets its own door instead of hiding as the third Trainers tab.
+  { href: "/trainers?tab=Open%20Positions", label: "Open Positions", Icon: IconUser, roles: ["Admin", "Operations"] },
   { href: "/candidates", label: "Candidates", Icon: IconUsers },
   { href: "/batches", label: "Batches", Icon: IconCap },
   // 2026-08-12: the portal attendance export Manish uploads, reconciled against our daily logs.
@@ -198,7 +201,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const links = (
     <nav className="flex flex-col gap-0.5 p-3">
       {nav.map(({ href, label, Icon, badge }) => {
-        const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
+        const hrefPath = href.split("?")[0];
+        const active = hrefPath === "/" ? pathname === "/" : pathname.startsWith(hrefPath);
         const count = badge === "sheets" ? syncCount + watchCount : badge === "sync" ? syncCount : badge === "watch" ? watchCount : 0;
         return (
           <Link key={href} href={href} onClick={() => setOpen(false)}

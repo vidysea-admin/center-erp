@@ -6,6 +6,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { api, fmtDT, fmtDate } from "@/lib/client";
+import { BASE_PATH } from "@/lib/base-path";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, inputCls } from "@/components/ui";
 import { useLocationCtx } from "@/components/shell";
 
@@ -99,6 +100,8 @@ function Inner() {
           </span>
         )}
         <div className="ml-auto flex items-center gap-2">
+          {/* QA-028: every importer offers its sample sheet. */}
+          <a href={`${BASE_PATH}/templates/govt-attendance-sample.csv`} download className="text-xs font-medium text-blue-700 hover:underline">⬇ sample format</a>
           <select className={inputCls + " max-w-56 text-xs"} value={manualLoc} onChange={(e) => setManualLoc(e.target.value)} title="Used when the file's TC ID matches no centre">
             <option value="">Centre: auto-detect from file</option>
             {locations.map((l: any) => <option key={l._id} value={l._id}>{l.name}</option>)}
@@ -122,10 +125,17 @@ function Inner() {
             { key: "period_label", label: "Period", sortable: true, sortValue: (r: any) => r.period_label || r.file_name, render: (r: any) => <span className="font-medium">{r.period_label || r.file_name}</span> },
             { key: "location", label: "Centre", sortable: true, sortValue: (r: any) => r.location?.name, render: (r: any) => `${r.location?.name ?? "—"}${r.tc_id ? ` · ${r.tc_id}` : ""}` },
             { key: "row_count", label: "Rows", sortable: true },
-            { key: "matched_count", label: "Matched", sortable: true, render: (r: any) => `${r.matched_count}/${r.row_count}` },
+            // QA-023: the counts on the list open the import pre-filtered to that subset.
+            { key: "matched_count", label: "Matched", sortable: true, render: (r: any) => (
+              <button className="font-medium text-blue-700 hover:underline" onClick={(e) => { e.stopPropagation(); setFilter("matched"); setOpen(r._id); }}>
+                {r.matched_count}/{r.row_count}
+              </button>
+            ) },
             {
               key: "variance_count", label: "Variance", sortable: true, render: (r: any) =>
-                r.variance_count ? <span className="font-semibold text-amber-700">{r.variance_count}</span> : <span className="text-gray-400">none</span>,
+                r.variance_count
+                  ? <button className="font-semibold text-amber-700 hover:underline" onClick={(e) => { e.stopPropagation(); setFilter("variance"); setOpen(r._id); }}>{r.variance_count}</button>
+                  : <span className="text-gray-400">none</span>,
             },
             { key: "imported_at", label: "Imported", mobile: false, sortable: true, sortValue: (r: any) => r.imported_at ? new Date(r.imported_at).getTime() : null, render: (r: any) => `${fmtDT(r.imported_at)} · ${r.imported_by?.name ?? "—"}` },
           ]} empty="No portal attendance imported yet — upload the export Manish downloads from the portal." />
@@ -141,9 +151,14 @@ function Inner() {
               <Btn small kind="danger" onClick={() => remove(open)}>Delete</Btn>
             </span>
           }>
+          {/* QA-023: every summary count is a clickable filter of the rows below. */}
           <div className="mb-3 flex flex-wrap gap-2 text-xs">
-            {[["", `All ${detail.item.row_count}`], ["variance", `Variance ${detail.item.variance_count}`], ["unmatched", `Unmatched ${detail.item.unmatched_count + detail.item.ambiguous_count}`]].map(([v, label]) => (
-              <button key={v} onClick={() => setFilter(v as string)}
+            {[["", `All ${detail.item.row_count}`],
+              ["matched", `Matched ${detail.item.matched_count}`],
+              ["ambiguous", `Ambiguous ${detail.item.ambiguous_count}`],
+              ["unmatched", `Unmatched ${detail.item.unmatched_count}`],
+              ["variance", `Differ from our logs ${detail.item.variance_count}`]].map(([v, label]) => (
+              <button key={v} onClick={() => setFilter(filter === v ? "" : (v as string))}
                 className={`rounded-full border px-3 py-1 font-medium ${filter === v ? "border-blue-300 bg-blue-50 text-blue-700" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>
                 {label}
               </button>
