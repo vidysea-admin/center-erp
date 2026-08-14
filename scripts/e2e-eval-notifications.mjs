@@ -43,7 +43,7 @@ if (mine) {
 if (mine) await req(admin, "POST", `/api/notifications/${mine._id}`, { status: "Deleted" }, 400);
 
 // [worst] an alert not addressed to your role is untouchable even by ID.
-const spoc = await login("spoc.jpr03@vidysea.com", "Vidysea@123");
+const spoc = await login("spoc.jpr03@vidysea.com", "CiOnly@123");
 if (spoc && mine) {
   const r = await req(spoc, "POST", `/api/notifications/${mine._id}`, { status: "Acknowledged" });
   ok("[worst] SPOC cannot act on an Admin-addressed alert by guessing its id", r.status === 403, `got ${r.status}`);

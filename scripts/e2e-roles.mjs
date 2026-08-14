@@ -26,7 +26,7 @@ async function req(cookie, method, path, body) {
   return { status: res.status, data: await res.json().catch(() => ({})) };
 }
 
-const PW = "Vidysea@123";
+const PW = "CiOnly@123";
 const admin = await login("admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
 const ops = await login("ops@vidysea.com", PW);
 const spoc = await login("spoc.jpr03@vidysea.com", PW);

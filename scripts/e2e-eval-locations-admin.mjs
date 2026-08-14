@@ -10,7 +10,7 @@ const loc = (await req(admin, "POST", "/api/locations", { code: "L" + s, name: "
 
 // ---- targets: the new locations.manage gate (was requireEdit-only — audit 2026-08-13) ----
 // enroll@ is unscoped with can_edit — exactly the shape that could rewrite approved targets before.
-const enroll = await login("enroll@vidysea.com", "Vidysea@123");
+const enroll = await login("enroll@vidysea.com", "CiOnly@123");
 if (enroll) {
   const r = await req(enroll, "PUT", `/api/locations/${loc._id}/targets`, { program: prog._id, approved_target: 999 });
   ok("[worst] approved targets refuse a can_edit user without locations.manage", r.status === 403, `got ${r.status}`);
@@ -124,10 +124,10 @@ await req(admin, "PUT", "/api/defaults", { snapshot_retention_per_tab: before.sn
 
 // ---- users lifecycle ----
 const uEmail = `eval.user.${s}@vidysea-test.local`;
-const mk = await req(admin, "POST", "/api/users", { name: "TEST-EL User " + s, email: uEmail, password: "Vidysea@123", role: "Location", location_scope: [loc._id] }, 201);
+const mk = await req(admin, "POST", "/api/users", { name: "TEST-EL User " + s, email: uEmail, password: "CiOnly@123", role: "Location", location_scope: [loc._id] }, 201);
 const uid = mk.data.item?._id;
 // [best] the fresh scoped user can sign in and sees only their centre.
-const fresh = await login(uEmail, "Vidysea@123");
+const fresh = await login(uEmail, "CiOnly@123");
 ok("[best] admin-created user can sign in", !!fresh);
 if (fresh) {
   const locs = (await req(fresh, "GET", "/api/locations?limit=2000", undefined, 200)).data;
@@ -145,8 +145,8 @@ ok("[avg] deactivated user shows active=false", offRow?.active === false, JSON.s
 {
   // lowercase on purpose: the schema lowercases emails, and the drop asserts compare strings.
   const dEmail = `eval.drop.${s.toLowerCase()}@vidysea-test.local`;
-  const d1 = (await req(admin, "POST", "/api/users", { name: "TEST-EL Drop " + s, email: dEmail, password: "Vidysea@123", role: "Location", location_scope: [loc._id] }, 201)).data.item;
-  ok("T3: drop fixture signs in before the drop", !!(await login(dEmail, "Vidysea@123")));
+  const d1 = (await req(admin, "POST", "/api/users", { name: "TEST-EL Drop " + s, email: dEmail, password: "CiOnly@123", role: "Location", location_scope: [loc._id] }, 201)).data.item;
+  ok("T3: drop fixture signs in before the drop", !!(await login(dEmail, "CiOnly@123")));
   // Non-admin cannot drop (the Admin-only privilege guard fires).
   const enrollDeny = await req(enroll, "PATCH", `/api/users/${d1._id}`, { drop: true });
   ok("T3: a non-admin cannot drop anyone", enrollDeny.status === 403, `got ${enrollDeny.status}`);
@@ -157,9 +157,9 @@ ok("[avg] deactivated user shows active=false", offRow?.active === false, JSON.s
     dropped?.dropped_email === dEmail && String(dropped?.email ?? "").startsWith("dropped.") && String(dropped?.email ?? "").endsWith(dEmail),
     JSON.stringify({ e: dropped?.email, de: dropped?.dropped_email }));
   // The login dies with the drop.
-  ok("T3: the dropped user cannot sign in anymore", !(await login(dEmail, "Vidysea@123")));
+  ok("T3: the dropped user cannot sign in anymore", !(await login(dEmail, "CiOnly@123")));
   // The freed email can carry a brand-new account (drop → recreate flow).
-  const re = await req(admin, "POST", "/api/users", { name: "TEST-EL Rehire " + s, email: dEmail, password: "Vidysea@123", role: "Location", location_scope: [loc._id] });
+  const re = await req(admin, "POST", "/api/users", { name: "TEST-EL Rehire " + s, email: dEmail, password: "CiOnly@123", role: "Location", location_scope: [loc._id] });
   ok("T3: the same email works for a fresh account after the drop", re.status === 201, `got ${re.status}`);
   // Dropped is terminal: no edits, no second drop, and never yourself.
   ok("T3: a dropped account refuses edits (create a new one instead)", (await req(admin, "PATCH", `/api/users/${d1._id}`, { name: "zombie" })).status === 400);

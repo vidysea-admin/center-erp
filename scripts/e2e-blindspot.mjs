@@ -23,7 +23,7 @@ async function req(cookie, method, path, body) {
 }
 
 const admin = await login("admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
-const ops = await login("ops@vidysea.com", "Vidysea@123");
+const ops = await login("ops@vidysea.com", "CiOnly@123");
 const stamp = "BS" + Date.now().toString().slice(-6);
 
 // ---- setup ----

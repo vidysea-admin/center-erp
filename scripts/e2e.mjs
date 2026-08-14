@@ -283,7 +283,7 @@ ok("F-B17: a genuinely new name still creates (trimmed)", freshCat.data.item?.na
 // ---- R-E (CEO 14/08 [25:20-25:44]): Operations is POST-ONLY on money ----
 {
   await req("PUT", "/api/approvals", { action: "cost.post", enabled: true, approver_role: "Admin" }, 200);
-  const opsCookie = await loginAs("ops@vidysea.com", "Vidysea@123");
+  const opsCookie = await loginAs("ops@vidysea.com", "CiOnly@123");
   if (opsCookie) {
     const saved = cookie; cookie = opsCookie;
     ok("R-E: the cost ledger is closed to Operations", (await req("GET", "/api/costs")).status === 403);
@@ -1021,7 +1021,7 @@ ok("…with the contact details an approver needs", !!queued && queued.phone ===
 // must be GONE, not merely guarded. The AVPL rebase endpoint is permanent: Admin-only. ----
 {
   await req("POST", "/api/admin/wipe", {}, 404); // removed — 404 proves the surface no longer exists
-  const spocCookie = await loginAs("spoc.jpr03@vidysea.com", "Vidysea@123");
+  const spocCookie = await loginAs("spoc.jpr03@vidysea.com", "CiOnly@123");
   if (spocCookie) {
     const saved = cookie; cookie = spocCookie;
     await req("POST", "/api/admin/avpl-rebase", {}, 403);

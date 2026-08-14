@@ -140,13 +140,13 @@ ok("daily log written for the reconciliation baseline", logRes.status === 201, J
 {
   // can_edit true — a trainer's whole job here is writing the daily log (the signup approval
   // path auto-grants it for Trainer role; direct admin creation must say so explicitly).
-  const mk = (email, scope) => req(admin, "POST", "/api/users", { name: "TEST-GT " + email, email, password: "Vidysea@123", role: "Trainer", can_edit: true, location_scope: scope });
+  const mk = (email, scope) => req(admin, "POST", "/api/users", { name: "TEST-GT " + email, email, password: "CiOnly@123", role: "Trainer", can_edit: true, location_scope: scope });
   const inEmail = `gt.trainer.in.${STAMP}@vidysea-test.local`, outEmail = `gt.trainer.out.${STAMP}@vidysea-test.local`;
   const farLoc = (await req(admin, "POST", "/api/locations", { code: "GTF" + STAMP, name: "TEST-GT Far " + STAMP, approval_status: "Approved", operational_status: "Active", city: "Elsewhere" }, 201)).data.item;
   await mk(inEmail, [loc._id]);
   await mk(outEmail, [farLoc._id]);
-  const tIn = await login(inEmail, "Vidysea@123");
-  const tOut = await login(outEmail, "Vidysea@123");
+  const tIn = await login(inEmail, "CiOnly@123");
+  const tOut = await login(outEmail, "CiOnly@123");
   ok("trainer-role logins available", !!tIn && !!tOut);
   if (tIn && tOut) {
     // The scoped trainer marks a fresh ROUND on their own batch's day log — allowed.
@@ -222,7 +222,7 @@ ok("all 7 rows persisted", detail.data.rows?.length === 7, `got ${detail.data.ro
     (att.data.members ?? []).every((m) => m.present_by_day.length === att.data.days_held), `days_held=${att.data.days_held}`);
   // Scope: the endpoint carries no extra permission gate, but Rule 38 still bites — the
   // out-of-scope trainer from the marking block must not read another centre's meters.
-  const tOut2 = await login(`gt.trainer.out.${STAMP}@vidysea-test.local`, "Vidysea@123");
+  const tOut2 = await login(`gt.trainer.out.${STAMP}@vidysea-test.local`, "CiOnly@123");
   if (tOut2) {
     const foreignAtt = await req(tOut2, "GET", `/api/batches/${batch._id}/attendance`);
     ok("R-D: out-of-scope trainer refused (Rule 38)", foreignAtt.status === 403 || foreignAtt.status === 404, `got ${foreignAtt.status}`);

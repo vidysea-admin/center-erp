@@ -47,3 +47,6 @@ uploads/
 
 # Prod mongodump backups — NEVER in git (PII + live TC credentials)
 backups/
+
+# SEC-01 (2026-08-15): ad-hoc probe/smoke scripts carry live credentials - never in git.
+scratch-*

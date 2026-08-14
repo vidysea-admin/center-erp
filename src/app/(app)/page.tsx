@@ -26,7 +26,17 @@ export default function HomePage() {
 
   if (error) return <ErrorBanner msg={error} />;
   if (!data) return <div className="p-8 text-center text-sm text-gray-400">Loading…</div>;
-  const q = data.queues;
+  // QA-114 (S1, checker 15/08): the lean payload OMITS the org-wide queue keys
+  // (follow_ups / sheet_changes / invoices_pending — home/route.ts QA-096 trim), and
+  // reading .length on an absent key killed the whole tree for exactly the three lean
+  // roles. Absent key = this role doesn't get that queue = default empty here, and the
+  // org-wide sections below render on KEY PRESENCE, not on session state — useSession()
+  // can resolve after the data does, so leanHome alone guards nothing reliably.
+  const q = {
+    missing_logs: [], attendance_gaps: [], enrollment_failures: [],
+    registration_failed: [], pending_users: [],
+    ...data.queues,
+  };
   // A centre principal/SPOC signs in as a Location-scoped user.
   const isPrincipal = role === "Location";
   // QA-058/059 (checker): the Trainer home showed EIGHT cards including money and hiring,
@@ -165,7 +175,7 @@ export default function HomePage() {
           )}
         </Section>
 
-        {!leanHome && (
+        {q.sheet_changes && (
         <Section title={`Sheet Changes Pending Review (${q.sheet_changes.length})`} titleHref="/sync" actions={<Link href="/sync"><Btn kind="ghost" small>Sync Inbox</Btn></Link>}>
           {q.sheet_changes.length === 0 ? <p className="text-sm text-gray-400">No open changes.</p> : (
             <ul className="divide-y divide-gray-100 text-sm">
@@ -220,6 +230,7 @@ export default function HomePage() {
           )}
         </Section>
 
+        {q.follow_ups && (
         <Section title={`Follow-up Actions (${q.follow_ups.length})`} titleHref="/sync">
           {q.follow_ups.length === 0 ? <p className="text-sm text-gray-400">Nothing pending.</p> : (
             <ul className="divide-y divide-gray-100 text-sm">
@@ -234,8 +245,9 @@ export default function HomePage() {
             </ul>
           )}
         </Section>
+        )}
 
-        {!leanHome && (
+        {q.invoices_pending && (
         <Section title={`Invoices Pending (${q.invoices_pending.length})`} titleHref="/costs?tab=Invoices" actions={<Link href="/costs?tab=Invoices"><Btn kind="ghost" small>Invoices</Btn></Link>}>
           {q.invoices_pending.length === 0 ? <p className="text-sm text-gray-400">No invoices waiting.</p> : (
             <ul className="divide-y divide-gray-100 text-sm">

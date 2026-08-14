@@ -79,7 +79,7 @@ ok("[avg] training today → cooldown makes them ineligible", cTRead.eligibility
 
 // ---- scoping on the edit surface ----
 // [worst] a scoped user cannot edit another centre's candidate by ID.
-const spoc = await login("spoc.jpr03@vidysea.com", "Vidysea@123");
+const spoc = await login("spoc.jpr03@vidysea.com", "CiOnly@123");
 if (spoc) {
   const r = await req(spoc, "PATCH", `/api/candidates/${c1._id}`, { name: "hijacked" });
   ok("[worst] out-of-scope candidate edit → 403", r.status === 403, `got ${r.status}`);

@@ -263,7 +263,7 @@ ok("a dropped trainer can be re-opened if they come back", reopened.data.item.pi
   const vCsrf = vCsrfRes.headers.get("set-cookie").split(";")[0];
   const vLogin = await fetch(BASE + "/api/auth/callback/credentials", {
     method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", cookie: vCsrf },
-    body: new URLSearchParams({ csrfToken: vTok, email: "ops@vidysea.com", password: "Vidysea@123" }), redirect: "manual",
+    body: new URLSearchParams({ csrfToken: vTok, email: "ops@vidysea.com", password: "CiOnly@123" }), redirect: "manual",
   });
   const vSession = (vLogin.headers.getSetCookie?.() ?? [vLogin.headers.get("set-cookie")]).flat().filter(Boolean).map((c) => c.split(";")[0]).find((c) => c.includes("session-token"));
   const vCookie = [vCsrf, vSession].join("; ");

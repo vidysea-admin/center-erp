@@ -26,7 +26,7 @@ async function login(email, password) {
   return [jar, ...set].join("; ");
 }
 const admin = await login("admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
-const enroll = await login("enroll@vidysea.com", "Vidysea@123");
+const enroll = await login("enroll@vidysea.com", "CiOnly@123");
 
 async function req(cookie, method, path, json, expect) {
   const r = await fetch(BASE + path, {

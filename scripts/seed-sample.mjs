@@ -107,7 +107,7 @@ for (const [name, skills, home, rate] of trainerDefs) {
 }
 
 // ---- Users (role-wise access) ----
-const PW = "Vidysea@123";
+const PW = "CiOnly@123";
 for (const u of [
   { name: "Operations Lead", email: "ops@vidysea.com", role: "Operations", can_edit: true },
   { name: "Neha Sharma", email: "spoc.jpr03@vidysea.com", role: "Location", can_edit: true, location_scope: [locations.JPR03._id] },

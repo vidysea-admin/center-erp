@@ -52,9 +52,9 @@ ok("[avg] fixing the registration clears the queue row", !(homeRF2.queues.regist
 
 // [worst] a scoped user whose centres do not exist gets an explanation, not a wall of zeros.
 const ghostEmail = `eval.ghost.${s}@vidysea-test.local`;
-const mkGhost = await req(admin, "POST", "/api/users", { name: "TEST-EH Ghost " + s, email: ghostEmail, password: "Vidysea@123", role: "Location", location_scope: ["000000000000000000000000"] });
+const mkGhost = await req(admin, "POST", "/api/users", { name: "TEST-EH Ghost " + s, email: ghostEmail, password: "CiOnly@123", role: "Location", location_scope: ["000000000000000000000000"] });
 if (mkGhost.status === 201) {
-  const ghost = await login(ghostEmail, "Vidysea@123");
+  const ghost = await login(ghostEmail, "CiOnly@123");
   ok("[worst] dangling-scope user can still sign in", !!ghost);
   if (ghost) {
     const gHome = (await req(ghost, "GET", "/api/home", undefined, 200)).data;
@@ -64,6 +64,16 @@ if (mkGhost.status === 201) {
     ok("[worst] …and every KPI they receive is an honest zero (org keys absent)",
       gHome.kpis.active_batches === 0 && gHome.kpis.approved_locations === undefined, JSON.stringify(gHome.kpis));
     ok("[worst] …with no other centre's queue rows leaking", (gHome.queues.registration_failed ?? []).length === 0 && (gHome.queues.missing_logs ?? []).length === 0);
+    // QA-114 (S1): the client renders queue sections on KEY PRESENCE now. This pins the
+    // contract both ways: the org-wide queue keys are ABSENT for a lean role (so the
+    // sections hide instead of crashing on undefined.length), and the always-on queues
+    // arrive as real arrays.
+    ok("QA-114: lean payload omits the org-wide queue keys entirely",
+      gHome.queues.follow_ups === undefined && gHome.queues.sheet_changes === undefined && gHome.queues.invoices_pending === undefined,
+      JSON.stringify(Object.keys(gHome.queues)));
+    ok("QA-114: the always-on queues are real arrays, never missing",
+      Array.isArray(gHome.queues.missing_logs) && Array.isArray(gHome.queues.attendance_gaps) && Array.isArray(gHome.queues.enrollment_failures),
+      JSON.stringify(Object.keys(gHome.queues)));
   }
   await req(admin, "PATCH", `/api/users/${mkGhost.data.item._id}`, { active: false }, 200); // leave no live login behind
 } else {
@@ -80,7 +90,7 @@ ok("[avg] attendance thresholds ride along for the gap queue", typeof homeFinal.
 
 // [worst] Home never 500s for any seeded role (content varies, the endpoint must not break).
 for (const [email, label] of [["ops@vidysea.com", "Operations"], ["spoc.jpr03@vidysea.com", "SPOC"], ["enroll@vidysea.com", "Enrollment"]]) {
-  const c = await login(email, "Vidysea@123");
+  const c = await login(email, "CiOnly@123");
   if (!c) { ok(`[worst] ${label} login available (seed-sample)`, false, email); continue; }
   const r = await req(c, "GET", "/api/home");
   ok(`[worst] Home answers 200 for ${label}`, r.status === 200, `got ${r.status}`);

@@ -40,16 +40,23 @@ Verify what is deployed at any time, no login needed:
 
 ## Logins (seeded)
 
-| Email | Password | Role |
-|---|---|---|
-| admin@vidysea.com | **`ErpBGO5XbCn!`** (NOT `admin123`) | Admin |
-| ops@vidysea.com | `Vidysea@123` | Operations |
-| spoc.jpr03@vidysea.com | `Vidysea@123` | Location (Jaipur 03) |
-| principal.jpr03@vidysea.com | `Vidysea@123` | Location, view-only |
-| enroll@vidysea.com | `Vidysea@123` | Enrollment |
+<!-- SEC-01 (2026-08-15, GitGuardian): live passwords were WRITTEN HERE and pushed to
+     GitHub. Never again — this file records WHO exists, never their credentials.
+     Passwords live with Umesh / the team password manager only. -->
 
-`admin123` is only the fresh-seed default and is **wrong on production** — the prod admin password
-was rotated to `ErpBGO5XbCn!`. A failed admin login with `admin123` is expected, not a bug.
+| Email | Role |
+|---|---|
+| admin@vidysea.com | Admin |
+| ops@vidysea.com | Operations |
+| spoc.jpr03@vidysea.com | Location (Jaipur 03) |
+| principal.jpr03@vidysea.com | Location, view-only |
+| enroll@vidysea.com | Enrollment |
+
+`admin123` is only the fresh-seed default and is **wrong on production** — the prod admin
+password was rotated (current one is with Umesh, not in this repo). A failed admin login
+with `admin123` is expected, not a bug. The non-admin live passwords are also held by
+Umesh; the CI/e2e suites use their own throwaway password that has no relation to
+production.
 
 ---
 
@@ -165,3 +172,16 @@ only; it must not block the checker's own tooling.
 
 See `d:\erp\qa\STATE.md` for the full remediation ledger (every fix, where, and its test) and
 `d:\erp\qa\CHANGELOG.jsonl` for the machine-readable one-row-per-fix log.
+
+## Infra follow-up — proxy multipart body cap (2026-08-15, URGENT for devops)
+
+The app imposes NO upload size limit anymore (Umesh 15/08: "koi bhi cap nahi" — the
+`max_upload_mb` check and its Admin knob were removed in -14-50). The ONLY thing that
+rejects a large upload now is the reverse proxy in front of the app: multipart bodies over
+~8-10 MB die in the platform's form parse (live-bisected 2026-08-15: 8 MB → 200,
+10 MB → 500; the app answers an honest 413). Field videos routinely exceed this.
+
+**Devops action:** raise the body-size cap on whatever fronts the app
+(nginx `client_max_body_size` / ALB / ingress equivalent) to at least a few hundred MB,
+then re-test with a >10 MB upload via the trainer-documents drawer. Until then, big videos
+fail with the 413 message naming this exact cause.
