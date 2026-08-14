@@ -86,8 +86,8 @@ function TrainerApplyInner() {
             <div className="grid grid-cols-2 gap-3">
               <label className="block"><span className="mb-1 block text-xs font-medium text-gray-600">Phone (10 digit) *</span>
                 <input className={inputCls} required inputMode="numeric" value={form.phone ?? ""} onChange={(e) => set("phone", e.target.value)} /></label>
-              <label className="block"><span className="mb-1 block text-xs font-medium text-gray-600">Email</span>
-                <input className={inputCls} type="email" value={form.email ?? ""} onChange={(e) => set("email", e.target.value)} /></label>
+              <label className="block"><span className="mb-1 block text-xs font-medium text-gray-600">Email *</span>
+                <input className={inputCls} type="email" required value={form.email ?? ""} onChange={(e) => set("email", e.target.value)} /></label>
             </div>
             <label className="block"><span className="mb-1 block text-xs font-medium text-gray-600">Qualification (highest)</span>
               <input className={inputCls} placeholder="e.g. B.Tech / ITI / Diploma" value={form.qualification ?? ""} onChange={(e) => set("qualification", e.target.value)} /></label>

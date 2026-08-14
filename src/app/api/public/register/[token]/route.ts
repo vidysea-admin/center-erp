@@ -45,12 +45,17 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   const name = String(body.name ?? "").trim();
   const phone = String(body.phone ?? "").replace(/\D/g, "");
   if (!name || phone.length < 10) throw new HttpError(400, "Name and a 10-digit phone number are required.");
+  // 15/08 (Umesh): phone AND email both mandatory on self-registration — the email
+  // pipeline is coming, and everything should reach people properly by mail.
+  const email = String(body.email ?? "").trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, "A valid email address is required.");
   const program = body.program && !t.program ? body.program : (t.program?._id ?? body.program);
   if (!program) throw new HttpError(400, "Please choose a program.");
 
   const doc = await Candidate.create({
     name,
     phone,
+    email,
     gender: body.gender || undefined,
     dob: body.dob ? new Date(body.dob) : undefined,
     education: EDUCATION_LEVEL.includes(body.education) ? body.education : undefined,

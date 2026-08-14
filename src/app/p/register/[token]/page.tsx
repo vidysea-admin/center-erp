@@ -65,6 +65,11 @@ export default function PublicRegisterPage({ params }: { params: Promise<{ token
             <label className="mb-1 block text-sm font-medium">Mobile number *</label>
             <input className={inputCls} required inputMode="numeric" placeholder="10-digit mobile" value={form.phone ?? ""} onChange={(e) => set("phone", e.target.value)} />
           </div>
+          <div>
+            {/* 15/08 (Umesh): email mandatory on self-registration — the mail pipeline is coming. */}
+            <label className="mb-1 block text-sm font-medium">Email *</label>
+            <input className={inputCls} required type="email" placeholder="you@example.com" value={form.email ?? ""} onChange={(e) => set("email", e.target.value)} />
+          </div>
           {meta.programs?.length > 1 && (
             <div>
               <label className="mb-1 block text-sm font-medium">Program *</label>

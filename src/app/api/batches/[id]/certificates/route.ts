@@ -6,7 +6,6 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { BASE_PATH } from "@/lib/base-path";
-import { getDefaults } from "@/lib/defaults";
 import { Batch, BatchMember, CandidateResult, Closure } from "@/models";
 import { assertBatchInScope, recomputeClosureAggregates, upsertCandidateCertificate } from "@/lib/rules";
 import { audit } from "@/lib/audit";
@@ -54,7 +53,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   const results = await CandidateResult.find({ batch: id }).lean<any[]>();
   const resultByCandidate = new Map(results.map((r) => [String(r.candidate), r]));
 
-  const maxMb = (await getDefaults()).max_upload_mb ?? 100;
+  // 15/08 (Umesh): no app-side size cap — the proxy's multipart cap is the only limit left.
   const matched: any[] = [];
   const unmatched: { filename: string; reason: string }[] = [];
   const claimed = new Set<string>(); // one file per candidate per request
@@ -64,7 +63,6 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     const refuse = (reason: string) => unmatched.push({ filename: file.name, reason });
     const ext = path.extname(file.name).toLowerCase();
     if (!ALLOWED.has(ext)) { refuse(`file type ${ext || "(none)"} not allowed — certificates are pdf/jpg/png/webp`); continue; }
-    if (file.size > maxMb * 1024 * 1024) { refuse(`over the ${maxMb} MB limit`); continue; }
     const can = canOf(file.name);
     if (!can) { refuse("no CAN id in the filename — name files like CAN_12345.pdf"); continue; }
     const hits = byCan.get(can) ?? [];

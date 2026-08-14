@@ -3,7 +3,7 @@
 import { Types } from "mongoose";
 import {
   Batch, BatchMember, Candidate, CandidateResult, Closure, CostCategory, CostEntry, DailyLog, Invoice, Location,
-  LocationTarget, Notification, Program, Room, Trainer, TrainerDocument,
+  LocationTarget, Notification, Program, Room, TRAINER_PIPELINE, Trainer, TrainerDocument,
 } from "@/models";
 import { auditDiff } from "@/lib/audit";
 import { getDefaults } from "@/lib/defaults";
@@ -1417,12 +1417,33 @@ export async function trainerDocSummary(trainerId: string) {
 export async function transitionTrainer(
   trainerId: string,
   target: string,
-  opts: { reason?: string; remarks?: string; date?: Date; payload?: Record<string, unknown>; actor?: string } = {},
+  opts: { reason?: string; remarks?: string; date?: Date; payload?: Record<string, unknown>; actor?: string; bypass?: boolean; actorName?: string } = {},
 ) {
   const t = await Trainer.findById(trainerId);
   if (!t) throw new HttpError(404, "Trainer not found");
   const from = t.pipeline_status ?? "Fresh Lead";
   if (from === target) throw new HttpError(409, `${t.name} is already at "${target}".`);
+
+  // Rule T8 (Umesh 15/08): a pipeline.bypass holder may set ANY status directly — the
+  // use-case is a trainer who already works with us (batch live or done) whose paperwork
+  // arrives later. Every gate below (edges, T2 docs, T3 vacancy, T5 TR ID) is skipped;
+  // the note and the audit row say so in as many words.
+  if (opts.bypass) {
+    if (!TRAINER_PIPELINE.includes(target as any)) throw new HttpError(400, `Unknown status "${target}".`);
+    if (target === "Dropped" && !opts.reason) throw new HttpError(400, "Rule T6 holds even on bypass: dropping needs a reason.");
+    if (target === "Certified") {
+      const trId = (opts.payload?.tr_id as string) ?? t.tr_id;
+      if (trId) t.tr_id = trId; // recorded when given; NOT demanded — that is the point
+      t.tot_done_on = opts.date ? new Date(opts.date) : new Date();
+      if (!t.available_from) t.available_from = t.tot_done_on;
+    }
+    if (target === "Dropped") { t.dropped_from_stage = from; t.dropped_reason = opts.reason; t.active = false; }
+    if (from === "Dropped") { t.dropped_reason = undefined; t.active = true; }
+    t.pipeline_status = target as any;
+    t.pipeline_note = `BYPASS by ${opts.actorName ?? "admin"}: ${from} → ${target}${opts.reason ? ` (${opts.reason})` : ""}`;
+    await t.save();
+    return t;
+  }
 
   const allowed = TRAINER_FLOW[from];
   if (!allowed) throw new HttpError(409, `Unknown pipeline state "${from}".`);

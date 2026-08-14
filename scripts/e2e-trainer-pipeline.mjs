@@ -235,5 +235,41 @@ ok("a dropped trainer can be re-opened if they come back", reopened.data.item.pi
     saved.data.item.drive_folder_url === "https://drive.google.com/drive/folders/abc", JSON.stringify(saved.data.item.drive_folder_url));
 }
 
+// ---- 15/08 (Umesh): pipeline BYPASS — a grantable right to set any status directly ----
+// Use-case: a trainer who already works with us goes straight to Certified; TR ID follows later.
+// The gates (docs, NSDC round-trip, TR ID) deliberately do NOT run — that is the point, and why
+// the right is Admin-held and the UI double-confirms.
+{
+  const bt = (await req("POST", "/api/trainers", {
+    name: "Bypass Trainer " + stamp, phone: "8" + Date.now().toString().slice(-9),
+    skills: ["DST" + stamp], nominated_for_location: loc._id, nominated_for_program: prog._id,
+  }, 201)).data.item;
+  const BT = `/api/trainers/${bt._id}/transition`;
+  // The normal machine refuses the jump; bypass takes it — no docs, no NSDC, no TR ID.
+  await req("POST", BT, { target: "Certified" }, 409);
+  const jump = await req("POST", BT, { target: "Certified", bypass: true }, 200);
+  ok("bypass jumps Fresh Lead → Certified with no gates", jump.data.item?.pipeline_status === "Certified", JSON.stringify(jump.data.item?.pipeline_status));
+  ok("bypass leaves a signed note on the profile", /BYPASS by /.test(jump.data.item?.pipeline_note ?? ""), JSON.stringify(jump.data.item?.pipeline_note));
+  // Garbage target still refused, bypass or not.
+  await req("POST", BT, { target: "Wizard", bypass: true }, 400);
+  // Dropped still demands its reason even under bypass (T6 survives).
+  await req("POST", BT, { target: "Dropped", bypass: true }, 400);
+  const drop = await req("POST", BT, { target: "Dropped", bypass: true, reason: "left the org" }, 200);
+  ok("bypass-drop records the reason and deactivates", drop.data.item?.dropped_reason === "left the org" && drop.data.item?.active === false, JSON.stringify({ r: drop.data.item?.dropped_reason, a: drop.data.item?.active }));
+  // Ops HAS trainers.manage but NOT pipeline.bypass — the 403 below is the bypass check
+  // itself firing, not a generic write denial.
+  const vCsrfRes = await fetch(BASE + "/api/auth/csrf");
+  const { csrfToken: vTok } = await vCsrfRes.json();
+  const vCsrf = vCsrfRes.headers.get("set-cookie").split(";")[0];
+  const vLogin = await fetch(BASE + "/api/auth/callback/credentials", {
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", cookie: vCsrf },
+    body: new URLSearchParams({ csrfToken: vTok, email: "ops@vidysea.com", password: "Vidysea@123" }), redirect: "manual",
+  });
+  const vSession = (vLogin.headers.getSetCookie?.() ?? [vLogin.headers.get("set-cookie")]).flat().filter(Boolean).map((c) => c.split(";")[0]).find((c) => c.includes("session-token"));
+  const vCookie = [vCsrf, vSession].join("; ");
+  const deniedRes = await fetch(BASE + BT, { method: "POST", headers: { "Content-Type": "application/json", cookie: vCookie }, body: JSON.stringify({ target: "Certified", bypass: true }) });
+  ok("bypass without the right → 403", deniedRes.status === 403, `got ${deniedRes.status}`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

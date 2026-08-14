@@ -53,6 +53,8 @@ export const POST = apiHandler(async (req: NextRequest) => {
   if (String(body.website ?? "").trim()) return NextResponse.json({ ok: true }, { status: 201 });
   const f = applicantFields(body);
   if (!f.name || f.phone.length !== 10) throw new HttpError(400, "Name and a 10-digit phone are required.");
+  // 15/08 (Umesh): email mandatory on self-application too — the mail pipeline is coming.
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(f.email ?? ""))) throw new HttpError(400, "A valid email address is required.");
   if (!f.skills.length) throw new HttpError(400, "Tell us at least one skill / job role you can teach.");
 
   if (body.token) {

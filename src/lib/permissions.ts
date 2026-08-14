@@ -24,6 +24,11 @@ export const PERMISSIONS: { key: string; label: string; group: string }[] = [
   { key: "costs.manage", label: "Enter costs", group: "Finance" },
   { key: "invoices.manage", label: "Manage invoices", group: "Finance" },
   { key: "feedback.links", label: "Generate public registration/feedback links", group: "Public" },
+  // 15/08 (Umesh): "bypass all the steps and direct select any status" — for a trainer
+  // who already works with us (batch running/complete) and whose papers arrive later.
+  // Admin holds it implicitly (role bypass); grant it to a specific person via the
+  // per-user Special rights. Every use is confirmed in the UI and audited.
+  { key: "pipeline.bypass", label: "Bypass pipeline steps (set any status directly)", group: "Admin" },
   { key: "users.manage", label: "Create/approve users & assign rights", group: "Admin" },
   { key: "defaults.manage", label: "Edit planning defaults & master lists", group: "Admin" },
   { key: "approvals.decide", label: "Decide approval requests", group: "Admin" },

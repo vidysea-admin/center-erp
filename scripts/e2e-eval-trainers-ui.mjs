@@ -106,7 +106,7 @@ ok("[avg] nomination can be cleared again (wrong pick is reversible)", nomCleare
   const tok = inv.link.split("token=")[1];
   const pre = await (await pub(`/api/public/trainer-apply?token=${tok}`)).json();
   ok("[best] the link prefills what Divya typed", pre.prefill?.name === "TEST-ET Invite " + s && pre.prefill?.phone === qPhone, JSON.stringify(pre.prefill));
-  const done = await pub("/api/public/trainer-apply", { token: tok, name: "TEST-ET Invite " + s, phone: qPhone, qualification: "B.Tech", skills: "Drone Service, Solar", industry_experience_years: 4, teaching_experience_years: 2, home_location_other: "Basti" });
+  const done = await pub("/api/public/trainer-apply", { token: tok, name: "TEST-ET Invite " + s, phone: qPhone, email: "invite." + s + "@test.local", qualification: "B.Tech", skills: "Drone Service, Solar", industry_experience_years: 4, teaching_experience_years: 2, home_location_other: "Basti" });
   ok("[best] applicant completes the profile through the link", done.status === 200, `got ${done.status}`);
   const filled = (await req(admin, "GET", `/api/trainers/${inv.trainer}`, undefined, 200)).data.item;
   ok("[best] the profile carries what the APPLICANT wrote", filled.qualification === "B.Tech" && (filled.skills ?? []).includes("Drone Service") && filled.industry_experience_years === 4, JSON.stringify({ q: filled.qualification, sk: filled.skills }));
@@ -118,11 +118,16 @@ ok("[avg] nomination can be cleared again (wrong pick is reversible)", nomCleare
   ok("[best] completing an application notifies Admin/Ops (QA-041)",
     notifs1.some((n) => n.type === "trainer_application" && String(n.entity_id) === String(inv.trainer)), "no trainer_application notification");
   // [worst] the link is single-use — a second submit is refused.
-  ok("[worst] a used link is dead", (await pub("/api/public/trainer-apply", { token: tok, name: "x", phone: qPhone, skills: "y" })).status === 404);
+  ok("[worst] a used link is dead", (await pub("/api/public/trainer-apply", { token: tok, name: "x", phone: qPhone, email: "x@test.local", skills: "y" })).status === 404);
 
   // [best] fresh self-application (no token) lands as Applied / Self Application.
   const fPhone = phone("94");
-  const fresh = await pub("/api/public/trainer-apply", { name: "TEST-ET Fresh " + s, phone: fPhone, skills: "Battery Repair", qualification: "ITI" });
+  // 15/08 (Umesh): email is mandatory on self-application — refused with the field named.
+  const noMail = await pub("/api/public/trainer-apply", { name: "TEST-ET NoMail " + s, phone: fPhone, skills: "Battery Repair" });
+  const noMailBody = await noMail.json().catch(() => ({}));
+  ok("T2: application without email refused, naming the field",
+    noMail.status === 400 && /email/i.test(noMailBody.error ?? ""), `got ${noMail.status} ${noMailBody.error ?? ""}`);
+  const fresh = await pub("/api/public/trainer-apply", { name: "TEST-ET Fresh " + s, phone: fPhone, email: "fresh." + s + "@test.local", skills: "Battery Repair", qualification: "ITI" });
   ok("[best] fresh public application is accepted", fresh.status === 201, `got ${fresh.status}`);
   const found = ((await req(admin, "GET", `/api/trainers?q=${fPhone}&limit=5`, undefined, 200)).data.items ?? []).find((t) => t.phone === fPhone);
   ok("[best] …and creates the pipeline record", found?.pipeline_status === "Fresh Lead" && found?.source === "Self Application", JSON.stringify({ p: found?.pipeline_status, src: found?.source }));
@@ -130,7 +135,7 @@ ok("[avg] nomination can be cleared again (wrong pick is reversible)", nomCleare
   ok("[best] a fresh application notifies Admin/Ops (QA-041)",
     notifs2.some((n) => n.type === "trainer_application" && String(n.entity_id) === String(found?._id)), "no trainer_application notification for fresh app");
   // [worst] duplicate phone: same success shape, no second record (anti-enumeration).
-  await pub("/api/public/trainer-apply", { name: "TEST-ET Dup " + s, phone: fPhone, skills: "x" });
+  await pub("/api/public/trainer-apply", { name: "TEST-ET Dup " + s, phone: fPhone, email: "dup." + s + "@test.local", skills: "x" });
   const dupCount = ((await req(admin, "GET", `/api/trainers?q=${fPhone}&limit=10`, undefined, 200)).data.items ?? []).filter((t) => t.phone === fPhone).length;
   ok("[worst] duplicate application creates no second record", dupCount === 1, `count=${dupCount}`);
   // [worst] honeypot bots get a fake yes and write nothing.

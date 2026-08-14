@@ -1,6 +1,7 @@
 "use client";
 import { use, useEffect, useState } from "react";
 import Link from "next/link";
+import { useSession } from "next-auth/react";
 import { api, fmtDate, pipelineLabel } from "@/lib/client";
 import { BackLink, Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
 import { uploadWithRetry } from "@/lib/upload";
@@ -25,6 +26,10 @@ const fmt = (d?: string | null) => (d ? fmtDate(d) : "—");
 
 export default function TrainerDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  // Rule T8 (Umesh 15/08): the direct-status control renders for the Admin; a non-Admin
+  // holding the granted pipeline.bypass right reaches the same API — the server is the gate.
+  const { data: session } = useSession();
+  const isAdmin = (session?.user as any)?.role === "Admin";
   const [tab, setTab] = useState("Pipeline");
   const [t, setT] = useState<any>(null);
   const [docs, setDocs] = useState<any>({ items: [], summary: null });
@@ -170,8 +175,27 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
                 );
               })}
             </ol>
-            <div className="mt-4">
+            <div className="mt-4 flex flex-wrap items-center gap-3">
               <Btn onClick={() => setMove({ target: "" })}>Move to next stage</Btn>
+              {isAdmin && (
+                // Rule T8: the bypass door — any status, gates skipped, loudly confirmed.
+                <select className={inputCls + " max-w-[240px] text-sm"} value=""
+                  onChange={async (e) => {
+                    const target = e.target.value;
+                    e.target.value = "";
+                    if (!target) return;
+                    if (!window.confirm(`Are you sure? You are BYPASSING the pipeline steps — the document, NSDC and TOT gates will NOT run. ${t.name} will be set to "${target}" directly.`)) return;
+                    const reason = target === "Dropped" ? (window.prompt("Reason for dropping (required):") ?? "") : undefined;
+                    if (target === "Dropped" && !reason) return;
+                    try {
+                      await api(`/api/trainers/${id}/transition`, { method: "POST", json: { target, bypass: true, reason } });
+                      await load();
+                    } catch (er: any) { setErr(er.message); }
+                  }}>
+                  <option value="">Set status directly (bypass)…</option>
+                  {[...JOURNEY, "NSDC Rejected", "Dropped"].filter((s) => s !== (t.pipeline_status ?? "Fresh Lead")).map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+              )}
             </div>
           </Section>
 

@@ -75,7 +75,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
     .map((r, rowIdx) => {
       const c: Record<string, unknown> = { location, program, lifecycle_status: "Unassigned", created_by: user.id };
       for (const [col, field] of Object.entries(mapping)) {
-        if (["name", "phone", "alt_phone", "gender", "source", "id_reference"].includes(field)) c[field] = String(r[col] ?? "").trim();
+        if (["name", "phone", "alt_phone", "email", "gender", "source", "id_reference"].includes(field)) c[field] = String(r[col] ?? "").trim();
         if (["dob", "last_training_date"].includes(field) && r[col] !== "" && r[col] != null) {
           // QA-097/098: DD-MM-YYYY (the template's own format), ISO and Excel serials all
           // parse; anything else is named by row — new Date() read "05-06-2001" as May 5th

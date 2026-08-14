@@ -4,12 +4,10 @@ import path from "path";
 import crypto from "crypto";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { BASE_PATH } from "@/lib/base-path";
-import { dbConnect } from "@/lib/db";
-import { getDefaults } from "@/lib/defaults";
 
-// 2026-08-12 (Manish): 25 MB was too small for the twice-daily evidence videos, so the ceiling
-// moved to Defaults.max_upload_mb (100 MB out of the box) and can be tuned against the server's
-// disk without a deploy. .mov/.3gp added — that is what the field phones actually record.
+// 2026-08-12 (Manish): 25 MB was too small for the twice-daily evidence videos.
+// 15/08 (Umesh): the app-side ceiling is GONE entirely — no size check here at all.
+// .mov/.3gp added — that is what the field phones actually record.
 // 2026-08-12: .doc/.docx added — a trainer's industry and teaching experience certificates arrive
 // as Word files, and without these the mandatory-document gate could never be satisfied.
 // 15/08 (team feedback): .heic added — iPhones hand photos over as HEIC by default.
@@ -30,11 +28,9 @@ export const POST = apiHandler(async (req: NextRequest) => {
   }
   const file = form.get("file") as File | null;
   if (!file) throw new HttpError(400, "file required");
-  await dbConnect();
-  const maxMb = (await getDefaults()).max_upload_mb ?? 100;
-  if (file.size > maxMb * 1024 * 1024) {
-    throw new HttpError(400, `File is ${(file.size / 1024 / 1024).toFixed(1)} MB — the limit is ${maxMb} MB. An Admin can raise it in Admin → Defaults.`);
-  }
+  // 15/08 (Umesh): NO app-side size cap on uploads — "koi bhi cap nahi, space bahut hai".
+  // The only remaining limit is the reverse proxy's multipart body cap (the 413 above),
+  // which is infra, not ours, and is with devops to raise.
   const ext = path.extname(file.name).toLowerCase();
   if (!ALLOWED.has(ext)) throw new HttpError(400, "File type not allowed: " + ext);
   const name = crypto.randomBytes(16).toString("hex") + ext;

@@ -820,9 +820,18 @@ ok("export-sidh returns an xlsx", sidhExport.status === 200 &&
 const regToken = (await req("POST", "/api/public-tokens", { purpose: "register", location: loc._id, program: prog._id }, 201)).data.item;
 const pubGet = await fetch(BASE + `/api/public/register/${regToken.token}`); // deliberately no cookie
 ok("public register form loads without login", pubGet.status === 200, `status=${pubGet.status}`);
+// 15/08 (Umesh): email is mandatory on self-registration — without it the form refuses,
+// naming the field; with it the candidate lands carrying the email.
+const noEmail = await fetch(BASE + `/api/public/register/${regToken.token}`, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ name: "NoMail Cand " + stamp, phone: "7666601" + stamp.slice(0, 3) }),
+});
+const noEmailBody = await noEmail.json().catch(() => ({}));
+ok("T2: self-registration without email is refused, naming the field",
+  noEmail.status === 400 && /email/i.test(noEmailBody.error ?? ""), `status=${noEmail.status} ${noEmailBody.error ?? ""}`);
 const pubPost = await fetch(BASE + `/api/public/register/${regToken.token}`, {
   method: "POST", headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ name: "SelfReg Cand " + stamp, phone: "7666600" + stamp.slice(0, 3), dob: "2001-05-05", education: "12th Pass" }),
+  body: JSON.stringify({ name: "SelfReg Cand " + stamp, phone: "7666600" + stamp.slice(0, 3), email: `selfreg.${stamp}@test.local`, dob: "2001-05-05", education: "12th Pass" }),
 });
 ok("public self-registration creates a candidate", pubPost.status === 201, `status=${pubPost.status}`);
 const honeypot = await fetch(BASE + `/api/public/register/${regToken.token}`, {
@@ -834,6 +843,7 @@ const badToken = await fetch(BASE + "/api/public/register/deadbeefdeadbeefdeadbe
 ok("invalid register token → 404", badToken.status === 404, `status=${badToken.status}`);
 const selfReg = (await req("GET", `/api/candidates?q=${encodeURIComponent("SelfReg Cand " + stamp)}`)).data.items;
 ok("self-registered candidate lands in the pool", selfReg.length === 1 && selfReg[0].source === "Self Registration", JSON.stringify(selfReg[0]?.source));
+ok("T2: the self-registered candidate carries the email", selfReg[0]?.email === `selfreg.${stamp}@test.local`, JSON.stringify(selfReg[0]?.email));
 await req("PATCH", `/api/public-tokens/${regToken._id}`, { active: false }, 200);
 const revoked = await fetch(BASE + `/api/public/register/${regToken.token}`);
 ok("revoked register token → 404", revoked.status === 404, `status=${revoked.status}`);

@@ -95,16 +95,16 @@ function CandidatesInner() {
   const JOURNEY_TAGS = ["Enrollment in progress", "Training Ongoing", "Training Completed", "Result Awaited", "Certified", "Dropout", "Failed"];
   // QA-021 (checker) + CEO [29:36]: Fresh has its OWN journey — inquiry to portal
   // registration — derived from sidh_status, never stored.
+  // 15/08 (Umesh, supersedes Karunn's "enrolled = fees paid"): THIS programme takes no fee
+  // from the candidate — the Fee Paid stage and the fee inputs leave the UI. The schema
+  // fields and the Rule 54 toggle stay dormant (default OFF) in case a paid scheme returns.
   const freshJourneyOf = (r: any): string => {
     if (r.lifecycle_status === "Dropped") return "Dropped";
-    // R-J (QA-049, CEO: "enrolled = fees paid"): a paid fee is the furthest Fresh stage —
-    // the candidate is ready to be placed into a batch.
-    if (r.fee_paid_on) return "Fee Paid";
     if (r.sidh_status === "Registered") return "Registered on Portal";
     if (r.sidh_status === "Link Sent") return "Portal Link Sent";
     return "Fresh Lead";
   };
-  const FRESH_TAGS = ["Fresh Lead", "Portal Link Sent", "Registered on Portal", "Fee Paid", "Dropped"];
+  const FRESH_TAGS = ["Fresh Lead", "Portal Link Sent", "Registered on Portal", "Dropped"];
   const LIFECYCLE_TAGS = bucket === "Fresh" ? FRESH_TAGS : JOURNEY_TAGS;
   // 2026-08-13 (Umesh): a candidate in a batch HAS that batch's programme — "No programme"
   // only when neither the row nor an active membership carries one.
@@ -141,7 +141,7 @@ function CandidatesInner() {
   function openEdit(r: any) {
     setEditId(r._id);
     setForm({
-      name: r.name ?? "", phone: r.phone ?? "", alt_phone: r.alt_phone ?? "", gender: r.gender ?? "",
+      name: r.name ?? "", phone: r.phone ?? "", alt_phone: r.alt_phone ?? "", email: r.email ?? "", gender: r.gender ?? "",
       dob: r.dob ? String(r.dob).slice(0, 10) : "",
       location: r.location?._id ?? r.location ?? "", program: r.program?._id ?? r.program ?? "",
       education: r.education ?? "", source: r.source ?? "",
@@ -307,7 +307,6 @@ function CandidatesInner() {
               "Fresh Lead": "Inquiry stage — Skill India registration not started",
               "Portal Link Sent": "Registration link sent (WhatsApp/SMS) — waiting on the candidate",
               "Registered on Portal": "Skill India registration done — ready for batch assignment",
-              "Fee Paid": "Fee received — ready to enroll (CEO: enrolled = fees paid)",
               "Dropped": "Left/removed",
               "Enrollment in progress": "Placed into a batch; registration/KYC/acceptance still running",
               "Training Ongoing": "Enrolled on a batch that is currently Active",
@@ -423,6 +422,8 @@ function CandidatesInner() {
             <Field label="Phone" required><input className={inputCls} value={form.phone ?? ""} onChange={(e) => set("phone", e.target.value)} /></Field>
             <Field label="Alt phone"><input className={inputCls} value={form.alt_phone ?? ""} onChange={(e) => set("alt_phone", e.target.value)} /></Field>
           </div>
+          {/* 15/08 (Umesh): mandatory only on SELF-registration; staff may fill or fix it here. */}
+          <Field label="Email"><input className={inputCls} type="email" value={form.email ?? ""} onChange={(e) => set("email", e.target.value)} /></Field>
           {dupes.length > 0 && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
               <div className="font-medium">Possible duplicate — check before saving</div>
@@ -482,13 +483,8 @@ function CandidatesInner() {
             </select>
           </Field>
           <Field label="Source (mobiliser / campaign)"><input className={inputCls} value={form.source ?? ""} onChange={(e) => set("source", e.target.value)} /></Field>
-          {/* R-J (QA-049): the fee on the candidate. Blocking enrollment on an unpaid fee is
-              the Admin's Defaults toggle — these fields just record the money. */}
-          <div className="grid grid-cols-3 gap-3">
-            <Field label="Fee amount (₹)"><input type="number" className={inputCls} value={form.fee_amount ?? ""} onChange={(e) => set("fee_amount", e.target.value === "" ? undefined : +e.target.value)} /></Field>
-            <Field label="Fee paid on"><input type="date" className={inputCls} value={form.fee_paid_on ? String(form.fee_paid_on).slice(0, 10) : ""} onChange={(e) => set("fee_paid_on", e.target.value || undefined)} /></Field>
-            <Field label="Payment reference"><input className={inputCls} value={form.fee_reference ?? ""} onChange={(e) => set("fee_reference", e.target.value)} /></Field>
-          </div>
+          {/* 15/08 (Umesh): no candidate fee in this programme — the fee inputs left the
+              drawer. Schema + Rule 54 toggle stay dormant for a future paid scheme. */}
           {/* Edit mode: location/program may legitimately be blank on a sheet-imported row — the
               save must not be held hostage to fields the user is not correcting. */}
           <Btn onClick={saveCandidate} disabled={drawer === "add" ? (!form.name || !form.phone || !form.location || !form.program) : (!form.name || !form.phone)}>
@@ -540,7 +536,7 @@ function CandidatesInner() {
                     <select className={inputCls} value={importState.mapping?.[c] ?? ""} onChange={(e) => setImportState({ ...importState, mapping: { ...importState.mapping, [c]: e.target.value } })}>
                       <option value="">Ignore</option>
                       {/* F-B4: the eligibility fields (dob · education · last_training_date) are mappable now. */}
-                      {["name", "phone", "alt_phone", "gender", "source", "id_reference", "dob", "education", "last_training_date", "interested_programs", "interested_locations"].map((f) => <option key={f}>{f}</option>)}
+                      {["name", "phone", "alt_phone", "email", "gender", "source", "id_reference", "dob", "education", "last_training_date", "interested_programs", "interested_locations"].map((f) => <option key={f}>{f}</option>)}
                     </select>
                   </Field>
                 ))}

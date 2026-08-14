@@ -205,7 +205,7 @@ ok("regenerate allowed while Planning", regenPlanning.status === 200);
 
 // ---- 10. Public register: halted location keeps its link working (pool-building is allowed pre-open) ----
 const regTok = (await req(admin, "POST", "/api/public-tokens", { purpose: "register", location: loc._id, program: prog._id })).data.item;
-const pubRes = await fetch(BASE + `/api/public/register/${regTok.token}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "Pub " + stamp, phone: "7999" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0") }) });
+const pubRes = await fetch(BASE + `/api/public/register/${regTok.token}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "Pub " + stamp, phone: "7999" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0"), email: "pub" + stamp + "@test.local" }) });
 ok("public registration works (location Not Started — advance pooling)", pubRes.status === 201, `status=${pubRes.status}`);
 // 9-digit phone rejected
 const shortPhone = await fetch(BASE + `/api/public/register/${regTok.token}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "Pub short", phone: "123456789" }) });

@@ -52,6 +52,6 @@ Admin → set a strong password. Sample users (`ops@`, `spoc.jpr03@`, `principal
 - `can_edit=false` users are view-only everywhere (Rule 39).
 - Every write goes to AuditLog with actor + actor_type.
 - Passwords bcrypt-hashed (cost 10). Session JWTs encrypted (Auth.js v5).
-- Upload whitelist by extension; size cap is the Admin-tunable `Defaults.max_upload_mb`
-  (100 MB out of the box — the media home is the shared Google Drive, not the ERP, per the
-  2026-08-13 decision); filenames are 128-bit random hex.
+- Upload whitelist by extension; NO app-side size cap (removed 2026-08-15 on Umesh's
+  instruction — "koi bhi cap nahi"; the reverse proxy's body cap is the only limit and is
+  with devops to raise); filenames are 128-bit random hex.

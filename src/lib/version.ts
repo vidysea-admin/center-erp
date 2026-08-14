@@ -3,14 +3,17 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-49";
+export const RELEASE = "2026.08.14-50";
 export const RELEASE_NOTE =
-  "THE upload fix (team-reported, live-reproduced): the upload helper was " +
-  "the one fetch in the app without the /erp basePath, so on production " +
-  "every UI upload - trainer documents, daily-log photos and videos, " +
-  "certificates - went to the marketing site's 404, retried three times and " +
-  "died. One prefix, everything works. Riding along: several documents in " +
-  "one pick (type auto-detected from the filename, duplicate names refused " +
-  "by name), PDF/Word/photo/HEIC accepted on every document surface, and " +
-  "an honest message when a file over ~8 MB hits the platform's multipart " +
-  "cap instead of 'something went wrong'.";
+  "Team feedback round 2 (Umesh 15/08): pipeline BYPASS as a grantable " +
+  "right - an admin (or anyone granted pipeline.bypass) can set any trainer " +
+  "status directly, double-confirmed in the UI, signed on the profile and " +
+  "in the audit log; the docs/NSDC/TOT gates deliberately do not run. " +
+  "Candidate fees are OFF for this programme (drawer fields and the Fee " +
+  "Paid stage removed; the Rule 54 toggle stays dormant for the day fees " +
+  "return). Email is now mandatory alongside phone on candidate " +
+  "self-registration and the public trainer application - the mail " +
+  "pipeline is coming and every new contact must carry an address. Also: " +
+  "the app-side upload size cap is GONE (Umesh: no cap, space is not a " +
+  "constraint) - the only remaining limit is the proxy's multipart body " +
+  "cap, which devops is raising.";

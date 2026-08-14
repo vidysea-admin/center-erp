@@ -331,6 +331,9 @@ const CandidateSchema = new Schema({
   sidh_link_sent_at: Date,
   sidh_registered_on: Date,
   sidh_failure_reason: String, // why the portal refused — the queue is useless without the why
+  // 15/08 (Umesh): email mandatory on SELF-registration (the email pipeline is coming) —
+  // optional everywhere else (drawer, imports), so old data never blocks.
+  email: String,
   // Portal "Candidate ID" (CAN_40918461). The government attendance export keys on this, so it
   // is the only reliable join — names repeat within a centre.
   sidh_candidate_id: { type: String, default: null },

@@ -783,12 +783,12 @@ function DefaultsTab({ setError }: any) {
               <span className="block text-xs text-gray-500">On: enrollment cannot complete until a fee payment is recorded on the candidate. Off (default): the fee fields are informational.</span>
             </span>
           </label>
-          <Field label="Maximum upload size (MB)">
-            <input type="number" className={inputCls} value={form.max_upload_mb ?? ""} onChange={(e) => setForm({ ...form, max_upload_mb: +e.target.value })} />
-          </Field>
+          {/* 15/08 (Umesh): app-side upload cap REMOVED entirely ("koi bhi cap nahi") — the
+              knob is gone so nobody thinks the app is the limiter. The only limit left is the
+              reverse proxy's body cap (infra, with devops to raise). */}
           <p className="text-xs text-gray-500">
-            Raising this beyond what the web server accepts will not work on its own — the reverse proxy in front of the
-            app has its own body-size cap that has to be raised to match.
+            Upload size is not limited by the app. Very large files can still be refused by the web server in front of
+            the app (its body-size cap is being raised by devops).
           </p>
         </div>
       </Section>
