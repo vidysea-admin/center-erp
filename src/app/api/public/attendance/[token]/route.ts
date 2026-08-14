@@ -55,13 +55,15 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   const minPct = defaults.min_attendance_pct ?? 50;
   // Shared with the batch Attendance tab (R-D) — one threshold formula, not two.
   const requiredHours = requiredAssessmentHours(batch?.program, minPct);
-  const hoursPerDay = slotHoursPerDay(batch);
+  const hoursPerDay = slotHoursPerDay(batch); // null when the batch has no slot (QA-085)
 
-  // The portal's own hour meter is authoritative when present (that is what the assessor
-  // settles against); the centre's day count approximates hours otherwise.
-  const attendedHours = govtRow?.total_hours_minutes != null
-    ? Math.round(govtRow.total_hours_minutes / 60)
-    : Math.round(internalDays * hoursPerDay);
+  // QA-085/086: the ELIGIBLE verdict comes from the portal's hour meter alone — that is
+  // what the assessor settles against. Days × slot is only ever an estimate, shown as
+  // such; with no slot on the batch there is no estimate at all, never an assumed 8.
+  const govtHours = govtRow?.total_hours_minutes != null ? Math.round(govtRow.total_hours_minutes / 60) : null;
+  const estimatedHours = hoursPerDay != null ? Math.round(internalDays * hoursPerDay) : null;
+  const attendedHours = govtHours ?? estimatedHours;
+  const basis = govtHours != null ? "portal" : estimatedHours != null ? "estimate" : null;
 
   const closure = await Closure.findOne({ batch: batch._id }).select("assessment_date").lean<any>();
   // Result & certificate — the "aage kya hua" answer once the exam happens.
@@ -101,8 +103,9 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     min_attendance_pct: minPct,
     required_hours: requiredHours,
     attended_hours: attendedHours,
-    remaining_hours: Math.max(0, requiredHours - attendedHours),
-    eligible: attendedHours >= requiredHours,
+    hours_basis: basis, // "portal" (authoritative) | "estimate" (days × slot) | null (no slot, no import)
+    remaining_hours: attendedHours != null ? Math.max(0, requiredHours - attendedHours) : null,
+    eligible: govtHours != null && govtHours >= requiredHours,
     assessment_date: closure?.assessment_date ?? null,
   });
 });

@@ -4,6 +4,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Candidate, EDUCATION_LEVEL, Location, Program } from "@/models";
+import { parseSheetDate } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 import { findDuplicateCandidates, normalizePhone } from "@/lib/duplicates";
 
@@ -46,6 +47,8 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // Interest fields (comma-separated centre / job-role NAMES) resolve the same way.
   const eduUnmatched: string[] = [];
   const interestUnmatched: string[] = [];
+  // QA-097: a date the parser cannot read is REPORTED against its row, never dropped.
+  const dateUnparseable: string[] = [];
   const needsInterest = Object.values(mapping).some((f) => ["interested_programs", "interested_locations"].includes(f));
   const progByName = new Map<string, any>();
   const locByName = new Map<string, any>();
@@ -69,13 +72,17 @@ export const POST = apiHandler(async (req: NextRequest) => {
     return ids;
   };
   const candidates = rows
-    .map((r) => {
+    .map((r, rowIdx) => {
       const c: Record<string, unknown> = { location, program, lifecycle_status: "Unassigned", created_by: user.id };
       for (const [col, field] of Object.entries(mapping)) {
         if (["name", "phone", "alt_phone", "gender", "source", "id_reference"].includes(field)) c[field] = String(r[col] ?? "").trim();
-        if (["dob", "last_training_date"].includes(field) && r[col]) {
-          const d = new Date(String(r[col]));
-          if (!isNaN(d.getTime())) c[field] = d;
+        if (["dob", "last_training_date"].includes(field) && r[col] !== "" && r[col] != null) {
+          // QA-097/098: DD-MM-YYYY (the template's own format), ISO and Excel serials all
+          // parse; anything else is named by row — new Date() read "05-06-2001" as May 5th
+          // and dropped "15-06-2001" without a word.
+          const d = parseSheetDate(r[col]);
+          if (d) c[field] = d;
+          else dateUnparseable.push(`row ${rowIdx + 2}: ${field} "${String(r[col])}"`);
         }
         if (field === "education" && r[col]) {
           const raw = String(r[col]).trim();
@@ -120,9 +127,10 @@ export const POST = apiHandler(async (req: NextRequest) => {
       duplicates: duplicates.slice(0, 25), duplicate_count: duplicates.length,
       education_unmatched: [...new Set(eduUnmatched)].slice(0, 25),
       interest_unmatched: [...new Set(interestUnmatched)].slice(0, 25),
+      date_unparseable: dateUnparseable.slice(0, 25), date_unparseable_count: dateUnparseable.length,
     });
   }
   const docs = await Candidate.insertMany(candidates);
-  await audit({ entity: "Candidate", entityId: docs[0]?._id ?? location, field: "import", newValue: `${docs.length} imported, ${duplicates.length} flagged as possible duplicates`, actor: user.id });
-  return NextResponse.json({ imported: docs.length, skipped: rows.length - candidates.length, duplicate_count: duplicates.length }, { status: 201 });
+  await audit({ entity: "Candidate", entityId: docs[0]?._id ?? location, field: "import", newValue: `${docs.length} imported, ${duplicates.length} flagged as possible duplicates${dateUnparseable.length ? `, ${dateUnparseable.length} unreadable dates` : ""}`, actor: user.id });
+  return NextResponse.json({ imported: docs.length, skipped: rows.length - candidates.length, duplicate_count: duplicates.length, date_unparseable: dateUnparseable.slice(0, 25), date_unparseable_count: dateUnparseable.length }, { status: 201 });
 });

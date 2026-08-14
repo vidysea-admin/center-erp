@@ -1,16 +1,15 @@
 import { collectionRoutes } from "@/lib/crud";
 import { Location, LocationTarget, Trainer } from "@/models";
-import { hasPermission } from "@/lib/permissions";
 import { NOMINATED_STATES } from "@/lib/rules";
 
 // 2026-08-12: tc_password is a LIVE government portal credential — "us location ke TC ID aur
-// password se login karunga". The Sheet Watch column carrying it is already masked for non-Admins
-// (src/app/api/workbook-changes/route.ts); storing the same secret on Location without the same
-// masking would have re-opened the hole through a different door, since every signed-in user can
-// read the centres they are scoped to. Only a holder of locations.manage sees it.
+// password se login karunga". QA-088 (checker, 14/08): the gate used to be
+// locations.manage, and the saved matrix grants that to Operations AND every SPOC — so the
+// password sat in plain text for exactly the logins it should be hidden from. The gate is
+// the ROLE now, same as the Sheet Watch column: Admin sees it, nobody else does.
 const SECRET_FIELDS = ["tc_password"];
-export function maskLocationSecrets(items: any[], canManage: boolean) {
-  if (canManage) return items;
+export function maskLocationSecrets(items: any[], isAdmin: boolean) {
+  if (isAdmin) return items;
   return items.map((l) => {
     const safe = { ...l };
     for (const f of SECRET_FIELDS) delete safe[f];
@@ -33,7 +32,7 @@ export const { GET, POST } = collectionRoutes({
   // derived per centre×job-role from Trainer rows (same $group as mappingReadinessBulk),
   // so the list updates the moment a trainer's pipeline moves. Never stored.
   async mapItems(items, user) {
-    const masked = maskLocationSecrets(items, await hasPermission(user, "locations.manage"));
+    const masked = maskLocationSecrets(items, user.role === "Admin"); // QA-088
     const locIds = items.map((l: any) => l._id);
     const [targets, trainerRows] = await Promise.all([
       LocationTarget.find({ location: { $in: locIds } })

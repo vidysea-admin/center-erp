@@ -248,6 +248,37 @@ console.log("\n--- FL6: the import flags the file's own duplicates and refuses a
     (impA?.interested_programs ?? []).length === 1, JSON.stringify(impA?.interested_programs));
   const impB = (await req(admin, "GET", `/api/candidates?q=9811100002`)).data.items.find((c) => c.name === `FL Imp B ${stamp}`);
   ok("FL6b: the BTech row imported with education left null", impB && impB.education == null, JSON.stringify(impB?.education));
+
+  // ---- QA-097/098: the importer reads its own template's date format ----
+  // new Date() read "05-06-2001" as May 5th and dropped "15-06-2001" silently; an .xlsx
+  // hands dates over as Excel serials. All must parse day-first; junk is named BY ROW.
+  {
+    const p3 = (n) => `97222${stamp.slice(0, 3)}1${n}`;
+    const rows3 = [
+      { "Student Name": `FL Date A ${stamp}`, "Mobile": p3(1), "DOB": "15-06-2001" },
+      { "Student Name": `FL Date B ${stamp}`, "Mobile": p3(2), "DOB": "05-06-2001" }, // both ≤12 → DD-MM wins
+      { "Student Name": `FL Date C ${stamp}`, "Mobile": p3(3), "DOB": 37057 },        // Excel serial = 2001-06-15
+      { "Student Name": `FL Date D ${stamp}`, "Mobile": p3(4), "DOB": "junk-date" },
+    ];
+    const ws3 = XLSX.utils.json_to_sheet(rows3);
+    const wb3 = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb3, ws3, "Sheet1");
+    const file3 = new File([XLSX.write(wb3, { type: "buffer", bookType: "xlsx" })], "import-dates.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const dateMap = JSON.stringify({ "Student Name": "name", "Mobile": "phone", "DOB": "dob" });
+    const prev3 = await multipart(admin, "/api/candidates/import", { file: file3, location: loc._id, program: prog._id, mapping: dateMap }, 200);
+    ok("QA-097: the unreadable date is reported BY ROW, nothing guessed",
+      (prev3.data.date_unparseable ?? []).some((x) => /row 5/.test(x) && /junk-date/.test(x)), JSON.stringify(prev3.data.date_unparseable));
+    await multipart(admin, "/api/candidates/import", { file: file3, location: loc._id, program: prog._id, mapping: dateMap, confirm: "1" }, 201);
+    const byPhone = async (ph) => (await req(admin, "GET", `/api/candidates?q=${ph}`)).data.items.find((c) => String(c.phone) === ph);
+    const [dA, dB, dC, dD] = [await byPhone(p3(1)), await byPhone(p3(2)), await byPhone(p3(3)), await byPhone(p3(4))];
+    ok("QA-097: DD-MM-YYYY parses as the template promises (15-06-2001 → 15 June)",
+      (dA?.dob ?? "").startsWith("2001-06-15"), dA?.dob);
+    ok("QA-097: an ambiguous day ≤12 is still DAY-first (05-06-2001 → 5 June, not 6 May)",
+      (dB?.dob ?? "").startsWith("2001-06-05"), dB?.dob);
+    ok("QA-098: an Excel serial date lands as the real date (37057 → 15 June 2001)",
+      (dC?.dob ?? "").startsWith("2001-06-15"), dC?.dob);
+    ok("QA-097: the junk-date row still imports, dob honestly empty", dD && dD.dob == null, JSON.stringify(dD?.dob));
+  }
 }
 
 console.log("\n--- FL7: an unregistered candidate can still be assigned (decoupled, by design) ---");

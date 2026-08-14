@@ -44,11 +44,12 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     const presentByDay = logs.map((l) => (l.present_member_ids ?? []).some((x: unknown) => String(x) === mid));
     const internalDays = presentByDay.filter(Boolean).length;
     const g = m.candidate ? govtByCand.get(String(m.candidate._id)) : undefined;
-    // The portal's own hour meter is authoritative when present (the assessor settles
-    // against it); the centre's day count approximates hours until a portal import lands.
-    const attendedHours = g?.total_hours_minutes != null
-      ? Math.round(g.total_hours_minutes / 60)
-      : Math.round(internalDays * hoursPerDay);
+    // QA-085/086: the GREEN verdict comes from the portal's hour meter ALONE — that is
+    // what the assessor settles against. Our own hours (days × slot) are shown beside it
+    // as their own column; with no slot on the batch they are null, never an assumed 8.
+    const govtHours = g?.total_hours_minutes != null ? Math.round(g.total_hours_minutes / 60) : null;
+    const ourHours = hoursPerDay != null ? Math.round(internalDays * hoursPerDay) : null;
+    const basis = govtHours != null ? "portal" : ourHours != null ? "estimate" : null;
     return {
       member_id: mid,
       candidate_id: m.candidate?._id ?? null,
@@ -57,15 +58,17 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
       left_on: m.left_on ?? null,
       present_by_day: presentByDay,
       internal_days: internalDays,
+      our_hours: ourHours,
       govt: g ? {
         days_present: g.total_days_present ?? null,
         working_days: g.total_working_days ?? null,
-        hours: g.total_hours_minutes != null ? Math.round(g.total_hours_minutes / 60) : null,
+        hours: govtHours,
         hours_raw: g.total_hours_raw ?? null,
         as_of: g.createdAt,
       } : null,
-      attended_hours: attendedHours,
-      qualified: attendedHours >= requiredHours,
+      attended_hours: govtHours ?? ourHours,
+      basis,
+      qualified: govtHours != null && govtHours >= requiredHours,
     };
   });
 

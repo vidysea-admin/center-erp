@@ -19,7 +19,7 @@ export default function PublicAttendancePage({ params }: { params: Promise<{ tok
       .catch(() => setState("invalid"));
   }, [token]);
 
-  const pct = data && data.required_hours > 0
+  const pct = data && data.required_hours > 0 && data.attended_hours != null
     ? Math.min(100, Math.round((100 * data.attended_hours) / data.required_hours))
     : 0;
 
@@ -80,7 +80,9 @@ export default function PublicAttendancePage({ params }: { params: Promise<{ tok
             <p className={`font-semibold ${data.eligible ? "text-green-800" : "text-amber-800"}`}>
               {data.eligible
                 ? "You are eligible for the exam"
-                : `${data.remaining_hours} more hour${data.remaining_hours === 1 ? "" : "s"} needed for exam eligibility`}
+                : data.remaining_hours != null
+                  ? `${data.remaining_hours} more hour${data.remaining_hours === 1 ? "" : "s"} needed for exam eligibility`
+                  : "Your hours are being confirmed with the government portal"}
             </p>
             <p className="mt-1 text-xs text-gray-500">
               Required: {data.required_hours} of {data.program_hours} hours ({data.min_attendance_pct}%)
@@ -88,7 +90,13 @@ export default function PublicAttendancePage({ params }: { params: Promise<{ tok
             <div className="mx-auto mt-3 h-2 w-full overflow-hidden rounded-full bg-gray-200">
               <div className={`h-full ${data.eligible ? "bg-green-500" : "bg-amber-500"}`} style={{ width: `${pct}%` }} />
             </div>
-            <p className="mt-1 text-xs font-medium text-gray-600">{data.attended_hours} hours attended</p>
+            {/* QA-085/086: eligibility is settled by the government portal's meter — an
+                estimate from our own logs is shown as exactly that. */}
+            <p className="mt-1 text-xs font-medium text-gray-600">
+              {data.attended_hours != null
+                ? `${data.attended_hours} hours attended${data.hours_basis === "estimate" ? " (estimated — portal hours pending)" : ""}`
+                : "hours will appear once the portal attendance is imported"}
+            </p>
           </div>
 
           {data.assessment_date && (

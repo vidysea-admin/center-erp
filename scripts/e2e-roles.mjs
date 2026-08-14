@@ -589,6 +589,20 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   }
 }
 
+// ---- QA-088: tc_password is the Admin's alone (the matrix grants locations.manage to
+// Ops AND every SPOC, so the old permission gate was the leak) ----
+{
+  await req(admin, "PATCH", `/api/locations/${jpr._id}`, { tc_password: "SECRET-" + Date.now() });
+  const asAdmin = (await req(admin, "GET", `/api/locations/${jpr._id}`)).data.item;
+  ok("QA-088: Admin sees tc_password", typeof asAdmin?.tc_password === "string" && asAdmin.tc_password.length > 0);
+  const asOps = (await req(ops, "GET", `/api/locations/${jpr._id}`)).data.item;
+  ok("QA-088: Operations never sees it", !!asOps && asOps.tc_password === undefined, JSON.stringify(asOps?.tc_password));
+  const asSpoc = (await req(spoc, "GET", `/api/locations/${jpr._id}`)).data.item;
+  ok("QA-088: the SPOC of the very centre never sees it", !!asSpoc && asSpoc.tc_password === undefined);
+  const listOps = (await req(ops, "GET", "/api/locations?limit=200")).data.items ?? [];
+  ok("QA-088: the list masks it for every centre", listOps.every((l) => l.tc_password === undefined));
+}
+
 // unauthenticated → 401
 const anon = await fetch(BASE + "/api/locations");
 ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}`);

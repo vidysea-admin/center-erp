@@ -1,16 +1,15 @@
 import { itemRoutes } from "@/lib/crud";
 import { Location } from "@/models";
 import { HttpError } from "@/lib/authz";
-import { hasPermission } from "@/lib/permissions";
 import { requireApproval } from "@/lib/approvals";
 import { maskLocationSecrets } from "../route";
 
 export const { GET, PATCH } = itemRoutes({
   model: Location, entity: "Location", scopeField: "_id",
   // Same masking as the list route — tc_password is a live portal credential, and opening one
-  // centre by id must not reveal what the list deliberately hides.
+  // centre by id must not reveal what the list deliberately hides. QA-088: Admin-only.
   async mapItems(items, user) {
-    return maskLocationSecrets(items, await hasPermission(user, "locations.manage"));
+    return maskLocationSecrets(items, user.role === "Admin");
   },
   fields: ["code", "external_id", "name", "city", "state", "address", "approval_status", "operational_status", "status_reason", "status_changed_on", "spoc_name", "spoc_phone", "spoc_user", "principal_name", "principal_phone", "principal_user", "contacts", "district", "tc_id", "tc_password", "tc_status", "operating_partner", "cluster_head_name", "cluster_head_phone"],
   writeRoles: ["Admin", "Operations", "Location"],

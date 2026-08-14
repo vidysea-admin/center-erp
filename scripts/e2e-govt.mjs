@@ -209,8 +209,13 @@ ok("all 7 rows persisted", detail.data.rows?.length === 7, `got ${detail.data.ro
   const rows = Object.fromEntries((att.data.members ?? []).map((m) => [m.name, m]));
   ok("R-D: Charlie carries the portal HOURS meter (4551 min → 76 hrs)",
     rows[`${NAME} Charlie`]?.govt?.hours === 76, String(rows[`${NAME} Charlie`]?.govt?.hours));
-  ok("R-D: the green verdict follows the threshold exactly, for every student",
-    (att.data.members ?? []).every((m) => m.qualified === (m.attended_hours >= att.data.required_hours)));
+  // QA-085: the green verdict is PORTAL-hours-only — an estimate can never qualify.
+  ok("QA-085: the green verdict follows PORTAL hours alone, for every student",
+    (att.data.members ?? []).every((m) => m.qualified === (m.govt?.hours != null && m.govt.hours >= att.data.required_hours)));
+  // QA-085: this batch carries no slot — our hours must be null, never an assumed 8/day.
+  ok("QA-085: a slot-less batch estimates NOTHING (our_hours null, basis never 'estimate')",
+    (att.data.members ?? []).every((m) => m.our_hours === null && m.basis !== "estimate"),
+    JSON.stringify((att.data.members ?? []).map((m) => [m.our_hours, m.basis])));
   ok("R-D: an ambiguous/unmatched student shows NO portal figures (never guessed)",
     rows[`${NAME} Twin`]?.govt === null, JSON.stringify(rows[`${NAME} Twin`]?.govt));
   ok("R-D: the day-wise grid is one cell per logged day",

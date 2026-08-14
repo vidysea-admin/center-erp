@@ -5,7 +5,7 @@ import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError 
 import { requirePerm } from "@/lib/permissions";
 import { Batch, Location, Program } from "@/models";
 import { audit } from "@/lib/audit";
-import { computePlannedEnd, nextBatchCode, planBatchBackward } from "@/lib/rules";
+import { computePlannedEnd, nextBatchCode, parseSheetDate, planBatchBackward } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 
 // Batch bulk import (QA-028's second half — "bulk upload in every module"). Batch_Master
@@ -69,8 +69,10 @@ export const POST = apiHandler(async (req: NextRequest) => {
     const prog = progByName.get(progRaw.toLowerCase());
     if (!loc) { if (locRaw) location_unmatched.push(locRaw); skipped.push(`row ${i + 2}: centre "${locRaw || "(blank)"}" not recognised`); continue; }
     if (!prog) { if (progRaw) program_unmatched.push(progRaw); skipped.push(`row ${i + 2}: job role "${progRaw || "(blank)"}" not recognised`); continue; }
-    const start = new Date(startRaw);
-    if (isNaN(start.getTime())) { skipped.push(`row ${i + 2}: planned start "${startRaw}" is not a date`); continue; }
+    // QA-097/098: same shared parser as the candidates importer — DD-MM-YYYY, ISO and
+    // Excel serials all read; anything else is refused BY ROW, never guessed.
+    const start = parseSheetDate(r[colFor("planned_start")!]);
+    if (!start) { skipped.push(`row ${i + 2}: planned start "${startRaw}" is not a date`); continue; }
     const sizeCol = colFor("target_size");
     const sizeRaw = sizeCol ? Number(r[sizeCol]) : NaN;
     const sessCol = colFor("session");

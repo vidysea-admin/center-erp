@@ -3,13 +3,15 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-43";
+export const RELEASE = "2026.08.14-44";
 export const RELEASE_NOTE =
-  "R-K: the programme gets a front door. /programs/[id] - facts (QP, scheme, " +
-  "training hours, duration, extra trainer documents; the Admin-only amount " +
-  "renders only for the Admin, the API masks it for everyone else), the " +
-  "centres running the job role with their hiring positions (reusing the Open " +
-  "Positions derivation), and every batch under it. The programme name is now " +
-  "a link wherever it appears - candidate rows, the batch list and the batch " +
-  "header - completing the CEO's click-through ask: candidate, location, " +
-  "batch and programme all open their detail.";
+  "Checker round five, the S1 trio. QA-097/098: one shared date parser for " +
+  "every importer - DD-MM-YYYY (the template's own format, day-first even when " +
+  "ambiguous), ISO, and Excel serials all read; an unreadable date is reported " +
+  "BY ROW, never guessed, never silently dropped. QA-088: tc_password is the " +
+  "Admin's alone - the old locations.manage gate handed the live government " +
+  "portal password to every SPOC and Operations login. QA-085/086: the green " +
+  "'Qualified for assessments' mark now comes from PORTAL hours alone; a " +
+  "slot-less batch estimates nothing (never an assumed 8 hrs/day), our own " +
+  "hours get their own column labelled est., and the student portal says " +
+  "'estimated' out loud while its verdict waits for the portal meter.";

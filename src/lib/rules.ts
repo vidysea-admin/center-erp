@@ -64,6 +64,38 @@ export function dayStart(d: Date | string): Date {
 //
 // dayKey is the calendar date itself, pinned to UTC midnight so it does not move with the
 // server's timezone. dayRange spans exactly that calendar day for querying.
+// QA-097/QA-098 (checker, 14/08): the candidate importer parsed dates with new Date(),
+// which cannot read the DD-MM-YYYY its own template asks for (Invalid → silently dropped)
+// and reads "05-06-2001" as May 5th; and an .xlsx sheet hands dates over as Excel SERIAL
+// numbers. ONE parser for every importer: day-first always wins on ambiguity (the
+// template's stated format), serials are days since 1899-12-30, and anything unreadable
+// returns null so the caller can REPORT it by row — never guess, never drop silently.
+export function parseSheetDate(raw: unknown): Date | null {
+  if (raw == null || raw === "") return null;
+  if (raw instanceof Date) return isNaN(raw.getTime()) ? null : dayKey(raw);
+  const build = (y: number, mo: number, d: number): Date | null => {
+    if (y < 1900 || y > 2100 || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+    const dt = new Date(Date.UTC(y, mo - 1, d));
+    return dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d ? dt : null;
+  };
+  if (typeof raw === "number" || /^\d{4,6}(\.\d+)?$/.test(String(raw).trim())) {
+    const n = Number(raw);
+    // Excel serial: days since 1899-12-30. 20k..60k ≈ years 1954..2064.
+    if (Number.isFinite(n) && n > 20000 && n < 60000) {
+      return new Date(Date.UTC(1899, 11, 30) + Math.round(n) * 86_400_000);
+    }
+  }
+  const s = String(raw).trim();
+  let m = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[T\s].*)?$/.exec(s); // ISO year-first
+  if (m) return build(+m[1], +m[2], +m[3]);
+  m = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$/.exec(s); // DD-MM-YYYY (template format)
+  if (m) {
+    const yy = +m[3];
+    return build(m[3].length <= 2 ? (yy <= 29 ? 2000 + yy : 1900 + yy) : yy, +m[2], +m[1]);
+  }
+  return null;
+}
+
 export function dayKey(d: Date | string): Date {
   if (typeof d === "string") {
     const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d);
@@ -1503,13 +1535,18 @@ export function requiredAssessmentHours(program: any, minPct: number): number {
   const programHours = program?.hours || (program?.duration_days ?? 15) * 8;
   return Math.ceil((programHours * minPct) / 100);
 }
-export function slotHoursPerDay(batch: any): number {
+// QA-085 (checker, 14/08): the old fallback credited a slot-less batch 8 hours a day —
+// the longer of the two legal session lengths — which could turn the green
+// "qualified for assessments" mark ON for hours never attended. Unknown slot now returns
+// null: the caller shows "no slot on the batch" instead of assuming, and the green verdict
+// comes from PORTAL hours alone.
+export function slotHoursPerDay(batch: any): number | null {
   const toMin = (s?: string | null) => {
     const mm = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(String(s ?? ""));
     return mm ? Number(mm[1]) * 60 + Number(mm[2]) : null;
   };
   const slotMin = (toMin(batch?.slot_end) ?? 0) - (toMin(batch?.slot_start) ?? 0);
-  return slotMin > 0 ? slotMin / 60 : 8;
+  return slotMin > 0 ? slotMin / 60 : null;
 }
 
 // Rule T7 - the counters the client tracks per centre x job role, DERIVED rather than stored.

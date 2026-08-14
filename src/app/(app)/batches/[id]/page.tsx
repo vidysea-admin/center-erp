@@ -615,16 +615,30 @@ function AttendanceTab({ batchId, setError }: any) {
         columns={[
           { key: "name", label: "Name", sortable: true, render: (r: any) => <NameCell name={r.name} sub={r.sidh_candidate_id ?? undefined} /> },
           { key: "internal_days", label: "Our days", sortable: true, render: (r: any) => `${r.internal_days} / ${data.days_held}` },
+          {
+            // QA-086: our own hours get their own column, on the same footing as the
+            // portal's. No slot on the batch = no estimate (QA-085), said out loud.
+            key: "our_hours", label: "Our hours", sortValue: (r: any) => r.our_hours ?? -1, sortable: true,
+            render: (r: any) => r.our_hours != null
+              ? <span title="Our days × the batch slot — an estimate, not the portal meter">{r.our_hours} hrs <span className="text-[10px] text-gray-400">est.</span></span>
+              : <span className="text-gray-400" title="No time slot on the batch — hours cannot be estimated">—</span>,
+          },
           { key: "govt_days", label: "Govt days", sortValue: (r: any) => r.govt?.days_present ?? -1, sortable: true, render: (r: any) => r.govt ? `${r.govt.days_present ?? "—"}${r.govt.working_days ? ` / ${r.govt.working_days}` : ""}` : <span className="text-gray-400" title="No matched portal import yet">—</span> },
           { key: "govt_hours", label: "Govt hours", sortValue: (r: any) => r.govt?.hours ?? -1, sortable: true, render: (r: any) => r.govt?.hours != null ? `${r.govt.hours} hrs` : <span className="text-gray-400">—</span> },
           {
+            // QA-085: the green mark is PORTAL-VERIFIED only — an estimate can never
+            // qualify a student, and the chip says which meter it is reading.
             key: "qualified", label: "Assessment", sortable: true, sortValue: (r: any) => (r.qualified ? 1 : 0),
-            filterText: (r: any) => (r.qualified ? "Qualified" : "Below threshold"),
+            filterText: (r: any) => (r.qualified ? "Qualified" : r.basis === "portal" ? "Below threshold" : "Awaiting portal hours"),
             render: (r: any) => r.left_on
               ? <Chip value="Dropout" />
               : r.qualified
-                ? <span className="rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-semibold text-green-700" title={`${r.attended_hours} of ${data.required_hours} hrs`}>✓ Qualified for assessments</span>
-                : <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600" title={r.govt ? "Portal hours below the threshold" : "No portal hours yet — estimated from our days"}>{r.attended_hours} / {data.required_hours} hrs</span>,
+                ? <span className="rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-semibold text-green-700" title={`Portal-verified: ${r.govt?.hours} of ${data.required_hours} hrs`}>✓ Qualified for assessments</span>
+                : r.basis === "portal"
+                  ? <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600" title="Portal hours below the threshold">{r.attended_hours} / {data.required_hours} hrs</span>
+                  : r.basis === "estimate"
+                    ? <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700" title="Estimated from our days × slot — the verdict waits for portal hours">~{r.attended_hours} / {data.required_hours} hrs (est.)</span>
+                    : <span className="rounded-full bg-gray-50 px-2 py-0.5 text-[11px] text-gray-400" title="No portal import and no slot on the batch">awaiting portal hours</span>,
           },
           {
             key: "_days", label: "Day-wise", mobile: false,
