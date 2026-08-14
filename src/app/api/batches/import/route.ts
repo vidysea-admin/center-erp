@@ -42,6 +42,11 @@ export const POST = apiHandler(async (req: NextRequest) => {
     throw new HttpError(400, "Mapping must include location, program and planned_start");
   }
 
+  // 15/08 (Umesh): unknown columns are reported and, on accept, stored per row in
+  // custom_fields under the sheet's own column name — never restricted away.
+  const unknownCols = columns.filter((c) => !mapping[c]);
+  const acceptUnknown = form.get("accept_unknown") === "1";
+
   // Exact case-insensitive name resolution; an ambiguous name maps to null → reported.
   const byName = (docs: any[]) => {
     const m = new Map<string, any>();
@@ -78,11 +83,20 @@ export const POST = apiHandler(async (req: NextRequest) => {
     const sessCol = colFor("session");
     const sessRaw = sessCol ? String(r[sessCol] ?? "").trim() : "";
     if (sessRaw && !SESSIONS.has(sessRaw)) { skipped.push(`row ${i + 2}: session "${sessRaw}" must be Morning / Afternoon / Full Day`); continue; }
-    importable.push({
+    const entry: any = {
       location: loc, program: prog, planned_start: start,
       target_size: Number.isFinite(sizeRaw) && sizeRaw > 0 ? Math.floor(sizeRaw) : prog.default_batch_size,
       session: sessRaw || "Full Day",
-    });
+    };
+    if (acceptUnknown && unknownCols.length) {
+      const cf: Record<string, string> = {};
+      for (const col of unknownCols) {
+        const raw = String(r[col] ?? "").trim();
+        if (raw) cf[col] = raw.slice(0, 500);
+      }
+      if (Object.keys(cf).length) entry.custom_fields = cf;
+    }
+    importable.push(entry);
   }
 
   if (!confirm) {
@@ -91,6 +105,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
       skipped: skipped.slice(0, 25),
       location_unmatched: [...new Set(location_unmatched)].slice(0, 25),
       program_unmatched: [...new Set(program_unmatched)].slice(0, 25),
+      unknown_columns: unknownCols,
       preview: importable.slice(0, 10).map((b) => ({
         location: b.location.name, program: b.program.name,
         planned_start: b.planned_start, target_size: b.target_size, session: b.session,
@@ -117,6 +132,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
         milestones: planBatchBackward(b.planned_start, defaults),
         created_by: user.id,
         source: `Import: ${file.name}`,
+        custom_fields: b.custom_fields,
       });
       created.push(doc.code);
       if (!firstId) firstId = doc._id;

@@ -68,6 +68,11 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const phoneCol = Object.keys(mapping).find((c) => mapping[c] === "phone");
   if (!nameCol || !phoneCol) throw new HttpError(400, "Mapping must include name and phone");
 
+  // 15/08 (Umesh): unknown columns are reported and, on accept, stored per row in
+  // custom_fields under the sheet's own column name — never restricted away.
+  const unknownCols = columns.filter((c) => !mapping[c]);
+  const acceptUnknown = form.get("accept_unknown") === "1";
+
   // Name → id resolution for nominations, case-insensitive, exact. Ambiguity is unmatched.
   const [locs, progs] = await Promise.all([
     Location.find({}).select("name code operational_status").lean<any[]>(),
@@ -121,6 +126,14 @@ export const POST = apiHandler(async (req: NextRequest) => {
       if (t.pipeline_status === "Certified" && !t.tr_id) {
         warnings.push(`${t.name ?? "(no name)"}: stage Certified but no TR ID — imported as-is, fix the TR ID in the ERP`);
       }
+      if (acceptUnknown && unknownCols.length) {
+        const cf: Record<string, string> = {};
+        for (const col of unknownCols) {
+          const raw = String(r[col] ?? "").trim();
+          if (raw) cf[col] = raw.slice(0, 500);
+        }
+        if (Object.keys(cf).length) t.custom_fields = cf;
+      }
       return t;
     })
     .filter((t) => t.name && t.phone);
@@ -154,6 +167,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
     centre_unmatched: [...new Set(centreUnmatched)].slice(0, 25),
     role_unmatched: [...new Set(roleUnmatched)].slice(0, 25),
     warnings: warnings.slice(0, 25),
+    unknown_columns: unknownCols,
   };
   if (!confirm) {
     return NextResponse.json({ preview: importable.slice(0, 10), ...report });

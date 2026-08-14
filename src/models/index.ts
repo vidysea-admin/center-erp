@@ -266,6 +266,9 @@ const TrainerSchema = new Schema({
   pipeline_note: String,
   dropped_reason: String,               // required to reach the terminal "Dropped" state
   dropped_from_stage: String,           // CEO: which stage the journey ended at ("Dropped at Shortlisted")
+  // 15/08 (Umesh): columns the bulk upload didn't recognise, kept when the operator accepts
+  // them ("restrict mat karo — data mil jaye"). {columnName: stringValue}, read-only facts.
+  custom_fields: { type: Schema.Types.Mixed, default: undefined },
 }, { timestamps: true });
 // 2026-08-12 audit: this schema declared NO indexes, so the same trainer could be created any
 // number of times and a TR ID could be duplicated across people. A TR ID is issued by NSDC and
@@ -349,6 +352,8 @@ const CandidateSchema = new Schema({
   fee_paid_on: Date,
   fee_reference: String,
   created_by: oid("User"),
+  // 15/08 (Umesh): accepted unknown columns from bulk upload — see TrainerSchema note.
+  custom_fields: { type: Schema.Types.Mixed, default: undefined },
 }, { timestamps: true });
 
 // ---------- Batch ----------
@@ -389,6 +394,8 @@ const BatchSchema = new Schema({
   // "हम अपनी safety के लिए ये सारे records अपने पास capture करके drive वाले folder में डालते हैं" —
   // the evidence goes to the NSDC portal AND to a Drive folder kept in parallel.
   drive_folder_url: String,
+  // 15/08 (Umesh): accepted unknown columns from bulk upload — see TrainerSchema note.
+  custom_fields: { type: Schema.Types.Mixed, default: undefined },
 }, { timestamps: true });
 
 // ---------- BatchMember (the roster) ----------
@@ -805,6 +812,12 @@ const UserSchema = new Schema({
   // rights OR REMOVE the rights" — a per-user deny list. Deny wins over both the role's
   // toggled set and any extra grant. Meaningless on an Admin (role bypasses all checks).
   revoked_permissions: { type: [String], default: [] },
+  // 15/08 (Umesh): user DROP is soft — the row stays so logs and created-by history keep
+  // their names, but the login dies and the email is renamed to dropped.<ts>.<email> so
+  // the unique index frees up ("drop karke naya create kar sakte hain"). dropped_email
+  // keeps the original address for display.
+  dropped: { type: Boolean, default: false },
+  dropped_email: String,
 }, { timestamps: true });
 
 // ---------- RolePermission (2026-08-11, CEO: AWS-style group toggles) ----------

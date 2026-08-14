@@ -25,13 +25,40 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   // any non-Admin holding the GRANTABLE users.manage right could reset the Admin's password
   // and take over the account. Credentials ARE privileges; they belong in this list.
   const PRIV_FIELDS = ["role", "location_scope", "can_edit", "active", "extra_permissions", "revoked_permissions", "password", "email"];
-  const changingPriv = PRIV_FIELDS.some((f) => body[f] !== undefined) || body.approval !== undefined;
+  const changingPriv = PRIV_FIELDS.some((f) => body[f] !== undefined) || body.approval !== undefined || body.drop === true;
   if (changingPriv && user.role !== "Admin") {
     throw new HttpError(403, "Only an Admin may change roles, rights or account status.");
   }
   if (changingPriv && String(doc._id) === String(user.id)) {
     throw new HttpError(400, "You cannot change your own role, rights or account status.");
   }
+
+  // 15/08 (Umesh): DROP a user — soft by design. "Logs me history rahegi, inka banaya data
+  // waise hi rahega, drop karke naya create kar sakte hain." The row stays (created_by refs
+  // and the audit trail keep their names), the login dies now (active=false +
+  // invalidateIdentity below), and the email is renamed so the unique index frees up for a
+  // fresh account. Nothing the person created is touched.
+  if (body.drop === true) {
+    if (doc.dropped) throw new HttpError(400, `${doc.name} is already dropped.`);
+    const original = doc.email;
+    doc.dropped = true;
+    doc.dropped_email = original;
+    doc.email = `dropped.${Date.now()}.${original}`;
+    doc.active = false;
+    await doc.save();
+    invalidateIdentity(String(doc._id));
+    await audit({
+      entity: "User", entityId: doc._id, field: "dropped",
+      oldValue: original,
+      newValue: `dropped by ${user.name} — was ${doc.role}${doc.can_edit ? " (edit)" : " (view-only)"}, email freed for re-use`,
+      actor: user.id,
+    });
+    const { password_hash: _p, ...safeDrop } = doc.toObject();
+    return NextResponse.json({ item: safeDrop });
+  }
+
+  // A dropped account is terminal — the flow is drop → create a fresh account, not revive.
+  if (doc.dropped) throw new HttpError(400, `${doc.name} was dropped. Create a new account instead of editing this one.`);
 
   for (const f of ["name", "email", "role", "location_scope", "can_edit", "active", "extra_permissions", "revoked_permissions"]) {
     if (body[f] !== undefined) (doc as any)[f] = body[f];

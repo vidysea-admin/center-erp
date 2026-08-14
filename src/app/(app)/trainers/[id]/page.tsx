@@ -278,6 +278,15 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
             <dt className="text-gray-500">Teaching experience</dt><dd>{t.teaching_experience_years != null ? `${t.teaching_experience_years} yrs` : "—"}</dd>
             <dt className="text-gray-500">Where CV came from</dt><dd>{t.source || "—"}</dd>
           </dl>
+          {/* 15/08 (Umesh): accepted unknown import columns — facts, edited only by re-import. */}
+          {t.custom_fields && Object.keys(t.custom_fields).length > 0 && (
+            <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm">
+              <div className="mb-1 text-xs font-medium text-gray-500">Extra columns (from import)</div>
+              {Object.entries(t.custom_fields).map(([k, v]) => (
+                <div key={k} className="flex justify-between gap-3"><span className="text-gray-500">{k}</span><span className="text-right">{String(v)}</span></div>
+              ))}
+            </div>
+          )}
           <div className="mt-3"><Link className="text-sm text-blue-700 underline" href="/trainers">Edit on the trainers list</Link></div>
         </Section>
       )}

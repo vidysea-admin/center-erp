@@ -181,6 +181,18 @@ function Users({ setError }: any) {
     } catch (e: any) { setError(e.message); }
   }
 
+  // 15/08 (Umesh): DROP — soft delete. History and created-data stay; login dies; the email
+  // frees up so a new account can be made. Hidden by default behind a "Show dropped" toggle.
+  const [showDropped, setShowDropped] = useState(false);
+  const droppedCount = items.filter((u) => u.dropped).length;
+  async function dropUser(u: any) {
+    if (!window.confirm(`Are you sure? ${u.name} will be DROPPED — they cannot sign in anymore, but the logs keep their history and everything they created stays. You can create a new account with the same email afterwards.`)) return;
+    try {
+      await api(`/api/users/${u._id}`, { method: "PATCH", json: { drop: true } });
+      load();
+    } catch (e: any) { setError(e.message); }
+  }
+
   return (
     <Section title="Users & Access" actions={<Btn small onClick={() => open()}>Add User</Btn>}>
       {pending.length > 0 && (
@@ -204,12 +216,18 @@ function Users({ setError }: any) {
           <p className="mt-2 text-xs text-amber-700">"Review &amp; edit…" lets you correct the role/scope before approving. Approval activates the account; the role's toggled rights (Permissions tab) apply immediately.</p>
         </div>
       )}
-      <DataTable rows={items.filter((u) => u.approval_status !== "Pending")} onRowClick={open}
+      {droppedCount > 0 && (
+        <label className="mb-2 flex items-center gap-2 text-sm text-gray-600">
+          <input type="checkbox" checked={showDropped} onChange={(e) => setShowDropped(e.target.checked)} />
+          Show dropped ({droppedCount})
+        </label>
+      )}
+      <DataTable rows={items.filter((u) => u.approval_status !== "Pending" && (showDropped || !u.dropped))} onRowClick={(r: any) => { if (!r.dropped) open(r); }}
         cardTitle={(r: any) => r.name}
         defaultSort={{ key: "name", dir: "asc" }}
         columns={[
-          { key: "name", label: "Name", sortable: true },
-          { key: "email", label: "Email", sortable: true },
+          { key: "name", label: "Name", sortable: true, render: (r: any) => r.dropped ? <span className="text-gray-400 line-through">{r.name}</span> : r.name },
+          { key: "email", label: "Email", sortable: true, render: (r: any) => r.dropped ? <span className="text-gray-400">{r.dropped_email ?? r.email} (dropped)</span> : r.email },
           { key: "role", label: "Role", sortable: true, render: (r: any) => <Chip value={r.role} /> },
           { key: "location_scope", label: "Scope", filterText: (r: any) => ["Location", "Trainer"].includes(r.role) ? (r.location_scope ?? []).map((l: any) => l.name ?? l.code).join(", ") || "none" : "All", render: (r: any) => ["Location", "Trainer"].includes(r.role) ? (r.location_scope ?? []).map((l: any) => l.name ?? l.code).join(", ") || "none" : "All" },
           { key: "can_edit", label: "Can edit", filterText: (r: any) => (r.can_edit ? "Yes" : "View only"), render: (r: any) => (r.can_edit ? "Yes" : "View only") },
@@ -237,13 +255,15 @@ function Users({ setError }: any) {
             // be … right away" — one click on the row, no drawer hunt. API guards apply
             // (Admin-only, never yourself), so the button only renders where it can succeed.
             key: "_stop", label: "", mobile: false,
-            render: (r: any) => r.approval_status === "Pending" ? null : (
-              <span onClick={(e) => e.stopPropagation()}>
+            render: (r: any) => r.approval_status === "Pending" || r.dropped ? null : (
+              <span onClick={(e) => e.stopPropagation()} className="flex gap-1.5">
                 <Btn small kind={r.active ? "danger" : "ghost"}
                   onClick={async () => {
                     try { await api(`/api/users/${r._id}`, { method: "PATCH", json: { active: !r.active } }); load(); }
                     catch (err: any) { setError(err.message); }
                   }}>{r.active ? "Stop access" : "Reactivate"}</Btn>
+                {/* 15/08 (Umesh): drop = terminal soft-delete with a plain-words confirm. */}
+                <Btn small kind="ghost" onClick={() => dropUser(r)}>Drop…</Btn>
               </span>
             ),
           },

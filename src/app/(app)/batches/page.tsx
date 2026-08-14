@@ -48,6 +48,8 @@ function BatchesInner() {
     const fd = new FormData();
     fd.append("file", imp.file);
     fd.append("mapping", JSON.stringify(imp.mapping ?? {}));
+    // 15/08 (Umesh): unknown columns accepted by default; the operator unticks to ignore.
+    if (imp.accept_unknown !== false) fd.append("accept_unknown", "1");
     if (!previewOnly) fd.append("confirm", "1");
     try {
       const res = await fetch(`${BASE_PATH}/api/batches/import`, { method: "POST", body: fd });
@@ -498,6 +500,18 @@ function BatchesInner() {
             {imp.result && (
               <div className="space-y-2 text-sm">
                 <p><b>{imp.result.valid}</b> importable · {imp.result.skipped_count} rows skipped</p>
+                {/* 15/08 (Umesh): unknown columns accepted by default, stored per batch. */}
+                {(imp.result.unknown_columns?.length ?? 0) > 0 && (
+                  <div className="rounded-lg border border-blue-200 bg-blue-50 p-2 text-xs text-blue-800">
+                    <div className="font-medium">New columns the ERP doesn&apos;t know: {imp.result.unknown_columns.join(" · ")}</div>
+                    <label className="mt-1 flex items-center gap-2">
+                      <input type="checkbox" checked={imp.accept_unknown !== false}
+                        onChange={(e) => setImp({ ...imp, accept_unknown: e.target.checked })} />
+                      Accept as new columns — their values are stored and shown on each batch
+                    </label>
+                    <div className="mt-0.5 text-blue-700">Or map them to an existing field above; unticked = ignored.</div>
+                  </div>
+                )}
                 {(imp.result.location_unmatched?.length ?? 0) > 0 && (
                   <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
                     Unknown centres (left out, fix the sheet or the Location Master): {imp.result.location_unmatched.join(" · ")}

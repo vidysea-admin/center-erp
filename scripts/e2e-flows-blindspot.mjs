@@ -279,6 +279,41 @@ console.log("\n--- FL6: the import flags the file's own duplicates and refuses a
       (dC?.dob ?? "").startsWith("2001-06-15"), dC?.dob);
     ok("QA-097: the junk-date row still imports, dob honestly empty", dD && dD.dob == null, JSON.stringify(dD?.dob));
   }
+
+  // ---- 15/08 (Umesh): custom columns — unknown columns accepted, never restricted away ----
+  {
+    const p4 = (n) => `97333${stamp.slice(0, 3)}1${n}`;
+    const rows4 = [
+      { "Student Name": `FL Cust A ${stamp}`, "Mobile": p4(1), "WhatsApp Group": "Basti-Batch-3", "Sponsor": "GramSevak" },
+      { "Student Name": `FL Cust B ${stamp}`, "Mobile": p4(2), "WhatsApp Group": "", "Sponsor": "SelfPay" },
+    ];
+    const ws4 = XLSX.utils.json_to_sheet(rows4);
+    const wb4 = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb4, ws4, "Sheet1");
+    const mkFile = () => new File([XLSX.write(wb4, { type: "buffer", bookType: "xlsx" })], "import-custom.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const custMap = JSON.stringify({ "Student Name": "name", "Mobile": "phone" });
+    // Preview names the columns the ERP does not know.
+    const prev4 = await multipart(admin, "/api/candidates/import", { file: mkFile(), location: loc._id, program: prog._id, mapping: custMap }, 200);
+    ok("T3: preview names the unknown columns",
+      (prev4.data.unknown_columns ?? []).includes("WhatsApp Group") && (prev4.data.unknown_columns ?? []).includes("Sponsor"),
+      JSON.stringify(prev4.data.unknown_columns));
+    // Accepted → each row's values land under the sheet's own column names.
+    await multipart(admin, "/api/candidates/import", { file: mkFile(), location: loc._id, program: prog._id, mapping: custMap, accept_unknown: "1", confirm: "1" }, 201);
+    const cA = (await req(admin, "GET", `/api/candidates?q=${p4(1)}`)).data.items.find((c) => String(c.phone) === p4(1));
+    ok("T3: accepted unknown columns are stored on the candidate",
+      cA?.custom_fields?.["WhatsApp Group"] === "Basti-Batch-3" && cA?.custom_fields?.Sponsor === "GramSevak",
+      JSON.stringify(cA?.custom_fields));
+    const cB = (await req(admin, "GET", `/api/candidates?q=${p4(2)}`)).data.items.find((c) => String(c.phone) === p4(2));
+    ok("T3: an empty cell stores nothing under that column", cB?.custom_fields?.["WhatsApp Group"] === undefined && cB?.custom_fields?.Sponsor === "SelfPay", JSON.stringify(cB?.custom_fields));
+    // Unticked (no accept flag) → ignored, like before.
+    const rows5 = [{ "Student Name": `FL Cust C ${stamp}`, "Mobile": p4(3), "Sponsor": "IgnoreMe" }];
+    const wb5 = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb5, XLSX.utils.json_to_sheet(rows5), "Sheet1");
+    const file5 = new File([XLSX.write(wb5, { type: "buffer", bookType: "xlsx" })], "import-custom2.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    await multipart(admin, "/api/candidates/import", { file: file5, location: loc._id, program: prog._id, mapping: custMap, confirm: "1" }, 201);
+    const cC = (await req(admin, "GET", `/api/candidates?q=${p4(3)}`)).data.items.find((c) => String(c.phone) === p4(3));
+    ok("T3: without accept the unknown column is ignored (today's behaviour)", cC && cC.custom_fields == null, JSON.stringify(cC?.custom_fields));
+  }
 }
 
 console.log("\n--- FL7: an unregistered candidate can still be assigned (decoupled, by design) ---");
@@ -349,6 +384,16 @@ console.log("\n--- FL9: trainer import — stages by display name, nominations b
   const trA = (await req(admin, "GET", `/api/trainers?q=9822200001`)).data.items.find((t) => t.name === `FL Tr A ${stamp}`);
   ok("FL9: 'Payment Done' (legacy sheet value) landed as 'TOT Payment Done'", trA?.pipeline_status === "TOT Payment Done", trA?.pipeline_status);
   ok("FL9: the centre name resolved to a real nomination", (trA?.nominated_for_location?.name ?? "") === loc.name, JSON.stringify(trA?.nominated_for_location));
+
+  // 15/08 (Umesh): custom columns ride the trainer importer too.
+  const wbT = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wbT, XLSX.utils.json_to_sheet([{ "Name": `FL Tr Cust ${stamp}`, "Phone": "9822200005", "Languages": "Hindi, Bhojpuri" }]), "S1");
+  const fileT = new File([XLSX.write(wbT, { type: "buffer", bookType: "xlsx" })], "trainers-custom.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const custPrev = await multipart(admin, "/api/trainers/import", { file: fileT, mapping: JSON.stringify({ "Name": "name", "Phone": "phone" }) }, 200);
+  ok("T3: trainer preview names the unknown column", (custPrev.data.unknown_columns ?? []).includes("Languages"), JSON.stringify(custPrev.data.unknown_columns));
+  await multipart(admin, "/api/trainers/import", { file: fileT, mapping: JSON.stringify({ "Name": "name", "Phone": "phone" }), accept_unknown: "1", confirm: "1" }, 201);
+  const trCust = (await req(admin, "GET", `/api/trainers?q=9822200005`)).data.items.find((t) => t.name === `FL Tr Cust ${stamp}`);
+  ok("T3: accepted unknown column stored on the trainer", trCust?.custom_fields?.Languages === "Hindi, Bhojpuri", JSON.stringify(trCust?.custom_fields));
 }
 
 console.log("\n--- FL10: batch import (QA-028) — centres/roles by name, unknowns reported, codes minted ---");
@@ -378,6 +423,18 @@ console.log("\n--- FL10: batch import (QA-028) — centres/roles by name, unknow
   ok("FL10: backward-plan milestones were stored on the imported batch", ((await req(admin, "GET", `/api/batches/${listed?._id}`)).data.item?.milestones ?? []).length > 0);
   // cleanup so room/trainer fixtures elsewhere stay unaffected
   await req(admin, "POST", `/api/batches/${listed?._id}/transition`, { target: "Cancelled", reason: "FL10 fixture cleanup" }, 200);
+
+  // 15/08 (Umesh): custom columns ride the batch importer too.
+  const wbB = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wbB, XLSX.utils.json_to_sheet([{ "Centre": loc.name, "Job Role": prog.name, "Start": "2027-05-01", "Funding": "CSR-2026" }]), "S1");
+  const fileB = new File([XLSX.write(wbB, { type: "buffer", bookType: "xlsx" })], "batches-custom.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const bMap = JSON.stringify({ "Centre": "location", "Job Role": "program", "Start": "planned_start" });
+  const bPrev = await multipart(admin, "/api/batches/import", { file: fileB, mapping: bMap }, 200);
+  ok("T3: batch preview names the unknown column", (bPrev.data.unknown_columns ?? []).includes("Funding"), JSON.stringify(bPrev.data.unknown_columns));
+  const bConf = await multipart(admin, "/api/batches/import", { file: fileB, mapping: bMap, accept_unknown: "1", confirm: "1" }, 201);
+  const bCust = ((await req(admin, "GET", "/api/batches?limit=2000", undefined, 200)).data.items ?? []).find((b) => b.code === (bConf.data.created ?? [])[0]);
+  ok("T3: accepted unknown column stored on the batch", bCust?.custom_fields?.Funding === "CSR-2026", JSON.stringify(bCust?.custom_fields));
+  await req(admin, "POST", `/api/batches/${bCust?._id}/transition`, { target: "Cancelled", reason: "T3 fixture cleanup" }, 200);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

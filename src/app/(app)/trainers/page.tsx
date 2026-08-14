@@ -54,6 +54,8 @@ function TrainersInner() {
     const fd = new FormData();
     fd.append("file", imp.file);
     fd.append("mapping", JSON.stringify(imp.mapping ?? {}));
+    // 15/08 (Umesh): unknown columns accepted by default; the operator unticks to ignore.
+    if (imp.accept_unknown !== false) fd.append("accept_unknown", "1");
     if (!previewOnly) fd.append("confirm", "1");
     try {
       const res = await fetch(`${BASE_PATH}/api/trainers/import`, { method: "POST", body: fd });
@@ -444,6 +446,18 @@ function TrainersInner() {
                 {imp.preview && (
                   <div className="space-y-2 text-sm text-gray-600">
                     <p>{imp.preview.valid} valid, {imp.preview.skipped} skipped (missing name/phone).</p>
+                    {/* 15/08 (Umesh): unknown columns accepted by default, stored per trainer. */}
+                    {(imp.preview.unknown_columns?.length ?? 0) > 0 && (
+                      <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                        <div className="font-medium">New columns the ERP doesn&apos;t know: {imp.preview.unknown_columns.join(" · ")}</div>
+                        <label className="mt-1 flex items-center gap-2">
+                          <input type="checkbox" checked={imp.accept_unknown !== false}
+                            onChange={(e) => setImp({ ...imp, accept_unknown: e.target.checked })} />
+                          Accept as new columns — their values are stored and shown on each trainer
+                        </label>
+                        <div className="mt-0.5 text-blue-700">Or map them to an existing field above; unticked = ignored.</div>
+                      </div>
+                    )}
                     {["stage_unmatched", "centre_unmatched", "role_unmatched"].map((k) => (imp.preview[k]?.length ?? 0) > 0 && (
                       <p key={k} className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                         {k === "stage_unmatched" ? "Stages" : k === "centre_unmatched" ? "Centres" : "Job roles"} not recognised (left blank): {imp.preview[k].join(" · ")}

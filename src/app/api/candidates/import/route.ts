@@ -41,6 +41,12 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const phoneCol = Object.keys(mapping).find((c) => mapping[c] === "phone");
   if (!nameCol || !phoneCol) throw new HttpError(400, "Mapping must include name and phone");
 
+  // 15/08 (Umesh): columns the mapping doesn't know are NOT restricted away — the preview
+  // names them and, when the operator accepts, each row's values land in custom_fields
+  // under the sheet's own column name (stringified, 500-char cap).
+  const unknownCols = columns.filter((c) => !mapping[c]);
+  const acceptUnknown = form.get("accept_unknown") === "1";
+
   // F-B4 (Manish): the eligibility fields arrive with the sheet — dob, education,
   // last training date. Education is matched against the enum case-insensitively;
   // a spelling we don't recognise stays null and is REPORTED, never guessed.
@@ -99,6 +105,14 @@ export const POST = apiHandler(async (req: NextRequest) => {
           if (ids.length) c.interested_locations = ids;
         }
       }
+      if (acceptUnknown && unknownCols.length) {
+        const cf: Record<string, string> = {};
+        for (const col of unknownCols) {
+          const raw = String(r[col] ?? "").trim();
+          if (raw) cf[col] = raw.slice(0, 500);
+        }
+        if (Object.keys(cf).length) c.custom_fields = cf;
+      }
       return c;
     })
     .filter((c) => c.name && c.phone);
@@ -128,6 +142,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
       education_unmatched: [...new Set(eduUnmatched)].slice(0, 25),
       interest_unmatched: [...new Set(interestUnmatched)].slice(0, 25),
       date_unparseable: dateUnparseable.slice(0, 25), date_unparseable_count: dateUnparseable.length,
+      unknown_columns: unknownCols,
     });
   }
   const docs = await Candidate.insertMany(candidates);

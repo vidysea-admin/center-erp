@@ -183,6 +183,15 @@ function Overview({ data, role, onChanged, setError }: any) {
               ))}
             </div>
           )}
+        {/* 15/08 (Umesh): accepted unknown import columns — facts, edited only by re-import. */}
+        {b.custom_fields && Object.keys(b.custom_fields).length > 0 && (
+          <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm">
+            <div className="mb-1 text-xs font-medium text-gray-500">Extra columns (from import)</div>
+            {Object.entries(b.custom_fields).map(([k, v]) => (
+              <div key={k} className="flex justify-between gap-3"><span className="text-gray-500">{k}</span><span className="text-right">{String(v)}</span></div>
+            ))}
+          </div>
+        )}
       </Section>
       {(b.milestones?.length ?? 0) > 0 && (
         <Section title="Backward plan (2026-08-11)" actions={b.status === "Planning" ? (

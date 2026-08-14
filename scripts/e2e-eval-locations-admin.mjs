@@ -141,6 +141,33 @@ await req(admin, "PATCH", `/api/users/${uid}`, { active: false }, 200);
 const offRow = ((await req(admin, "GET", "/api/users", undefined, 200)).data.items ?? []).find((u) => String(u._id) === String(uid));
 ok("[avg] deactivated user shows active=false", offRow?.active === false, JSON.stringify(offRow?.active));
 
+// ---- 15/08 (Umesh): user DROP — soft, terminal, email freed for a fresh account ----
+{
+  // lowercase on purpose: the schema lowercases emails, and the drop asserts compare strings.
+  const dEmail = `eval.drop.${s.toLowerCase()}@vidysea-test.local`;
+  const d1 = (await req(admin, "POST", "/api/users", { name: "TEST-EL Drop " + s, email: dEmail, password: "Vidysea@123", role: "Location", location_scope: [loc._id] }, 201)).data.item;
+  ok("T3: drop fixture signs in before the drop", !!(await login(dEmail, "Vidysea@123")));
+  // Non-admin cannot drop (the Admin-only privilege guard fires).
+  const enrollDeny = await req(enroll, "PATCH", `/api/users/${d1._id}`, { drop: true });
+  ok("T3: a non-admin cannot drop anyone", enrollDeny.status === 403, `got ${enrollDeny.status}`);
+  // Admin drops: row stays, flags set, email renamed, original kept for display.
+  const dropped = (await req(admin, "PATCH", `/api/users/${d1._id}`, { drop: true }, 200)).data.item;
+  ok("T3: drop keeps the row with dropped=true + active=false", dropped?.dropped === true && dropped?.active === false, JSON.stringify({ d: dropped?.dropped, a: dropped?.active }));
+  ok("T3: the original email is kept for display and the live one is renamed",
+    dropped?.dropped_email === dEmail && String(dropped?.email ?? "").startsWith("dropped.") && String(dropped?.email ?? "").endsWith(dEmail),
+    JSON.stringify({ e: dropped?.email, de: dropped?.dropped_email }));
+  // The login dies with the drop.
+  ok("T3: the dropped user cannot sign in anymore", !(await login(dEmail, "Vidysea@123")));
+  // The freed email can carry a brand-new account (drop → recreate flow).
+  const re = await req(admin, "POST", "/api/users", { name: "TEST-EL Rehire " + s, email: dEmail, password: "Vidysea@123", role: "Location", location_scope: [loc._id] });
+  ok("T3: the same email works for a fresh account after the drop", re.status === 201, `got ${re.status}`);
+  // Dropped is terminal: no edits, no second drop, and never yourself.
+  ok("T3: a dropped account refuses edits (create a new one instead)", (await req(admin, "PATCH", `/api/users/${d1._id}`, { name: "zombie" })).status === 400);
+  ok("T3: a second drop is refused", (await req(admin, "PATCH", `/api/users/${d1._id}`, { drop: true })).status === 400);
+  const me = ((await req(admin, "GET", "/api/users", undefined, 200)).data.items ?? []).find((u) => u.email === "admin@vidysea.com");
+  if (me) ok("T3: you cannot drop yourself", (await req(admin, "PATCH", `/api/users/${me._id}`, { drop: true })).status === 400);
+}
+
 // ---- cost entries: the 2026-08-13 edit/delete surface (sheet-imported costs can be wrong) ----
 const cost = (await req(admin, "POST", "/api/costs", { location: loc._id, category: (await pickCategory()), amount: 5000, note: "TEST-EL mobilisation " + s }, 201)).data.item;
 async function pickCategory() {

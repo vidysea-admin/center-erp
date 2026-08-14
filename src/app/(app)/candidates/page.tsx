@@ -142,6 +142,7 @@ function CandidatesInner() {
     setEditId(r._id);
     setForm({
       name: r.name ?? "", phone: r.phone ?? "", alt_phone: r.alt_phone ?? "", email: r.email ?? "", gender: r.gender ?? "",
+      custom_fields: r.custom_fields, // read-only display; the PATCH whitelist ignores it
       dob: r.dob ? String(r.dob).slice(0, 10) : "",
       location: r.location?._id ?? r.location ?? "", program: r.program?._id ?? r.program ?? "",
       education: r.education ?? "", source: r.source ?? "",
@@ -253,6 +254,8 @@ function CandidatesInner() {
     const fd = new FormData();
     fd.append("file", importState.file); fd.append("location", importState.location); fd.append("program", importState.program);
     fd.append("mapping", JSON.stringify(importState.mapping));
+    // 15/08 (Umesh): unknown columns are accepted by default — the operator unticks to ignore.
+    if (importState.accept_unknown !== false) fd.append("accept_unknown", "1");
     if (!preview) fd.append("confirm", "1");
     try {
       const res = await api("/api/candidates/import", { method: "POST", body: fd });
@@ -485,6 +488,16 @@ function CandidatesInner() {
           <Field label="Source (mobiliser / campaign)"><input className={inputCls} value={form.source ?? ""} onChange={(e) => set("source", e.target.value)} /></Field>
           {/* 15/08 (Umesh): no candidate fee in this programme — the fee inputs left the
               drawer. Schema + Rule 54 toggle stay dormant for a future paid scheme. */}
+          {/* 15/08 (Umesh): columns the import didn't recognise, accepted by the operator —
+              shown as facts, edited only by re-import. */}
+          {form.custom_fields && Object.keys(form.custom_fields).length > 0 && (
+            <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm">
+              <div className="mb-1 text-xs font-medium text-gray-500">Extra columns (from import)</div>
+              {Object.entries(form.custom_fields).map(([k, v]) => (
+                <div key={k} className="flex justify-between gap-3"><span className="text-gray-500">{k}</span><span className="text-right">{String(v)}</span></div>
+              ))}
+            </div>
+          )}
           {/* Edit mode: location/program may legitimately be blank on a sheet-imported row — the
               save must not be held hostage to fields the user is not correcting. */}
           <Btn onClick={saveCandidate} disabled={drawer === "add" ? (!form.name || !form.phone || !form.location || !form.program) : (!form.name || !form.phone)}>
@@ -547,6 +560,19 @@ function CandidatesInner() {
               </div>
               {importState.preview && (
                 <p className="text-sm text-gray-600">{importState.preview.valid} valid, {importState.preview.skipped} skipped (missing name/phone).</p>
+              )}
+              {/* 15/08 (Umesh): naye columns restrict nahi hote — accept (default) → har row ka
+                  data un columns ke naam se store, candidate par "Extra columns" me dikhta hai. */}
+              {importState.preview?.unknown_columns?.length > 0 && (
+                <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                  <div className="font-medium">New columns the ERP doesn&apos;t know: {importState.preview.unknown_columns.join(" · ")}</div>
+                  <label className="mt-1 flex items-center gap-2">
+                    <input type="checkbox" checked={importState.accept_unknown !== false}
+                      onChange={(e) => setImportState({ ...importState, accept_unknown: e.target.checked })} />
+                    Accept as new columns — their values are stored and shown on each candidate
+                  </label>
+                  <div className="mt-0.5 text-blue-700">Or map them to an existing field above; unticked = ignored.</div>
+                </div>
               )}
               {importState.preview?.interest_unmatched?.length > 0 && (
                 <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
