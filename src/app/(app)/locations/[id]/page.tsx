@@ -394,7 +394,7 @@ function TrainersInfra({ locationId, setError }: any) {
                             {t.name}
                             <span className={`rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${
                               t.pipeline_status === "Certified" ? "border-green-200 bg-green-50 text-green-700" : "border-amber-200 bg-amber-50 text-amber-700"}`}>
-                              {t.pipeline_status === "Certified" ? "Certified (Ready to Train)" : t.pipeline_status}
+                              {t.pipeline_status}
                             </span>
                           </Link>
                         ) : (

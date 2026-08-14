@@ -13,9 +13,9 @@ const TABS = ["Pipeline", "Documents", "Profile", "Assignments"];
 
 // The order the journey actually runs in, for the progress rail.
 const JOURNEY = [
-  "Applied", "CV Reviewed", "Docs Pending",
-  "Nomination Prepared", "Submitted to NSDC", "NSDC Approved",
-  "Payment Done", "TOT Scheduled", "TOT In Progress", "Certified",
+  "Fresh Lead", "Shortlisted", "Documents Completed",
+  "Sent to NSDC", "NSDC Approved",
+  "TOT Payment Done", "TOT Scheduled", "TOT In Progress", "Certified",
 ];
 
 const DOC_TYPES = ["Aadhaar", "PAN", "Photo", "CV", "Educational Qualification",
@@ -36,7 +36,7 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
   const [docDrawer, setDocDrawer] = useState(false);
   const [busy, setBusy] = useState(false);
   // F-A1 (2026-08-13): the nomination TARGET (which centre × job role this trainer is being
-  // hired FOR) finally gets an input. Rule T3 requires both before "Nomination Prepared", and
+  // hired FOR) finally gets an input. Rule T3 requires both before "Documents Completed", and
   // the readiness engine counts trainers by exactly this pair — yet no screen could set it.
   const [nom, setNom] = useState<{ location: string; program: string } | null>(null);
 
@@ -96,7 +96,7 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
 
   if (!t) return <div className="p-6 text-sm text-gray-500">Loading…</div>;
 
-  const stage = t.pipeline_status ?? "Applied";
+  const stage = t.pipeline_status ?? "Fresh Lead";
   const stageIdx = JOURNEY.indexOf(stage);
   const isOff = stage === "NSDC Rejected" || stage === "Dropped";
 
@@ -120,7 +120,7 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
         <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm">
           <div className="font-semibold text-red-800">NSDC sent this profile back</div>
           <div className="mt-1 text-red-700">{t.nsdc_remarks || "No remarks recorded."}</div>
-          <div className="mt-2 text-red-700">Correct the documents, then move back to <strong>Docs Pending</strong> and resubmit.</div>
+          <div className="mt-2 text-red-700">Correct the documents, then move back to <strong>Shortlisted</strong>, fix the papers, and resubmit.</div>
         </div>
       )}
 
@@ -160,7 +160,7 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
           }>
             {nom && (
               <div className="mb-3 space-y-2 rounded-lg border border-blue-200 bg-blue-50 p-3">
-                <p className="text-xs text-blue-800">Which centre × job role is this trainer being hired for? (Rule T3 — required before "Nomination Prepared"; the Preparation board counts trainers by this.)</p>
+                <p className="text-xs text-blue-800">Which centre × job role is this trainer being hired for? (Rule T3 — required before "Documents Completed"; the Preparation board counts trainers by this.)</p>
                 <div className="grid grid-cols-2 gap-2">
                   <Field label="Centre" required>
                     <select className={inputCls} value={nom.location} onChange={(e) => setNom({ ...nom, location: e.target.value })}>
@@ -185,7 +185,7 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
               <dt className="text-gray-500">Nominated for</dt>
               <dd>{t.nominated_for_program?.name ?? "—"}{t.nominated_for_location?.name ? ` at ${t.nominated_for_location.name}` : ""}</dd>
               <dt className="text-gray-500">Nomination sent</dt><dd>{fmt(t.nomination_sent_on)}</dd>
-              <dt className="text-gray-500">Submitted to NSDC</dt><dd>{fmt(t.nsdc_submitted_on)}</dd>
+              <dt className="text-gray-500">Sent to NSDC</dt><dd>{fmt(t.nsdc_submitted_on)}</dd>
               <dt className="text-gray-500">NSDC result</dt><dd>{fmt(t.nsdc_result_on)}</dd>
               <dt className="text-gray-500">Eligibility payment</dt>
               <dd>{t.paid_on ? `₹${t.eligibility_payment_amount ?? 3250} on ${fmt(t.paid_on)}` : "—"}</dd>
@@ -272,7 +272,7 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
               <Field label="TOT certificate no."><input className={inputCls} value={move.tot_certificate_no ?? ""} onChange={(e) => setMove({ ...move, tot_certificate_no: e.target.value })} /></Field>
             </>
           )}
-          {move.target === "Payment Done" && (
+          {move.target === "TOT Payment Done" && (
             <Field label="Payment reference"><input className={inputCls} value={move.payment_reference ?? ""} onChange={(e) => setMove({ ...move, payment_reference: e.target.value })} /></Field>
           )}
           {move.target === "Dropped" && (

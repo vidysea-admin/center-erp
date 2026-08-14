@@ -1,5 +1,5 @@
 // Trainer preparation pipeline E2E (2026-08-12, Manish's RPL walkthrough).
-// Walks a trainer from Applied to Certified, and proves the parts that matter operationally:
+// Walks a trainer from Fresh Lead to Certified, and proves the parts that matter operationally:
 // documents gate the nomination, an NSDC rejection can be corrected and resent, a TR ID is
 // required to certify, and the per-centre counters are derived rather than stored.
 // Run: node scripts/e2e-trainer-pipeline.mjs
@@ -50,31 +50,30 @@ ok("centre carries its TC identity", loc.tc_id === "TC" + stamp && loc.tc_status
 
 const tr = (await req("POST", "/api/trainers", {
   name: "Pipeline Trainer " + stamp, phone: "9" + Date.now().toString().slice(-9),
-  skills: ["DST" + stamp], home_location: loc._id, pipeline_status: "Applied",
+  skills: ["DST" + stamp], home_location: loc._id, pipeline_status: "Fresh Lead",
   nominated_for_location: loc._id, nominated_for_program: prog._id,
 }, 201)).data.item;
 const T = `/api/trainers/${tr._id}/transition`;
 
 // ---- the machine will not let you skip the journey (2026-08-14 merged stages) ----
 await req("POST", T, { target: "Certified" }, 409);
-await req("POST", T, { target: "Submitted to NSDC" }, 409);
-await req("POST", T, { target: "Shortlisted" }, 409); // merged away — no longer a stage
-await req("POST", T, { target: "CV Reviewed" }, 200);
-await req("POST", T, { target: "Docs Complete" }, 409); // merged away — no longer a stage
-await req("POST", T, { target: "Docs Pending" }, 200);
+await req("POST", T, { target: "Sent to NSDC" }, 409);
+await req("POST", T, { target: "Docs Pending" }, 409); // retired name (2026-08-14 CEO vocabulary)
+await req("POST", T, { target: "Shortlisted" }, 200);
+await req("POST", T, { target: "Docs Complete" }, 409); // retired name — never a stage again
 
 // ---- documents gate the nomination (Rule T2 — the T1 check lives here since the merge) ----
 const D = `/api/trainers/${tr._id}/documents`;
 const before = (await req("GET", D)).data;
 ok("every mandatory document is reported missing up front", before.summary.missing.length === 5, JSON.stringify(before.summary.missing));
-await req("POST", T, { target: "Nomination Prepared" }, 409); // still missing everything
+await req("POST", T, { target: "Documents Completed" }, 409); // still missing everything
 
 await req("POST", D, { doc_type: "Aadhaar", file_url: "/erp/api/files/aaaa.pdf", original_name: "aadhaar.pdf" }, 201);
 await req("POST", D, { doc_type: "PAN", file_url: "/erp/api/files/bbbb.pdf" }, 201);
 await req("POST", D, { doc_type: "Photo", file_url: "/erp/api/files/cccc.jpg" }, 201);
 await req("POST", D, { doc_type: "CV", file_url: "/erp/api/files/dddd.docx" }, 201);
 // Four of five is refused, and the refusal names the one still missing (was Rule T1's job).
-const halfway = await req("POST", T, { target: "Nomination Prepared" });
+const halfway = await req("POST", T, { target: "Documents Completed" });
 ok("the gate names exactly what is still missing",
   halfway.status === 409 && /Educational Qualification/.test(halfway.data?.error ?? ""), `got ${halfway.status} ${halfway.data?.error ?? ""}`);
 
@@ -87,23 +86,23 @@ const afterReplace = (await req("GET", D)).data;
 ok("re-uploading a document replaces it instead of stacking duplicates",
   afterReplace.items.filter((d) => d.doc_type === "PAN").length === 1, `${afterReplace.items.filter((d) => d.doc_type === "PAN").length}`);
 
-await req("POST", T, { target: "Nomination Prepared" }, 200);
-await req("POST", T, { target: "Submitted to NSDC" }, 200);
+await req("POST", T, { target: "Documents Completed" }, 200);
+await req("POST", T, { target: "Sent to NSDC" }, 200);
 
 // ---- the NSDC round-trip: rejection must carry remarks, and must be recoverable ----
 await req("POST", T, { target: "NSDC Rejected" }, 400); // no remarks
 const rej = await req("POST", T, { target: "NSDC Rejected", remarks: "Experience certificate not attested" }, 200);
 ok("a rejection records what NSDC actually said", rej.data.item.nsdc_remarks === "Experience certificate not attested", rej.data.item.nsdc_remarks);
 // "profile mein truti batate hain… hum isko correct karke wapas bhej rahe hain" — this must work
-await req("POST", T, { target: "Docs Pending" }, 200);
+await req("POST", T, { target: "Shortlisted" }, 200);
 await req("POST", D, { doc_type: "Industry Experience", file_url: "/erp/api/files/exp.docx" }, 201);
-await req("POST", T, { target: "Nomination Prepared" }, 200);
-await req("POST", T, { target: "Submitted to NSDC" }, 200);
+await req("POST", T, { target: "Documents Completed" }, 200);
+await req("POST", T, { target: "Sent to NSDC" }, 200);
 const appr = await req("POST", T, { target: "NSDC Approved" }, 200);
 ok("approval clears the old rejection remarks", !appr.data.item.nsdc_remarks, appr.data.item.nsdc_remarks);
 
 // ---- payment, TOT, TR ID ----
-const paid = await req("POST", T, { target: "Payment Done", payload: { payment_reference: "NEFT-" + stamp } }, 200);
+const paid = await req("POST", T, { target: "TOT Payment Done", payload: { payment_reference: "NEFT-" + stamp } }, 200);
 ok("the ₹3250 eligibility payment is recorded", paid.data.item.eligibility_payment_amount === 3250 && !!paid.data.item.paid_on,
   JSON.stringify({ amt: paid.data.item.eligibility_payment_amount, on: paid.data.item.paid_on }));
 await req("POST", T, { target: "TOT Scheduled", date: new Date().toISOString() }, 200);
@@ -155,17 +154,17 @@ ok("a duplicate trainer phone is refused", dup.status >= 400, `got ${dup.status}
     nominated_for_location: loc._id, nominated_for_program: strictProg._id,
   }, 201)).data.item;
   const TX = `/api/trainers/${tx._id}/transition`;
-  for (const s of ["CV Reviewed", "Docs Pending"]) await req("POST", TX, { target: s }, 200);
+  await req("POST", TX, { target: "Shortlisted" }, 200); // docs are collected while Shortlisted
   for (const d of ["Aadhaar", "PAN", "Photo", "CV", "Educational Qualification"]) {
     await req("POST", `/api/trainers/${tx._id}/documents`, { doc_type: d, file_url: `/uploads/x-${d}.pdf`, original_name: `${d}.pdf` }, 201);
   }
-  const refused = await req("POST", TX, { target: "Nomination Prepared" });
+  const refused = await req("POST", TX, { target: "Documents Completed" });
   ok("the five alone do not clear a role that demands experience certificates",
     refused.status === 409 && /Industry Experience/.test(refused.data?.error ?? ""), `got ${refused.status} ${refused.data?.error ?? ""}`);
   for (const d of ["Industry Experience", "Teaching Experience"]) {
     await req("POST", `/api/trainers/${tx._id}/documents`, { doc_type: d, file_url: `/uploads/x-${d}.pdf`, original_name: `${d}.pdf` }, 201);
   }
-  await req("POST", TX, { target: "Nomination Prepared" }, 200);
+  await req("POST", TX, { target: "Documents Completed" }, 200);
   const sum = await req("GET", `/api/trainers/${tx._id}/documents`, undefined, 200);
   ok("the documents summary names the role's full required set (7)",
     (sum.data.summary?.required ?? []).length === 7, JSON.stringify(sum.data.summary?.required));
@@ -176,9 +175,9 @@ const t2 = (await req("POST", "/api/trainers", { name: "Drop Me " + stamp, phone
 await req("POST", `/api/trainers/${t2._id}/transition`, { target: "Dropped" }, 400);
 const droppedRes = await req("POST", `/api/trainers/${t2._id}/transition`, { target: "Dropped", reason: "Took another offer" }, 200);
 // CEO 13/08: "har stage pe Accepted/Rejected dikhe" — the profile records WHERE it died.
-ok("dropping records the stage the journey ended at", droppedRes.data.item.dropped_from_stage === "Applied", droppedRes.data.item.dropped_from_stage);
-const reopened = await req("POST", `/api/trainers/${t2._id}/transition`, { target: "Applied" }, 200);
-ok("a dropped trainer can be re-opened if they come back", reopened.data.item.pipeline_status === "Applied" && reopened.data.item.active === true);
+ok("dropping records the stage the journey ended at", droppedRes.data.item.dropped_from_stage === "Fresh Lead", droppedRes.data.item.dropped_from_stage);
+const reopened = await req("POST", `/api/trainers/${t2._id}/transition`, { target: "Fresh Lead" }, 200);
+ok("a dropped trainer can be re-opened if they come back", reopened.data.item.pipeline_status === "Fresh Lead" && reopened.data.item.active === true);
 
 // ---- the targets endpoint must derive its own trainer counts (B5) ----
 // The two client sheets disagree (nominated 23 vs 20, certified 18 vs 16). Ours is computed from

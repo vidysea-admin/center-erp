@@ -61,8 +61,8 @@ async function certifiedTrainer(name) {
   for (const d of DOCS) {
     await req(admin, "POST", `/api/trainers/${t._id}/documents`, { doc_type: d, file_url: `/uploads/x-${d}.pdf`, original_name: `${d}.pdf` });
   }
-  for (const s of ["CV Reviewed", "Docs Pending", "Nomination Prepared",
-    "Submitted to NSDC", "NSDC Approved", "Payment Done", "TOT Scheduled", "TOT In Progress"]) {
+  for (const s of ["Shortlisted", "Documents Completed",
+    "Sent to NSDC", "NSDC Approved", "TOT Payment Done", "TOT Scheduled", "TOT In Progress"]) {
     await req(admin, "POST", `/api/trainers/${t._id}/transition`, { target: s });
   }
   await req(admin, "POST", `/api/trainers/${t._id}/transition`, { target: "Certified", payload: { tr_id: `TR${stamp}${Math.floor(Math.random() * 900 + 100)}` } });
@@ -153,7 +153,7 @@ console.log("\n--- BS5: an unknown document type must not widen the enum ---");
 console.log("\n--- BS6: the eligibility payment must not be recordable twice ---");
 {
   const t = await certifiedTrainer(`BS Pay ${stamp}`);
-  const again = await req(admin, "POST", `/api/trainers/${t._id}/transition`, { target: "Payment Done" });
+  const again = await req(admin, "POST", `/api/trainers/${t._id}/transition`, { target: "TOT Payment Done" });
   ok("BS6: a certified trainer cannot be walked back through Payment Done",
     again.status === 409, `got ${again.status} — the ₹3250 could be recorded twice`);
 }

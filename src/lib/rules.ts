@@ -366,6 +366,8 @@ export async function updateEnrollment(memberId: string, patch: {
 
   if (m.enrollment_status === "Completed") {
     await Candidate.findByIdAndUpdate(m.candidate, { lifecycle_status: "Enrolled" }); // Rule 21
+  // CEO 14/08: capture WHEN the candidate enrolled — first completion only, never overwritten.
+  await Candidate.updateOne({ _id: m.candidate, enrolled_at: null }, { enrolled_at: new Date() });
   }
   return m;
 }
@@ -480,7 +482,7 @@ export async function transitionBatch(batchId: string, target: string, opts: { i
       const rosterCandidateIds = roster.map((m) => String(m.candidate));
       const results = await CandidateResult.find({ batch: batchId }).select("candidate result").lean<any[]>();
       if (results.length) {
-        // Rule 47: only a Pass finishes as Completed; Fail/Absent are Not Certified.
+        // Rule 47: only a Pass finishes as Completed; Fail/Absent are Failed (CEO 14/08 word).
         const passed = results.filter((r) => r.result === "Pass").map((r) => String(r.candidate));
         const notCertified = results.filter((r) => ["Fail", "Absent"].includes(r.result)).map((r) => String(r.candidate));
         await Candidate.updateMany(
@@ -489,7 +491,7 @@ export async function transitionBatch(batchId: string, target: string, opts: { i
         );
         await Candidate.updateMany(
           { _id: { $in: notCertified.filter((id) => rosterCandidateIds.includes(id)) } },
-          { lifecycle_status: "Not Certified" },
+          { lifecycle_status: "Failed" },
         );
       } else {
         // Legacy batches keep the original blanket behaviour (Rule 21).
@@ -1293,11 +1295,12 @@ export async function nextBatchCode(): Promise<string> {
 // ---------- Trainer preparation pipeline (2026-08-12, Manish's RPL walkthrough) ----------
 // The journey is a round-trip through a body we do not control (NSDC/SSC via the ABPL team), so
 // the machine has to model waiting and rejection as first-class, not as an afterthought:
-//   Applied -> CV Reviewed -> Shortlisted -> Docs Pending -> Docs Complete -> Nomination Prepared
-//   -> Submitted to NSDC -> NSDC Approved -> Payment Done -> TOT Scheduled -> TOT In Progress -> Certified
-// with "NSDC Rejected" branching off the submission and looping BACK to Docs Pending, because
+//   Fresh Lead -> Shortlisted (docs collected here) -> Documents Completed (Rule T2 gate)
+//   -> Sent to NSDC -> NSDC Approved -> TOT Payment Done -> TOT Scheduled -> TOT In Progress -> Certified
+// with "NSDC Rejected" branching off the submission and looping BACK to Shortlisted, because
 // "profile mein kya truti hai vo batate hain... hum isko correct karke wapas bhej rahe hain" is
 // the normal case, not the exception. Anything can reach "Dropped" with a reason.
+// 2026-08-14: stage names ARE the CEO's recorded-review vocabulary — stored, not labelled.
 
 // Documents that must be on file before a nomination can be prepared. Kept here rather than in
 // The floor that applies to every job role. A programme can name its own wider set in
@@ -1306,23 +1309,22 @@ export async function nextBatchCode(): Promise<string> {
 export const MANDATORY_TRAINER_DOCS = ["Aadhaar", "PAN", "Photo", "CV", "Educational Qualification"] as const;
 
 const TRAINER_FLOW: Record<string, string[]> = {
-  // 2026-08-14 merge (CEO): CV Reviewed absorbs Shortlisted; Docs Pending absorbs Docs
-  // Complete. Rule T1's "papers actually in" check did not die — Rule T2 runs the same
-  // trainerDocSummary gate at Nomination Prepared, which is the only exit that mattered.
-  "Applied": ["CV Reviewed", "Dropped"],
-  "CV Reviewed": ["Docs Pending", "Dropped"],
-  "Docs Pending": ["Nomination Prepared", "Dropped"],
-  "Nomination Prepared": ["Submitted to NSDC", "Docs Pending", "Dropped"],
-  "Submitted to NSDC": ["NSDC Approved", "NSDC Rejected", "Dropped"],
-  // The correct-and-resubmit loop. Also allowed straight back to Submitted for a clerical fix.
-  "NSDC Rejected": ["Docs Pending", "Submitted to NSDC", "Dropped"],
-  "NSDC Approved": ["Payment Done", "Dropped"],
-  "Payment Done": ["TOT Scheduled", "Dropped"],
+  // 2026-08-14 CEO vocabulary. The old Docs Pending state merged into Shortlisted (documents
+  // are collected while Shortlisted); Rule T2's "papers actually in" check still gates the
+  // entry into Documents Completed, which is the only exit that mattered.
+  "Fresh Lead": ["Shortlisted", "Dropped"],
+  "Shortlisted": ["Documents Completed", "Dropped"],
+  "Documents Completed": ["Sent to NSDC", "Shortlisted", "Dropped"],
+  "Sent to NSDC": ["NSDC Approved", "NSDC Rejected", "Dropped"],
+  // The correct-and-resubmit loop. Also allowed straight back to Sent for a clerical fix.
+  "NSDC Rejected": ["Shortlisted", "Sent to NSDC", "Dropped"],
+  "NSDC Approved": ["TOT Payment Done", "Dropped"],
+  "TOT Payment Done": ["TOT Scheduled", "Dropped"],
   "TOT Scheduled": ["TOT In Progress", "Dropped"],
   // A trainer can fail TOT - back to scheduled for a retake, or out.
   "TOT In Progress": ["Certified", "TOT Scheduled", "Dropped"],
   "Certified": ["Dropped"],
-  "Dropped": ["Applied"], // re-open a candidate who comes back later
+  "Dropped": ["Fresh Lead"], // re-open a candidate who comes back later
 };
 
 export async function trainerDocSummary(trainerId: string) {
@@ -1333,7 +1335,7 @@ export async function trainerDocSummary(trainerId: string) {
   // The job role decides the extra paperwork: the five identity documents are the floor for
   // everyone, and a role that demands experience certificates names them on the programme —
   // the union gates. No nomination target yet (early pipeline) → the floor alone applies; the
-  // role's extras bite once the vacancy is chosen, which is always before Nomination Prepared
+  // role's extras bite once the vacancy is chosen, which is always before Documents Completed
   // (Rule T3 requires the target by then), so nothing incomplete ever reaches NSDC.
   const required: string[] = [...MANDATORY_TRAINER_DOCS];
   if (trainer?.nominated_for_program) {
@@ -1354,7 +1356,7 @@ export async function transitionTrainer(
 ) {
   const t = await Trainer.findById(trainerId);
   if (!t) throw new HttpError(404, "Trainer not found");
-  const from = t.pipeline_status ?? "Applied";
+  const from = t.pipeline_status ?? "Fresh Lead";
   if (from === target) throw new HttpError(409, `${t.name} is already at "${target}".`);
 
   const allowed = TRAINER_FLOW[from];
@@ -1367,7 +1369,7 @@ export async function transitionTrainer(
   const when = opts.date ? new Date(opts.date) : new Date();
 
   switch (target) {
-    case "Nomination Prepared": {
+    case "Documents Completed": {
       // The whole point of the document stage. Nominating someone whose papers are incomplete is
       // what gets the profile bounced back by NSDC, which is the delay this pipeline exists to stop.
       const d = await trainerDocSummary(trainerId);
@@ -1380,7 +1382,7 @@ export async function transitionTrainer(
       t.nomination_sent_on = when;
       break;
     }
-    case "Submitted to NSDC":
+    case "Sent to NSDC":
       t.nsdc_submitted_on = when;
       break;
     case "NSDC Approved":
@@ -1393,7 +1395,7 @@ export async function transitionTrainer(
       t.nsdc_result_on = when;
       t.nsdc_remarks = opts.remarks;
       break;
-    case "Payment Done": {
+    case "TOT Payment Done": {
       t.paid_on = when;
       if (opts.payload?.payment_reference) t.payment_reference = String(opts.payload.payment_reference);
       // "har stage pe cost capture karni hai" — the ₹3250 eligibility fee is a real per-trainer
@@ -1438,7 +1440,7 @@ export async function transitionTrainer(
     case "Dropped": {
       if (!opts.reason) throw new HttpError(400, "Rule T6: dropping a trainer needs a reason.");
       // CEO 13/08: "har stage pe Accepted/Rejected dikhna chahiye" — record WHERE the
-      // journey ended, so the profile can say "Dropped at CV Reviewed" instead of a bare tag.
+      // journey ended, so the profile can say "Dropped at Shortlisted" instead of a bare tag.
       t.dropped_from_stage = from;
       // Rule T7: dropping someone who is still running a batch stranded it silently — the batch
       // kept pointing at a trainer who had left, the readiness screen still counted them, and
@@ -1455,7 +1457,7 @@ export async function transitionTrainer(
       t.active = false;
       break;
     }
-    case "Applied":
+    case "Fresh Lead":
       // Re-opening someone previously dropped.
       t.dropped_reason = undefined;
       t.active = true;
@@ -1474,8 +1476,8 @@ export async function transitionTrainer(
 // ERP the source of truth and leaves each sheet as a cross-check.
 // Exported since 2026-08-13: the locations LIST derives the same live per-centre×job-role
 // counts (Umesh: "jaise-jaise trainer approve honge, count update ho jana chahiye").
-export const NOMINATED_STATES = ["Nomination Prepared", "Submitted to NSDC", "NSDC Approved", "NSDC Rejected",
-  "Payment Done", "TOT Scheduled", "TOT In Progress", "Certified"];
+export const NOMINATED_STATES = ["Documents Completed", "Sent to NSDC", "NSDC Approved", "NSDC Rejected",
+  "TOT Payment Done", "TOT Scheduled", "TOT In Progress", "Certified"];
 
 export async function trainerCountsFor(locationId: unknown, programId: unknown) {
   const base = { nominated_for_location: locationId, nominated_for_program: programId, active: true };

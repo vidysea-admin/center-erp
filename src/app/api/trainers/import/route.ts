@@ -13,18 +13,22 @@ import { normalizePhone } from "@/lib/duplicates";
 // unknown stages, unmatched centre/job-role names, Certified rows without a TR ID.
 // POST multipart: file, mapping (JSON {excelCol: field}), confirm ("1" to write)
 
-// The template speaks the CEO's DISPLAY labels; the enum never changed. Accept both.
+// 2026-08-14: the stored enum IS the CEO vocabulary now. Every legacy sheet/display value
+// stays importable, remapped to the current stage it merged into — never guessed.
 const STAGE_ALIASES: Record<string, string> = {
-  "fresh lead": "Applied",
-  // 2026-08-14 merge: the old names stay importable, remapped to the merged stages.
-  "shortlisted": "CV Reviewed",
-  "shortlisted (for tot)": "CV Reviewed",
-  "shortlisted for tot": "CV Reviewed",
-  "cv review & shortlist (for tot)": "CV Reviewed",
-  "cv review & shortlist": "CV Reviewed",
-  "docs complete": "Docs Pending",
-  "documents": "Docs Pending",
-  "tot payment done": "Payment Done",
+  "applied": "Fresh Lead",
+  "cv reviewed": "Shortlisted",
+  "shortlisted (for tot)": "Shortlisted",
+  "shortlisted for tot": "Shortlisted",
+  "cv review & shortlist (for tot)": "Shortlisted",
+  "cv review & shortlist": "Shortlisted",
+  "docs pending": "Shortlisted",
+  "documents": "Shortlisted",
+  "docs complete": "Documents Completed",
+  "nomination prepared": "Documents Completed",
+  "submitted to nsdc": "Sent to NSDC",
+  "payment done": "TOT Payment Done",
+  "ready to train": "Certified",
   "certified (ready to train)": "Certified",
   "certified ready to train": "Certified",
 };

@@ -22,12 +22,12 @@ function CandidatesInner() {
   useEffect(() => { setFLoc(ctxLoc); }, [ctxLoc]);
   // 2026-08-13 (Umesh): status TAG pills with counts instead of a dropdown — including the
   // states nobody could see before: "No programme" (bulk-imported rows), "Multi-interest",
-  // "Not Certified". Pills filter client-side so every count is visible at once; deep links
+  // "Failed". Pills filter client-side so every count is visible at once; deep links
   // /candidates?lifecycle_status=Enrolled and ?program=null preset the pill.
   const [tag, setTag] = useState(sp.get("lifecycle_status") ?? (sp.get("program") === "null" ? "No programme" : ""));
   // Bucket deep-links: /candidates?bucket=Enrolled, and lifecycle presets pick their bucket.
   const [bucket, setBucket] = useState<"Fresh" | "Enrolled">(
-    sp.get("bucket") === "Enrolled" || ["Assigned", "Enrolled", "Completed", "Not Certified"].includes(sp.get("lifecycle_status") ?? "") ? "Enrolled" : "Fresh");
+    sp.get("bucket") === "Enrolled" || ["Assigned", "Enrolled", "Completed", "Failed"].includes(sp.get("lifecycle_status") ?? "") ? "Enrolled" : "Fresh");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [shareLink, setShareLink] = useState("");
@@ -68,21 +68,25 @@ function CandidatesInner() {
   // 2026-08-14 (CEO): "do bucket banao — FRESH (inquiry, jab tak batch assign nahi) aur
   // ENROLLED (batch se billing tak ki poori journey, current status ke saath)".
   const FRESH_STATES = ["Unassigned", "Dropped"];
-  const isFresh = (r: any) => FRESH_STATES.includes(r.lifecycle_status ?? "Unassigned");
+  // CEO 14/08 [28:12]: "a person is enrolled but they did not complete the training …
+  // the word is drop out" — a Dropped candidate who HAD enrolled (enrolled_at is stamped
+  // once, never cleared) belongs to the Enrolled journey as a Dropout, not back in Fresh.
+  const isFresh = (r: any) => FRESH_STATES.includes(r.lifecycle_status ?? "Unassigned") && !(r.lifecycle_status === "Dropped" && r.enrolled_at);
   const freshItems = items.filter(isFresh);
   const enrolledItems = items.filter((r: any) => !isFresh(r));
   const bucketItems = bucket === "Fresh" ? freshItems : enrolledItems;
   // CEO's journey terminology for the Enrolled bucket — derived, never stored.
   const journeyOf = (r: any): string => {
     if (r.lifecycle_status === "Completed") return "Certified";
-    if (r.lifecycle_status === "Not Certified") return "Not Certified";
+    if (r.lifecycle_status === "Failed") return "Failed";
+    if (r.lifecycle_status === "Dropped") return "Dropout"; // enrolled-then-left (CEO 14/08)
     if (r.lifecycle_status === "Assigned") return "Enrollment in progress";
     const bs = r.active_batch?.status;
     if (bs === "Closing") return "Training Completed";
     if (bs === "Completed") return "Result Awaited";
     return "Training Ongoing";
   };
-  const JOURNEY_TAGS = ["Enrollment in progress", "Training Ongoing", "Training Completed", "Result Awaited", "Certified", "Not Certified"];
+  const JOURNEY_TAGS = ["Enrollment in progress", "Training Ongoing", "Training Completed", "Result Awaited", "Certified", "Dropout", "Failed"];
   // QA-021 (checker) + CEO [29:36]: Fresh has its OWN journey — inquiry to portal
   // registration — derived from sidh_status, never stored.
   const freshJourneyOf = (r: any): string => {
@@ -300,7 +304,8 @@ function CandidatesInner() {
               "Training Completed": "Their batch finished training; result not final yet",
               "Result Awaited": "Assessment done, awaiting the recorded result",
               "Certified": "Passed — certificate issued or on its way",
-              "Not Certified": "Finished without a Pass (Fail/Absent)",
+              "Dropout": "Enrolled but left before completing the training (CEO stage, set from admin via the roster drop)",
+              "Failed": "Completed the training and did not pass (Fail/Absent)",
             }[t as string],
           })),
           { value: "No programme", label: "No programme", count: tagCount("No programme") },
@@ -334,7 +339,7 @@ function CandidatesInner() {
           {
             // CEO terminology: Fresh bucket shows the pool state; Enrolled bucket shows the
             // JOURNEY (Enrollment in progress → Training Ongoing → Training Completed →
-            // Result Awaited → Certified / Not Certified).
+            // Result Awaited → Certified / Dropout / Failed).
             key: "lifecycle_status", label: bucket === "Fresh" ? "Stage" : "Journey status", sortable: true,
             sortValue: (r: any) => bucket === "Fresh" ? freshJourneyOf(r) : journeyOf(r),
             filterText: (r: any) => bucket === "Fresh" ? freshJourneyOf(r) : journeyOf(r),

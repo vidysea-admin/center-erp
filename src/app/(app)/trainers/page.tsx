@@ -8,19 +8,21 @@ import { BASE_PATH } from "@/lib/base-path";
 // 2026-08-13 (Umesh): "10 mein se 5 available, 2 under preparation, 3 not available — sab ke
 // saath proper tag with filters". One derived availability tag per trainer: the pipeline says
 // whether they are USABLE yet, the status says whether they are FREE.
-// QA-045 (CEO's own wording): the status axis answers "who can take a class tomorrow" —
-// "Ready to Train", not the rejected word "Available".
+// CEO 14/08 [06:57]: "instead of assigned, we should have a status called ready or
+// certified. Certified is a better word. Assigned should be used when you have assigned a
+// batch to them… if a trainer is at capacity … unavailable." The status axis answers "who
+// can take a class tomorrow" in exactly those three words.
 // QA-031: assignment is read from the LIVE BATCH LINKS (live_batches, attached by the API),
 // never from the stored status field — that field said "Assigned 11" while no batch pointed
 // at those trainers, and said "Certified 6" were assigned when the real number was different.
-const TAG_ORDER = ["Ready to Train", "Under preparation", "Assigned", "Unavailable", "Rejected/Dropped"] as const;
+const TAG_ORDER = ["Certified", "Under preparation", "Assigned", "Unavailable", "Rejected/Dropped"] as const;
 function availabilityTag(t: any): (typeof TAG_ORDER)[number] {
-  const p = t.pipeline_status ?? "Applied";
+  const p = t.pipeline_status ?? "Fresh Lead";
   if (p === "NSDC Rejected" || p === "Dropped") return "Rejected/Dropped";
   if (p !== "Certified") return "Under preparation";
   if ((t.live_batches?.length ?? 0) > 0) return "Assigned";
   if (t.status === "Unavailable") return "Unavailable";
-  return "Ready to Train";
+  return "Certified";
 }
 
 export default function TrainersPage() {
@@ -79,17 +81,17 @@ function TrainersInner() {
   const tagCounts = new Map<string, number>();
   for (const t of items) tagCounts.set(availabilityTag(t), (tagCounts.get(availabilityTag(t)) ?? 0) + 1);
   // CEO 13/08: stage-wise counts with rejected-here — the journey as a strip, click = filter.
-  const STAGES = ["Applied", "CV Reviewed", "Docs Pending", "Nomination Prepared",
-    "Submitted to NSDC", "NSDC Approved", "NSDC Rejected", "Payment Done", "TOT Scheduled", "TOT In Progress", "Certified"];
+  const STAGES = ["Fresh Lead", "Shortlisted", "Documents Completed",
+    "Sent to NSDC", "NSDC Approved", "NSDC Rejected", "TOT Payment Done", "TOT Scheduled", "TOT In Progress", "Certified"];
   const stageCur = new Map<string, number>();
   const stageRej = new Map<string, number>();
   // QA-046 (CEO): "har stage pe Accepted/Rejected" — accepted-at-a-stage = everyone whose
   // journey moved PAST it (they cleared that gate). Derived from current stage index.
   const stageAcc = new Map<string, number>();
   for (const t of items) {
-    stageCur.set(t.pipeline_status ?? "Applied", (stageCur.get(t.pipeline_status ?? "Applied") ?? 0) + 1);
+    stageCur.set(t.pipeline_status ?? "Fresh Lead", (stageCur.get(t.pipeline_status ?? "Fresh Lead") ?? 0) + 1);
     if (t.dropped_from_stage) stageRej.set(t.dropped_from_stage, (stageRej.get(t.dropped_from_stage) ?? 0) + 1);
-    const curIdx = STAGES.indexOf(t.pipeline_status === "Dropped" ? (t.dropped_from_stage ?? "Applied") : (t.pipeline_status ?? "Applied"));
+    const curIdx = STAGES.indexOf(t.pipeline_status === "Dropped" ? (t.dropped_from_stage ?? "Fresh Lead") : (t.pipeline_status ?? "Fresh Lead"));
     for (let i = 0; i < curIdx; i++) stageAcc.set(STAGES[i], (stageAcc.get(STAGES[i]) ?? 0) + 1);
   }
   // QA-047 (checker): same name under two phones may be one person entered twice — the
@@ -167,7 +169,7 @@ function TrainersInner() {
           {/* CEO 13/08: "naam-email-phone dala, link bana, WhatsApp chala gaya — trainer khud bhare" */}
           <Btn kind="ghost" onClick={() => setImp({})}>Import (Excel)</Btn>
           <Btn kind="ghost" onClick={() => setInvite({ form: {} })}>Quick add + send link</Btn>
-          <Btn onClick={() => { setEdit(null); setForm({ max_concurrent_batches: 4, status: "Available", pipeline_status: "Applied" }); setDrawer(true); }}>Add Trainer</Btn>
+          <Btn onClick={() => { setEdit(null); setForm({ max_concurrent_batches: 4, status: "Available", pipeline_status: "Fresh Lead" }); setDrawer(true); }}>Add Trainer</Btn>
         </div>
       </div>
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
@@ -252,7 +254,7 @@ function TrainersInner() {
                 // These are mutually exclusive TODAY-states, not a funnel — "Available 0
                 // while Assigned 6" simply means every certified trainer is on a batch.
                 title: {
-                  "Ready to Train": "Certified and not on any live batch — can take a class tomorrow",
+                  "Certified": "Certified and not on any live batch — can take a class tomorrow",
                   "Under preparation": "Still in the hiring/TOT pipeline — not certified yet (may already be pencilled into a batch)",
                   "Assigned": "Certified and named on a live batch (Planning/Ready/Active/Closing)",
                   "Unavailable": "Certified but marked unavailable",
@@ -273,16 +275,16 @@ function TrainersInner() {
               {
                 // 2026-08-12: three states now, not two — a rejected profile and a dropped applicant
                 // are not "in progress", and showing them amber hides the ones needing action.
-                key: "pipeline_status", label: "Pipeline", sortable: true, sortValue: (r: any) => r.pipeline_status ?? "Applied",
+                key: "pipeline_status", label: "Pipeline", sortable: true, sortValue: (r: any) => r.pipeline_status ?? "Fresh Lead",
                 // The funnel filter must speak the SAME display names the cells show —
                 // raw enum values here were exactly the "old labels in the filters"
                 // Umesh caught on 14/08 after the CEO rename.
                 filterText: (r: any) => {
-                  const s = r.pipeline_status ?? "Applied";
+                  const s = r.pipeline_status ?? "Fresh Lead";
                   return s === "Dropped" && r.dropped_from_stage ? `Dropped (at ${pipelineLabel(r.dropped_from_stage)})` : pipelineLabel(s);
                 },
                 render: (r: any) => {
-                  const s = r.pipeline_status ?? "Applied";
+                  const s = r.pipeline_status ?? "Fresh Lead";
                   const tone = s === "Certified" ? "border-green-200 bg-green-50 text-green-700"
                     : s === "NSDC Rejected" || s === "Dropped" ? "border-red-200 bg-red-50 text-red-700"
                       : "border-amber-200 bg-amber-50 text-amber-700";
@@ -410,7 +412,7 @@ function TrainersInner() {
             <p className="text-xs text-gray-500">
               Enter a name and phone number — an application link is generated for you to send over
               WhatsApp/SMS. The trainer fills in their own qualification, experience and skills;
-              the profile enters the pipeline at "Applied". The link is single-use.
+              the profile enters the pipeline at "Fresh Lead". The link is single-use.
             </p>
             <Field label="Full name" required><input className={inputCls} value={invite.form.name ?? ""} onChange={(e) => setInvite({ ...invite, form: { ...invite.form, name: e.target.value } })} /></Field>
             <div className="grid grid-cols-2 gap-3">
@@ -471,7 +473,7 @@ function TrainersInner() {
               would let someone skip the document and nomination gates entirely. */}
           <div className="grid grid-cols-2 gap-3">
             <Field label="Hiring stage">
-              <input className={inputCls + " bg-gray-50"} value={form.pipeline_status ?? "Applied"} readOnly
+              <input className={inputCls + " bg-gray-50"} value={form.pipeline_status ?? "Fresh Lead"} readOnly
                 title="Move a trainer along the pipeline from their detail page" />
             </Field>
             <Field label="TR ID (NSDC, after TOT)"><input className={inputCls} value={form.tr_id ?? ""} onChange={(e) => set("tr_id", e.target.value)} /></Field>

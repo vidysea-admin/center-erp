@@ -67,17 +67,10 @@ export function sourceLink(source?: string | null): { tab: string; url: string }
   return null;
 }
 
-// CEO 13/08 stage terminology — DISPLAY labels only, the stored enum never changes:
-// "Applied ko Fresh Lead likho; Shortlisted = for TOT; Payment Done = TOT Payment Done."
-export const PIPELINE_LABELS: Record<string, string> = {
-  "Applied": "Fresh Lead",
-  // 2026-08-14 merge: CV Reviewed absorbed Shortlisted; Docs Pending absorbed Docs Complete.
-  "CV Reviewed": "CV Review & Shortlist (for TOT)",
-  "Docs Pending": "Documents",
-  "Payment Done": "TOT Payment Done",
-  "Certified": "Certified (Ready to Train)",
-};
-export const pipelineLabel = (s?: string | null) => (s ? PIPELINE_LABELS[s] ?? s : "—");
+// 2026-08-14 (CEO recorded review): the stored stage names ARE the display vocabulary —
+// renamed in the DB enum during the post-wipe empty window, so there is no label layer left
+// to drift from the data (the QA-045 bug class). The helper survives as a null-guard only.
+export const pipelineLabel = (s?: string | null) => s ?? "—";
 
 export function toInputDate(d?: string | Date | null): string {
   if (!d) return "";

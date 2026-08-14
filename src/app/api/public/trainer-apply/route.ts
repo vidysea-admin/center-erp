@@ -9,12 +9,12 @@ import { audit } from "@/lib/audit";
 // jaye, wo khud bhar de — mere logon ka kaam kam ho jaye; fresh bhi bhej sake"). Two ways in:
 //   - WITH ?token= : the link Divya sends from Quick-invite — completes the pre-created
 //     Trainer profile (prefilled), single-use.
-//   - WITHOUT token: a fresh self-application — creates a Trainer at "Applied".
+//   - WITHOUT token: a fresh self-application — creates a Trainer at "Fresh Lead".
 // A trainer NEVER sets pay, TR ID, or pipeline stage from here; staff move the pipeline.
 // No login is created — the Trainer doc is a pipeline record, not an account (accounts are
 // admin-created per the role matrix).
 
-const EARLY_STAGES = ["Applied", "CV Reviewed", "Docs Pending"];
+const EARLY_STAGES = ["Fresh Lead", "Shortlisted"];
 
 // What the applicant may write about themselves — nothing else crosses this boundary.
 function applicantFields(body: Record<string, unknown>) {
@@ -90,7 +90,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
     // Anti-enumeration: same shape as success; staff see the earlier record either way.
     return NextResponse.json({ ok: true, mode: "received" }, { status: 201 });
   }
-  const tr = await Trainer.create({ ...f, pipeline_status: "Applied", status: "Available", source: "Self Application" });
+  const tr = await Trainer.create({ ...f, pipeline_status: "Fresh Lead", status: "Available", source: "Self Application" });
   await audit({ entity: "Trainer", entityId: tr._id, field: "self_application", newValue: "fresh application via /p/trainer-apply", actor: null });
   await Notification.create({
     type: "trainer_application", severity: "info",

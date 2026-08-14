@@ -45,7 +45,8 @@ const CHIP_COLORS: Record<string, string> = {
   "Open": "bg-blue-100 text-blue-700", "Closing": "bg-blue-100 text-blue-700",
   // green
   "Active": "bg-green-100 text-green-700", "Approved": "bg-green-100 text-green-700",
-  "Ready to Train": "bg-green-100 text-green-700", // QA-045: the CEO's own word for "free tomorrow"
+  // (2026-08-14: "Ready to Train" retired — the CEO's word for a free certified trainer is
+  // "Certified", which already maps green above via the pipeline entry.)
   "Completed": "bg-green-100 text-green-700", "Available": "bg-green-100 text-green-700",
   "Enrolled": "bg-green-100 text-green-700", "Paid": "bg-green-100 text-green-700",
   "Fulfilled": "bg-green-100 text-green-700", "Done": "bg-green-100 text-green-700", "OK": "bg-green-100 text-green-700",
@@ -61,13 +62,14 @@ const CHIP_COLORS: Record<string, string> = {
   "Green": "bg-green-100 text-green-700", "Amber": "bg-amber-100 text-amber-700", "Red": "bg-red-100 text-red-700",
   // 2026-08-13 (list-UX cycle): statuses that used to fall through to grey. Candidate
   // post-batch states + every trainer-pipeline stage — the tag IS the information now.
-  "Not Certified": "bg-amber-100 text-amber-700",
+  "Dropout": "bg-red-100 text-red-700", // ("Failed" already maps red above)
   "No programme": "bg-amber-100 text-amber-700",
   "Under preparation": "bg-amber-100 text-amber-700",
-  "Applied": "bg-amber-100 text-amber-700", "CV Reviewed": "bg-amber-100 text-amber-700",
+  "Fresh Lead": "bg-amber-100 text-amber-700", "Shortlisted": "bg-amber-100 text-amber-700",
   "Docs Requested": "bg-amber-100 text-amber-700",
-  "Nomination Prepared": "bg-amber-100 text-amber-700", "Nominated to NSDC": "bg-amber-100 text-amber-700",
-  "NSDC Approved": "bg-blue-100 text-blue-700", "Payment Done": "bg-blue-100 text-blue-700",
+  "Documents Completed": "bg-amber-100 text-amber-700", "Nominated to NSDC": "bg-amber-100 text-amber-700",
+  "Sent to NSDC": "bg-amber-100 text-amber-700",
+  "NSDC Approved": "bg-blue-100 text-blue-700", "TOT Payment Done": "bg-blue-100 text-blue-700",
   "TOT Scheduled": "bg-blue-100 text-blue-700", "TOT In Progress": "bg-blue-100 text-blue-700",
   "TOT Passed": "bg-blue-100 text-blue-700", "Certified": "bg-green-100 text-green-700",
   "NSDC Rejected": "bg-red-100 text-red-700",

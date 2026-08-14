@@ -22,14 +22,14 @@ ok("[best] search by phone finds the same trainer", byPhone.some((t) => t._id ==
 
 // [best] stage chips: the list's pipeline_status is the same one the detail screen shows.
 await req(admin, "PATCH", `/api/trainers/${t2._id}`, { nominated_for_location: loc._id, nominated_for_program: null }, 200);
-const move = await req(admin, "POST", `/api/trainers/${t2._id}/transition`, { target: "CV Reviewed" });
+const move = await req(admin, "POST", `/api/trainers/${t2._id}/transition`, { target: "Shortlisted" });
 ok("[best] a stage move succeeds through the guarded transition route", move.status === 200, `got ${move.status}: ${JSON.stringify(move.data).slice(0, 100)}`);
 const listed = (await req(admin, "GET", `/api/trainers?q=${p2}&limit=10`, undefined, 200)).data.items ?? [];
-ok("[best] the list shows the moved stage (chip data source)", listed[0]?.pipeline_status === "CV Reviewed", listed[0]?.pipeline_status);
+ok("[best] the list shows the moved stage (chip data source)", listed[0]?.pipeline_status === "Shortlisted", listed[0]?.pipeline_status);
 
 // [best] detail: GET by id returns the full editable record for the drawer.
 const detail = (await req(admin, "GET", `/api/trainers/${t1._id}`, undefined, 200)).data.item;
-ok("[best] detail carries the drawer's fields", detail.name.startsWith("TEST-ET Applied") && detail.pipeline_status === "Applied" && Array.isArray(detail.skills), JSON.stringify({ p: detail.pipeline_status }));
+ok("[best] detail carries the drawer's fields", detail.name.startsWith("TEST-ET Applied") && detail.pipeline_status === "Fresh Lead" && Array.isArray(detail.skills), JSON.stringify({ p: detail.pipeline_status }));
 
 // [best] drawer edit round-trip: the fields a wrong sheet import needs corrected.
 await req(admin, "PATCH", `/api/trainers/${t1._id}`, { qualification: "B.Sc Electronics", email: `et${s}@example.com`, home_location: loc._id, capable_locations: [loc._id, loc2._id], industry_experience_years: 4 }, 200);
@@ -48,7 +48,7 @@ ok("[worst] duplicate phone refused on edit too", dupPatch.status >= 400, `got $
 // skipping the docs gate, the NSDC round-trip, and Rule T7. The field is silently dropped now.
 await req(admin, "PATCH", `/api/trainers/${t1._id}`, { pipeline_status: "Certified" }, 200);
 const sneak = (await req(admin, "GET", `/api/trainers/${t1._id}`, undefined, 200)).data.item;
-ok("[worst] a stage jump by plain PATCH is dropped — no certification without the journey", sneak.pipeline_status === "Applied", `pipeline now: ${sneak.pipeline_status}`);
+ok("[worst] a stage jump by plain PATCH is dropped — no certification without the journey", sneak.pipeline_status === "Fresh Lead", `pipeline now: ${sneak.pipeline_status}`);
 
 // [avg] pagination contract: total is the truth, limit only pages it.
 const page = (await req(admin, "GET", "/api/trainers?limit=1", undefined, 200)).data;
@@ -57,8 +57,8 @@ const pageAll = (await req(admin, "GET", "/api/trainers?limit=2000", undefined, 
 ok("[avg] full-scale fetch returns every trainer (no hidden cap)", pageAll.items.length === pageAll.total || pageAll.total > 2000, `items=${pageAll.items.length} total=${pageAll.total}`);
 
 // [avg] filter by pipeline_status narrows correctly.
-const applied = (await req(admin, "GET", "/api/trainers?pipeline_status=CV%20Reviewed&limit=2000", undefined, 200)).data.items ?? [];
-ok("[avg] pipeline_status filter returns only that stage", applied.length > 0 && applied.every((t) => t.pipeline_status === "CV Reviewed"), JSON.stringify([...new Set(applied.map((t) => t.pipeline_status))]));
+const applied = (await req(admin, "GET", "/api/trainers?pipeline_status=Shortlisted&limit=2000", undefined, 200)).data.items ?? [];
+ok("[avg] pipeline_status filter returns only that stage", applied.length > 0 && applied.every((t) => t.pipeline_status === "Shortlisted"), JSON.stringify([...new Set(applied.map((t) => t.pipeline_status))]));
 
 
 // QA-031/045 (checker): the availability tag must come from REAL batch links, not the stored
@@ -110,7 +110,7 @@ ok("[avg] nomination can be cleared again (wrong pick is reversible)", nomCleare
   ok("[best] applicant completes the profile through the link", done.status === 200, `got ${done.status}`);
   const filled = (await req(admin, "GET", `/api/trainers/${inv.trainer}`, undefined, 200)).data.item;
   ok("[best] the profile carries what the APPLICANT wrote", filled.qualification === "B.Tech" && (filled.skills ?? []).includes("Drone Service") && filled.industry_experience_years === 4, JSON.stringify({ q: filled.qualification, sk: filled.skills }));
-  ok("[avg] …and stays at the top of the pipeline for CV review", filled.pipeline_status === "Applied", filled.pipeline_status);
+  ok("[avg] …and stays at the top of the pipeline for CV review", filled.pipeline_status === "Fresh Lead", filled.pipeline_status);
   // QA-040 regression: a submit whose values EQUAL the stored doc (the prefill-race shape)
   // must still burn the link and answer 200 — and never un-set what was already there.
   // QA-041: the completion raised a notification for the people who make the callback.
@@ -125,7 +125,7 @@ ok("[avg] nomination can be cleared again (wrong pick is reversible)", nomCleare
   const fresh = await pub("/api/public/trainer-apply", { name: "TEST-ET Fresh " + s, phone: fPhone, skills: "Battery Repair", qualification: "ITI" });
   ok("[best] fresh public application is accepted", fresh.status === 201, `got ${fresh.status}`);
   const found = ((await req(admin, "GET", `/api/trainers?q=${fPhone}&limit=5`, undefined, 200)).data.items ?? []).find((t) => t.phone === fPhone);
-  ok("[best] …and creates the pipeline record", found?.pipeline_status === "Applied" && found?.source === "Self Application", JSON.stringify({ p: found?.pipeline_status, src: found?.source }));
+  ok("[best] …and creates the pipeline record", found?.pipeline_status === "Fresh Lead" && found?.source === "Self Application", JSON.stringify({ p: found?.pipeline_status, src: found?.source }));
   const notifs2 = (await req(admin, "GET", "/api/notifications?limit=100", undefined, 200)).data.items ?? [];
   ok("[best] a fresh application notifies Admin/Ops (QA-041)",
     notifs2.some((n) => n.type === "trainer_application" && String(n.entity_id) === String(found?._id)), "no trainer_application notification for fresh app");

@@ -95,6 +95,8 @@ for (const m of members) {
 // candidate lifecycle → Enrolled (Rule 21)
 const c0 = (await req("GET", `/api/candidates/${cands[0]._id}`)).data.item;
 ok("Rule 21: candidate lifecycle Enrolled", c0.lifecycle_status === "Enrolled", c0.lifecycle_status);
+// CEO 14/08 [15:21]: "I hope we are also capturing when a candidate is enrolled"
+ok("R-A: enrolled_at is stamped when enrollment completes", !!c0.enrolled_at, String(c0.enrolled_at));
 
 // start batch
 await req("POST", `/api/batches/${batch._id}/transition`, { target: "Active" }, 200);
@@ -280,11 +282,17 @@ ok("F-B17: a genuinely new name still creates (trimmed)", freshCat.data.item?.na
 const batch2 = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, planned_start: today, target_size: 3 }, 201)).data.item;
 const cand4 = (await req("POST", "/api/candidates", { name: "Cand4 " + stamp, phone: "77777" + stamp.slice(0, 5), location: loc._id, program: prog._id }, 201)).data.item;
 const mem4 = (await req("POST", `/api/batches/${batch2._id}/members`, { candidate: cand4._id }, 201)).data.item;
+// Complete the enrollment first — the CEO's Dropout is "enrolled but did not complete the
+// training", so the fixture must actually enroll before leaving (also stamps enrolled_at).
+await req("PATCH", `/api/members/${mem4._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
 await req("POST", `/api/members/${mem4._id}/drop`, { left_on: today }, 400); // Rule 25: reason required
 await req("POST", `/api/members/${mem4._id}/drop`, { left_on: "2030-01-01", drop_reason: "Other" }, 400); // future date
 await req("POST", `/api/members/${mem4._id}/drop`, { left_on: today, drop_reason: "Other" }, 200);
 const cand4b = (await req("GET", `/api/candidates/${cand4._id}`)).data.item;
 ok("Rule 21: dropped candidate lifecycle", cand4b.lifecycle_status === "Dropped", cand4b.lifecycle_status);
+// CEO 14/08 [28:12] "the word is drop out": a Dropped candidate who HAD enrolled keeps the
+// enrolled_at stamp — the UI files them under the Enrolled journey as "Dropout", not Fresh.
+ok("R-A: a training dropout keeps enrolled_at (Dropout, not a fresh inquiry)", !!cand4b.enrolled_at, String(cand4b.enrolled_at));
 // re-assignable after drop (Rule 20/22 spirit)
 await req("POST", `/api/batches/${batch2._id}/members`, { candidate: cand4._id }, 409); // same batch: unique(batch,candidate)
 const batch3 = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, planned_start: today, target_size: 3, session: "Morning" }, 201)).data.item;
@@ -467,8 +475,8 @@ await req("POST", `/api/batches/${b4._id}/transition`, { target: "Completed" }, 
 const lcPass = (await req("GET", `/api/candidates/${b4Cands[0]._id}`)).data.item;
 const lcFail = (await req("GET", `/api/candidates/${b4Cands[1]._id}`)).data.item;
 const lcAbs = (await req("GET", `/api/candidates/${b4Cands[2]._id}`)).data.item;
-ok("Rule 47: Pass → Completed, Fail/Absent → Not Certified",
-  lcPass.lifecycle_status === "Completed" && lcFail.lifecycle_status === "Not Certified" && lcAbs.lifecycle_status === "Not Certified",
+ok("Rule 47: Pass → Completed, Fail/Absent → Failed",
+  lcPass.lifecycle_status === "Completed" && lcFail.lifecycle_status === "Failed" && lcAbs.lifecycle_status === "Failed",
   `${lcPass.lifecycle_status}/${lcFail.lifecycle_status}/${lcAbs.lifecycle_status}`);
 
 await req("PUT", `/api/batches/${b4._id}/results`, { rows: [{ member: b4Members[0]._id, result: "Pass" }] }, 400); // Rule 41: closed batch
@@ -692,10 +700,10 @@ ok("meeting note recorded with author", notes.length === 1 && !!notes[0].logged_
 // ---- Trainer pipeline warning ----
 const pipeTrainer = (await req("POST", "/api/trainers", {
   name: "Pipeline Trainer " + stamp, phone: "97777" + stamp.slice(0, 5),
-  skills: ["TestSkill" + stamp], pipeline_status: "Docs Pending", tr_id: "TR" + stamp,
+  skills: ["TestSkill" + stamp], pipeline_status: "Shortlisted", tr_id: "TR" + stamp,
 }, 201)).data.item;
 const warnBatch = await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: pipeTrainer._id, planned_start: "2027-03-01", target_size: 3 }, 201);
-ok("booking a not-Ready trainer warns, not blocks", String(warnBatch.data.warning ?? "").includes("Docs Pending"), JSON.stringify(warnBatch.data.warning));
+ok("booking a not-Ready trainer warns, not blocks", String(warnBatch.data.warning ?? "").includes("Shortlisted"), JSON.stringify(warnBatch.data.warning));
 await req("POST", `/api/batches/${warnBatch.data.item._id}/transition`, { target: "Cancelled", reason: "pipeline test cleanup" }, 200);
 
 // ---- Backward batch planner ----
@@ -944,17 +952,14 @@ const queued = (homeAfterSignup.queues?.pending_users ?? []).find((u) => u.email
 ok("a pending account appears on the Admin's Home queue", !!queued, JSON.stringify(homeAfterSignup.queues?.pending_users?.length));
 ok("…with the contact details an approver needs", !!queued && queued.phone === "9876500011", JSON.stringify(queued));
 
-// ---- admin reset endpoints (2026-08-14 CEO order) — guards only; apply is never exercised
-// here because the suite's own fixtures live in this database ----
+// ---- admin reset endpoints (2026-08-14 CEO order). The TEMPORARY wipe endpoint was removed
+// in -14-33 after the reset ran (a wipe surface must not outlive its one job) — the route
+// must be GONE, not merely guarded. The AVPL rebase endpoint is permanent: Admin-only. ----
 {
-  const dry = await req("POST", "/api/admin/wipe", {}, 200);
-  ok("wipe dry-run reports a total and collection counts", typeof dry.data.total === "number" && dry.data.mode === "dry_run", JSON.stringify(dry.data).slice(0, 120));
-  ok("wipe dry-run names the preserved logins", Array.isArray(dry.data.logins_preserved) && dry.data.logins_preserved.length > 0);
-  await req("POST", "/api/admin/wipe", { confirm: "wipe all data" }, 400); // phrase is case-exact
+  await req("POST", "/api/admin/wipe", {}, 404); // removed — 404 proves the surface no longer exists
   const spocCookie = await loginAs("spoc.jpr03@vidysea.com", "Vidysea@123");
   if (spocCookie) {
     const saved = cookie; cookie = spocCookie;
-    await req("POST", "/api/admin/wipe", {}, 403);
     await req("POST", "/api/admin/avpl-rebase", {}, 403);
     cookie = saved;
   }

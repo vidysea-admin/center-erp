@@ -5,7 +5,7 @@ import { BASE_PATH } from "@/lib/base-path";
 
 // Public trainer application (CEO 13/08: "trainer ka ALAG slash — form uske paas jaye, wo
 // khud bhar de"). Works two ways: with ?token= (Divya's quick-invite link, prefilled,
-// single-use) or fresh. No login is created; this feeds the hiring pipeline at "Applied".
+// single-use) or fresh. No login is created; this feeds the hiring pipeline at "Fresh Lead".
 // English-only copy (Umesh 14/08: the WhatsApp form "must and should be in english").
 
 const inputCls = "w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none bg-white";

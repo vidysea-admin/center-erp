@@ -17,18 +17,20 @@ export const TRAINER_STATUS = ["Available", "Assigned", "Unavailable"] as const;
 //    भेजते हैं → eligible होने पर ₹3250 payment → TOT → certified → TR ID"
 // "NSDC Rejected" is deliberately NOT terminal — the correct-and-resubmit loop is the common case,
 // and the 2026-08-12 audit found an S0 exactly where a rejected certificate had no way back.
-// 2026-08-14 (CEO via Umesh, twice): "CV Reviewed + Shortlisted (for TOT)" are ONE decision
-// and "Docs Pending + Docs Complete" are ONE stage — merged. Old values remain accepted as
-// import aliases and are remapped in prod by the 14/08 migration.
+// 2026-08-14 (CEO recorded review [06:38]): "fresh lead, then shortlisted, … document
+// completed, … sent to NSDC, NSDC approved, TOT done, and then … Certified is a better word."
+// The STORED names are the CEO's vocabulary — renamed outright during the post-wipe empty-DB
+// window, so there is no label layer left to drift from the data (the QA-045 bug class).
+// Docs collection happens while Shortlisted; "Documents Completed" is entered through the
+// Rule T2 all-documents gate. Legacy sheet values are still accepted as import aliases.
 export const TRAINER_PIPELINE = [
-  "Applied",
-  "CV Reviewed",
-  "Docs Pending",
-  "Nomination Prepared",
-  "Submitted to NSDC",
+  "Fresh Lead",
+  "Shortlisted",
+  "Documents Completed",
+  "Sent to NSDC",
   "NSDC Approved",
   "NSDC Rejected",
-  "Payment Done",
+  "TOT Payment Done",
   "TOT Scheduled",
   "TOT In Progress",
   "Certified",
@@ -49,9 +51,11 @@ export const SCHEME = ["RPL-AVPL", "RPL-HSL", "PMKVY-BECIL", "DDU-GKY2.0", "DDUG
 // फिक्स, और एक होता है इंसेंटिव बेस्ड ऑन देयर परफॉरमेंस". Only two were selectable (2026-08-12).
 export const COMPENSATION_TYPE = ["Batch-wise", "Monthly", "Fixed", "Incentive-based"] as const;
 export const TRAINER_REQUEST_STATUS = ["Open", "In Progress", "Fulfilled", "Cancelled"] as const;
-// "Not Certified" (RPL M17/M18): finished the batch but did not pass — not Completed
-// (which would inflate outcome reporting) and not Dropped (they never left).
-export const LIFECYCLE_STATUS = ["Unassigned", "Assigned", "Enrolled", "Dropped", "Completed", "Not Certified"] as const;
+// "Failed" (CEO 14/08 [28:28]: "they completed the training and they failed … the second
+// stage is fail"): finished the batch but did not pass — not Completed (which would inflate
+// outcome reporting) and not Dropped (they never left). Renamed from "Not Certified" during
+// the empty-DB window.
+export const LIFECYCLE_STATUS = ["Unassigned", "Assigned", "Enrolled", "Dropped", "Completed", "Failed"] as const;
 export const ASSESSMENT_RESULT = ["Pending", "Pass", "Fail", "Absent"] as const;
 // "Not Issued" (2026-08-12 audit, S0): a terminal state for a Pass candidate the awarding body
 // will never certify — name mismatch on the government ID, duplicate NSDC record, withdrawal.
@@ -217,11 +221,9 @@ const TrainerSchema = new Schema({
   // usually NOT one of our centres. Free text used when home_location is unset.
   home_location_other: String,
   status: { type: String, enum: TRAINER_STATUS, required: true, default: "Available" },
-  // Hiring pipeline (2026-08-11). Existing trainers predate the pipeline — they default to
-  // Ready to Train so nothing operational changes for them.
-  // Default is the START of the journey. It used to be the END ("Ready to Train") because the
-  // placeholder pipeline had no real intake; with the real stages a new trainer is an applicant.
-  pipeline_status: { type: String, enum: TRAINER_PIPELINE, default: "Applied" },
+  // Hiring pipeline (2026-08-11; renamed to the CEO's vocabulary 2026-08-14).
+  // Default is the START of the journey — a new trainer is a fresh lead.
+  pipeline_status: { type: String, enum: TRAINER_PIPELINE, default: "Fresh Lead" },
   tr_id: String, // NSDC TR ID, assigned after TOT certification
   govt_candidate_id: String, // portal "Candidate ID" (CAN_…) — trainers appear on the attendance export too
   user: oid("User"), // linked login (2026-08-11: trainers sign up and get approved)
@@ -259,7 +261,7 @@ const TrainerSchema = new Schema({
   tot_certificate_no: String,
   pipeline_note: String,
   dropped_reason: String,               // required to reach the terminal "Dropped" state
-  dropped_from_stage: String,           // CEO: which stage the journey ended at ("Dropped at CV Reviewed")
+  dropped_from_stage: String,           // CEO: which stage the journey ended at ("Dropped at Shortlisted")
 }, { timestamps: true });
 // 2026-08-12 audit: this schema declared NO indexes, so the same trainer could be created any
 // number of times and a TR ID could be duplicated across people. A TR ID is issued by NSDC and
@@ -329,6 +331,10 @@ const CandidateSchema = new Schema({
   // is the only reliable join — names repeat within a centre.
   sidh_candidate_id: { type: String, default: null },
   lifecycle_status: { type: String, enum: LIFECYCLE_STATUS, required: true, default: "Unassigned" },
+  // CEO 14/08 [15:21]: "I hope we are also capturing when a candidate is enrolled" — stamped
+  // once, the first time enrollment completes (Rule 21); never cleared on a later drop, so a
+  // training dropout stays distinguishable from an inquiry that never enrolled.
+  enrolled_at: { type: Date, default: null },
   created_by: oid("User"),
 }, { timestamps: true });
 

@@ -84,18 +84,18 @@ console.log("\n--- FL1: the ₹3250 books itself as a cost, exactly once ---");
   for (const d of ["Aadhaar", "PAN", "Photo", "CV", "Educational Qualification"]) {
     await req(admin, "POST", `/api/trainers/${t._id}/documents`, { doc_type: d, file_url: `/uploads/${d}.pdf`, original_name: `${d}.pdf` });
   }
-  for (const s of ["CV Reviewed", "Docs Pending", "Nomination Prepared", "Submitted to NSDC", "NSDC Approved"]) {
+  for (const s of ["Shortlisted", "Documents Completed", "Sent to NSDC", "NSDC Approved"]) {
     await req(admin, "POST", `/api/trainers/${t._id}/transition`, { target: s });
   }
-  await req(admin, "POST", `/api/trainers/${t._id}/transition`, { target: "Payment Done", payload: { payment_reference: `NEFT-FL${stamp}` } }, 200);
+  await req(admin, "POST", `/api/trainers/${t._id}/transition`, { target: "TOT Payment Done", payload: { payment_reference: `NEFT-FL${stamp}` } }, 200);
   const costs = (await req(admin, "GET", `/api/costs?trainer=${t._id}`)).data.items ?? [];
   const fee = costs.filter((c) => /eligibility/i.test(c.category?.name ?? ""));
   ok("FL1: the eligibility fee landed in the cost model", fee.length === 1 && fee[0].amount === 3250, JSON.stringify(fee.map((f) => f.amount)));
 
   // Walk the same trainer out and back through the stage — the fee must not book twice.
   await req(admin, "POST", `/api/trainers/${t._id}/transition`, { target: "Dropped", reason: "Test detour" }, 200);
-  await req(admin, "POST", `/api/trainers/${t._id}/transition`, { target: "Applied" }, 200);
-  for (const s of ["CV Reviewed", "Docs Pending", "Nomination Prepared", "Submitted to NSDC", "NSDC Approved", "Payment Done"]) {
+  await req(admin, "POST", `/api/trainers/${t._id}/transition`, { target: "Fresh Lead" }, 200);
+  for (const s of ["Shortlisted", "Documents Completed", "Sent to NSDC", "NSDC Approved", "TOT Payment Done"]) {
     await req(admin, "POST", `/api/trainers/${t._id}/transition`, { target: s });
   }
   const again = (await req(admin, "GET", `/api/costs?trainer=${t._id}`)).data.items ?? [];
@@ -316,7 +316,7 @@ console.log("\n--- FL9: trainer import — stages by display name, nominations b
   const done = await multipart(admin, "/api/trainers/import", { file, mapping, confirm: "1" }, 201);
   ok("FL9: confirm imports the 3 unique rows, never the phone dupe", done.data.imported === 3, String(done.data.imported));
   const trA = (await req(admin, "GET", `/api/trainers?q=9822200001`)).data.items.find((t) => t.name === `FL Tr A ${stamp}`);
-  ok("FL9: 'TOT Payment Done' landed as the enum 'Payment Done'", trA?.pipeline_status === "Payment Done", trA?.pipeline_status);
+  ok("FL9: 'Payment Done' (legacy sheet value) landed as 'TOT Payment Done'", trA?.pipeline_status === "TOT Payment Done", trA?.pipeline_status);
   ok("FL9: the centre name resolved to a real nomination", (trA?.nominated_for_location?.name ?? "") === loc.name, JSON.stringify(trA?.nominated_for_location));
 }
 

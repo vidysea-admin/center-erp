@@ -111,7 +111,7 @@ const trainers = new Map(); // phone → doc
     const inactive = /inactive/i.test(pick(m, r, "Status (Active/Inactive)"));
     // 2026-08-13 (Umesh: "jo approved hain wo approved nahi aata — sab under preparation"):
     // a trainer the client gave a TR code AND put on a batch is de-facto cleared and teaching —
-    // that is Certified/Assigned in our pipeline, not "Applied". The client's TR0001-style code
+    // that is Certified/Assigned in our pipeline, not "Fresh Lead". The client's TR0001-style code
     // fills tr_id until a real SIP id arrives (Trainer_Nomination's "Trainer SIP ID" wins later).
     const teaching = !inactive && sheetCode && batchCode && batchCode !== "-";
     trainers.set(phone, {
@@ -122,7 +122,7 @@ const trainers = new Map(); // phone → doc
       nominated_for_location: loc?._id, nominated_for_program: prog?._id,
       status: inactive ? "Unavailable" : teaching ? "Assigned" : "Available",
       active: !inactive,
-      pipeline_status: teaching ? "Certified" : "Applied",
+      pipeline_status: teaching ? "Certified" : "Fresh Lead",
       tr_id: teaching ? sheetCode : undefined,
       pipeline_note: teaching ? `Client sheet: active on batch ${batchCode} (code ${sheetCode})` : undefined,
       incentive_note: [pick(m, r, "Salary/Batch"), pick(m, r, "Pass/Incentive (60%)"), pick(m, r, "Pass/Enroll (85%)")].filter(Boolean).join(" · ") || undefined,
@@ -146,10 +146,10 @@ const trainers = new Map(); // phone → doc
     const loc = findLocation(r[4]);
     const prev = trainers.get(phone);
     // Documents saved + experience cert + ok-for-TOT is a real stage: papers are in.
-    const stage = /ok for tot|tot|document/i.test(docNotes) ? "Docs Pending" : "Applied"; // 2026-08-14 merge: Docs Complete folded into Docs Pending
+    const stage = /ok for tot|tot|document/i.test(docNotes) ? "Shortlisted" : "Fresh Lead"; // 14/08 vocabulary: docs collect while Shortlisted
     // Never DOWNGRADE: a Trainer_Master-certified (teaching) trainer also on this doc tab
     // stays Certified — the doc chase is history for them, not their current stage.
-    const RANK = ["Applied", "Docs Pending", "Submitted to NSDC", "NSDC Approved", "Certified"];
+    const RANK = ["Fresh Lead", "Shortlisted", "Sent to NSDC", "NSDC Approved", "Certified"];
     const keepPrev = prev?.pipeline_status && RANK.indexOf(prev.pipeline_status) > RANK.indexOf(stage);
     trainers.set(phone, {
       ...(prev ?? { name, phone, source: "AVPL Registered Trainers", skills: [], active: true, status: "Available" }),
@@ -181,9 +181,9 @@ const trainers = new Map(); // phone → doc
     if (!hit) {
       // Someone who exists only on the planning sheet is still in the hiring pipeline.
       const key = `NA-${norm(name).replace(/ /g, "-")}`;
-      hit = { name, phone: key, source: "AVPL Back-dated Planning", skills: [], active: true, status: "Available", pipeline_status: "Applied" };
+      hit = { name, phone: key, source: "AVPL Back-dated Planning", skills: [], active: true, status: "Available", pipeline_status: "Fresh Lead" };
       trainers.set(key, hit);
-      note(tab, `"${name}" existed only here — created at "Applied" with placeholder key "${key}"`);
+      note(tab, `"${name}" existed only here — created at "Fresh Lead" with placeholder key "${key}"`);
     }
     const submitted = pick(m, r, "Trainer profile submitted Date to SSC/NSDC?");
     const approved = pick(m, r, "Is SSC/NSDC approved the trainer profile?", "Is SSC/NSDC approved?");
@@ -194,8 +194,8 @@ const trainers = new Map(); // phone → doc
     hit.nominated_for_program = hit.nominated_for_program ?? prog?._id;
     // Furthest-along evidence wins; the pipeline itself is walked by humans afterwards.
     if (/yes|approved/i.test(approved)) hit.pipeline_status = "NSDC Approved";
-    else if (submitted) hit.pipeline_status = "Submitted to NSDC";
-    else if (/yes/i.test(readyTot)) hit.pipeline_status = "Docs Pending"; // merge 14/08
+    else if (submitted) hit.pipeline_status = "Sent to NSDC";
+    else if (/yes/i.test(readyTot)) hit.pipeline_status = "Shortlisted"; // 14/08 vocabulary
     hit.pipeline_note = [hit.pipeline_note, `Back-dated planning: ${rows[hi].map((h, i) => (h && r[i] ? `${h}=${r[i]}` : "")).filter(Boolean).join(" | ").slice(0, 400)}`].filter(Boolean).join(" || ");
     touched++;
   }
@@ -225,7 +225,7 @@ const trainers = new Map(); // phone → doc
       tr_id: pick(m, r, "Trainer SIP ID") || prev?.tr_id,
       // A row on the nomination sheet means the profile went out to NSDC.
       pipeline_status: prev?.pipeline_status && ["NSDC Approved", "Certified"].includes(prev.pipeline_status)
-        ? prev.pipeline_status : "Submitted to NSDC",
+        ? prev.pipeline_status : "Sent to NSDC",
     });
     touched++;
   }
@@ -334,11 +334,11 @@ for (const tab of CANDIDATE_TABS) {
       name, phone, email: pick(m, r, "Email") || undefined,
       qualification: pick(m, r, "Education") || undefined,
       source: "AVPL Resumes", skills: [], active: true, status: "Available",
-      pipeline_status: "Applied", pipeline_note: response || undefined,
+      pipeline_status: "Fresh Lead", pipeline_note: response || undefined,
     });
     n++;
   }
-  report[tab] = `${n} applicants added at "Applied"`;
+  report[tab] = `${n} applicants added at "Fresh Lead"`;
 }
 report["Target_Planning"] = "read for reference only — monthly targets are planning aggregates, not entities";
 report["Rough"] = "scratch tab — deliberately not imported";

@@ -8,7 +8,7 @@ import { audit } from "@/lib/audit";
 
 // Quick-invite (CEO 13/08): "chhota sa form — naam, email, phone dala, link bana, WhatsApp/
 // SMS chala gaya; trainer khud baaki bhar de, mere staff ka kaam kam ho." Creates the
-// Trainer at "Applied" and mints a single-use trainer_apply link that completes the profile.
+// Trainer at "Fresh Lead" and mints a single-use trainer_apply link that completes the profile.
 export const POST = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
@@ -25,7 +25,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
     tr = await Trainer.create({
       name, phone, email: email || undefined,
       skills: ["(to be filled by the applicant)"], // model requires skills; the form replaces this
-      pipeline_status: "Applied", status: "Available", source: "Quick invite",
+      pipeline_status: "Fresh Lead", status: "Available", source: "Quick invite",
     });
   }
   // Burn any earlier unused link for this trainer — exactly one live link at a time.

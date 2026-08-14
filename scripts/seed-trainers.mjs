@@ -27,16 +27,16 @@ const TAB_MAPPINGS = [];
 // Status text in the sheet → pipeline stage. Extend from the real inventory; anything not
 // listed is REPORTED, never guessed into a stage.
 const STATUS_ALIASES = {
-  "shortlisted": "CV Reviewed",
-  "documents pending": "Docs Pending",
-  "documents received": "Docs Pending",
-  "registered": "Docs Pending",           // registered on SIDH = profile built, papers in
-  "nominated": "Submitted to NSDC",
-  "nominated to nsdc": "Submitted to NSDC",
+  "shortlisted": "Shortlisted",
+  "documents pending": "Shortlisted",
+  "documents received": "Shortlisted",
+  "registered": "Shortlisted",            // registered on SIDH = profile built, papers in
+  "nominated": "Sent to NSDC",
+  "nominated to nsdc": "Sent to NSDC",
   "approved": "NSDC Approved",
   "accepted": "NSDC Approved",
   "rejected": "NSDC Rejected",
-  "payment done": "Payment Done",
+  "payment done": "TOT Payment Done",
   "tot scheduled": "TOT Scheduled",
   "tot done": "Certified",
   "certified": "Certified",
@@ -105,7 +105,7 @@ for (const m of TAB_MAPPINGS) {
       source: col("company") >= 0 ? r[col("company")] : m.tab,
       skills: prog ? [prog.trainer_skill] : [],
       nominated_for_location: loc?._id, nominated_for_program: prog?._id,
-      pipeline_status: stage ?? "Applied",
+      pipeline_status: stage ?? "Fresh Lead",
       tr_id: col("tr_id") >= 0 ? r[col("tr_id")] || undefined : undefined,
       active: stage !== "Dropped",
       _trace: { tab: m.tab, row: hi + i + 2, loc: loc?.name ?? `UNMATCHED "${col("location") >= 0 ? r[col("location")] : ""}"` },

@@ -90,8 +90,8 @@ if (spoc) {
 // [best] ?program=null (the "No programme" pill / KPI deep-link) excludes programme-carrying rows.
 const noProg = (await req(admin, "GET", "/api/candidates?program=null&limit=2000", undefined, 200)).data.items ?? [];
 ok("[best] ?program=null never returns a programme-carrying candidate", !noProg.some((c) => String(c._id) === String(c1._id)) && noProg.every((c) => c.program == null), `${noProg.length} rows`);
-// [avg] "Not Certified" is a legal lifecycle filter value (was missing from the old dropdown).
+// [avg] "Failed" is a legal lifecycle filter value (renamed from "Not Certified", CEO 14/08).
 const notCert = await req(admin, "GET", "/api/candidates?lifecycle_status=Not%20Certified&limit=2000");
-ok("[avg] Not Certified filter is accepted and type-clean", notCert.status === 200 && (notCert.data.items ?? []).every((c) => c.lifecycle_status === "Not Certified"), `got ${notCert.status}, ${notCert.data.items?.length} rows`);
+ok("[avg] Failed filter is accepted and type-clean", notCert.status === 200 && (notCert.data.items ?? []).every((c) => c.lifecycle_status === "Failed"), `got ${notCert.status}, ${notCert.data.items?.length} rows`);
 
 finish();

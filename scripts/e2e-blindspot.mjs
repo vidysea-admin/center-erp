@@ -82,7 +82,7 @@ ok("contained slot (10–14 inside 9–17) blocked", b9.status === 409, `got ${b
 const bCap = await req(admin, "POST", "/api/batches", { location: loc2._id, program: prog._id, trainer: tr._id, planned_start: "2027-08-01", target_size: 3 });
 ok("booking outside capable_locations warns", bCap.status === 201 && String(bCap.data.warning ?? "").includes("not listed as able"), JSON.stringify(bCap.data.warning));
 const bCapOk = await req(admin, "POST", "/api/batches", { location: loc._id, program: prog._id, trainer: tr._id, planned_start: "2027-10-01", target_size: 3 });
-// 2026-08-12: assert on the capability warning specifically. A trainer now starts at "Applied"
+// 2026-08-12: assert on the capability warning specifically. A trainer now starts at "Fresh Lead"
 // (the real pipeline default), which legitimately raises its own not-yet-Certified warning —
 // that must not be read as a location-capability failure.
 ok("booking at a capable location does not warn about capability",
@@ -155,7 +155,7 @@ ok("Operations sees TC Password MASKED", pwChangeOps?.new_value === "•••�
   // keying this reported a change on every row; keyed on the trainer's own columns it is 1 add.
   const trainersV2 = [
     ["S.No", "Trainer Name", "Job Role", "Status"],
-    [1, "Naya " + stamp, "Drone Tech", "Applied"],
+    [1, "Naya " + stamp, "Drone Tech", "Fresh Lead"],
     [2, "Ramesh " + stamp, "Drone Tech", "Nominated"],
     [3, "Suresh " + stamp, "Solar Tech", "Certified"],
   ];
