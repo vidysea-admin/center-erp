@@ -3,9 +3,10 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-17";
+export const RELEASE = "2026.08.14-18";
 export const RELEASE_NOTE =
-  "Candidate import learns the interest fields (F-B4 complete): map comma-" +
-  "separated centre / job-role NAMES into interested_locations / " +
-  "interested_programs - exact case-insensitive resolution, ambiguous or " +
-  "unknown names reported in the preview and left blank, never guessed.";
+  "Certificate bulk upload learns late-arrival results: on a Completed batch " +
+  "that finished with batch-level figures (no per-candidate rows), an uploaded " +
+  "CAN-id certificate creates the Pass row carrying that file as evidence " +
+  "(Rule 45 by construction). Recorded batch-level closure figures stay frozen " +
+  "(Rule 42/S0 guard); everything already recorded stays DEC-6-locked.";

@@ -514,6 +514,39 @@ const upLate2 = await certUpload(b5._id, [[`CAN_88${stamp.slice(-4)}.pdf`, pdf]]
 ok("cert bulk: second late upload refused — the fill is once (DEC-6)",
   upLate2.summary?.matched === 0 && /DEC-6/.test(upLate2.unmatched?.[0]?.reason ?? ""), JSON.stringify(upLate2.unmatched));
 
+// ---- Late-ARRIVAL results (2026-08-14, Manish's Gurugram batch-1 certificates): a batch
+// completed legacy-style — batch-level closure figures, ZERO per-candidate rows — and
+// Rule 41 forbids marking after completion. The NSDC certificate arriving now IS the pass
+// evidence: the upload creates the Pass row carrying it, and the recorded batch-level
+// closure figures stay exactly as typed (Rule 42 / S0 clobber guard).
+const b6 = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, room: room._id, planned_start: today, target_size: 2 }, 201)).data.item;
+const c6a = (await req("POST", "/api/candidates", { name: `LateRes A ${stamp}`, phone: `68${stamp}1`, location: loc._id, program: prog._id, sidh_candidate_id: `CAN99${stamp.slice(-4)}` }, 201)).data.item;
+const c6b = (await req("POST", "/api/candidates", { name: `LateRes B ${stamp}`, phone: `68${stamp}2`, location: loc._id, program: prog._id }, 201)).data.item;
+const m6 = [];
+for (const c of [c6a, c6b]) m6.push((await req("POST", `/api/batches/${b6._id}/members`, { candidate: c._id }, 201)).data.item);
+for (const m of m6) await req("PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+await req("POST", `/api/batches/${b6._id}/transition`, { target: "Ready" }, 200);
+await req("POST", `/api/batches/${b6._id}/transition`, { target: "Active" }, 200);
+await req("PUT", `/api/batches/${b6._id}/closure`, { assessment_status: "Completed", assessment_date: today, appeared: 2, passed: 1 }, 200); // batch-level, no rows
+await req("POST", `/api/batches/${b6._id}/transition`, { target: "Closing" }, 200);
+await req("PUT", `/api/batches/${b6._id}/closure`, { certification_status: "Completed", certification_date: today, certificates_issued: 1 }, 200);
+await req("PUT", `/api/batches/${b6._id}/closure`, { ready_for_invoice: true }, 200);
+await req("POST", `/api/batches/${b6._id}/transition`, { target: "Completed" }, 200);
+const preRows = (await req("GET", `/api/batches/${b6._id}/results`)).data.items.filter((i) => i.result);
+ok("late-arrival fixture: Completed with zero per-candidate rows", preRows.length === 0, String(preRows.length));
+const upNew = await certUpload(b6._id, [[`CAN_99${stamp.slice(-4)}.pdf`, pdf]], 200);
+ok("late-arrival: certificate upload CREATES the Pass row on a Completed batch",
+  upNew.summary?.matched === 1 && upNew.matched?.[0]?.created_result === true && upNew.matched?.[0]?.candidate === c6a.name, JSON.stringify(upNew));
+const r6row = (await req("GET", `/api/batches/${b6._id}/results`)).data.items.find((i) => i.result)?.result;
+ok("late-arrival: created row is Pass + Issued + carries the file",
+  r6row?.result === "Pass" && r6row?.certificate_status === "Issued" && /\/api\/files\//.test(r6row?.certificate_file ?? ""), JSON.stringify(r6row));
+const cl6 = (await req("GET", `/api/batches/${b6._id}/closure`)).data.closure;
+ok("late-arrival: batch-level closure figures NOT clobbered by the late row (Rule 42/S0)",
+  cl6?.appeared === 2 && cl6?.passed === 1 && cl6?.certificates_issued === 1, JSON.stringify({ appeared: cl6?.appeared, passed: cl6?.passed, ci: cl6?.certificates_issued }));
+const upNew2 = await certUpload(b6._id, [[`CAN_99${stamp.slice(-4)}.pdf`, pdf]], 200);
+ok("late-arrival: re-upload for the same candidate refused — frozen after the fill (DEC-6)",
+  upNew2.summary?.matched === 0 && /DEC-6/.test(upNew2.unmatched?.[0]?.reason ?? ""), JSON.stringify(upNew2.unmatched));
+
 // ---- Batch Health Score (score always travels with reasons) ----
 const healthBatch = (await req("GET", `/api/batches/${capBatch._id}`)).data;
 ok("health score present with reasons array", ["Green", "Amber", "Red"].includes(healthBatch.health?.score) && Array.isArray(healthBatch.health?.reasons), JSON.stringify(healthBatch.health));
