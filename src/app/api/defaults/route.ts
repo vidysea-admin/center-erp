@@ -29,11 +29,14 @@ export const PUT = apiHandler(async (req: NextRequest) => {
     "min_daily_evidence", "sidh_url", "drive_root_url", "snapshot_retention_per_tab",
     // 2026-08-12: scheme timing guidelines + client-contract counting rules (Manish)
     "day_start_time", "day_end_time", "max_session_hours", "max_batches_per_day",
-    "absent_counts_as_appeared", "dropped_pass_is_billable", "max_upload_mb",
+    // QA-104 (15/08): max_upload_mb dropped from the whitelist — the app has no size cap.
+    "absent_counts_as_appeared", "dropped_pass_is_billable",
     // 2026-08-13: exam-eligibility attendance floor (Manish: "60 plus hona mandatory hai")
     "min_attendance_pct",
     // R-J (QA-049): unpaid fee blocks enrollment completion only when this is on
     "fee_required_for_enrollment",
+    // QA-115 (15/08): admin kill-switch for outbound email
+    "email_enabled",
   ]) {
     if (body[f] !== undefined) set[f] = body[f];
   }

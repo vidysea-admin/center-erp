@@ -1,6 +1,7 @@
 import { collectionRoutes } from "@/lib/crud";
 import { Location, Notification, Program, TrainerRequest } from "@/models";
 import { assertLocationOperational } from "@/lib/rules";
+import { mailUsersByRole } from "@/lib/mailer";
 
 export const { GET, POST } = collectionRoutes({
   model: TrainerRequest, entity: "TrainerRequest",
@@ -31,5 +32,13 @@ export const { GET, POST } = collectionRoutes({
       entity: "TrainerRequest", entity_id: doc._id, link: "/trainers?tab=Requests",
       location: doc.location, role_target: ["Admin", "Operations"],
     });
+    // QA-115: same news, inbox delivery ("requested trainer ki detail Manish ji ke paas").
+    mailUsersByRole({
+      roles: ["Admin", "Operations"], location: doc.location,
+      subject: `Trainer request: ${prog?.name ?? "program"} at ${loc?.name ?? "location"}`,
+      title: "A new trainer request was raised",
+      lines: [`${prog?.name ?? "Program"} at ${loc?.name ?? "location"}, required by ${new Date(doc.required_by_date).toLocaleDateString("en-IN")}.`],
+      link: "/trainers?tab=Requests", entity: "TrainerRequest", entity_id: doc._id,
+    }).catch(() => {});
   },
 });

@@ -4,6 +4,7 @@ import { apiHandler, HttpError } from "@/lib/authz";
 import { rateLimit, clientKey } from "@/lib/rate-limit";
 import { Candidate, EDUCATION_LEVEL, Program, PublicToken } from "@/models";
 import { findDuplicateCandidates } from "@/lib/duplicates";
+import { renderMail, sendMail } from "@/lib/mailer";
 import { audit } from "@/lib/audit";
 
 // Public candidate self-registration (2026-08-11: "मैंने आपको एक link भेज दिया, उस link पे
@@ -70,6 +71,15 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   const dups = await findDuplicateCandidates({ phone, name, dob: doc.dob }, String(doc._id)).catch(() => []);
   if (dups.length) {
     await audit({ entity: "Candidate", entityId: doc._id, field: "duplicate_check", newValue: `${dups.length} possible duplicate(s) at intake`, actorType: "SYSTEM" });
+  }
+  // QA-115: the mandatory address gets its first real use — a confirmation the candidate
+  // can keep. Fire-and-forget; registration never fails on mail.
+  {
+    const { html, text } = renderMail({
+      title: "Your training registration is received",
+      lines: [`Hello ${name},`, `Your details are registered with ${t.location?.name ?? "the training centre"}. The team will contact you about the next steps.`, `Keep this email as your registration confirmation.`],
+    });
+    sendMail({ to: email, subject: "Your training registration is received", html, text, entity: "Candidate", entity_id: doc._id }).catch(() => {});
   }
   return NextResponse.json({ ok: true, message: "Thank you! Your details are registered — the team will contact you." }, { status: 201 });
 });

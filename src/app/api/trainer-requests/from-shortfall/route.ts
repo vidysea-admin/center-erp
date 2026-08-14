@@ -4,6 +4,7 @@ import { apiHandler, requireUser, requireEdit, locationFilter, assertLocationInS
 import { requirePerm } from "@/lib/permissions";
 import { Notification, TrainerRequest } from "@/models";
 import { mappingReadinessBulk, addDays } from "@/lib/rules";
+import { mailUsersByRole } from "@/lib/mailer";
 
 // F-A9 (Manish): the readiness screen already knows exactly which centre × job role has
 // no trainer — turn that shortfall into TrainerRequests in one click instead of retyping
@@ -54,6 +55,14 @@ export const POST = apiHandler(async (req: NextRequest) => {
       entity: "TrainerRequest", entity_id: doc._id, link: "/trainers?tab=Requests",
       location: r.location._id, role_target: ["Admin", "Operations"],
     });
+    // QA-115: inbox mirror, same audience and scope as the bell.
+    mailUsersByRole({
+      roles: ["Admin", "Operations"], location: r.location._id,
+      subject: `Trainer request: ${name.program ?? "job role"} at ${name.location ?? "centre"}`,
+      title: "A new trainer request was raised",
+      lines: [`${name.program ?? "Job role"} at ${name.location ?? "centre"} (from readiness shortfall).`],
+      link: "/trainers?tab=Requests", entity: "TrainerRequest", entity_id: doc._id,
+    }).catch(() => {});
     created.push({ ...name, id: doc._id });
   }
 

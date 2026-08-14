@@ -40,13 +40,19 @@ export type AppDefaults = {
   // Client-contract counting rules (Manish, 2026-08-12)
   absent_counts_as_appeared: boolean; // absentees are NOT deducted from "appeared"
   dropped_pass_is_billable: boolean;  // a dropout who passed is not billable
-  // Evidence uploads
-  max_upload_mb: number;
+  // QA-104 (2026-08-15): max_upload_mb REMOVED from the tunables — the app has NO size
+  // cap by Umesh's order, so a 100 MB figure here was a lie twice over. The schema field
+  // stays dormant; it just never surfaces or enforces anything again.
   // Exam eligibility: minimum attendance as a percent of programme hours (2026-08-13)
   min_attendance_pct: number;
   // R-J (QA-049): does an unpaid fee BLOCK enrollment completion? OFF by default —
   // government-funded schemes charge the candidate nothing.
   fee_required_for_enrollment: boolean;
+  // QA-115 (2026-08-15): admin kill-switch for outbound email. The REAL gate is the SES
+  // env credentials (absent = mail silently off); this lets an Admin mute mail without a
+  // redeploy. Credentials themselves NEVER live here — defaults are readable by every
+  // authenticated user.
+  email_enabled: boolean;
 };
 
 // Fallbacks for every tunable. A Defaults document written before a field existed simply
@@ -83,10 +89,10 @@ export const DEFAULT_VALUES: AppDefaults = {
   max_batches_per_day: 2,
   absent_counts_as_appeared: true,
   dropped_pass_is_billable: false,
-  max_upload_mb: 100,
   // 2026-08-13 (Manish): exam eligibility = this percent of programme hours attended.
   min_attendance_pct: 50,
   fee_required_for_enrollment: false,
+  email_enabled: true,
 };
 
 export async function getDefaults(): Promise<AppDefaults> {

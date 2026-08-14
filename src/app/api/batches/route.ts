@@ -6,6 +6,7 @@ import { Batch, BatchMember, Candidate, Closure, Invoice, Location, Notification
 import { assertLocationOperational, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, nextBatchCode, planBatchBackward, settlementStage, trainerBookingWarnings } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
+import { mailUsersByRole } from "@/lib/mailer";
 
 export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
@@ -114,5 +115,13 @@ export const POST = apiHandler(async (req: NextRequest) => {
     entity: "Batch", entity_id: doc._id, link: `/batches/${doc._id}?tab=Candidates`,
     location, role_target: ["Location", "Operations", "Enrollment"],
   });
+  // QA-115: the same news lands in those users' inboxes — scoped exactly like the bell.
+  mailUsersByRole({
+    roles: ["Location", "Operations", "Enrollment"], location,
+    subject: `Batch ${doc.code} opened at ${locDoc?.name ?? "your centre"}`,
+    title: "A new batch has opened",
+    lines: [`${doc.code} (${program.name}) opened at ${locDoc?.name ?? "your centre"}.`, `${poolCount} candidate${poolCount === 1 ? "" : "s"} in your pool to assign.`],
+    link: `/batches/${doc._id}?tab=Candidates`, entity: "Batch", entity_id: doc._id,
+  }).catch(() => {});
   return NextResponse.json({ item: doc, ...(warnings.length ? { warning: warnings.join(" ") } : {}) }, { status: 201 });
 });

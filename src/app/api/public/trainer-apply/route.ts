@@ -4,6 +4,7 @@ import { apiHandler, HttpError } from "@/lib/authz";
 import { rateLimit, clientKey } from "@/lib/rate-limit";
 import { Notification, Program, PublicToken, Trainer } from "@/models";
 import { audit } from "@/lib/audit";
+import { mailUsersByRole, renderMail, sendMail } from "@/lib/mailer";
 
 // Public trainer application (CEO 13/08: "Add Trainer ke fields as a form uske paas chala
 // jaye, wo khud bhar de — mere logon ka kaam kam ho jaye; fresh bhi bhej sake"). Two ways in:
@@ -83,6 +84,9 @@ export const POST = apiHandler(async (req: NextRequest) => {
       message: `Trainer application completed: ${tr.name} (${(tr.skills ?? []).join(", ") || "no skills listed"}) — review the CV.`,
       entity: "Trainer", entity_id: tr._id, link: "/trainers", role_target: ["Admin", "Operations"],
     });
+    // QA-115: the applicant finally hears back in writing, and the reviewers get the
+    // same ping in their inbox. Both fire-and-forget.
+    notifyTrainerApplication(tr, "completed");
     return NextResponse.json({ ok: true, mode: "completed" }, { status: 200 });
   }
 
@@ -99,5 +103,27 @@ export const POST = apiHandler(async (req: NextRequest) => {
     message: `New trainer application: ${tr.name} (${(tr.skills ?? []).join(", ")}) — review the CV.`,
     entity: "Trainer", entity_id: tr._id, link: "/trainers", role_target: ["Admin", "Operations"],
   });
+  notifyTrainerApplication(tr, "received");
   return NextResponse.json({ ok: true, mode: "received" }, { status: 201 });
 });
+
+// QA-115: acknowledgement to the applicant + inbox mirror to the reviewing roles.
+// Fire-and-forget by design — a mail problem must never fail the application.
+function notifyTrainerApplication(tr: { _id: unknown; name: string; email?: string; skills?: string[] }, mode: "received" | "completed") {
+  if (tr.email) {
+    const { html, text } = renderMail({
+      title: "We received your trainer application",
+      lines: [`Hello ${tr.name},`, mode === "completed"
+        ? "Thank you — your application form is complete. Our team will review your profile and call you about the next steps."
+        : "Thank you for applying as a trainer with Vidysea. Our team will review your profile and call you about the next steps."],
+    });
+    sendMail({ to: tr.email, subject: "We received your trainer application", html, text, entity: "Trainer", entity_id: tr._id }).catch(() => {});
+  }
+  mailUsersByRole({
+    roles: ["Admin", "Operations"],
+    subject: `Trainer application: ${tr.name}`,
+    title: mode === "completed" ? "A trainer application was completed" : "A new trainer application arrived",
+    lines: [`${tr.name} (${(tr.skills ?? []).join(", ") || "no skills listed"}) — review the CV.`],
+    link: "/trainers", entity: "Trainer", entity_id: tr._id,
+  }).catch(() => {});
+}

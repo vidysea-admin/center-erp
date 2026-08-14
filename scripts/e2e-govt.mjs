@@ -291,7 +291,8 @@ ok("Defaults still expose the legacy session knobs (slot rule itself is exact 4/
 ok("Defaults: exam-eligibility attendance floor is 50%", defaults.min_attendance_pct === 50, String(defaults.min_attendance_pct));
 ok("Defaults: absentees are NOT deducted from 'appeared'", defaults.absent_counts_as_appeared === true);
 ok("Defaults: a dropout who passed is not billable", defaults.dropped_pass_is_billable === false);
-ok("Defaults: upload ceiling raised off 25 MB", defaults.max_upload_mb === 100, String(defaults.max_upload_mb));
+// QA-104 (15/08): the app has NO upload cap — the defaults must stop advertising one.
+ok("QA-104: defaults no longer advertise an upload ceiling", defaults.max_upload_mb === undefined, String(defaults.max_upload_mb));
 
 // Mark results: 1 Pass, 1 Fail, 1 Absent, then drop a passed candidate.
 const marked = await req(admin, "PUT", `/api/batches/${batch._id}/results`, {

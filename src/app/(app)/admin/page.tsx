@@ -810,6 +810,16 @@ function DefaultsTab({ setError }: any) {
             Upload size is not limited by the app. Very large files can still be refused by the web server in front of
             the app (its body-size cap is being raised by devops).
           </p>
+          {/* QA-115: outbound email kill-switch. The transport itself is configured on the
+              server (env) — this only mutes/unmutes sending without a redeploy. */}
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-0.5" checked={form.email_enabled ?? true}
+              onChange={(e) => setForm({ ...form, email_enabled: e.target.checked })} />
+            <span>
+              <span className="font-medium">Send emails (approvals, confirmations, team alerts)</span>
+              <span className="block text-xs text-gray-500">Off: every send is skipped and recorded as skipped. Sending also stays off until the mail credentials are configured on the server.</span>
+            </span>
+          </label>
         </div>
       </Section>
     </div>

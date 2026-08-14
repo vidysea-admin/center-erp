@@ -5,6 +5,7 @@ import { apiHandler, requireUser, requireEdit, requireRole, HttpError } from "@/
 import { requirePerm } from "@/lib/permissions";
 import { User } from "@/models";
 import { audit } from "@/lib/audit";
+import { renderMail, sendMail } from "@/lib/mailer";
 
 export const GET = apiHandler(async () => {
   await dbConnect();
@@ -48,6 +49,16 @@ export const POST = apiHandler(async (req: NextRequest) => {
     requested_role: body.requested_role,
   });
   await audit({ entity: "User", entityId: doc._id, newValue: "created " + body.email, actor: user.id });
+  // QA-115: welcome mail — NEVER the password (that stays out-of-band with the admin).
+  // A Pending-created account is told on APPROVAL instead, not here.
+  if (doc.approval_status !== "Pending") {
+    const { html, text } = renderMail({
+      title: "Your Center ERP account is ready",
+      lines: [`Hello ${doc.name},`, `An account (${doc.email}, role ${doc.role}) has been created for you on the Vidysea Center ERP.`, `${user.name} will share your password with you separately.`],
+      cta: { label: "Sign in to the ERP", url: "https://www.vidysea.com/erp" },
+    });
+    sendMail({ to: doc.email, subject: "Your Center ERP account is ready", html, text, entity: "User", entity_id: doc._id }).catch(() => {});
+  }
   const { password_hash: _ph, ...safe } = doc.toObject();
   return NextResponse.json({ item: safe }, { status: 201 });
 });

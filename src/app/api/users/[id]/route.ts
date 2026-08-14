@@ -5,6 +5,7 @@ import { apiHandler, requireUser, requireEdit, requireRole, HttpError, invalidat
 import { requirePerm } from "@/lib/permissions";
 import { User } from "@/models";
 import { audit } from "@/lib/audit";
+import { renderMail, sendMail } from "@/lib/mailer";
 
 export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   await dbConnect();
@@ -86,6 +87,16 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   // next request — not after the identity cache's TTL. Stop access = stopped now.
   if (changingPriv || body.approval) invalidateIdentity(String(doc._id));
   await audit({ entity: "User", entityId: doc._id, field: body.approval ? `signup ${body.approval}d` : "updated", actor: user.id });
+  // QA-115 (CEO [19:48] "I didn't get the mail" — this WAS the mail): tell the person
+  // their account is live. Fire-and-forget — mail can never fail the approval.
+  if (body.approval === "approve") {
+    const { html, text } = renderMail({
+      title: "Your Center ERP account is approved",
+      lines: [`Hello ${doc.name},`, `Your account (${doc.email}) has been approved as ${doc.role}. You can sign in now.`],
+      cta: { label: "Sign in to the ERP", url: "https://www.vidysea.com/erp" },
+    });
+    sendMail({ to: doc.email, subject: "Your Center ERP account is approved", html, text, entity: "User", entity_id: doc._id }).catch(() => {});
+  }
   const { password_hash: _ph, ...safe } = doc.toObject();
   return NextResponse.json({ item: safe });
 });

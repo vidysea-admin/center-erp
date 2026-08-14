@@ -5,6 +5,7 @@ import { ApprovalRequest, ApprovalRule, Notification } from "@/models";
 import { HttpError } from "@/lib/authz";
 import type { SessionUser } from "@/auth";
 import { audit } from "@/lib/audit";
+import { mailUsersByRole } from "@/lib/mailer";
 
 export type ApprovalAction =
   | "location.close" | "location.stop" | "batch.cancel"
@@ -45,6 +46,15 @@ export async function requireApproval(
     role_target: [rule.approver_role],
     location: ctx.location,
   });
+  // QA-115: the approver hears about it in their inbox too — an approval that waits for
+  // someone to open the bell is an approval that waits.
+  mailUsersByRole({
+    roles: [rule.approver_role], location: ctx.location,
+    subject: `Approval needed: ${ctx.summary}`,
+    title: "An action is waiting for your approval",
+    lines: [`${ctx.summary}`, `Requested by ${user.name}.`],
+    link: "/admin?tab=Approvals", entity: "ApprovalRequest", entity_id: request._id,
+  }).catch(() => {});
 
   await audit({ entity: "ApprovalRequest", entityId: request._id, field: "created", newValue: ctx.summary, actor: user.id });
   return { request };

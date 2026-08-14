@@ -5,6 +5,7 @@ import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { PublicToken, Trainer } from "@/models";
 import { audit } from "@/lib/audit";
+import { renderMail, sendMail } from "@/lib/mailer";
 
 // Quick-invite (CEO 13/08): "chhota sa form — naam, email, phone dala, link bana, WhatsApp/
 // SMS chala gaya; trainer khud baaki bhar de, mere staff ka kaam kam ho." Creates the
@@ -33,5 +34,16 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const token = crypto.randomBytes(16).toString("hex");
   await PublicToken.create({ token, purpose: "trainer_apply", trainer: tr._id, created_by: user.id });
   await audit({ entity: "Trainer", entityId: tr._id, field: "quick_invite", newValue: `apply link minted by ${user.email ?? user.id}`, actor: user.id });
-  return NextResponse.json({ item: { trainer: tr._id, link: `/p/trainer-apply?token=${token}` } }, { status: 201 });
+  // QA-115: the address was collected here and then never used — now the link goes to the
+  // applicant's inbox too (WhatsApp/copy stays the staff flow). Fire-and-forget.
+  const mailed = !!(email || tr.email);
+  if (mailed) {
+    const { html, text } = renderMail({
+      title: "Complete your trainer application",
+      lines: [`Hello ${name || tr.name},`, `Vidysea has invited you to apply as a trainer. The form takes a few minutes — your name and phone are already filled in.`],
+      cta: { label: "Open the application form", url: `https://www.vidysea.com/erp/p/trainer-apply?token=${token}` },
+    });
+    sendMail({ to: (email || tr.email)!, subject: "Complete your trainer application — Vidysea", html, text, entity: "Trainer", entity_id: tr._id }).catch(() => {});
+  }
+  return NextResponse.json({ item: { trainer: tr._id, link: `/p/trainer-apply?token=${token}`, mailed } }, { status: 201 });
 });

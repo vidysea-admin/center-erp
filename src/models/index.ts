@@ -758,6 +758,22 @@ const NotificationSchema = new Schema({
 NotificationSchema.index({ type: 1, entity_id: 1, status: 1 });
 NotificationSchema.index({ status: 1, createdAt: -1 });
 
+// ---------- MailLog (QA-115, 2026-08-15) ----------
+// One row per outbound-email ATTEMPT — sent, failed, or skipped (mail off / no creds).
+// This is the answer to "mail gaya ki nahi?": the CEO's [19:48] complaint was exactly a
+// send nobody could prove either way. Bodies are not stored (PII bloat); subject + to +
+// outcome are the record.
+export const MAIL_STATUS = ["sent", "failed", "skipped"] as const;
+const MailLogSchema = new Schema({
+  to: { type: String, required: true },
+  subject: { type: String, required: true },
+  status: { type: String, enum: MAIL_STATUS, required: true },
+  reason: String,                              // skip reason or failure message
+  message_id: String,                          // SES message id on success
+  entity: String, entity_id: Schema.Types.ObjectId, // what this mail was about
+}, { timestamps: true });
+MailLogSchema.index({ createdAt: -1 });
+
 // ---------- Public tokens (2026-08-11: self-registration + candidate feedback) ----------
 // Capability URLs: the random token IS the credential. register tokens are per-location
 // (Admin/Ops generate and share); feedback and attendance tokens are per batch-member
@@ -896,6 +912,9 @@ const DefaultsSchema = new Schema({
   // strict — a toggle missing here is silently dropped by $set, which is exactly the bug
   // the probe caught on 14/08.
   fee_required_for_enrollment: { type: Boolean, default: false },
+  // QA-115 (2026-08-15): admin kill-switch for outbound email — the real gate is the SES
+  // env creds. Same strict-schema warning as above: omit here = writes silently dropped.
+  email_enabled: { type: Boolean, default: true },
   // Client-contract counting rules, confirmed by Manish 2026-08-12.
   // "Appeared" is NOT reduced by absentees — the client counts everyone who reached assessment
   // stage. Kept as a toggle because it is a contract term, not a scheme rule, and the next
@@ -939,6 +958,7 @@ export const FollowUpAction = models.FollowUpAction || model("FollowUpAction", F
 export const User = models.User || model("User", UserSchema);
 export const RolePermission = models.RolePermission || model("RolePermission", RolePermissionSchema);
 export const Notification = models.Notification || model("Notification", NotificationSchema);
+export const MailLog = models.MailLog || model("MailLog", MailLogSchema);
 export const ApprovalRule = models.ApprovalRule || model("ApprovalRule", ApprovalRuleSchema);
 export const ApprovalRequest = models.ApprovalRequest || model("ApprovalRequest", ApprovalRequestSchema);
 export const AuditLog = models.AuditLog || model("AuditLog", AuditLogSchema);

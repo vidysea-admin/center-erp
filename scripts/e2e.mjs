@@ -1045,6 +1045,32 @@ ok("…with the contact details an approver needs", !!queued && queued.phone ===
   ok("T1: an executable is refused", (await up("t.exe", "application/octet-stream")) === 400);
 }
 
+// ---- QA-115 (15/08): the mail layer — CI runs UNCONFIGURED, so this pins the SKIP path:
+// hooks fire (MailLog rows appear), sends are recorded as skipped, and no business flow
+// ever breaks on mail. Real sending is proven live via the admin test-email endpoint.
+{
+  const cfg = (await req("GET", "/api/test-email", undefined, 200)).data;
+  ok("QA-115: CI reports mail unconfigured (skip path active)", cfg.configured === false, JSON.stringify(cfg.configured));
+  // The self-registration earlier in this suite must have left a SKIPPED confirmation row
+  // for the candidate's address. The send is fire-and-forget — poll briefly for the row.
+  const wantTo = `selfreg.${stamp}@test.local`;
+  let row = null;
+  for (let i = 0; i < 10 && !row; i++) {
+    const log = (await req("GET", "/api/test-email", undefined, 200)).data.log ?? [];
+    row = log.find((l) => l.to === wantTo);
+    if (!row) await new Promise((r) => setTimeout(r, 200));
+  }
+  ok("QA-115: the register hook attempted the confirmation mail (MailLog row exists)", !!row, wantTo);
+  ok("QA-115: …and it is honestly 'skipped' with the reason named", row?.status === "skipped" && /not configured/.test(row?.reason ?? ""), JSON.stringify({ s: row?.status, r: row?.reason }));
+  // Verify endpoint contract: admin POST without creds → 400 naming configuration.
+  const post = await req("POST", "/api/test-email", {});
+  ok("QA-115: admin test-email without creds → 400 naming the env gap", post.status === 400 && /not configured|environment/.test(post.data?.error ?? ""), `${post.status} ${post.data?.error ?? ""}`);
+  // Non-admin never reaches the mail surface.
+  const opsCookie2 = await loginAs("ops@vidysea.com", "CiOnly@123");
+  const denied = await fetch(BASE + "/api/test-email", { headers: { cookie: opsCookie2 } });
+  ok("QA-115: non-admin test-email → 403", denied.status === 403, String(denied.status));
+}
+
 // ---- public build marker (deploy verification, no auth) ----
 const verRes = await fetch(BASE + "/api/public/version");
 const verBody = await verRes.json().catch(() => ({}));
