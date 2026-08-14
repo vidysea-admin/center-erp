@@ -3,7 +3,7 @@ import * as XLSX from "xlsx";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
-import { Candidate, EDUCATION_LEVEL } from "@/models";
+import { Candidate, EDUCATION_LEVEL, Location, Program } from "@/models";
 import { audit } from "@/lib/audit";
 import { findDuplicateCandidates, normalizePhone } from "@/lib/duplicates";
 
@@ -43,7 +43,31 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // F-B4 (Manish): the eligibility fields arrive with the sheet — dob, education,
   // last training date. Education is matched against the enum case-insensitively;
   // a spelling we don't recognise stays null and is REPORTED, never guessed.
+  // Interest fields (comma-separated centre / job-role NAMES) resolve the same way.
   const eduUnmatched: string[] = [];
+  const interestUnmatched: string[] = [];
+  const needsInterest = Object.values(mapping).some((f) => ["interested_programs", "interested_locations"].includes(f));
+  const progByName = new Map<string, any>();
+  const locByName = new Map<string, any>();
+  if (needsInterest) {
+    for (const p of await Program.find({}).select("name").lean<any[]>()) {
+      const k = String(p.name).trim().toLowerCase();
+      progByName.set(k, progByName.has(k) ? null : p._id); // ambiguous name → null → unmatched
+    }
+    for (const l of await Location.find({}).select("name").lean<any[]>()) {
+      const k = String(l.name).trim().toLowerCase();
+      locByName.set(k, locByName.has(k) ? null : l._id);
+    }
+  }
+  const resolveNames = (raw: string, map: Map<string, any>) => {
+    const ids: any[] = [];
+    for (const part of raw.split(",").map((s) => s.trim()).filter(Boolean)) {
+      const id = map.get(part.toLowerCase());
+      if (id) ids.push(id);
+      else interestUnmatched.push(part);
+    }
+    return ids;
+  };
   const candidates = rows
     .map((r) => {
       const c: Record<string, unknown> = { location, program, lifecycle_status: "Unassigned", created_by: user.id };
@@ -58,6 +82,14 @@ export const POST = apiHandler(async (req: NextRequest) => {
           const match = EDUCATION_LEVEL.find((e) => e.toLowerCase() === raw.toLowerCase());
           if (match) c.education = match;
           else if (raw) eduUnmatched.push(raw);
+        }
+        if (field === "interested_programs" && r[col]) {
+          const ids = resolveNames(String(r[col]), progByName);
+          if (ids.length) c.interested_programs = ids;
+        }
+        if (field === "interested_locations" && r[col]) {
+          const ids = resolveNames(String(r[col]), locByName);
+          if (ids.length) c.interested_locations = ids;
         }
       }
       return c;
@@ -87,6 +119,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
       skipped: rows.length - candidates.length,
       duplicates: duplicates.slice(0, 25), duplicate_count: duplicates.length,
       education_unmatched: [...new Set(eduUnmatched)].slice(0, 25),
+      interest_unmatched: [...new Set(interestUnmatched)].slice(0, 25),
     });
   }
   const docs = await Candidate.insertMany(candidates);

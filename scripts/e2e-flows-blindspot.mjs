@@ -223,18 +223,29 @@ console.log("\n--- FL6: the import flags the file's own duplicates and refuses a
     JSON.stringify(preview.data.duplicates));
   ok("FL6: …and it is a flag, not a block — all 3 rows stay importable", preview.data.valid === 3, String(preview.data.valid));
 
-  // F-B4: the eligibility fields ride the same mapping — dob, education, last training.
-  const fullMap = JSON.stringify({ "Student Name": "name", "Mobile": "phone", "DOB": "dob", "Edu": "education", "Last Training": "last_training_date" });
-  const prev2 = await multipart(admin, "/api/candidates/import", { file, location: loc._id, program: prog._id, mapping: fullMap }, 200);
+  // F-B4: the eligibility fields ride the same mapping — dob, education, last training,
+  // and comma-separated interest NAMES resolving to real centres / job roles.
+  rows[0]["Interests"] = `${prog.name}, Nonexistent Program`;
+  const ws2 = XLSX.utils.json_to_sheet(rows);
+  const wb2 = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb2, ws2, "Sheet1");
+  const file2 = new File([XLSX.write(wb2, { type: "buffer", bookType: "xlsx" })], "import-probe2.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const fullMap = JSON.stringify({ "Student Name": "name", "Mobile": "phone", "DOB": "dob", "Edu": "education", "Last Training": "last_training_date", "Interests": "interested_programs" });
+  const prev2 = await multipart(admin, "/api/candidates/import", { file: file2, location: loc._id, program: prog._id, mapping: fullMap }, 200);
   ok("FL6b: the unrecognised education spelling is reported, not guessed",
     (prev2.data.education_unmatched ?? []).includes("BTech"), JSON.stringify(prev2.data.education_unmatched));
-  const done = await multipart(admin, "/api/candidates/import", { file, location: loc._id, program: prog._id, mapping: fullMap, confirm: "1" }, 201);
+  ok("FL6b: the unknown interest name is reported, the real one resolves",
+    (prev2.data.interest_unmatched ?? []).includes("Nonexistent Program") && !(prev2.data.interest_unmatched ?? []).includes(prog.name),
+    JSON.stringify(prev2.data.interest_unmatched));
+  const done = await multipart(admin, "/api/candidates/import", { file: file2, location: loc._id, program: prog._id, mapping: fullMap, confirm: "1" }, 201);
   ok("FL6b: confirm imports all rows", done.data.imported === 3, String(done.data.imported));
   const impA = (await req(admin, "GET", `/api/candidates?q=9811100001`)).data.items.find((c) => c.name === `FL Imp A ${stamp}`);
   ok("FL6b: education normalised to the enum ('12th pass' → '12th Pass')", impA?.education === "12th Pass", impA?.education);
   ok("FL6b: dob and last_training_date landed as dates",
     (impA?.dob ?? "").startsWith("2001-04-15") && (impA?.last_training_date ?? "").startsWith("2025-11-20"),
     JSON.stringify({ dob: impA?.dob, lt: impA?.last_training_date }));
+  ok("FL6b: the resolved interest landed as a real program id",
+    (impA?.interested_programs ?? []).length === 1, JSON.stringify(impA?.interested_programs));
   const impB = (await req(admin, "GET", `/api/candidates?q=9811100002`)).data.items.find((c) => c.name === `FL Imp B ${stamp}`);
   ok("FL6b: the BTech row imported with education left null", impB && impB.education == null, JSON.stringify(impB?.education));
 }

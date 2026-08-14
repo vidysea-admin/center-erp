@@ -474,7 +474,7 @@ function CandidatesInner() {
                     <select className={inputCls} value={importState.mapping?.[c] ?? ""} onChange={(e) => setImportState({ ...importState, mapping: { ...importState.mapping, [c]: e.target.value } })}>
                       <option value="">Ignore</option>
                       {/* F-B4: the eligibility fields (dob · education · last_training_date) are mappable now. */}
-                      {["name", "phone", "alt_phone", "gender", "source", "id_reference", "dob", "education", "last_training_date"].map((f) => <option key={f}>{f}</option>)}
+                      {["name", "phone", "alt_phone", "gender", "source", "id_reference", "dob", "education", "last_training_date", "interested_programs", "interested_locations"].map((f) => <option key={f}>{f}</option>)}
                     </select>
                   </Field>
                 ))}
@@ -485,6 +485,11 @@ function CandidatesInner() {
               </div>
               {importState.preview && (
                 <p className="text-sm text-gray-600">{importState.preview.valid} valid, {importState.preview.skipped} skipped (missing name/phone).</p>
+              )}
+              {importState.preview?.interest_unmatched?.length > 0 && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  Interest names not recognised (must match a centre / job-role name exactly, comma-separated): {importState.preview.interest_unmatched.join(" · ")}
+                </div>
               )}
               {importState.preview?.education_unmatched?.length > 0 && (
                 <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
