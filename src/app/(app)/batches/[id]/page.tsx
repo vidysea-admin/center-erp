@@ -1,5 +1,6 @@
 "use client";
 import { use, useEffect, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { api, fmtDate, toInputDate } from "@/lib/client";
@@ -39,6 +40,32 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
         <span className="text-sm text-gray-500">{b.program?.name} · {fmtDate(b.planned_start)} → {fmtDate(b.planned_end)}</span>
       </div>
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
+      {/* 2026-08-14 (Umesh): a batch with nobody on it is not a batch — either its students
+          get uploaded or the empty shell gets deleted. Not dismissible on purpose: an empty
+          batch skews every count on the board until someone acts on it. */}
+      {(data.readiness?.roster_count ?? 0) === 0 && !["Cancelled"].includes(b.status) && (
+        <div className="rounded-xl border-2 border-red-300 bg-red-50 p-4">
+          <div className="text-sm font-semibold text-red-800">This batch has no students yet — upload the roster</div>
+          <p className="mt-1 text-sm text-red-700">
+            {b.status === "Completed" || b.status === "Closing"
+              ? "It is marked " + b.status + " with an empty roster, so its attendance, results and billing are all reading zero."
+              : "Readiness, attendance and every count on the dashboard stay wrong until the students are on it."}
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Btn small onClick={() => setTab("Candidates")}>Add students to this batch</Btn>
+            <Link href="/candidates"><Btn small kind="ghost">Import candidates (Excel)</Btn></Link>
+            {role === "Admin" && (
+              <Btn small kind="danger" onClick={async () => {
+                if (!confirm(`Delete ${b.code}? This is only allowed while the batch carries no members, results, costs, logs or attendance.`)) return;
+                try {
+                  await api(`/api/batches/${id}`, { method: "DELETE" });
+                  window.location.href = `${BASE_PATH}/batches`;
+                } catch (e: any) { setError(e.message); }
+              }}>Delete this empty batch</Btn>
+            )}
+          </div>
+        </div>
+      )}
       <HealthBanner health={data.health} />
       <Tabs tabs={tabs} active={tab} onChange={setTab} />
       {tab === "Overview" && <Overview data={data} role={role} onChanged={load} setError={setError} />}

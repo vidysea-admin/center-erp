@@ -559,6 +559,21 @@ ok("QA-042: tranche two does NOT rewrite the recorded batch-level figures",
   cl6b?.appeared === 2 && cl6b?.passed === 1 && cl6b?.certificates_issued === 1,
   JSON.stringify({ appeared: cl6b?.appeared, passed: cl6b?.passed, ci: cl6b?.certificates_issued }));
 
+// ---- Empty-shell delete (2026-08-14, Umesh: "agar data ka koi source nahi hai toh remove
+// that"). A batch carrying ANY record is history and must be refused; an empty one goes. ----
+{
+  const shell = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, planned_start: today, target_size: 5 }, 201)).data.item;
+  const del1 = await req("DELETE", `/api/batches/${shell._id}`, undefined, 200);
+  ok("empty batch deletes", del1.data.deleted === shell.code, JSON.stringify(del1.data));
+  ok("…and is gone from the list", !((await req("GET", "/api/batches?limit=2000")).data.items ?? []).some((x) => x.code === shell.code));
+  await req("GET", `/api/batches/${shell._id}`, undefined, 404);
+  // b4 carries results/closure/members — the guard must refuse it BY NAME.
+  const del2 = await req("DELETE", `/api/batches/${b4._id}`);
+  ok("a batch with recorded work refuses deletion and names what it carries",
+    del2.status === 409 && /members|results|closure/.test(del2.data?.error ?? "") && /cancelled, never deleted/i.test(del2.data?.error ?? ""),
+    `got ${del2.status}: ${del2.data?.error ?? ""}`);
+}
+
 // ---- Batch Health Score (score always travels with reasons) ----
 const healthBatch = (await req("GET", `/api/batches/${capBatch._id}`)).data;
 ok("health score present with reasons array", ["Green", "Amber", "Red"].includes(healthBatch.health?.score) && Array.isArray(healthBatch.health?.reasons), JSON.stringify(healthBatch.health));
