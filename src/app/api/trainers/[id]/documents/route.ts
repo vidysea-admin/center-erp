@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Trainer, TrainerDocument, TRAINER_DOC_TYPE } from "@/models";
-import { trainerDocSummary } from "@/lib/rules";
+import { assertTrainerInScope, trainerDocSummary } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
 // 2026-08-12 (Manish): "phir uske documents mangaye - Aadhaar, PAN, photo, CV, educational
@@ -16,6 +16,7 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   const user = await requireUser();
   await requirePerm(user, "trainers.manage");
   const { id } = await ctx.params;
+  await assertTrainerInScope(user, id); // QA-125: Aadhaar/PAN are personnel data — scope, not just the right
   const [items, summary] = await Promise.all([
     TrainerDocument.find({ trainer: id }).sort({ createdAt: -1 }).populate("uploaded_by", "name").populate("verified_by", "name").lean(),
     trainerDocSummary(id),
@@ -32,6 +33,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   await requirePerm(user, "trainers.manage");
   const { id } = await ctx.params;
   if (!(await Trainer.exists({ _id: id }))) throw new HttpError(404, "Trainer not found");
+  await assertTrainerInScope(user, id); // QA-125: writing a file onto a foreign trainer was live-proved
 
   const body = await req.json();
   if (!body.doc_type || !TRAINER_DOC_TYPE.includes(body.doc_type)) {

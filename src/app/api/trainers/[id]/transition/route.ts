@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
-import { transitionTrainer } from "@/lib/rules";
+import { assertTrainerInScope, transitionTrainer } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
 // POST { target, reason?, remarks?, date?, payload? } — move a trainer along the hiring pipeline
@@ -15,6 +15,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   requireEdit(user);
   await requirePerm(user, "trainers.manage");
   const { id } = await ctx.params;
+  await assertTrainerInScope(user, id); // QA-125: moving a foreign trainer's pipeline is a foreign write
   const { target, reason, remarks, date, payload, bypass } = await req.json();
 
   // Rule T8 (Umesh 15/08): bypass = its own grantable right, confirmed in the UI, and the

@@ -284,6 +284,56 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   ok("…while Admin still sees the full directory", adminAll.length > spocTrainers.length, `${adminAll.length} vs ${spocTrainers.length}`);
 }
 
+// ---- QA-125 (checker, 15/08): trainer IDOR — the SEVENTH list-hides/item-allows hole,
+// and the first on WRITES. A SPOC documented, un-documented and edited a trainer they
+// could not even see. The union scope (nomination/capability/home) now guards every
+// by-id trainer surface, untied trainers fail closed, and creation binds to the
+// creator's own scope.
+{
+  const stamp = Date.now().toString().slice(-6); // block-local: the mask block's stamp is not in scope here
+  const p125 = (n) => "95" + Date.now().toString().slice(-7) + n; // unique 10-digit phones
+  const prog = (await req(admin, "GET", "/api/programs?limit=1")).data.items[0];
+  // A trainer that is unambiguously FOREIGN to the JPR03-scoped SPOC…
+  const foreignTr = (await req(admin, "POST", "/api/trainers", {
+    name: `Foreign Trainer ${stamp}`, phone: p125(1), skills: ["Q125"],
+    nominated_for_location: otherLoc._id, nominated_for_program: prog._id,
+  })).data.item;
+  // …and one tied to NOTHING at all.
+  const untiedTr = (await req(admin, "POST", "/api/trainers", {
+    name: `Untied Trainer ${stamp}`, phone: p125(2), skills: ["Q125"],
+  })).data.item;
+  const fDoc = (await req(admin, "POST", `/api/trainers/${foreignTr._id}/documents`, { doc_type: "Aadhaar", file_url: "/erp/api/files/q125.pdf", original_name: "q125.pdf" })).data.item;
+
+  ok("QA-125: SPOC GET foreign trainer → 403", (await req(spoc, "GET", `/api/trainers/${foreignTr._id}`)).status === 403);
+  ok("QA-125: SPOC PATCH foreign trainer → 403", (await req(spoc, "PATCH", `/api/trainers/${foreignTr._id}`, { qualification: "x" })).status === 403);
+  ok("QA-125: SPOC read foreign trainer's documents → 403", (await req(spoc, "GET", `/api/trainers/${foreignTr._id}/documents`)).status === 403);
+  ok("QA-125: SPOC document a foreign trainer → 403", (await req(spoc, "POST", `/api/trainers/${foreignTr._id}/documents`, { doc_type: "PAN", file_url: "/erp/api/files/q125b.pdf" })).status === 403);
+  ok("QA-125: SPOC delete a foreign trainer's document → 403", (await req(spoc, "DELETE", `/api/trainers/${foreignTr._id}/documents/${fDoc._id}`)).status === 403);
+  ok("QA-125: SPOC move a foreign trainer's pipeline → 403", (await req(spoc, "POST", `/api/trainers/${foreignTr._id}/transition`, { target: "Shortlisted" })).status === 403);
+  ok("QA-125: an UNTIED trainer is out of scope too (fail closed, like the list)", (await req(spoc, "GET", `/api/trainers/${untiedTr._id}`)).status === 403);
+  // Creation binds to the creator's scope: a foreign tie is refused, an own-centre tie lands.
+  ok("QA-125: SPOC creating a trainer tied to a foreign centre → 403",
+    (await req(spoc, "POST", "/api/trainers", { name: `Q125F ${stamp}`, phone: p125(3), skills: ["x"], nominated_for_location: otherLoc._id })).status === 403);
+  ok("QA-125: SPOC creating an UNTIED trainer → 403 (they could never see it again)",
+    (await req(spoc, "POST", "/api/trainers", { name: `Q125U ${stamp}`, phone: p125(4), skills: ["x"] })).status === 403);
+  const jprLoc = (await req(spoc, "GET", "/api/locations?limit=1")).data.items[0];
+  const ownCreate = await req(spoc, "POST", "/api/trainers", { name: `Q125O ${stamp}`, phone: p125(5), skills: ["x"], home_location: jprLoc._id });
+  ok("QA-125: SPOC creating an own-centre trainer still works", ownCreate.status === 201, `got ${ownCreate.status}`);
+  // Quick-invite by a scoped user auto-ties the invitee to the inviter's centre(s).
+  const qi = await req(spoc, "POST", "/api/trainers/quick-invite", { name: `Q125QI ${stamp}`, phone: p125(6) });
+  ok("QA-125: scoped quick-invite lands…", qi.status === 201, `got ${qi.status}`);
+  if (qi.status === 201) {
+    const invited = (await req(spoc, "GET", `/api/trainers/${qi.data.item.trainer}`));
+    ok("QA-125: …auto-tied so the inviter can see their own invitee", invited.status === 200 && (invited.data.item?.capable_locations ?? []).length > 0, `got ${invited.status}`);
+  }
+  // QA-061 evidence (stale row close): Enrollment reaches neither the directory nor the board.
+  ok("QA-061: Enrollment cannot read the trainer directory", (await req(enroll, "GET", "/api/trainers?limit=5")).status === 403);
+  ok("QA-061: Enrollment cannot read the hiring board", (await req(enroll, "GET", "/api/open-positions")).status === 403);
+  // Admin cleanup so later fixtures stay unaffected.
+  const clean = await req(admin, "DELETE", `/api/trainers/${foreignTr._id}/documents/${fDoc._id}`);
+  ok("QA-125: admin (unscoped) still deletes fine", clean.status === 200, `got ${clean.status}`);
+}
+
 // 2026-08-12 audit F-000 (S0): the generic list route copied every ?key=value into the Mongo
 // filter AFTER the Rule 38 scope filter, so ?location=<other centre> simply overwrote it and a
 // scoped user could read every centre's candidate PII. Scope is now applied last, client keys

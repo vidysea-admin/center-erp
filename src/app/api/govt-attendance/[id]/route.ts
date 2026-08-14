@@ -10,7 +10,9 @@ async function loadInScope(id: string, user: Awaited<ReturnType<typeof requireUs
     .populate("location", "name external_id").populate("batch", "code")
     .populate("imported_by", "name").lean<any>();
   if (!imp) throw new HttpError(404, "Import not found");
-  if (isScoped(user) && imp.location && !(user.location_scope ?? []).map(String).includes(String(imp.location._id))) {
+  // QA-125 sweep (15/08): fail CLOSED like costs/[id] — a centre-less import is not
+  // scoped-readable/deletable; before this, `imp.location &&` silently let it through.
+  if (isScoped(user) && (!imp.location || !(user.location_scope ?? []).map(String).includes(String(imp.location._id)))) {
     throw new HttpError(403, "That import belongs to a centre outside your assigned locations.");
   }
   return imp;

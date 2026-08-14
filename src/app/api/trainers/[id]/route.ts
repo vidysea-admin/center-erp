@@ -1,13 +1,16 @@
 import { itemRoutes } from "@/lib/crud";
 import { Trainer } from "@/models";
 import { hasPermission } from "@/lib/permissions";
-import { assertLocationOperational, TRAINER_FLOW } from "@/lib/rules";
+import { assertLocationOperational, assertTrainerDocInScope, TRAINER_FLOW } from "@/lib/rules";
 import { maskTrainerSecrets } from "../route";
 
 // Same masking as the list route (2026-08-12) — opening one trainer by id was the obvious way
 // around a list-only filter. The field list itself lives in the list route so there is only one.
 export const { GET, PATCH } = itemRoutes({
   model: Trainer, entity: "Trainer", scopeField: null,
+  // QA-125 (checker, 15/08): the list's nomination/capability/home union now guards the
+  // ITEM too — a scoped user could read and PATCH any trainer by id before this.
+  scopeAssert: (user, item) => assertTrainerDocInScope(user, item),
   async mapItems(items, user) {
     const masked = await maskTrainerSecrets(items, await hasPermission(user, "trainers.manage"));
     // QA-111 (15/08): the Move drawer offered all 11 stages and let the server refuse the

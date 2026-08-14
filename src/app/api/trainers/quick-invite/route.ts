@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, isScoped } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { PublicToken, Trainer } from "@/models";
 import { audit } from "@/lib/audit";
 import { renderMail, sendMail } from "@/lib/mailer";
+import { assertTrainerInScope } from "@/lib/rules";
 
 // Quick-invite (CEO 13/08): "chhota sa form — naam, email, phone dala, link bana, WhatsApp/
 // SMS chala gaya; trainer khud baaki bhar de, mere staff ka kaam kam ho." Creates the
@@ -27,7 +28,15 @@ export const POST = apiHandler(async (req: NextRequest) => {
       name, phone, email: email || undefined,
       skills: ["(to be filled by the applicant)"], // model requires skills; the form replaces this
       pipeline_status: "Fresh Lead", status: "Available", source: "Quick invite",
+      // QA-125: a scoped inviter's trainer is tied to their own centre(s) — otherwise the
+      // invitee would be invisible to the very person who invited them (and untied rows
+      // are now 403 for every scoped user, by design).
+      ...(isScoped(user) ? { capable_locations: user.location_scope } : {}),
     });
+  } else if (isScoped(user)) {
+    // Re-inviting an existing person: the scoped inviter must already be allowed to
+    // touch this trainer — same Rule 38 as every other by-id write.
+    await assertTrainerInScope(user, String(tr._id));
   }
   // Burn any earlier unused link for this trainer — exactly one live link at a time.
   await PublicToken.updateMany({ purpose: "trainer_apply", trainer: tr._id, active: true }, { $set: { active: false } });

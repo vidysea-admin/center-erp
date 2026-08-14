@@ -34,6 +34,11 @@ export type CrudConfig = {
   afterWrite?: (doc: any, user: SessionUser) => Promise<void> | void;
   // Optional read-side decorator: attach computed fields to items before they leave the API.
   mapItems?: (items: any[], user: SessionUser) => Promise<any[]> | any[];
+  // QA-125: itemRoutes never supported scopeFilter, so an entity whose scope is a
+  // multi-field union (trainers) had LIST scoping and zero item scoping. This hook runs
+  // on GET (after load) and PATCH (before write) with the loaded record — throw 403 to
+  // refuse. Use alongside scopeField: null.
+  scopeAssert?: (user: SessionUser, item: any) => void;
 };
 
 export function pick(body: Record<string, unknown>, fields: string[]) {
@@ -147,6 +152,7 @@ export function itemRoutes(cfg: CrudConfig) {
         throw new HttpError(403, "Out of scope");
       }
     }
+    if (cfg.scopeAssert) cfg.scopeAssert(user, item); // QA-125: multi-field union scope
     if (cfg.mapItems) item = (await cfg.mapItems([item], user))[0];
     return NextResponse.json({ item });
   });
@@ -165,6 +171,7 @@ export function itemRoutes(cfg: CrudConfig) {
         throw new HttpError(403, "Out of scope");
       }
     }
+    if (cfg.scopeAssert) cfg.scopeAssert(user, existing); // QA-125: multi-field union scope
     const body = await req.json();
     const data = pick(body, cfg.fields);
     if (cfg.beforeUpdate) await cfg.beforeUpdate(id, data, existing, user);

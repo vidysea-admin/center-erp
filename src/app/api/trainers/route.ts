@@ -2,6 +2,7 @@ import { collectionRoutes } from "@/lib/crud";
 import { Batch, Trainer } from "@/models";
 import { hasPermission } from "@/lib/permissions";
 import { ACTIVE_BATCH_STATUSES, assertLocationOperational } from "@/lib/rules";
+import { HttpError, isScoped } from "@/lib/authz";
 
 // 2026-08-12, found by testing a real Trainer login: the directory is not location-scoped,
 // so every signed-in user could read all 19 trainers INCLUDING day_rate, compensation and
@@ -74,8 +75,19 @@ export const { GET, POST } = collectionRoutes({
   writeRoles: ["Admin", "Operations"],
   permission: "trainers.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
   // F-B5 (Manish): a halted centre must stop hiring — no nominating trainers for it.
-  async beforeCreate(body) {
+  async beforeCreate(body, user) {
     if (body.nominated_for_location) await assertLocationOperational(body.nominated_for_location, "Nominating a trainer for this centre");
+    // QA-125: a scoped creator must tie the new trainer to their own centre — otherwise
+    // they either write into a foreign centre or create someone their own list will
+    // never show them (and, before this fix, could then still edit by id).
+    if (isScoped(user)) {
+      const allowed = user.location_scope.map(String);
+      const ties = [body.nominated_for_location, body.home_location, ...((body.capable_locations as unknown[]) ?? [])]
+        .filter(Boolean).map(String);
+      if (!ties.length || !ties.every((t) => allowed.includes(t))) {
+        throw new HttpError(403, "Tie the trainer to your own centre — nomination, home or capable location must be one of yours.");
+      }
+    }
   },
   populate: [
     { path: "home_location", select: "name code" },

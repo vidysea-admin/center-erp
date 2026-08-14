@@ -43,6 +43,33 @@ export async function assertMemberInScope(user: SessionUser, memberId: string) {
   await assertBatchInScope(user, String(m.batch));
 }
 
+// QA-125 (checker, 15/08): Rule 38 on by-ID TRAINER access. The trainers LIST hides
+// out-of-scope people (nomination/capability/home union — trainers/route.ts scopeFilter),
+// but every item-level route only asked "may you manage trainers", never "may you manage
+// THIS trainer" — a Gurugram SPOC documented, un-documented and edited a trainer they
+// could not even see. Seventh occurrence of the list-hides/item-allows pattern and the
+// first on writes, so the check is a shared helper, not another spot fix.
+// A trainer tied to NO centre is out of scope for every scoped user (fail closed) — the
+// same person the list already refuses to show them.
+export function trainerScopeTies(t: { nominated_for_location?: unknown; home_location?: unknown; capable_locations?: unknown[] }): string[] {
+  return [t.nominated_for_location, t.home_location, ...((t.capable_locations as unknown[]) ?? [])]
+    .filter(Boolean)
+    .map((v) => String((v as { _id?: unknown })?._id ?? v));
+}
+export function assertTrainerDocInScope(user: SessionUser, t: { nominated_for_location?: unknown; home_location?: unknown; capable_locations?: unknown[] } | null) {
+  if (!isScoped(user)) return;
+  if (!t) throw new HttpError(404, "Trainer not found");
+  const allowed = user.location_scope.map(String);
+  if (!trainerScopeTies(t).some((id) => allowed.includes(id))) {
+    throw new HttpError(403, "Trainer out of scope — this person is not tied to your centre.");
+  }
+}
+export async function assertTrainerInScope(user: SessionUser, trainerId: string) {
+  if (!isScoped(user)) return;
+  const t = await Trainer.findById(trainerId).select("nominated_for_location home_location capable_locations").lean<any>();
+  assertTrainerDocInScope(user, t);
+}
+
 export function addDays(d: Date, days: number): Date {
   const r = new Date(d);
   r.setDate(r.getDate() + days);

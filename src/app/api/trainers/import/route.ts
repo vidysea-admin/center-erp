@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, isScoped } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Location, Program, Trainer, TRAINER_PIPELINE } from "@/models";
 import { audit } from "@/lib/audit";
@@ -142,6 +142,20 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // phone is UNIQUE in the schema — a duplicate cannot be "flagged but imported", it
   // would bounce off the index. Duplicates are excluded from the insert and each one
   // is named with why.
+  // QA-125: a scoped importer only hires for their own centre(s) — a row nominating a
+  // foreign centre is refused BY NAME, and every imported trainer is tied to the
+  // importer's scope so their own list can see what they just imported.
+  if (isScoped(user)) {
+    const allowed = user.location_scope.map(String);
+    for (const t of trainers) {
+      if (t.nominated_for_location && !allowed.includes(String(t.nominated_for_location))) {
+        warnings.push(`${t.name}: nominated centre is outside your scope — nomination left blank`);
+        delete t.nominated_for_location;
+      }
+      t.capable_locations = user.location_scope;
+    }
+  }
+
   const seen = new Map<string, number>();
   const inFileDupe = new Set<number>();
   const duplicates: string[] = [];
