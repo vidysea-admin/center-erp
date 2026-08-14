@@ -1,6 +1,8 @@
 "use client";
 import { Suspense, useEffect, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import { useSession } from "next-auth/react";
 import { api } from "@/lib/client";
 import { Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, ShareLinkPanel, SourceCell, copyText, inputCls , Tabs} from "@/components/ui";
 import { useLocationCtx } from "@/components/shell";
@@ -13,6 +15,10 @@ export default function CandidatesPage() {
 
 function CandidatesInner() {
   const sp = useSearchParams();
+  // R-H (CEO [27:45], in the enrollment worklist): "Remove the source from here — we don't
+  // need it once the data is included here." Admin/Ops keep provenance; Enrollment doesn't.
+  const { data: session } = useSession();
+  const role = (session?.user as any)?.role;
   const [items, setItems] = useState<any[]>([]);
   const [locations, setLocations] = useState<any[]>([]);
   const [programs, setPrograms] = useState<any[]>([]);
@@ -328,7 +334,23 @@ function CandidatesInner() {
           { key: "_sel", label: "", mobile: false, render: (r: any) => <input type="checkbox" checked={selected.has(r._id)} onChange={() => toggle(r._id)} onClick={(e) => e.stopPropagation()} disabled={r.lifecycle_status !== "Unassigned" && r.lifecycle_status !== "Dropped"} /> },
           { key: "name", label: "Name", sortable: true, sortValue: (r: any) => r.name, render: (r: any) => <NameCell name={r.name} sub={r.gender} /> },
           { key: "phone", label: "Phone" },
-          { key: "location", label: "Location", sortable: true, sortValue: (r: any) => r.location?.name, render: (r: any) => r.location?.name },
+          {
+            // R-H (CEO [11:29]): "If I click on location, I should be able to see the
+            // location detail" — the cell is a real link, the row still opens the candidate.
+            key: "location", label: "Location", sortable: true, sortValue: (r: any) => r.location?.name,
+            render: (r: any) => r.location
+              ? <Link className="text-blue-700 hover:underline" href={`/locations/${r.location._id ?? r.location}`} onClick={(e) => e.stopPropagation()}>{r.location.name}</Link>
+              : "—",
+          },
+          {
+            // R-H (CEO [12:00]): "you also mention here as a data point, batch number — and
+            // when I click on that batch number, I should be able to see all the details".
+            key: "batch", label: "Batch", mobile: false, sortable: true, sortValue: (r: any) => r.active_batch?.code ?? "",
+            filterText: (r: any) => r.active_batch?.code ?? "",
+            render: (r: any) => r.active_batch
+              ? <Link className="text-blue-700 hover:underline" href={`/batches/${r.active_batch._id}`} onClick={(e) => e.stopPropagation()}>{r.active_batch.code}</Link>
+              : <span className="text-gray-400">—</span>,
+          },
           {
             key: "program", label: "Program", sortable: true, filterable: true, sortValue: (r: any) => progOf(r)?.name ?? "",
             render: (r: any) => r.program?.name
@@ -382,7 +404,9 @@ function CandidatesInner() {
               </span>
             ),
           },
-          { key: "source", label: "Source", mobile: false, filterable: true, filterText: (r: any) => r.source ?? "Entered in ERP", render: (r: any) => <SourceCell source={r.source} /> },
+          ...(role === "Enrollment" ? [] : [
+            { key: "source", label: "Source", mobile: false, filterable: true, filterText: (r: any) => r.source ?? "Entered in ERP", render: (r: any) => <SourceCell source={r.source} /> },
+          ]),
         ]} empty="No candidates — add or import." />
 
       <Drawer open={drawer === "add" || drawer === "edit"} onClose={() => { setDrawer(""); setEditId(""); }}

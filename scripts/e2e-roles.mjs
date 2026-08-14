@@ -560,6 +560,24 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   await req(admin, "PUT", "/api/approvals", { action: "location.edit", enabled: false });
 }
 
+// ---- R-H (CEO [03:02-03:14]): programme master carries QP hours + Admin-only money ----
+{
+  const prog = (await req(admin, "GET", "/api/programs?limit=1")).data.items?.[0];
+  if (prog) {
+    await req(admin, "PATCH", `/api/programs/${prog._id}`, { hours: 120, contract_amount: 9999 });
+    const asAdmin = (await req(admin, "GET", `/api/programs/${prog._id}`)).data.item;
+    ok("R-H: Admin sees the QP hours and the amount", asAdmin?.hours === 120 && asAdmin?.contract_amount === 9999,
+      JSON.stringify({ h: asAdmin?.hours, a: asAdmin?.contract_amount }));
+    const asSpoc = (await req(spoc, "GET", `/api/programs/${prog._id}`)).data.item;
+    ok("R-H: the amount is MASKED for every non-Admin reader",
+      !!asSpoc && asSpoc.contract_amount === undefined && asSpoc.hours === 120, JSON.stringify({ a: asSpoc?.contract_amount }));
+    const listSpoc = (await req(spoc, "GET", "/api/programs?limit=5")).data.items ?? [];
+    ok("R-H: the list masks it too", listSpoc.every((p) => p.contract_amount === undefined));
+  } else {
+    ok("R-H skipped — no programme (run seed:sample)", true);
+  }
+}
+
 // unauthenticated → 401
 const anon = await fetch(BASE + "/api/locations");
 ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}`);

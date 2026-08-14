@@ -93,12 +93,30 @@ function Programs({ setError }: any) {
             <Field label="Name" required><input className={inputCls} value={form.name ?? ""} onChange={(e) => set("name", e.target.value)} /></Field>
           </div>
           <Field label="Trainer skill (matched to Trainer.skills)" required><input className={inputCls} value={form.trainer_skill ?? ""} onChange={(e) => set("trainer_skill", e.target.value)} /></Field>
+          {/* R-H (CEO [02:56-03:14]): the scheme/job-role master carries its own basic data —
+              scheme, QP training hours (drives the assessment-qualification threshold), and
+              the amount we receive, which the API shows to Admin alone. */}
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Scheme">
+              <select className={inputCls} value={form.scheme ?? ""} onChange={(e) => set("scheme", e.target.value || undefined)}>
+                <option value="">—</option>
+                {["RPL-AVPL", "RPL-HSL", "PMKVY-BECIL", "DDU-GKY2.0", "DDUGKY 2.0 SPH"].map((s) => <option key={s}>{s}</option>)}
+              </select>
+            </Field>
+            <Field label="QP training hours">
+              <input type="number" className={inputCls} value={form.hours ?? ""} onChange={(e) => set("hours", e.target.value === "" ? undefined : +e.target.value)} />
+              <span className="mt-0.5 block text-[11px] text-gray-400">Drives "qualified for assessments" (min-attendance % × these hours). Blank = duration × 8.</span>
+            </Field>
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Duration days"><input type="number" className={inputCls} value={form.duration_days ?? ""} onChange={(e) => set("duration_days", +e.target.value)} /></Field>
             <Field label="Buffer days"><input type="number" className={inputCls} value={form.buffer_days ?? ""} onChange={(e) => set("buffer_days", +e.target.value)} /></Field>
             <Field label="Default batch size"><input type="number" className={inputCls} value={form.default_batch_size ?? ""} onChange={(e) => set("default_batch_size", +e.target.value)} /></Field>
             <Field label="Completion deadline days"><input type="number" className={inputCls} value={form.completion_deadline_days ?? ""} onChange={(e) => set("completion_deadline_days", +e.target.value)} /></Field>
           </div>
+          <Field label="Amount we receive (₹ — Admin-only, masked for every other login)">
+            <input type="number" className={inputCls} value={form.contract_amount ?? ""} onChange={(e) => set("contract_amount", e.target.value === "" ? undefined : +e.target.value)} />
+          </Field>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!form.requires_lab} onChange={(e) => set("requires_lab", e.target.checked)} /> Requires Lab</label>
           {/* 2026-08-12 (Manish): experience certificates are mandatory PER JOB ROLE to qualify
               for TVP. Aadhaar/PAN/Photo/CV/Educational Qualification always apply; ticks here add

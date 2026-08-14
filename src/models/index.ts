@@ -109,6 +109,10 @@ const ProgramSchema = new Schema({
   qp_code: String,        // NSDC Qualification Pack, e.g. "ELE/Q4602"
   nsqf_level: Number,
   sector: String,
+  // R-H (CEO 14/08 [03:14]): "we can also capture, which should be visible only to our
+  // admin, the amount that we are getting" — per centre-scheme-role money; masked for every
+  // non-Admin reader at the API.
+  contract_amount: Number,
   // "पहले हमें ABPL, HSL दूसरे priority पे है, तीसरे पे ये है" — lower number = worked first.
   scheme_priority: { type: Number, default: 99 },
   // 2026-08-12 (Manish): "industry experience aur teaching experience required hai — mendetary
