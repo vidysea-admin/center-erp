@@ -3,6 +3,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { api, fmtDate, toInputDate } from "@/lib/client";
+import { BASE_PATH } from "@/lib/base-path";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthChip, SourceCell, Tabs, inputCls, useCopied } from "@/components/ui";
 import { useLocationCtx } from "@/components/shell";
 
@@ -33,6 +34,21 @@ function BatchesInner() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [drawer, setDrawer] = useState(false);
+  // QA-028 second half: batch bulk import — upload → map → preview → confirm.
+  const [imp, setImp] = useState<any>(null);
+  async function batchImport(previewOnly: boolean) {
+    const fd = new FormData();
+    fd.append("file", imp.file);
+    fd.append("mapping", JSON.stringify(imp.mapping ?? {}));
+    if (!previewOnly) fd.append("confirm", "1");
+    try {
+      const res = await fetch(`${BASE_PATH}/api/batches/import`, { method: "POST", body: fd });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.error ?? "Import failed");
+      if (previewOnly) setImp({ ...imp, result: d });
+      else { setImp(null); setInfo(`Imported ${d.created?.length ?? 0} batch(es)${d.refused?.length ? ` — ${d.refused.length} refused` : ""}${d.skipped_count ? ` — ${d.skipped_count} rows skipped` : ""}`); load(); }
+    } catch (e: any) { setError(e.message); }
+  }
   const [form, setForm] = useState<any>({ session: "Full Day" });
   const [trainerReq, setTrainerReq] = useState(""); // F-A2: "" | "busy" | "done"
   useEffect(() => { setTrainerReq(""); }, [form.location, form.program]); // a different centre/role = a different request
@@ -130,6 +146,7 @@ function BatchesInner() {
             <option value="">All locations</option>
             {locations.map((l) => <option key={l._id} value={l._id}>{l.name}</option>)}
           </select>
+          <Btn kind="ghost" onClick={() => setImp({})}>Import (Excel)</Btn>
           <Btn kind="ghost" onClick={() => setPlanner({ open: true })}>Plan a batch</Btn>
           <Btn onClick={() => setDrawer(true)}>New Batch</Btn>
         </div>
@@ -396,6 +413,83 @@ function BatchesInner() {
             </>
           )}
         </div>
+      </Drawer>
+
+      {/* QA-028: batch bulk import — same contract as the candidate/trainer importers. */}
+      <Drawer open={!!imp} onClose={() => setImp(null)} title="Import batches (Excel)" wide>
+        {imp && (
+          <div className="space-y-3">
+            <a href={`${BASE_PATH}/templates/batches-sample.csv`} download className="inline-block text-sm font-medium text-blue-700 hover:underline">⬇ Download sample sheet format</a>
+            <input type="file" accept=".xlsx,.xls,.csv" onChange={async (e) => {
+              const file = e.target.files?.[0]; e.target.value = "";
+              if (!file) return;
+              const fd = new FormData(); fd.append("file", file);
+              try {
+                const res = await fetch(`${BASE_PATH}/api/batches/import`, { method: "POST", body: fd });
+                const d = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(d.error ?? "Could not read the file");
+                setImp({ file, columns: d.columns, mapping: Object.fromEntries(d.columns.map((c: string) => {
+                  const k = c.toLowerCase();
+                  if (/centre|center|institution|location/.test(k)) return [c, "location"];
+                  if (/job role|program|course/.test(k)) return [c, "program"];
+                  if (/start/.test(k)) return [c, "planned_start"];
+                  if (/target|size|capacity/.test(k)) return [c, "target_size"];
+                  if (/session/.test(k)) return [c, "session"];
+                  return [c, ""];
+                })) });
+              } catch (err: any) { setError(err.message); }
+            }} />
+            {imp.columns && (
+              <>
+                <div className="grid grid-cols-2 gap-2">
+                  {imp.columns.map((c: string) => (
+                    <Field key={c} label={c}>
+                      <select className={inputCls} value={imp.mapping?.[c] ?? ""} onChange={(e) => setImp({ ...imp, mapping: { ...imp.mapping, [c]: e.target.value } })}>
+                        <option value="">(ignore)</option>
+                        {["location", "program", "planned_start", "target_size", "session"].map((f) => <option key={f} value={f}>{f}</option>)}
+                      </select>
+                    </Field>
+                  ))}
+                </div>
+                <Btn kind="ghost" onClick={() => batchImport(true)}>Preview</Btn>
+              </>
+            )}
+            {imp.result && (
+              <div className="space-y-2 text-sm">
+                <p><b>{imp.result.valid}</b> importable · {imp.result.skipped_count} rows skipped</p>
+                {(imp.result.location_unmatched?.length ?? 0) > 0 && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+                    Unknown centres (left out, fix the sheet or the Location Master): {imp.result.location_unmatched.join(" · ")}
+                  </div>
+                )}
+                {(imp.result.program_unmatched?.length ?? 0) > 0 && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+                    Unknown job roles: {imp.result.program_unmatched.join(" · ")}
+                  </div>
+                )}
+                {(imp.result.skipped?.length ?? 0) > 0 && (
+                  <ul className="max-h-32 space-y-0.5 overflow-y-auto text-xs text-gray-500">
+                    {imp.result.skipped.map((s: string, i: number) => <li key={i}>• {s}</li>)}
+                  </ul>
+                )}
+                <div className="max-h-48 overflow-y-auto rounded-lg border border-gray-200">
+                  <table className="w-full text-xs">
+                    <thead className="bg-gray-50 text-left text-gray-500"><tr><th className="p-2">Centre</th><th className="p-2">Job role</th><th className="p-2">Start</th><th className="p-2">Size</th><th className="p-2">Session</th></tr></thead>
+                    <tbody>
+                      {imp.result.preview?.map((r: any, i: number) => (
+                        <tr key={i} className="border-t border-gray-100">
+                          <td className="p-2">{r.location}</td><td className="p-2">{r.program}</td>
+                          <td className="p-2">{fmtDate(r.planned_start)}</td><td className="p-2">{r.target_size}</td><td className="p-2">{r.session}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <Btn onClick={() => batchImport(false)} disabled={!imp.result.valid}>Import {imp.result.valid} batch(es)</Btn>
+              </div>
+            )}
+          </div>
+        )}
       </Drawer>
     </div>
   );

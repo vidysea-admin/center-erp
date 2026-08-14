@@ -320,5 +320,34 @@ console.log("\n--- FL9: trainer import — stages by display name, nominations b
   ok("FL9: the centre name resolved to a real nomination", (trA?.nominated_for_location?.name ?? "") === loc.name, JSON.stringify(trA?.nominated_for_location));
 }
 
+console.log("\n--- FL10: batch import (QA-028) — centres/roles by name, unknowns reported, codes minted ---");
+{
+  const rows = [
+    { "Centre": loc.name, "Job Role": prog.name, "Start": "2027-04-01", "Size": "24", "Session": "Full Day" },
+    { "Centre": "No Such Centre", "Job Role": prog.name, "Start": "2027-04-01", "Size": "", "Session": "" },
+    { "Centre": loc.name, "Job Role": "No Such Role", "Start": "2027-04-01", "Size": "", "Session": "" },
+    { "Centre": loc.name, "Job Role": prog.name, "Start": "not-a-date", "Size": "", "Session": "" },
+  ];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "S1");
+  const file = new File([XLSX.write(wb, { type: "buffer", bookType: "xlsx" })], "batches-probe.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+
+  const step1 = await multipart(admin, "/api/batches/import", { file }, 200);
+  ok("FL10: step 1 returns the columns", (step1.data.columns ?? []).includes("Centre"), JSON.stringify(step1.data.columns));
+  const mapping = JSON.stringify({ "Centre": "location", "Job Role": "program", "Start": "planned_start", "Size": "target_size", "Session": "session" });
+  const prev = await multipart(admin, "/api/batches/import", { file, mapping }, 200);
+  ok("FL10: exactly one row is importable, three are reported by reason",
+    prev.data.valid === 1 && prev.data.skipped_count === 3, JSON.stringify({ v: prev.data.valid, s: prev.data.skipped_count }));
+  ok("FL10: the unknown centre and role are named", (prev.data.location_unmatched ?? []).includes("No Such Centre") && (prev.data.program_unmatched ?? []).includes("No Such Role"), JSON.stringify([prev.data.location_unmatched, prev.data.program_unmatched]));
+  const conf = await multipart(admin, "/api/batches/import", { file, mapping, confirm: "1" }, 201);
+  ok("FL10: confirm creates exactly the one valid batch with a minted code", (conf.data.created ?? []).length === 1 && /^B\d+/.test(conf.data.created[0] ?? "") || (conf.data.created ?? []).length === 1, JSON.stringify(conf.data));
+  const listed = ((await req(admin, "GET", "/api/batches?limit=2000", undefined, 200)).data.items ?? []).find((b) => b.code === conf.data.created[0]);
+  ok("FL10: the imported batch carries creator + file provenance",
+    !!listed && listed.created_by?.name && /^Import: batches-probe\.xlsx$/.test(listed.source ?? ""), JSON.stringify({ code: listed?.code, by: listed?.created_by?.name, src: listed?.source }));
+  ok("FL10: backward-plan milestones were stored on the imported batch", ((await req(admin, "GET", `/api/batches/${listed?._id}`)).data.item?.milestones ?? []).length > 0);
+  // cleanup so room/trainer fixtures elsewhere stay unaffected
+  await req(admin, "POST", `/api/batches/${listed?._id}/transition`, { target: "Cancelled", reason: "FL10 fixture cleanup" }, 200);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

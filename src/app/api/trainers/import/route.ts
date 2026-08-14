@@ -155,6 +155,10 @@ export const POST = apiHandler(async (req: NextRequest) => {
     return NextResponse.json({ preview: importable.slice(0, 10), ...report });
   }
   const docs = await Trainer.insertMany(importable);
-  await audit({ entity: "Trainer", entityId: docs[0]?._id ?? "import", field: "import", newValue: `${docs.length} imported, ${duplicates.length} duplicate flags`, actor: user.id });
+  // Same 0-import bug FL10 caught on the batch importer: with every row skipped there is no
+  // ObjectId to anchor the audit on, and "import" as an id 400'd the WHOLE response.
+  if (docs[0]?._id) {
+    await audit({ entity: "Trainer", entityId: docs[0]._id, field: "import", newValue: `${docs.length} imported, ${duplicates.length} duplicate flags`, actor: user.id });
+  }
   return NextResponse.json({ imported: docs.length, ...report }, { status: 201 });
 });

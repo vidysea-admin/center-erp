@@ -45,7 +45,9 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "locations.manage", "trainers.manage", "candidates.manage", "candidates.assign",
     "closure.manage", "feedback.links",
   ],
-  Enrollment: ["candidates.manage", "candidates.assign", "batches.daily_log"],
+  // QA-036 (checker, vs the role table): Enrollment's brief is candidate registration and
+  // the enrollment worklist — daily attendance is the SPOC/Trainer's job, removed 14/08.
+  Enrollment: ["candidates.manage", "candidates.assign"],
   Trainer: ["batches.daily_log"],
 };
 

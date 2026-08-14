@@ -155,8 +155,13 @@ authenticated read-only smoke (curl, never Playwright against Umesh's own Chrome
 5. One NON-admin role login (principal/trainer) — scoped list + one gate that must 403.
 6. Eyeball the release's OWN feature via its API surface (whatever the PR shipped).
 
-Record the result in qa/STATE.md with the release number. A UI click-through happens
-with Umesh's go-ahead (Playwright drives his browser) or by Umesh himself.
+Record the result in qa/STATE.md with the release number.
+
+UI click-throughs (QA-010 update, 2026-08-14): the independent CHECKER session runs its
+own browser and screenshots every release from its deploy-watch — visual verification is
+its lane. The maker verifies via the API surface above. The old blanket warning
+("Playwright drives Umesh's own Chrome") applied to THIS maker session's MCP browser
+only; it must not block the checker's own tooling.
 
 See `d:\erp\qa\STATE.md` for the full remediation ledger (every fix, where, and its test) and
 `d:\erp\qa\CHANGELOG.jsonl` for the machine-readable one-row-per-fix log.
