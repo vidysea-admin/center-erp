@@ -691,6 +691,9 @@ export const APPROVAL_ACTIONS = [
   // R-E (CEO 14/08 [25:20]): Operations posts an expense/revenue entry; it lands with the
   // Admin, and only an approval writes the ledger row.
   "cost.post",
+  // R-F (CEO 14/08 [37:23]): a SPOC's centre-detail change is "sent for the approval to
+  // the admin before we kind of change it".
+  "location.edit",
 ] as const;
 export const APPROVAL_REQUEST_STATUS = ["Pending", "Approved", "Rejected", "Cancelled"] as const;
 

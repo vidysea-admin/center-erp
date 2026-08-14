@@ -5,6 +5,7 @@ import { requirePerm } from "@/lib/permissions";
 import { Batch, BatchMember, Closure, LocationTarget, Program } from "@/models";
 import { capacitySummary, trainerCountsFor } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
+import { requireApproval } from "@/lib/approvals";
 import { audit } from "@/lib/audit";
 
 // GET: targets for a location with capacity math (§5)
@@ -89,6 +90,17 @@ export const PUT = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
     // 2026-08-13 (Karunn): the sheet's claimed trainer counts — soft data kept beside ours.
     "nominations_received_reported", "nominated_nsdc_reported", "trainers_certified_reported"]) {
     if (body[f] !== undefined) set[f] = body[f];
+  }
+  // R-F (CEO 14/08 [36:55]): "a location is now approved for a certain program — they
+  // should be able to do that … let us send it for the approval to the admin." A centre
+  // login's target change parks; the row is written by the approval replay.
+  if (user.role === "Location") {
+    const gate = await requireApproval("location.edit", user, {
+      entity: "Location", entity_id: id, location: id,
+      summary: `${user.name} suggests a target change (${program.name}): ${Object.keys(set).join(", ")}`,
+      payload: { target: { program: body.program, set } },
+    });
+    if (gate) return NextResponse.json({ queued: true, item: gate.request }, { status: 202 });
   }
   const doc = await LocationTarget.findOneAndUpdate(
     { location: id, program: body.program },

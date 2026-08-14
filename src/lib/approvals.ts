@@ -9,7 +9,7 @@ import { audit } from "@/lib/audit";
 export type ApprovalAction =
   | "location.close" | "location.stop" | "batch.cancel"
   | "invoice.raise" | "invoice.paid" | "batch.complete"
-  | "cost.post";
+  | "cost.post" | "location.edit";
 
 export type ApprovalOutcome = { request: any } | null;
 

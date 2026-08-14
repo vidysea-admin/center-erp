@@ -532,6 +532,34 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   }
 }
 
+// ---- R-F (CEO 14/08 [36:44-37:28]): SPOC centre-detail edits go through Admin approval ----
+{
+  const rfStamp = Date.now().toString().slice(-6);
+  await req(admin, "PUT", "/api/approvals", { action: "location.edit", enabled: true, approver_role: "Admin" });
+  const fx = await req(spoc, "PATCH", `/api/locations/${jpr._id}`, { name: "Renamed by SPOC " + rfStamp });
+  ok("R-F: a fixed field is refused for a centre login (403 naming it)",
+    fx.status === 403 && /cannot change/.test(fx.data?.error ?? ""), `got ${fx.status} ${fx.data?.error ?? ""}`);
+  const newAddr = "New Wing " + rfStamp;
+  const sug = await req(spoc, "PATCH", `/api/locations/${jpr._id}`, { address: newAddr });
+  ok("R-F: a detail change parks for approval (202)",
+    sug.status === 202 && /Sent for approval/.test(sug.data?.error ?? ""), `got ${sug.status} ${JSON.stringify(sug.data).slice(0, 100)}`);
+  const parkedLoc = (await req(admin, "GET", `/api/locations/${jpr._id}`)).data.item;
+  ok("R-F: nothing applied while parked", parkedLoc.address !== newAddr, parkedLoc.address);
+  const pend = ((await req(admin, "GET", "/api/approvals?status=Pending")).data.items ?? []).find((i) => i.action === "location.edit");
+  ok("R-F: the suggestion sits in the Admin queue", !!pend, JSON.stringify(pend?.summary));
+  if (pend) {
+    await req(admin, "POST", `/api/approvals/${pend._id}`, { decision: "Approved" });
+    const appliedLoc = (await req(admin, "GET", `/api/locations/${jpr._id}`)).data.item;
+    ok("R-F: approval applies the change", appliedLoc.address === newAddr, appliedLoc.address);
+  }
+  const progList = (await req(admin, "GET", "/api/programs?limit=1")).data.items;
+  if (progList?.[0]) {
+    const tgt = await req(spoc, "PUT", `/api/locations/${jpr._id}/targets`, { program: progList[0]._id, approved_target: 111 });
+    ok("R-F: a SPOC target change parks too (202, queued)", tgt.status === 202 && tgt.data.queued === true, `got ${tgt.status}`);
+  }
+  await req(admin, "PUT", "/api/approvals", { action: "location.edit", enabled: false });
+}
+
 // unauthenticated → 401
 const anon = await fetch(BASE + "/api/locations");
 ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}`);

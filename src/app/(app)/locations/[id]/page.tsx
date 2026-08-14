@@ -53,7 +53,9 @@ function Overview({ loc, onSaved, setError }: any) {
         "district", "tc_id", "tc_status", "tc_password", "operating_partner", "cluster_head_name", "cluster_head_phone"]) {
         if (form[f] !== loc[f]) patch[f] = form[f];
       }
-      await api(`/api/locations/${loc._id}`, { method: "PATCH", json: patch });
+      const res = await api(`/api/locations/${loc._id}`, { method: "PATCH", json: patch });
+      // R-F: a centre login's edit parks for Admin approval — the 202 carries the message.
+      if (res?.error) setError(res.error);
       onSaved();
     } catch (e: any) { setError(e.message); }
   }
@@ -208,7 +210,9 @@ function Targets({ locationId, setError }: any) {
 
   async function save() {
     try {
-      await api(`/api/locations/${locationId}/targets`, { method: "PUT", json: form });
+      const res = await api(`/api/locations/${locationId}/targets`, { method: "PUT", json: form });
+      // R-F: a centre login's target change parks for Admin approval (202, queued).
+      if (res?.queued) setError(`Sent to the Admin for approval — the target updates once approved.`);
       setForm({}); load();
     } catch (e: any) { setError(e.message); }
   }

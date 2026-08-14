@@ -4,7 +4,7 @@ import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { decideApproval } from "@/lib/approvals";
 import { assertCostEntryValid, transitionBatch, updateInvoiceChecked } from "@/lib/rules";
-import { CostEntry, Location } from "@/models";
+import { CostEntry, Location, LocationTarget } from "@/models";
 import { audit } from "@/lib/audit";
 
 // POST { decision: "Approved" | "Rejected", note? }
@@ -41,6 +41,24 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     case "invoice.paid":
       await updateInvoiceChecked(String(request.entity_id), p);
       break;
+    case "location.edit": {
+      // R-F: apply the SPOC's parked suggestion. The fixed ten are stripped again here —
+      // the park-side check is the UX, this is the guarantee.
+      const FIXED = ["code", "external_id", "name", "city", "state", "tc_id", "tc_password", "tc_status", "approval_status", "operational_status"];
+      if (p.patch) {
+        const patch = { ...p.patch };
+        for (const f of FIXED) delete patch[f];
+        if (Object.keys(patch).length) await Location.findByIdAndUpdate(request.entity_id, patch);
+      }
+      if (p.target?.program) {
+        await LocationTarget.findOneAndUpdate(
+          { location: request.entity_id, program: p.target.program },
+          { $set: p.target.set ?? {} },
+          { upsert: true, new: true },
+        );
+      }
+      break;
+    }
     case "cost.post": {
       // R-E: the ledger row is written only here — approval IS the write. It belongs to the
       // person who posted it (entered_by = initiator), with the approval trail alongside.
