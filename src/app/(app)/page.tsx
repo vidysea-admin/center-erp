@@ -65,15 +65,24 @@ export default function HomePage() {
           sub={`${data.kpis.completed_batches ?? 0} completed`} />
         <KPI label="Completed Batches" value={data.kpis.completed_batches ?? 0} tone="green" icon={<IconCap size={19} />} href="/batches?status=Completed"
           sub={`${data.kpis.active_batches} ongoing`} />
+        {/* QA-012: with zero logs the card used to read "0 of 0" — expected-so-far now rides
+            along, so an empty log book says so instead of looking broken. */}
         <KPI label="Total Attendance" tone="blue" icon={<IconUsers size={19} />} href="/govt-attendance"
           value={data.kpis.attendance?.pct != null ? `${data.kpis.attendance.pct}%` : "—"}
-          sub={data.kpis.attendance?.today_roster
-            ? `today ${data.kpis.attendance.today_present}/${data.kpis.attendance.today_roster} · ${data.kpis.attendance.present} of ${data.kpis.attendance.roster} student-days`
-            : `${data.kpis.attendance?.present ?? 0} of ${data.kpis.attendance?.roster ?? 0} student-days`} />
+          sub={data.kpis.attendance?.roster
+            ? `${data.kpis.attendance.today_roster ? `today ${data.kpis.attendance.today_present}/${data.kpis.attendance.today_roster} · ` : ""}${data.kpis.attendance.present} of ${data.kpis.attendance.roster} logged student-days`
+            : data.kpis.attendance?.expected_so_far
+              ? `no daily logs yet — ${data.kpis.attendance.expected_so_far} student-days expected so far`
+              : "no active batches logging yet"} />
 
+        {/* QA-002: this total and the Open Positions board count different universes —
+            both numbers travel together so the difference is explained, not hidden. */}
         {!isPrincipal && (
           <KPI label="Active Trainers" value={data.kpis.trainers_active_total ?? 0} tone="amber" icon={<IconUser size={19} />} href="/trainers?tag=Ready%20to%20Train"
-            sub={(data.kpis.trainers_by_role ?? []).slice(0, 3).map((r: any) => `${r.code ?? r.program} ${r.count}`).join(" · ") || "none certified yet"} />
+            sub={[
+              (data.kpis.trainers_by_role ?? []).slice(0, 3).map((r: any) => `${r.code ?? r.program} ${r.count}`).join(" · ") || "none certified yet",
+              data.kpis.trainers_on_approved_positions != null ? `${data.kpis.trainers_on_approved_positions} on approved positions` : null,
+            ].filter(Boolean).join(" · ")} />
         )}
         {/* 2026-08-14 (Umesh: "31 vs 13 — blunder?"): both countings, both NAMED — the
             headline is job-role ROWS (the sheet's 31), the sub says centres explicitly. */}

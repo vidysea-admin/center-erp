@@ -3,13 +3,13 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-27";
+export const RELEASE = "2026.08.14-28";
 export const RELEASE_NOTE =
-  "The money chain after Completed is visible (QA-048): every Completed/Closed " +
-  "batch shows where it stands - awaiting certification / invoice to raise / " +
-  "payment pending / dues to settle / ready to close - derived from the same " +
-  "Closure+Invoice facts Rule 52 enforces. 'Close Batch' disables itself and " +
-  "names what is still needed instead of bouncing (QA-004). A Completed batch " +
-  "with zero students is Amber, never Green, and an Active one names 'no " +
-  "students on the roster' as the reason (QA-003). The main Batches list " +
-  "announces how many positions Preparation is holding back (QA-030).";
+  "Home KPIs stop misreading (checker round): a scoped user's Active Trainers " +
+  "KPI now scopes the same way the trainers list does - nominated OR capable OR " +
+  "home centre (QA-011); Total Attendance carries expected-so-far, so an empty " +
+  "log book says 'no daily logs yet - N student-days expected' instead of '0 of " +
+  "0' (QA-012); the certified total travels with 'N on approved positions' so " +
+  "Home and the Open Positions board reconcile by construction (QA-002). " +
+  "(-14-27 in the same train: visible money chain, honest Close button, " +
+  "no-Green empty batches, Preparation banner.)";

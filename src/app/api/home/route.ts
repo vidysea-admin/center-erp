@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, locationFilter, isScoped } from "@/lib/authz";
 import { Batch, BatchMember, Candidate, DailyLog, FollowUpAction, Invoice, Location, LocationTarget, Program, SheetChange, Trainer, TrainerRequest, User } from "@/models";
-import { missingLogQueue } from "@/lib/rules";
+import { addDays, dayStart, missingLogQueue } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 
 // Home Action Center: the three real conditions by name (§5) + operational queues.
@@ -51,8 +51,18 @@ export const GET = apiHandler(async () => {
 
   // "Total Active Trainers — job role wise": certified trainers grouped by the job role they
   // are nominated for (the same key readiness counts on).
+  // QA-011 (checker): the KPI scoped on nominated_for_location ONLY, but the trainers LIST
+  // scopes on nominated OR capable OR home — so a certified trainer visible in a scoped
+  // user's own list read as 0 on their KPI. Same $or on both surfaces now.
+  const trainerScope = isScoped(user)
+    ? { $or: [
+        { nominated_for_location: { $in: (user.location_scope ?? []) } },
+        { capable_locations: { $in: (user.location_scope ?? []) } },
+        { home_location: { $in: (user.location_scope ?? []) } },
+      ] }
+    : {};
   const trainerRoleRows = await Trainer.aggregate([
-    { $match: { active: true, pipeline_status: "Certified", ...(isScoped(user) ? { nominated_for_location: { $in: (user.location_scope ?? []) } } : {}) } },
+    { $match: { active: true, pipeline_status: "Certified", ...trainerScope } },
     { $group: { _id: "$nominated_for_program", count: { $sum: 1 } } },
   ]);
   const roleProgs = await Program.find({ _id: { $in: trainerRoleRows.map((r) => r._id).filter(Boolean) } }).select("name code scheme").lean<any[]>();
@@ -60,6 +70,19 @@ export const GET = apiHandler(async () => {
   const trainersByRole = trainerRoleRows
     .map((r) => ({ program: r._id ? (progById.get(String(r._id))?.name ?? "?") : "No role assigned", code: r._id ? progById.get(String(r._id))?.code ?? null : null, scheme: r._id ? progById.get(String(r._id))?.scheme ?? null : null, count: r.count }))
     .sort((a, b) => b.count - a.count);
+  // QA-002 (checker): the Home certified total and the Open Positions board disagreed —
+  // the board only counts certified trainers sitting on an APPROVED centre×job-role pair.
+  // Both numbers now travel together so the difference is explained, not hidden.
+  const apprTargets = await LocationTarget.find({ tc_status: "Approved", ...locationFilter(user) })
+    .select("location program").populate("location", "approval_status").lean<any[]>();
+  const apprPairs = new Set(apprTargets
+    .filter((t) => t.location?.approval_status === "Approved" && t.program)
+    .map((t) => `${String(t.location._id)}|${String(t.program)}`));
+  const certRows = await Trainer.find({ active: true, pipeline_status: "Certified", ...trainerScope })
+    .select("nominated_for_location nominated_for_program").lean<any[]>();
+  const trainersOnApprovedPositions = certRows.filter((t) =>
+    t.nominated_for_location && t.nominated_for_program &&
+    apprPairs.has(`${String(t.nominated_for_location)}|${String(t.nominated_for_program)}`)).length;
 
   // "Total Attendance" — one aggregate over the daily logs (man-days), plus today's row.
   // internal_present/roster_count are both required at save (Rule 28), so the sums are honest.
@@ -74,10 +97,31 @@ export const GET = apiHandler(async () => {
       today_roster: { $sum: { $cond: [{ $and: [{ $gte: ["$log_date", todayStart] }, { $lte: ["$log_date", todayEnd] }] }, "$roster_count", 0] } },
     } },
   ]);
+  // QA-012 (checker): "0 of 0 student-days" while the batch page computed 390 expected —
+  // the card showed only LOGGED man-days, and with zero logs entered it read as broken.
+  // Expected-so-far (roster × operating days elapsed, Active batches) rides along so the
+  // card can say "0 logged of 390 expected — no daily logs entered yet" honestly.
+  const activeForExp = await Batch.find({ status: "Active", ...scope })
+    .populate("program", "operating_days").select("actual_start program").lean<any[]>();
+  const expRoster = activeForExp.length ? await BatchMember.aggregate([
+    { $match: { batch: { $in: activeForExp.map((b) => b._id) }, left_on: null } },
+    { $group: { _id: "$batch", n: { $sum: 1 } } },
+  ]) : [];
+  const expRosterMap = new Map(expRoster.map((r) => [String(r._id), r.n]));
+  let expectedDays = 0;
+  const todayD = dayStart(new Date());
+  for (const b of activeForExp) {
+    if (!b.actual_start) continue;
+    const operating: number[] = b.program?.operating_days?.length ? b.program.operating_days : [1, 2, 3, 4, 5, 6];
+    let d = dayStart(b.actual_start); let days = 0; let guard = 0;
+    while (d <= todayD && guard++ < 366) { if (operating.includes(d.getDay())) days++; d = addDays(d, 1); }
+    expectedDays += days * (expRosterMap.get(String(b._id)) ?? 0);
+  }
   const attendance = {
     present: attAll?.present ?? 0, roster: attAll?.roster ?? 0,
     pct: attAll?.roster ? Math.round((100 * attAll.present) / attAll.roster) : null,
     today_present: attAll?.today_present ?? 0, today_roster: attAll?.today_roster ?? 0,
+    expected_so_far: expectedDays,
   };
 
   // Queue 1: missing daily logs (Rule 33)
@@ -149,6 +193,7 @@ export const GET = apiHandler(async () => {
       pending_followups: followUps.length,
       trainers_by_role: trainersByRole,
       trainers_active_total: trainersByRole.reduce((s, r) => s + r.count, 0),
+      trainers_on_approved_positions: trainersOnApprovedPositions,
       attendance,
     },
     queues: {
