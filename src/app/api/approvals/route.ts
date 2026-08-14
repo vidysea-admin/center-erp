@@ -10,6 +10,15 @@ import { audit } from "@/lib/audit";
 export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
+  // R-E: ?mine=1 — the initiator's own submissions only (CEO: once approved "it should go
+  // from their queue and then they're done"; a rejection shows its note so they can fix and
+  // repost). No approvals.decide needed: these are the caller's own requests, nobody else's.
+  if (req.nextUrl.searchParams.get("mine") === "1") {
+    const mineItems = await ApprovalRequest.find({ initiator: user.id })
+      .sort({ createdAt: -1 }).limit(100)
+      .populate("decided_by", "name").populate("location", "name code").lean();
+    return NextResponse.json({ items: mineItems });
+  }
   // 2026-08-12 audit (auth S3-5): requireUser() alone. Each request carries the replay
   // `payload` — closure reasons, invoice amounts — so any signed-in user could read what the
   // business was about to do and why. Deciding an approval is already gated; seeing the queue

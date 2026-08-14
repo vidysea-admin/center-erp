@@ -15,7 +15,9 @@ const NAV = [
   { href: "/", label: "Home", Icon: IconHome },
   // 2026-08-14 (Umesh): one sheet = one nav entry. Sheet Watch hosts the Sync Inbox as a
   // tab; both routes stay alive for deep links. Badge = open items across both engines.
-  { href: "/sheet-watch", label: "Sheet Sync", Icon: IconSync, badge: "sheets" as string | undefined, roles: ["Admin", "Operations"] },
+  // CEO 14/08 [17:26] (as the ops persona): "we should remove sheet sync, all of these
+  // things" — the sheet machinery is the Admin's concern; everyone else just sees its output.
+  { href: "/sheet-watch", label: "Sheet Sync", Icon: IconSync, badge: "sheets" as string | undefined, roles: ["Admin"] },
   { href: "/locations", label: "Locations", Icon: IconPin },
   { href: "/trainers", label: "Trainers", Icon: IconUser },
   // Karunn 13/08 [25:28]: "Open Positions kahan-kahan hain — side me chahiye" — the

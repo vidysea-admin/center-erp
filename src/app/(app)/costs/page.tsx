@@ -1,13 +1,21 @@
 "use client";
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { useSession } from "next-auth/react";
 import { api, fmtDate, toInputDate } from "@/lib/client";
 import { Btn, Chip, DataTable, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
 
 function CostsInner() {
   const sp = useSearchParams();
+  // R-E (CEO 14/08): Operations is POST-only on money — they submit an entry, it goes to
+  // the Admin's approval queue, and once decided it leaves their view. They never see the
+  // ledger ("they shouldn't be able to see what has been posted").
+  const { data: session, status } = useSession();
+  const role = (session?.user as any)?.role;
+  const postOnly = role === "Operations";
   const [tab, setTab] = useState(sp.get("tab") === "Invoices" ? "Invoices" : "Costs");
   const [costs, setCosts] = useState<any[]>([]);
+  const [mine, setMine] = useState<any[]>([]);
   const [invoices, setInvoices] = useState<any[]>([]);
   const [cats, setCats] = useState<any[]>([]);
   const [locations, setLocations] = useState<any[]>([]);
@@ -15,16 +23,21 @@ function CostsInner() {
   const [form, setForm] = useState<any>({ entry_date: toInputDate(new Date()) });
   const [editId, setEditId] = useState("");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(true);
 
-  const load = () => Promise.all([
-    api("/api/costs").then((d) => setCosts(d.items)),
+  const load = (asPostOnly: boolean) => Promise.all([
+    asPostOnly
+      ? api("/api/approvals?mine=1").then((d) => setMine((d.items ?? []).filter((i: any) => i.action === "cost.post")))
+      : api("/api/costs").then((d) => setCosts(d.items)),
     api("/api/invoices").then((d) => setInvoices(d.items)),
     api("/api/master-lists/cost-categories").then((d) => setCats(d.items)),
     api("/api/locations?limit=2000").then((d) => setLocations(d.items)),
     api("/api/trainers?limit=2000").then((d) => setTrainers(d.items)),
   ]).catch((e) => setError(e.message)).finally(() => setLoading(false));
-  useEffect(() => { load(); }, []);
+  // Wait for the session — the first paint doesn't know the role yet, and firing the
+  // ledger fetch for an Operations user would just banner their own 403 at them.
+  useEffect(() => { if (status !== "loading") load(postOnly); }, [status, postOnly]);
 
   async function addCost() {
     try {
@@ -33,9 +46,10 @@ function CostsInner() {
         const json = Object.fromEntries(Object.entries(form).filter(([, v]) => v !== "" && v !== undefined));
         await api(`/api/costs/${editId}`, { method: "PATCH", json });
       } else {
-        await api("/api/costs", { method: "POST", json: { ...form, location: form.location || undefined, trainer: form.trainer || undefined } });
+        const res = await api("/api/costs", { method: "POST", json: { ...form, location: form.location || undefined, trainer: form.trainer || undefined } });
+        if (res.queued) setNotice("Sent to the Admin for approval — it will leave My submissions once decided.");
       }
-      setForm({ entry_date: toInputDate(new Date()) }); setEditId(""); load();
+      setForm({ entry_date: toInputDate(new Date()) }); setEditId(""); load(postOnly);
     } catch (e: any) { setError(e.message); }
   }
 
@@ -52,7 +66,7 @@ function CostsInner() {
 
   async function deleteCost() {
     if (!editId || !window.confirm("Delete this cost entry? The amount disappears from every total.")) return;
-    try { await api(`/api/costs/${editId}`, { method: "DELETE" }); setForm({ entry_date: toInputDate(new Date()) }); setEditId(""); load(); }
+    try { await api(`/api/costs/${editId}`, { method: "DELETE" }); setForm({ entry_date: toInputDate(new Date()) }); setEditId(""); load(postOnly); }
     catch (e: any) { setError(e.message); }
   }
 
@@ -62,10 +76,16 @@ function CostsInner() {
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">Costs & Invoices</h1>
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
+      {notice && (
+        <div className="flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-800">
+          <span>{notice}</span>
+          <button className="text-xs underline" onClick={() => setNotice("")}>dismiss</button>
+        </div>
+      )}
       <Tabs tabs={["Costs", "Invoices"]} active={tab} onChange={setTab} />
       {tab === "Costs" ? (
         <>
-          <Section title={editId ? "Edit cost entry" : "Add cost entry"}>
+          <Section title={postOnly ? "Post an expense / cost" : editId ? "Edit cost entry" : "Add cost entry"}>
             <div className="grid gap-3 md:grid-cols-6">
               <Field label="Date"><input type="date" className={inputCls} value={form.entry_date} onChange={(e) => setForm({ ...form, entry_date: e.target.value })} /></Field>
               <Field label="Location">
@@ -94,8 +114,27 @@ function CostsInner() {
               </div>
             </div>
             {editId && <Field label="Note"><input className={inputCls + " mt-2"} value={form.note ?? ""} onChange={(e) => setForm({ ...form, note: e.target.value })} /></Field>}
-            <p className="mt-2 text-xs text-gray-500">Rule 37: at least one of location / batch / trainer. Batch-level costs are added from the batch's Costs tab.</p>
+            <p className="mt-2 text-xs text-gray-500">
+              {postOnly
+                ? "Your entry goes to the Admin for approval; the ledger is written only on approval."
+                : "Rule 37: at least one of location / batch / trainer. Batch-level costs are added from the batch's Costs tab."}
+            </p>
           </Section>
+          {postOnly ? (
+            <Section title="My submissions">
+              <DataTable rows={mine} loading={loading}
+                cardTitle={(r: any) => r.summary}
+                defaultSort={{ key: "createdAt", dir: "desc" }}
+                columns={[
+                  { key: "createdAt", label: "Submitted", sortable: true, sortValue: (r: any) => new Date(r.createdAt).getTime(), render: (r: any) => fmtDate(r.createdAt) },
+                  { key: "summary", label: "Entry" },
+                  { key: "status", label: "Status", sortable: true, render: (r: any) => <Chip value={r.status} /> },
+                  { key: "decision_note", label: "Admin's note", render: (r: any) => r.decision_note ?? "—" },
+                  { key: "decided_by", label: "Decided by", mobile: false, render: (r: any) => r.decided_by?.name ?? "—" },
+                ]} empty="Nothing submitted yet — post your first entry above." />
+              <p className="mt-2 text-xs text-gray-500">Approved entries land on the Admin's ledger; a Rejected one shows the Admin's note so you can fix and repost.</p>
+            </Section>
+          ) : (
           <Section title={`All cost entries — total ₹${total.toLocaleString("en-IN")}`}>
             <DataTable rows={costs} loading={loading}
               cardTitle={(r: any) => `₹${r.amount} · ${r.category?.name}`}
@@ -121,6 +160,7 @@ function CostsInner() {
                 },
               ]} empty="No cost entries." />
           </Section>
+          )}
         </>
       ) : (
         <Section title="Invoices">

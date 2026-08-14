@@ -3,15 +3,13 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-36";
+export const RELEASE = "2026.08.14-37";
 export const RELEASE_NOTE =
-  "R-D attendance in hours. Every batch gains an Attendance tab: day-wise " +
-  "presence per student, BOTH meters side by side (our daily logs in days; the " +
-  "government portal in days AND hours), and the green verdict the CEO asked " +
-  "for - once a student's hours cross the programme threshold (min-attendance % " +
-  "x QP hours) they are marked 'Qualified for assessments', visible in every " +
-  "login that can open the batch. Portal hours are authoritative when a matched " +
-  "import exists; until then hours are estimated from our logs x the batch " +
-  "slot, and an unmatched student shows no portal figures rather than a guess. " +
-  "One shared threshold formula now feeds this tab and the student's own " +
-  "public portal page.";
+  "R-E: Operations is post-only on money. An Operations cost entry now PARKS " +
+  "in the Admin's approval queue (202) - the ledger row is written only by the " +
+  "approval itself, owned by the person who posted it; a rejection carries the " +
+  "Admin's note so it can be fixed and reposted. The ledger, batch Costs tab " +
+  "and Sheet Sync leave the Operations view entirely (CEO: 'they shouldn't be " +
+  "able to see anything else'); their own submissions live under My " +
+  "submissions. Admin, as the configured approver, posts straight through. " +
+  "Enable per environment: approval rule cost.post (ships OFF by design).";

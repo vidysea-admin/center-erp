@@ -8,7 +8,8 @@ import { audit } from "@/lib/audit";
 
 export type ApprovalAction =
   | "location.close" | "location.stop" | "batch.cancel"
-  | "invoice.raise" | "invoice.paid" | "batch.complete";
+  | "invoice.raise" | "invoice.paid" | "batch.complete"
+  | "cost.post";
 
 export type ApprovalOutcome = { request: any } | null;
 

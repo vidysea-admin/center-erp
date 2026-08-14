@@ -134,8 +134,9 @@ export const GET = apiHandler(async () => {
   // Queue 1: missing daily logs (Rule 33)
   const missingLogs = await missingLogQueue(scope);
 
-  // Queue 2: sheet changes pending review (Admin/Operations only)
-  const openChanges = ["Admin", "Operations"].includes(user.role)
+  // Queue 2: sheet changes pending review — Admin only since R-E (CEO 14/08: the sheet
+  // machinery leaves every other persona's view).
+  const openChanges = user.role === "Admin"
     ? await SheetChange.find({ status: "Open" }).sort({ detected_at: -1 }).limit(10).populate("location", "name code").lean()
     : [];
 

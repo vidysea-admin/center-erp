@@ -278,6 +278,35 @@ ok("F-B17: the refusal names the existing entry", /"Trainer Fee" already exists/
 const freshCat = await req("POST", "/api/master-lists/cost-categories", { name: "E2E Cat " + stamp }, 201);
 ok("F-B17: a genuinely new name still creates (trimmed)", freshCat.data.item?.name === "E2E Cat " + stamp, freshCat.data.item?.name);
 
+// ---- R-E (CEO 14/08 [25:20-25:44]): Operations is POST-ONLY on money ----
+{
+  await req("PUT", "/api/approvals", { action: "cost.post", enabled: true, approver_role: "Admin" }, 200);
+  const opsCookie = await loginAs("ops@vidysea.com", "Vidysea@123");
+  if (opsCookie) {
+    const saved = cookie; cookie = opsCookie;
+    ok("R-E: the cost ledger is closed to Operations", (await req("GET", "/api/costs")).status === 403);
+    const post = await req("POST", "/api/costs", { category: cats[0]._id, amount: 777, trainer: trainer._id, note: "R-E queue test" });
+    ok("R-E: an Operations entry PARKS for approval — 202, no ledger write", post.status === 202 && post.data.queued === true, `got ${post.status}`);
+    const reqId = post.data.item?._id;
+    const mineList = await req("GET", "/api/approvals?mine=1");
+    ok("R-E: the initiator sees their own submission without approver rights",
+      mineList.status === 200 && (mineList.data.items ?? []).some((i) => String(i._id) === String(reqId)));
+    cookie = saved;
+    const parkedLedger = (await req("GET", "/api/costs")).data.items.filter((c) => c.note === "R-E queue test").length;
+    ok("R-E: nothing reaches the ledger while parked", parkedLedger === 0, String(parkedLedger));
+    const dec = await req("POST", `/api/approvals/${reqId}`, { decision: "Approved" }, 200);
+    ok("R-E: approval IS the write (applied: true)", dec.data.applied === true, JSON.stringify(dec.data).slice(0, 120));
+    const landed = (await req("GET", "/api/costs")).data.items.filter((c) => c.note === "R-E queue test");
+    ok("R-E: the approved entry lands exactly once, owned by the initiator",
+      landed.length === 1 && !!landed[0].entered_by, JSON.stringify({ n: landed.length, by: landed[0]?.entered_by?.name }));
+    const direct = await req("POST", "/api/costs", { category: cats[0]._id, amount: 5, trainer: trainer._id, note: "R-E direct" }, 201);
+    ok("R-E: the Admin-approver's own post writes directly (201)", direct.status === 201);
+    await req("PUT", "/api/approvals", { action: "cost.post", enabled: false }, 200);
+  } else {
+    ok("R-E skipped — ops login unavailable (run seed:sample)", true);
+  }
+}
+
 // ---- drop rules ----
 const batch2 = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, planned_start: today, target_size: 3 }, 201)).data.item;
 const cand4 = (await req("POST", "/api/candidates", { name: "Cand4 " + stamp, phone: "77777" + stamp.slice(0, 5), location: loc._id, program: prog._id }, 201)).data.item;

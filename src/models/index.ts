@@ -688,6 +688,9 @@ const FollowUpActionSchema = new Schema({
 // flow rebuilt per module. Ships switched OFF: with no enabled rule nothing changes.
 export const APPROVAL_ACTIONS = [
   "location.close", "location.stop", "batch.cancel", "invoice.raise", "invoice.paid", "batch.complete",
+  // R-E (CEO 14/08 [25:20]): Operations posts an expense/revenue entry; it lands with the
+  // Admin, and only an approval writes the ledger row.
+  "cost.post",
 ] as const;
 export const APPROVAL_REQUEST_STATUS = ["Pending", "Approved", "Rejected", "Cancelled"] as const;
 

@@ -20,7 +20,8 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
   // server remains the real gate either way.
   const { data: session } = useSession();
   const role = (session?.user as any)?.role;
-  const tabs = TABS.filter((t) => t !== "Costs" || role === "Admin" || role === "Operations");
+  // R-E (CEO 14/08): Operations is post-only on money — the batch cost ledger is Admin's.
+  const tabs = TABS.filter((t) => t !== "Costs" || role === "Admin");
   const [tab, setTab] = useState(sp.get("tab") && TABS.includes(sp.get("tab")!) ? sp.get("tab")! : "Overview");
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState("");
@@ -80,7 +81,7 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
       {tab === "Attendance" && <AttendanceTab batchId={id} setError={setError} />}
       {tab === "Closure" && <ClosureTab batchId={id} batch={b} role={role} setError={setError} onChanged={load} />}
       {tab === "Feedback" && <FeedbackTab batchId={id} setError={setError} />}
-      {tab === "Costs" && (role === "Admin" || role === "Operations") && <CostsTab batchId={id} batch={b} setError={setError} />}
+      {tab === "Costs" && role === "Admin" && <CostsTab batchId={id} batch={b} setError={setError} />}
       {tab === "Activity" && <Activity entity="Batch" id={id} />}
     </div>
   );
