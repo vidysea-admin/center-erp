@@ -108,7 +108,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
         buffer_days: b.program.buffer_days ?? 0,
       });
       const doc = await Batch.create({
-        code: await nextBatchCode(),
+        code: await nextBatchCode(b.location, b.program),
         location: b.location._id, program: b.program._id,
         session: b.session, target_size: b.target_size,
         planned_start: b.planned_start, planned_end: isNaN(end.getTime()) ? b.planned_start : end,

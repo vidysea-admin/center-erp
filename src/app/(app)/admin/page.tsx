@@ -744,6 +744,16 @@ function DefaultsTab({ setError }: any) {
               <span className="block text-xs text-gray-500">Confirmed off: their result is still kept, but it is excluded from the billable count.</span>
             </span>
           </label>
+          {/* R-J (QA-049): the CEO's "enrolled = fees paid", as a switch — OFF for
+              government-funded schemes where the candidate pays nothing. */}
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-1" checked={form.fee_required_for_enrollment === true}
+              onChange={(e) => setForm({ ...form, fee_required_for_enrollment: e.target.checked })} />
+            <span>
+              <span className="font-medium">Enrollment requires the fee to be paid (Rule 54)</span>
+              <span className="block text-xs text-gray-500">On: enrollment cannot complete until a fee payment is recorded on the candidate. Off (default): the fee fields are informational.</span>
+            </span>
+          </label>
           <Field label="Maximum upload size (MB)">
             <input type="number" className={inputCls} value={form.max_upload_mb ?? ""} onChange={(e) => setForm({ ...form, max_upload_mb: +e.target.value })} />
           </Field>

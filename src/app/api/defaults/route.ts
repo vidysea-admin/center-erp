@@ -32,6 +32,8 @@ export const PUT = apiHandler(async (req: NextRequest) => {
     "absent_counts_as_appeared", "dropped_pass_is_billable", "max_upload_mb",
     // 2026-08-13: exam-eligibility attendance floor (Manish: "60 plus hona mandatory hai")
     "min_attendance_pct",
+    // R-J (QA-049): unpaid fee blocks enrollment completion only when this is on
+    "fee_required_for_enrollment",
   ]) {
     if (body[f] !== undefined) set[f] = body[f];
   }

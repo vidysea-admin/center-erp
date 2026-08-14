@@ -65,7 +65,9 @@ for (let i = 0; i < 3; i++) {
 const _n = new Date();
 const today = `${_n.getFullYear()}-${String(_n.getMonth() + 1).padStart(2, "0")}-${String(_n.getDate()).padStart(2, "0")}`;
 const batch = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, room: room._id, planned_start: today, target_size: 3 }, 201)).data.item;
-ok("batch code auto-assigned (B###)", /^B\d+$/.test(batch.code), batch.code);
+// R-J (CEO [32:47]): batch codes are CENTRE-COURSE-NN, numbered per centre × course.
+ok("R-J: the first batch for a centre × course is …-01", batch.code === `LOC${stamp}-PROG${stamp}-01`, batch.code);
+ok("batch code auto-assigned (CENTRE-COURSE-NN)", /-\d{2}$/.test(batch.code), batch.code);
 const end = new Date(batch.planned_end), start = new Date(batch.planned_start);
 ok("Rule 15: planned_end = start + 20 days", Math.round((end - start) / 86400000) === 20);
 
@@ -285,21 +287,21 @@ ok("F-B17: a genuinely new name still creates (trimmed)", freshCat.data.item?.na
   if (opsCookie) {
     const saved = cookie; cookie = opsCookie;
     ok("R-E: the cost ledger is closed to Operations", (await req("GET", "/api/costs")).status === 403);
-    const post = await req("POST", "/api/costs", { category: cats[0]._id, amount: 777, trainer: trainer._id, note: "R-E queue test" });
+    const post = await req("POST", "/api/costs", { category: cats[0]._id, amount: 777, trainer: trainer._id, note: "R-E queue test " + stamp });
     ok("R-E: an Operations entry PARKS for approval — 202, no ledger write", post.status === 202 && post.data.queued === true, `got ${post.status}`);
     const reqId = post.data.item?._id;
     const mineList = await req("GET", "/api/approvals?mine=1");
     ok("R-E: the initiator sees their own submission without approver rights",
       mineList.status === 200 && (mineList.data.items ?? []).some((i) => String(i._id) === String(reqId)));
     cookie = saved;
-    const parkedLedger = (await req("GET", "/api/costs")).data.items.filter((c) => c.note === "R-E queue test").length;
+    const parkedLedger = (await req("GET", "/api/costs")).data.items.filter((c) => c.note === "R-E queue test " + stamp).length;
     ok("R-E: nothing reaches the ledger while parked", parkedLedger === 0, String(parkedLedger));
     const dec = await req("POST", `/api/approvals/${reqId}`, { decision: "Approved" }, 200);
     ok("R-E: approval IS the write (applied: true)", dec.data.applied === true, JSON.stringify(dec.data).slice(0, 120));
-    const landed = (await req("GET", "/api/costs")).data.items.filter((c) => c.note === "R-E queue test");
+    const landed = (await req("GET", "/api/costs")).data.items.filter((c) => c.note === "R-E queue test " + stamp);
     ok("R-E: the approved entry lands exactly once, owned by the initiator",
       landed.length === 1 && !!landed[0].entered_by, JSON.stringify({ n: landed.length, by: landed[0]?.entered_by?.name }));
-    const direct = await req("POST", "/api/costs", { category: cats[0]._id, amount: 5, trainer: trainer._id, note: "R-E direct" }, 201);
+    const direct = await req("POST", "/api/costs", { category: cats[0]._id, amount: 5, trainer: trainer._id, note: "R-E direct " + stamp }, 201);
     ok("R-E: the Admin-approver's own post writes directly (201)", direct.status === 201);
     await req("PUT", "/api/approvals", { action: "cost.post", enabled: false }, 200);
   } else {
@@ -322,6 +324,25 @@ ok("Rule 21: dropped candidate lifecycle", cand4b.lifecycle_status === "Dropped"
 // CEO 14/08 [28:12] "the word is drop out": a Dropped candidate who HAD enrolled keeps the
 // enrolled_at stamp — the UI files them under the Enrolled journey as "Dropout", not Fresh.
 ok("R-A: a training dropout keeps enrolled_at (Dropout, not a fresh inquiry)", !!cand4b.enrolled_at, String(cand4b.enrolled_at));
+ok("R-J: per-position numbering keeps the centre × course prefix",
+  new RegExp(`^LOC${stamp}-PROG${stamp}-\\d{2}$`).test(batch2.code), batch2.code);
+
+// ---- R-J (QA-049, CEO: "enrolled = fees paid") — Rule 54, toggle-gated ----
+{
+  const cand5 = (await req("POST", "/api/candidates", { name: "Cand5 Fee " + stamp, phone: "76666" + stamp.slice(0, 5), location: loc._id, program: prog._id }, 201)).data.item;
+  const mem5 = (await req("POST", `/api/batches/${batch2._id}/members`, { candidate: cand5._id }, 201)).data.item;
+  await req("PUT", "/api/defaults", { fee_required_for_enrollment: true }, 200);
+  const blocked = await req("PATCH", `/api/members/${mem5._id}`, { reg_done: true, kyc_done: true, accept_done: true });
+  ok("Rule 54: toggle ON — enrollment refuses without a fee on record",
+    blocked.status === 409 && /Rule 54/.test(blocked.data?.error ?? ""), `got ${blocked.status} ${blocked.data?.error ?? ""}`);
+  await req("PATCH", `/api/candidates/${cand5._id}`, { fee_amount: 500, fee_paid_on: today, fee_reference: "UPI-" + stamp }, 200);
+  const okNow = await req("PATCH", `/api/members/${mem5._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+  ok("Rule 54: fee recorded → enrollment completes", okNow.data.item.enrollment_status === "Completed", okNow.data.item.enrollment_status);
+  const cand5b = (await req("GET", `/api/candidates/${cand5._id}`)).data.item;
+  ok("R-J: the fee travels on the candidate", cand5b.fee_amount === 500 && !!cand5b.fee_paid_on && cand5b.fee_reference === "UPI-" + stamp,
+    JSON.stringify({ a: cand5b.fee_amount, r: cand5b.fee_reference }));
+  await req("PUT", "/api/defaults", { fee_required_for_enrollment: false }, 200); // default OFF for the rest of the wall
+}
 // re-assignable after drop (Rule 20/22 spirit)
 await req("POST", `/api/batches/${batch2._id}/members`, { candidate: cand4._id }, 409); // same batch: unique(batch,candidate)
 const batch3 = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, planned_start: today, target_size: 3, session: "Morning" }, 201)).data.item;

@@ -44,6 +44,9 @@ export type AppDefaults = {
   max_upload_mb: number;
   // Exam eligibility: minimum attendance as a percent of programme hours (2026-08-13)
   min_attendance_pct: number;
+  // R-J (QA-049): does an unpaid fee BLOCK enrollment completion? OFF by default —
+  // government-funded schemes charge the candidate nothing.
+  fee_required_for_enrollment: boolean;
 };
 
 // Fallbacks for every tunable. A Defaults document written before a field existed simply
@@ -83,6 +86,7 @@ export const DEFAULT_VALUES: AppDefaults = {
   max_upload_mb: 100,
   // 2026-08-13 (Manish): exam eligibility = this percent of programme hours attended.
   min_attendance_pct: 50,
+  fee_required_for_enrollment: false,
 };
 
 export async function getDefaults(): Promise<AppDefaults> {

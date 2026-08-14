@@ -97,11 +97,14 @@ function CandidatesInner() {
   // registration — derived from sidh_status, never stored.
   const freshJourneyOf = (r: any): string => {
     if (r.lifecycle_status === "Dropped") return "Dropped";
+    // R-J (QA-049, CEO: "enrolled = fees paid"): a paid fee is the furthest Fresh stage —
+    // the candidate is ready to be placed into a batch.
+    if (r.fee_paid_on) return "Fee Paid";
     if (r.sidh_status === "Registered") return "Registered on Portal";
     if (r.sidh_status === "Link Sent") return "Portal Link Sent";
     return "Fresh Lead";
   };
-  const FRESH_TAGS = ["Fresh Lead", "Portal Link Sent", "Registered on Portal", "Dropped"];
+  const FRESH_TAGS = ["Fresh Lead", "Portal Link Sent", "Registered on Portal", "Fee Paid", "Dropped"];
   const LIFECYCLE_TAGS = bucket === "Fresh" ? FRESH_TAGS : JOURNEY_TAGS;
   // 2026-08-13 (Umesh): a candidate in a batch HAS that batch's programme — "No programme"
   // only when neither the row nor an active membership carries one.
@@ -304,6 +307,7 @@ function CandidatesInner() {
               "Fresh Lead": "Inquiry stage — Skill India registration not started",
               "Portal Link Sent": "Registration link sent (WhatsApp/SMS) — waiting on the candidate",
               "Registered on Portal": "Skill India registration done — ready for batch assignment",
+              "Fee Paid": "Fee received — ready to enroll (CEO: enrolled = fees paid)",
               "Dropped": "Left/removed",
               "Enrollment in progress": "Placed into a batch; registration/KYC/acceptance still running",
               "Training Ongoing": "Enrolled on a batch that is currently Active",
@@ -476,6 +480,13 @@ function CandidatesInner() {
             </select>
           </Field>
           <Field label="Source (mobiliser / campaign)"><input className={inputCls} value={form.source ?? ""} onChange={(e) => set("source", e.target.value)} /></Field>
+          {/* R-J (QA-049): the fee on the candidate. Blocking enrollment on an unpaid fee is
+              the Admin's Defaults toggle — these fields just record the money. */}
+          <div className="grid grid-cols-3 gap-3">
+            <Field label="Fee amount (₹)"><input type="number" className={inputCls} value={form.fee_amount ?? ""} onChange={(e) => set("fee_amount", e.target.value === "" ? undefined : +e.target.value)} /></Field>
+            <Field label="Fee paid on"><input type="date" className={inputCls} value={form.fee_paid_on ? String(form.fee_paid_on).slice(0, 10) : ""} onChange={(e) => set("fee_paid_on", e.target.value || undefined)} /></Field>
+            <Field label="Payment reference"><input className={inputCls} value={form.fee_reference ?? ""} onChange={(e) => set("fee_reference", e.target.value)} /></Field>
+          </div>
           {/* Edit mode: location/program may legitimately be blank on a sheet-imported row — the
               save must not be held hostage to fields the user is not correcting. */}
           <Btn onClick={saveCandidate} disabled={drawer === "add" ? (!form.name || !form.phone || !form.location || !form.program) : (!form.name || !form.phone)}>

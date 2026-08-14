@@ -339,6 +339,12 @@ const CandidateSchema = new Schema({
   // once, the first time enrollment completes (Rule 21); never cleared on a later drop, so a
   // training dropout stays distinguishable from an inquiry that never enrolled.
   enrolled_at: { type: Date, default: null },
+  // R-J (QA-049, Umesh 14/08): the CEO's "enrolled = fees paid" needs the fee ON the
+  // candidate. Whether an unpaid fee BLOCKS enrollment is a Defaults toggle
+  // (fee_required_for_enrollment) — some schemes are government-funded and charge nothing.
+  fee_amount: Number,
+  fee_paid_on: Date,
+  fee_reference: String,
   created_by: oid("User"),
 }, { timestamps: true });
 
@@ -869,6 +875,11 @@ const DefaultsSchema = new Schema({
   // 2026-08-13 (Manish): "60 plus hona mandatory hai" — minimum attendance, as a percent of
   // programme hours, to qualify for the assessment. Contract-tunable like the counters below.
   min_attendance_pct: { type: Number, default: 50 },
+  // R-J (QA-049): Rule 54 — enrollment completion requires a recorded fee payment. OFF by
+  // default (government-funded schemes charge the candidate nothing). NOTE: this schema is
+  // strict — a toggle missing here is silently dropped by $set, which is exactly the bug
+  // the probe caught on 14/08.
+  fee_required_for_enrollment: { type: Boolean, default: false },
   // Client-contract counting rules, confirmed by Manish 2026-08-12.
   // "Appeared" is NOT reduced by absentees — the client counts everyone who reached assessment
   // stage. Kept as a toggle because it is a contract term, not a scheme rule, and the next

@@ -354,11 +354,17 @@ export async function updateEnrollment(memberId: string, patch: {
     }
     // 2026-08-11: eligibility hard-gates enrollment completion (assignment only warns).
     // Only definitive failures block — unknown DOB/education never do.
-    const cand = await Candidate.findById(m.candidate).select("name dob education last_training_date").lean<any>();
+    const cand = await Candidate.findById(m.candidate).select("name dob education last_training_date fee_paid_on").lean<any>();
     if (cand) {
-      const elig = candidateEligibility(cand, await getDefaults());
+      const defaults = await getDefaults();
+      const elig = candidateEligibility(cand, defaults);
       if (!elig.eligible) {
         throw new HttpError(409, `Candidate ${cand.name} is not eligible: ${elig.reasons.join("; ")}`);
+      }
+      // R-J (QA-049, CEO: "enrolled = fees paid"): gates only when the Defaults toggle is
+      // ON — government-funded schemes charge the candidate nothing, so OFF is the default.
+      if (defaults.fee_required_for_enrollment && !cand.fee_paid_on) {
+        throw new HttpError(409, `Rule 54: ${cand.name} has no fee payment on record, and this environment requires the fee before enrollment completes. Record the payment on the candidate first.`);
       }
     }
   }
@@ -1280,9 +1286,26 @@ export function planBatchBackward(
   return plan.sort((a, b) => a.due_date.getTime() - b.due_date.getTime());
 }
 
-// ---------- Batch code (auto: B + serial) ----------
-export async function nextBatchCode(): Promise<string> {
+// ---------- Batch code (CEO 14/08 [32:47]: CENTRE-COURSE-NN) ----------
+// "It should be center code, dash, abbreviation for the course … dash, the batch number" —
+// GGM-DST-01 style, numbered per centre × course. Shipped BEFORE Manish bulk-plans every
+// RPL batch, so 8-10k batches are not minted in the old global format. The course
+// abbreviation is the programme code's last segment (RPLAVP-DST → DST); one counter per
+// prefix in the same `counters` collection. The legacy global "batch" counter stays parked
+// at its last value — old codes on old paper never collide with new ones.
+export async function nextBatchCode(location?: { code?: string } | null, program?: { code?: string } | null): Promise<string> {
   const db = Batch.db;
+  const locCode = String(location?.code ?? "").trim().toUpperCase();
+  const progAbbr = String(program?.code ?? "").trim().toUpperCase().split("-").pop() ?? "";
+  if (locCode && progAbbr) {
+    const prefix = `${locCode}-${progAbbr}`;
+    const res = await db.collection("counters").findOneAndUpdate(
+      { _id: `batch|${prefix}` as any }, { $inc: { seq: 1 } }, { upsert: true, returnDocument: "after" },
+    );
+    const seq = (res as any)?.seq ?? (res as any)?.value?.seq ?? 1;
+    return `${prefix}-${String(seq).padStart(2, "0")}`;
+  }
+  // Legacy fallback — only for a caller with no centre/programme context.
   const res = await db.collection("counters").findOneAndUpdate(
     { _id: "batch" as any },
     { $inc: { seq: 1 } },

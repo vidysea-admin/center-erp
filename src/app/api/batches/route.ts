@@ -82,8 +82,12 @@ export const POST = apiHandler(async (req: NextRequest) => {
   if (room) await assertRoomFreeForBatch(room, null, start, end, session); // Rule 13
 
   const defaults = await getDefaults();
+  // R-J: CENTRE-COURSE-NN code needs the centre's code string (Rule 1 above already
+  // proved the location exists and is operational). Name rides along for the
+  // batch-created notification below.
+  const locDoc = await Location.findById(location).select("code name").lean<any>();
   const doc = await Batch.create({
-    code: await nextBatchCode(),
+    code: await nextBatchCode(locDoc, program),
     location, program: programId, trainer: trainer || undefined, room: room || undefined,
     session,
     slot_start: slot.slot_start || undefined, slot_end: slot.slot_end || undefined,
@@ -103,10 +107,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // candidate pool mein 50." The centre's own people are told the batch exists and how many
   // unassigned candidates they have to fill it from, at the moment it opens — not when someone
   // happens to look. Rule 38 scoping on the inbox delivers it to exactly that centre.
-  const [poolCount, locDoc] = await Promise.all([
-    Candidate.countDocuments({ location, program: programId, lifecycle_status: "Unassigned" }),
-    Location.findById(location).select("name").lean<any>(),
-  ]);
+  const poolCount = await Candidate.countDocuments({ location, program: programId, lifecycle_status: "Unassigned" });
   await Notification.create({
     type: "batch_created", severity: "info",
     message: `${doc.code} (${program.name}) opened at ${locDoc?.name ?? "your centre"} — ${poolCount} candidate${poolCount === 1 ? "" : "s"} in your pool to assign`,
