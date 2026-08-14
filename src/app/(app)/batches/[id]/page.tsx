@@ -1546,6 +1546,7 @@ function CostsTab({ batchId, batch, setError }: any) {
       )}
       <DataTable rows={items} loading={!loaded}
         cardTitle={(r: any) => `₹${r.amount} · ${r.category?.name}`}
+        storageKey="batch-costs"
         columns={[
           { key: "entry_date", label: "Date", render: (r: any) => fmtDate(r.entry_date) },
           { key: "category", label: "Category", render: (r: any) => r.category?.name },

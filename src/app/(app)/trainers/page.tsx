@@ -83,10 +83,29 @@ function TrainersInner() {
     "Submitted to NSDC", "NSDC Approved", "NSDC Rejected", "Payment Done", "TOT Scheduled", "TOT In Progress", "Certified"];
   const stageCur = new Map<string, number>();
   const stageRej = new Map<string, number>();
+  // QA-046 (CEO): "har stage pe Accepted/Rejected" — accepted-at-a-stage = everyone whose
+  // journey moved PAST it (they cleared that gate). Derived from current stage index.
+  const stageAcc = new Map<string, number>();
   for (const t of items) {
     stageCur.set(t.pipeline_status ?? "Applied", (stageCur.get(t.pipeline_status ?? "Applied") ?? 0) + 1);
     if (t.dropped_from_stage) stageRej.set(t.dropped_from_stage, (stageRej.get(t.dropped_from_stage) ?? 0) + 1);
+    const curIdx = STAGES.indexOf(t.pipeline_status === "Dropped" ? (t.dropped_from_stage ?? "Applied") : (t.pipeline_status ?? "Applied"));
+    for (let i = 0; i < curIdx; i++) stageAcc.set(STAGES[i], (stageAcc.get(STAGES[i]) ?? 0) + 1);
   }
+  // QA-047 (checker): same name under two phones may be one person entered twice — the
+  // unique-phone index cannot catch it, so it is surfaced for a human (Manish) to confirm.
+  // Never auto-merged.
+  const dupeNames = (() => {
+    const byName = new Map<string, Set<string>>();
+    for (const t of items) {
+      const k = String(t.name ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+      if (!k) continue;
+      if (!byName.has(k)) byName.set(k, new Set());
+      byName.get(k)!.add(String(t.phone ?? ""));
+    }
+    return [...byName.entries()].filter(([, phones]) => phones.size > 1)
+      .map(([name, phones]) => ({ name, phones: [...phones] }));
+  })();
   const stageShown = stageFilter
     ? items.filter((t) => (t.pipeline_status === stageFilter) || (t.pipeline_status === "Dropped" && t.dropped_from_stage === stageFilter))
     : items;
@@ -179,7 +198,14 @@ function TrainersInner() {
                 render: (r: any) => <span>{r.program?.name} {r.program?.scheme && <Chip value={r.program.scheme} />}</span> },
               { key: "required", label: "Required", sortable: true, sortValue: (r: any) => r.required ?? -1, render: (r: any) => r.required ?? <span className="text-gray-400">not set</span> },
               { key: "certified", label: "Certified (ours)", sortable: true, sortValue: (r: any) => r.certified },
-              { key: "nominated", label: "In pipeline", mobile: false, render: (r: any) => r.nominated },
+              {
+                // QA-001 (checker): over-nomination was invisible — more people in the pipeline
+                // than the position needs is money and TOT seats spent on a filled role.
+                key: "nominated", label: "In pipeline", mobile: false, sortable: true, sortValue: (r: any) => r.nominated,
+                render: (r: any) => r.required != null && r.nominated > r.required
+                  ? <span className="font-semibold text-amber-700" title={`${r.nominated} in the pipeline for a position that needs ${r.required} — over-nominated`}>{r.nominated} ⚠ over</span>
+                  : r.nominated,
+              },
               { key: "balance", label: "Balance to hire", sortable: true, sortValue: (r: any) => r.balance ?? -1,
                 render: (r: any) => r.balance == null ? <span className="text-gray-400">—</span>
                   : <span className={`font-semibold ${r.balance > 0 ? "text-amber-600" : "text-green-700"}`}>{r.balance}</span> },
@@ -194,8 +220,8 @@ function TrainersInner() {
               red = trainers who were DROPPED at that stage. Click a stage to filter. */}
           <div className="dt-scroll flex gap-1.5 overflow-x-auto pb-1">
             {STAGES.map((st) => {
-              const cur = stageCur.get(st) ?? 0, rej = stageRej.get(st) ?? 0;
-              if (!cur && !rej) return (
+              const cur = stageCur.get(st) ?? 0, rej = stageRej.get(st) ?? 0, acc = stageAcc.get(st) ?? 0;
+              if (!cur && !rej && !acc) return (
                 <button key={st} onClick={() => setStageFilter(stageFilter === st ? "" : st)}
                   className={`shrink-0 rounded-lg border px-2 py-1 text-[11px] ${stageFilter === st ? "border-blue-400 bg-blue-50" : "border-gray-100 text-gray-300"}`}>
                   {pipelineLabel(st)} 0
@@ -203,13 +229,22 @@ function TrainersInner() {
               );
               return (
                 <button key={st} onClick={() => setStageFilter(stageFilter === st ? "" : st)}
+                  title={`${cur} here now · ${acc} accepted (moved past this stage) · ${rej} rejected at this stage`}
                   className={`shrink-0 rounded-lg border px-2 py-1 text-left text-[11px] font-medium ${stageFilter === st ? "border-blue-400 bg-blue-50 text-blue-800" : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"}`}>
                   {pipelineLabel(st)} <span className="font-semibold text-gray-900">{cur}</span>
-                  {rej > 0 && <span className="ml-1 rounded-full bg-red-100 px-1.5 text-[10px] font-semibold text-red-700">{rej} rejected</span>}
+                  {/* QA-046: the CEO's pair at every stage — accepted through, rejected here. */}
+                  {acc > 0 && <span className="ml-1 rounded-full bg-green-100 px-1.5 text-[10px] font-semibold text-green-700">✓{acc}</span>}
+                  {rej > 0 && <span className="ml-1 rounded-full bg-red-100 px-1.5 text-[10px] font-semibold text-red-700">✗{rej}</span>}
                 </button>
               );
             })}
           </div>
+          {dupeNames.length > 0 && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              ⚠ <b>{dupeNames.length} name{dupeNames.length > 1 ? "s appear" : " appears"} under more than one phone number</b> — possibly the same person entered twice (the phone-unique rule cannot catch this). Confirm with the team before merging:{" "}
+              {dupeNames.slice(0, 5).map((d) => `${d.name} (${d.phones.join(" / ")})`).join(" · ")}{dupeNames.length > 5 ? " …" : ""}
+            </div>
+          )}
           <FilterPills active={tag} onChange={(v) => setTag(v === tag ? "" : v)}
             options={[{ value: "", label: "All", count: items.length },
               ...TAG_ORDER.map((t) => ({

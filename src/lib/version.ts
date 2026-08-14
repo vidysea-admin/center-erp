@@ -3,13 +3,12 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-28";
+export const RELEASE = "2026.08.14-29";
 export const RELEASE_NOTE =
-  "Home KPIs stop misreading (checker round): a scoped user's Active Trainers " +
-  "KPI now scopes the same way the trainers list does - nominated OR capable OR " +
-  "home centre (QA-011); Total Attendance carries expected-so-far, so an empty " +
-  "log book says 'no daily logs yet - N student-days expected' instead of '0 of " +
-  "0' (QA-012); the certified total travels with 'N on approved positions' so " +
-  "Home and the Open Positions board reconcile by construction (QA-002). " +
-  "(-14-27 in the same train: visible money chain, honest Close button, " +
-  "no-Green empty batches, Preparation banner.)";
+  "Trainers polish (checker round): every pipeline stage shows the CEO's pair - " +
+  "accepted-through (green) and rejected-here (red) with a hover explaining both " +
+  "(QA-046); Open Positions flags over-nomination when more people are in the " +
+  "pipeline than the position needs (QA-001); a name appearing under two phone " +
+  "numbers is surfaced as a possible duplicate for the team to confirm, never " +
+  "auto-merged (QA-047); cost rows carry Source / Entered by - the person, or " +
+  "the AVPL sheet the seed absorbed them from (QA-039).";

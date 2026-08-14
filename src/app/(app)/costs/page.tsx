@@ -109,6 +109,16 @@ function CostsInner() {
                 { key: "batch", label: "Batch", sortable: true, sortValue: (r: any) => r.batch?.code, render: (r: any) => r.batch?.code ?? "—" },
                 { key: "trainer", label: "Trainer", sortable: true, sortValue: (r: any) => r.trainer?.name, render: (r: any) => r.trainer?.name ?? "—" },
                 { key: "note", label: "Note", mobile: false },
+                {
+                  // QA-039: provenance on cost rows — the person who entered it, or the sheet
+                  // the seed absorbed it from (the note records "… — from AVPL <tab>").
+                  key: "entered_by", label: "Source / Entered by", mobile: false, filterable: true,
+                  filterText: (r: any) => r.entered_by?.name ?? (/from (AVPL [\w -]+)/.exec(r.note ?? "")?.[1] ?? "—"),
+                  render: (r: any) => r.entered_by?.name
+                    ?? (/from (AVPL [\w -]+)/.exec(r.note ?? "")?.[1]
+                      ? <span className="text-xs text-gray-500">{/from (AVPL [\w -]+)/.exec(r.note ?? "")![1]}</span>
+                      : <span className="text-gray-400">—</span>),
+                },
               ]} empty="No cost entries." />
           </Section>
         </>

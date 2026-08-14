@@ -54,11 +54,18 @@ export const GET = apiHandler(async () => {
   // QA-011 (checker): the KPI scoped on nominated_for_location ONLY, but the trainers LIST
   // scopes on nominated OR capable OR home — so a certified trainer visible in a scoped
   // user's own list read as 0 on their KPI. Same $or on both surfaces now.
+  // …plus the trainer actually RUNNING a batch at a scoped centre — live -14-28 smoke found
+  // a Gurugram SPOC still reading 0 while a certified trainer taught their own GGM batch
+  // (linked only through the batch, not through nomination/capability/home).
+  const scopedBatchTrainers = isScoped(user)
+    ? await Batch.find({ ...scope, trainer: { $ne: null } }).distinct("trainer")
+    : [];
   const trainerScope = isScoped(user)
     ? { $or: [
         { nominated_for_location: { $in: (user.location_scope ?? []) } },
         { capable_locations: { $in: (user.location_scope ?? []) } },
         { home_location: { $in: (user.location_scope ?? []) } },
+        { _id: { $in: scopedBatchTrainers } },
       ] }
     : {};
   const trainerRoleRows = await Trainer.aggregate([
