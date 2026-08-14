@@ -188,6 +188,19 @@ function Users({ setError }: any) {
     } catch (e: any) { setError(e.message); }
   }
 
+  // QA-137 (Umesh, 15/08): "Divya ne aaj kya kiya" — a per-person activity drawer, fed by the
+  // Admin-only /api/audit/by-user route. Works for dropped accounts too: backtracking is the
+  // whole point, and the dropped are exactly who you backtrack.
+  const [act, setAct] = useState<any>(null);
+  const [actRows, setActRows] = useState<any[]>([]);
+  const [actTotal, setActTotal] = useState(0);
+  async function openActivity(u: any) {
+    try {
+      const d = await api(`/api/audit/by-user/${u._id}?limit=200`);
+      setActRows(d.items ?? []); setActTotal(d.total ?? 0); setAct(u);
+    } catch (e: any) { setError(e.message); }
+  }
+
   // 15/08 (Umesh): DROP — soft delete. History and created-data stay; login dies; the email
   // frees up so a new account can be made. Hidden by default behind a "Show dropped" toggle.
   const [showDropped, setShowDropped] = useState(false);
@@ -262,19 +275,41 @@ function Users({ setError }: any) {
             // be … right away" — one click on the row, no drawer hunt. API guards apply
             // (Admin-only, never yourself), so the button only renders where it can succeed.
             key: "_stop", label: "", mobile: false,
-            render: (r: any) => r.approval_status === "Pending" || r.dropped ? null : (
+            render: (r: any) => r.approval_status === "Pending" ? null : (
               <span onClick={(e) => e.stopPropagation()} className="flex gap-1.5">
-                <Btn small kind={r.active ? "danger" : "ghost"}
-                  onClick={async () => {
-                    try { await api(`/api/users/${r._id}`, { method: "PATCH", json: { active: !r.active } }); load(); }
-                    catch (err: any) { setError(err.message); }
-                  }}>{r.active ? "Stop access" : "Reactivate"}</Btn>
-                {/* 15/08 (Umesh): drop = terminal soft-delete with a plain-words confirm. */}
-                <Btn small kind="ghost" onClick={() => dropUser(r)}>Drop…</Btn>
+                {!r.dropped && (
+                  <>
+                    <Btn small kind={r.active ? "danger" : "ghost"}
+                      onClick={async () => {
+                        try { await api(`/api/users/${r._id}`, { method: "PATCH", json: { active: !r.active } }); load(); }
+                        catch (err: any) { setError(err.message); }
+                      }}>{r.active ? "Stop access" : "Reactivate"}</Btn>
+                    {/* 15/08 (Umesh): drop = terminal soft-delete with a plain-words confirm. */}
+                    <Btn small kind="ghost" onClick={() => dropUser(r)}>Drop…</Btn>
+                  </>
+                )}
+                {/* QA-137: the per-person trail — dropped accounts included, that's the point. */}
+                <Btn small kind="ghost" onClick={() => openActivity(r)}>Activity</Btn>
               </span>
             ),
           },
         ]} empty="No users." />
+      {/* QA-137: "what did this person do" — read-only, Admin-only, latest 200 actions. */}
+      <Drawer open={!!act} onClose={() => setAct(null)} title={act ? `Activity — ${act.name}` : ""}>
+        <p className="mb-2 text-xs text-gray-500">
+          {actTotal} recorded action{actTotal === 1 ? "" : "s"} in the audit log{actTotal > 200 ? " (latest 200 shown)" : ""}.
+        </p>
+        {actRows.length === 0 ? <p className="text-sm text-gray-400">No activity recorded for this account.</p> : (
+          <ul className="divide-y text-sm">
+            {actRows.map((a: any) => (
+              <li key={a._id} className="py-2">
+                <span className="text-xs text-gray-400">{fmtDT(a.created_at)} · {a.entity}</span>
+                <div>{a.field ?? "event"}: <span className="text-gray-500">{JSON.stringify(a.old_value)} → {JSON.stringify(a.new_value)}</span></div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Drawer>
       <Drawer open={drawer} onClose={() => setDrawer(false)} title={edit ? `Edit ${edit.name}` : "Add User"}>
         <div className="space-y-3">
           <Field label="Name" required><input className={inputCls} value={form.name ?? ""} onChange={(e) => set("name", e.target.value)} /></Field>

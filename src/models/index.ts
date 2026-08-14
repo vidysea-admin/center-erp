@@ -884,6 +884,8 @@ const AuditLogSchema = new Schema({
   actor_type: { type: String, enum: ACTOR_TYPE, required: true, default: "USER" },
 }, { timestamps: { createdAt: "created_at", updatedAt: false } });
 AuditLogSchema.index({ entity: 1, entity_id: 1, created_at: -1 });
+// QA-137: the per-user activity view queries by actor — without this it is a collection scan.
+AuditLogSchema.index({ actor: 1, created_at: -1 });
 
 // ---------- Master lists ----------
 const NamedActiveSchema = new Schema({

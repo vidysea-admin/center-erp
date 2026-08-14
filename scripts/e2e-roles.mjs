@@ -398,6 +398,44 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   ok("QA-130: re-delete → 404, not a crash", (await req(admin, "DELETE", `/api/trainers/${tid}`)).status === 404);
 }
 
+// ---- QA-136/137 (-62): the audit trail was ALWAYS written on create (crud.ts — the checker's
+// grep saw only route files and missed the central layer); what was missing is a surface.
+// These pins hold both truths: the rows exist, and the new windows onto them are role-gated.
+{
+  const stamp62 = Date.now().toString().slice(-6);
+  const p137 = (n) => "93" + Date.now().toString().slice(-7) + n;
+  const jpr = (await req(spoc, "GET", "/api/locations?limit=1")).data.items[0];
+
+  const mk = await req(admin, "POST", "/api/trainers", { name: `Q137 Trail ${stamp62}`, phone: p137(1), skills: ["Q137"], home_location: jpr._id });
+  ok("QA-136: trainer create lands", mk.status === 201, `got ${mk.status}`);
+  const tid = mk.data.item?._id;
+  const hist = await req(admin, "GET", `/api/audit/Trainer/${tid}`);
+  ok("QA-136 evidence: the CREATE audit row exists — crud has always written it",
+    hist.status === 200 && (hist.data.items ?? []).some((a) => a.new_value === "created"),
+    `${hist.status}, rows=${(hist.data.items ?? []).length}`);
+  await req(admin, "PATCH", `/api/trainers/${tid}`, { qualification: "MSc (Q137)" });
+  ok("QA-137: field-level history rows carry the change",
+    ((await req(admin, "GET", `/api/audit/Trainer/${tid}`)).data.items ?? []).some((a) => a.field === "qualification"));
+  ok("QA-137: SPOC reads an own-centre trainer's history (union resolver)",
+    (await req(spoc, "GET", `/api/audit/Trainer/${tid}`)).status === 200);
+  const foreign = await req(admin, "POST", "/api/trainers", { name: `Q137 Foreign ${stamp62}`, phone: p137(2), skills: ["Q137"], home_location: otherLoc._id });
+  ok("QA-137: SPOC reading a FOREIGN trainer's history → 403 (fail closed)",
+    (await req(spoc, "GET", `/api/audit/Trainer/${foreign.data.item?._id}`)).status === 403);
+
+  const adminU = ((await req(admin, "GET", "/api/users")).data.items ?? []).find((u) => u.email === "admin@vidysea.com");
+  const byUser = await req(admin, "GET", `/api/audit/by-user/${adminU._id}?limit=50`);
+  ok("QA-137: Admin reads the per-user activity view", byUser.status === 200 && (byUser.data.items ?? []).length > 0, `got ${byUser.status}`);
+  const narrowed = (await req(admin, "GET", `/api/audit/by-user/${adminU._id}?entity=Trainer&limit=50`)).data.items ?? [];
+  ok("QA-137: ?entity= narrows the per-user view", narrowed.length > 0 && narrowed.every((a) => a.entity === "Trainer"), `n=${narrowed.length}`);
+  ok("QA-137: Operations is refused the per-user view (Admin-only v1)", (await req(ops, "GET", `/api/audit/by-user/${adminU._id}`)).status === 403);
+  ok("QA-137: a scoped SPOC is refused too — no Rule 38 back door", (await req(spoc, "GET", `/api/audit/by-user/${adminU._id}`)).status === 403);
+
+  // Fixtures leave through the front door (QA-130's verb), proving it twice over.
+  ok("QA-137: fixtures cleaned via the delete verb",
+    (await req(admin, "DELETE", `/api/trainers/${tid}`)).status === 200 &&
+    (await req(admin, "DELETE", `/api/trainers/${foreign.data.item?._id}`)).status === 200);
+}
+
 // 2026-08-12 audit F-000 (S0): the generic list route copied every ?key=value into the Mongo
 // filter AFTER the Rule 38 scope filter, so ?location=<other centre> simply overwrote it and a
 // scoped user could read every centre's candidate PII. Scope is now applied last, client keys

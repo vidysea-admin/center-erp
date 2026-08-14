@@ -4,13 +4,16 @@ import Link from "next/link";
 import { useSession } from "next-auth/react";
 import { api, fmtDate, pipelineLabel } from "@/lib/client";
 import { BackLink, Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
+import { Activity } from "@/components/activity";
 import { uploadWithRetry } from "@/lib/upload";
 
 // Trainer detail (2026-08-12). The list + drawer had nowhere to show the hiring journey Manish
 // described, so this is the host surface for it: where the stage is moved, documents are
 // collected, and the NSDC round-trip is recorded.
 
-const TABS = ["Pipeline", "Documents", "Profile", "Assignments"];
+// QA-137: Activity joined — batches and locations had their trail tab for weeks; the trainer,
+// whose journey is the most disputed record in the building, had none.
+const TABS = ["Pipeline", "Documents", "Profile", "Assignments", "Activity"];
 
 // The order the journey actually runs in, for the progress rail.
 const JOURNEY = [
@@ -342,6 +345,8 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
           />
         </Section>
       )}
+
+      {tab === "Activity" && <Activity entity="Trainer" id={id} />}
 
       {move && (
         <Drawer open onClose={() => setMove(null)} title={`Move ${t.name}`}>
