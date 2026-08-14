@@ -574,6 +574,17 @@ ok("QA-042: tranche two does NOT rewrite the recorded batch-level figures",
     `got ${del2.status}: ${del2.data?.error ?? ""}`);
 }
 
+// ---- QA-048: the post-Completed money chain is visible, derived from Closure+Invoice ----
+{
+  const listRows = (await req("GET", "/api/batches?limit=2000")).data.items ?? [];
+  const doneRows = listRows.filter((x) => ["Completed", "Closed"].includes(x.status));
+  ok("QA-048: every Completed/Closed row carries a settlement stage", doneRows.length > 0 && doneRows.every((x) => typeof x.settlement_stage === "string" && x.settlement_stage.length > 3), JSON.stringify(doneRows.map((x) => [x.code, x.settlement_stage])));
+  const b5row = listRows.find((x) => x._id === b5._id);
+  ok("QA-048: certified-but-unraised batch names the invoice step", /invoice/i.test(b5row?.settlement_stage ?? ""), b5row?.settlement_stage);
+  const det = (await req("GET", `/api/batches/${b5._id}`)).data;
+  ok("QA-048: the detail payload carries the same stage", det.settlement_stage === b5row.settlement_stage, det.settlement_stage);
+}
+
 // ---- Batch Health Score (score always travels with reasons) ----
 const healthBatch = (await req("GET", `/api/batches/${capBatch._id}`)).data;
 ok("health score present with reasons array", ["Green", "Amber", "Red"].includes(healthBatch.health?.score) && Array.isArray(healthBatch.health?.reasons), JSON.stringify(healthBatch.health));

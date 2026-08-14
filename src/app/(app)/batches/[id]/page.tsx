@@ -37,6 +37,11 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
         <BackLink fallback="/batches" label="Batches" />
         <h1 className="text-xl font-semibold">{b.code}</h1>
         <Chip value={b.status} />
+        {data.settlement_stage && (
+          <span className="rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-700" title="Where this batch stands on the money chain (Rule 52)">
+            {data.settlement_stage}
+          </span>
+        )}
         <span className="text-sm text-gray-500">{b.program?.name} · {fmtDate(b.planned_start)} → {fmtDate(b.planned_end)}</span>
       </div>
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
@@ -89,6 +94,18 @@ function Overview({ data, role, onChanged, setError }: any) {
   const r = data.readiness;
   const [reason, setReason] = useState("");
   const [confirmCancel, setConfirmCancel] = useState(false);
+  // QA-004 (checker): "Close Batch" was an enabled primary button on batches that provably
+  // cannot close — the click just bounced off Rule 52. The button now knows the rule too.
+  const [money, setMoney] = useState<any>(null);
+  useEffect(() => {
+    if (b.status !== "Completed") { setMoney(null); return; }
+    api(`/api/batches/${b._id}/closure`).then((d) => setMoney({ closure: d.closure, invoice: d.invoice })).catch(() => setMoney(null));
+  }, [b._id, b.status]);
+  const closeBlockers: string[] = b.status !== "Completed" ? [] : [
+    ...(money?.closure?.certification_status !== "Completed" ? ["certification not completed"] : []),
+    ...(money?.invoice?.status !== "Paid" ? [`invoice ${money?.invoice?.status ?? "not raised"} — must be PAID`] : []),
+    ...(!money?.closure?.dues_settled ? ["dues not attested as settled"] : []),
+  ];
 
   async function transition(target: string) {
     try {
@@ -129,7 +146,14 @@ function Overview({ data, role, onChanged, setError }: any) {
             {b.status === "Active" && <Btn onClick={() => transition("Closing")}>Move to Closing</Btn>}
             {b.status === "Closing" && <Btn onClick={() => transition("Completed")}>Complete Batch</Btn>}
             {/* Rule 52: Completed = training over; Closed = money over (cert + invoice PAID + no dues). */}
-            {b.status === "Completed" && <Btn onClick={() => transition("Closed")}>Close Batch (no dues)</Btn>}
+            {b.status === "Completed" && (
+              <span title={closeBlockers.length ? `Rule 52 — still needed: ${closeBlockers.join("; ")}` : "All dues settled — the batch can close"} className="inline-flex flex-col gap-0.5">
+                <Btn onClick={() => transition("Closed")} disabled={money !== null && closeBlockers.length > 0}>Close Batch (no dues)</Btn>
+                {money !== null && closeBlockers.length > 0 && (
+                  <span className="text-[10px] font-medium text-amber-700">needs: {closeBlockers.join(" · ")}</span>
+                )}
+              </span>
+            )}
             {["Planning", "Ready", "Active"].includes(b.status) && <Btn kind="danger" onClick={() => setConfirmCancel(true)}>Cancel Batch</Btn>}
           </div>
         ) : (

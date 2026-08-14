@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, BatchMember, CandidateResult, Closure, CostEntry, DailyLog, GovtAttendanceRow, Invoice, Program } from "@/models";
-import { assertBatchInScope, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, batchReadiness, planBatchBackward, trainerBookingWarnings } from "@/lib/rules";
+import { assertBatchInScope, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, batchReadiness, planBatchBackward, settlementStage, trainerBookingWarnings } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { audit, auditDiff } from "@/lib/audit";
 
@@ -14,7 +14,13 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   await assertBatchInScope(user, id); // Rule 38
   const readiness = await batchReadiness(id); // includes populated batch
   const health = await batchHealth(id);
-  return NextResponse.json({ item: readiness.batch, readiness, health });
+  // QA-048: the post-Completed money stage rides the detail payload too.
+  const st = ["Completed", "Closed"].includes(readiness.batch.status)
+    ? settlementStage(readiness.batch.status,
+        await Closure.findOne({ batch: id }).select("certification_status dues_settled").lean(),
+        await Invoice.findOne({ batch: id }).select("status").lean())
+    : null;
+  return NextResponse.json({ item: readiness.batch, readiness, health, settlement_stage: st });
 });
 
 // 2026-08-14 (Umesh): "agar data ka koi source nahi hai toh remove that." The 13/08 seed

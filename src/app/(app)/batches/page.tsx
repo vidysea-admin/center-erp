@@ -146,6 +146,13 @@ function BatchesInner() {
 
       {tab === "Batches" ? (
         <>
+          {/* QA-030: the main list says out loud what Preparation is holding back. */}
+          {(prep?.blocked_count ?? 0) > 0 && (
+            <button onClick={() => setTab("Preparation")}
+              className="w-full rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-left text-sm text-amber-800 hover:border-amber-300">
+              ⚑ <b>{prep.blocked_count}</b> centre × job-role position{prep.blocked_count === 1 ? " is" : "s are"} blocked in Preparation (trainer / candidates / infrastructure not ready) — click to see what each one needs.
+            </button>
+          )}
           <FilterPills active={fStatus} onChange={(v) => setFStatus(v === fStatus ? "" : v)}
             options={[{ value: "", label: "All", count: items.length },
               ...BATCH_STATUSES.map((s) => ({ value: s, label: s, count: statusCount(s) }))]} />
@@ -157,7 +164,18 @@ function BatchesInner() {
               { key: "code", label: "Code", mobile: false, sortable: true, sortValue: (r: any) => r.code },
               { key: "location", label: "Location", sortable: true, sortValue: (r: any) => r.location?.name, render: (r: any) => r.location?.name },
               { key: "program", label: "Program", sortable: true, filterable: true, sortValue: (r: any) => r.program?.name, render: (r: any) => r.program?.name, mobile: false },
-              { key: "status", label: "Status", sortable: true, sortValue: (r: any) => r.status, render: (r: any) => <Chip value={r.status} />, mobile: false },
+              {
+                // QA-048: after Completed the money chain shows WHERE the batch stands
+                // (derived from Closure+Invoice — the same facts Rule 52 gates closing on).
+                key: "status", label: "Status", sortable: true, sortValue: (r: any) => r.status, mobile: false,
+                filterText: (r: any) => r.settlement_stage ? `${r.status} — ${r.settlement_stage}` : r.status,
+                render: (r: any) => (
+                  <span className="flex flex-col gap-0.5">
+                    <Chip value={r.status} />
+                    {r.settlement_stage && <span className="text-[10px] font-medium leading-3 text-gray-500">{r.settlement_stage}</span>}
+                  </span>
+                ),
+              },
               // A Planning batch's gaps show inline — "backward planning chal rahi hai,
               // requirement incomplete" is visible from the LIST, not just the detail page.
               { key: "health", label: "Health", render: (r: any) => <HealthChip health={r.health} inline={r.status === "Planning"} /> },

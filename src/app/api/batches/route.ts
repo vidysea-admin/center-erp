@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, requireRole, locationFilter, assertLocationInScope, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
-import { Batch, BatchMember, Candidate, Location, Notification, Program } from "@/models";
-import { assertLocationOperational, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, nextBatchCode, planBatchBackward, trainerBookingWarnings } from "@/lib/rules";
+import { Batch, BatchMember, Candidate, Closure, Invoice, Location, Notification, Program } from "@/models";
+import { assertLocationOperational, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, nextBatchCode, planBatchBackward, settlementStage, trainerBookingWarnings } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
 
@@ -35,11 +35,18 @@ export const GET = apiHandler(async (req: NextRequest) => {
     { $group: { _id: "$batch", roster: { $sum: 1 }, enrolled: { $sum: { $cond: [{ $eq: ["$enrollment_status", "Completed"] }, 1, 0] } } } },
   ]);
   const byBatch = new Map(counts.map((c) => [String(c._id), c]));
+  // QA-048: the post-Completed money chain, visible per row (derived from Closure+Invoice).
+  const doneIds = items.filter((b) => ["Completed", "Closed"].includes(b.status)).map((b) => b._id);
+  const closures = doneIds.length ? await Closure.find({ batch: { $in: doneIds } }).select("batch certification_status dues_settled").lean<any[]>() : [];
+  const invoices = doneIds.length ? await Invoice.find({ batch: { $in: doneIds } }).select("batch status").lean<any[]>() : [];
+  const clByB = new Map(closures.map((c) => [String(c.batch), c]));
+  const invByB = new Map(invoices.map((i) => [String(i.batch), i]));
   // Health is computed per row; the list is already capped by location scope + status filter.
   const out = await Promise.all(items.map(async (b) => ({
     ...b,
     roster_count: byBatch.get(String(b._id))?.roster ?? 0,
     enrolled_count: byBatch.get(String(b._id))?.enrolled ?? 0,
+    settlement_stage: settlementStage(b.status, clByB.get(String(b._id)), invByB.get(String(b._id))),
     health: await batchHealth(String(b._id)),
   })));
   return NextResponse.json({ items: out, total: out.length });

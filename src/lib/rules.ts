@@ -631,7 +631,23 @@ export async function batchHealth(batchId: string): Promise<BatchHealth> {
   if (!batch) throw new HttpError(404, "Batch not found");
   const reasons: BatchHealth["reasons"] = [];
 
-  if (["Completed", "Cancelled"].includes(batch.status)) return { score: "Green", reasons };
+  if (batch.status === "Cancelled") return { score: "Green", reasons };
+  // QA-003 (checker): a batch that "Completed" with nobody on it was Health Green — the
+  // dashboard's word for "all fine" on a row that is provably wrong. Completed stays Green
+  // only when it actually had students.
+  if (batch.status === "Completed") {
+    const rosterN = await BatchMember.countDocuments({ batch: batchId, left_on: null });
+    if (rosterN === 0) {
+      return { score: "Amber", reasons: [{ code: "empty_completed", label: "Completed with no students on the roster — upload the roster or remove the shell", severity: "amber" }] };
+    }
+    return { score: "Green", reasons };
+  }
+  // An Active/Closing batch with an empty roster is running for nobody — name it (the
+  // missing-logs streak already fires, but "why" matters more than "what").
+  if (["Active", "Closing"].includes(batch.status)) {
+    const rosterN = await BatchMember.countDocuments({ batch: batchId, left_on: null });
+    if (rosterN === 0) reasons.push({ code: "empty_roster", label: "No students on the roster", severity: "red" });
+  }
 
   // 1. Missing daily logs (Rule 33) — a streak matters more than a single miss.
   if (batch.status === "Active") {
@@ -669,6 +685,21 @@ export async function batchHealth(batchId: string): Promise<BatchHealth> {
 
   const score = reasons.some((r) => r.severity === "red") ? "Red" : reasons.length ? "Amber" : "Green";
   return { score, reasons };
+}
+
+// QA-048 (CEO): "Completed ke baad ke statuses kya hain?" — the money chain existed only as
+// hidden flags (Closure.certification_status, Invoice.status, dues_settled) that Rule 52
+// enforces but nothing displayed. Derived, never stored: the next unmet step IS the stage.
+export function settlementStage(batchStatus: string, closure: any, invoice: any): string | null {
+  if (batchStatus === "Closed") return "Closed — all dues settled";
+  if (batchStatus !== "Completed") return null;
+  if (closure?.certification_status !== "Completed") return "Awaiting certification";
+  if (!invoice || invoice.status === "Not Ready") return "Certified — invoice not ready";
+  if (invoice.status === "Ready") return "Certified — invoice to raise";
+  if (invoice.status === "Raised") return "Invoice raised — payment pending";
+  if (invoice.status === "Paid" && !closure?.dues_settled) return "Payment received — dues to settle";
+  if (invoice.status === "Paid" && closure?.dues_settled) return "Ready to close";
+  return null;
 }
 
 // Rule 33: Active batches missing previous operating day's log
