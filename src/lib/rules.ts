@@ -1470,6 +1470,25 @@ export async function transitionTrainer(
   return t;
 }
 
+// ---------- Attendance-in-hours (R-D, CEO 14/08 [33:35, 42:15]) ----------
+// "Without number of hours we don't know if the student has qualified for the next stage."
+// One computation, shared by the public per-student portal and the batch Attendance tab —
+// two copies of a threshold formula is how two screens end up disagreeing about the same
+// student (the QA-045 lesson, money edition).
+export function requiredAssessmentHours(program: any, minPct: number): number {
+  // Real QP hours when recorded; duration_days × 8 (the full-day session) until then.
+  const programHours = program?.hours || (program?.duration_days ?? 15) * 8;
+  return Math.ceil((programHours * minPct) / 100);
+}
+export function slotHoursPerDay(batch: any): number {
+  const toMin = (s?: string | null) => {
+    const mm = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(String(s ?? ""));
+    return mm ? Number(mm[1]) * 60 + Number(mm[2]) : null;
+  };
+  const slotMin = (toMin(batch?.slot_end) ?? 0) - (toMin(batch?.slot_start) ?? 0);
+  return slotMin > 0 ? slotMin / 60 : 8;
+}
+
 // Rule T7 - the counters the client tracks per centre x job role, DERIVED rather than stored.
 // The two sheets already disagree with each other (nominated 23 vs 20, certified 18 vs 16),
 // which is what happens when the same number is kept in two places; computing it here makes the

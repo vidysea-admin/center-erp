@@ -3,6 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, HttpError } from "@/lib/authz";
 import { CandidateResult, Closure, DailyLog, GovtAttendanceRow, PublicToken } from "@/models";
 import { getDefaults } from "@/lib/defaults";
+import { requiredAssessmentHours, slotHoursPerDay } from "@/lib/rules";
 
 // Public per-student attendance view (2026-08-13, Manish: "bacche baar-baar request karte hain
 // sir hamein attendance dekhiye… 60 plus hona mandatory hai" — eligibility is min_attendance_pct
@@ -52,16 +53,9 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
 
   const defaults = await getDefaults();
   const minPct = defaults.min_attendance_pct ?? 50;
-  // Programme hours: real QP hours when recorded; duration_days × 8 (the full-day session) until then.
-  const programHours = batch?.program?.hours || (batch?.program?.duration_days ?? 15) * 8;
-  const requiredHours = Math.ceil((programHours * minPct) / 100);
-
-  const toMin = (s?: string | null) => {
-    const mm = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(String(s ?? ""));
-    return mm ? Number(mm[1]) * 60 + Number(mm[2]) : null;
-  };
-  const slotMin = (toMin(batch?.slot_end) ?? 0) - (toMin(batch?.slot_start) ?? 0);
-  const hoursPerDay = slotMin > 0 ? slotMin / 60 : 8;
+  // Shared with the batch Attendance tab (R-D) — one threshold formula, not two.
+  const requiredHours = requiredAssessmentHours(batch?.program, minPct);
+  const hoursPerDay = slotHoursPerDay(batch);
 
   // The portal's own hour meter is authoritative when present (that is what the assessor
   // settles against); the centre's day count approximates hours otherwise.
@@ -103,7 +97,7 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
       hours_raw: govtRow.total_hours_raw,
       as_of: govtRow.createdAt,
     } : null,
-    program_hours: programHours,
+    program_hours: batch?.program?.hours || (batch?.program?.duration_days ?? 15) * 8,
     min_attendance_pct: minPct,
     required_hours: requiredHours,
     attended_hours: attendedHours,

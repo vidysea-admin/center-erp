@@ -10,7 +10,7 @@ import { flushQueue, getQueue, uploadWithRetry } from "@/lib/upload";
 import { BASE_PATH } from "@/lib/base-path";
 import { bulkSmsCsv, smsLink, waLink } from "@/lib/messaging";
 
-const TABS = ["Overview", "Candidates", "Enrollment", "Daily Execution", "Closure", "Feedback", "Costs", "Activity"];
+const TABS = ["Overview", "Candidates", "Enrollment", "Daily Execution", "Attendance", "Closure", "Feedback", "Costs", "Activity"];
 
 export default function BatchDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -77,6 +77,7 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
       {tab === "Candidates" && <Roster batchId={id} batch={b} setError={setError} onChanged={load} />}
       {tab === "Enrollment" && <Enrollment batchId={id} setError={setError} />}
       {tab === "Daily Execution" && <DailyExecution batchId={id} batch={b} role={role} setError={setError} />}
+      {tab === "Attendance" && <AttendanceTab batchId={id} setError={setError} />}
       {tab === "Closure" && <ClosureTab batchId={id} batch={b} role={role} setError={setError} onChanged={load} />}
       {tab === "Feedback" && <FeedbackTab batchId={id} setError={setError} />}
       {tab === "Costs" && (role === "Admin" || role === "Operations") && <CostsTab batchId={id} batch={b} setError={setError} />}
@@ -583,6 +584,64 @@ function Enrollment({ batchId, setError }: any) {
 // it — "no attendance, attendance trainer karega" (Umesh role matrix, 2026-08-13). The
 // entry form and the +Round/Edit affordances are simply not rendered; the server 403s
 // regardless (batches.daily_log removed from the Location role).
+// ---------- Attendance tab (R-D, CEO 14/08 [34:02, 41:50, 42:15]) ----------
+// "One more tab as attendance only … day-wise a person should be able to see the
+// attendance … show them two types: the one they are taking and the government portal's —
+// days AND hours — and once the hours threshold is crossed, mark that child GREEN:
+// qualified for assessments." Visible to every login that can open the batch.
+function AttendanceTab({ batchId, setError }: any) {
+  const [data, setData] = useState<any>(null);
+  useEffect(() => {
+    api(`/api/batches/${batchId}/attendance`).then(setData).catch((e: any) => setError(e.message));
+  }, [batchId]);
+  if (!data) return <p className="p-6 text-center text-sm text-gray-400">Loading…</p>;
+  if (!data.members?.length) return <p className="p-6 text-center text-sm text-gray-400">No students on the roster yet.</p>;
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className="rounded-full bg-gray-100 px-2 py-0.5">Programme: {data.program_hours} hrs</span>
+        <span className="rounded-full bg-gray-100 px-2 py-0.5" title={`${data.min_attendance_pct}% of programme hours`}>Needed for assessment: {data.required_hours} hrs</span>
+        <span className="rounded-full bg-gray-100 px-2 py-0.5">{data.days_held} day{data.days_held === 1 ? "" : "s"} logged</span>
+        <span className="rounded-full bg-green-100 px-2 py-0.5 font-medium text-green-700">{data.qualified_count} qualified for assessments</span>
+      </div>
+      <DataTable rows={data.members}
+        cardTitle={(r: any) => r.name}
+        defaultSort={{ key: "name", dir: "asc" }}
+        columns={[
+          { key: "name", label: "Name", sortable: true, render: (r: any) => <NameCell name={r.name} sub={r.sidh_candidate_id ?? undefined} /> },
+          { key: "internal_days", label: "Our days", sortable: true, render: (r: any) => `${r.internal_days} / ${data.days_held}` },
+          { key: "govt_days", label: "Govt days", sortValue: (r: any) => r.govt?.days_present ?? -1, sortable: true, render: (r: any) => r.govt ? `${r.govt.days_present ?? "—"}${r.govt.working_days ? ` / ${r.govt.working_days}` : ""}` : <span className="text-gray-400" title="No matched portal import yet">—</span> },
+          { key: "govt_hours", label: "Govt hours", sortValue: (r: any) => r.govt?.hours ?? -1, sortable: true, render: (r: any) => r.govt?.hours != null ? `${r.govt.hours} hrs` : <span className="text-gray-400">—</span> },
+          {
+            key: "qualified", label: "Assessment", sortable: true, sortValue: (r: any) => (r.qualified ? 1 : 0),
+            filterText: (r: any) => (r.qualified ? "Qualified" : "Below threshold"),
+            render: (r: any) => r.left_on
+              ? <Chip value="Dropout" />
+              : r.qualified
+                ? <span className="rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-semibold text-green-700" title={`${r.attended_hours} of ${data.required_hours} hrs`}>✓ Qualified for assessments</span>
+                : <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600" title={r.govt ? "Portal hours below the threshold" : "No portal hours yet — estimated from our days"}>{r.attended_hours} / {data.required_hours} hrs</span>,
+          },
+          {
+            key: "_days", label: "Day-wise", mobile: false,
+            render: (r: any) => (
+              <div className="flex max-w-[260px] gap-0.5 overflow-x-auto" title="Our daily logs, oldest first">
+                {r.present_by_day.map((p: boolean, i: number) => (
+                  <span key={i} title={fmtDate(data.days[i])}
+                    className={`inline-block h-3 w-3 shrink-0 rounded-sm ${p ? "bg-green-500" : "bg-gray-200"}`} />
+                ))}
+              </div>
+            ),
+          },
+        ]} empty="No students on the roster." />
+      <p className="text-[11px] text-gray-500">
+        Hours come from the government portal when a matched import exists; until then they are
+        estimated from our daily logs × the batch slot. The portal meter is what the assessor
+        settles against.
+      </p>
+    </div>
+  );
+}
+
 function DailyExecution({ batchId, batch, role, setError }: any) {
   const canMark = role !== "Location";
   const [logs, setLogs] = useState<any[]>([]);

@@ -197,6 +197,34 @@ ok("committed counts match the preview", done.data.matched_count === 4 && done.d
 
 const detail = await req(admin, "GET", `/api/govt-attendance/${done.data._id}`);
 ok("all 7 rows persisted", detail.data.rows?.length === 7, `got ${detail.data.rows?.length}`);
+
+// ---- R-D (CEO 14/08): the batch Attendance tab — both meters + the green verdict ----
+{
+  const att = await req(admin, "GET", `/api/batches/${batch._id}/attendance`);
+  ok("R-D: attendance endpoint answers with the full roster",
+    att.status === 200 && (att.data.members ?? []).length === 5, `got ${att.status}, ${att.data.members?.length}`);
+  ok("R-D: the hours threshold is derived and positive",
+    att.data.required_hours > 0 && att.data.min_attendance_pct > 0,
+    JSON.stringify({ r: att.data.required_hours, pct: att.data.min_attendance_pct }));
+  const rows = Object.fromEntries((att.data.members ?? []).map((m) => [m.name, m]));
+  ok("R-D: Charlie carries the portal HOURS meter (4551 min → 76 hrs)",
+    rows[`${NAME} Charlie`]?.govt?.hours === 76, String(rows[`${NAME} Charlie`]?.govt?.hours));
+  ok("R-D: the green verdict follows the threshold exactly, for every student",
+    (att.data.members ?? []).every((m) => m.qualified === (m.attended_hours >= att.data.required_hours)));
+  ok("R-D: an ambiguous/unmatched student shows NO portal figures (never guessed)",
+    rows[`${NAME} Twin`]?.govt === null, JSON.stringify(rows[`${NAME} Twin`]?.govt));
+  ok("R-D: the day-wise grid is one cell per logged day",
+    (att.data.members ?? []).every((m) => m.present_by_day.length === att.data.days_held), `days_held=${att.data.days_held}`);
+  // Scope: the endpoint carries no extra permission gate, but Rule 38 still bites — the
+  // out-of-scope trainer from the marking block must not read another centre's meters.
+  const tOut2 = await login(`gt.trainer.out.${STAMP}@vidysea-test.local`, "Vidysea@123");
+  if (tOut2) {
+    const foreignAtt = await req(tOut2, "GET", `/api/batches/${batch._id}/attendance`);
+    ok("R-D: out-of-scope trainer refused (Rule 38)", foreignAtt.status === 403 || foreignAtt.status === 404, `got ${foreignAtt.status}`);
+  } else {
+    ok("R-D: out-of-scope login already deactivated (Rule 38 pinned elsewhere)", true);
+  }
+}
 ok("period label stored", detail.data.item?.period_label === `test ${STAMP}`);
 const varOnly = await req(admin, "GET", `/api/govt-attendance/${done.data._id}?filter=variance`);
 ok("variance filter returns only rows that actually differ",
