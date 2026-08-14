@@ -1,7 +1,7 @@
 import { itemRoutes } from "@/lib/crud";
 import { Trainer } from "@/models";
 import { hasPermission } from "@/lib/permissions";
-import { assertLocationOperational } from "@/lib/rules";
+import { assertLocationOperational, TRAINER_FLOW } from "@/lib/rules";
 import { maskTrainerSecrets } from "../route";
 
 // Same masking as the list route (2026-08-12) — opening one trainer by id was the obvious way
@@ -9,7 +9,11 @@ import { maskTrainerSecrets } from "../route";
 export const { GET, PATCH } = itemRoutes({
   model: Trainer, entity: "Trainer", scopeField: null,
   async mapItems(items, user) {
-    return maskTrainerSecrets(items, await hasPermission(user, "trainers.manage"));
+    const masked = await maskTrainerSecrets(items, await hasPermission(user, "trainers.manage"));
+    // QA-111 (15/08): the Move drawer offered all 11 stages and let the server refuse the
+    // pick — a dead-end that even demanded a TR ID first. The edge table is the single
+    // source of truth; hand the UI exactly the moves the machine will accept.
+    return masked.map((t: any) => ({ ...t, allowed_next: TRAINER_FLOW[t.pipeline_status ?? "Fresh Lead"] ?? [] }));
   },
   // The hiring-journey fields have to be writable here too — the detail page PATCHes through
   // this route, and a field missing from this list is silently dropped. pipeline_status is

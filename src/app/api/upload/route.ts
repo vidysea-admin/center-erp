@@ -11,7 +11,8 @@ import { BASE_PATH } from "@/lib/base-path";
 // 2026-08-12: .doc/.docx added — a trainer's industry and teaching experience certificates arrive
 // as Word files, and without these the mandatory-document gate could never be satisfied.
 // 15/08 (team feedback): .heic added — iPhones hand photos over as HEIC by default.
-const ALLOWED = new Set([".jpg", ".jpeg", ".png", ".webp", ".heic", ".pdf", ".mp4", ".mov", ".3gp", ".xlsx", ".xls", ".csv", ".doc", ".docx"]);
+// 15/08 (team, via checker): audio too — voice notes are field evidence like photos are.
+const ALLOWED = new Set([".jpg", ".jpeg", ".png", ".webp", ".heic", ".pdf", ".mp4", ".mov", ".3gp", ".mp3", ".m4a", ".wav", ".amr", ".xlsx", ".xls", ".csv", ".doc", ".docx"]);
 
 // POST multipart { file } → { url } (served from /uploads via next.config rewrite-free public dir)
 export const POST = apiHandler(async (req: NextRequest) => {

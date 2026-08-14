@@ -86,6 +86,17 @@ const afterReplace = (await req("GET", D)).data;
 ok("re-uploading a document replaces it instead of stacking duplicates",
   afterReplace.items.filter((d) => d.doc_type === "PAN").length === 1, `${afterReplace.items.filter((d) => d.doc_type === "PAN").length}`);
 
+// ---- QA-112 (15/08): a wrong file is REMOVABLE — delete exists, audited, then re-add ----
+{
+  const pan = afterReplace.items.find((d) => d.doc_type === "PAN");
+  const del = await req("DELETE", `${D}/${pan._id}`, undefined, 200);
+  ok("QA-112: deleting a document reports the fresh summary", del.data.summary?.missing?.includes("PAN"), JSON.stringify(del.data.summary?.missing));
+  await req("DELETE", `${D}/${pan._id}`, undefined, 404); // gone is gone
+  const gate = await req("POST", T, { target: "Documents Completed" });
+  ok("QA-112: the docs gate honestly reopens after the delete", gate.status === 409 && /PAN/.test(gate.data?.error ?? ""), `got ${gate.status}`);
+  await req("POST", D, { doc_type: "PAN", file_url: "/erp/api/files/pan-v3.pdf" }, 201); // replace = delete + re-add
+}
+
 await req("POST", T, { target: "Documents Completed" }, 200);
 await req("POST", T, { target: "Sent to NSDC" }, 200);
 

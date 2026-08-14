@@ -260,6 +260,20 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
                 <a className="text-blue-700 underline" href={r.file_url} target="_blank" rel="noreferrer">{r.original_name || "open"}</a>) },
               { key: "uploaded_by", label: "Uploaded by", render: (r: any) => r.uploaded_by?.name ?? "—", mobile: false },
               { key: "createdAt", label: "On", render: (r: any) => fmt(r.createdAt), mobile: false },
+              {
+                // QA-112 (15/08): a wrong file was permanent. Delete with a plain confirm;
+                // replace = delete + upload again. The audit log keeps what left and who.
+                key: "_del", label: "", mobile: false,
+                render: (r: any) => (
+                  <span onClick={(e) => e.stopPropagation()}>
+                    <Btn small kind="ghost" onClick={async () => {
+                      if (!window.confirm(`Delete this ${r.doc_type}${r.original_name ? ` (${r.original_name})` : ""}? The audit log keeps a record of who removed it.`)) return;
+                      try { await api(`/api/trainers/${id}/documents/${r._id}`, { method: "DELETE" }); await load(); }
+                      catch (er: any) { setErr(er.message); }
+                    }}>Delete</Btn>
+                  </span>
+                ),
+              },
             ]}
             empty="No documents yet."
           />
@@ -311,9 +325,12 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
       {move && (
         <Drawer open onClose={() => setMove(null)} title={`Move ${t.name}`}>
           <Field label="Move to" required>
+            {/* QA-111 (15/08): only the moves the machine will accept — the server's own
+                edge table rides in on the trainer (allowed_next). No more picking
+                "Certified" from Fresh Lead, filling a TR ID and getting refused. */}
             <select className={inputCls} value={move.target} onChange={(e) => setMove({ ...move, target: e.target.value })}>
               <option value="">Choose…</option>
-              {[...JOURNEY, "NSDC Rejected", "Dropped"].map((s) => <option key={s}>{s}</option>)}
+              {(t.allowed_next ?? [...JOURNEY, "NSDC Rejected", "Dropped"]).map((s: string) => <option key={s}>{s}</option>)}
             </select>
           </Field>
           {/* Only ask for what this particular move actually requires. */}
@@ -358,7 +375,9 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
                 const sel = document.getElementById("dt") as HTMLSelectElement | null;
                 if (files.length) addDocs(files, sel?.value);
               }} />
-            <p className="mt-1 text-[11px] text-gray-400">4-5 documents ek saath — type filename se pehchana jayega (aadhaar/pan/cv…); galat lage to upload ke baad us document pe replace kar dena.</p>
+            {/* QA-113 (15/08): English-only product copy, and it now describes a real action —
+                delete exists since QA-112 shipped alongside. */}
+            <p className="mt-1 text-[11px] text-gray-400">Pick several files at once — the type is detected from each filename (aadhaar / pan / cv / photo…). Wrong type? Delete that document from the list and upload it again.</p>
           </Field>
           {busy && <p className="mt-2 text-sm text-gray-500">Uploading…</p>}
         </Drawer>

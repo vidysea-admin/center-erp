@@ -30,6 +30,10 @@ ok("[best] the list shows the moved stage (chip data source)", listed[0]?.pipeli
 // [best] detail: GET by id returns the full editable record for the drawer.
 const detail = (await req(admin, "GET", `/api/trainers/${t1._id}`, undefined, 200)).data.item;
 ok("[best] detail carries the drawer's fields", detail.name.startsWith("TEST-ET Applied") && detail.pipeline_status === "Fresh Lead" && Array.isArray(detail.skills), JSON.stringify({ p: detail.pipeline_status }));
+// QA-111 (15/08): the detail hands the UI the LEGAL next steps from the server's own edge
+// table — the Move drawer offers exactly these, so no more dead-end picks.
+ok("QA-111: detail carries allowed_next from the edge table (Fresh Lead → Shortlisted/Dropped)",
+  JSON.stringify(detail.allowed_next) === JSON.stringify(["Shortlisted", "Dropped"]), JSON.stringify(detail.allowed_next));
 
 // [best] drawer edit round-trip: the fields a wrong sheet import needs corrected.
 await req(admin, "PATCH", `/api/trainers/${t1._id}`, { qualification: "B.Sc Electronics", email: `et${s}@example.com`, home_location: loc._id, capable_locations: [loc._id, loc2._id], industry_experience_years: 4 }, 200);

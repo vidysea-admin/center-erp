@@ -1040,6 +1040,8 @@ ok("…with the contact details an approver needs", !!queued && queued.phone ===
   ok("T1: png uploads", (await up("t.png", "image/png")) === 200);
   ok("T1: docx uploads", (await up("t.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")) === 200);
   ok("T1: heic uploads (iPhone default)", (await up("t.heic", "image/heic")) === 200);
+  // 15/08 (team, via checker): voice notes are field evidence too.
+  ok("T1: m4a audio uploads (voice notes)", (await up("t.m4a", "audio/mp4")) === 200);
   ok("T1: an executable is refused", (await up("t.exe", "application/octet-stream")) === 400);
 }
 

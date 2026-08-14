@@ -1373,7 +1373,9 @@ export async function nextBatchCode(location?: { code?: string } | null, program
 // mendetary hai TVP mein jaane ke lie", and which ones differ BY JOB ROLE (2026-08-12, Manish).
 export const MANDATORY_TRAINER_DOCS = ["Aadhaar", "PAN", "Photo", "CV", "Educational Qualification"] as const;
 
-const TRAINER_FLOW: Record<string, string[]> = {
+// QA-111 (15/08): exported so the trainer GET can hand the UI the LEGAL next steps —
+// the Move drawer used to offer all 11 stages and let the server refuse the pick.
+export const TRAINER_FLOW: Record<string, string[]> = {
   // 2026-08-14 CEO vocabulary. The old Docs Pending state merged into Shortlisted (documents
   // are collected while Shortlisted); Rule T2's "papers actually in" check still gates the
   // entry into Documents Completed, which is the only exit that mattered.
