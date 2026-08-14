@@ -654,10 +654,10 @@ ok("meeting note recorded with author", notes.length === 1 && !!notes[0].logged_
 // ---- Trainer pipeline warning ----
 const pipeTrainer = (await req("POST", "/api/trainers", {
   name: "Pipeline Trainer " + stamp, phone: "97777" + stamp.slice(0, 5),
-  skills: ["TestSkill" + stamp], pipeline_status: "Shortlisted", tr_id: "TR" + stamp,
+  skills: ["TestSkill" + stamp], pipeline_status: "Docs Pending", tr_id: "TR" + stamp,
 }, 201)).data.item;
 const warnBatch = await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: pipeTrainer._id, planned_start: "2027-03-01", target_size: 3 }, 201);
-ok("booking a not-Ready trainer warns, not blocks", String(warnBatch.data.warning ?? "").includes("Shortlisted"), JSON.stringify(warnBatch.data.warning));
+ok("booking a not-Ready trainer warns, not blocks", String(warnBatch.data.warning ?? "").includes("Docs Pending"), JSON.stringify(warnBatch.data.warning));
 await req("POST", `/api/batches/${warnBatch.data.item._id}/transition`, { target: "Cancelled", reason: "pipeline test cleanup" }, 200);
 
 // ---- Backward batch planner ----

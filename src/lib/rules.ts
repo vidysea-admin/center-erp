@@ -1275,11 +1275,12 @@ export async function nextBatchCode(): Promise<string> {
 export const MANDATORY_TRAINER_DOCS = ["Aadhaar", "PAN", "Photo", "CV", "Educational Qualification"] as const;
 
 const TRAINER_FLOW: Record<string, string[]> = {
+  // 2026-08-14 merge (CEO): CV Reviewed absorbs Shortlisted; Docs Pending absorbs Docs
+  // Complete. Rule T1's "papers actually in" check did not die — Rule T2 runs the same
+  // trainerDocSummary gate at Nomination Prepared, which is the only exit that mattered.
   "Applied": ["CV Reviewed", "Dropped"],
-  "CV Reviewed": ["Shortlisted", "Dropped"],
-  "Shortlisted": ["Docs Pending", "Dropped"],
-  "Docs Pending": ["Docs Complete", "Dropped"],
-  "Docs Complete": ["Nomination Prepared", "Docs Pending", "Dropped"],
+  "CV Reviewed": ["Docs Pending", "Dropped"],
+  "Docs Pending": ["Nomination Prepared", "Dropped"],
   "Nomination Prepared": ["Submitted to NSDC", "Docs Pending", "Dropped"],
   "Submitted to NSDC": ["NSDC Approved", "NSDC Rejected", "Dropped"],
   // The correct-and-resubmit loop. Also allowed straight back to Submitted for a clerical fix.
@@ -1335,16 +1336,6 @@ export async function transitionTrainer(
   const when = opts.date ? new Date(opts.date) : new Date();
 
   switch (target) {
-    case "Docs Complete": {
-      // The stage says the papers are in, so the system checks they actually are — including the
-      // job role's own extras ("industry experience aur teaching experience — mendetary hai TVP
-      // mein jaane ke lie"). Rule T2 re-checks at nomination in case documents were removed after.
-      const d = await trainerDocSummary(trainerId);
-      if (!d.complete) {
-        throw new HttpError(409, `Rule T1: ${t.name} is still missing ${d.missing.join(", ")} - "Docs Complete" means exactly that.`);
-      }
-      break;
-    }
     case "Nomination Prepared": {
       // The whole point of the document stage. Nominating someone whose papers are incomplete is
       // what gets the profile bounced back by NSDC, which is the delay this pipeline exists to stop.

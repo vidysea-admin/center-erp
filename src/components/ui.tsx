@@ -64,7 +64,7 @@ const CHIP_COLORS: Record<string, string> = {
   "No programme": "bg-amber-100 text-amber-700",
   "Under preparation": "bg-amber-100 text-amber-700",
   "Applied": "bg-amber-100 text-amber-700", "CV Reviewed": "bg-amber-100 text-amber-700",
-  "Docs Requested": "bg-amber-100 text-amber-700", "Docs Complete": "bg-amber-100 text-amber-700",
+  "Docs Requested": "bg-amber-100 text-amber-700",
   "Nomination Prepared": "bg-amber-100 text-amber-700", "Nominated to NSDC": "bg-amber-100 text-amber-700",
   "NSDC Approved": "bg-blue-100 text-blue-700", "Payment Done": "bg-blue-100 text-blue-700",
   "TOT Scheduled": "bg-blue-100 text-blue-700", "TOT In Progress": "bg-blue-100 text-blue-700",

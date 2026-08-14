@@ -1,2 +1,2 @@
-Name,Phone (10 digit),Email,Qualification,Skills / Job Roles (comma se alag),Industry Experience (saal),Teaching Experience (saal),Home Town,Current Stage,TR ID (agar Certified),Nominated Centre (Institution Name),Nominated Job Role,Remarks
+Name,Phone (10 digit),Email,Qualification,Skills / Job Roles (comma separated),Industry Experience (years),Teaching Experience (years),Home Town,Current Stage,TR ID (if Certified),Nominated Centre (Institution Name),Nominated Job Role,Remarks
 Anil Sharma,9876500002,anil@example.com,B.Tech,"Drone Service, Battery Repair",5,2,Meerut,CV Reviewed,,,"example row - delete this"

@@ -55,14 +55,15 @@ const tr = (await req("POST", "/api/trainers", {
 }, 201)).data.item;
 const T = `/api/trainers/${tr._id}/transition`;
 
-// ---- the machine will not let you skip the journey ----
+// ---- the machine will not let you skip the journey (2026-08-14 merged stages) ----
 await req("POST", T, { target: "Certified" }, 409);
 await req("POST", T, { target: "Submitted to NSDC" }, 409);
+await req("POST", T, { target: "Shortlisted" }, 409); // merged away — no longer a stage
 await req("POST", T, { target: "CV Reviewed" }, 200);
-await req("POST", T, { target: "Shortlisted" }, 200);
+await req("POST", T, { target: "Docs Complete" }, 409); // merged away — no longer a stage
 await req("POST", T, { target: "Docs Pending" }, 200);
 
-// ---- documents gate the nomination (Rule T2) ----
+// ---- documents gate the nomination (Rule T2 — the T1 check lives here since the merge) ----
 const D = `/api/trainers/${tr._id}/documents`;
 const before = (await req("GET", D)).data;
 ok("every mandatory document is reported missing up front", before.summary.missing.length === 5, JSON.stringify(before.summary.missing));
@@ -72,16 +73,14 @@ await req("POST", D, { doc_type: "Aadhaar", file_url: "/erp/api/files/aaaa.pdf",
 await req("POST", D, { doc_type: "PAN", file_url: "/erp/api/files/bbbb.pdf" }, 201);
 await req("POST", D, { doc_type: "Photo", file_url: "/erp/api/files/cccc.jpg" }, 201);
 await req("POST", D, { doc_type: "CV", file_url: "/erp/api/files/dddd.docx" }, 201);
-// Rule T1 (2026-08-12 evening): "Docs Complete" means exactly that — four of five is refused,
-// and the refusal names the one still missing.
-const halfway = await req("POST", T, { target: "Docs Complete" });
+// Four of five is refused, and the refusal names the one still missing (was Rule T1's job).
+const halfway = await req("POST", T, { target: "Nomination Prepared" });
 ok("the gate names exactly what is still missing",
   halfway.status === 409 && /Educational Qualification/.test(halfway.data?.error ?? ""), `got ${halfway.status} ${halfway.data?.error ?? ""}`);
 
 await req("POST", D, { doc_type: "Educational Qualification", file_url: "/erp/api/files/eeee.pdf" }, 201);
 const complete = (await req("GET", D)).data;
 ok("documents complete once the last one is in", complete.summary.complete === true);
-await req("POST", T, { target: "Docs Complete" }, 200);
 // re-uploading a type replaces rather than duplicates — what happens when NSDC bounces a profile
 await req("POST", D, { doc_type: "PAN", file_url: "/erp/api/files/pan-v2.pdf" }, 201);
 const afterReplace = (await req("GET", D)).data;
@@ -98,7 +97,6 @@ ok("a rejection records what NSDC actually said", rej.data.item.nsdc_remarks ===
 // "profile mein truti batate hain… hum isko correct karke wapas bhej rahe hain" — this must work
 await req("POST", T, { target: "Docs Pending" }, 200);
 await req("POST", D, { doc_type: "Industry Experience", file_url: "/erp/api/files/exp.docx" }, 201);
-await req("POST", T, { target: "Docs Complete" }, 200);
 await req("POST", T, { target: "Nomination Prepared" }, 200);
 await req("POST", T, { target: "Submitted to NSDC" }, 200);
 const appr = await req("POST", T, { target: "NSDC Approved" }, 200);
@@ -157,17 +155,17 @@ ok("a duplicate trainer phone is refused", dup.status >= 400, `got ${dup.status}
     nominated_for_location: loc._id, nominated_for_program: strictProg._id,
   }, 201)).data.item;
   const TX = `/api/trainers/${tx._id}/transition`;
-  for (const s of ["CV Reviewed", "Shortlisted", "Docs Pending"]) await req("POST", TX, { target: s }, 200);
+  for (const s of ["CV Reviewed", "Docs Pending"]) await req("POST", TX, { target: s }, 200);
   for (const d of ["Aadhaar", "PAN", "Photo", "CV", "Educational Qualification"]) {
     await req("POST", `/api/trainers/${tx._id}/documents`, { doc_type: d, file_url: `/uploads/x-${d}.pdf`, original_name: `${d}.pdf` }, 201);
   }
-  const refused = await req("POST", TX, { target: "Docs Complete" });
+  const refused = await req("POST", TX, { target: "Nomination Prepared" });
   ok("the five alone do not clear a role that demands experience certificates",
     refused.status === 409 && /Industry Experience/.test(refused.data?.error ?? ""), `got ${refused.status} ${refused.data?.error ?? ""}`);
   for (const d of ["Industry Experience", "Teaching Experience"]) {
     await req("POST", `/api/trainers/${tx._id}/documents`, { doc_type: d, file_url: `/uploads/x-${d}.pdf`, original_name: `${d}.pdf` }, 201);
   }
-  await req("POST", TX, { target: "Docs Complete" }, 200);
+  await req("POST", TX, { target: "Nomination Prepared" }, 200);
   const sum = await req("GET", `/api/trainers/${tx._id}/documents`, undefined, 200);
   ok("the documents summary names the role's full required set (7)",
     (sum.data.summary?.required ?? []).length === 7, JSON.stringify(sum.data.summary?.required));

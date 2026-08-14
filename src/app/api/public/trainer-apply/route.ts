@@ -14,7 +14,7 @@ import { audit } from "@/lib/audit";
 // No login is created — the Trainer doc is a pipeline record, not an account (accounts are
 // admin-created per the role matrix).
 
-const EARLY_STAGES = ["Applied", "CV Reviewed", "Shortlisted", "Docs Pending"];
+const EARLY_STAGES = ["Applied", "CV Reviewed", "Docs Pending"];
 
 // What the applicant may write about themselves — nothing else crosses this boundary.
 function applicantFields(body: Record<string, unknown>) {

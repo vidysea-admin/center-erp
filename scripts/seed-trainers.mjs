@@ -27,10 +27,10 @@ const TAB_MAPPINGS = [];
 // Status text in the sheet → pipeline stage. Extend from the real inventory; anything not
 // listed is REPORTED, never guessed into a stage.
 const STATUS_ALIASES = {
-  "shortlisted": "Shortlisted",
+  "shortlisted": "CV Reviewed",
   "documents pending": "Docs Pending",
-  "documents received": "Docs Complete",
-  "registered": "Docs Complete",          // registered on SIDH = profile built, papers in
+  "documents received": "Docs Pending",
+  "registered": "Docs Pending",           // registered on SIDH = profile built, papers in
   "nominated": "Submitted to NSDC",
   "nominated to nsdc": "Submitted to NSDC",
   "approved": "NSDC Approved",

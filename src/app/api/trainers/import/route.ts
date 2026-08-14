@@ -16,8 +16,14 @@ import { normalizePhone } from "@/lib/duplicates";
 // The template speaks the CEO's DISPLAY labels; the enum never changed. Accept both.
 const STAGE_ALIASES: Record<string, string> = {
   "fresh lead": "Applied",
-  "shortlisted (for tot)": "Shortlisted",
-  "shortlisted for tot": "Shortlisted",
+  // 2026-08-14 merge: the old names stay importable, remapped to the merged stages.
+  "shortlisted": "CV Reviewed",
+  "shortlisted (for tot)": "CV Reviewed",
+  "shortlisted for tot": "CV Reviewed",
+  "cv review & shortlist (for tot)": "CV Reviewed",
+  "cv review & shortlist": "CV Reviewed",
+  "docs complete": "Docs Pending",
+  "documents": "Docs Pending",
   "tot payment done": "Payment Done",
   "certified (ready to train)": "Certified",
   "certified ready to train": "Certified",

@@ -74,7 +74,7 @@ function TrainersInner() {
   const tagCounts = new Map<string, number>();
   for (const t of items) tagCounts.set(availabilityTag(t), (tagCounts.get(availabilityTag(t)) ?? 0) + 1);
   // CEO 13/08: stage-wise counts with rejected-here — the journey as a strip, click = filter.
-  const STAGES = ["Applied", "CV Reviewed", "Shortlisted", "Docs Pending", "Docs Complete", "Nomination Prepared",
+  const STAGES = ["Applied", "CV Reviewed", "Docs Pending", "Nomination Prepared",
     "Submitted to NSDC", "NSDC Approved", "NSDC Rejected", "Payment Done", "TOT Scheduled", "TOT In Progress", "Certified"];
   const stageCur = new Map<string, number>();
   const stageRej = new Map<string, number>();

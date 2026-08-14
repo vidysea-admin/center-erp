@@ -71,7 +71,9 @@ export function sourceLink(source?: string | null): { tab: string; url: string }
 // "Applied ko Fresh Lead likho; Shortlisted = for TOT; Payment Done = TOT Payment Done."
 export const PIPELINE_LABELS: Record<string, string> = {
   "Applied": "Fresh Lead",
-  "Shortlisted": "Shortlisted (for TOT)",
+  // 2026-08-14 merge: CV Reviewed absorbed Shortlisted; Docs Pending absorbed Docs Complete.
+  "CV Reviewed": "CV Review & Shortlist (for TOT)",
+  "Docs Pending": "Documents",
   "Payment Done": "TOT Payment Done",
   "Certified": "Certified (Ready to Train)",
 };

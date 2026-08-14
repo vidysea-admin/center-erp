@@ -146,10 +146,10 @@ const trainers = new Map(); // phone → doc
     const loc = findLocation(r[4]);
     const prev = trainers.get(phone);
     // Documents saved + experience cert + ok-for-TOT is a real stage: papers are in.
-    const stage = /ok for tot|tot/i.test(docNotes) ? "Docs Complete" : /document/i.test(docNotes) ? "Docs Pending" : "Applied";
+    const stage = /ok for tot|tot|document/i.test(docNotes) ? "Docs Pending" : "Applied"; // 2026-08-14 merge: Docs Complete folded into Docs Pending
     // Never DOWNGRADE: a Trainer_Master-certified (teaching) trainer also on this doc tab
     // stays Certified — the doc chase is history for them, not their current stage.
-    const RANK = ["Applied", "Docs Pending", "Docs Complete", "Submitted to NSDC", "NSDC Approved", "Certified"];
+    const RANK = ["Applied", "Docs Pending", "Submitted to NSDC", "NSDC Approved", "Certified"];
     const keepPrev = prev?.pipeline_status && RANK.indexOf(prev.pipeline_status) > RANK.indexOf(stage);
     trainers.set(phone, {
       ...(prev ?? { name, phone, source: "AVPL Registered Trainers", skills: [], active: true, status: "Available" }),
@@ -195,7 +195,7 @@ const trainers = new Map(); // phone → doc
     // Furthest-along evidence wins; the pipeline itself is walked by humans afterwards.
     if (/yes|approved/i.test(approved)) hit.pipeline_status = "NSDC Approved";
     else if (submitted) hit.pipeline_status = "Submitted to NSDC";
-    else if (/yes/i.test(readyTot)) hit.pipeline_status = "Docs Complete";
+    else if (/yes/i.test(readyTot)) hit.pipeline_status = "Docs Pending"; // merge 14/08
     hit.pipeline_note = [hit.pipeline_note, `Back-dated planning: ${rows[hi].map((h, i) => (h && r[i] ? `${h}=${r[i]}` : "")).filter(Boolean).join(" | ").slice(0, 400)}`].filter(Boolean).join(" || ");
     touched++;
   }

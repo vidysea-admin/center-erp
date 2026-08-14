@@ -61,7 +61,7 @@ async function certifiedTrainer(name) {
   for (const d of DOCS) {
     await req(admin, "POST", `/api/trainers/${t._id}/documents`, { doc_type: d, file_url: `/uploads/x-${d}.pdf`, original_name: `${d}.pdf` });
   }
-  for (const s of ["CV Reviewed", "Shortlisted", "Docs Pending", "Docs Complete", "Nomination Prepared",
+  for (const s of ["CV Reviewed", "Docs Pending", "Nomination Prepared",
     "Submitted to NSDC", "NSDC Approved", "Payment Done", "TOT Scheduled", "TOT In Progress"]) {
     await req(admin, "POST", `/api/trainers/${t._id}/transition`, { target: s });
   }

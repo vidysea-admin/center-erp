@@ -17,12 +17,13 @@ export const TRAINER_STATUS = ["Available", "Assigned", "Unavailable"] as const;
 //    भेजते हैं → eligible होने पर ₹3250 payment → TOT → certified → TR ID"
 // "NSDC Rejected" is deliberately NOT terminal — the correct-and-resubmit loop is the common case,
 // and the 2026-08-12 audit found an S0 exactly where a rejected certificate had no way back.
+// 2026-08-14 (CEO via Umesh, twice): "CV Reviewed + Shortlisted (for TOT)" are ONE decision
+// and "Docs Pending + Docs Complete" are ONE stage — merged. Old values remain accepted as
+// import aliases and are remapped in prod by the 14/08 migration.
 export const TRAINER_PIPELINE = [
   "Applied",
   "CV Reviewed",
-  "Shortlisted",
   "Docs Pending",
-  "Docs Complete",
   "Nomination Prepared",
   "Submitted to NSDC",
   "NSDC Approved",

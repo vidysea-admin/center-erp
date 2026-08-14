@@ -13,7 +13,7 @@ const TABS = ["Pipeline", "Documents", "Profile", "Assignments"];
 
 // The order the journey actually runs in, for the progress rail.
 const JOURNEY = [
-  "Applied", "CV Reviewed", "Shortlisted", "Docs Pending", "Docs Complete",
+  "Applied", "CV Reviewed", "Docs Pending",
   "Nomination Prepared", "Submitted to NSDC", "NSDC Approved",
   "Payment Done", "TOT Scheduled", "TOT In Progress", "Certified",
 ];

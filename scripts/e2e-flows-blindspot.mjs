@@ -84,7 +84,7 @@ console.log("\n--- FL1: the ₹3250 books itself as a cost, exactly once ---");
   for (const d of ["Aadhaar", "PAN", "Photo", "CV", "Educational Qualification"]) {
     await req(admin, "POST", `/api/trainers/${t._id}/documents`, { doc_type: d, file_url: `/uploads/${d}.pdf`, original_name: `${d}.pdf` });
   }
-  for (const s of ["CV Reviewed", "Shortlisted", "Docs Pending", "Docs Complete", "Nomination Prepared", "Submitted to NSDC", "NSDC Approved"]) {
+  for (const s of ["CV Reviewed", "Docs Pending", "Nomination Prepared", "Submitted to NSDC", "NSDC Approved"]) {
     await req(admin, "POST", `/api/trainers/${t._id}/transition`, { target: s });
   }
   await req(admin, "POST", `/api/trainers/${t._id}/transition`, { target: "Payment Done", payload: { payment_reference: `NEFT-FL${stamp}` } }, 200);
@@ -95,7 +95,7 @@ console.log("\n--- FL1: the ₹3250 books itself as a cost, exactly once ---");
   // Walk the same trainer out and back through the stage — the fee must not book twice.
   await req(admin, "POST", `/api/trainers/${t._id}/transition`, { target: "Dropped", reason: "Test detour" }, 200);
   await req(admin, "POST", `/api/trainers/${t._id}/transition`, { target: "Applied" }, 200);
-  for (const s of ["CV Reviewed", "Shortlisted", "Docs Pending", "Docs Complete", "Nomination Prepared", "Submitted to NSDC", "NSDC Approved", "Payment Done"]) {
+  for (const s of ["CV Reviewed", "Docs Pending", "Nomination Prepared", "Submitted to NSDC", "NSDC Approved", "Payment Done"]) {
     await req(admin, "POST", `/api/trainers/${t._id}/transition`, { target: s });
   }
   const again = (await req(admin, "GET", `/api/costs?trainer=${t._id}`)).data.items ?? [];

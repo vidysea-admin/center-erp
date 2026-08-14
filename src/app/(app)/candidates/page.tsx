@@ -83,13 +83,21 @@ function CandidatesInner() {
     return "Training Ongoing";
   };
   const JOURNEY_TAGS = ["Enrollment in progress", "Training Ongoing", "Training Completed", "Result Awaited", "Certified", "Not Certified"];
-  const FRESH_TAGS = ["Unassigned", "Dropped"];
+  // QA-021 (checker) + CEO [29:36]: Fresh has its OWN journey — inquiry to portal
+  // registration — derived from sidh_status, never stored.
+  const freshJourneyOf = (r: any): string => {
+    if (r.lifecycle_status === "Dropped") return "Dropped";
+    if (r.sidh_status === "Registered") return "Registered on Portal";
+    if (r.sidh_status === "Link Sent") return "Portal Link Sent";
+    return "Fresh Lead";
+  };
+  const FRESH_TAGS = ["Fresh Lead", "Portal Link Sent", "Registered on Portal", "Dropped"];
   const LIFECYCLE_TAGS = bucket === "Fresh" ? FRESH_TAGS : JOURNEY_TAGS;
   // 2026-08-13 (Umesh): a candidate in a batch HAS that batch's programme — "No programme"
   // only when neither the row nor an active membership carries one.
   const progOf = (r: any) => r.program ?? r.active_batch?.program ?? null;
   const tagOf = (r: any): string[] => {
-    const tags = [bucket === "Fresh" ? (r.lifecycle_status ?? "Unassigned") : journeyOf(r)];
+    const tags = [bucket === "Fresh" ? freshJourneyOf(r) : journeyOf(r)];
     if (!progOf(r)) tags.push("No programme");
     if ((r.interested_programs?.length ?? 0) > 1) tags.push("Multi-interest");
     return tags;
@@ -283,8 +291,10 @@ function CandidatesInner() {
             // Mutually exclusive CURRENT states — a zero on an earlier stage while a later
             // one is full means everyone moved through, not a broken funnel (N02).
             title: {
-              "Unassigned": "In the pool — not placed into any batch yet",
-              "Dropped": "Left/removed after being placed",
+              "Fresh Lead": "Inquiry stage — Skill India registration not started",
+              "Portal Link Sent": "Registration link sent (WhatsApp/SMS) — waiting on the candidate",
+              "Registered on Portal": "Skill India registration done — ready for batch assignment",
+              "Dropped": "Left/removed",
               "Enrollment in progress": "Placed into a batch; registration/KYC/acceptance still running",
               "Training Ongoing": "Enrolled on a batch that is currently Active",
               "Training Completed": "Their batch finished training; result not final yet",
@@ -325,10 +335,10 @@ function CandidatesInner() {
             // CEO terminology: Fresh bucket shows the pool state; Enrolled bucket shows the
             // JOURNEY (Enrollment in progress → Training Ongoing → Training Completed →
             // Result Awaited → Certified / Not Certified).
-            key: "lifecycle_status", label: bucket === "Fresh" ? "Status" : "Journey status", sortable: true,
-            sortValue: (r: any) => bucket === "Fresh" ? r.lifecycle_status : journeyOf(r),
-            filterText: (r: any) => bucket === "Fresh" ? r.lifecycle_status : journeyOf(r),
-            render: (r: any) => <Chip value={bucket === "Fresh" ? r.lifecycle_status : journeyOf(r)} />,
+            key: "lifecycle_status", label: bucket === "Fresh" ? "Stage" : "Journey status", sortable: true,
+            sortValue: (r: any) => bucket === "Fresh" ? freshJourneyOf(r) : journeyOf(r),
+            filterText: (r: any) => bucket === "Fresh" ? freshJourneyOf(r) : journeyOf(r),
+            render: (r: any) => <Chip value={bucket === "Fresh" ? freshJourneyOf(r) : journeyOf(r)} />,
           },
           {
             key: "eligibility", label: "Eligible",
