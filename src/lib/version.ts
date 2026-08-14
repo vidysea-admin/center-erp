@@ -3,12 +3,11 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-34";
+export const RELEASE = "2026.08.14-35";
 export const RELEASE_NOTE =
-  "R-B user management (CEO: 'right away'). Per-user REMOVED rights: a deny " +
-  "list that wins over the role's set AND any extra grant - Admin edits it on " +
-  "the user drawer ('Removed rights', red), non-Admins cannot touch it, and the " +
-  "refusal names the missing right. One-click 'Stop access' / 'Reactivate' on " +
-  "every user row - a stopped account cannot mint a new session. (Rides with " +
-  "R-A from -33: CEO stage vocabulary stored, Dropout/Failed journey stages, " +
-  "enrolled_at stamp, wipe endpoint removed.)";
+  "R-C daily-log date guard (Rule 53, CEO: 'today, maximum minus one, " +
+  "definitely not plus one'). Attendance can never be taken for a future date - " +
+  "any role; a Trainer may write only today or yesterday (IST calendar day, not " +
+  "the server's UTC day), with older corrections left to Operations/Admin. The " +
+  "date picker mirrors the rule, and the govt-attendance-screenshot upload " +
+  "leaves the Trainer's form (CEO: they won't have it) while Ops/Admin keep it.";

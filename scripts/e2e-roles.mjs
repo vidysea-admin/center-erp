@@ -515,6 +515,23 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   ok("R-B: reactivate restores login", (await req(admin, "PATCH", `/api/users/${uid}`, { active: true })).status === 200 && !!(await login(`revoke.${stamp}@test.local`, PW)));
 }
 
+// ---- Rule 53 (R-C, CEO 14/08 [40:51]): trainer log-date window ----
+{
+  const tb = (await req(trainer, "GET", "/api/batches")).data.items?.find((b) => ["Active", "Closing"].includes(b.status));
+  if (tb) {
+    const twoAgo = new Date(Date.now() - 2 * 86_400_000).toISOString().slice(0, 10);
+    const old = await req(trainer, "POST", `/api/batches/${tb._id}/logs`, { log_date: twoAgo, present_member_ids: [] });
+    ok("Rule 53: a trainer cannot backdate beyond yesterday",
+      old.status === 403 && /Rule 53/.test(old.data?.error ?? ""), `got ${old.status} ${old.data?.error ?? ""}`);
+    const fut = new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10);
+    const future = await req(admin, "POST", `/api/batches/${tb._id}/logs`, { log_date: fut, present_member_ids: [] });
+    ok("Rule 53: a future date is refused for everyone",
+      future.status === 400 && /future/i.test(future.data?.error ?? ""), `got ${future.status} ${future.data?.error ?? ""}`);
+  } else {
+    ok("Rule 53: skipped — no Active batch visible to the trainer (fixture)", true);
+  }
+}
+
 // unauthenticated → 401
 const anon = await fetch(BASE + "/api/locations");
 ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}`);

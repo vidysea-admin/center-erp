@@ -705,7 +705,12 @@ function DailyExecution({ batchId, batch, role, setError }: any) {
       {canMark && <Section title="Today's entry">
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Date" required><input type="date" className={inputCls} value={form.log_date} onChange={(e) => setForm({ ...form, log_date: e.target.value })} /></Field>
+            {/* Rule 53 (CEO 14/08): never a future date; a Trainer gets today or yesterday
+                only. The server enforces the same — this just stops the doomed attempt. */}
+            <Field label="Date" required><input type="date" className={inputCls} value={form.log_date}
+              max={toInputDate(new Date())}
+              min={role === "Trainer" ? toInputDate(new Date(Date.now() - 86_400_000)) : undefined}
+              onChange={(e) => setForm({ ...form, log_date: e.target.value })} /></Field>
             <Field label="Govt portal present (blank = not verified)"><input type="number" className={inputCls} value={form.govt_present ?? ""} onChange={(e) => setForm({ ...form, govt_present: e.target.value })} /></Field>
             <Field label="Planned topic"><input className={inputCls} value={form.planned_topic ?? ""} onChange={(e) => setForm({ ...form, planned_topic: e.target.value })} /></Field>
             <Field label="Actual topic"><input className={inputCls} value={form.actual_topic ?? ""} onChange={(e) => setForm({ ...form, actual_topic: e.target.value })} /></Field>
@@ -751,9 +756,13 @@ function DailyExecution({ batchId, batch, role, setError }: any) {
             <Field label={`Videos (${form.videos.length})`}>
               <input type="file" accept="video/mp4,video/*" capture="environment" className={inputCls} onChange={(e) => e.target.files?.[0] && uploadFile(e.target.files[0], "videos")} />
             </Field>
-            <Field label={`Govt attendance screenshot${form.govt_screenshot ? " ✓" : ""}`}>
-              <input type="file" accept="image/*" className={inputCls} onChange={(e) => e.target.files?.[0] && uploadFile(e.target.files[0], "govt_screenshot")} />
-            </Field>
+            {/* CEO 14/08 [41:31]: "Government attendance screenshot — I don't think they
+                [trainers] will have it, so they won't be able to provide." Ops/Admin keep it. */}
+            {role !== "Trainer" && (
+              <Field label={`Govt attendance screenshot${form.govt_screenshot ? " ✓" : ""}`}>
+                <input type="file" accept="image/*" className={inputCls} onChange={(e) => e.target.files?.[0] && uploadFile(e.target.files[0], "govt_screenshot")} />
+              </Field>
+            )}
           </div>
           <Field label="Note"><input className={inputCls} value={form.note ?? ""} onChange={(e) => setForm({ ...form, note: e.target.value })} /></Field>
           <div className="flex items-center gap-3">

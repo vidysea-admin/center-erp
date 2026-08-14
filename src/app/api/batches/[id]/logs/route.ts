@@ -29,6 +29,18 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // F-008: store the calendar date itself (UTC midnight), not midnight in whatever timezone this
   // process happens to run in — otherwise the same day written by two processes is two instants.
   const D = dayKey(body.log_date);
+  // R-C (CEO 14/08 [40:51]): "the trainer should be able to work only on today's date —
+  // maximum minus 1, definitely not plus 1." A future day is fiction for EVERY role; the
+  // deeper backdate stays open to Operations/Admin for corrections (Manish to confirm the
+  // trainer window). "Today" is the IST calendar date — the server clock runs in UTC, and
+  // at 1am IST the UTC date is still yesterday (the same class as the QA-056 DOB bug).
+  const todayD = dayKey(new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10));
+  if (D.getTime() > todayD.getTime()) {
+    throw new HttpError(400, "Rule 53: attendance cannot be taken for a future date.");
+  }
+  if (user.role === "Trainer" && (todayD.getTime() - D.getTime()) > 86_400_000) {
+    throw new HttpError(403, "Rule 53: trainers may log only today or yesterday. Ask Operations/Admin to enter an older day.");
+  }
   // Rule 27 is backed by a unique index on {batch, log_date}, which only catches an exact repeat.
   // Check the whole calendar day as well, so a row written under the old timezone-dependent
   // encoding cannot be duplicated by a new one for the same day.
