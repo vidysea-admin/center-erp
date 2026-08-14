@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { DailyLog } from "@/models";
-import { assertBatchInScope, dayKey, validateDailyLog } from "@/lib/rules";
+import { assertBatchInScope, dayKey, istToday, validateDailyLog } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
 // POST append a MARKING ROUND to a day's log (Karunn 2026-08-13: "din mein do baar, teen
@@ -24,7 +24,9 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // A round is LIVE marking, not an edit: any scoped batches.daily_log holder (the trainer,
   // whoever opened the day) may add one ON THE DAY ITSELF. Anything later is a backdated
   // correction and goes through Edit, which Rule 27 restricts to Ops/Admin.
-  if (dayKey(new Date()).getTime() !== dayKey(log.log_date).getTime() && user.role !== "Admin" && user.role !== "Operations") {
+  // QA-081: "today" is the IST calendar date everywhere — at 1am IST the server's UTC day
+  // is still yesterday, which would have refused a trainer's perfectly-on-time round.
+  if (istToday().getTime() !== dayKey(log.log_date).getTime() && user.role !== "Admin" && user.role !== "Operations") {
     throw new HttpError(403, "Marking rounds are same-day only — for an earlier date use Edit (Operations/Admin).");
   }
   const body = await req.json();

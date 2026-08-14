@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, requireRole, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, requireRole, HttpError, invalidateIdentity } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { User } from "@/models";
 import { audit } from "@/lib/audit";
@@ -55,6 +55,9 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   }
 
   await doc.save();
+  // QA-080: a privilege/identity change must bite the person's LIVE session on their very
+  // next request — not after the identity cache's TTL. Stop access = stopped now.
+  if (changingPriv || body.approval) invalidateIdentity(String(doc._id));
   await audit({ entity: "User", entityId: doc._id, field: body.approval ? `signup ${body.approval}d` : "updated", actor: user.id });
   const { password_hash: _ph, ...safe } = doc.toObject();
   return NextResponse.json({ item: safe });

@@ -3,15 +3,16 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-45";
+export const RELEASE = "2026.08.14-46";
 export const RELEASE_NOTE =
-  "The doors the CEO closed are now shut on the SERVER - the checker called " +
-  "the menu-only pattern out for the sixth time, so this is the last time. A " +
-  "Trainer is refused at the trainer/candidate/location directories and the " +
-  "hiring board (403, not data); Enrollment keeps candidates and locations " +
-  "but loses the trainer directory and hiring plan; the hiring board itself " +
-  "now demands trainers.manage. Operations loses the sheet machinery and the " +
-  "approvals queue at the RIGHTS level (their own submissions stay under My " +
-  "submissions). The lean Home payload no longer ships the org-wide numbers " +
-  "its cards were hiding, and a Trainer's daily-log write cannot smuggle the " +
-  "government figures in through the API.";
+  "One definition of today, and a stop that stops. QA-081: every date guard " +
+  "in the daily-log path - future-date refusal, the trainer's same-day " +
+  "marking rounds, the dropout future check - now reads the same IST calendar " +
+  "day (istToday); at 1am IST the server's UTC clock no longer refuses an " +
+  "on-time trainer or accepts a future drop. QA-080: stopping a user " +
+  "invalidates their LIVE session on the very next request - not after a " +
+  "cache TTL, and never 30 days. QA-072: the daily log's photo and video " +
+  "pickers take multiple files in one go. QA-030: the Batches screen names " +
+  "WHY positions are blocked, not just how many. QA-073: the users list " +
+  "names the granted/removed rights, and choosing a role shows what that " +
+  "preset profile carries.";

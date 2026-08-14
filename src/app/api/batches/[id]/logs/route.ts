@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { DailyLog } from "@/models";
-import { assertBatchInScope, dayKey, dayRange, validateDailyLog } from "@/lib/rules";
+import { assertBatchInScope, dayKey, dayRange, istToday, validateDailyLog } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
 export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
@@ -40,7 +40,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // deeper backdate stays open to Operations/Admin for corrections (Manish to confirm the
   // trainer window). "Today" is the IST calendar date — the server clock runs in UTC, and
   // at 1am IST the UTC date is still yesterday (the same class as the QA-056 DOB bug).
-  const todayD = dayKey(new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10));
+  const todayD = istToday(); // QA-081: the one shared definition
   if (D.getTime() > todayD.getTime()) {
     throw new HttpError(400, "Rule 53: attendance cannot be taken for a future date.");
   }

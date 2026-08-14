@@ -213,10 +213,24 @@ function Users({ setError }: any) {
           { key: "role", label: "Role", sortable: true, render: (r: any) => <Chip value={r.role} /> },
           { key: "location_scope", label: "Scope", filterText: (r: any) => ["Location", "Trainer"].includes(r.role) ? (r.location_scope ?? []).map((l: any) => l.name ?? l.code).join(", ") || "none" : "All", render: (r: any) => ["Location", "Trainer"].includes(r.role) ? (r.location_scope ?? []).map((l: any) => l.name ?? l.code).join(", ") || "none" : "All" },
           { key: "can_edit", label: "Can edit", filterText: (r: any) => (r.can_edit ? "Yes" : "View only"), render: (r: any) => (r.can_edit ? "Yes" : "View only") },
-          { key: "extra_permissions", label: "Special rights", render: (r: any) => [
-            (r.extra_permissions ?? []).length ? `${r.extra_permissions.length} extra` : "",
-            (r.revoked_permissions ?? []).length ? `${r.revoked_permissions.length} removed` : "",
-          ].filter(Boolean).join(" · ") || "—", mobile: false },
+          {
+            // QA-073: name the rights, not just a count — the cell says which, on hover too.
+            key: "extra_permissions", label: "Special rights", mobile: false,
+            filterText: (r: any) => [...(r.extra_permissions ?? []), ...(r.revoked_permissions ?? []).map((p: string) => `-${p}`)].join(" "),
+            render: (r: any) => {
+              const extra: string[] = r.extra_permissions ?? [];
+              const revoked: string[] = r.revoked_permissions ?? [];
+              if (!extra.length && !revoked.length) return "—";
+              return (
+                <span title={[extra.length ? `granted: ${extra.join(", ")}` : "", revoked.length ? `removed: ${revoked.join(", ")}` : ""].filter(Boolean).join(" · ")}>
+                  {extra.length ? <span className="text-green-700">+{extra.length}</span> : null}
+                  {extra.length && revoked.length ? " · " : null}
+                  {revoked.length ? <span className="text-red-700">−{revoked.length}</span> : null}
+                  <span className="ml-1 text-[10px] text-gray-400">{[...extra.map((p) => p.split(".")[0]), ...revoked.map((p) => p.split(".")[0])].slice(0, 3).join(", ")}{extra.length + revoked.length > 3 ? "…" : ""}</span>
+                </span>
+              );
+            },
+          },
           { key: "active", label: "Active", filterText: (r: any) => (r.active ? "Yes" : r.approval_status === "Rejected" ? "Rejected" : "No"), render: (r: any) => (r.active ? "Yes" : r.approval_status === "Rejected" ? "Rejected" : "No") },
           {
             // CEO 14/08 [35:13]: "we should be able to stop access to certain people if need
@@ -241,10 +255,11 @@ function Users({ setError }: any) {
           <Field label={edit ? "New password (blank = unchanged)" : "Password"} required={!edit}>
             <input type="password" className={inputCls} value={form.password ?? ""} onChange={(e) => set("password", e.target.value)} />
           </Field>
-          <Field label="Role">
+          <Field label="Role (the preset profile — its toggled rights apply on sign-in)">
             <select className={inputCls} value={form.role} onChange={(e) => set("role", e.target.value)}>
               {["Admin", "Operations", "Location", "Enrollment", "Trainer"].map((r) => <option key={r}>{r}</option>)}
             </select>
+            <RolePresetSummary role={form.role} />
           </Field>
           {["Location", "Trainer"].includes(form.role) && (
             <Field label="Location scope (Rule 38 — server-enforced)">
@@ -276,6 +291,20 @@ function Users({ setError }: any) {
         </div>
       </Drawer>
     </Section>
+  );
+}
+
+// QA-073 (CEO [34:59] "preset profiles"): show what the chosen profile actually carries,
+// at the moment of choosing it — the matrix tab remains where it is edited.
+function RolePresetSummary({ role }: { role?: string }) {
+  const [roles, setRoles] = useState<any[]>([]);
+  useEffect(() => { api("/api/permissions").then((d) => setRoles(d.roles ?? [])).catch(() => {}); }, []);
+  if (!role || role === "Admin") return role === "Admin" ? <p className="mt-1 text-[11px] text-gray-500">Admin bypasses the matrix — every right, always.</p> : null;
+  const set = roles.find((r) => r.role === role)?.permissions ?? [];
+  return (
+    <p className="mt-1 text-[11px] text-gray-500" title={set.join(", ") || "no rights toggled"}>
+      This profile carries <b>{set.length}</b> right{set.length === 1 ? "" : "s"}{set.length ? `: ${set.slice(0, 4).map((p: string) => p.split(".").pop()).join(", ")}${set.length > 4 ? "…" : ""}` : ""} — adjust per-user below after saving, or per-role on the Permissions tab.
+    </p>
   );
 }
 

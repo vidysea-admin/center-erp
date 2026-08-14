@@ -519,8 +519,12 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   // A grant does NOT resurrect a revoked right — deny wins over extra too.
   await req(admin, "PATCH", `/api/users/${uid}`, { extra_permissions: ["trainers.manage"] });
   ok("R-B: an extra grant cannot undo a revoke (deny wins)", (await mkTrainer()).status === 403);
-  // Stop access: active=false kills the NEXT login; a fresh session cannot be minted.
+  // Stop access: active=false kills the LIVE session on its very next request (QA-080 —
+  // the identity cache is invalidated by the stop itself, no TTL wait), and a fresh
+  // session cannot be minted.
   ok("R-B: Admin stops access", (await req(admin, "PATCH", `/api/users/${uid}`, { active: false })).status === 200);
+  ok("QA-080: the session they already had dies on the very next request",
+    (await req(cookie, "GET", "/api/candidates?limit=1")).status === 401);
   ok("R-B: a stopped account cannot log in", (await login(`revoke.${stamp}@test.local`, PW)) === null);
   ok("R-B: reactivate restores login", (await req(admin, "PATCH", `/api/users/${uid}`, { active: true })).status === 200 && !!(await login(`revoke.${stamp}@test.local`, PW)));
 }

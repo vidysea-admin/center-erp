@@ -176,12 +176,24 @@ function BatchesInner() {
       {tab === "Batches" ? (
         <>
           {/* QA-030: the main list says out loud what Preparation is holding back. */}
-          {(prep?.blocked_count ?? 0) > 0 && (
-            <button onClick={() => setTab("Preparation")}
-              className="w-full rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-left text-sm text-amber-800 hover:border-amber-300">
-              ⚑ <b>{prep.blocked_count}</b> centre × job-role position{prep.blocked_count === 1 ? " is" : "s are"} blocked in Preparation (trainer / candidates / infrastructure not ready) — click to see what each one needs.
-            </button>
-          )}
+          {(prep?.blocked_count ?? 0) > 0 && (() => {
+            // QA-030: name the REASONS on the main screen, not just the count — post-reset
+            // every position is blocked and a bare number reads as noise, not a stall.
+            const why = new Map<string, number>();
+            for (const row of prep.items ?? []) {
+              for (const b of row.blockers ?? []) {
+                const k = /trainer/i.test(b) ? "trainer" : /candidate/i.test(b) ? "candidates" : /room|lab|infra/i.test(b) ? "infrastructure" : "other";
+                why.set(k, (why.get(k) ?? 0) + 1);
+              }
+            }
+            const parts = [...why.entries()].map(([k, n]) => `${k} ${n}`).join(" · ");
+            return (
+              <button onClick={() => setTab("Preparation")}
+                className="w-full rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-left text-sm text-amber-800 hover:border-amber-300">
+                ⚑ <b>{prep.blocked_count}</b> of {(prep.items ?? []).length} centre × job-role position{prep.blocked_count === 1 ? " is" : "s are"} blocked in Preparation{parts ? ` — ${parts}` : ""} — click to see what each one needs.
+              </button>
+            );
+          })()}
           {role === "Trainer" && (
             <FilterPills active={mineFilter} onChange={(v) => setMineFilter((v || "mine") as any)}
               options={[

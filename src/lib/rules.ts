@@ -96,6 +96,14 @@ export function parseSheetDate(raw: unknown): Date | null {
   return null;
 }
 
+// QA-081 (checker, 14/08): Rule 53 fixed "today" in one place and left three other
+// definitions behind it. ONE definition now: the IST calendar date, in dayKey (UTC-
+// midnight) encoding — at 1am IST the server's UTC date is still yesterday, the same
+// class as the QA-056 DOB lockout.
+export function istToday(): Date {
+  return dayKey(new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10));
+}
+
 export function dayKey(d: Date | string): Date {
   if (typeof d === "string") {
     const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d);
@@ -417,7 +425,9 @@ export async function dropMemberChecked(memberId: string, left_on: Date, drop_re
   if (!m) throw new HttpError(404, "Batch member not found");
   const lo = dayStart(left_on);
   if (lo < dayStart(m.joined_on)) throw new HttpError(400, "Rule 25: left_on cannot precede joined_on.");
-  if (lo > dayStart(new Date())) throw new HttpError(400, "Rule 25: left_on cannot be a future date.");
+  // QA-081: the future check compares CALENDAR dates on the IST footing (dayKey space);
+  // storage below stays in the historical dayStart encoding untouched.
+  if (dayKey(left_on).getTime() > istToday().getTime()) throw new HttpError(400, "Rule 25: left_on cannot be a future date.");
   m.left_on = lo;
   m.drop_reason = drop_reason;
   await m.save();
@@ -592,7 +602,7 @@ export async function validateDailyLog(batchId: string, log_date: Date, payload:
   const D = dayKey(log_date);
   if (batch.actual_start && D < dayKey(batch.actual_start)) throw new HttpError(400, "Rule 32: log date before batch actual start.");
   if (batch.actual_end && D > dayKey(batch.actual_end)) throw new HttpError(400, "Rule 32: log date after batch actual end.");
-  if (D > dayKey(new Date())) throw new HttpError(400, "Cannot log a future date.");
+  if (D > istToday()) throw new HttpError(400, "Cannot log a future date."); // QA-081: IST, not the server's UTC day
 
   const roster = await rosterOnDate(batchId, D); // Rule 26
   const rosterIds = new Set(roster.map((m) => String(m._id)));

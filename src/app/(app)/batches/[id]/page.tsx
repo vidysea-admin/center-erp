@@ -828,11 +828,14 @@ function DailyExecution({ batchId, batch, role, setError }: any) {
             </div>
           </div>
           <div className="grid gap-3 md:grid-cols-3">
+            {/* QA-072 (CEO [39:59] "they should be able to add multiple photos"): the
+                pickers take several files in one go; each uploads through the same
+                compressed/retry/offline-queue path and appends to the day's arrays. */}
             <Field label={`Photos (${form.photos.length})`}>
-              <input type="file" accept="image/*" capture="environment" className={inputCls} onChange={(e) => e.target.files?.[0] && uploadFile(e.target.files[0], "photos")} />
+              <input type="file" accept="image/*" capture="environment" multiple className={inputCls} onChange={(e) => { for (const f of Array.from(e.target.files ?? [])) uploadFile(f, "photos"); }} />
             </Field>
             <Field label={`Videos (${form.videos.length})`}>
-              <input type="file" accept="video/mp4,video/*" capture="environment" className={inputCls} onChange={(e) => e.target.files?.[0] && uploadFile(e.target.files[0], "videos")} />
+              <input type="file" accept="video/mp4,video/*" capture="environment" multiple className={inputCls} onChange={(e) => { for (const f of Array.from(e.target.files ?? [])) uploadFile(f, "videos"); }} />
             </Field>
             {/* CEO 14/08 [41:31]: "Government attendance screenshot — I don't think they
                 [trainers] will have it, so they won't be able to provide." Ops/Admin keep it. */}
