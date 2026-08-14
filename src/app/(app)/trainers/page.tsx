@@ -207,7 +207,18 @@ function TrainersInner() {
           </div>
           <FilterPills active={tag} onChange={(v) => setTag(v === tag ? "" : v)}
             options={[{ value: "", label: "All", count: items.length },
-              ...TAG_ORDER.map((t) => ({ value: t, label: t, count: tagCounts.get(t) ?? 0 }))]} />
+              ...TAG_ORDER.map((t) => ({
+                value: t, label: t, count: tagCounts.get(t) ?? 0,
+                // These are mutually exclusive TODAY-states, not a funnel — "Available 0
+                // while Assigned 6" simply means every certified trainer is on a batch.
+                title: {
+                  "Available": "Certified AND free to take a batch today",
+                  "Under preparation": "Still in the hiring/TOT pipeline — not certified yet (may already be pencilled into a batch)",
+                  "Assigned": "Certified and currently running a batch — not free",
+                  "Unavailable": "Certified but marked unavailable",
+                  "Rejected/Dropped": "Left the pipeline (NSDC rejected or dropped)",
+                }[t],
+              }))]} />
           {/* 2026-08-13 (Manish couldn't find the hiring journey): a row now opens the trainer's
               detail page — the ONLY host of the journey rail + TOT panel; editing moved to the
               explicit button so the journey stops being unreachable. */}
@@ -222,7 +233,15 @@ function TrainersInner() {
               {
                 // 2026-08-12: three states now, not two — a rejected profile and a dropped applicant
                 // are not "in progress", and showing them amber hides the ones needing action.
-                key: "pipeline_status", label: "Pipeline", sortable: true, sortValue: (r: any) => r.pipeline_status ?? "Applied", render: (r: any) => {
+                key: "pipeline_status", label: "Pipeline", sortable: true, sortValue: (r: any) => r.pipeline_status ?? "Applied",
+                // The funnel filter must speak the SAME display names the cells show —
+                // raw enum values here were exactly the "old labels in the filters"
+                // Umesh caught on 14/08 after the CEO rename.
+                filterText: (r: any) => {
+                  const s = r.pipeline_status ?? "Applied";
+                  return s === "Dropped" && r.dropped_from_stage ? `Dropped (at ${pipelineLabel(r.dropped_from_stage)})` : pipelineLabel(s);
+                },
+                render: (r: any) => {
                   const s = r.pipeline_status ?? "Applied";
                   const tone = s === "Certified" ? "border-green-200 bg-green-50 text-green-700"
                     : s === "NSDC Rejected" || s === "Dropped" ? "border-red-200 bg-red-50 text-red-700"

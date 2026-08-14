@@ -35,7 +35,9 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   if (!batch) throw new HttpError(404, "Batch not found");
   if (batch.status === "Cancelled") throw new HttpError(409, "A cancelled batch is frozen — no certificate uploads.");
 
-  const form = await req.formData();
+  let form: FormData;
+  try { form = await req.formData(); }
+  catch { throw new HttpError(400, "multipart form-data body required — attach one or more files[]"); }
   const files = form.getAll("files").filter((f): f is File => f instanceof File);
   if (!files.length) throw new HttpError(400, "files[] is required (multipart, one or more)");
 

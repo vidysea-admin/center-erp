@@ -278,7 +278,21 @@ function CandidatesInner() {
       <FilterPills active={tag} onChange={(v) => setTag(v === tag ? "" : v)}
         options={[
           { value: "", label: "All", count: bucketItems.length },
-          ...LIFECYCLE_TAGS.map((t) => ({ value: t, label: t, count: tagCount(t) })),
+          ...LIFECYCLE_TAGS.map((t) => ({
+            value: t, label: t, count: tagCount(t),
+            // Mutually exclusive CURRENT states — a zero on an earlier stage while a later
+            // one is full means everyone moved through, not a broken funnel (N02).
+            title: {
+              "Unassigned": "In the pool — not placed into any batch yet",
+              "Dropped": "Left/removed after being placed",
+              "Enrollment in progress": "Placed into a batch; registration/KYC/acceptance still running",
+              "Training Ongoing": "Enrolled on a batch that is currently Active",
+              "Training Completed": "Their batch finished training; result not final yet",
+              "Result Awaited": "Assessment done, awaiting the recorded result",
+              "Certified": "Passed — certificate issued or on its way",
+              "Not Certified": "Finished without a Pass (Fail/Absent)",
+            }[t as string],
+          })),
           { value: "No programme", label: "No programme", count: tagCount("No programme") },
           { value: "Multi-interest", label: "Multi-interest", count: tagCount("Multi-interest") },
         ]} />

@@ -191,14 +191,16 @@ export function Tabs({ tabs, active, onChange }: { tabs: string[]; active: strin
 // generalized from the govt-attendance page's local pattern). Counts come from the fetched
 // set, so the pill row doubles as the at-a-glance summary Manish asked for.
 export function FilterPills({ options, active, onChange }: {
-  options: { value: string; label: string; count?: number }[];
+  // title: what this state MEANS — the N01/N02 review read "Available 0 · Assigned 6" as a
+  // contradiction; the states are mutually exclusive, and the hover text is where that lives.
+  options: { value: string; label: string; count?: number; title?: string }[];
   active: string;
   onChange: (v: string) => void;
 }) {
   return (
     <div className="flex flex-wrap gap-2 text-xs">
       {options.map((o) => (
-        <button key={o.value} onClick={() => onChange(o.value)}
+        <button key={o.value} onClick={() => onChange(o.value)} title={o.title}
           className={`rounded-full border px-3 py-1 font-medium ${active === o.value ? "border-blue-300 bg-blue-50 text-blue-700" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>
           {o.label}{o.count != null ? ` ${o.count}` : ""}
         </button>
@@ -539,13 +541,17 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
             <div style={{ width: scrollW, height: 8 }} />
           </div>
         )}
-        <div ref={bodyScrollRef} onScroll={() => syncScroll(bodyScrollRef.current, topScrollRef.current)} className="dt-scroll overflow-x-auto">
+        {/* 2026-08-14 (Umesh): "top columns and the scroller should be static … in each and
+            every table" — the table scrolls INSIDE this container (max-h) so the header row
+            can stick to its top; sticky lives on the th cells (thead-sticky is unreliable),
+            and the bg must be opaque or data rows ghost through while scrolling. */}
+        <div ref={bodyScrollRef} onScroll={() => syncScroll(bodyScrollRef.current, topScrollRef.current)} className="dt-scroll max-h-[72vh] overflow-auto">
           <table className="w-full text-sm" style={tableStyle}>
             {anyWidth && <colgroup>{visCols.map((c) => <col key={c.key} style={widths[c.key] ? { width: widths[c.key] } : undefined} />)}</colgroup>}
-            <thead className="bg-gray-50/80 text-left text-[11px] uppercase tracking-wider text-gray-400">
+            <thead className="text-left text-[11px] uppercase tracking-wider text-gray-400">
               <tr>
                 {visCols.map((c) => (
-                  <th key={c.key} className="relative px-3.5 py-3 font-semibold">
+                  <th key={c.key} className="sticky top-0 z-[5] border-b border-gray-100 bg-gray-50 px-3.5 py-3 font-semibold">
                     <span className="flex items-center gap-1">
                       {headerCell(c)}
                       {funnel(c)}

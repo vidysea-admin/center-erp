@@ -299,6 +299,7 @@ function Roster({ batchId, batch, setError, onChanged }: any) {
     setAttBusy(false);
   }
 
+  const [loaded, setLoaded] = useState(false);
   const load = () => Promise.all([
     api(`/api/batches/${batchId}/members`).then((d) => setMembers(d.items)),
     // 2026-08-13 (Manish hit this live — Prem Kumar/Lalit from another job role in the pool):
@@ -308,7 +309,7 @@ function Roster({ batchId, batch, setError, onChanged }: any) {
       setPool(d.items.filter((c: any) => ["Unassigned", "Dropped"].includes(c.lifecycle_status)
         && (!c.program || String(c.program?._id ?? c.program) === String(batch.program?._id ?? batch.program))))),
     api("/api/master-lists/drop-reasons").then((d) => setDropReasons(d.items)),
-  ]).catch((e: any) => setError(e.message));
+  ]).catch((e: any) => setError(e.message)).finally(() => setLoaded(true));
   useEffect(() => { load(); }, [batchId]);
 
   async function add(candidateId: string) {
@@ -362,7 +363,7 @@ function Roster({ batchId, batch, setError, onChanged }: any) {
               }}>Download bulk SMS file</button>
           </div>
         )}
-        <DataTable rows={members}
+        <DataTable rows={members} loading={!loaded}
           cardTitle={(r: any) => r.candidate?.name}
           columns={[
             { key: "candidate", label: "Candidate", render: (r: any) => r.candidate?.name },
@@ -501,10 +502,11 @@ function DailyExecution({ batchId, batch, role, setError }: any) {
   const [editLog, setEditLog] = useState<any>(null);
   const [roundLog, setRoundLog] = useState<any>(null); // "mark another round" target (Karunn: P-P-P multiple times a day)
 
+  const [loaded, setLoaded] = useState(false);
   const load = () => Promise.all([
     api(`/api/batches/${batchId}/logs`).then((d) => setLogs(d.items)),
     api(`/api/batches/${batchId}/members`).then((d) => setMembers(d.items.filter((m: any) => !m.left_on))),
-  ]).catch((e: any) => setError(e.message));
+  ]).catch((e: any) => setError(e.message)).finally(() => setLoaded(true));
   useEffect(() => { load(); setQueued(getQueue().length); }, [batchId]);
 
   function togglePresent(id: string) {
@@ -686,7 +688,7 @@ function DailyExecution({ batchId, batch, role, setError }: any) {
           </a>
         ) : undefined
       }>
-        <DataTable rows={logs}
+        <DataTable rows={logs} loading={!loaded}
           cardTitle={(r: any) => fmtDate(r.log_date)}
           columns={[
             // mobile:false — the card already leads with this date as its title (audit F-005).
@@ -1096,10 +1098,11 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
     finally { setUploading(false); }
   }
 
+  const [loaded, setLoaded] = useState(false);
   const load = () => Promise.all([
     api(`/api/batches/${batchId}/results`).then((d) => { setItems(d.items); setSummary(d.summary); }),
     api("/api/master-lists/failure-reasons").then((d) => setReasons(d.items)).catch(() => setReasons([])),
-  ]).catch((e: any) => setError(e.message));
+  ]).catch((e: any) => setError(e.message)).finally(() => setLoaded(true));
   useEffect(() => { load(); }, [batchId]);
 
   async function mark(member: string, patch: any) {
@@ -1232,7 +1235,7 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
       )}
 
       {view === "review" ? (
-        <DataTable rows={items}
+        <DataTable rows={items} loading={!loaded}
           cardTitle={(r: any) => r.candidate?.name}
           columns={[
             { key: "candidate", label: "Candidate", render: (r: any) => <NameCell name={r.candidate?.name} sub={r.candidate?.phone} /> },
@@ -1365,7 +1368,7 @@ function FeedbackTab({ batchId, setError }: any) {
               }}>Download bulk SMS file</button>
           </div>
         )}
-        <DataTable rows={data?.items ?? []}
+        <DataTable rows={data?.items ?? []} loading={!data}
           cardTitle={(r: any) => r.batch_member?.candidate?.name ?? "?"}
           columns={[
             { key: "candidate", label: "Candidate", render: (r: any) => r.batch_member?.candidate?.name ?? "?" },
@@ -1385,10 +1388,11 @@ function CostsTab({ batchId, batch, setError }: any) {
   const [form, setForm] = useState<any>({ entry_date: toInputDate(new Date()) });
   const [suggest, setSuggest] = useState<any>(null);
 
+  const [loaded, setLoaded] = useState(false);
   const load = () => Promise.all([
     api(`/api/costs?batch=${batchId}`).then((d) => setItems(d.items)),
     api("/api/master-lists/cost-categories").then((d) => setCats(d.items)),
-  ]).catch((e: any) => setError(e.message));
+  ]).catch((e: any) => setError(e.message)).finally(() => setLoaded(true));
   useEffect(() => { load(); }, [batchId]);
 
   // Trainer fee suggestion — honours the trainer's compensation model (F-B1):
@@ -1447,7 +1451,7 @@ function CostsTab({ batchId, batch, setError }: any) {
           <Btn small onClick={addSuggested}>Add as cost entry</Btn>
         </div>
       )}
-      <DataTable rows={items}
+      <DataTable rows={items} loading={!loaded}
         cardTitle={(r: any) => `₹${r.amount} · ${r.category?.name}`}
         columns={[
           { key: "entry_date", label: "Date", render: (r: any) => fmtDate(r.entry_date) },
