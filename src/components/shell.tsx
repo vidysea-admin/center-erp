@@ -18,12 +18,15 @@ const NAV = [
   // CEO 14/08 [17:26] (as the ops persona): "we should remove sheet sync, all of these
   // things" — the sheet machinery is the Admin's concern; everyone else just sees its output.
   { href: "/sheet-watch", label: "Sheet Sync", Icon: IconSync, badge: "sheets" as string | undefined, roles: ["Admin"] },
-  { href: "/locations", label: "Locations", Icon: IconPin },
-  { href: "/trainers", label: "Trainers", Icon: IconUser },
+  // R-I (CEO 14/08 [38:10-38:43], as the trainer persona): "I shouldn't be able to see
+  // other trainers … why new location tab is here — this all should be disabled … I should
+  // just see my batch-wise details." A Trainer's doors are Home and Batches, full stop.
+  { href: "/locations", label: "Locations", Icon: IconPin, roles: ["Admin", "Operations", "Location", "Enrollment"] },
+  { href: "/trainers", label: "Trainers", Icon: IconUser, roles: ["Admin", "Operations", "Location", "Enrollment"] },
   // Karunn 13/08 [25:28]: "Open Positions kahan-kahan hain — side me chahiye" — the
   // hiring board gets its own door instead of hiding as the third Trainers tab.
   { href: "/trainers?tab=Open%20Positions", label: "Open Positions", Icon: IconUser, roles: ["Admin", "Operations"] },
-  { href: "/candidates", label: "Candidates", Icon: IconUsers },
+  { href: "/candidates", label: "Candidates", Icon: IconUsers, roles: ["Admin", "Operations", "Location", "Enrollment"] },
   { href: "/batches", label: "Batches", Icon: IconCap },
   // 2026-08-12: the portal attendance export Manish uploads, reconciled against our daily logs.
   // 2026-08-13 (Umesh): attendance is OFF the principal/SPOC plate entirely — Location removed.

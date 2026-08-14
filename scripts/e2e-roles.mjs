@@ -560,6 +560,17 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   await req(admin, "PUT", "/api/approvals", { action: "location.edit", enabled: false });
 }
 
+// ---- R-I (CEO [38:54-39:10]): a Trainer's batch list marks mine vs guest-faculty ----
+{
+  const tb = await req(trainer, "GET", "/api/batches");
+  ok("R-I: every batch row carries is_mine for a Trainer login",
+    (tb.data.items ?? []).length === 0 || tb.data.items.every((b) => typeof b.is_mine === "boolean"),
+    JSON.stringify(tb.data.items?.[0]?.is_mine));
+  const ab = await req(admin, "GET", "/api/batches");
+  ok("R-I: other roles never see the flag (no accidental contract growth)",
+    (ab.data.items ?? []).every((b) => b.is_mine === undefined));
+}
+
 // ---- R-H (CEO [03:02-03:14]): programme master carries QP hours + Admin-only money ----
 {
   const prog = (await req(admin, "GET", "/api/programs?limit=1")).data.items?.[0];

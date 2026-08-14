@@ -1,6 +1,7 @@
 "use client";
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { api, fmtDate, toInputDate } from "@/lib/client";
 import { BASE_PATH } from "@/lib/base-path";
@@ -20,6 +21,13 @@ function BatchesInner() {
   const [trainers, setTrainers] = useState<any[]>([]);
   const [rooms, setRooms] = useState<any[]>([]);
   const [fStatus, setFStatus] = useState(sp.get("status") ?? "");
+  // R-I (CEO [38:54-39:10], trainer persona): "these are my batches assigned to me … or if
+  // I am going into a batch as a guest faculty, then I should be able to see a batch which
+  // is not assigned to me … and should be able to select." Default = mine; one click widens
+  // to the centre's other batches (still Rule 38 — never another centre's).
+  const { data: session } = useSession();
+  const role = (session?.user as any)?.role;
+  const [mineFilter, setMineFilter] = useState<"mine" | "all">("mine");
   const [ctxLoc] = useLocationCtx();
   // B12 fix (2026-08-13): /batches?location=… — emitted by the location page and Home's
   // readiness rows — used to be silently dropped (only localStorage context was read). The URL
@@ -70,8 +78,9 @@ function BatchesInner() {
 
   // "Closed" (Rule 52) included so settled batches can be isolated and counted (audit find).
   const BATCH_STATUSES = ["Planning", "Ready", "Active", "Closing", "Completed", "Closed", "Cancelled"];
-  const statusCount = (s: string) => items.filter((b) => b.status === s).length;
-  const shown = fStatus ? items.filter((b) => b.status === fStatus) : items;
+  const trainerScoped = role === "Trainer" && mineFilter === "mine" ? items.filter((b) => b.is_mine) : items;
+  const statusCount = (s: string) => trainerScoped.filter((b) => b.status === s).length;
+  const shown = fStatus ? trainerScoped.filter((b) => b.status === fStatus) : trainerScoped;
 
   useEffect(() => {
     if (form.location) api(`/api/locations/${form.location}/rooms`).then((d) => setRooms(d.items)).catch(() => setRooms([]));
@@ -170,8 +179,15 @@ function BatchesInner() {
               ⚑ <b>{prep.blocked_count}</b> centre × job-role position{prep.blocked_count === 1 ? " is" : "s are"} blocked in Preparation (trainer / candidates / infrastructure not ready) — click to see what each one needs.
             </button>
           )}
+          {role === "Trainer" && (
+            <FilterPills active={mineFilter} onChange={(v) => setMineFilter((v || "mine") as any)}
+              options={[
+                { value: "mine", label: "My batches", count: items.filter((b) => b.is_mine).length },
+                { value: "all", label: "Guest faculty — other batches at my centre", count: items.length },
+              ]} />
+          )}
           <FilterPills active={fStatus} onChange={(v) => setFStatus(v === fStatus ? "" : v)}
-            options={[{ value: "", label: "All", count: items.length },
+            options={[{ value: "", label: "All", count: trainerScoped.length },
               ...BATCH_STATUSES.map((s) => ({ value: s, label: s, count: statusCount(s) }))]} />
           <DataTable rows={shown} onRowClick={(r) => router.push(`/batches/${r._id}`)}
             cardTitle={(r: any) => <>{r.code} <Chip value={r.status} /></>}

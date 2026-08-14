@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, requireRole, locationFilter, assertLocationInScope, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
-import { Batch, BatchMember, Candidate, Closure, Invoice, Location, Notification, Program } from "@/models";
+import { Batch, BatchMember, Candidate, Closure, Invoice, Location, Notification, Program, Trainer } from "@/models";
 import { assertLocationOperational, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, nextBatchCode, planBatchBackward, settlementStage, trainerBookingWarnings } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
@@ -41,6 +41,14 @@ export const GET = apiHandler(async (req: NextRequest) => {
   const invoices = doneIds.length ? await Invoice.find({ batch: { $in: doneIds } }).select("batch status").lean<any[]>() : [];
   const clByB = new Map(closures.map((c) => [String(c.batch), c]));
   const invByB = new Map(invoices.map((i) => [String(i.batch), i]));
+  // R-I (CEO [38:54-39:10]): a Trainer's default view is "batches assigned to ME", with the
+  // rest of their centre reachable as guest faculty. is_mine marks which is which — the
+  // linked Trainer profile is resolved from the login (Trainer.user), never guessed by name.
+  let myTrainerId: string | null = null;
+  if (user.role === "Trainer") {
+    const me = await Trainer.findOne({ user: user.id }).select("_id").lean<any>();
+    myTrainerId = me ? String(me._id) : null;
+  }
   // Health is computed per row; the list is already capped by location scope + status filter.
   const out = await Promise.all(items.map(async (b) => ({
     ...b,
@@ -48,6 +56,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
     enrolled_count: byBatch.get(String(b._id))?.enrolled ?? 0,
     settlement_stage: settlementStage(b.status, clByB.get(String(b._id)), invByB.get(String(b._id))),
     health: await batchHealth(String(b._id)),
+    ...(user.role === "Trainer" ? { is_mine: myTrainerId != null && String(b.trainer?._id ?? b.trainer ?? "") === myTrainerId } : {}),
   })));
   return NextResponse.json({ items: out, total: out.length });
 });
