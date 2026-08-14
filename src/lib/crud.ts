@@ -97,7 +97,11 @@ export function collectionRoutes(cfg: CrudConfig) {
     // 2026-08-13, Umesh: "don't apply any capping — full scale banana hai." The 200 ceiling was
     // silently hiding 372 of 572 candidates. 5000 is a guard against a runaway query, not a
     // product limit; DataTable paginates client-side, and `total` is always returned.
-    const limit = Math.min(5000, parseInt(sp.get("limit") || "50", 10));
+    // Sanitize before the ceiling: parseInt("abc")→NaN and limit=0 both make mongo's
+    // .limit() return the WHOLE collection, and a negative limit returns abs(n) rows
+    // (maker-found M-02, 2026-08-14). Coerce to a positive integer, default 50, hard-capped.
+    const rawLimit = parseInt(sp.get("limit") || "50", 10);
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(5000, rawLimit) : 50;
     let query = cfg.model.find(filter).sort(cfg.defaultSort ?? { createdAt: -1 }).skip((page - 1) * limit).limit(limit);
     for (const p of cfg.populate ?? []) query = query.populate(p.path, p.select);
     let [items, total] = await Promise.all([query.lean(), cfg.model.countDocuments(filter)]);

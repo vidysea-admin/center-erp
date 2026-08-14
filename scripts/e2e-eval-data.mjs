@@ -90,6 +90,12 @@ const all = (await req(admin, "GET", "/api/candidates?limit=5000", undefined, 20
 ok("[best] limit=5000 is honoured (no hidden 200-cap regression)", all.items.length === Math.min(all.total, 5000), `items=${all.items.length} total=${all.total}`);
 const over = await req(admin, "GET", "/api/candidates?limit=999999");
 ok("[worst] a runaway limit is clamped, not honoured", over.status === 200 && over.data.items.length <= 5000, `items=${over.data?.items?.length}`);
+// maker-found M-02 (2026-08-14): a junk / zero / negative limit must fall back to the
+// default page, not dump the whole collection (or a mongo negative-slice).
+for (const bad of ["0", "-5", "abc"]) {
+  const r = await req(admin, "GET", `/api/candidates?limit=${bad}`, undefined, 200);
+  ok(`[worst] limit=${bad} falls back to the 50 default, not the full set`, r.data.limit === 50 && r.data.items.length <= 50, `limit=${r.data.limit} items=${r.data.items.length}`);
+}
 
 // ---- shape 5 (2026-08-13, roster fix): a program-less import row joins a matching batch and
 // inherits its programme — the exact path the 572 prod rows take from the pool drawer.

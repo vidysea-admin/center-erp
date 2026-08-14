@@ -3,12 +3,10 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-23";
+export const RELEASE = "2026.08.14-24";
 export const RELEASE_NOTE =
-  "Trainer pipeline stages MERGED per the CEO (QA-020): CV Reviewed absorbs " +
-  "Shortlisted (label: CV Review & Shortlist), Docs Pending absorbs Docs Complete " +
-  "(label: Documents) - the papers-in gate now runs at Nomination Prepared (Rule " +
-  "T2, unchanged strength); old names stay importable as aliases; prod rows " +
-  "remapped by the 14/08 migration. Fresh candidates get their own journey " +
-  "(QA-021): Fresh Lead / Portal Link Sent / Registered on Portal, derived from " +
-  "sidh_status. Sample-sheet headers speak English.";
+  "List endpoints sanitize ?limit before the page cap (maker-found M-02): a " +
+  "non-numeric, zero, or negative limit used to make the query return the whole " +
+  "collection (or a negative-slice count) instead of a page - now coerced to a " +
+  "positive integer, default 50, hard-capped at 5000. No behaviour change for " +
+  "valid values; scope filters were never affected.";
