@@ -204,7 +204,7 @@ function BatchesInner() {
           <FilterPills active={fStatus} onChange={(v) => setFStatus(v === fStatus ? "" : v)}
             options={[{ value: "", label: "All", count: trainerScoped.length },
               ...BATCH_STATUSES.map((s) => ({ value: s, label: s, count: statusCount(s) }))]} />
-          <DataTable rows={shown} onRowClick={(r) => router.push(`/batches/${r._id}`)}
+          <DataTable rows={shown} storageKey="batches" onRowClick={(r) => router.push(`/batches/${r._id}`)}
             cardTitle={(r: any) => <>{r.code} <Chip value={r.status} /></>}
             loading={loading}
             defaultSort={{ key: "planned_start", dir: "desc" }}
@@ -235,7 +235,13 @@ function BatchesInner() {
               { key: "trainer", label: "Trainer", sortable: true, sortValue: (r: any) => r.trainer?.name ?? null, render: (r: any) => r.trainer?.name ?? "—" },
               { key: "planned_start", label: "Start", sortable: true, sortValue: (r: any) => r.planned_start ? new Date(r.planned_start).getTime() : null, render: (r: any) => fmtDate(r.planned_start) },
               // 2026-08-13 (Manish): source link per row — click lands on that sheet tab.
-              { key: "source", label: "Source", mobile: false, filterable: true, filterText: (r: any) => r.source ?? "Entered in ERP", render: (r: any) => <SourceCell source={r.source} /> },
+              // QA-022: "Entered in ERP" told nobody anything — an app-created row's
+              // provenance IS its creator, so the Source cell says so by name.
+              { key: "source", label: "Source", mobile: false, filterable: true,
+                filterText: (r: any) => r.source ?? `Entered by ${r.created_by?.name ?? "?"}`,
+                render: (r: any) => r.source
+                  ? <SourceCell source={r.source} />
+                  : <span className="text-xs text-gray-500">Entered by {r.created_by?.name ?? <span className="text-gray-400">(seed/import)</span>}</span> },
               // 2026-08-14 (Umesh): "entered into ERP dikhana is really not right — KISNE
               // daala, 4 me se kaun". The creator by name; seeded rows honestly say so.
               // Checker caught the first ship hiding this behind the picker — visible by default.

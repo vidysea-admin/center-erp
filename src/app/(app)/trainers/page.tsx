@@ -286,8 +286,9 @@ function TrainersInner() {
               const cur = stageCur.get(st) ?? 0, rej = stageRej.get(st) ?? 0, acc = stageAcc.get(st) ?? 0;
               if (!cur && !rej && !acc) return (
                 <button key={st} onClick={() => setStageFilter(stageFilter === st ? "" : st)}
+                  title="0 here now · 0 accepted through · 0 rejected here"
                   className={`shrink-0 rounded-lg border px-2 py-1 text-[11px] ${stageFilter === st ? "border-blue-400 bg-blue-50" : "border-gray-100 text-gray-300"}`}>
-                  {pipelineLabel(st)} 0
+                  {pipelineLabel(st)} 0 <span className="text-[10px]">✓0 ✗0</span>
                 </button>
               );
               return (
@@ -295,9 +296,9 @@ function TrainersInner() {
                   title={`${cur} here now · ${acc} accepted (moved past this stage) · ${rej} rejected at this stage`}
                   className={`shrink-0 rounded-lg border px-2 py-1 text-left text-[11px] font-medium ${stageFilter === st ? "border-blue-400 bg-blue-50 text-blue-800" : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"}`}>
                   {pipelineLabel(st)} <span className="font-semibold text-gray-900">{cur}</span>
-                  {/* QA-046: the CEO's pair at every stage — accepted through, rejected here. */}
-                  {acc > 0 && <span className="ml-1 rounded-full bg-green-100 px-1.5 text-[10px] font-semibold text-green-700">✓{acc}</span>}
-                  {rej > 0 && <span className="ml-1 rounded-full bg-red-100 px-1.5 text-[10px] font-semibold text-red-700">✗{rej}</span>}
+                  {/* QA-046: the CEO's pair at EVERY stage — zeros included, greyed. */}
+                  <span className={`ml-1 rounded-full px-1.5 text-[10px] font-semibold ${acc > 0 ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-400"}`}>✓{acc}</span>
+                  <span className={`ml-1 rounded-full px-1.5 text-[10px] font-semibold ${rej > 0 ? "bg-red-100 text-red-700" : "bg-gray-100 text-gray-400"}`}>✗{rej}</span>
                 </button>
               );
             })}

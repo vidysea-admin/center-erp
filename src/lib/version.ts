@@ -3,16 +3,16 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-46";
+export const RELEASE = "2026.08.14-47";
 export const RELEASE_NOTE =
-  "One definition of today, and a stop that stops. QA-081: every date guard " +
-  "in the daily-log path - future-date refusal, the trainer's same-day " +
-  "marking rounds, the dropout future check - now reads the same IST calendar " +
-  "day (istToday); at 1am IST the server's UTC clock no longer refuses an " +
-  "on-time trainer or accepts a future drop. QA-080: stopping a user " +
-  "invalidates their LIVE session on the very next request - not after a " +
-  "cache TTL, and never 30 days. QA-072: the daily log's photo and video " +
-  "pickers take multiple files in one go. QA-030: the Batches screen names " +
-  "WHY positions are blocked, not just how many. QA-073: the users list " +
-  "names the granted/removed rights, and choosing a role shows what that " +
-  "preset profile carries.";
+  "The not-built set, built. QA-046: the Accepted/Rejected pair shows at " +
+  "EVERY pipeline stage, zeros included. QA-075: a SPOC's classroom/lab " +
+  "suggestion parks for Admin approval like their field edits - the Room is " +
+  "created only by the approval - and a cluster-head number that matches the " +
+  "SPOC's says '= SPOC' instead of printing the same digits twice. QA-033: " +
+  "per-candidate marking is the default path; legacy batch-level figures " +
+  "hide behind their own explicit button and never ride a save unseen. " +
+  "QA-022: an app-created batch's Source says WHO entered it, and the " +
+  "batches table gains the column picker. QA-032/021/069: assignment stamps " +
+  "the journey's middle (Assigned) - the pre-wipe rows that skipped it were " +
+  "seed artifacts; e2e now pins the full chain.";

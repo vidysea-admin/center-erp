@@ -1105,6 +1105,11 @@ function ClosureTab({ batchId, batch, role, setError, onChanged }: any) {
   const [legacy, setLegacy] = useState(true);
   const [summary, setSummary] = useState<any>(null);
   const [perCandidate, setPerCandidate] = useState(false);
+  // QA-033: two sources of truth were OFFERED side by side — free batch-level numbers next
+  // to "Start per-candidate marking". Per-candidate is the default path now; the legacy
+  // numeric entry hides behind its own explicit button and disappears entirely once
+  // per-candidate rows exist.
+  const [showLegacyEntry, setShowLegacyEntry] = useState(false);
 
   const load = () => api(`/api/batches/${batchId}/closure`).then((d) => {
     setClosure(d.closure); setInvoice(d.invoice);
@@ -1159,21 +1164,28 @@ function ClosureTab({ batchId, batch, role, setError, onChanged }: any) {
       <div className="grid gap-4 lg:grid-cols-2">
       <Section
         title={`Assessment — ${closure?.assessment_status ?? "Pending"}`}
-        actions={legacy && !perCandidate && !closed ? <Btn small kind="ghost" onClick={() => setPerCandidate(true)}>Start per-candidate marking</Btn> : undefined}
+        actions={legacy && !perCandidate && !closed ? (
+          <span className="flex gap-1.5">
+            <Btn small onClick={() => setPerCandidate(true)}>Start per-candidate marking</Btn>
+            {!showLegacyEntry && <Btn small kind="ghost" onClick={() => setShowLegacyEntry(true)}>Batch-level figures (legacy)…</Btn>}
+          </span>
+        ) : undefined}
       >
         <div className="grid grid-cols-2 gap-3">
           <Field label="Assessment date"><input type="date" className={inputCls} value={toInputDate(form.assessment_date)} onChange={(e) => setForm({ ...form, assessment_date: e.target.value })} /></Field>
           <div />
-          {legacy && !perCandidate ? (
+          {legacy && !perCandidate && showLegacyEntry ? (
             <>
-              <Field label="Appeared"><input type="number" className={inputCls} value={form.appeared ?? ""} onChange={(e) => setForm({ ...form, appeared: +e.target.value })} /></Field>
-              <Field label="Passed"><input type="number" className={inputCls} value={form.passed ?? ""} onChange={(e) => setForm({ ...form, passed: +e.target.value })} /></Field>
+              <Field label="Appeared (legacy batch-level)"><input type="number" className={inputCls} value={form.appeared ?? ""} onChange={(e) => setForm({ ...form, appeared: +e.target.value })} /></Field>
+              <Field label="Passed (legacy batch-level)"><input type="number" className={inputCls} value={form.passed ?? ""} onChange={(e) => setForm({ ...form, passed: +e.target.value })} /></Field>
             </>
-          ) : (
+          ) : !legacy || perCandidate ? (
             <>
               <Field label="Appeared"><div className={inputCls + " bg-gray-50 text-gray-700"}>{closure?.appeared ?? 0} <span className="text-xs text-gray-400">derived</span></div></Field>
               <Field label="Passed"><div className={inputCls + " bg-gray-50 text-gray-700"}>{closure?.passed ?? 0} <span className="text-xs text-gray-400">derived</span></div></Field>
             </>
+          ) : (
+            <p className="col-span-2 text-xs text-gray-500">Mark each candidate ("Start per-candidate marking") — Appeared/Passed derive from the marks. Batch-level entry exists only for legacy paper records.</p>
           )}
         </div>
         {/* DEC-4 (2026-08-13): dropped-but-passed never bill. Show the split whenever it exists. */}
@@ -1186,8 +1198,8 @@ function ClosureTab({ batchId, batch, role, setError, onChanged }: any) {
           <p className="mt-2 text-xs text-gray-500">Batch-level figures (recorded before per-candidate marking existed).</p>
         )}
         <div className="mt-3 flex gap-2">
-          <Btn small kind="ghost" onClick={() => saveClosure({ assessment_date: form.assessment_date, ...(legacy && !perCandidate ? { appeared: form.appeared, passed: form.passed } : {}) })}>Save</Btn>
-          <Btn small onClick={() => saveClosure({ assessment_status: "Completed", assessment_date: form.assessment_date ?? new Date(), ...(legacy && !perCandidate ? { appeared: form.appeared, passed: form.passed } : {}) })} disabled={closure?.assessment_status === "Completed"}>Mark Completed</Btn>
+          <Btn small kind="ghost" onClick={() => saveClosure({ assessment_date: form.assessment_date, ...(legacy && !perCandidate && showLegacyEntry ? { appeared: form.appeared, passed: form.passed } : {}) })}>Save</Btn>
+          <Btn small onClick={() => saveClosure({ assessment_status: "Completed", assessment_date: form.assessment_date ?? new Date(), ...(legacy && !perCandidate && showLegacyEntry ? { appeared: form.appeared, passed: form.passed } : {}) })} disabled={closure?.assessment_status === "Completed"}>Mark Completed</Btn>
         </div>
         <ClosureFileSlot label="Result sheet" value={closure?.result_file} disabled={closed} onUpload={(e: any) => uploadClosureFile(e, "result_file")} />
       </Section>

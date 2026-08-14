@@ -115,7 +115,19 @@ function LocationsInner() {
         defaultSort={{ key: "name", dir: "asc" }}
         columns={[
           { key: "spoc_name", label: "SPOC Name", sortable: true, sortValue: (r: any) => r.loc.spoc_name, filterText: (r: any) => r.loc.spoc_name, render: (r: any) => rep(r, r.loc.spoc_name) },
-          { key: "cluster_head_phone", label: "Cluster Head Contact", mobile: false, filterText: (r: any) => r.loc.cluster_head_phone, render: (r: any) => rep(r, r.loc.cluster_head_phone) },
+          {
+            // QA-075 (CEO [01:17-01:39]): "Spoc name and cluster head contact, are these
+            // different, or Saurabh Verma's number is this?" — when the two numbers are the
+            // same person, SAY so instead of printing the same digits twice.
+            key: "cluster_head_phone", label: "Cluster Head Contact", mobile: false, filterText: (r: any) => r.loc.cluster_head_phone,
+            render: (r: any) => {
+              const same = r.loc.cluster_head_phone && r.loc.spoc_phone
+                && String(r.loc.cluster_head_phone).replace(/\D/g, "") === String(r.loc.spoc_phone).replace(/\D/g, "");
+              return same
+                ? <span title={`${r.loc.cluster_head_name ?? "Cluster head"} — same number as the SPOC`}>{rep(r, r.loc.cluster_head_phone)} <span className="rounded bg-gray-100 px-1 text-[10px] text-gray-500">= SPOC</span></span>
+                : rep(r, r.loc.cluster_head_phone);
+            },
+          },
           { key: "state", label: "State", mobile: false, sortable: true, sortValue: (r: any) => r.loc.state, filterText: (r: any) => r.loc.state, render: (r: any) => rep(r, r.loc.state) },
           { key: "district", label: "District", sortable: true, sortValue: (r: any) => r.loc.district ?? r.loc.city, filterText: (r: any) => r.loc.district ?? r.loc.city, render: (r: any) => rep(r, r.loc.district ?? r.loc.city) },
           {

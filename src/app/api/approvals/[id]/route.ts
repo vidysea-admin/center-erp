@@ -4,7 +4,7 @@ import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { decideApproval } from "@/lib/approvals";
 import { assertCostEntryValid, transitionBatch, updateInvoiceChecked } from "@/lib/rules";
-import { CostEntry, Location, LocationTarget } from "@/models";
+import { CostEntry, Location, LocationTarget, Room } from "@/models";
 import { audit } from "@/lib/audit";
 
 // POST { decision: "Approved" | "Rejected", note? }
@@ -56,6 +56,10 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
           { $set: p.target.set ?? {} },
           { upsert: true, new: true },
         );
+      }
+      // QA-075: a SPOC's classroom/lab suggestion — the Room is created only on approval.
+      if (p.room?.name && p.room?.type) {
+        await Room.create({ location: request.entity_id, name: p.room.name, type: p.room.type, capacity: p.room.capacity, active: true });
       }
       break;
     }

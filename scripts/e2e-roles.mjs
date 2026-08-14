@@ -571,6 +571,18 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
     const tgt = await req(spoc, "PUT", `/api/locations/${jpr._id}/targets`, { program: progList[0]._id, approved_target: 111 });
     ok("R-F: a SPOC target change parks too (202, queued)", tgt.status === 202 && tgt.data.queued === true, `got ${tgt.status}`);
   }
+  // QA-075: a SPOC's classroom/lab suggestion parks the same way, and the Room is created
+  // only by the approval.
+  const roomName = "SPOC Lab " + rfStamp;
+  const roomSug = await req(spoc, "POST", `/api/locations/${jpr._id}/rooms`, { name: roomName, type: "Lab", capacity: 20 });
+  ok("QA-075: a SPOC room suggestion parks (202, queued)", roomSug.status === 202 && roomSug.data.queued === true, `got ${roomSug.status}`);
+  const roomsBefore = (await req(admin, "GET", `/api/locations/${jpr._id}/rooms`)).data.items ?? [];
+  ok("QA-075: no room exists while parked", !roomsBefore.some((r) => r.name === roomName));
+  if (roomSug.data.item?._id) {
+    await req(admin, "POST", `/api/approvals/${roomSug.data.item._id}`, { decision: "Approved" });
+    const roomsAfter = (await req(admin, "GET", `/api/locations/${jpr._id}/rooms`)).data.items ?? [];
+    ok("QA-075: approval creates the room", roomsAfter.some((r) => r.name === roomName && r.type === "Lab"), JSON.stringify(roomsAfter.map((r) => r.name)));
+  }
   await req(admin, "PUT", "/api/approvals", { action: "location.edit", enabled: false });
 }
 

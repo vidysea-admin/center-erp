@@ -331,6 +331,10 @@ ok("R-J: per-position numbering keeps the centre × course prefix",
 {
   const cand5 = (await req("POST", "/api/candidates", { name: "Cand5 Fee " + stamp, phone: "76666" + stamp.slice(0, 5), location: loc._id, program: prog._id }, 201)).data.item;
   const mem5 = (await req("POST", `/api/batches/${batch2._id}/members`, { candidate: cand5._id }, 201)).data.item;
+  // QA-032/021/069: the MIDDLE of the journey is written — assignment stamps Assigned
+  // (the pre-wipe 75-Enrolled-never-Assigned rows were seed artifacts, not a code path).
+  ok("QA-032: assignment stamps the middle of the journey (Assigned)",
+    (await req("GET", `/api/candidates/${cand5._id}`)).data.item.lifecycle_status === "Assigned");
   await req("PUT", "/api/defaults", { fee_required_for_enrollment: true }, 200);
   const blocked = await req("PATCH", `/api/members/${mem5._id}`, { reg_done: true, kyc_done: true, accept_done: true });
   ok("Rule 54: toggle ON — enrollment refuses without a fee on record",
