@@ -209,6 +209,17 @@ export const GET = apiHandler(async () => {
       trainers_active_total: trainersByRole.reduce((s, r) => s + r.count, 0),
       trainers_on_approved_positions: trainersOnApprovedPositions,
     }),
+    // QA-011 (S1): the Active Trainers KPI read 0 for a scoped user while their own
+    // trainers page showed a certified trainer. The count above IS scope-aware (the
+    // -28 union incl. batch-linked trainers) — the QA-096 trim just stopped sending it,
+    // and the card's `?? 0` turned "absent" into a lie. A scoped LOCATION user gets
+    // their own centre's numbers (no org figure — the union filter already applied).
+    // Trainer role stays without the card: its /trainers link is a 403 for them
+    // (QA-058), and central unscoped Enrollment gets nothing org-wide.
+    ...(lean && isScoped(user) && user.role === "Location" ? {
+      trainers_by_role: trainersByRole,
+      trainers_active_total: trainersByRole.reduce((s, r) => s + r.count, 0),
+    } : {}),
   };
   return NextResponse.json({
     kpis,

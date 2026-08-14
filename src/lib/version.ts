@@ -3,16 +3,16 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-55";
+export const RELEASE = "2026.08.14-56";
 export const RELEASE_NOTE =
-  "QA-125 (S2, checker live-proof): a location-scoped user could edit, " +
-  "document and un-document a trainer their own list refused to show " +
-  "them - the seventh list-hides/item-allows hole and the first on " +
-  "writes. The list's nomination/capability/home union now guards EVERY " +
-  "by-id trainer surface (detail, edit, documents read/attach/delete, " +
-  "pipeline moves), a trainer tied to no centre fails closed, and a " +
-  "scoped user can only create or import trainers tied to their own " +
-  "centre - quick-invite auto-ties the invitee so the inviter can see " +
-  "them. Sweep riders: a centre-less government-attendance import no " +
-  "longer slips past scope, and the trainer-request detail honours the " +
-  "same reader list as its own list.";
+  "QA-069 + QA-011 (both S1). The Enrolled journey now tells the truth: " +
+  "a candidate whose assessment is RECORDED shows Certified / Failed / " +
+  "Absent at Assessment from the result itself (latest_result rides on " +
+  "every row) - no more 'Result Awaited' for people the register says " +
+  "were certified, because the journey no longer waits on a " +
+  "lifecycle_status that historical imports never wrote back. And the " +
+  "Active Trainers KPI stops lying to scoped users: a centre's SPOC " +
+  "receives their own centre's scope-aware trainer count (the same " +
+  "nomination/capability/home/batch union their trainers page uses), " +
+  "the card renders on key presence, and the central unscoped " +
+  "Enrollment login still gets no organisation-wide figure.";

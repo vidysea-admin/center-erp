@@ -310,6 +310,20 @@ ok("'appeared' counts the absentee too (3 pass + 1 fail + 1 absent = 5)", sum.ap
 ok("passed is unaffected by the appeared rule", sum.passed === 3, String(sum.passed));
 ok("with nobody dropped, billable == passed", sum.billable_passed === 3, String(sum.billable_passed));
 
+// QA-069 (S1): the candidates LIST carries the recorded result (latest_result), so the
+// Enrolled journey shows Certified/Failed/Absent from the assessment itself — it no
+// longer waits on a lifecycle_status that historical imports never wrote back.
+{
+  const rows = (await req(admin, "GET", `/api/candidates?location=${loc._id}&limit=200`)).data.items ?? [];
+  const byId = new Map(rows.map((c) => [String(c._id), c]));
+  const passCand = byId.get(String(members[0].candidate._id));
+  const failCand = byId.get(String(members[1].candidate._id));
+  const absCand = byId.get(String(members[2].candidate._id));
+  ok("QA-069: the passed candidate's row carries latest_result Pass", passCand?.latest_result === "Pass", JSON.stringify(passCand?.latest_result));
+  ok("QA-069: the failed candidate's row carries latest_result Fail", failCand?.latest_result === "Fail", JSON.stringify(failCand?.latest_result));
+  ok("QA-069: the absent candidate's row carries latest_result Absent", absCand?.latest_result === "Absent", JSON.stringify(absCand?.latest_result));
+}
+
 // A candidate who dropped out is not billable even though their Pass survives (Rule 42).
 const dropped = await req(admin, "POST", `/api/members/${members[4].member._id}/drop`, {
   left_on: localDate(), drop_reason: "Personal",

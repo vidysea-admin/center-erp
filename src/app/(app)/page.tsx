@@ -90,9 +90,12 @@ export default function HomePage() {
               : "no active batches logging yet"} />
 
         {/* QA-002: this total and the Open Positions board count different universes —
-            both numbers travel together so the difference is explained, not hidden. */}
-        {!leanHome && (
-          <KPI label="Active Trainers" value={data.kpis.trainers_active_total ?? 0} tone="amber" icon={<IconUser size={19} />} href="/trainers?tag=Ready%20to%20Train"
+            both numbers travel together so the difference is explained, not hidden.
+            QA-011: PRESENCE-driven, not role-guessed — a scoped SPOC now receives their
+            own centre's count from the API, so the card shows THEIR truth instead of
+            hiding or lying with ?? 0 (absent key = card absent, same as QA-114). */}
+        {data.kpis.trainers_active_total != null && (
+          <KPI label="Active Trainers" value={data.kpis.trainers_active_total} tone="amber" icon={<IconUser size={19} />} href="/trainers?tag=Ready%20to%20Train"
             sub={[
               (data.kpis.trainers_by_role ?? []).slice(0, 3).map((r: any) => `${r.code ?? r.program} ${r.count}`).join(" · ") || "none certified yet",
               data.kpis.trainers_on_approved_positions != null ? `${data.kpis.trainers_on_approved_positions} on approved positions` : null,

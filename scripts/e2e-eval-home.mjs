@@ -94,6 +94,18 @@ for (const [email, label] of [["ops@vidysea.com", "Operations"], ["spoc.jpr03@vi
   if (!c) { ok(`[worst] ${label} login available (seed-sample)`, false, email); continue; }
   const r = await req(c, "GET", "/api/home");
   ok(`[worst] Home answers 200 for ${label}`, r.status === 200, `got ${r.status}`);
+  // QA-011 (S1): a scoped LOCATION user receives THEIR OWN trainer count (scope-aware
+  // union) instead of an absent key the card renders as 0 — while the central unscoped
+  // Enrollment login still gets no org-wide trainer figure at all.
+  if (label === "SPOC") {
+    ok("QA-011: SPOC home carries a scoped trainers_active_total (number, not absent)",
+      typeof r.data.kpis?.trainers_active_total === "number" && Array.isArray(r.data.kpis?.trainers_by_role),
+      JSON.stringify(r.data.kpis?.trainers_active_total));
+  }
+  if (label === "Enrollment") {
+    ok("QA-011: unscoped Enrollment still gets no org-wide trainer figure",
+      r.data.kpis?.trainers_active_total === undefined, JSON.stringify(r.data.kpis?.trainers_active_total));
+  }
 }
 
 // ---- 2026-08-13 (Manish walkthrough): role-wise cards need role-wise KPI payload ----

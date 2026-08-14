@@ -1,5 +1,5 @@
 import { collectionRoutes } from "@/lib/crud";
-import { BatchMember, Candidate } from "@/models";
+import { BatchMember, Candidate, CandidateResult } from "@/models";
 import { assertLocationInScope } from "@/lib/authz";
 import { candidateEligibility } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
@@ -37,9 +37,21 @@ export const { GET, POST } = collectionRoutes({
       .populate({ path: "batch", select: "code program status", populate: { path: "program", select: "name code scheme" } })
       .lean();
     const byCand = new Map(members.map((m: any) => [String(m.candidate), m.batch]));
+    // QA-069 (S1): the Enrolled journey read "Result Awaited" for people whose result WAS
+    // recorded — the journey trusted lifecycle_status, which historical imports never
+    // caught up. The recorded assessment is the truth; it rides on every row as
+    // latest_result and the journey derives from it first.
+    const results = await CandidateResult.find({ candidate: { $in: items.map((c) => c._id) }, result: { $ne: "Pending" } })
+      .select("candidate result assessed_on").sort({ assessed_on: -1, updatedAt: -1 }).lean<any[]>();
+    const resByCand = new Map<string, string>();
+    for (const r of results) if (!resByCand.has(String(r.candidate))) resByCand.set(String(r.candidate), r.result);
     return items.map((c) => {
       const b: any = byCand.get(String(c._id));
-      return { ...c, eligibility: candidateEligibility(c, defaults), active_batch: b ? { code: b.code, status: b.status, program: b.program } : null };
+      return {
+        ...c, eligibility: candidateEligibility(c, defaults),
+        active_batch: b ? { code: b.code, status: b.status, program: b.program } : null,
+        latest_result: resByCand.get(String(c._id)) ?? null,
+      };
     });
   },
 });

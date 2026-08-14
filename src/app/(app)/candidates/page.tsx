@@ -82,17 +82,21 @@ function CandidatesInner() {
   const enrolledItems = items.filter((r: any) => !isFresh(r));
   const bucketItems = bucket === "Fresh" ? freshItems : enrolledItems;
   // CEO's journey terminology for the Enrolled bucket — derived, never stored.
+  // QA-069 (S1): the RECORDED assessment result outranks lifecycle_status — historical
+  // imports never wrote the lifecycle back, so certified people read "Result Awaited".
+  // latest_result rides in from the API (non-Pending only).
   const journeyOf = (r: any): string => {
-    if (r.lifecycle_status === "Completed") return "Certified";
-    if (r.lifecycle_status === "Failed") return "Failed";
     if (r.lifecycle_status === "Dropped") return "Dropout"; // enrolled-then-left (CEO 14/08)
+    if (r.latest_result === "Pass" || r.lifecycle_status === "Completed") return "Certified";
+    if (r.latest_result === "Fail" || r.lifecycle_status === "Failed") return "Failed";
+    if (r.latest_result === "Absent") return "Absent at Assessment";
     if (r.lifecycle_status === "Assigned") return "Enrollment in progress";
     const bs = r.active_batch?.status;
     if (bs === "Closing") return "Training Completed";
     if (bs === "Completed") return "Result Awaited";
     return "Training Ongoing";
   };
-  const JOURNEY_TAGS = ["Enrollment in progress", "Training Ongoing", "Training Completed", "Result Awaited", "Certified", "Dropout", "Failed"];
+  const JOURNEY_TAGS = ["Enrollment in progress", "Training Ongoing", "Training Completed", "Result Awaited", "Certified", "Dropout", "Failed", "Absent at Assessment"];
   // QA-021 (checker) + CEO [29:36]: Fresh has its OWN journey — inquiry to portal
   // registration — derived from sidh_status, never stored.
   // 15/08 (Umesh, supersedes Karunn's "enrolled = fees paid"): THIS programme takes no fee
@@ -317,7 +321,8 @@ function CandidatesInner() {
               "Result Awaited": "Assessment done, awaiting the recorded result",
               "Certified": "Passed — certificate issued or on its way",
               "Dropout": "Enrolled but left before completing the training (CEO stage, set from admin via the roster drop)",
-              "Failed": "Completed the training and did not pass (Fail/Absent)",
+              "Failed": "Completed the training and did not pass",
+              "Absent at Assessment": "Did not appear for the assessment — result recorded as Absent",
             }[t as string],
           })),
           { value: "No programme", label: "No programme", count: tagCount("No programme") },
