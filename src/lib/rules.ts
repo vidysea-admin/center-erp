@@ -69,6 +69,25 @@ export async function assertTrainerInScope(user: SessionUser, trainerId: string)
   const t = await Trainer.findById(trainerId).select("nominated_for_location home_location capable_locations").lean<any>();
   assertTrainerDocInScope(user, t);
 }
+// QA-125 follow-up (checker design note, 15/08): capable_locations is a TEACHING tie — a
+// trainer capable at ten centres would hand all ten SPOCs delete rights over their
+// Aadhaar/PAN. Document DELETION follows ownership instead: the nominating centre or the
+// home centre. Only a trainer with neither (the quick-invite window, capable-only) falls
+// back to the full union — otherwise a mis-upload in that window needs an Admin, which is
+// the QA-112 pain this delete exists to end. Reads and uploads keep the wide union.
+export async function assertTrainerDocDeleteInScope(user: SessionUser, trainerId: string) {
+  if (!isScoped(user)) return;
+  const t = await Trainer.findById(trainerId).select("nominated_for_location home_location capable_locations").lean<any>();
+  if (!t) throw new HttpError(404, "Trainer not found");
+  const owners = [t.nominated_for_location, t.home_location]
+    .filter(Boolean)
+    .map((v) => String((v as { _id?: unknown })?._id ?? v));
+  if (!owners.length) return assertTrainerDocInScope(user, t);
+  const allowed = user.location_scope.map(String);
+  if (!owners.some((id) => allowed.includes(id))) {
+    throw new HttpError(403, "Only the nominating or home centre may delete this trainer's documents.");
+  }
+}
 
 // QA-093/119 (15/08): the assessment threshold stops being "a guess wearing a number"
 // the moment the scheme master carries real hours — min/total from the SCHEME row wins,

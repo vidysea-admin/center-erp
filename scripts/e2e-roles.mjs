@@ -326,6 +326,31 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
     const invited = (await req(spoc, "GET", `/api/trainers/${qi.data.item.trainer}`));
     ok("QA-125: …auto-tied so the inviter can see their own invitee", invited.status === 200 && (invited.data.item?.capable_locations ?? []).length > 0, `got ${invited.status}`);
   }
+  // QA-125 follow-up (checker design note): document DELETE is narrower than read/upload.
+  // A capable-only tie lets a centre teach with the trainer, not erase their identity
+  // documents — deletion belongs to the nominating/home centre. Capable-only trainers
+  // (the quick-invite window) fall back to the union so a mis-upload stays fixable.
+  const sharedTr = (await req(admin, "POST", "/api/trainers", {
+    name: `Q125S ${stamp}`, phone: p125(7), skills: ["Q125"],
+    nominated_for_location: otherLoc._id, capable_locations: [jprLoc._id],
+  })).data.item;
+  const sDoc = await req(spoc, "POST", `/api/trainers/${sharedTr._id}/documents`, { doc_type: "PAN", file_url: "/erp/api/files/q125s.pdf", original_name: "q125s.pdf" });
+  ok("QA-125b: capable-tie SPOC can still READ the shared trainer", (await req(spoc, "GET", `/api/trainers/${sharedTr._id}`)).status === 200);
+  ok("QA-125b: capable-tie SPOC can still UPLOAD a document", sDoc.status === 201, `got ${sDoc.status}`);
+  ok("QA-125b: capable-tie SPOC cannot DELETE it — ownership is the nominating centre",
+    (await req(spoc, "DELETE", `/api/trainers/${sharedTr._id}/documents/${sDoc.data.item._id}`)).status === 403);
+  ok("QA-125b: admin (unscoped) deletes the shared trainer's document fine",
+    (await req(admin, "DELETE", `/api/trainers/${sharedTr._id}/documents/${sDoc.data.item._id}`)).status === 200);
+  if (qi.status === 201) {
+    const qiDoc = await req(spoc, "POST", `/api/trainers/${qi.data.item.trainer}/documents`, { doc_type: "Photo", file_url: "/erp/api/files/q125qi.jpg", original_name: "q125qi.jpg" });
+    ok("QA-125b: capable-ONLY invitee (no nomination/home) — inviter still deletes (union fallback)",
+      qiDoc.status === 201 && (await req(spoc, "DELETE", `/api/trainers/${qi.data.item.trainer}/documents/${qiDoc.data.item._id}`)).status === 200);
+  }
+  if (ownCreate.status === 201) {
+    const oDoc = await req(spoc, "POST", `/api/trainers/${ownCreate.data.item._id}/documents`, { doc_type: "Photo", file_url: "/erp/api/files/q125o.jpg", original_name: "q125o.jpg" });
+    ok("QA-125b: HOME centre owns deletion too",
+      oDoc.status === 201 && (await req(spoc, "DELETE", `/api/trainers/${ownCreate.data.item._id}/documents/${oDoc.data.item._id}`)).status === 200);
+  }
   // QA-061 evidence (stale row close): Enrollment reaches neither the directory nor the board.
   ok("QA-061: Enrollment cannot read the trainer directory", (await req(enroll, "GET", "/api/trainers?limit=5")).status === 403);
   ok("QA-061: Enrollment cannot read the hiring board", (await req(enroll, "GET", "/api/open-positions")).status === 403);

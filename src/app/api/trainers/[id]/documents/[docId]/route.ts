@@ -5,7 +5,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { TrainerDocument } from "@/models";
-import { assertTrainerInScope, trainerDocSummary } from "@/lib/rules";
+import { assertTrainerDocDeleteInScope, trainerDocSummary } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
 // QA-112 (checker, 15/08): a wrong file on a trainer was PERMANENT — no delete, no
@@ -19,7 +19,9 @@ export const DELETE = apiHandler(async (_req: NextRequest, ctx: { params: Promis
   requireEdit(user);
   await requirePerm(user, "trainers.manage");
   const { id, docId } = await ctx.params;
-  await assertTrainerInScope(user, id); // QA-125: deleting a foreign trainer's Aadhaar was live-proved
+  // QA-125: deleting a foreign trainer's Aadhaar was live-proved. Delete is narrower than
+  // read/upload — ownership (nominating/home centre), not the teaching union.
+  await assertTrainerDocDeleteInScope(user, id);
 
   const doc = await TrainerDocument.findOne({ _id: docId, trainer: id });
   if (!doc) throw new HttpError(404, "Document not found on this trainer.");
