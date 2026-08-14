@@ -78,7 +78,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const start = new Date(planned_start);
   const end = computePlannedEnd(start, program); // Rule 15
   const slot = { slot_start: body.slot_start || null, slot_end: body.slot_end || null };
-  await assertSlotWithinGuidelines(slot); // 2026-08-12: 09:00–18:00, ≤4h per session
+  await assertSlotWithinGuidelines(slot); // slot-rules.ts: 09:00–18:00 window, exactly 4h or 8h
   if (trainer) await assertTrainerAvailableForBatch(trainer, null, start, end, slot); // Rule 10 + slot clash
   if (room) await assertRoomFreeForBatch(room, null, start, end, session); // Rule 13
 
@@ -106,6 +106,20 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // 2026-08-11: booking a not-yet-Ready trainer, or one not capable at this location,
   // warns but does not block (Rule 11 gates the actual start).
   const warnings = trainer ? await trainerBookingWarnings(trainer, location) : [];
+  // QA-139 (checker, 15/08): the earliest-possible-start was computed, displayed, then ignored
+  // at save. Warn — never block; a back-planned batch is sometimes deliberate.
+  {
+    const day = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const mob = new Date(); mob.setDate(mob.getDate() + (defaults.mobilisation_lead_days ?? 7));
+    let earliest = mob;
+    if (trainer) {
+      const tDoc = await Trainer.findById(trainer).select("available_from").lean<any>();
+      if (tDoc?.available_from && new Date(tDoc.available_from) > earliest) earliest = new Date(tDoc.available_from);
+    }
+    if (day(start) < day(earliest)) {
+      warnings.push(`Planned start ${start.toLocaleDateString("en-IN")} is before the earliest possible start ${earliest.toLocaleDateString("en-IN")} (mobilisation lead ${defaults.mobilisation_lead_days ?? 7}d${trainer ? " / trainer availability" : ""}) — the batch is created, but it will not be ready by then.`);
+    }
+  }
   await audit({ entity: "Batch", entityId: doc._id, newValue: "created " + doc.code, actor: user.id });
 
   // 2026-08-08 (both transcriptions): "Batch open hote hi inke paas aana chahiye — bhaiya tere

@@ -5,6 +5,7 @@ import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { api, fmtDate, toInputDate } from "@/lib/client";
 import { trainerSelectGroups } from "@/lib/trainer-select";
+import { slotGuidelineErrors } from "@/lib/slot-rules";
 import { BASE_PATH } from "@/lib/base-path";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthChip, SourceCell, Tabs, inputCls, useCopied } from "@/components/ui";
 import { useLocationCtx } from "@/components/shell";
@@ -125,13 +126,22 @@ function BatchesInner() {
   const [defaults, setDefaults] = useState<any>(null);
   useEffect(() => { api("/api/defaults").then((d) => setDefaults(d.item)).catch(() => {}); }, []);
   const selTrainer = trainers.find((t) => t._id === form.trainer);
-  const earliestStart = (() => {
+  const earliestStartDate = (() => {
     if (!defaults) return null;
     const mob = new Date(); mob.setDate(mob.getDate() + (defaults.mobilisation_lead_days ?? 7));
     const avail = selTrainer?.available_from ? new Date(selTrainer.available_from) : null;
-    const d = avail && avail > mob ? avail : mob;
-    return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+    return avail && avail > mob ? avail : mob;
   })();
+  const earliestStart = earliestStartDate
+    ? earliestStartDate.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })
+    : null;
+  // QA-139: advice that can be silently ignored is not advice — the same date now warns
+  // (never blocks) when the chosen start is before it. The server repeats the warning.
+  const dayFloor = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const startsTooEarly = !!(earliestStartDate && form.planned_start && new Date(form.planned_start) < dayFloor(earliestStartDate));
+  // QA-138: the slot rule runs while the operator types — same function the API blocks with
+  // (slot-rules.ts), so the two can never disagree.
+  const slotErrs = slotGuidelineErrors({ slot_start: form.slot_start, slot_end: form.slot_end }, defaults ?? {});
 
   async function save() {
     try {
@@ -324,6 +334,12 @@ function BatchesInner() {
           </div>
           {/* 2026-08-13 (Manish): "ya toh 4 ghante ka rakho ya 8 ghante ka" */}
           <p className="-mt-1 text-xs text-gray-500">Scheme rule: a slot is exactly 4 or 8 hours, inside 09:00–18:00.</p>
+          {/* QA-138: the same errors the API would refuse with, shown while typing. */}
+          {slotErrs.length > 0 && (
+            <div className="-mt-1 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              {slotErrs.map((e) => <div key={e}>⚠ {e}</div>)}
+            </div>
+          )}
           <Field label="Trainer">
             <select className={inputCls} value={form.trainer ?? ""} onChange={(e) => set("trainer", e.target.value)}>
               <option value="">— assign later —</option>
@@ -397,9 +413,17 @@ function BatchesInner() {
           <Field label={`Target size (default ${program?.default_batch_size ?? 30})`}>
             <input type="number" className={inputCls} value={form.target_size ?? ""} onChange={(e) => set("target_size", +e.target.value)} placeholder={String(program?.default_batch_size ?? 30)} />
           </Field>
-          {earliestStart && (
+          {earliestStart && !startsTooEarly && (
             <p className="rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-700">
               Earliest possible start: <b>{earliestStart}</b> (mobilisation lead {defaults?.mobilisation_lead_days ?? 7}d{selTrainer?.available_from ? `, trainer available ${new Date(selTrainer.available_from).toLocaleDateString("en-IN")}` : ""})
+            </p>
+          )}
+          {/* QA-139: same fact, amber, when the chosen date ignores it. Creating still works. */}
+          {startsTooEarly && (
+            <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+              ⚠ Planned start is before the earliest possible start <b>{earliestStart}</b> (mobilisation
+              lead {defaults?.mobilisation_lead_days ?? 7}d{selTrainer?.available_from ? `, trainer available ${new Date(selTrainer.available_from).toLocaleDateString("en-IN")}` : ""}).
+              You can still create the batch — but mobilisation says it will not be ready by then.
             </p>
           )}
           {/* Location + trainer + candidate: say which of the three is missing before the batch

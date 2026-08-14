@@ -436,6 +436,38 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
     (await req(admin, "DELETE", `/api/trainers/${foreign.data.item?._id}`)).status === 200);
 }
 
+// ---- QA-131/140/139 (-63): the scheme's money is Admin-only, the invoice book follows the
+// costs-ledger rule, and ignored earliest-start advice says so out loud (warn, never block).
+{
+  const ls = await req(admin, "GET", "/api/master-lists/schemes");
+  ok("QA-131: schemes master loads for admin (lazy-seeded)", ls.status === 200 && (ls.data.items ?? []).length > 0, `got ${ls.status}, n=${(ls.data.items ?? []).length}`);
+  const sch = ls.data.items?.[0];
+  const set = await req(admin, "PATCH", `/api/master-lists/schemes/${sch._id}`, { amount_received: 12345, total_hours: 480 });
+  ok("QA-131: admin records hours + amount on a scheme", set.status === 200, `got ${set.status}`);
+  const back = (await req(admin, "GET", "/api/master-lists/schemes")).data.items.find((s) => s._id === sch._id);
+  ok("QA-131: admin reads the amount back", back?.amount_received === 12345, JSON.stringify(back?.amount_received));
+  for (const [who, name] of [[ops, "Operations"], [spoc, "Location SPOC"]]) {
+    const r = await req(who, "GET", "/api/master-lists/schemes");
+    const row = (r.data.items ?? []).find((s) => s._id === sch._id);
+    ok(`QA-131: ${name} reads schemes WITHOUT amount_received`,
+      r.status === 200 && (r.data.items ?? []).length > 0 && (r.data.items ?? []).every((s) => !("amount_received" in s)),
+      `got ${r.status}`);
+    ok(`QA-131: ${name} still sees the hours (only the money is masked)`, row?.total_hours === 480, JSON.stringify(row?.total_hours));
+  }
+  ok("QA-140: Operations is refused the invoice book (same R-E rule as the cost ledger)",
+    (await req(ops, "GET", "/api/invoices")).status === 403);
+  ok("QA-140: admin reads invoices fine", (await req(admin, "GET", "/api/invoices")).status === 200);
+
+  const jpr = (await req(spoc, "GET", "/api/locations?limit=1")).data.items[0];
+  const prog = (await req(admin, "GET", "/api/programs?limit=1")).data.items[0];
+  const tomorrow = new Date(Date.now() + 24 * 3600 * 1000).toISOString().slice(0, 10);
+  const early = await req(admin, "POST", "/api/batches", { location: jpr._id, program: prog._id, planned_start: tomorrow });
+  ok("QA-139: a too-early batch still creates — warn, never block", early.status === 201, `got ${early.status}`);
+  ok("QA-139: …and the response names the earliest possible start",
+    typeof early.data.warning === "string" && /earliest possible start/i.test(early.data.warning),
+    JSON.stringify(early.data.warning ?? null));
+}
+
 // 2026-08-12 audit F-000 (S0): the generic list route copied every ?key=value into the Mongo
 // filter AFTER the Rule 38 scope filter, so ?location=<other centre> simply overwrote it and a
 // scoped user could read every centre's candidate PII. Scope is now applied last, client keys

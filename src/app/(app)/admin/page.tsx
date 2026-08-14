@@ -898,8 +898,56 @@ function DefaultsTab({ setError }: any) {
               <span className="block text-xs text-gray-500">Off: every send is skipped and recorded as skipped. Sending also stays off until the mail credentials are configured on the server.</span>
             </span>
           </label>
+          <MailPanel setError={setError} />
         </div>
       </Section>
+    </div>
+  );
+}
+
+// QA-132 (checker, 15/08): mail attempts were logged but invisible — even the Admin had to
+// call the API by hand to answer "mail gayi ki nahi". This panel is that answer, and it is
+// honest about what SES can and cannot promise: "sent" means SES ACCEPTED the message; the
+// system never learns about a bounce (that needs SNS hooks — devops). Labels say so.
+function MailPanel({ setError }: any) {
+  const [mail, setMail] = useState<any>(null);
+  const [busy, setBusy] = useState(false);
+  const loadMail = () => api("/api/test-email").then(setMail).catch((e: any) => setError(e.message));
+  useEffect(() => { loadMail(); }, []);
+  const STATUS: Record<string, { label: string; cls: string }> = {
+    sent: { label: "accepted by SES — delivery not confirmed", cls: "text-green-700" },
+    failed: { label: "failed", cls: "text-red-700" },
+    skipped: { label: "skipped", cls: "text-gray-500" },
+  };
+  return (
+    <div className="rounded-lg border p-3">
+      <div className="mb-1 flex items-center justify-between">
+        <span className="text-sm font-medium">Mail — last 20 attempts</span>
+        <span className="flex items-center gap-2">
+          <span className={`text-xs ${mail?.configured ? "text-green-700" : "text-amber-700"}`}>
+            {mail == null ? "…" : mail.configured ? "credentials configured" : "not configured on the server"}
+          </span>
+          <Btn small kind="ghost" disabled={busy || !mail?.configured} onClick={async () => {
+            setBusy(true);
+            try { await api("/api/test-email", { method: "POST", json: { send_to_self: true } }); await loadMail(); }
+            catch (e: any) { setError(e.message); } finally { setBusy(false); }
+          }}>{busy ? "Sending…" : "Send test mail to me"}</Btn>
+        </span>
+      </div>
+      {(mail?.log ?? []).length === 0 ? (
+        <p className="text-xs text-gray-400">No mail attempts recorded yet.</p>
+      ) : (
+        <ul className="divide-y text-xs">
+          {(mail.log ?? []).map((m: any) => (
+            <li key={m._id} className="flex flex-wrap items-baseline gap-2 py-1.5">
+              <span className="text-gray-400">{fmtDT(m.createdAt)}</span>
+              <span className="font-medium">{m.to}</span>
+              <span className="text-gray-500">{m.subject}</span>
+              <span className={`ml-auto ${STATUS[m.status]?.cls ?? ""}`}>{STATUS[m.status]?.label ?? m.status}{m.reason ? ` — ${m.reason}` : ""}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

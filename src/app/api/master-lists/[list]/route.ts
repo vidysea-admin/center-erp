@@ -17,16 +17,25 @@ const EXTRA_FIELDS: Record<string, string[]> = {
 
 export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ list: string }> }) => {
   await dbConnect();
-  await requireUser();
+  const user = await requireUser();
   const { list } = await ctx.params;
   const Model = LISTS[list];
   if (!Model) throw new HttpError(404, "Unknown list");
   // Lazy seed: the scheme master mirrors the SCHEME enum so Program.scheme values always
   // have a row to hang their hours on — created once, empty of facts until Admin fills them.
-  if (list === "schemes" && (await Scheme.countDocuments({})) === 0) {
+  // QA-131 rider: Admin-only now — a GET that writes must not be reachable by every role.
+  if (list === "schemes" && user.role === "Admin" && (await Scheme.countDocuments({})) === 0) {
     await Scheme.insertMany(SCHEME.map((name) => ({ name, active: true }))).catch(() => {});
   }
-  const items = await Model.find({}).sort({ name: 1 }).lean();
+  let items = await Model.find({}).sort({ name: 1 }).lean();
+  // QA-131 (S1, checker 15/08): amount_received is the per-scheme money the client pays —
+  // the one field the CEO called admin-only — and this route was handing it to every
+  // signed-in role, trainers included. Hours stay readable; the money leaves the payload
+  // for everyone but Admin (maskTrainerSecrets pattern: strip on a copy, not a projection,
+  // so the Admin path stays a single query).
+  if (list === "schemes" && user.role !== "Admin") {
+    items = (items as any[]).map(({ amount_received: _a, ...safe }) => safe);
+  }
   return NextResponse.json({ items });
 });
 

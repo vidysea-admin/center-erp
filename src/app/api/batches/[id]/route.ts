@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
-import { Batch, BatchMember, CandidateResult, Closure, CostEntry, DailyLog, GovtAttendanceRow, Invoice, Program } from "@/models";
+import { Batch, BatchMember, CandidateResult, Closure, CostEntry, DailyLog, GovtAttendanceRow, Invoice, Program, Trainer } from "@/models";
 import { assertBatchInScope, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, batchReadiness, planBatchBackward, settlementStage, trainerBookingWarnings } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { audit, auditDiff } from "@/lib/audit";
@@ -116,7 +116,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
     slot_start: (patch.slot_start as string | undefined) ?? batch.slot_start,
     slot_end: (patch.slot_end as string | undefined) ?? batch.slot_end,
   };
-  await assertSlotWithinGuidelines(slot); // 2026-08-12: 09:00–18:00, ≤4h per session
+  await assertSlotWithinGuidelines(slot); // slot-rules.ts: 09:00–18:00 window, exactly 4h or 8h
   if (trainer) await assertTrainerAvailableForBatch(String(trainer), id, newStart, newEnd ?? newStart, slot); // Rule 10 + slot clash
   if (room) await assertRoomFreeForBatch(String(room), id, newStart, newEnd ?? newStart, session); // Rule 13
 
@@ -138,5 +138,19 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   if (oldTrainer && oldTrainer !== String(batch.trainer ?? "")) await deriveTrainerStatus(oldTrainer);
   if (batch.trainer) await deriveTrainerStatus(String(batch.trainer)); // Rule 12
   const warnings = patch.trainer && batch.trainer ? await trainerBookingWarnings(String(batch.trainer), batch.location) : [];
+  // QA-139: reschedules are exactly where a too-early start sneaks in — same warning as create.
+  if (patch.planned_start || patch.trainer !== undefined) {
+    const day = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const def = await getDefaults();
+    const mob = new Date(); mob.setDate(mob.getDate() + (def.mobilisation_lead_days ?? 7));
+    let earliest = mob;
+    if (batch.trainer) {
+      const tDoc = await Trainer.findById(batch.trainer).select("available_from").lean<any>();
+      if (tDoc?.available_from && new Date(tDoc.available_from) > earliest) earliest = new Date(tDoc.available_from);
+    }
+    if (day(new Date(batch.planned_start)) < day(earliest)) {
+      warnings.push(`Planned start ${new Date(batch.planned_start).toLocaleDateString("en-IN")} is before the earliest possible start ${earliest.toLocaleDateString("en-IN")} (mobilisation lead ${def.mobilisation_lead_days ?? 7}d${batch.trainer ? " / trainer availability" : ""}).`);
+    }
+  }
   return NextResponse.json({ item: batch, ...(warnings.length ? { warning: warnings.join(" ") } : {}) });
 });

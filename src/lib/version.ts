@@ -3,15 +3,16 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-62";
+export const RELEASE = "2026.08.14-63";
 export const RELEASE_NOTE =
-  "QA-136/137: the audit trail becomes visible. It was ALWAYS written - " +
-  "every create/patch through the generic layer logs entity, field, " +
-  "old->new and the actor - but only batches and locations had a " +
-  "surface. Now: Activity tab on the trainer detail (scoped via the " +
-  "same QA-125 nomination/home/capable union as the list), and an " +
-  "Admin-only per-user activity view (/api/audit/by-user + an Activity " +
-  "drawer on Users & Access, dropped accounts included) - 'what did " +
-  "this person do' finally has an answer. Scoped roles are refused the " +
-  "per-user view by design: a cross-centre trail would be a Rule 38 " +
-  "back door.";
+  "QA-131/140/138/139/132: money and honesty. The scheme master's " +
+  "amount_received - the one field the CEO called admin-only - was " +
+  "readable by every signed-in role; now only Admin sees it (hours " +
+  "stay open) and the lazy seed is Admin-only too. The invoice book " +
+  "gets the same R-E guard the cost ledger has - Operations raises " +
+  "work, Admin reads the book. The batch form's slot rule now runs " +
+  "while you type (same function the API blocks with - slot-rules.ts, " +
+  "one source), and an ignored earliest-possible-start warns at save " +
+  "on both client and API (never blocks). Mail attempts get an Admin " +
+  "panel that tells the truth: 'sent' means SES accepted it, delivery " +
+  "is not confirmed.";
