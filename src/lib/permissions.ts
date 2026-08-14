@@ -70,8 +70,11 @@ export function invalidatePermissionCache() { cache = null; }
 export async function getEffectivePermissions(user: SessionUser): Promise<Set<string>> {
   const set = new Set(await getRolePermissions(user.role));
   // extra grants live on the user document, not the JWT — a grant works without re-login
-  const doc = await User.findById(user.id).select("extra_permissions").lean<any>();
+  const doc = await User.findById(user.id).select("extra_permissions revoked_permissions").lean<any>();
   for (const p of doc?.extra_permissions ?? []) set.add(p);
+  // CEO 14/08: per-user REMOVAL of a right. Deny wins over the role set and extra grants
+  // alike — otherwise a revoke could be undone by the very grant list the same screen edits.
+  for (const p of doc?.revoked_permissions ?? []) set.delete(p);
   return set;
 }
 

@@ -24,7 +24,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   // only {"password":"…"} skipped the Admin check below and rewrote the hash further down —
   // any non-Admin holding the GRANTABLE users.manage right could reset the Admin's password
   // and take over the account. Credentials ARE privileges; they belong in this list.
-  const PRIV_FIELDS = ["role", "location_scope", "can_edit", "active", "extra_permissions", "password", "email"];
+  const PRIV_FIELDS = ["role", "location_scope", "can_edit", "active", "extra_permissions", "revoked_permissions", "password", "email"];
   const changingPriv = PRIV_FIELDS.some((f) => body[f] !== undefined) || body.approval !== undefined;
   if (changingPriv && user.role !== "Admin") {
     throw new HttpError(403, "Only an Admin may change roles, rights or account status.");
@@ -33,7 +33,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
     throw new HttpError(400, "You cannot change your own role, rights or account status.");
   }
 
-  for (const f of ["name", "email", "role", "location_scope", "can_edit", "active", "extra_permissions"]) {
+  for (const f of ["name", "email", "role", "location_scope", "can_edit", "active", "extra_permissions", "revoked_permissions"]) {
     if (body[f] !== undefined) (doc as any)[f] = body[f];
   }
   if (body.password) doc.password_hash = await bcrypt.hash(body.password, 10);

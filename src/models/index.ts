@@ -782,11 +782,16 @@ const UserSchema = new Schema({
   // 2026-08-11 (CEO): special per-user grants on top of the role's toggled set —
   // "किसी को special देने तो admin दे पाएगा"
   extra_permissions: { type: [String], default: [] },
+  // 2026-08-14 (CEO recorded review [35:07]): "we should be able to give them additional
+  // rights OR REMOVE the rights" — a per-user deny list. Deny wins over both the role's
+  // toggled set and any extra grant. Meaningless on an Admin (role bypasses all checks).
+  revoked_permissions: { type: [String], default: [] },
 }, { timestamps: true });
 
 // ---------- RolePermission (2026-08-11, CEO: AWS-style group toggles) ----------
 // One document per role = the "group". Admin toggles which feature-rights the role carries;
-// enforcement = role's toggled set ∪ the user's extra_permissions (Admin bypasses all).
+// enforcement = (role's toggled set ∪ the user's extra_permissions) − revoked_permissions
+// (Admin bypasses all).
 const RolePermissionSchema = new Schema({
   role: { type: String, enum: USER_ROLE, required: true, unique: true },
   permissions: { type: [String], default: [] },

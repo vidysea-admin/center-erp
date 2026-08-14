@@ -480,6 +480,41 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   }
 }
 
+// ---- R-B (CEO 14/08 [35:07-35:13]): per-user REMOVE-a-right + stop access ----
+{
+  const stamp = Date.now().toString().slice(-6);
+  const mk = await req(admin, "POST", "/api/users", {
+    name: "Revoke Target " + stamp, email: `revoke.${stamp}@test.local`, password: PW,
+    role: "Operations", can_edit: true,
+  });
+  ok("R-B fixture: an Operations user is created", mk.status === 201, `got ${mk.status}`);
+  const uid = mk.data.item?._id;
+  let cookie = await login(`revoke.${stamp}@test.local`, PW);
+  ok("R-B fixture: they can log in", !!cookie);
+  // Operations carries trainers.manage by default. The trainers LIST is deliberately
+  // ungated (batch creators read it), so the revoke is proven on the WRITE the right
+  // actually gates.
+  const mkTrainer = () => req(cookie, "POST", "/api/trainers", { name: "Revoke Probe " + Date.now(), phone: "5" + Date.now().toString().slice(-9), skills: ["rp" + stamp] });
+  ok("R-B: before the revoke, the role's right works (trainer create 201)", (await mkTrainer()).status === 201);
+  ok("R-B: a non-Admin may not revoke rights",
+    (await req(ops, "PATCH", `/api/users/${uid}`, { revoked_permissions: ["trainers.manage"] })).status === 403);
+  ok("R-B: Admin revokes one right", (await req(admin, "PATCH", `/api/users/${uid}`, { revoked_permissions: ["trainers.manage"] })).status === 200);
+  // (no cache wait needed: revokes are read from the user document on every check)
+  const denied = await mkTrainer();
+  ok("R-B: deny wins — the revoked right now 403s and names itself",
+    denied.status === 403 && /right/i.test(denied.data?.error ?? ""), `got ${denied.status} ${denied.data?.error ?? ""}`);
+  const anyProg = (await req(cookie, "GET", "/api/programs?limit=1")).data.items?.[0];
+  ok("R-B: other rights survive the revoke (candidate create still allowed)",
+    (await req(cookie, "POST", "/api/candidates", { name: "Revoke Cand " + stamp, phone: "4" + Date.now().toString().slice(-9), location: jpr._id, program: anyProg?._id })).status === 201);
+  // A grant does NOT resurrect a revoked right — deny wins over extra too.
+  await req(admin, "PATCH", `/api/users/${uid}`, { extra_permissions: ["trainers.manage"] });
+  ok("R-B: an extra grant cannot undo a revoke (deny wins)", (await mkTrainer()).status === 403);
+  // Stop access: active=false kills the NEXT login; a fresh session cannot be minted.
+  ok("R-B: Admin stops access", (await req(admin, "PATCH", `/api/users/${uid}`, { active: false })).status === 200);
+  ok("R-B: a stopped account cannot log in", (await login(`revoke.${stamp}@test.local`, PW)) === null);
+  ok("R-B: reactivate restores login", (await req(admin, "PATCH", `/api/users/${uid}`, { active: true })).status === 200 && !!(await login(`revoke.${stamp}@test.local`, PW)));
+}
+
 // unauthenticated → 401
 const anon = await fetch(BASE + "/api/locations");
 ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}`);

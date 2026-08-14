@@ -195,8 +195,26 @@ function Users({ setError }: any) {
           { key: "role", label: "Role", sortable: true, render: (r: any) => <Chip value={r.role} /> },
           { key: "location_scope", label: "Scope", filterText: (r: any) => ["Location", "Trainer"].includes(r.role) ? (r.location_scope ?? []).map((l: any) => l.name ?? l.code).join(", ") || "none" : "All", render: (r: any) => ["Location", "Trainer"].includes(r.role) ? (r.location_scope ?? []).map((l: any) => l.name ?? l.code).join(", ") || "none" : "All" },
           { key: "can_edit", label: "Can edit", filterText: (r: any) => (r.can_edit ? "Yes" : "View only"), render: (r: any) => (r.can_edit ? "Yes" : "View only") },
-          { key: "extra_permissions", label: "Special rights", render: (r: any) => (r.extra_permissions ?? []).length ? `${r.extra_permissions.length} extra` : "—", mobile: false },
+          { key: "extra_permissions", label: "Special rights", render: (r: any) => [
+            (r.extra_permissions ?? []).length ? `${r.extra_permissions.length} extra` : "",
+            (r.revoked_permissions ?? []).length ? `${r.revoked_permissions.length} removed` : "",
+          ].filter(Boolean).join(" · ") || "—", mobile: false },
           { key: "active", label: "Active", filterText: (r: any) => (r.active ? "Yes" : r.approval_status === "Rejected" ? "Rejected" : "No"), render: (r: any) => (r.active ? "Yes" : r.approval_status === "Rejected" ? "Rejected" : "No") },
+          {
+            // CEO 14/08 [35:13]: "we should be able to stop access to certain people if need
+            // be … right away" — one click on the row, no drawer hunt. API guards apply
+            // (Admin-only, never yourself), so the button only renders where it can succeed.
+            key: "_stop", label: "", mobile: false,
+            render: (r: any) => r.approval_status === "Pending" ? null : (
+              <span onClick={(e) => e.stopPropagation()}>
+                <Btn small kind={r.active ? "danger" : "ghost"}
+                  onClick={async () => {
+                    try { await api(`/api/users/${r._id}`, { method: "PATCH", json: { active: !r.active } }); load(); }
+                    catch (err: any) { setError(err.message); }
+                  }}>{r.active ? "Stop access" : "Reactivate"}</Btn>
+              </span>
+            ),
+          },
         ]} empty="No users." />
       <Drawer open={drawer} onClose={() => setDrawer(false)} title={edit ? `Edit ${edit.name}` : "Add User"}>
         <div className="space-y-3">
@@ -229,6 +247,7 @@ function Users({ setError }: any) {
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.active ?? true} onChange={(e) => set("active", e.target.checked)} /> Active</label>
           {/* 2026-08-11 (CEO): "किसी को special देने तो admin दे पाएगा" */}
           {edit && <SpecialGrants form={form} set={set} />}
+          {edit && <RevokedRights form={form} set={set} />}
           {edit?.approval_status === "Pending" && (
             <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
               <Btn onClick={async () => { try { await api(`/api/users/${edit._id}`, { method: "PATCH", json: { ...form, password: form.password || undefined, approval: "approve" } }); setDrawer(false); load(); } catch (e: any) { setError(e.message); } }}>Approve with these settings</Btn>
@@ -274,6 +293,31 @@ function SpecialGrants({ form, set }: any) {
         {catalog.map((p) => (
           <label key={p.key} className="flex items-center gap-2 text-xs">
             <input type="checkbox" checked={extra.includes(p.key)} onChange={() => toggle(p.key)} />
+            <span><b>{p.group}</b> · {p.label}</span>
+          </label>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+// CEO 14/08 [35:07]: "give them additional rights OR REMOVE the rights" — the deny half.
+// A ticked right here is taken away from THIS user even though their role (or an extra
+// grant) carries it. Deny wins; pointless on an Admin, whose role bypasses every check.
+function RevokedRights({ form, set }: any) {
+  const [catalog, setCatalog] = useState<any[]>([]);
+  useEffect(() => { api("/api/permissions").then((d) => setCatalog(d.catalog)).catch(() => {}); }, []);
+  if (!catalog.length || form.role === "Admin") return null;
+  const revoked: string[] = form.revoked_permissions ?? [];
+  const toggle = (key: string) =>
+    set("revoked_permissions", revoked.includes(key) ? revoked.filter((k) => k !== key) : [...revoked, key]);
+  return (
+    <details className="rounded-lg border border-red-200 p-3">
+      <summary className="cursor-pointer text-sm font-medium text-red-700">Removed rights ({revoked.length}) — taken away from this user, wins over the role</summary>
+      <div className="mt-2 grid gap-1.5 md:grid-cols-2">
+        {catalog.map((p) => (
+          <label key={p.key} className="flex items-center gap-2 text-xs">
+            <input type="checkbox" checked={revoked.includes(p.key)} onChange={() => toggle(p.key)} />
             <span><b>{p.group}</b> · {p.label}</span>
           </label>
         ))}
