@@ -275,5 +275,39 @@ console.log("\n--- FL8: the day holds two slotted batches per trainer, never thr
   ok("FL8: the same slot after the earlier batches END is fine", later.status === 201, `got ${later.status}`);
 }
 
+console.log("\n--- FL9: trainer import — stages by display name, nominations by centre/role name ---");
+{
+  const rows = [
+    { "Name": `FL Tr A ${stamp}`, "Phone": "9822200001", "Stage": "TOT Payment Done", "Centre": loc.name, "Role": prog.name, "TR": "" },
+    { "Name": `FL Tr B ${stamp}`, "Phone": "9822200002", "Stage": "Random Stage", "Centre": "No Such Centre", "Role": "", "TR": "" },
+    { "Name": `FL Tr C ${stamp}`, "Phone": "9822200001", "Stage": "", "Centre": "", "Role": "", "TR": "" }, // same phone as A
+    { "Name": `FL Tr D ${stamp}`, "Phone": "9822200004", "Stage": "Certified", "Centre": "", "Role": "", "TR": "" }, // Certified without TR ID
+  ];
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+  const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+  const file = new File([buf], "trainers-probe.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+
+  const step1 = await multipart(admin, "/api/trainers/import", { file }, 200);
+  ok("FL9: step 1 returns the columns", (step1.data.columns ?? []).includes("Stage"), JSON.stringify(step1.data.columns));
+
+  const mapping = JSON.stringify({ "Name": "name", "Phone": "phone", "Stage": "pipeline_status", "Centre": "nominated_for_location", "Role": "nominated_for_program", "TR": "tr_id" });
+  const prev = await multipart(admin, "/api/trainers/import", { file, mapping }, 200);
+  ok("FL9: the display label resolved, the junk stage is reported not guessed",
+    (prev.data.stage_unmatched ?? []).includes("Random Stage") && !(prev.data.stage_unmatched ?? []).includes("TOT Payment Done"),
+    JSON.stringify(prev.data.stage_unmatched));
+  ok("FL9: the unknown centre is reported", (prev.data.centre_unmatched ?? []).includes("No Such Centre"), JSON.stringify(prev.data.centre_unmatched));
+  ok("FL9: the in-file phone duplicate is flagged and excluded (phone is unique)",
+    (prev.data.duplicates ?? []).some((d) => /same number as row/.test(d)) && prev.data.importable === 3, JSON.stringify({ dupes: prev.data.duplicates, importable: prev.data.importable }));
+  ok("FL9: Certified without a TR ID is warned by name", (prev.data.warnings ?? []).some((w) => /no TR ID/.test(w)), JSON.stringify(prev.data.warnings));
+
+  const done = await multipart(admin, "/api/trainers/import", { file, mapping, confirm: "1" }, 201);
+  ok("FL9: confirm imports the 3 unique rows, never the phone dupe", done.data.imported === 3, String(done.data.imported));
+  const trA = (await req(admin, "GET", `/api/trainers?q=9822200001`)).data.items.find((t) => t.name === `FL Tr A ${stamp}`);
+  ok("FL9: 'TOT Payment Done' landed as the enum 'Payment Done'", trA?.pipeline_status === "Payment Done", trA?.pipeline_status);
+  ok("FL9: the centre name resolved to a real nomination", (trA?.nominated_for_location?.name ?? "") === loc.name, JSON.stringify(trA?.nominated_for_location));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

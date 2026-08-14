@@ -40,6 +40,21 @@ function TrainersInner() {
   const [form, setForm] = useState<any>({ max_concurrent_batches: 1, status: "Available" });
   const set = (k: string, v: unknown) => setForm((f: any) => ({ ...f, [k]: v }));
   const [invite, setInvite] = useState<any>(null);         // quick-invite drawer {form, link?}
+  const [imp, setImp] = useState<any>(null);               // F-TRAINER-IMPORT drawer state
+  async function trainerImport(previewOnly: boolean) {
+    if (!imp?.file) return;
+    const fd = new FormData();
+    fd.append("file", imp.file);
+    fd.append("mapping", JSON.stringify(imp.mapping ?? {}));
+    if (!previewOnly) fd.append("confirm", "1");
+    try {
+      const res = await fetch(`${BASE_PATH}/api/trainers/import`, { method: "POST", body: fd });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error ?? "import failed");
+      if (previewOnly) setImp({ ...imp, preview: d, done: null });
+      else { setImp({ ...imp, done: d, preview: null }); load(); }
+    } catch (err: any) { setError(err.message); }
+  }
   const [positions, setPositions] = useState<any[]>([]);   // CEO: Open Positions tab
   const [posFilter, setPosFilter] = useState("Open");      // default = only what needs hiring
   const [reqEdit, setReqEdit] = useState<any>(null);
@@ -126,6 +141,7 @@ function TrainersInner() {
         <h1 className="text-xl font-semibold">Trainers</h1>
         <div className="flex gap-2">
           {/* CEO 13/08: "naam-email-phone dala, link bana, WhatsApp chala gaya — trainer khud bhare" */}
+          <Btn kind="ghost" onClick={() => setImp({})}>Import (Excel)</Btn>
           <Btn kind="ghost" onClick={() => setInvite({ form: {} })}>Quick add + send link</Btn>
           <Btn onClick={() => { setEdit(null); setForm({ max_concurrent_batches: 4, status: "Available", pipeline_status: "Applied" }); setDrawer(true); }}>Add Trainer</Btn>
         </div>
@@ -258,6 +274,67 @@ function TrainersInner() {
         </>
       ) : null}
 
+      {/* F-TRAINER-IMPORT: Manish's stage-wise sheet (qa/templates #3) → upload → map →
+          preview → confirm. Unknown stages / centre / job-role names are reported and left
+          blank, never guessed. */}
+      <Drawer open={!!imp} onClose={() => setImp(null)} title="Import trainers (Excel)" wide>
+        {imp && (
+          <div className="space-y-3">
+            <input type="file" accept=".xlsx,.xls,.csv" onChange={async (e) => {
+              const file = e.target.files?.[0]; e.target.value = "";
+              if (!file) return;
+              const fd = new FormData(); fd.append("file", file);
+              try {
+                const res = await fetch(`${BASE_PATH}/api/trainers/import`, { method: "POST", body: fd });
+                const d = await res.json();
+                if (!res.ok) throw new Error(d.error ?? "upload failed");
+                setImp({ file, columns: d.columns, total: d.total, mapping: {} });
+              } catch (err: any) { setError(err.message); }
+            }} />
+            {imp.columns && (
+              <>
+                <p className="text-sm text-gray-600">{imp.total} rows found. Map columns → fields (name and phone required). "Current Stage" accepts the display names (Fresh Lead, TOT Payment Done…).</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {imp.columns.map((c: string) => (
+                    <Field key={c} label={c}>
+                      <select className={inputCls} value={imp.mapping?.[c] ?? ""} onChange={(e) => setImp({ ...imp, mapping: { ...imp.mapping, [c]: e.target.value } })}>
+                        <option value="">Ignore</option>
+                        {["name", "phone", "email", "qualification", "skills", "industry_experience_years", "teaching_experience_years", "home_location_other", "pipeline_status", "tr_id", "nominated_for_location", "nominated_for_program", "source", "day_rate", "pipeline_note"].map((f) => <option key={f}>{f}</option>)}
+                      </select>
+                    </Field>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <Btn kind="ghost" onClick={() => trainerImport(true)}>Preview</Btn>
+                  {imp.preview && <Btn onClick={() => trainerImport(false)}>Import {imp.preview.importable ?? imp.preview.valid} trainers</Btn>}
+                </div>
+                {imp.preview && (
+                  <div className="space-y-2 text-sm text-gray-600">
+                    <p>{imp.preview.valid} valid, {imp.preview.skipped} skipped (missing name/phone).</p>
+                    {["stage_unmatched", "centre_unmatched", "role_unmatched"].map((k) => (imp.preview[k]?.length ?? 0) > 0 && (
+                      <p key={k} className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        {k === "stage_unmatched" ? "Stages" : k === "centre_unmatched" ? "Centres" : "Job roles"} not recognised (left blank): {imp.preview[k].join(" · ")}
+                      </p>
+                    ))}
+                    {(imp.preview.warnings?.length ?? 0) > 0 && (
+                      <ul className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        {imp.preview.warnings.map((w: string, i: number) => <li key={i}>• {w}</li>)}
+                      </ul>
+                    )}
+                    {(imp.preview.duplicate_count ?? 0) > 0 && (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        <div className="font-medium">{imp.preview.duplicate_count} duplicate{imp.preview.duplicate_count > 1 ? "s" : ""} — skipped on import (a trainer's phone is unique)</div>
+                        <ul className="mt-1 max-h-32 space-y-0.5 overflow-y-auto">{imp.preview.duplicates.map((d: string, i: number) => <li key={i}>• {d}</li>)}</ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {imp.done && <p className="text-sm font-medium text-green-700">✓ {imp.done.imported} trainers imported.</p>}
+              </>
+            )}
+          </div>
+        )}
+      </Drawer>
       <Drawer open={!!invite} onClose={() => setInvite(null)} title="Quick add trainer — send them the form">
         {invite && (
           <div className="space-y-3">
