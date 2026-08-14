@@ -39,7 +39,7 @@ const PURGE = [
   "trainers", "trainerdocuments", "trainerrequests",
   "candidates", "batches", "batchmembers", "dailylogs",
   "closures", "candidateresults", "invoices", "costentries",
-  "followupactions", "sheetchanges", "workbooksnapshots", "workbookchanges",
+  "followupactions", "sheetchanges", "workbooksnapshots", "workbookchanges", "tabmappings",
   "meetingnotes", "publictokens", "feedbacks", "notifications",
   "govtattendanceimports", "govtattendancerows",
   "approvalrequests", "auditlogs",

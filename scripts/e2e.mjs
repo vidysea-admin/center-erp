@@ -944,6 +944,22 @@ const queued = (homeAfterSignup.queues?.pending_users ?? []).find((u) => u.email
 ok("a pending account appears on the Admin's Home queue", !!queued, JSON.stringify(homeAfterSignup.queues?.pending_users?.length));
 ok("…with the contact details an approver needs", !!queued && queued.phone === "9876500011", JSON.stringify(queued));
 
+// ---- admin reset endpoints (2026-08-14 CEO order) — guards only; apply is never exercised
+// here because the suite's own fixtures live in this database ----
+{
+  const dry = await req("POST", "/api/admin/wipe", {}, 200);
+  ok("wipe dry-run reports a total and collection counts", typeof dry.data.total === "number" && dry.data.mode === "dry_run", JSON.stringify(dry.data).slice(0, 120));
+  ok("wipe dry-run names the preserved logins", Array.isArray(dry.data.logins_preserved) && dry.data.logins_preserved.length > 0);
+  await req("POST", "/api/admin/wipe", { confirm: "wipe all data" }, 400); // phrase is case-exact
+  const spocCookie = await loginAs("spoc.jpr03@vidysea.com", "Vidysea@123");
+  if (spocCookie) {
+    const saved = cookie; cookie = spocCookie;
+    await req("POST", "/api/admin/wipe", {}, 403);
+    await req("POST", "/api/admin/avpl-rebase", {}, 403);
+    cookie = saved;
+  }
+}
+
 // ---- public build marker (deploy verification, no auth) ----
 const verRes = await fetch(BASE + "/api/public/version");
 const verBody = await verRes.json().catch(() => ({}));

@@ -80,7 +80,17 @@ const avpl = await db.collection("syncsources").updateOne(
         "TC Password": "tc_password",
       },
     },
+    // Same OneDrive workbook as the watch source — mapped mode reads its location-master tab.
+    // Upsert so a fresh database (post-wipe) gets the source back instead of a silent skip.
+    $setOnInsert: {
+      name: "AVPL workbook",
+      source_url: process.env.WATCH_SOURCE_URL ||
+        "https://onedrive.live.com/:x:/g/personal/c1d310c499f08fba/IQBHQGQ1_HmBRZjCmC1XQMK8AQCFnOpu1H8GXm3MNvZnypE",
+      key_columns: [],
+      createdAt: new Date(),
+    },
   },
+  { upsert: true },
 );
-console.log(`AVPL workbook (mapped): ${avpl.matchedCount ? "configured" : "not present — skipped"}`);
+console.log(`AVPL workbook (mapped): ${avpl.upsertedCount ? "created" : "configured"}`);
 await mongoose.disconnect();
