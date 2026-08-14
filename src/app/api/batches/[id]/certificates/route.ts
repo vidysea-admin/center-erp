@@ -7,7 +7,7 @@ import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { BASE_PATH } from "@/lib/base-path";
 import { getDefaults } from "@/lib/defaults";
-import { Batch, BatchMember, CandidateResult } from "@/models";
+import { Batch, BatchMember, CandidateResult, Closure } from "@/models";
 import { assertBatchInScope, recomputeClosureAggregates, upsertCandidateCertificate } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
@@ -130,9 +130,13 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   }
 
   // Rule 42 / S0 guard: a batch that completed in BATCH-LEVEL mode (zero rows before this
-  // request) keeps its recorded closure figures — deriving appeared/passed from the handful
+  // request) keeps its RECORDED closure figures — deriving appeared/passed from the handful
   // of late rows would rewrite a 45-person batch's totals down to the certificate count.
-  const wasLegacy = results.length === 0 && batch.status === "Completed";
+  // QA-044 refinement: when NO closure document exists at all (seeded/legacy batches),
+  // there is nothing recorded to protect — deriving is the only way the Closure tab stops
+  // reading "0 passed" on a batch that provably holds certificates.
+  const hasRecordedClosure = !!(await Closure.exists({ batch: id }));
+  const wasLegacy = results.length === 0 && batch.status === "Completed" && hasRecordedClosure;
   if (touched && !wasLegacy) await recomputeClosureAggregates(id, user.id);
   return NextResponse.json({ matched, unmatched, summary: { received: files.length, matched: matched.length, unmatched: unmatched.length } });
 });

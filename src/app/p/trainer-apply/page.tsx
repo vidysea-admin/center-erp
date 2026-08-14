@@ -28,7 +28,11 @@ function TrainerApplyInner() {
       .then(async (r) => {
         if (!r.ok) { setState("dead"); return; }
         const d = await r.json();
-        if (d.prefill) setForm((f: any) => ({ ...f, ...d.prefill }));
+        // QA-040 root cause: on a slow fetch this prefill used to land AFTER the applicant
+        // had started typing and silently overwrote their input — the submit then carried
+        // the placeholder values back, the server saw nothing changed, and a "successful"
+        // application saved nothing. Prefill only ever fills fields the user hasn't typed.
+        if (d.prefill) setForm((f: any) => ({ ...d.prefill, ...Object.fromEntries(Object.entries(f).filter(([, v]) => String(v ?? "").trim())) }));
         setState("form");
       })
       .catch(() => setState("dead"));

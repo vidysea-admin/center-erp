@@ -3,12 +3,12 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-20";
+export const RELEASE = "2026.08.14-21";
 export const RELEASE_NOTE =
-  "Tables: header row now stays pinned while you scroll (every table, via the " +
-  "shared component) and long tables scroll inside their own frame; batch-detail " +
-  "tab tables show loading skeletons instead of blanks. Trainer pipeline funnel " +
-  "filter speaks the renamed display labels (was raw enum - the 'old labels in " +
-  "filters' catch). Status pills explain themselves on hover (N01/N02: the states " +
-  "are mutually exclusive today-states, not a funnel). Cert upload without a " +
-  "multipart body now answers 400, not 500.";
+  "Trainer application actually saves (QA-040): the prefill no longer races over " +
+  "what the applicant typed, and the server writes via the supported set() path - " +
+  "a blank field never erases what staff pre-typed. Applications now notify " +
+  "Admin/Operations (QA-041). Batches list gains an 'Entered by' column (QA-022). " +
+  "Late-arrival certificates on a batch with NO recorded closure now derive the " +
+  "closure figures - '0 passed' on a batch holding 7 certificates was the guard " +
+  "being too broad (QA-044); recorded batch-level figures stay protected.";

@@ -166,6 +166,11 @@ function BatchesInner() {
               { key: "planned_start", label: "Start", sortable: true, sortValue: (r: any) => r.planned_start ? new Date(r.planned_start).getTime() : null, render: (r: any) => fmtDate(r.planned_start) },
               // 2026-08-13 (Manish): source link per row — click lands on that sheet tab.
               { key: "source", label: "Source", mobile: false, filterable: true, filterText: (r: any) => r.source ?? "Entered in ERP", render: (r: any) => <SourceCell source={r.source} /> },
+              // 2026-08-14 (Umesh): "entered into ERP dikhana is really not right — KISNE
+              // daala, 4 me se kaun". The creator by name; seeded rows honestly say so.
+              { key: "created_by", label: "Entered by", mobile: false, hidden: true, filterable: true,
+                sortValue: (r: any) => r.created_by?.name ?? "", filterText: (r: any) => r.created_by?.name ?? "(seed/import)",
+                render: (r: any) => r.created_by?.name ?? <span className="text-gray-400">(seed/import)</span> },
             ]} empty="No batches — plan the first one." />
         </>
       ) : (

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, HttpError } from "@/lib/authz";
 import { rateLimit, clientKey } from "@/lib/rate-limit";
-import { Program, PublicToken, Trainer } from "@/models";
+import { Notification, Program, PublicToken, Trainer } from "@/models";
 import { audit } from "@/lib/audit";
 
 // Public trainer application (CEO 13/08: "Add Trainer ke fields as a form uske paas chala
@@ -65,11 +65,22 @@ export const POST = apiHandler(async (req: NextRequest) => {
     if (!EARLY_STAGES.includes(tr.pipeline_status)) {
       throw new HttpError(409, "This profile has already progressed — please contact the office for changes.");
     }
-    Object.assign(tr, f);
+    // QA-040 (2026-08-14): Object.assign onto the mongoose document saved NOTHING — the
+    // audit row and the burned link both landed while the profile kept its placeholder
+    // skills (live evidence: trainer 6a7e…ec7c, updatedAt === createdAt). doc.set() is the
+    // supported write path; undefined values are stripped so a field the applicant left
+    // blank never erases what Divya pre-typed.
+    tr.set(Object.fromEntries(Object.entries(f).filter(([, v]) => v !== undefined)));
     await tr.save();
     t.active = false; // single-use: the completed form burns the link
     await t.save();
     await audit({ entity: "Trainer", entityId: tr._id, field: "self_application", newValue: "profile completed via trainer-apply link", actor: null });
+    // QA-041: the applicant is promised a callback — tell the people who make it.
+    await Notification.create({
+      type: "trainer_application", severity: "info",
+      message: `Trainer application completed: ${tr.name} (${(tr.skills ?? []).join(", ") || "no skills listed"}) — review the CV.`,
+      entity: "Trainer", entity_id: tr._id, link: "/trainers", role_target: ["Admin", "Operations"],
+    });
     return NextResponse.json({ ok: true, mode: "completed" }, { status: 200 });
   }
 
@@ -81,5 +92,10 @@ export const POST = apiHandler(async (req: NextRequest) => {
   }
   const tr = await Trainer.create({ ...f, pipeline_status: "Applied", status: "Available", source: "Self Application" });
   await audit({ entity: "Trainer", entityId: tr._id, field: "self_application", newValue: "fresh application via /p/trainer-apply", actor: null });
+  await Notification.create({
+    type: "trainer_application", severity: "info",
+    message: `New trainer application: ${tr.name} (${(tr.skills ?? []).join(", ")}) — review the CV.`,
+    entity: "Trainer", entity_id: tr._id, link: "/trainers", role_target: ["Admin", "Operations"],
+  });
   return NextResponse.json({ ok: true, mode: "received" }, { status: 201 });
 });

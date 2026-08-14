@@ -99,6 +99,12 @@ ok("[avg] nomination can be cleared again (wrong pick is reversible)", nomCleare
   const filled = (await req(admin, "GET", `/api/trainers/${inv.trainer}`, undefined, 200)).data.item;
   ok("[best] the profile carries what the APPLICANT wrote", filled.qualification === "B.Tech" && (filled.skills ?? []).includes("Drone Service") && filled.industry_experience_years === 4, JSON.stringify({ q: filled.qualification, sk: filled.skills }));
   ok("[avg] …and stays at the top of the pipeline for CV review", filled.pipeline_status === "Applied", filled.pipeline_status);
+  // QA-040 regression: a submit whose values EQUAL the stored doc (the prefill-race shape)
+  // must still burn the link and answer 200 — and never un-set what was already there.
+  // QA-041: the completion raised a notification for the people who make the callback.
+  const notifs1 = (await req(admin, "GET", "/api/notifications?limit=100", undefined, 200)).data.items ?? [];
+  ok("[best] completing an application notifies Admin/Ops (QA-041)",
+    notifs1.some((n) => n.type === "trainer_application" && String(n.entity_id) === String(inv.trainer)), "no trainer_application notification");
   // [worst] the link is single-use — a second submit is refused.
   ok("[worst] a used link is dead", (await pub("/api/public/trainer-apply", { token: tok, name: "x", phone: qPhone, skills: "y" })).status === 404);
 
@@ -108,6 +114,9 @@ ok("[avg] nomination can be cleared again (wrong pick is reversible)", nomCleare
   ok("[best] fresh public application is accepted", fresh.status === 201, `got ${fresh.status}`);
   const found = ((await req(admin, "GET", `/api/trainers?q=${fPhone}&limit=5`, undefined, 200)).data.items ?? []).find((t) => t.phone === fPhone);
   ok("[best] …and creates the pipeline record", found?.pipeline_status === "Applied" && found?.source === "Self Application", JSON.stringify({ p: found?.pipeline_status, src: found?.source }));
+  const notifs2 = (await req(admin, "GET", "/api/notifications?limit=100", undefined, 200)).data.items ?? [];
+  ok("[best] a fresh application notifies Admin/Ops (QA-041)",
+    notifs2.some((n) => n.type === "trainer_application" && String(n.entity_id) === String(found?._id)), "no trainer_application notification for fresh app");
   // [worst] duplicate phone: same success shape, no second record (anti-enumeration).
   await pub("/api/public/trainer-apply", { name: "TEST-ET Dup " + s, phone: fPhone, skills: "x" });
   const dupCount = ((await req(admin, "GET", `/api/trainers?q=${fPhone}&limit=10`, undefined, 200)).data.items ?? []).filter((t) => t.phone === fPhone).length;

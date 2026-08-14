@@ -27,6 +27,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
     .populate("program", "name code duration_days")
     .populate("trainer", "name")
     .populate("room", "name type")
+    .populate("created_by", "name email")
     .lean<any[]>();
   // enrolled/target chip for the list
   const counts = await BatchMember.aggregate([
