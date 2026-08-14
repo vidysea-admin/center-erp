@@ -29,6 +29,10 @@ export default function HomePage() {
   const q = data.queues;
   // A centre principal/SPOC signs in as a Location-scoped user.
   const isPrincipal = role === "Location";
+  // QA-058/059 (checker): the Trainer home showed EIGHT cards including money and hiring,
+  // with Invoices / Sync Inbox buttons its own session gets 403 on. The most junior roles
+  // see the least: batches + attendance, same as the principal.
+  const leanHome = ["Location", "Trainer", "Enrollment"].includes(role ?? "");
 
   const Row = ({ href, left, right }: { href: string; left: React.ReactNode; right?: React.ReactNode }) => (
     <li>
@@ -77,7 +81,7 @@ export default function HomePage() {
 
         {/* QA-002: this total and the Open Positions board count different universes —
             both numbers travel together so the difference is explained, not hidden. */}
-        {!isPrincipal && (
+        {!leanHome && (
           <KPI label="Active Trainers" value={data.kpis.trainers_active_total ?? 0} tone="amber" icon={<IconUser size={19} />} href="/trainers?tag=Ready%20to%20Train"
             sub={[
               (data.kpis.trainers_by_role ?? []).slice(0, 3).map((r: any) => `${r.code ?? r.program} ${r.count}`).join(" · ") || "none certified yet",
@@ -86,23 +90,23 @@ export default function HomePage() {
         )}
         {/* 2026-08-14 (Umesh: "31 vs 13 — blunder?"): both countings, both NAMED — the
             headline is job-role ROWS (the sheet's 31), the sub says centres explicitly. */}
-        {!isPrincipal && (
+        {!leanHome && (
           <KPI label="Approved (centre × job role)" value={data.kpis.approved_targets ?? 0} tone="blue" icon={<IconPin size={19} />} href="/batches?tab=Preparation"
             sub={`of ${data.kpis.targets_total ?? 0} job-role rows · centres: ${data.kpis.approved_locations} approved`} />
         )}
-        {!isPrincipal && (
+        {!leanHome && (
           <KPI label="Enrolled Students" value={data.kpis.enrolled_students} tone="green" icon={<IconUsers size={19} />} href="/candidates?lifecycle_status=Enrolled"
             sub={`of ${data.kpis.pool_candidates ?? 0} in the pool`} />
         )}
-        {!isPrincipal && (
+        {!leanHome && (
           <KPI label="Open Trainer Requests" value={data.kpis.open_trainer_requests} tone="amber" icon={<IconUser size={19} />} href="/trainers?tab=Requests"
             sub={`${data.kpis.fulfilled_trainer_requests ?? 0} fulfilled`} />
         )}
-        {!isPrincipal && (
+        {!leanHome && (
           <KPI label="Pending Follow-ups" value={data.kpis.pending_followups} tone="red" icon={<IconAlert size={19} />} href="/sync" />
         )}
       </div>
-      {!isPrincipal && (data.kpis.trainers_by_role ?? []).length > 0 && (
+      {!leanHome && (data.kpis.trainers_by_role ?? []).length > 0 && (
         <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
           <span className="font-medium text-gray-600">Certified trainers by job role:</span>
           {data.kpis.trainers_by_role.map((r: any) => (
@@ -115,7 +119,7 @@ export default function HomePage() {
 
       {/* Manish, 2026-08-12: "location, trainer aur candidate — ye teeno map ho gaye to batch form
           ho jaata hai." This queue answers exactly that, and names the one thing still missing. */}
-      {mapping && mapping.total > 0 && (
+      {!leanHome && mapping && mapping.total > 0 && (
         <Section
           title={`Centres Ready to Start (${mapping.ready_count} of ${mapping.total})`}
           titleHref="/batches?tab=Preparation"
@@ -161,6 +165,7 @@ export default function HomePage() {
           )}
         </Section>
 
+        {!leanHome && (
         <Section title={`Sheet Changes Pending Review (${q.sheet_changes.length})`} titleHref="/sync" actions={<Link href="/sync"><Btn kind="ghost" small>Sync Inbox</Btn></Link>}>
           {q.sheet_changes.length === 0 ? <p className="text-sm text-gray-400">No open changes.</p> : (
             <ul className="divide-y divide-gray-100 text-sm">
@@ -173,6 +178,7 @@ export default function HomePage() {
             </ul>
           )}
         </Section>
+        )}
 
         <Section title={`Government Attendance Gap (${q.attendance_gaps.length})`} titleHref="/batches?status=Active">
           {q.attendance_gaps.length === 0 ? <p className="text-sm text-gray-400">No gaps above {data.thresholds.amber} points.</p> : (
@@ -229,6 +235,7 @@ export default function HomePage() {
           )}
         </Section>
 
+        {!leanHome && (
         <Section title={`Invoices Pending (${q.invoices_pending.length})`} titleHref="/costs?tab=Invoices" actions={<Link href="/costs?tab=Invoices"><Btn kind="ghost" small>Invoices</Btn></Link>}>
           {q.invoices_pending.length === 0 ? <p className="text-sm text-gray-400">No invoices waiting.</p> : (
             <ul className="divide-y divide-gray-100 text-sm">
@@ -241,6 +248,7 @@ export default function HomePage() {
             </ul>
           )}
         </Section>
+        )}
 
         {/* Signups waiting on the Admin (2026-08-12). Previously only discoverable by
             opening Admin → Users, so the one person who can act never saw them. Contact

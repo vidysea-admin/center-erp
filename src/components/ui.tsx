@@ -45,6 +45,7 @@ const CHIP_COLORS: Record<string, string> = {
   "Open": "bg-blue-100 text-blue-700", "Closing": "bg-blue-100 text-blue-700",
   // green
   "Active": "bg-green-100 text-green-700", "Approved": "bg-green-100 text-green-700",
+  "Ready to Train": "bg-green-100 text-green-700", // QA-045: the CEO's own word for "free tomorrow"
   "Completed": "bg-green-100 text-green-700", "Available": "bg-green-100 text-green-700",
   "Enrolled": "bg-green-100 text-green-700", "Paid": "bg-green-100 text-green-700",
   "Fulfilled": "bg-green-100 text-green-700", "Done": "bg-green-100 text-green-700", "OK": "bg-green-100 text-green-700",

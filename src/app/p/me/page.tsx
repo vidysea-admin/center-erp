@@ -39,7 +39,10 @@ export default function CandidatePortalEntry() {
             placeholder="10 digit mobile number" value={phone} onChange={(e) => setPhone(e.target.value)} />
         </label>
         <label className="block">
-          <span className="mb-1 block text-xs font-medium text-gray-600">Date of birth (if asked)</span>
+          {/* QA-057: "(if asked)" — but nothing ever asked. Most students have a DOB on
+              record, so the label says when it is needed instead of hinting at a prompt
+              that never comes. */}
+          <span className="mb-1 block text-xs font-medium text-gray-600">Date of birth (needed for most students — as given at registration)</span>
           <input type="date" className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none"
             value={dob} onChange={(e) => setDob(e.target.value)} />
         </label>

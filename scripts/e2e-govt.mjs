@@ -368,6 +368,16 @@ const cPool = (await req(admin, "POST", "/api/candidates", { name: `${NAME} Pool
 const plk = await lookup({ phone: cPool.phone });
 ok("portal lookup: a pool candidate learns their registration status, not a dead end", plk.status === 200 && plk.data.enrolled === false && typeof plk.data.sidh_status === "string", JSON.stringify(plk.data).slice(0, 120));
 
+// QA-056 (S1, checker): imported DOBs sit at IST midnight = previous day 18:30 UTC, and a
+// UTC-date comparison refused every such student's REAL birthday while accepting the day
+// before it. Both sides now canonicalize to the IST calendar date.
+const cIst = (await req(admin, "POST", "/api/candidates", { name: `${NAME} IstDob`, phone: `9${STAMP}3009`, location: loc._id, program: program._id, dob: "1998-12-31T18:30:00.000Z" }, 201)).data.item;
+const lkReal = await lookup({ phone: cIst.phone, dob: "1999-01-01" });
+ok("QA-056: the REAL birthday opens the portal for an IST-midnight-stored DOB", lkReal.status === 200, `got ${lkReal.status}`);
+const lkPrev = await lookup({ phone: cIst.phone, dob: "1998-12-31" });
+ok("QA-056: the day BEFORE the birthday no longer works", lkPrev.status === 404, `got ${lkPrev.status}`);
+ok("QA-057: the refusal names the date-of-birth field", /date of birth/i.test(lkPrev.data?.error ?? ""), lkPrev.data?.error);
+
 // ---------------------------------------------------------------- F-N2 (2026-08-13): assessment date raises an in-app alert
 const assessDate = new Date(Date.now() + 7 * 864e5 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 const closurePut = await req(admin, "PUT", `/api/batches/${batch._id}/closure`, { assessment_date: assessDate });

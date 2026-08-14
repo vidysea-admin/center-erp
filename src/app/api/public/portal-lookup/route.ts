@@ -23,13 +23,26 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const body = await req.json().catch(() => ({}));
   const phone = String(body.phone ?? "").replace(/\D/g, "").slice(-10);
   const dob = String(body.dob ?? "").trim(); // yyyy-mm-dd from the date input
-  const fail = () => new HttpError(404, "These details did not match. Enter the number you used at registration — or ask your centre coordinator for your link.");
+  // QA-057: the refusal stays GENERIC on purpose (anti-enumeration — it never confirms a
+  // number is known), but it now names the second field, because with 504 of 590 candidates
+  // carrying a DOB the old wording read as "wrong number" to the majority.
+  const fail = () => new HttpError(404, "These details did not match. Check the mobile number — and if you have a date of birth on record, enter that too. Your centre coordinator can also send you your link.");
 
   if (phone.length !== 10) throw fail();
   const cand = await Candidate.findOne({ phone: { $regex: phone + "$" } }).select("name dob sidh_status lifecycle_status").lean<any>();
   if (!cand) throw fail();
   if (cand.dob) {
-    if (!dob || new Date(dob).toISOString().slice(0, 10) !== new Date(cand.dob).toISOString().slice(0, 10)) throw fail();
+    // QA-056 (S1, checker): DOBs imported at IST midnight are stored as the PREVIOUS day
+    // 18:30 UTC, and a UTC .toISOString() comparison locked every such student out — their
+    // real birthday 404'd, the day before it worked. Both sides now canonicalize to the
+    // IST calendar date (+05:30) before comparing, which also leaves clean UTC-midnight
+    // dates (API-created rows) matching exactly as before.
+    const istDateKey = (d: string | Date) => {
+      const x = new Date(d);
+      x.setMinutes(x.getMinutes() + 330);
+      return x.toISOString().slice(0, 10);
+    };
+    if (!dob || istDateKey(dob) !== istDateKey(cand.dob)) throw fail();
   }
 
   // At most one active membership (partial-unique index on {candidate, left_on: null}).

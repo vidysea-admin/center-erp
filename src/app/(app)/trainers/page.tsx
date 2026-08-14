@@ -294,7 +294,15 @@ function TrainersInner() {
                 },
               },
               { key: "tr_id", label: "TR ID", render: (r: any) => r.tr_id || "—", mobile: false },
-              { key: "status", label: "Status", sortable: true, sortValue: (r: any) => availabilityTag(r), render: (r: any) => <Chip value={availabilityTag(r) === "Under preparation" ? "Under preparation" : r.status} /> },
+              {
+                // QA-045 (third reopen — checker): the COLUMN still leaked the stale stored
+                // status for certified trainers (4 of 6 wrong) while the pills were already
+                // derived. One truth everywhere now: the tag computed from pipeline + real
+                // batch links. The raw field is never rendered again.
+                key: "status", label: "Status", sortable: true, filterable: true,
+                sortValue: (r: any) => availabilityTag(r), filterText: (r: any) => availabilityTag(r),
+                render: (r: any) => <Chip value={availabilityTag(r)} />,
+              },
               { key: "available_from", label: "Available from", sortable: true, sortValue: (r: any) => r.available_from ? new Date(r.available_from).getTime() : null, render: (r: any) => fmtDate(r.available_from), mobile: false },
               { key: "max_concurrent_batches", label: "Max batches", mobile: false },
               // 2026-08-13 (Manish): where this row came from, one click to that sheet tab.

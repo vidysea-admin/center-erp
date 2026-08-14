@@ -160,8 +160,23 @@ function Overview({ data, role, onChanged, setError }: any) {
           <p className="mt-4 text-xs text-gray-400">Batch status is moved by Operations/Admin.</p>
         )}
       </Section>
+      {/* QA-055 (checker): a SPOC saw the full editable Details card with a Save button the
+          server refuses (403). Editors get the form; everyone else gets the same facts
+          read-only — no button that only exists to bounce. */}
       <Section title="Details">
-        <EditDetails b={b} onChanged={onChanged} setError={setError} />
+        {canTransition
+          ? <EditDetails b={b} onChanged={onChanged} setError={setError} />
+          : (
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
+              {[["Trainer", b.trainer?.name ?? "—"], ["Room", b.room?.name ?? "—"],
+                ["Planned start", fmtDate(b.planned_start)], ["Planned end", fmtDate(b.planned_end)],
+                ["Session", b.session ?? "—"], ["Target size", String(b.target_size ?? "—")],
+                ["Time slot", b.slot_start ? `${b.slot_start}–${b.slot_end}` : "—"],
+                ["Government batch ID", b.govt_batch_id ?? "—"]].map(([k, v]) => (
+                <div key={k as string}><span className="text-xs text-gray-400">{k}: </span><span className="font-medium">{v}</span></div>
+              ))}
+            </div>
+          )}
       </Section>
       {(b.milestones?.length ?? 0) > 0 && (
         <Section title="Backward plan (2026-08-11)" actions={b.status === "Planning" ? (
