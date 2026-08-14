@@ -100,8 +100,11 @@ export function collectionRoutes(cfg: CrudConfig) {
     // Sanitize before the ceiling: parseInt("abc")→NaN and limit=0 both make mongo's
     // .limit() return the WHOLE collection, and a negative limit returns abs(n) rows
     // (maker-found M-02, 2026-08-14). Coerce to a positive integer, default 50, hard-capped.
-    const rawLimit = parseInt(sp.get("limit") || "50", 10);
-    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(5000, rawLimit) : 50;
+    // QA-053: Number() not parseInt — parseInt stops at the first non-digit, so "1e9" and
+    // "1.5" both became 1, silently returning a single row for a caller that asked for a
+    // page. Number() reads them as 1e9 and 1.5; the ceil+clamp then does the right thing.
+    const asked = Number(sp.get("limit") ?? "");
+    const limit = Number.isFinite(asked) && asked >= 1 ? Math.min(5000, Math.ceil(asked)) : 50;
     let query = cfg.model.find(filter).sort(cfg.defaultSort ?? { createdAt: -1 }).skip((page - 1) * limit).limit(limit);
     for (const p of cfg.populate ?? []) query = query.populate(p.path, p.select);
     let [items, total] = await Promise.all([query.lean(), cfg.model.countDocuments(filter)]);

@@ -10,7 +10,7 @@ import { getDefaults } from "@/lib/defaults";
 import { HttpError, isScoped } from "@/lib/authz";
 import type { SessionUser } from "@/auth";
 
-const ACTIVE_BATCH_STATUSES = ["Planning", "Ready", "Active", "Closing"];
+export const ACTIVE_BATCH_STATUSES = ["Planning", "Ready", "Active", "Closing"];
 
 // Rule 1 (RPL M1/M10): no operational activity at a location that has been stopped.
 // "Not Started" is deliberately allowed — centres are planned before they open, which is

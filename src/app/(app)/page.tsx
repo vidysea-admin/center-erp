@@ -72,7 +72,7 @@ export default function HomePage() {
             : `${data.kpis.attendance?.present ?? 0} of ${data.kpis.attendance?.roster ?? 0} student-days`} />
 
         {!isPrincipal && (
-          <KPI label="Active Trainers" value={data.kpis.trainers_active_total ?? 0} tone="amber" icon={<IconUser size={19} />} href="/trainers?tag=Available"
+          <KPI label="Active Trainers" value={data.kpis.trainers_active_total ?? 0} tone="amber" icon={<IconUser size={19} />} href="/trainers?tag=Ready%20to%20Train"
             sub={(data.kpis.trainers_by_role ?? []).slice(0, 3).map((r: any) => `${r.code ?? r.program} ${r.count}`).join(" · ") || "none certified yet"} />
         )}
         {/* 2026-08-14 (Umesh: "31 vs 13 — blunder?"): both countings, both NAMED — the
@@ -97,7 +97,7 @@ export default function HomePage() {
         <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
           <span className="font-medium text-gray-600">Certified trainers by job role:</span>
           {data.kpis.trainers_by_role.map((r: any) => (
-            <Link key={r.program} href={`/trainers?tag=Available`} className="rounded-full border border-gray-200 px-2.5 py-0.5 hover:bg-gray-50">
+            <Link key={r.program} href={`/trainers?tag=Ready%20to%20Train`} className="rounded-full border border-gray-200 px-2.5 py-0.5 hover:bg-gray-50">
               {r.program}{r.scheme ? <span className="text-gray-400"> ({r.scheme})</span> : null} <b className="text-gray-700">{r.count}</b>
             </Link>
           ))}

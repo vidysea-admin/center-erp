@@ -96,6 +96,12 @@ for (const bad of ["0", "-5", "abc"]) {
   const r = await req(admin, "GET", `/api/candidates?limit=${bad}`, undefined, 200);
   ok(`[worst] limit=${bad} falls back to the 50 default, not the full set`, r.data.limit === 50 && r.data.items.length <= 50, `limit=${r.data.limit} items=${r.data.items.length}`);
 }
+// QA-053 (checker): parseInt stops at the first non-digit, so "1e9" and "1.5" both became 1
+// and a caller asking for a page silently got a single row. Numeric parse + ceil + clamp.
+const sci = await req(admin, "GET", "/api/candidates?limit=1e9", undefined, 200);
+ok("[worst] limit=1e9 clamps to the cap, not 1 row", sci.data.limit === 5000 && sci.data.items.length > 1, `limit=${sci.data.limit} items=${sci.data.items.length}`);
+const frac = await req(admin, "GET", "/api/candidates?limit=1.5", undefined, 200);
+ok("[worst] limit=1.5 rounds up to 2, not down to 1", frac.data.limit === 2 && frac.data.items.length <= 2, `limit=${frac.data.limit} items=${frac.data.items.length}`);
 
 // ---- shape 5 (2026-08-13, roster fix): a program-less import row joins a matching batch and
 // inherits its programme — the exact path the 572 prod rows take from the pool drawer.

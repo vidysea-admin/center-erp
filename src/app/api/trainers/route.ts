@@ -1,7 +1,7 @@
 import { collectionRoutes } from "@/lib/crud";
-import { Trainer } from "@/models";
+import { Batch, Trainer } from "@/models";
 import { hasPermission } from "@/lib/permissions";
-import { assertLocationOperational } from "@/lib/rules";
+import { ACTIVE_BATCH_STATUSES, assertLocationOperational } from "@/lib/rules";
 
 // 2026-08-12, found by testing a real Trainer login: the directory is not location-scoped,
 // so every signed-in user could read all 19 trainers INCLUDING day_rate, compensation and
@@ -42,7 +42,23 @@ export const { GET, POST } = collectionRoutes({
     };
   },
   async mapItems(items, user) {
-    return maskTrainerSecrets(items, await hasPermission(user, "trainers.manage"));
+    // QA-031/045 (checker): "Assigned 6" was derived from pipeline_status Certified while
+    // assigned_batches sat empty on all 71 — two different facts presented as one. The
+    // truth is the batch links themselves: a trainer is assigned when a live batch points
+    // at them. Attached per row so the UI stops guessing.
+    const ids = items.map((t: any) => t._id);
+    const live = ids.length
+      ? await Batch.find({ trainer: { $in: ids }, status: { $in: ACTIVE_BATCH_STATUSES } })
+        .select("code status trainer").lean<any[]>()
+      : [];
+    const byTrainer = new Map<string, any[]>();
+    for (const b of live) {
+      const k = String(b.trainer);
+      if (!byTrainer.has(k)) byTrainer.set(k, []);
+      byTrainer.get(k)!.push({ _id: b._id, code: b.code, status: b.status });
+    }
+    const withBatches = items.map((t: any) => ({ ...t, live_batches: byTrainer.get(String(t._id)) ?? [] }));
+    return maskTrainerSecrets(withBatches, await hasPermission(user, "trainers.manage"));
   },
   fields: ["name", "phone", "email", "skills", "home_location", "home_location_other", "status", "available_from", "day_rate", "incentive_note", "max_concurrent_batches", "active", "pipeline_status", "tr_id", "capable_locations", "programs_applied", "compensation_type", "compensation_fixed", "govt_candidate_id",
     // 2026-08-12 hiring pipeline (Manish's RPL walkthrough)

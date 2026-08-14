@@ -521,7 +521,8 @@ ok("cert bulk: second late upload refused — the fill is once (DEC-6)",
 // closure figures stay exactly as typed (Rule 42 / S0 clobber guard).
 const b6 = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, room: room._id, planned_start: today, target_size: 2 }, 201)).data.item;
 const c6a = (await req("POST", "/api/candidates", { name: `LateRes A ${stamp}`, phone: `68${stamp}1`, location: loc._id, program: prog._id, sidh_candidate_id: `CAN99${stamp.slice(-4)}` }, 201)).data.item;
-const c6b = (await req("POST", "/api/candidates", { name: `LateRes B ${stamp}`, phone: `68${stamp}2`, location: loc._id, program: prog._id }, 201)).data.item;
+// c6b carries its own CAN id so the QA-042 second-tranche case can be tested below.
+const c6b = (await req("POST", "/api/candidates", { name: `LateRes B ${stamp}`, phone: `68${stamp}2`, location: loc._id, program: prog._id, sidh_candidate_id: `CAN98${stamp.slice(-4)}` }, 201)).data.item;
 const m6 = [];
 for (const c of [c6a, c6b]) m6.push((await req("POST", `/api/batches/${b6._id}/members`, { candidate: c._id }, 201)).data.item);
 for (const m of m6) await req("PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
@@ -546,6 +547,17 @@ ok("late-arrival: batch-level closure figures NOT clobbered by the late row (Rul
 const upNew2 = await certUpload(b6._id, [[`CAN_99${stamp.slice(-4)}.pdf`, pdf]], 200);
 ok("late-arrival: re-upload for the same candidate refused — frozen after the fill (DEC-6)",
   upNew2.summary?.matched === 0 && /DEC-6/.test(upNew2.unmatched?.[0]?.reason ?? ""), JSON.stringify(upNew2.unmatched));
+// QA-042 (checker): the SECOND tranche of certificates must not recompute the protected
+// batch-level figures. The old guard tested "were there rows before this request", which is
+// false once tranche one has landed — so tranche two silently rewrote closure.
+// c6b was on the roster from the start (added before completion) and never got a
+// certificate in tranche one — it is exactly the "second tranche arrives later" case.
+const upTranche2 = await certUpload(b6._id, [[`CAN_98${stamp.slice(-4)}.pdf`, pdf]], 200);
+ok("late-arrival tranche two: the certificate still lands", upTranche2.summary?.matched === 1, JSON.stringify(upTranche2.summary));
+const cl6b = (await req("GET", `/api/batches/${b6._id}/closure`)).data.closure;
+ok("QA-042: tranche two does NOT rewrite the recorded batch-level figures",
+  cl6b?.appeared === 2 && cl6b?.passed === 1 && cl6b?.certificates_issued === 1,
+  JSON.stringify({ appeared: cl6b?.appeared, passed: cl6b?.passed, ci: cl6b?.certificates_issued }));
 
 // ---- Batch Health Score (score always travels with reasons) ----
 const healthBatch = (await req("GET", `/api/batches/${capBatch._id}`)).data;

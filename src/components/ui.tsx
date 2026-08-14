@@ -708,9 +708,12 @@ export function KPI({ label, value, icon, tone = "blue", delta, href, sub }: {
     <div className={`flex items-start gap-3 rounded-xl border border-gray-200/80 bg-white p-4 shadow-[0_1px_2px_rgba(16,24,40,.04)] ${href ? "transition-all hover:border-blue-300 hover:shadow-md" : ""}`}>
       {icon && <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${KPI_TONES[tone]}`}>{icon}</span>}
       <div className="min-w-0">
-        <div className="truncate text-xs font-medium text-gray-500">{label}</div>
+        {/* QA-051 (checker, 390px): the label was truncated to "Ongoing Bat…" / "Completed …"
+            on the phone the CEO actually uses, so the big number lost its meaning. Labels and
+            sub-lines now wrap instead of clipping — a two-line label beats an ambiguous one. */}
+        <div className="text-xs font-medium leading-4 text-gray-500" title={label}>{label}</div>
         <div className="mt-0.5 text-[22px] font-semibold leading-7 tracking-tight text-gray-900">{value}</div>
-        {sub && <div className="mt-0.5 truncate text-[11px] font-medium text-gray-400">{sub}</div>}
+        {sub && <div className="mt-0.5 text-[11px] font-medium leading-4 text-gray-400">{sub}</div>}
         {delta && (
           <div className={`mt-0.5 flex items-center gap-1 text-[11px] font-medium ${good ? "text-emerald-600" : "text-red-500"}`}>
             {up ? <IconTrendUp size={12} /> : <IconTrendDown size={12} />}

@@ -61,6 +61,18 @@ const applied = (await req(admin, "GET", "/api/trainers?pipeline_status=CV%20Rev
 ok("[avg] pipeline_status filter returns only that stage", applied.length > 0 && applied.every((t) => t.pipeline_status === "CV Reviewed"), JSON.stringify([...new Set(applied.map((t) => t.pipeline_status))]));
 
 
+// QA-031/045 (checker): the availability tag must come from REAL batch links, not the stored
+// status field — "Assigned 6" was being derived from pipeline_status while no batch pointed
+// at those trainers. The list payload now carries live_batches per row.
+{
+  const rows = (await req(admin, "GET", "/api/trainers?limit=2000", undefined, 200)).data.items ?? [];
+  ok("[best] every trainer row carries live_batches", rows.length > 0 && rows.every((t) => Array.isArray(t.live_batches)), `sample=${JSON.stringify(rows[0]?.live_batches)}`);
+  const linked = rows.filter((t) => (t.live_batches ?? []).length > 0);
+  ok("[best] live_batches names the batch (code + status), so 'Assigned' is checkable",
+    linked.length === 0 || linked.every((t) => t.live_batches.every((b) => b.code && b.status)),
+    JSON.stringify(linked[0]?.live_batches ?? "none linked in this fixture"));
+}
+
 // ---- 2026-08-13 list-UX cycle: preset filter contracts + the nomination input (F-A1) ----
 // [best] ?status= narrows server-side (the Available pill's deep-link contract).
 const avail = (await req(admin, "GET", "/api/trainers?status=Available&limit=2000", undefined, 200)).data.items ?? [];

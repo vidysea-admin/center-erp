@@ -535,6 +535,11 @@ const CandidateResultSchema = new Schema({
   certificate_rejection_reason: String,
 
   marked_by: oid("User"), marked_at: Date,
+  // 2026-08-14 (QA-042): row created by the certificate bulk upload on an already-Completed
+  // batch, rather than by per-candidate marking. The freeze guard reads this to tell a
+  // never-marked legacy batch from one that was genuinely marked — a snapshot count could
+  // not, and a second tranche of certificates used to recompute protected figures.
+  late_arrival: { type: Boolean, default: false },
   source: { type: String, enum: MEMBER_SOURCE, default: "Manual" }, // §7 provenance
 }, { timestamps: true });
 CandidateResultSchema.index({ batch: 1, candidate: 1 }, { unique: true });

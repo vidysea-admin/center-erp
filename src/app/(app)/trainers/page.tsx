@@ -8,14 +8,19 @@ import { BASE_PATH } from "@/lib/base-path";
 // 2026-08-13 (Umesh): "10 mein se 5 available, 2 under preparation, 3 not available — sab ke
 // saath proper tag with filters". One derived availability tag per trainer: the pipeline says
 // whether they are USABLE yet, the status says whether they are FREE.
-const TAG_ORDER = ["Available", "Under preparation", "Assigned", "Unavailable", "Rejected/Dropped"] as const;
+// QA-045 (CEO's own wording): the status axis answers "who can take a class tomorrow" —
+// "Ready to Train", not the rejected word "Available".
+// QA-031: assignment is read from the LIVE BATCH LINKS (live_batches, attached by the API),
+// never from the stored status field — that field said "Assigned 11" while no batch pointed
+// at those trainers, and said "Certified 6" were assigned when the real number was different.
+const TAG_ORDER = ["Ready to Train", "Under preparation", "Assigned", "Unavailable", "Rejected/Dropped"] as const;
 function availabilityTag(t: any): (typeof TAG_ORDER)[number] {
   const p = t.pipeline_status ?? "Applied";
   if (p === "NSDC Rejected" || p === "Dropped") return "Rejected/Dropped";
   if (p !== "Certified") return "Under preparation";
-  if (t.status === "Assigned") return "Assigned";
+  if ((t.live_batches?.length ?? 0) > 0) return "Assigned";
   if (t.status === "Unavailable") return "Unavailable";
-  return "Available";
+  return "Ready to Train";
 }
 
 export default function TrainersPage() {
@@ -212,9 +217,9 @@ function TrainersInner() {
                 // These are mutually exclusive TODAY-states, not a funnel — "Available 0
                 // while Assigned 6" simply means every certified trainer is on a batch.
                 title: {
-                  "Available": "Certified AND free to take a batch today",
+                  "Ready to Train": "Certified and not on any live batch — can take a class tomorrow",
                   "Under preparation": "Still in the hiring/TOT pipeline — not certified yet (may already be pencilled into a batch)",
-                  "Assigned": "Certified and currently running a batch — not free",
+                  "Assigned": "Certified and named on a live batch (Planning/Ready/Active/Closing)",
                   "Unavailable": "Certified but marked unavailable",
                   "Rejected/Dropped": "Left the pipeline (NSDC rejected or dropped)",
                 }[t],

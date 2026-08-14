@@ -103,6 +103,9 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
         const doc = await new CandidateResult({
           batch: id, candidate: member.candidate?._id ?? member.candidate, batch_member: member._id,
           result: "Pass", certificate_file: url, certificate_status: "Issued",
+          // QA-042: marks this row as certificate-derived, so a later tranche can still tell
+          // "this batch was never marked per-candidate" and keep its recorded figures frozen.
+          late_arrival: true,
           marked_by: user.id, marked_at: new Date(),
         }).save();
         await audit({ entity: "CandidateResult", entityId: doc._id, field: "late_certificate", newValue: `Pass + certificate created from uploaded ${file.name} (batch Completed, no prior result — late-arrival evidence)`, actor: user.id });
@@ -129,14 +132,23 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     }
   }
 
-  // Rule 42 / S0 guard: a batch that completed in BATCH-LEVEL mode (zero rows before this
-  // request) keeps its RECORDED closure figures — deriving appeared/passed from the handful
-  // of late rows would rewrite a 45-person batch's totals down to the certificate count.
-  // QA-044 refinement: when NO closure document exists at all (seeded/legacy batches),
-  // there is nothing recorded to protect — deriving is the only way the Closure tab stops
-  // reading "0 passed" on a batch that provably holds certificates.
+  // Rule 42 / S0 guard: a batch that completed in BATCH-LEVEL mode keeps its RECORDED closure
+  // figures — deriving appeared/passed from a handful of late rows would rewrite a 45-person
+  // batch's totals down to the certificate count.
+  //
+  // QA-042 (checker, 14/08): the old test used `results.length === 0`, a snapshot taken BEFORE
+  // this request — true on the first upload, false on the second, so a later tranche of
+  // certificates silently recomputed the very figures the guard exists to protect. The honest
+  // question is not "were there rows before this request" but "does this batch have ANY row
+  // that predates the late-arrival flow" — i.e. was it ever marked per-candidate at all.
+  // Late-arrival rows carry the marker; a batch whose every row is late-arrival plus a
+  // recorded closure stays frozen no matter how many tranches arrive.
+  // QA-044: with NO closure document there is nothing recorded to protect — derive.
   const hasRecordedClosure = !!(await Closure.exists({ batch: id }));
-  const wasLegacy = results.length === 0 && batch.status === "Completed" && hasRecordedClosure;
+  const genuinelyMarked = batch.status === "Completed"
+    ? await CandidateResult.exists({ batch: id, late_arrival: { $ne: true } })
+    : true;
+  const wasLegacy = batch.status === "Completed" && hasRecordedClosure && !genuinelyMarked;
   if (touched && !wasLegacy) await recomputeClosureAggregates(id, user.id);
   return NextResponse.json({ matched, unmatched, summary: { received: files.length, matched: matched.length, unmatched: unmatched.length } });
 });
