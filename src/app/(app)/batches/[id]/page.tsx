@@ -43,7 +43,11 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
             {data.settlement_stage}
           </span>
         )}
-        <span className="text-sm text-gray-500">{b.program?.name} · {fmtDate(b.planned_start)} → {fmtDate(b.planned_end)}</span>
+        <span className="text-sm text-gray-500">
+          {/* R-K: the programme name in the header opens its detail page. */}
+          {b.program ? <Link className="text-blue-700 hover:underline" href={`/programs/${b.program._id}`}>{b.program.name}</Link> : "—"}
+          {" "}· {fmtDate(b.planned_start)} → {fmtDate(b.planned_end)}
+        </span>
       </div>
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
       {/* 2026-08-14 (Umesh): a batch with nobody on it is not a batch — either its students

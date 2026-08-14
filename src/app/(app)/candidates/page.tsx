@@ -357,8 +357,10 @@ function CandidatesInner() {
           },
           {
             key: "program", label: "Program", sortable: true, filterable: true, sortValue: (r: any) => progOf(r)?.name ?? "",
-            render: (r: any) => r.program?.name
-              ?? (r.active_batch?.program
+            // R-K (CEO [11:29]): the programme cell links to its detail page.
+            render: (r: any) => r.program
+              ? <Link className="text-blue-700 hover:underline" href={`/programs/${r.program._id ?? r.program}`} onClick={(e) => e.stopPropagation()}>{r.program.name}</Link>
+              : (r.active_batch?.program
                 ? <span title={`Via batch ${r.active_batch.code} — the row itself has no programme yet`}>{r.active_batch.program.name} <span className="text-[10px] text-gray-400">via {r.active_batch.code}</span></span>
                 : <Chip value="No programme" />),
           },

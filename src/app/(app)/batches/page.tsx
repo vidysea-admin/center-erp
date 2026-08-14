@@ -196,7 +196,11 @@ function BatchesInner() {
             columns={[
               { key: "code", label: "Code", mobile: false, sortable: true, sortValue: (r: any) => r.code },
               { key: "location", label: "Location", sortable: true, sortValue: (r: any) => r.location?.name, render: (r: any) => r.location?.name },
-              { key: "program", label: "Program", sortable: true, filterable: true, sortValue: (r: any) => r.program?.name, render: (r: any) => r.program?.name, mobile: false },
+              { key: "program", label: "Program", sortable: true, filterable: true, sortValue: (r: any) => r.program?.name, mobile: false,
+                // R-K: the programme cell is a door to its detail page.
+                render: (r: any) => r.program
+                  ? <Link className="text-blue-700 hover:underline" href={`/programs/${r.program._id}`} onClick={(e) => e.stopPropagation()}>{r.program.name}</Link>
+                  : "—" },
               {
                 // QA-048: after Completed the money chain shows WHERE the batch stands
                 // (derived from Closure+Invoice — the same facts Rule 52 gates closing on).
