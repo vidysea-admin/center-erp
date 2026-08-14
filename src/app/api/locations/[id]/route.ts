@@ -21,7 +21,10 @@ export const { GET, PATCH } = itemRoutes({
     // the Admin approves it. The fixed ten are the centre's identity and the master-sheet
     // truth; everything else parks as a location.edit request (direct while the rule is off).
     if (user.role === "Location") {
-      const FIXED = ["code", "external_id", "name", "city", "state", "tc_id", "tc_password", "tc_status", "approval_status", "operational_status"];
+      // QA-089: district and operating_partner ride the AVPL rebase too — everything the
+      // master sheet writes is fixed the same way, or the next rebase silently undoes an
+      // approved SPOC edit.
+      const FIXED = ["code", "external_id", "name", "city", "state", "district", "operating_partner", "tc_id", "tc_password", "tc_status", "approval_status", "operational_status"];
       const touched = FIXED.filter((f) => data[f] !== undefined && String(data[f]) !== String((existing as any)[f] ?? ""));
       if (touched.length) {
         throw new HttpError(403, `Fixed by the Admin/master sheet — a centre login cannot change: ${touched.join(", ")}.`);

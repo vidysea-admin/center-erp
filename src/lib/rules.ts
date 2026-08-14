@@ -1328,17 +1328,17 @@ export function planBatchBackward(
   return plan.sort((a, b) => a.due_date.getTime() - b.due_date.getTime());
 }
 
-// ---------- Batch code (CEO 14/08 [32:47]: CENTRE-COURSE-NN) ----------
-// "It should be center code, dash, abbreviation for the course … dash, the batch number" —
-// GGM-DST-01 style, numbered per centre × course. Shipped BEFORE Manish bulk-plans every
-// RPL batch, so 8-10k batches are not minted in the old global format. The course
-// abbreviation is the programme code's last segment (RPLAVP-DST → DST); one counter per
-// prefix in the same `counters` collection. The legacy global "batch" counter stays parked
-// at its last value — old codes on old paper never collide with new ones.
+// ---------- Batch code (CEO 14/08 [32:47], QA-076: CENTRE-COURSE-SKILL-NN) ----------
+// "Center code, dash, abbreviation for the course, dash, skill that we are training, dash,
+// the batch number" — FOUR parts (the checker caught the third one dropped; Umesh: ship the
+// four-part form before the bulk wave). The programme code is already COURSE-SKILL fused
+// (RPLAVP-DST), so the prefix is the centre code + the FULL programme code:
+// AVP-GURU-RPLAVP-DST-01. One counter per prefix in the same `counters` collection; the
+// legacy global "batch" counter stays parked — old codes on old paper never collide.
 export async function nextBatchCode(location?: { code?: string } | null, program?: { code?: string } | null): Promise<string> {
   const db = Batch.db;
   const locCode = String(location?.code ?? "").trim().toUpperCase();
-  const progAbbr = String(program?.code ?? "").trim().toUpperCase().split("-").pop() ?? "";
+  const progAbbr = String(program?.code ?? "").trim().toUpperCase();
   if (locCode && progAbbr) {
     const prefix = `${locCode}-${progAbbr}`;
     const res = await db.collection("counters").findOneAndUpdate(

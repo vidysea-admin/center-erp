@@ -3,16 +3,13 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-47";
+export const RELEASE = "2026.08.14-48";
 export const RELEASE_NOTE =
-  "The not-built set, built. QA-046: the Accepted/Rejected pair shows at " +
-  "EVERY pipeline stage, zeros included. QA-075: a SPOC's classroom/lab " +
-  "suggestion parks for Admin approval like their field edits - the Room is " +
-  "created only by the approval - and a cluster-head number that matches the " +
-  "SPOC's says '= SPOC' instead of printing the same digits twice. QA-033: " +
-  "per-candidate marking is the default path; legacy batch-level figures " +
-  "hide behind their own explicit button and never ride a save unseen. " +
-  "QA-022: an app-created batch's Source says WHO entered it, and the " +
-  "batches table gains the column picker. QA-032/021/069: assignment stamps " +
-  "the journey's middle (Assigned) - the pre-wipe rows that skipped it were " +
-  "seed artifacts; e2e now pins the full chain.";
+  "QA-076: batch codes speak all FOUR of the CEO's parts - centre code, " +
+  "course, skill, number (AVP-GURU-RPLAVP-DST-01; the programme code is " +
+  "already course-and-skill fused) - the checker caught the dropped third " +
+  "part before the bulk batch-planning wave could mint 8-10k codes in the " +
+  "short form. QA-089: district and operating_partner join the fixed set on " +
+  "both the park side and the approval replay - everything the AVPL master " +
+  "sheet writes is now protected the same way, so the next rebase can never " +
+  "silently undo an approved SPOC edit.";

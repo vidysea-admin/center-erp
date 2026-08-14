@@ -44,7 +44,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     case "location.edit": {
       // R-F: apply the SPOC's parked suggestion. The fixed ten are stripped again here —
       // the park-side check is the UX, this is the guarantee.
-      const FIXED = ["code", "external_id", "name", "city", "state", "tc_id", "tc_password", "tc_status", "approval_status", "operational_status"];
+      const FIXED = ["code", "external_id", "name", "city", "state", "district", "operating_partner", "tc_id", "tc_password", "tc_status", "approval_status", "operational_status"]; // QA-089: sheet-truth complete
       if (p.patch) {
         const patch = { ...p.patch };
         for (const f of FIXED) delete patch[f];
