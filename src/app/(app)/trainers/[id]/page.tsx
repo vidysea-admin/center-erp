@@ -47,7 +47,7 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
   // hired FOR) finally gets an input. Rule T3 requires both before "Documents Completed", and
   // the readiness engine counts trainers by exactly this pair — yet no screen could set it.
   const [nom, setNom] = useState<{ location: string; program: string } | null>(null);
-  // QA-148: the missing bridge between a trainer and a login — one click here.
+  // QA-149: the missing bridge between a trainer and a login — one click here.
   const [loginRes, setLoginRes] = useState<any>(null);
   const role = (session?.user as any)?.role;
   const canCreateLogin = role === "Admin" || role === "Operations";
@@ -157,7 +157,7 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
               : "border-amber-200 bg-amber-50 text-amber-700"}`}>{stage === "Dropped" && t.dropped_from_stage ? `Dropped (at ${pipelineLabel(t.dropped_from_stage)})` : pipelineLabel(stage)}</span>
         {/* QA-130 rider (Umesh): who brought this row in, on the row itself. */}
         <span className="text-sm text-gray-500">{t.phone}{t.tr_id ? ` · TR ID ${t.tr_id}` : ""}{t.created_by?.name ? ` · added by ${t.created_by.name}` : ""}</span>
-        {/* QA-148 (Manish): "is trainer se login kaise karun?" — the answer is a button, not a hunt. */}
+        {/* QA-149 (Manish): "is trainer se login kaise karun?" — the answer is a button, not a hunt. */}
         {t.user
           ? <span className="rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-[11px] font-semibold text-green-700" title="This trainer has a linked login — their batches show under 'My batches'">Login linked ✓</span>
           : canCreateLogin && <Btn small kind="ghost" disabled={busy} onClick={createLogin}>{busy ? "…" : "Create login"}</Btn>}

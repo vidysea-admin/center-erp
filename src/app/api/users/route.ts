@@ -59,7 +59,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
     requested_role: body.requested_role,
   });
   await audit({ entity: "User", entityId: doc._id, newValue: "created " + body.email, actor: user.id });
-  // QA-148: an Add-User login with role Trainer and a trainer's email IS that trainer's login —
+  // QA-149: an Add-User login with role Trainer and a trainer's email IS that trainer's login —
   // link it now so "My batches" works from the first sign-in (the other direction, Add Trainer
   // → Create login, lives on the trainer page).
   if (doc.role === "Trainer") {

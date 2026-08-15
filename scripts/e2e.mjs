@@ -1095,6 +1095,12 @@ ok("…with the contact details an approver needs", !!queued && queued.phone ===
   const cfg = (await req("GET", "/api/test-email", undefined, 200)).data;
   ok("QA-145: admin health names the loss honestly (NOT connected, lost on deploy)",
     cfg.storage?.configured === false && /LOST on every deploy/.test(cfg.storage?.reason ?? ""), JSON.stringify(cfg.storage));
+  // -79 rider: the one-click storage probe REFUSES to run unconfigured (it would only prove
+  // the disk that deploys wipe) and says why — the live proof is a click away once Drive is on.
+  const probe = await req("POST", "/api/test-storage", {});
+  ok("QA-145: storage probe refuses unconfigured with the reason named (400)", probe.status === 400 && /not connected/i.test(probe.data?.error ?? ""), `${probe.status} ${probe.data?.error}`);
+  const probeGet = await req("GET", "/api/test-storage", undefined, 200);
+  ok("QA-145: storage probe GET reports health", probeGet.data?.storage?.configured === false);
 }
 
 // ---- QA-115 (15/08): the mail layer — CI runs UNCONFIGURED, so this pins the SKIP path:

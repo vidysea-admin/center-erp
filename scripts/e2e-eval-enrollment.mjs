@@ -72,7 +72,7 @@ ok("[worst] double-assignment refused", dupAdd.status >= 400, `got ${dupAdd.stat
   const noRoomBatch = (await req(admin, "POST", "/api/batches", { location: loc2._id, program: prog2._id, planned_start: today(), target_size: 5 }, 201)).data.item;
   const health = (await req(admin, "GET", `/api/batches/${noRoomBatch._id}`, undefined, 200)).data;
   const notReady = (health.health?.reasons ?? []).find((r) => r.code === "not_ready");
-  ok("QA-147: the readiness blocker names the FAILURE ('room not assigned'), never the check ('room assigned')",
+  ok("QA-148: the readiness blocker names the FAILURE ('room not assigned'), never the check ('room assigned')",
     !!notReady && /room not assigned/.test(notReady.label) && !/Not ready: room assigned/.test(notReady.label), notReady?.label);
   await req(admin, "POST", `/api/batches/${noRoomBatch._id}/transition`, { target: "Cancelled", reason: "QA-147 pin cleanup" }, 200);
 }

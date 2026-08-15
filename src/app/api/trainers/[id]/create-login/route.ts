@@ -10,7 +10,7 @@ import { audit } from "@/lib/audit";
 import { emailError } from "@/lib/validate";
 import { renderMail, sendMail } from "@/lib/mailer";
 
-// QA-148 (Manish, 15/08): "Add Trainer se trainer add kiya, bypass se Certified, batch
+// QA-149 (Manish, 15/08): "Add Trainer se trainer add kiya, bypass se Certified, batch
 // assign — ab is trainer se login kaise karun?" There was NO bridge: Add Trainer makes a
 // person, Add User makes a login, nothing joined them, and the trainer's batch list opened
 // on an empty "My batches". This verb is the bridge, ONE click on the trainer's page:

@@ -12,7 +12,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
   const sp = req.nextUrl.searchParams;
-  // R-I / QA-148: a Trainer login's own profile is resolved ONCE here (explicit link, else
+  // R-I / QA-149: a Trainer login's own profile is resolved ONCE here (explicit link, else
   // same email — self-healed) and its assigned batches are always in view, whatever the
   // login's location_scope says. Resolved before the filter so the OR can use it.
   let myTrainerId: string | null = null;

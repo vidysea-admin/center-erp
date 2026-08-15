@@ -937,6 +937,7 @@ function DefaultsTab({ setError }: any) {
 function MailPanel({ setError }: any) {
   const [mail, setMail] = useState<any>(null);
   const [busy, setBusy] = useState(false);
+  const [storageCheck, setStorageCheck] = useState<any>(null);
   const loadMail = () => api("/api/test-email").then(setMail).catch((e: any) => setError(e.message));
   useEffect(() => { loadMail(); }, []);
   const STATUS: Record<string, { label: string; cls: string }> = {
@@ -954,7 +955,20 @@ function MailPanel({ setError }: any) {
           because until then every upload is lost on the next deploy. */}
       {mail?.storage && (
         <div className={`mb-3 rounded-lg border px-3 py-2 text-xs ${mail.storage.configured ? "border-green-200 bg-green-50 text-green-800" : "border-red-300 bg-red-50 text-red-800"}`}>
-          <b>Evidence storage:</b> {mail.storage.configured ? "Google Drive connected" : "NOT CONNECTED"} — {mail.storage.reason}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span><b>Evidence storage:</b> {mail.storage.configured ? "Google Drive connected" : "NOT CONNECTED"} — {mail.storage.reason}</span>
+            {/* QA-145 rider: one click proves the Drive path end to end (write probe → read back). */}
+            <Btn small kind="ghost" disabled={busy || !mail.storage.configured} onClick={async () => {
+              setBusy(true); setStorageCheck(null);
+              try { setStorageCheck(await api("/api/test-storage", { method: "POST", json: {} })); }
+              catch (e: any) { setStorageCheck({ ok: false, note: e.message }); } finally { setBusy(false); }
+            }}>{busy ? "Checking…" : "Run storage check"}</Btn>
+          </div>
+          {storageCheck && (
+            <div className={`mt-1 ${storageCheck.ok ? "text-green-800" : "text-red-800"}`}>
+              {storageCheck.ok ? "✓" : "✗"} {storageCheck.note}{storageCheck.folder_path ? ` — ${storageCheck.folder_path}/ (id ${storageCheck.drive_file_id}, ${storageCheck.ms} ms)` : ""}
+            </div>
+          )}
         </div>
       )}
       <div className="mb-1 flex items-center justify-between">

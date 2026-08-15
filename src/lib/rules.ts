@@ -26,7 +26,7 @@ export async function assertLocationOperational(locationId: unknown, action = "T
   }
 }
 
-// QA-148 (Manish, 15/08): "Add Trainer se trainer banaya, certified kiya, batch assign kiya —
+// QA-149 (Manish, 15/08): "Add Trainer se trainer banaya, certified kiya, batch assign kiya —
 // login karun to batch dikhta hi nahi." Trainer.user was declared in 2026-08-11 but NOTHING
 // ever set it — Add Trainer makes no login, Add User links to no trainer — so is_mine was
 // false for every trainer alive and the batch list opened on an empty "My batches". This
@@ -47,7 +47,7 @@ export async function trainerForLogin(user: { id: string; email?: string | null;
 }
 
 // Rule 38 on by-ID access: scoped users may only touch batches at their locations.
-// QA-148: a Trainer login always reaches the batches ASSIGNED to it, even when the login's
+// QA-149: a Trainer login always reaches the batches ASSIGNED to it, even when the login's
 // location_scope missed that centre — assignment is the stronger claim.
 export async function assertBatchInScope(user: SessionUser, batchId: string) {
   if (!isScoped(user)) return;
@@ -531,7 +531,7 @@ export async function dropMemberChecked(memberId: string, left_on: Date, drop_re
 }
 
 // ---------- Batch lifecycle (Rules 14–19) ----------
-// QA-147: what each FAILED readiness check means in words. Keys mirror batchReadiness().checks.
+// QA-148 (checker) / Manish point 4: what each FAILED readiness check means in words. Keys mirror batchReadiness().checks.
 export const READINESS_FAILURE_TEXT: Record<string, string> = {
   location_approved: "centre not approved / not operational",
   room_assigned: "room not assigned",
@@ -815,7 +815,7 @@ export async function batchHealth(batchId: string): Promise<BatchHealth> {
     if (failing.length) {
       reasons.push({
         code: "not_ready",
-        // QA-147 (Manish, 15/08 recording): the check KEYS are positive ("room_assigned"),
+        // QA-148 (Manish, 15/08 recording): the check KEYS are positive ("room_assigned"),
         // so joining them after "Not ready:" read backwards — "Not ready: room assigned".
         // He selected the line with the mouse and said "ye samajh nahi aaya". Say the
         // failure, not the check.
