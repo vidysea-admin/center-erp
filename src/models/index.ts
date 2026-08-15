@@ -376,6 +376,12 @@ const CandidateSchema = new Schema({
   fee_amount: Number,
   fee_paid_on: Date,
   fee_reference: String,
+  // QA-021 (-68, the CEO's loudest repeated ask): a dropout is a recorded FACT, not just an
+  // enum value only a roster removal could reach. Mirrors the trainer's pair (dropped_reason /
+  // dropped_from_stage) so both funnels speak "Dropped (at <stage>)".
+  dropped_reason: String,
+  dropped_at: Date,
+  dropped_from_stage: String,
   created_by: oid("User"),
   // 15/08 (Umesh): accepted unknown columns from bulk upload — see TrainerSchema note.
   custom_fields: { type: Schema.Types.Mixed, default: undefined },

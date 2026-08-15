@@ -54,7 +54,9 @@ export const POST = apiHandler(async (req: NextRequest) => {
       title: "Your registration code",
       lines: [`Your one-time code is:`, code, `It works for 10 minutes. If you did not ask for this, ignore this mail.`],
     });
-    sendMail({ to: email, subject: `${code} is your registration code`, html, text, entity: "PublicToken" }).catch(() => {});
+    // QA-142: the code stays in the REAL subject (phone notification preview) but never in
+    // the log — the Admin mail panel must not be a live-codes list.
+    sendMail({ to: email, subject: `${code} is your registration code`, log_subject: "****** is your registration code", html, text, entity: "PublicToken" }).catch(() => {});
     return NextResponse.json({ ok: true, token, message: "If the address is reachable, a 6-digit code is on its way." });
   }
 

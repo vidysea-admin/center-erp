@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { api } from "@/lib/client";
 import { emailError, phoneError } from "@/lib/validate";
+import { FRESH_TAGS, JOURNEY_TAGS, isFreshCandidate, freshJourneyOf as sharedFreshJourneyOf, journeyOf as sharedJourneyOf } from "@/lib/candidate-journey";
 import { Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, ShareLinkPanel, SourceCell, copyText, inputCls , Tabs} from "@/components/ui";
 import { useLocationCtx } from "@/components/shell";
 import { BASE_PATH } from "@/lib/base-path";
@@ -41,6 +42,10 @@ function CandidatesInner() {
   const [shareLink, setShareLink] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [drawer, setDrawer] = useState<"" | "add" | "edit" | "import" | "assign">("");
+  // QA-021: the drop drawer's state.
+  const [dropT, setDropT] = useState<any>(null);
+  const [dropForm, setDropForm] = useState<any>({});
+  const [dropReasons, setDropReasons] = useState<any[]>([]);
   const [editId, setEditId] = useState<string>("");
   const [form, setForm] = useState<any>({});
   const [importState, setImportState] = useState<any>({});
@@ -69,48 +74,26 @@ function CandidatesInner() {
       api("/api/locations?limit=2000").then((d) => setLocations(d.items)),
       api("/api/programs?limit=1000").then((d) => setPrograms(d.items)),
       api("/api/batches").then((d) => setBatches(d.items.filter((b: any) => ["Planning", "Ready", "Active"].includes(b.status)))),
+      // QA-021: the drop drawer offers the master's reasons (free text stays available —
+      // the master ships empty until Admin/Manish fill it).
+      api("/api/master-lists/drop-reasons").then((d) => setDropReasons(d.items ?? [])).catch(() => {}),
     ]).catch((e) => setError(e.message)).finally(() => setLoading(false));
   };
   useEffect(() => { load(); }, [fLoc]);
 
   // 2026-08-14 (CEO): "do bucket banao — FRESH (inquiry, jab tak batch assign nahi) aur
   // ENROLLED (batch se billing tak ki poori journey, current status ke saath)".
-  const FRESH_STATES = ["Unassigned", "Dropped"];
-  // CEO 14/08 [28:12]: "a person is enrolled but they did not complete the training …
-  // the word is drop out" — a Dropped candidate who HAD enrolled (enrolled_at is stamped
-  // once, never cleared) belongs to the Enrolled journey as a Dropout, not back in Fresh.
-  const isFresh = (r: any) => FRESH_STATES.includes(r.lifecycle_status ?? "Unassigned") && !(r.lifecycle_status === "Dropped" && r.enrolled_at);
+  // QA-021 (-68): the whole derivation moved VERBATIM to lib/candidate-journey.ts — the drop
+  // verb stamps "Dropped (at <stage>)" with the same function this page renders with, so the
+  // two can never disagree (the QA-133/138 dual-copy lesson, third time). Comments preserved
+  // there: CEO 14/08 [28:12] dropout vs Fresh, QA-069 result-outranks-lifecycle, [29:36]
+  // Fresh's own journey, 15/08 fee-stage removal.
+  const isFresh = (r: any) => isFreshCandidate(r);
   const freshItems = items.filter(isFresh);
   const enrolledItems = items.filter((r: any) => !isFresh(r));
   const bucketItems = bucket === "Fresh" ? freshItems : enrolledItems;
-  // CEO's journey terminology for the Enrolled bucket — derived, never stored.
-  // QA-069 (S1): the RECORDED assessment result outranks lifecycle_status — historical
-  // imports never wrote the lifecycle back, so certified people read "Result Awaited".
-  // latest_result rides in from the API (non-Pending only).
-  const journeyOf = (r: any): string => {
-    if (r.lifecycle_status === "Dropped") return "Dropout"; // enrolled-then-left (CEO 14/08)
-    if (r.latest_result === "Pass" || r.lifecycle_status === "Completed") return "Certified";
-    if (r.latest_result === "Fail" || r.lifecycle_status === "Failed") return "Failed";
-    if (r.latest_result === "Absent") return "Absent at Assessment";
-    if (r.lifecycle_status === "Assigned") return "Enrollment in progress";
-    const bs = r.active_batch?.status;
-    if (bs === "Closing") return "Training Completed";
-    if (bs === "Completed") return "Result Awaited";
-    return "Training Ongoing";
-  };
-  const JOURNEY_TAGS = ["Enrollment in progress", "Training Ongoing", "Training Completed", "Result Awaited", "Certified", "Dropout", "Failed", "Absent at Assessment"];
-  // QA-021 (checker) + CEO [29:36]: Fresh has its OWN journey — inquiry to portal
-  // registration — derived from sidh_status, never stored.
-  // 15/08 (Umesh, supersedes Karunn's "enrolled = fees paid"): THIS programme takes no fee
-  // from the candidate — the Fee Paid stage and the fee inputs leave the UI. The schema
-  // fields and the Rule 54 toggle stay dormant (default OFF) in case a paid scheme returns.
-  const freshJourneyOf = (r: any): string => {
-    if (r.lifecycle_status === "Dropped") return "Dropped";
-    if (r.sidh_status === "Registered") return "Registered on Portal";
-    if (r.sidh_status === "Link Sent") return "Portal Link Sent";
-    return "Fresh Lead";
-  };
-  const FRESH_TAGS = ["Fresh Lead", "Portal Link Sent", "Registered on Portal", "Dropped"];
+  const journeyOf = (r: any): string => sharedJourneyOf({ ...r, active_batch_status: r.active_batch?.status });
+  const freshJourneyOf = (r: any): string => sharedFreshJourneyOf(r);
   const LIFECYCLE_TAGS = bucket === "Fresh" ? FRESH_TAGS : JOURNEY_TAGS;
   // 2026-08-13 (Umesh): a candidate in a batch HAS that batch's programme — "No programme"
   // only when neither the row nor an active membership carries one.
@@ -426,10 +409,16 @@ function CandidatesInner() {
             // CEO terminology: Fresh bucket shows the pool state; Enrolled bucket shows the
             // JOURNEY (Enrollment in progress → Training Ongoing → Training Completed →
             // Result Awaited → Certified / Dropout / Failed).
+            // QA-021: a dropped row NAMES the stage the journey ended at, trainer-style.
             key: "lifecycle_status", label: bucket === "Fresh" ? "Stage" : "Journey status", sortable: true,
             sortValue: (r: any) => bucket === "Fresh" ? freshJourneyOf(r) : journeyOf(r),
             filterText: (r: any) => bucket === "Fresh" ? freshJourneyOf(r) : journeyOf(r),
-            render: (r: any) => <Chip value={bucket === "Fresh" ? freshJourneyOf(r) : journeyOf(r)} />,
+            render: (r: any) => {
+              const j = bucket === "Fresh" ? freshJourneyOf(r) : journeyOf(r);
+              return ["Dropped", "Dropout"].includes(j) && r.dropped_from_stage
+                ? <span title={r.dropped_reason ? `Reason: ${r.dropped_reason}` : undefined}><Chip value={`${j} (at ${r.dropped_from_stage})`} /></span>
+                : <Chip value={j} />;
+            },
           },
           {
             key: "eligibility", label: "Eligible",
@@ -471,7 +460,54 @@ function CandidatesInner() {
           ...(role === "Enrollment" ? [] : [
             { key: "source", label: "Source", mobile: false, filterable: true, filterText: (r: any) => r.source ?? "Entered in ERP", render: (r: any) => <SourceCell source={r.source} /> },
           ]),
+          {
+            // QA-021 (-68): Dropout is reachable from ANY stage now, not only a batch roster.
+            key: "_drop", label: "", render: (r: any) => (
+              <span onClick={(e) => e.stopPropagation()}>
+                {r.lifecycle_status === "Dropped"
+                  ? <Btn small kind="ghost" onClick={async () => {
+                      if (!window.confirm(`Reinstate ${r.name}? They go back to Unassigned in the Fresh pool.`)) return;
+                      try { await api(`/api/candidates/${r._id}/drop`, { method: "POST", json: { undo: true } }); load(); }
+                      catch (e: any) { setError(e.message); }
+                    }}>Reinstate</Btn>
+                  : <Btn small kind="ghost" onClick={() => { setDropT(r); setDropForm({}); }}>Drop…</Btn>}
+              </span>
+            ),
+          },
         ]} empty="No candidates — add or import." />
+
+      <Drawer open={!!dropT} onClose={() => setDropT(null)} title={dropT ? `Drop ${dropT.name}?` : ""}>
+        <div className="space-y-3">
+          <p className="text-sm text-gray-600">
+            Currently at <b>{dropT ? (isFresh(dropT) ? freshJourneyOf(dropT) : journeyOf(dropT)) : ""}</b> — the drop
+            is recorded at this stage, with your reason. {dropT?.active_batch ? "They are on a batch roster; the roster drop happens too (results already recorded stay, Rule 42)." : ""}
+          </p>
+          <Field label="Reason" required>
+            {dropReasons.length > 0 && (
+              <select className={inputCls} value={dropForm.pick ?? ""} onChange={(e) => setDropForm({ ...dropForm, pick: e.target.value, reason: e.target.value === "__other__" ? "" : e.target.value })}>
+                <option value="">Select…</option>
+                {dropReasons.map((d: any) => <option key={d._id} value={d.name}>{d.name}</option>)}
+                <option value="__other__">Other…</option>
+              </select>
+            )}
+            {(dropReasons.length === 0 || dropForm.pick === "__other__") && (
+              <input className={inputCls + (dropReasons.length ? " mt-1.5" : "")} placeholder="Why did they leave?"
+                value={dropForm.pick === "__other__" || dropReasons.length === 0 ? (dropForm.reason ?? "") : ""}
+                onChange={(e) => setDropForm({ ...dropForm, reason: e.target.value })} />
+            )}
+          </Field>
+          <Field label="Date (blank = today)"><input type="date" className={inputCls} value={dropForm.date ?? ""} onChange={(e) => setDropForm({ ...dropForm, date: e.target.value })} /></Field>
+          <div className="flex gap-2">
+            <Btn kind="danger" disabled={!(dropForm.reason ?? "").trim()} onClick={async () => {
+              try {
+                await api(`/api/candidates/${dropT._id}/drop`, { method: "POST", json: { reason: dropForm.reason.trim(), date: dropForm.date || undefined } });
+                setDropT(null); load();
+              } catch (e: any) { setError(e.message); }
+            }}>Confirm Drop</Btn>
+            <Btn kind="ghost" onClick={() => setDropT(null)}>Cancel</Btn>
+          </div>
+        </div>
+      </Drawer>
 
       <Drawer open={drawer === "add" || drawer === "edit"} onClose={() => { setDrawer(""); setEditId(""); }}
         title={drawer === "edit" ? `Edit Candidate — ${form.name || ""}` : "Add Candidate"}>

@@ -6,6 +6,7 @@ import {
   LocationTarget, Notification, Program, Room, Scheme, TRAINER_PIPELINE, Trainer, TrainerDocument,
 } from "@/models";
 import { auditDiff } from "@/lib/audit";
+import { currentStageOf } from "@/lib/candidate-journey";
 import { getDefaults } from "@/lib/defaults";
 import { HttpError, isScoped } from "@/lib/authz";
 import type { SessionUser } from "@/auth";
@@ -473,7 +474,20 @@ export async function dropMemberChecked(memberId: string, left_on: Date, drop_re
     log.internal_present = log.present_member_ids.length; // Rule 29; roster_count stays frozen (Rule 28)
     await log.save();
   }
-  await Candidate.findByIdAndUpdate(m.candidate, { lifecycle_status: "Dropped" }); // Rule 21
+  // Rule 21 + QA-021 (-68): the drop is a recorded FACT on the candidate too — reason, date
+  // and the journey stage it happened at (derived server-side, same function the page uses).
+  {
+    const cand = await Candidate.findById(m.candidate).select("lifecycle_status enrolled_at sidh_status").lean<any>();
+    const batchDoc = await Batch.findById(m.batch).select("status").lean<any>();
+    const stage = cand ? currentStageOf({
+      lifecycle_status: cand.lifecycle_status, enrolled_at: cand.enrolled_at, sidh_status: cand.sidh_status,
+      latest_result: null, active_batch_status: batchDoc?.status ?? null,
+    }) : undefined;
+    await Candidate.findByIdAndUpdate(m.candidate, {
+      lifecycle_status: "Dropped",
+      dropped_reason: drop_reason, dropped_at: lo, ...(stage ? { dropped_from_stage: stage } : {}),
+    });
+  }
   // Rule 42: an existing result is NOT deleted when someone drops — they still appeared.
   // Recompute so the aggregates reflect the new roster.
   await recomputeClosureAggregates(String(m.batch));

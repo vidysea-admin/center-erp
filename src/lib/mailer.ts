@@ -64,6 +64,11 @@ export function renderMail(opts: { title: string; lines: string[]; cta?: { label
 export type MailAttempt = {
   to: string;
   subject: string;
+  // QA-142 (checker, 16/08): what the LOG stores when the real subject carries a secret —
+  // the OTP mail keeps its code in the subject (phone notification preview), but the Admin
+  // mail panel must not become a live-codes list. Bodies were deliberately never stored;
+  // the subject line had quietly undone that decision.
+  log_subject?: string;
   html: string;
   text: string;
   entity?: string;
@@ -73,7 +78,7 @@ export type MailAttempt = {
 // The one door out. Resolves to the MailLog outcome; never rejects.
 export async function sendMail(m: MailAttempt): Promise<{ status: "sent" | "failed" | "skipped"; reason?: string }> {
   const log = async (status: "sent" | "failed" | "skipped", extra: { reason?: string; message_id?: string } = {}) => {
-    await MailLog.create({ to: m.to, subject: m.subject, status, entity: m.entity, entity_id: m.entity_id, ...extra }).catch(() => {});
+    await MailLog.create({ to: m.to, subject: m.log_subject ?? m.subject, status, entity: m.entity, entity_id: m.entity_id, ...extra }).catch(() => {});
     return { status, reason: extra.reason };
   };
   try {

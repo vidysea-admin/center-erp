@@ -570,6 +570,55 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   ok("QA-025: role matrix restored for the rest of the wall", restore.status === 200);
 }
 
+// ---- QA-021/142 (-68): Dropout is a real candidate stage now — reachable from anywhere,
+// with the reason and the journey stage stamped server-side (same derivation the page
+// renders with). And the OTP mail's LOG subject is redacted (QA-142).
+{
+  const s68 = Date.now().toString().slice(-6);
+  const p68 = (n) => "92" + Date.now().toString().slice(-7) + n;
+  const jpr = (await req(spoc, "GET", "/api/locations?limit=1")).data.items[0];
+  const prog = (await req(admin, "GET", "/api/programs?limit=1")).data.items[0];
+
+  const c1 = (await req(admin, "POST", "/api/candidates", { name: `Q021 Fresh ${s68}`, phone: p68(1), location: jpr._id, program: prog._id })).data.item;
+  ok("QA-021: dropping without a reason is refused", (await req(admin, "POST", `/api/candidates/${c1._id}/drop`, {})).status === 400);
+  const d1 = await req(admin, "POST", `/api/candidates/${c1._id}/drop`, { reason: "Moved away" });
+  ok("QA-021: a FRESH lead can drop now — no roster needed", d1.status === 200 && d1.data.item?.lifecycle_status === "Dropped", `got ${d1.status}`);
+  ok("QA-021: reason + stage stamped ('Fresh Lead')",
+    d1.data.item?.dropped_reason === "Moved away" && d1.data.item?.dropped_from_stage === "Fresh Lead",
+    JSON.stringify([d1.data.item?.dropped_reason ?? null, d1.data.item?.dropped_from_stage ?? null]));
+  ok("QA-021: a second drop is refused (409)", (await req(admin, "POST", `/api/candidates/${c1._id}/drop`, { reason: "again" })).status === 409);
+  const u1 = await req(admin, "POST", `/api/candidates/${c1._id}/drop`, { undo: true });
+  ok("QA-021: reinstate → Unassigned with the stamps cleared",
+    u1.status === 200 && u1.data.item?.lifecycle_status === "Unassigned" && !u1.data.item?.dropped_reason && !u1.data.item?.dropped_from_stage);
+
+  const cf = (await req(admin, "POST", "/api/candidates", { name: `Q021 Foreign ${s68}`, phone: p68(2), location: otherLoc._id, program: prog._id })).data.item;
+  ok("QA-021: a scoped SPOC cannot drop a foreign candidate (403)",
+    (await req(spoc, "POST", `/api/candidates/${cf._id}/drop`, { reason: "x" })).status === 403);
+
+  const bat = (await req(admin, "POST", "/api/batches", { location: jpr._id, program: prog._id, planned_start: "2027-01-05" })).data.item;
+  const mem = await req(admin, "POST", `/api/batches/${bat._id}/members`, { candidate: c1._id });
+  ok("QA-021: a reinstated candidate re-assigns fine (Rule 20/21)", mem.status === 201 || mem.status === 200, `got ${mem.status}`);
+  const d2 = await req(admin, "POST", `/api/candidates/${c1._id}/drop`, { reason: "Left town" });
+  ok("QA-021: dropping a ROSTERED candidate runs the Rule 25 path too", d2.status === 200 && d2.data.item?.lifecycle_status === "Dropped", `got ${d2.status}`);
+  ok("QA-021: the stage came from the Enrolled journey ('Enrollment in progress')",
+    d2.data.item?.dropped_from_stage === "Enrollment in progress", JSON.stringify(d2.data.item?.dropped_from_stage ?? null));
+
+  const pjO = async (body) => {
+    const r = await fetch((process.env.BASE_URL || "http://localhost:3000/erp") + "/api/public/enrol-otp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    return { status: r.status, data: await r.json().catch(() => ({})) };
+  };
+  const em68 = `q142.${Date.now()}@test.local`;
+  const rq = await pjO({ action: "request", email: em68 });
+  ok("QA-142: OTP request lands", rq.status === 200, `got ${rq.status}`);
+  const { MongoClient } = await import("mongodb");
+  const mc2 = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+  await mc2.connect();
+  const row = await mc2.db(process.env.MONGODB_DB || "center_erp_ci").collection("maillogs").findOne({ to: em68 });
+  ok("QA-142: the OTP mail's LOG subject is redacted — no live code in the Admin panel",
+    row?.subject === "****** is your registration code", JSON.stringify(row?.subject ?? null));
+  await mc2.close();
+}
+
 // ---- QA-126/127/128 (-67): the manual is current, role-filtered and English-only.
 // (The manual sits behind sign-in like every staff screen — fetch it WITH a session.)
 {
