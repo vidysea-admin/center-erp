@@ -47,6 +47,18 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
   // hired FOR) finally gets an input. Rule T3 requires both before "Documents Completed", and
   // the readiness engine counts trainers by exactly this pair — yet no screen could set it.
   const [nom, setNom] = useState<{ location: string; program: string } | null>(null);
+  // QA-148: the missing bridge between a trainer and a login — one click here.
+  const [loginRes, setLoginRes] = useState<any>(null);
+  const role = (session?.user as any)?.role;
+  const canCreateLogin = role === "Admin" || role === "Operations";
+  async function createLogin() {
+    if (busy) return;
+    if (!confirm(`Create a Trainer login for ${t?.name} (${t?.email || "no email"})? Their scope will be every centre they are tied to or assigned at.`)) return;
+    setBusy(true);
+    try { setLoginRes(await api(`/api/trainers/${id}/create-login`, { method: "POST", json: {} })); await load(); }
+    catch (e: any) { setErr(e.message); }
+    finally { setBusy(false); }
+  }
 
   async function load() {
     try {
@@ -145,7 +157,20 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
               : "border-amber-200 bg-amber-50 text-amber-700"}`}>{stage === "Dropped" && t.dropped_from_stage ? `Dropped (at ${pipelineLabel(t.dropped_from_stage)})` : pipelineLabel(stage)}</span>
         {/* QA-130 rider (Umesh): who brought this row in, on the row itself. */}
         <span className="text-sm text-gray-500">{t.phone}{t.tr_id ? ` · TR ID ${t.tr_id}` : ""}{t.created_by?.name ? ` · added by ${t.created_by.name}` : ""}</span>
+        {/* QA-148 (Manish): "is trainer se login kaise karun?" — the answer is a button, not a hunt. */}
+        {t.user
+          ? <span className="rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-[11px] font-semibold text-green-700" title="This trainer has a linked login — their batches show under 'My batches'">Login linked ✓</span>
+          : canCreateLogin && <Btn small kind="ghost" disabled={busy} onClick={createLogin}>{busy ? "…" : "Create login"}</Btn>}
       </div>
+      {loginRes && (
+        <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-sm">
+          <div className="font-semibold text-green-800">{loginRes.item?.created ? "Login created" : "Existing login linked"} — {loginRes.item?.email}</div>
+          {loginRes.temporary_password && (
+            <div className="mt-1 text-green-800">Temporary password (shown once — share it with the trainer yourself, it is never mailed): <code className="rounded bg-white px-1.5 py-0.5 font-mono">{loginRes.temporary_password}</code></div>
+          )}
+          <div className="mt-1 text-xs text-green-700">Scope: {loginRes.item?.location_scope?.length ?? 0} centre(s). Their assigned batches show under &quot;My batches&quot; from the first sign-in.</div>
+        </div>
+      )}
 
       {/* The rejection is the thing an operator must act on, so it is stated, not buried. */}
       {stage === "NSDC Rejected" && (

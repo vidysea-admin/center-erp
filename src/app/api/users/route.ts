@@ -3,7 +3,7 @@ import bcrypt from "bcryptjs";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, requireRole, HttpError } from "@/lib/authz";
 import { requirePerm, requireView } from "@/lib/permissions";
-import { User } from "@/models";
+import { Trainer, User } from "@/models";
 import { audit } from "@/lib/audit";
 import { emailError, canonicalPhone, phoneError } from "@/lib/validate";
 import { renderMail, sendMail } from "@/lib/mailer";
@@ -59,6 +59,16 @@ export const POST = apiHandler(async (req: NextRequest) => {
     requested_role: body.requested_role,
   });
   await audit({ entity: "User", entityId: doc._id, newValue: "created " + body.email, actor: user.id });
+  // QA-148: an Add-User login with role Trainer and a trainer's email IS that trainer's login —
+  // link it now so "My batches" works from the first sign-in (the other direction, Add Trainer
+  // → Create login, lives on the trainer page).
+  if (doc.role === "Trainer") {
+    const em = String(doc.email).trim().toLowerCase();
+    await Trainer.updateOne(
+      { email: new RegExp(`^${em.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"), $or: [{ user: null }, { user: { $exists: false } }] },
+      { $set: { user: doc._id } },
+    );
+  }
   // QA-115: welcome mail — NEVER the password (that stays out-of-band with the admin).
   // A Pending-created account is told on APPROVAL instead, not here.
   if (doc.approval_status !== "Pending") {

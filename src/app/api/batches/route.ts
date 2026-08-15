@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, requireRole, locationFilter, assertLocationInScope, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, BatchMember, Candidate, Closure, Invoice, Location, Notification, Program, Trainer } from "@/models";
-import { assertLocationOperational, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, nextBatchCode, planBatchBackward, settlementStage, trainerBookingWarnings } from "@/lib/rules";
+import { assertLocationOperational, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, nextBatchCode, planBatchBackward, settlementStage, trainerBookingWarnings, trainerForLogin } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
 import { mailUsersByRole } from "@/lib/mailer";
@@ -12,7 +12,18 @@ export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
   const sp = req.nextUrl.searchParams;
-  const filter: Record<string, unknown> = { ...locationFilter(user) };
+  // R-I / QA-148: a Trainer login's own profile is resolved ONCE here (explicit link, else
+  // same email — self-healed) and its assigned batches are always in view, whatever the
+  // login's location_scope says. Resolved before the filter so the OR can use it.
+  let myTrainerId: string | null = null;
+  if (user.role === "Trainer") {
+    const me = await trainerForLogin(user);
+    myTrainerId = me ? String(me._id) : null;
+  }
+  const scope = locationFilter(user);
+  const filter: Record<string, unknown> = myTrainerId && Object.keys(scope).length
+    ? { $or: [scope, { trainer: myTrainerId }] }
+    : { ...scope };
   for (const k of ["program", "status", "trainer"]) {
     const v = sp.get(k);
     if (v) filter[k] = v;
@@ -57,13 +68,8 @@ export const GET = apiHandler(async (req: NextRequest) => {
   const clByB = new Map(closures.map((c) => [String(c.batch), c]));
   const invByB = new Map(invoices.map((i) => [String(i.batch), i]));
   // R-I (CEO [38:54-39:10]): a Trainer's default view is "batches assigned to ME", with the
-  // rest of their centre reachable as guest faculty. is_mine marks which is which — the
-  // linked Trainer profile is resolved from the login (Trainer.user), never guessed by name.
-  let myTrainerId: string | null = null;
-  if (user.role === "Trainer") {
-    const me = await Trainer.findOne({ user: user.id }).select("_id").lean<any>();
-    myTrainerId = me ? String(me._id) : null;
-  }
+  // rest of their centre reachable as guest faculty. is_mine marks which is which — resolved
+  // above via trainerForLogin (link, else email; never by name).
   // Health is computed per row; the list is already capped by location scope + status filter.
   const out = await Promise.all(items.map(async (b) => ({
     ...b,

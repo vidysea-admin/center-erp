@@ -26,14 +26,39 @@ export async function assertLocationOperational(locationId: unknown, action = "T
   }
 }
 
+// QA-148 (Manish, 15/08): "Add Trainer se trainer banaya, certified kiya, batch assign kiya —
+// login karun to batch dikhta hi nahi." Trainer.user was declared in 2026-08-11 but NOTHING
+// ever set it — Add Trainer makes no login, Add User links to no trainer — so is_mine was
+// false for every trainer alive and the batch list opened on an empty "My batches". This
+// resolver is the ONE place a login becomes a trainer: the explicit link first, then the
+// same email (self-healed onto the record so the next read is direct). Never by name.
+export async function trainerForLogin(user: { id: string; email?: string | null; role?: string }): Promise<{ _id: unknown } | null> {
+  if (user.role !== "Trainer") return null;
+  const byLink = await Trainer.findOne({ user: user.id }).select("_id").lean<any>();
+  if (byLink) return byLink;
+  const email = String(user.email ?? "").trim().toLowerCase();
+  if (!email) return null;
+  const byEmail = await Trainer.findOne({ email: new RegExp(`^${email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"), $or: [{ user: null }, { user: { $exists: false } }] }).select("_id").lean<any>();
+  if (byEmail) {
+    await Trainer.updateOne({ _id: byEmail._id }, { $set: { user: user.id } });
+    return byEmail;
+  }
+  return null;
+}
+
 // Rule 38 on by-ID access: scoped users may only touch batches at their locations.
+// QA-148: a Trainer login always reaches the batches ASSIGNED to it, even when the login's
+// location_scope missed that centre — assignment is the stronger claim.
 export async function assertBatchInScope(user: SessionUser, batchId: string) {
   if (!isScoped(user)) return;
-  const b = await Batch.findById(batchId).select("location").lean<any>();
+  const b = await Batch.findById(batchId).select("location trainer").lean<any>();
   if (!b) throw new HttpError(404, "Batch not found");
-  if (!user.location_scope.map(String).includes(String(b.location))) {
-    throw new HttpError(403, "Batch out of scope");
+  if (user.location_scope.map(String).includes(String(b.location))) return;
+  if (user.role === "Trainer" && b.trainer) {
+    const me = await trainerForLogin(user);
+    if (me && String(me._id) === String(b.trainer)) return;
   }
+  throw new HttpError(403, "Batch out of scope");
 }
 
 // Same, resolved via a BatchMember id.

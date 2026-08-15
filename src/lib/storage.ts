@@ -25,16 +25,25 @@ let cachedDrive: drive_v3.Drive | null = null;
 let cachedErr: string | null = null;
 const folderCache = new Map<string, string>(); // "parentId/name" → folderId
 
+// Umesh (15/08): "drive ka link hard code kar de" — the ROOT FOLDER is not a secret (it is
+// the same Drive folder Defaults.drive_root_url already points at), so it is the default
+// here and the env var only overrides it. What CANNOT be hardcoded is the service-account
+// key: that is a private credential, and without it Google will not let the app write.
+export const DEFAULT_DRIVE_ROOT_FOLDER_ID = "1NOfRCw9lIyRoJTEFAg4--HIJiTG-Of0G";
+export function rootFolderId(): string {
+  return String(process.env.GDRIVE_ROOT_FOLDER_ID || DEFAULT_DRIVE_ROOT_FOLDER_ID);
+}
+
 export function storageConfigured(): boolean {
-  return !!(process.env.GDRIVE_SA_JSON && process.env.GDRIVE_ROOT_FOLDER_ID);
+  return !!process.env.GDRIVE_SA_JSON;
 }
 
 export function storageHealth(): { backend: "drive" | "local"; configured: boolean; reason: string } {
-  if (storageConfigured()) return { backend: "drive", configured: true, reason: cachedErr ? `Drive error: ${cachedErr}` : "Google Drive connected — uploads survive deploys" };
+  if (storageConfigured()) return { backend: "drive", configured: true, reason: cachedErr ? `Drive error: ${cachedErr}` : `Google Drive connected (root folder ${rootFolderId()}) — uploads survive deploys` };
   return {
     backend: "local",
     configured: false,
-    reason: "Evidence storage NOT connected — uploads are written to the server's own disk and are LOST on every deploy. Set GDRIVE_SA_JSON + GDRIVE_ROOT_FOLDER_ID (see drive-storage-setup.md).",
+    reason: "Evidence storage NOT connected — uploads are written to the server's own disk and are LOST on every deploy. Set GDRIVE_SA_JSON (service-account key, base64) — the Drive folder is already known (see drive-storage-setup.md).",
   };
 }
 
@@ -51,7 +60,7 @@ function drive(): drive_v3.Drive {
 // (centre code, batch code, kind) — human-readable in Drive for anyone who does look.
 async function ensureFolder(segments: string[]): Promise<{ id: string; path: string }> {
   const d = drive();
-  let parent = String(process.env.GDRIVE_ROOT_FOLDER_ID);
+  let parent = rootFolderId();
   const walked: string[] = [];
   for (const seg of segments.map((s) => String(s).trim()).filter(Boolean)) {
     walked.push(seg);

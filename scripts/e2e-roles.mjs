@@ -619,6 +619,44 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   await mc2.close();
 }
 
+// ---- QA-148 (-78): a trainer's LOGIN reaches the trainer's BATCHES. Manish: "Add Trainer se
+// banaya, Certified, batch assign — login karun to batch dikhta hi nahi." Trainer.user was
+// never set anywhere; is_mine was false for everyone.
+{
+  const s148 = Date.now().toString().slice(-6);
+  const jpr = (await req(spoc, "GET", "/api/locations?limit=1")).data.items[0];
+  const prog148 = (await req(admin, "GET", "/api/programs?limit=1")).data.items[0];
+  const em148 = `t148.${s148}@vidysea-test.local`;
+  // A trainer made the Add-Trainer way — no login, just a person with an email.
+  const tr = (await req(admin, "POST", "/api/trainers", { name: `Q148 Trainer ${s148}`, phone: `98${s148}00`.slice(0, 10).padEnd(10, "1"), email: em148, skills: [String(prog148.trainer_skill ?? "x")], home_location: jpr._id }, 201)).data.item;
+  ok("QA-148: trainer exists with no login yet", !!tr?._id && !tr.user);
+  // The bridge: one call creates the login, scoped to the trainer's centres, and links it.
+  const mk = await req(admin, "POST", `/api/trainers/${tr._id}/create-login`, {}, 201);
+  ok("QA-148: create-login mints a Trainer login with a one-time temporary password", !!mk.data.temporary_password && mk.data.item?.linked === true && mk.data.item?.email === em148, JSON.stringify(mk.data.item));
+  ok("QA-148: the login's scope covers the trainer's centre", (mk.data.item?.location_scope ?? []).map(String).includes(String(jpr._id)), JSON.stringify(mk.data.item?.location_scope));
+  const trAfter = (await req(admin, "GET", `/api/trainers/${tr._id}`)).data.item;
+  ok("QA-148: Trainer.user is linked after create-login", String(trAfter.user ?? "") === String(mk.data.item.user_id));
+  const again = await req(admin, "POST", `/api/trainers/${tr._id}/create-login`, {});
+  ok("QA-148: a second create-login is refused 409 (already has a login)", again.status === 409, String(again.status));
+  // Assign a batch to this trainer, sign in as the trainer: the batch is MINE.
+  const b148 = (await req(admin, "POST", "/api/batches", { location: jpr._id, program: prog148._id, trainer: tr._id, planned_start: new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10), target_size: 5 }, 201)).data.item;
+  const trLogin = await login(em148, mk.data.temporary_password);
+  ok("QA-148: the new trainer login signs in", !!trLogin);
+  if (trLogin) {
+    const mine = (await req(trLogin, "GET", "/api/batches")).data.items ?? [];
+    const row = mine.find((b) => String(b._id) === String(b148._id));
+    ok("QA-148: the assigned batch is in the trainer's list AND is_mine=true", !!row && row.is_mine === true, JSON.stringify(mine.map((b) => [b.code, b.is_mine])));
+    ok("QA-148: the trainer can open their assigned batch by id (scope allows assignment)", (await req(trLogin, "GET", `/api/batches/${b148._id}`)).status === 200);
+  }
+  // The other direction: an Add-User login with role Trainer + a trainer's email gets linked automatically.
+  const em148b = `t148b.${s148}@vidysea-test.local`;
+  const tr2 = (await req(admin, "POST", "/api/trainers", { name: `Q148 Trainer B ${s148}`, phone: `97${s148}00`.slice(0, 10).padEnd(10, "2"), email: em148b, skills: ["x"], home_location: jpr._id }, 201)).data.item;
+  await req(admin, "POST", "/api/users", { name: "Q148 B", email: em148b, password: "Q148pass!xyz", role: "Trainer", location_scope: [jpr._id], can_edit: true }, 201);
+  const tr2After = (await req(admin, "GET", `/api/trainers/${tr2._id}`)).data.item;
+  ok("QA-148: Add User (role Trainer, same email) auto-links to the trainer", !!tr2After.user, JSON.stringify(tr2After.user));
+  await req(admin, "POST", `/api/batches/${b148._id}/transition`, { target: "Cancelled", reason: "QA-148 cleanup" }, 200);
+}
+
 // ---- QA-132/025-P3 (-72): the product listens for bounces, and more reads open at view.
 {
   const s72 = Date.now().toString().slice(-6);
