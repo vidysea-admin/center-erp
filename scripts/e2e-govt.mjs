@@ -198,6 +198,35 @@ ok("committed counts match the preview", done.data.matched_count === 4 && done.d
 const detail = await req(admin, "GET", `/api/govt-attendance/${done.data._id}`);
 ok("all 7 rows persisted", detail.data.rows?.length === 7, `got ${detail.data.rows?.length}`);
 
+// ---- -88 (Umesh 15/08): attendance on record = the batch runs; a Planning batch that receives
+// matched portal rows becomes Active on its own (actual_start = planned start), audited; the
+// import is never blocked; a second reconcile is a no-op.
+{
+  const pStart = localDate(Date.now() - 3 * 86400_000);
+  const pBatch = (await req(admin, "POST", "/api/batches", { location: loc._id, program: program._id, target_size: 1, planned_start: pStart })).data.item;
+  ok("-88 fixture: an after-the-fact Planning batch", pBatch?.status === "Planning", pBatch?.status);
+  const pCand = (await req(admin, "POST", "/api/candidates", { name: `${NAME} Auto`, phone: "9333" + STAMP, location: loc._id, program: program._id, sidh_candidate_id: `CAN_${STAMP}0009` }, 201)).data.item;
+  const pMem = (await req(admin, "POST", `/api/batches/${pBatch._id}/members`, { candidate: pCand._id }, 201)).data.item;
+  const csvLines = csvText.split(String.fromCharCode(10));
+  const alphaAt = csvLines.findIndex((l) => l.includes(`${NAME} Alpha`));
+  const csvAuto = [csvLines[0], csvLines[alphaAt], csvLines[alphaAt + 1], csvLines[alphaAt + 2]].join(String.fromCharCode(10))
+    .replace(`${NAME} Alpha`, `${NAME} Auto`).replace(`CAN_${STAMP}0001`, `CAN_${STAMP}0009`);
+  const autoRes = await upload(admin, { file: new File([Buffer.from(csvAuto)], "auto.csv", { type: "text/csv" }), batch: pBatch._id, confirm: "1", period_label: `auto ${STAMP}` });
+  ok("-88: the import on a Planning batch is NOT blocked (201) and reports the auto-activation", autoRes.status === 201 && (autoRes.data.auto_activated ?? []).includes(String(pBatch._id)), JSON.stringify({ s: autoRes.status, m: autoRes.data.matched_count, auto: autoRes.data.auto_activated }));
+  const after = (await req(admin, "GET", `/api/batches/${pBatch._id}`)).data.item;
+  ok("-88: the batch is Active on its own with actual_start = the planned start", after.status === "Active" && String(after.actual_start).slice(0, 10) === pStart, JSON.stringify({ st: after.status, as: after.actual_start }));
+  const memAfter = ((await req(admin, "GET", `/api/batches/${pBatch._id}/members`)).data.items ?? []).find((m) => String(m._id) === String(pMem._id));
+  ok("-88: the roster is counted from that day (joined_on restamped)", String(memAfter?.joined_on).slice(0, 10) === pStart, JSON.stringify(memAfter?.joined_on));
+  const aud = ((await req(admin, "GET", `/api/audit/Batch/${pBatch._id}`)).data.items ?? []);
+  ok("-88: the auto-activation is on the audit trail with its reason", aud.some((a) => a.field === "auto_activated" && /portal import/.test(String(a.new_value))), JSON.stringify(aud.filter((a) => a.field === "auto_activated").map((a) => a.new_value)));
+  const again = await req(admin, "POST", `/api/batches/${pBatch._id}/reconcile-status`, {});
+  ok("-88: reconcile on an already-Active batch is a no-op", again.status === 200 && again.data.activated === false && /already Active/.test(again.data.reason ?? ""), JSON.stringify(again.data));
+  const fresh = (await req(admin, "POST", "/api/batches", { location: loc._id, program: program._id, target_size: 1, planned_start: localDate(Date.now() + 10 * 86400_000) })).data.item;
+  const noEv = await req(admin, "POST", `/api/batches/${fresh._id}/reconcile-status`, {});
+  ok("-88: reconcile without evidence changes nothing", noEv.data.activated === false && /no attendance evidence/.test(noEv.data.reason ?? ""), JSON.stringify(noEv.data));
+  await req(admin, "POST", `/api/batches/${fresh._id}/transition`, { target: "Cancelled", reason: "-88 fixture" }, 200);
+}
+
 // ---- QA-159 (-86, Umesh): the batches LIST says how much attendance each batch has ----
 {
   const list = ((await req(admin, "GET", "/api/batches?limit=2000")).data.items ?? []);

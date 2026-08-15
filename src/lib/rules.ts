@@ -2,7 +2,7 @@
 // center-erp-data-model-rules.md §4. Rule numbers are cited inline.
 import { Types } from "mongoose";
 import {
-  Batch, BatchMember, Candidate, CandidateResult, Closure, CostCategory, CostEntry, DailyLog, Invoice, Location,
+  Batch, BatchMember, Candidate, CandidateResult, Closure, CostCategory, CostEntry, DailyLog, GovtAttendanceRow, Invoice, Location,
   LocationTarget, Notification, Program, Room, Scheme, TRAINER_PIPELINE, Trainer, TrainerDocument,
 } from "@/models";
 import { audit, auditDiff } from "@/lib/audit";
@@ -591,6 +591,45 @@ export async function batchReadiness(batchId: string) {
     location_halted: HALTED_LOCATION_STATUSES.includes(location?.operational_status),
     batch,
   };
+}
+
+// -88 (Umesh 15/08 23:20, on DST-02 with 36 portal rows imported and "Mark Ready" still on
+// screen): "jis batch me attendance upload ho gayi hai usme Start batch jaise buttons aa rahe
+// hain — ye to apne aap hona chahiye." Attendance IS proof the batch runs; asking a person to
+// click Mark Ready / Start afterwards is backwards. When attendance evidence exists (a matched
+// portal import or a daily log) for a batch still in Planning/Ready, the batch becomes Active
+// on its own: actual_start = the planned start (or today if the plan is in the future — the
+// evidence wins), the roster counted from that day (same restamp as a dated Start), the
+// readiness gates skipped ON RECORD (audit row says "auto-activated from attendance"). It
+// never moves past Active by itself — Closing/Completed still need assessment/certification.
+export async function activateFromEvidence(batchId: string, opts: { actor?: string | null; source: string }): Promise<{ activated: boolean; reason?: string }> {
+  const batch = await Batch.findById(batchId);
+  if (!batch) return { activated: false, reason: "batch not found" };
+  if (!["Planning", "Ready"].includes(batch.status)) return { activated: false, reason: `already ${batch.status}` };
+  const [logs, portal] = await Promise.all([
+    DailyLog.countDocuments({ batch: batchId }),
+    GovtAttendanceRow.countDocuments({ batch: batchId, match_status: "Matched" }),
+  ]);
+  if (!logs && !portal) return { activated: false, reason: "no attendance evidence" };
+  const today = istToday();
+  const planned = dayKey(batch.planned_start);
+  const start = planned.getTime() <= today.getTime() ? planned : today;
+  const from = batch.status;
+  batch.actual_start = start;
+  batch.status = "Active" as any;
+  await batch.save();
+  const restamped = await BatchMember.updateMany({ batch: batchId, joined_on: { $gt: start } }, { $set: { joined_on: start } });
+  await audit({
+    entity: "Batch", entityId: batch._id, field: "status", oldValue: from, newValue: "Active",
+    actor: opts.actor ?? null, actorType: opts.actor ? "USER" : "SYSTEM",
+  });
+  await audit({
+    entity: "Batch", entityId: batch._id, field: "auto_activated",
+    newValue: `auto-activated from attendance evidence (${opts.source}: ${portal ? `${portal} portal rows` : ""}${portal && logs ? ", " : ""}${logs ? `${logs} daily logs` : ""}); actual_start ${start.toISOString().slice(0, 10)}${restamped.modifiedCount ? `; roster counted from that day (${restamped.modifiedCount} members)` : ""}; readiness gates skipped — the evidence is the proof`,
+    actor: opts.actor ?? null, actorType: opts.actor ? "USER" : "SYSTEM",
+  });
+  if (batch.trainer) await deriveTrainerStatus(String(batch.trainer)); // Rule 12
+  return { activated: true };
 }
 
 export async function transitionBatch(batchId: string, target: string, opts: { isAdmin?: boolean; reason?: string; actual_start?: string | Date | null; actor?: string } = {}) {

@@ -36,6 +36,19 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
   const undismiss = (key: string) => { try { sessionStorage.removeItem(key); } catch {} setDismissTick((t) => t + 1); };
 
   const load = () => api(`/api/batches/${id}`).then(setData).catch((e) => setError(e.message));
+  // -88 (Umesh): a Planning/Ready batch that already has attendance evidence is running —
+  // ask the server to let the status catch up (idempotent), then show the truth.
+  const [reconciled, setReconciled] = useState(false);
+  useEffect(() => {
+    const b = data?.item;
+    if (!b || reconciled || !["Planning", "Ready"].includes(b.status)) return;
+    api(`/api/batches/${id}/attendance`).then((att) => {
+      const evidence = (att?.days_held ?? 0) > 0 || (att?.members ?? []).some((m: any) => m.govt);
+      if (!evidence) return;
+      setReconciled(true);
+      api(`/api/batches/${id}/reconcile-status`, { method: "POST", json: {} }).then((r) => { if (r?.activated) load(); }).catch(() => {});
+    }).catch(() => {});
+  }, [data?.item?._id, data?.item?.status]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [id]);
 
   if (!data) return <div className="p-8 text-center text-gray-400">{error || "Loading…"}</div>;
@@ -113,6 +126,19 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
 // ---------- Overview: readiness checklist (Rule 16) + transitions ----------
 function Overview({ data, role, onChanged, setError }: any) {
   const b = data.item;
+  // -88 (Umesh): once a batch runs, the Overview says so in numbers — running since when,
+  // day N of M, our logged days, the portal's working days, who is qualified — instead of a
+  // readiness checklist for a batch that already started.
+  const [att, setAtt] = useState<any>(null);
+  useEffect(() => {
+    if (!["Active", "Closing", "Completed", "Closed"].includes(b.status)) { setAtt(null); return; }
+    api(`/api/batches/${b._id}/attendance`).then(setAtt).catch(() => setAtt(null));
+  }, [b._id, b.status]);
+  const running = ["Active", "Closing", "Completed", "Closed"].includes(b.status);
+  const dayN = b.actual_start ? Math.max(1, Math.floor((Date.now() - new Date(b.actual_start).getTime()) / 864e5) + 1) : null;
+  const dayM = b.program?.duration_days ?? (b.planned_start && b.planned_end ? Math.round((new Date(b.planned_end).getTime() - new Date(b.planned_start).getTime()) / 864e5) + 1 : null);
+  const withPortal = (att?.members ?? []).filter((m: any) => m.govt);
+  const portalDays = withPortal.length ? Math.max(0, ...withPortal.map((m: any) => Number(m.govt?.working_days ?? 0))) : 0;
   // Umesh role matrix: "no batch edit" for principal/SPOC — the server 403s regardless
   // (batches.manage removed from the Location role); the buttons simply are not offered.
   const canTransition = role !== "Location" && role !== "Trainer" && role !== "Enrollment";
@@ -205,6 +231,16 @@ function Overview({ data, role, onChanged, setError }: any) {
 
   return (
     <div className="grid gap-4 lg:grid-cols-2">
+      {running && (
+        <div className="lg:col-span-2 flex flex-wrap items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-2 text-xs text-green-900">
+          <span className="font-semibold">{b.status === "Active" ? "Running" : b.status}</span>
+          {b.actual_start && <span>since {fmtDate(b.actual_start)}</span>}
+          {dayN && dayM && b.status === "Active" && <span>· day {Math.min(dayN, dayM)} of {dayM}</span>}
+          {att && <span>· our logs {att.days_held} day{att.days_held === 1 ? "" : "s"}</span>}
+          {att && (withPortal.length ? <span>· portal {portalDays} working day{portalDays === 1 ? "" : "s"} ({withPortal.length}/{att.members?.length} students)</span> : <span className="text-green-700/70">· portal not imported yet</span>)}
+          {att && <span>· {att.qualified_count} qualified for assessment</span>}
+        </div>
+      )}
       {/* QA-150: the header counts the checks that gate Mark Ready and nothing else; the
           enrollment line below the divider gates START (Rule 17 side) and is labelled so. */}
       <Section title={`Readiness checklist (${CHECKS.filter(([, , v]) => v).length}/${CHECKS.length})`}>

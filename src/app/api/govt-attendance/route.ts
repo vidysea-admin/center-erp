@@ -3,6 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, isScoped, HttpError } from "@/lib/authz";
 import { requirePerm, requireView } from "@/lib/permissions";
 import { GovtAttendanceImport, GovtAttendanceRow, Notification } from "@/models";
+import { activateFromEvidence } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 import {
   parseGovtAttendance, matchGovtRows, reconcileAgainstLogs, resolveLocationFromFile,
@@ -110,6 +111,15 @@ export const POST = apiHandler(async (req: NextRequest) => {
     actor: user.id,
   });
 
+  // -88 (Umesh): attendance on record = the batch is running. A Planning/Ready batch that
+  // just received matched portal rows becomes Active on its own (audited); nobody is asked
+  // to click Mark Ready / Start after the fact.
+  const touchedBatches = [...new Set(matched.filter((r) => r.match_status === "Matched" && (r.batch ?? batchId)).map((r) => String(r.batch ?? batchId)))];
+  const autoActivated: string[] = [];
+  for (const bId of touchedBatches) {
+    try { const res = await activateFromEvidence(bId, { actor: user.id, source: `portal import ${imp.period_label}` }); if (res.activated) autoActivated.push(bId); } catch { /* the import itself stands; activation is best-effort and audited when it happens */ }
+  }
+
   // A variance is the number the client is invoiced on diverging from the number the centre
   // logged, so it is raised rather than left for someone to notice on the report.
   if (counts.variance_count || counts.unmatched_count) {
@@ -123,5 +133,5 @@ export const POST = apiHandler(async (req: NextRequest) => {
       location: locationId ?? undefined,
     });
   }
-  return NextResponse.json({ _id: imp._id, ...counts }, { status: 201 });
+  return NextResponse.json({ auto_activated: autoActivated,  _id: imp._id, ...counts }, { status: 201 });
 });
