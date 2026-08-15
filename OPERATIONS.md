@@ -173,15 +173,24 @@ only; it must not block the checker's own tooling.
 See `d:\erp\qa\STATE.md` for the full remediation ledger (every fix, where, and its test) and
 `d:\erp\qa\CHANGELOG.jsonl` for the machine-readable one-row-per-fix log.
 
-## Infra follow-up — proxy multipart body cap (2026-08-15, URGENT for devops)
+## Upload body cap — ROOT CAUSE FOUND (2026-08-15, -14-81) — it was Next.js, not the reverse proxy
 
-The app imposes NO upload size limit anymore (Umesh 15/08: "koi bhi cap nahi" — the
-`max_upload_mb` check and its Admin knob were removed in -14-50). The ONLY thing that
-rejects a large upload now is the reverse proxy in front of the app: multipart bodies over
-~8-10 MB die in the platform's form parse (live-bisected 2026-08-15: 8 MB → 200,
-10 MB → 500; the app answers an honest 413). Field videos routinely exceed this.
+The app imposes NO upload size limit (Umesh 15/08: "koi bhi cap nahi" — the `max_upload_mb`
+check and its Admin knob were removed in -14-50). The "~8-10 MB cap" (live-bisected 15/08:
+8 MB → 200, 10 MB → 500/413) was **Next.js itself**: because the app has `src/proxy.ts`,
+Next clones and buffers every matched request body in memory, capped by
+`experimental.proxyClientMaxBodySize` (default **10 MB**) and silently truncates the rest —
+the local server logged "Request body exceeded 10MB for /erp/api/upload" — so
+`req.formData()` failed and the route answered 413.
 
-**Devops action:** raise the body-size cap on whatever fronts the app
-(nginx `client_max_body_size` / ALB / ingress equivalent) to at least a few hundred MB,
-then re-test with a >10 MB upload via the trainer-documents drawer. Until then, big videos
-fail with the 413 message naming this exact cause.
+**Fix (-14-81):** `/api/upload` is excluded from the proxy matcher (`src/proxy.ts`), so the
+body streams straight to the handler with no cap and no RAM buffer; the route still
+authenticates itself (`requireUser` + `requireEdit`; anon → 401, pinned in e2e). Proved
+locally against real Drive: 91.7 MB video → Drive in 12 s, proxy read-back byte-identical.
+Do NOT "fix" this by raising `proxyClientMaxBodySize` — that buffers whole videos in the
+task's memory.
+
+**Still open for devops (only if it bites):** whether the AWS layer in front (ALB/nginx)
+has its own body limit for bodies larger than what we have tested (96 MB) — test on prod
+once Drive storage is on; the app's 413 text now says "body too large for the layer in
+front of the app" if that is what happens.
