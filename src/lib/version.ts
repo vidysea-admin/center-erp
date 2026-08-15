@@ -3,17 +3,16 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-76";
+export const RELEASE = "2026.08.14-77";
 export const RELEASE_NOTE =
-  "QA-147 enrollment UX - Manish's 15/08 recording, all five points. " +
-  "BULK: one request marks a step (or completes enrollment) for every " +
-  "pending member - the 135-click wall is three clicks or one, and the " +
-  "RPL cohort's ~50 hours of clicking becomes minutes. SCROLL: the card " +
-  "components were declared inside the render, so each click remounted " +
-  "the whole list ('page upar bhaga') - hoisted, a click updates one " +
-  "card in place. NAME: every card names the person in every state, " +
-  "Completed included (name -> email -> phone). TEXT: the readiness " +
-  "blocker says the failure ('room not assigned') instead of the check " +
-  "('Not ready: room assigned'). ROOM: the failing check now carries the " +
-  "path - pick one of the centre's rooms or add one right there (rooms " +
-  "were per-centre already; CHI-ITI simply had none).";
+  "QA-145 evidence storage (S1). The checker proved every deploy wipes " +
+  "the uploads dir (24/24 reads on -73, 16/16 404 after -74) while the " +
+  "URLs stay in Mongo pointing at nothing. This build carries Umesh's " +
+  "design, ready to switch on: a Google Drive adapter (service account, " +
+  "folder-wise <Centre>/<Batch>/<kind>, the app proxies every read - the " +
+  "user never sees Drive), a StoredFile row for EVERY upload (backend, " +
+  "Drive id, folder path, size, uploader, entity), and an honest health " +
+  "surface: /api/public/version says evidence_storage drive|local-" +
+  "ephemeral, the admin panel shows RED 'NOT CONNECTED - lost on every " +
+  "deploy' until the two env vars land. Graceful-off like mail: nothing " +
+  "breaks unconfigured, nothing lies. Gate = Umesh: drive-storage-setup.md.";

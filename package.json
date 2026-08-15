@@ -31,6 +31,7 @@
   "dependencies": {
     "bcryptjs": "^3.0.3",
     "date-fns": "^4.4.0",
+    "googleapis": "^144.0.0",
     "mongoose": "^9.9.1",
     "next": "16.3.0",
     "next-auth": "^5.0.0-beta.32",

@@ -950,6 +950,13 @@ function MailPanel({ setError }: any) {
   };
   return (
     <div className="rounded-lg border p-3">
+      {/* QA-145: evidence storage — the loud, honest state. Red until Drive is connected,
+          because until then every upload is lost on the next deploy. */}
+      {mail?.storage && (
+        <div className={`mb-3 rounded-lg border px-3 py-2 text-xs ${mail.storage.configured ? "border-green-200 bg-green-50 text-green-800" : "border-red-300 bg-red-50 text-red-800"}`}>
+          <b>Evidence storage:</b> {mail.storage.configured ? "Google Drive connected" : "NOT CONNECTED"} — {mail.storage.reason}
+        </div>
+      )}
       <div className="mb-1 flex items-center justify-between">
         <span className="text-sm font-medium">Mail — last 20 attempts</span>
         <span className="flex items-center gap-2">

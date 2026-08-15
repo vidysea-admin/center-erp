@@ -1068,6 +1068,35 @@ ok("…with the contact details an approver needs", !!queued && queued.phone ===
   ok("T1: an executable is refused", (await up("t.exe", "application/octet-stream")) === 400);
 }
 
+// ---- QA-145 (-77): durable evidence storage. CI runs UNCONFIGURED (no Drive creds), so
+// this pins the graceful-off shape: every upload gets a StoredFile row (backend "local"),
+// the proxied read still serves the bytes, and the product tells the truth about it —
+// version endpoint says local-ephemeral, admin health says NOT connected. Real Drive
+// durability is proven live once Umesh completes drive-storage-setup.md.
+{
+  const fd = new FormData();
+  fd.append("file", new File([Buffer.from("qa145-evidence")], "ev.png", { type: "image/png" }));
+  fd.append("folder_centre", "TEST-CENTRE"); fd.append("folder_batch", "TEST-BATCH-01"); fd.append("folder_kind", "evidence");
+  const upRes = await fetch(BASE + "/api/upload", { method: "POST", headers: { cookie }, body: fd });
+  const upJ = await upRes.json();
+  ok("QA-145: upload answers with its backend (local in CI)", upRes.status === 200 && upJ.backend === "local", JSON.stringify(upJ));
+  const fname = String(upJ.url ?? "").split("/").pop();
+  const { MongoClient } = await import("mongodb");
+  const mc = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+  await mc.connect();
+  const row = await mc.db(process.env.MONGODB_DB || "center_erp_ci").collection("storedfiles").findOne({ name: fname });
+  await mc.close();
+  ok("QA-145: every upload leaves a StoredFile row (backend, size, original name, uploader)",
+    !!row && row.backend === "local" && row.size === 14 && row.original_name === "ev.png" && !!row.uploaded_by, JSON.stringify(row && { backend: row.backend, size: row.size }));
+  const rd = await fetch(BASE + upJ.url.replace(/^\/erp/, ""));
+  ok("QA-145: the proxied read serves the bytes back", rd.status === 200 && (await rd.text()) === "qa145-evidence", String(rd.status));
+  const ver = await (await fetch(BASE + "/api/public/version")).json();
+  ok("QA-145: version endpoint tells the truth — evidence_storage is local-ephemeral in CI", ver.evidence_storage === "local-ephemeral", ver.evidence_storage);
+  const cfg = (await req("GET", "/api/test-email", undefined, 200)).data;
+  ok("QA-145: admin health names the loss honestly (NOT connected, lost on deploy)",
+    cfg.storage?.configured === false && /LOST on every deploy/.test(cfg.storage?.reason ?? ""), JSON.stringify(cfg.storage));
+}
+
 // ---- QA-115 (15/08): the mail layer — CI runs UNCONFIGURED, so this pins the SKIP path:
 // hooks fire (MailLog rows appear), sends are recorded as skipped, and no business flow
 // ever breaks on mail. Real sending is proven live via the admin test-email endpoint.

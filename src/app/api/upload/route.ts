@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { mkdir, writeFile } from "fs/promises";
 import path from "path";
 import crypto from "crypto";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { BASE_PATH } from "@/lib/base-path";
+import { dbConnect } from "@/lib/db";
+import { StoredFile } from "@/models";
+import { putFile } from "@/lib/storage";
 
 // 2026-08-12 (Manish): 25 MB was too small for the twice-daily evidence videos.
 // 15/08 (Umesh): the app-side ceiling is GONE entirely — no size check here at all.
@@ -35,10 +37,21 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const ext = path.extname(file.name).toLowerCase();
   if (!ALLOWED.has(ext)) throw new HttpError(400, "File type not allowed: " + ext);
   const name = crypto.randomBytes(16).toString("hex") + ext;
-  const dir = path.join(process.cwd(), "uploads");
-  await mkdir(dir, { recursive: true });
-  await writeFile(path.join(dir, name), Buffer.from(await file.arrayBuffer()));
-  // Served via /api/files/[name] — public/ is not writable at runtime in production builds.
+  const buf = Buffer.from(await file.arrayBuffer());
+  // QA-145: durable, folder-wise storage (Drive when configured) + a StoredFile row for
+  // every upload. Callers may say WHERE this belongs (folder segments + entity) so the
+  // Drive tree reads like the product: <Centre code>/<Batch code>/<kind>/file.
+  const seg = (k: string) => String(form.get(k) ?? "").trim();
+  const folder = [seg("folder_centre"), seg("folder_batch"), seg("folder_kind") || "uploads"].filter(Boolean);
+  const put = await putFile(name, buf, file.type, folder);
+  await dbConnect();
+  await StoredFile.create({
+    name, original_name: file.name, mime: file.type, size: buf.length,
+    backend: put.backend, drive_file_id: put.drive_file_id, folder_path: put.folder_path,
+    entity: seg("entity") || undefined, entity_id: /^[a-f0-9]{24}$/.test(seg("entity_id")) ? seg("entity_id") : undefined,
+    uploaded_by: user.id,
+  });
+  // Served via /api/files/[name] — the app proxies the bytes; the user never sees Drive.
   // URL is stored in the DB, so it carries the basePath prefix explicitly.
-  return NextResponse.json({ url: `${BASE_PATH}/api/files/` + name, name: file.name });
+  return NextResponse.json({ url: `${BASE_PATH}/api/files/` + name, name: file.name, backend: put.backend });
 });

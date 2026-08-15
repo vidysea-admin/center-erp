@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { readFile } from "fs/promises";
 import path from "path";
 import { apiHandler, HttpError } from "@/lib/authz";
+import { dbConnect } from "@/lib/db";
+import { StoredFile } from "@/models";
+import { getFile } from "@/lib/storage";
 
 const TYPES: Record<string, string> = {
   ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp",
@@ -15,7 +17,11 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   const { name } = await ctx.params;
   if (!/^[a-f0-9]{32}\.[a-z0-9]+$/.test(name)) throw new HttpError(400, "Bad file name");
   try {
-    const buf = await readFile(path.join(process.cwd(), "uploads", name));
+    // QA-145: the StoredFile row says where the bytes live (Drive / local); the app proxies
+    // them so the URL shape and the capability-name secret never change.
+    await dbConnect();
+    const rec = await StoredFile.findOne({ name }).select("backend drive_file_id").lean<any>();
+    const buf = await getFile(rec, name);
     const ext = path.extname(name);
     const inline = [".jpg", ".jpeg", ".png", ".webp", ".pdf", ".mp4"].includes(ext);
     return new NextResponse(new Uint8Array(buf), {

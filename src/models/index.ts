@@ -811,6 +811,26 @@ const MailLogSchema = new Schema({
 }, { timestamps: true });
 MailLogSchema.index({ createdAt: -1 });
 
+// ---------- Stored files (QA-145, 2026-08-15) ----------
+// Every upload gets a row — "koi bhi data miss na ho" (Umesh). The checker proved that
+// uploads written to the ECS task's own disk vanish on every deploy while their URLs stay
+// in Mongo pointing at nothing. This row is the durable record: WHERE the bytes live
+// (drive / local), the Drive file id + folder path when it is Drive, and what entity it
+// belongs to. The user never sees Drive — the app proxies every read through /api/files.
+export const FILE_BACKEND = ["local", "drive"] as const;
+const StoredFileSchema = new Schema({
+  name: { type: String, required: true, unique: true }, // the 32-hex capability name (+ext)
+  original_name: String,
+  mime: String,
+  size: Number,
+  backend: { type: String, enum: FILE_BACKEND, required: true },
+  drive_file_id: String,          // when backend = drive
+  folder_path: String,            // human path inside the Drive root, e.g. CHI-ITI/CHI-ITI-RPLAVP-DST-03/evidence
+  entity: String, entity_id: Schema.Types.ObjectId, // what this file is about (batch/trainer/candidate/...) when known
+  uploaded_by: { type: Schema.Types.ObjectId, ref: "User" },
+}, { timestamps: true });
+StoredFileSchema.index({ entity: 1, entity_id: 1 });
+
 // ---------- Public tokens (2026-08-11: self-registration + candidate feedback) ----------
 // Capability URLs: the random token IS the credential. register tokens are per-location
 // (Admin/Ops generate and share); feedback and attendance tokens are per batch-member
@@ -1012,6 +1032,7 @@ export const User = models.User || model("User", UserSchema);
 export const RolePermission = models.RolePermission || model("RolePermission", RolePermissionSchema);
 export const Notification = models.Notification || model("Notification", NotificationSchema);
 export const MailLog = models.MailLog || model("MailLog", MailLogSchema);
+export const StoredFile = models.StoredFile || model("StoredFile", StoredFileSchema);
 export const ApprovalRule = models.ApprovalRule || model("ApprovalRule", ApprovalRuleSchema);
 export const ApprovalRequest = models.ApprovalRequest || model("ApprovalRequest", ApprovalRequestSchema);
 export const AuditLog = models.AuditLog || model("AuditLog", AuditLogSchema);
