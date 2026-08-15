@@ -1,6 +1,7 @@
 import { collectionRoutes } from "@/lib/crud";
 import { BatchMember, Candidate, CandidateResult } from "@/models";
-import { assertLocationInScope } from "@/lib/authz";
+import { assertLocationInScope, HttpError } from "@/lib/authz";
+import { emailError, canonicalPhone, phoneError } from "@/lib/validate";
 import { candidateEligibility } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 
@@ -22,6 +23,18 @@ export const { GET, POST } = collectionRoutes({
   ],
   // Rule 38: creating a record at someone else's location was previously unchecked.
   beforeCreate(data, user) {
+    // QA-141 (Umesh): manual entry is strict; bulk import keeps its own normalize-and-report
+    // lane (rows are client data and are never dropped over format).
+    const pErr = phoneError(data.phone);
+    if (pErr) throw new HttpError(400, pErr);
+    data.phone = canonicalPhone(data.phone)!;
+    if (data.alt_phone) {
+      const aErr = phoneError(data.alt_phone, { optional: true });
+      if (aErr) throw new HttpError(400, "Alt phone: " + aErr);
+      data.alt_phone = canonicalPhone(data.alt_phone)!;
+    }
+    const eErr = emailError(data.email, { optional: true });
+    if (eErr) throw new HttpError(400, eErr);
     if (data.location) assertLocationInScope(user, String(data.location));
   },
   // 2026-08-11: eligibility (age / education / training cooldown) computed on read,

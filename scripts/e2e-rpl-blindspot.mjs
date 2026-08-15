@@ -40,7 +40,7 @@ async function req(cookie, method, path, json, expect) {
 }
 
 const stamp = Date.now().toString().slice(-6);
-const phone = () => "7" + Date.now().toString().slice(-9) + Math.floor(Math.random() * 9);
+const phone = () => "7" + Date.now().toString().slice(-8) + Math.floor(Math.random() * 9); // QA-141: 10 digits
 
 // Fixtures: a centre, a job role, and a trainer walked all the way to Certified.
 const loc = (await req(admin, "POST", "/api/locations", {

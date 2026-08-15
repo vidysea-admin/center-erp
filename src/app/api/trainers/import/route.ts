@@ -6,6 +6,7 @@ import { requirePerm } from "@/lib/permissions";
 import { Location, Program, Trainer, TRAINER_PIPELINE } from "@/models";
 import { audit } from "@/lib/audit";
 import { normalizePhone } from "@/lib/duplicates";
+import { canonicalPhone } from "@/lib/validate";
 
 // F-TRAINER-IMPORT (2026-08-14): Manish's stage-wise trainer sheet (qa/templates #3)
 // lands here — same 3-step shape as the candidates importer: upload → map → preview →
@@ -138,6 +139,16 @@ export const POST = apiHandler(async (req: NextRequest) => {
     })
     .filter((t) => t.name && t.phone);
 
+  // QA-141 (Umesh): canonicalize what we can, REPORT what we cannot — rows are never dropped
+  // over format, but a valid-shaped number lands as the bare 10 digits so the unique index
+  // sees one person once (and the existing-directory check below actually matches).
+  const phoneInvalid: string[] = [];
+  for (const t of trainers) {
+    const p = canonicalPhone(t.phone);
+    if (p) t.phone = p;
+    else phoneInvalid.push(`${t.name} (${t.phone})`);
+  }
+
   // Phone-dedup, in-file and against the directory. Unlike candidates, a trainer's
   // phone is UNIQUE in the schema — a duplicate cannot be "flagged but imported", it
   // would bounce off the index. Duplicates are excluded from the insert and each one
@@ -181,6 +192,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
     centre_unmatched: [...new Set(centreUnmatched)].slice(0, 25),
     role_unmatched: [...new Set(roleUnmatched)].slice(0, 25),
     warnings: warnings.slice(0, 25),
+    phone_invalid: phoneInvalid.slice(0, 25), phone_invalid_count: phoneInvalid.length,
     unknown_columns: unknownCols,
   };
   if (!confirm) {

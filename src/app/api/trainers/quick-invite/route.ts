@@ -5,6 +5,7 @@ import { apiHandler, requireUser, requireEdit, HttpError, isScoped } from "@/lib
 import { requirePerm } from "@/lib/permissions";
 import { PublicToken, Trainer } from "@/models";
 import { audit } from "@/lib/audit";
+import { emailError, canonicalPhone } from "@/lib/validate";
 import { renderMail, sendMail } from "@/lib/mailer";
 import { assertTrainerInScope } from "@/lib/rules";
 
@@ -18,8 +19,15 @@ export const POST = apiHandler(async (req: NextRequest) => {
   await requirePerm(user, "trainers.manage"); // Admin/Ops — and the principal, per the role matrix
   const body = await req.json();
   const S = (v: unknown) => String(v ?? "").trim();
-  const name = S(body.name), email = S(body.email), phone = S(body.phone).replace(/\D/g, "").slice(-10);
-  if (!name || phone.length !== 10) throw new HttpError(400, "Name and a 10-digit phone are required.");
+  const name = S(body.name), email = S(body.email);
+  // QA-141: the old slice(-10) silently accepted a 15-digit keyboard-mash as its last ten.
+  // canonicalPhone refuses anything that is not a real 10-digit form (+91/0 prefixes fine).
+  const phone = canonicalPhone(body.phone);
+  if (!name || !phone) throw new HttpError(400, "Name and a 10-digit phone are required (a +91/0 prefix is fine).");
+  if (email) {
+    const eErr = emailError(email, { optional: true });
+    if (eErr) throw new HttpError(400, eErr);
+  }
 
   // One live profile per phone — re-inviting someone re-uses their record and a fresh link.
   let tr = await Trainer.findOne({ phone });

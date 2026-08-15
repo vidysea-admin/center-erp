@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useSession } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, fmtDate, pipelineLabel, toInputDate } from "@/lib/client";
+import { emailError, phoneError } from "@/lib/validate";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, ShareLinkPanel, SourceCell, Tabs, inputCls } from "@/components/ui";
 import { BASE_PATH } from "@/lib/base-path";
 
@@ -519,15 +520,21 @@ function TrainersInner() {
             </p>
             <Field label="Full name" required><input className={inputCls} value={invite.form.name ?? ""} onChange={(e) => setInvite({ ...invite, form: { ...invite.form, name: e.target.value } })} /></Field>
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Phone (10 digit)" required><input className={inputCls} inputMode="numeric" value={invite.form.phone ?? ""} onChange={(e) => setInvite({ ...invite, form: { ...invite.form, phone: e.target.value } })} /></Field>
-              <Field label="Email"><input className={inputCls} type="email" value={invite.form.email ?? ""} onChange={(e) => setInvite({ ...invite, form: { ...invite.form, email: e.target.value } })} /></Field>
+              <Field label="Phone (10 digit)" required>
+                <input className={inputCls} inputMode="numeric" value={invite.form.phone ?? ""} onChange={(e) => setInvite({ ...invite, form: { ...invite.form, phone: e.target.value } })} />
+                {invite.form.phone && phoneError(invite.form.phone) && <p className="mt-1 text-xs text-red-600">{phoneError(invite.form.phone)}</p>}
+              </Field>
+              <Field label="Email">
+                <input className={inputCls} type="email" value={invite.form.email ?? ""} onChange={(e) => setInvite({ ...invite, form: { ...invite.form, email: e.target.value } })} />
+                {invite.form.email && emailError(invite.form.email, { optional: true }) && <p className="mt-1 text-xs text-red-600">{emailError(invite.form.email, { optional: true })}</p>}
+              </Field>
             </div>
             {invite.link ? (
               <ShareLinkPanel label="Application link" link={invite.link}
                 hint="Single-use — the link stops working the moment the trainer submits the form. To send it again, generate a new link."
                 onDismiss={() => { setInvite(null); load(); }} />
             ) : (
-              <Btn disabled={!invite.form.name || !(invite.form.phone ?? "").trim()} onClick={async () => {
+              <Btn disabled={!invite.form.name || !(invite.form.phone ?? "").trim() || !!phoneError(invite.form.phone) || !!emailError(invite.form.email, { optional: true })} onClick={async () => {
                 try {
                   const d = await api("/api/trainers/quick-invite", { method: "POST", json: invite.form });
                   setInvite({ ...invite, link: `${window.location.origin}${BASE_PATH}${d.item.link}` });
@@ -542,8 +549,15 @@ function TrainersInner() {
         <div className="space-y-3">
           <Field label="Name" required><input className={inputCls} value={form.name ?? ""} onChange={(e) => set("name", e.target.value)} /></Field>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Phone" required><input className={inputCls} value={form.phone ?? ""} onChange={(e) => set("phone", e.target.value)} /></Field>
-            <Field label="Email"><input className={inputCls} value={form.email ?? ""} onChange={(e) => set("email", e.target.value)} /></Field>
+            {/* QA-141: same checks the API refuses with — shown while typing, not on save. */}
+            <Field label="Phone" required>
+              <input className={inputCls} value={form.phone ?? ""} onChange={(e) => set("phone", e.target.value)} />
+              {form.phone && phoneError(form.phone) && <p className="mt-1 text-xs text-red-600">{phoneError(form.phone)}</p>}
+            </Field>
+            <Field label="Email">
+              <input className={inputCls} value={form.email ?? ""} onChange={(e) => set("email", e.target.value)} />
+              {form.email && emailError(form.email, { optional: true }) && <p className="mt-1 text-xs text-red-600">{emailError(form.email, { optional: true })}</p>}
+            </Field>
           </div>
           {/* QA-133: skills no longer gate any dropdown — free text is honest labelling now. */}
           <Field label="Skills (comma-separated)" required>
@@ -613,7 +627,7 @@ function TrainersInner() {
             <Field label="Max concurrent batches"><input type="number" className={inputCls} value={form.max_concurrent_batches ?? 4} onChange={(e) => set("max_concurrent_batches", +e.target.value)} /></Field>
           </div>
           <Field label="Performance incentive note"><input className={inputCls} placeholder="e.g. ₹500/batch completion bonus" value={form.incentive_note ?? ""} onChange={(e) => set("incentive_note", e.target.value)} /></Field>
-          <Btn onClick={save} disabled={!form.name || !form.phone}>{edit ? "Save changes" : "Add Trainer"}</Btn>
+          <Btn onClick={save} disabled={!form.name || !form.phone || !!phoneError(form.phone) || !!emailError(form.email, { optional: true })}>{edit ? "Save changes" : "Add Trainer"}</Btn>
         </div>
       </Drawer>
 

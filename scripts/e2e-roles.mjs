@@ -468,6 +468,32 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
     JSON.stringify(early.data.warning ?? null));
 }
 
+// ---- QA-141 (-64, Umesh after the Arun episode: "values must be format tested — mobile
+// number only 10 digit"): phone canon = bare 10 digits (+91/0 forms normalize to the same
+// ten so one person is ONE row under the unique index); email must look like one. Strict on
+// manual entry; the importers normalize-and-report instead (client rows are never dropped).
+{
+  const s141 = Date.now().toString().slice(-6);
+  const jpr = (await req(spoc, "GET", "/api/locations?limit=1")).data.items[0];
+  ok("QA-141: a 12-digit keyboard-mash phone is refused on trainer create (the Arun shape)",
+    (await req(admin, "POST", "/api/trainers", { name: `Q141 Bad ${s141}`, phone: "332432432432", skills: ["x"], home_location: jpr._id })).status === 400);
+  ok("QA-141: a junk email is refused",
+    (await req(admin, "POST", "/api/trainers", { name: `Q141 Mail ${s141}`, phone: "9822200111", skills: ["x"], email: "not-an-email", home_location: jpr._id })).status === 400);
+  const fancy = await req(admin, "POST", "/api/trainers", { name: `Q141 Canon ${s141}`, phone: "+91 98222 00119", skills: ["x"], home_location: jpr._id });
+  ok("QA-141: '+91 98222 00119' lands as the bare '9822200119'", fancy.status === 201 && fancy.data.item?.phone === "9822200119", JSON.stringify(fancy.data.item?.phone ?? fancy.status));
+  ok("QA-141: the SAME person entered bare now collides — one row per human (409)",
+    (await req(admin, "POST", "/api/trainers", { name: `Q141 Dup ${s141}`, phone: "9822200119", skills: ["x"], home_location: jpr._id })).status === 409);
+  ok("QA-141: candidate junk phone refused",
+    (await req(admin, "POST", "/api/candidates", { name: `Q141 Cand ${s141}`, phone: "12345", location: jpr._id })).status === 400);
+  ok("QA-141: user junk login email refused",
+    (await req(admin, "POST", "/api/users", { name: "Q141U", email: "nope", password: "Q141pass!xyz", role: "Enrollment", location_scope: [jpr._id] })).status === 400);
+  ok("QA-141: quick-invite refuses a 15-digit mash the old slice(-10) silently accepted",
+    (await req(admin, "POST", "/api/trainers/quick-invite", { name: `Q141 QI ${s141}`, phone: "123456789012345" })).status === 400);
+  if (fancy.status === 201) {
+    ok("QA-141: fixture leaves via the delete verb", (await req(admin, "DELETE", `/api/trainers/${fancy.data.item._id}`)).status === 200);
+  }
+}
+
 // 2026-08-12 audit F-000 (S0): the generic list route copied every ?key=value into the Mongo
 // filter AFTER the Rule 38 scope filter, so ?location=<other centre> simply overwrote it and a
 // scoped user could read every centre's candidate PII. Scope is now applied last, client keys

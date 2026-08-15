@@ -7,6 +7,7 @@ import { Candidate, EDUCATION_LEVEL, Location, Program } from "@/models";
 import { parseSheetDate } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 import { findDuplicateCandidates, normalizePhone } from "@/lib/duplicates";
+import { canonicalPhone } from "@/lib/validate";
 
 // Excel import: upload → map → preview → confirm (screen spec).
 // POST multipart: file, location, program, mapping (JSON {excelCol: name|phone|alt_phone|gender|source}), confirm ("1" to write)
@@ -117,6 +118,19 @@ export const POST = apiHandler(async (req: NextRequest) => {
     })
     .filter((c) => c.name && c.phone);
 
+  // QA-141 (Umesh): canonicalize what we can, REPORT what we cannot — client rows are never
+  // dropped over format (the custom_fields ruling), but a valid-shaped number lands as the
+  // bare 10 digits so one person cannot become three rows.
+  const phoneInvalid: string[] = [];
+  for (const c of candidates) {
+    for (const f of ["phone", "alt_phone"] as const) {
+      if (!c[f]) continue;
+      const p = canonicalPhone(c[f]);
+      if (p) c[f] = p;
+      else if (f === "phone") phoneInvalid.push(`${c.name} (${c.phone})`);
+    }
+  }
+
   // Rule 7: the import path is where bulk duplicates actually enter. Flag them, never block —
   // the operator decides. Checks both against existing records and within the file itself.
   const seen = new Map<string, number>();
@@ -142,10 +156,11 @@ export const POST = apiHandler(async (req: NextRequest) => {
       education_unmatched: [...new Set(eduUnmatched)].slice(0, 25),
       interest_unmatched: [...new Set(interestUnmatched)].slice(0, 25),
       date_unparseable: dateUnparseable.slice(0, 25), date_unparseable_count: dateUnparseable.length,
+      phone_invalid: phoneInvalid.slice(0, 25), phone_invalid_count: phoneInvalid.length,
       unknown_columns: unknownCols,
     });
   }
   const docs = await Candidate.insertMany(candidates);
-  await audit({ entity: "Candidate", entityId: docs[0]?._id ?? location, field: "import", newValue: `${docs.length} imported, ${duplicates.length} flagged as possible duplicates${dateUnparseable.length ? `, ${dateUnparseable.length} unreadable dates` : ""}`, actor: user.id });
-  return NextResponse.json({ imported: docs.length, skipped: rows.length - candidates.length, duplicate_count: duplicates.length, date_unparseable: dateUnparseable.slice(0, 25), date_unparseable_count: dateUnparseable.length }, { status: 201 });
+  await audit({ entity: "Candidate", entityId: docs[0]?._id ?? location, field: "import", newValue: `${docs.length} imported, ${duplicates.length} flagged as possible duplicates${dateUnparseable.length ? `, ${dateUnparseable.length} unreadable dates` : ""}${phoneInvalid.length ? `, ${phoneInvalid.length} un-normalizable phones` : ""}`, actor: user.id });
+  return NextResponse.json({ imported: docs.length, skipped: rows.length - candidates.length, duplicate_count: duplicates.length, date_unparseable: dateUnparseable.slice(0, 25), date_unparseable_count: dateUnparseable.length, phone_invalid: phoneInvalid.slice(0, 25), phone_invalid_count: phoneInvalid.length }, { status: 201 });
 });

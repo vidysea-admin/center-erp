@@ -78,7 +78,7 @@ const room = (await req(admin, "POST", `/api/locations/${loc._id}/rooms`, {
 ok("room created", !!room?._id, JSON.stringify(room).slice(0, 200));
 
 const trainer = (await req(admin, "POST", "/api/trainers", {
-  name: `${NAME} Trainer`, phone: `9${STAMP}0001`, skills: ["Testing"],
+  name: `${NAME} Trainer`, phone: `9${STAMP.slice(1)}0001`, skills: ["Testing"],
   home_location: loc._id, pipeline_status: "Certified", max_concurrent_batches: 4,
   available_from: localDate(Date.now() - 30 * 86400_000),
 })).data.item;
@@ -106,7 +106,7 @@ const people = [
 const members = [];
 for (const [i, p] of people.entries()) {
   const c = (await req(admin, "POST", "/api/candidates", {
-    name: p.name, phone: `9${STAMP}1${String(i).padStart(3, "0")}`,
+    name: p.name, phone: `9${STAMP.slice(1)}1${String(i).padStart(3, "0")}`,
     location: loc._id, program: program._id, ...(p.sidh_candidate_id ? { sidh_candidate_id: p.sidh_candidate_id } : {}),
   })).data.item;
   // Joined 20 days ago so the back-dated daily logs below have a roster to draw on (Rule 26).
@@ -336,7 +336,7 @@ ok("and the exclusion is visible, not silent", sum.dropped_passed === 1, String(
 
 // Mid-batch replacement: the freed seat takes a new candidate on a LATER joining date.
 const replacement = (await req(admin, "POST", "/api/candidates", {
-  name: `${NAME} Replacement`, phone: `9${STAMP}2000`, location: loc._id, program: program._id,
+  name: `${NAME} Replacement`, phone: `9${STAMP.slice(1)}2000`, location: loc._id, program: program._id,
 })).data.item;
 const readd = await req(admin, "POST", `/api/batches/${batch._id}/members`, {
   candidate: replacement._id, joined_on: new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10),
@@ -354,13 +354,13 @@ const otherLoc = (await req(admin, "POST", "/api/locations", {
   name: `${NAME} Other Centre`, code: `GO${STAMP}`, city: "Jaipur", approval_status: "Approved", operational_status: "Active",
 })).data.item;
 const foreignCand = (await req(admin, "POST", "/api/candidates", {
-  name: `${NAME} Foreign`, phone: `9${STAMP}2001`, location: otherLoc._id, program: program._id,
+  name: `${NAME} Foreign`, phone: `9${STAMP.slice(1)}2001`, location: otherLoc._id, program: program._id,
 })).data.item;
 const crossLoc = await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: foreignCand._id });
 ok("another centre's candidate refused even for Admin (Prem Kumar/Lalit fix)", crossLoc.status === 409 && /another centre/.test(crossLoc.data.error ?? ""), JSON.stringify(crossLoc.data).slice(0, 160));
 const otherProg = (await req(admin, "POST", "/api/programs", { code: `GP${STAMP}`, name: `${NAME} Other Prog`, trainer_skill: "OtherSkill" + STAMP })).data.item;
 const wrongProgCand = (await req(admin, "POST", "/api/candidates", {
-  name: `${NAME} WrongRole`, phone: `9${STAMP}2002`, location: loc._id, program: otherProg._id,
+  name: `${NAME} WrongRole`, phone: `9${STAMP.slice(1)}2002`, location: loc._id, program: otherProg._id,
 })).data.item;
 const crossProg = await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: wrongProgCand._id });
 ok("a different job role/scheme refused (the scheme-twin trap)", crossProg.status === 409 && /job role/.test(crossProg.data.error ?? ""), JSON.stringify(crossProg.data).slice(0, 160));
@@ -401,7 +401,7 @@ ok("a FEEDBACK token does not open the attendance view (purpose-bound)", feedbac
 // ---------------------------------------------------------------- Candidate portal /p/me (2026-08-13, Umesh: "candidate ke liye bhi ek hoga — ye requirement hai")
 const lookup = (json) => fetch(`${BASE}/api/public/portal-lookup`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(json) })
   .then(async (r) => ({ status: r.status, data: await r.json().catch(() => ({})) }));
-const cPort = (await req(admin, "POST", "/api/candidates", { name: `${NAME} Portal`, phone: `9${STAMP}3007`, location: loc._id, program: program._id, dob: "2000-01-15" }, 201)).data.item;
+const cPort = (await req(admin, "POST", "/api/candidates", { name: `${NAME} Portal`, phone: `9${STAMP.slice(1)}3007`, location: loc._id, program: program._id, dob: "2000-01-15" }, 201)).data.item;
 await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: cPort._id }, 201);
 const lk = await lookup({ phone: cPort.phone, dob: "2000-01-15" });
 ok("portal lookup: registered phone + DOB opens own My Training url", lk.status === 200 && lk.data.enrolled === true && /\/p\/attendance\//.test(lk.data.url ?? ""), JSON.stringify(lk.data).slice(0, 120));
@@ -412,14 +412,14 @@ const myTok = lk.data.url?.split("/").pop();
 const myPage = await fetch(`${BASE}/api/public/attendance/${myTok}`).then((r) => r.json()).catch(() => ({}));
 ok("…and the portal payload carries the full training picture (centre/trainer/sidh/result keys)",
   "centre" in myPage && "trainer" in myPage && "sidh_status" in myPage && "result" in myPage, JSON.stringify({ c: myPage.centre, t: myPage.trainer }).slice(0, 120));
-const cPool = (await req(admin, "POST", "/api/candidates", { name: `${NAME} PoolPortal`, phone: `9${STAMP}3008`, location: loc._id, program: program._id }, 201)).data.item;
+const cPool = (await req(admin, "POST", "/api/candidates", { name: `${NAME} PoolPortal`, phone: `9${STAMP.slice(1)}3008`, location: loc._id, program: program._id }, 201)).data.item;
 const plk = await lookup({ phone: cPool.phone });
 ok("portal lookup: a pool candidate learns their registration status, not a dead end", plk.status === 200 && plk.data.enrolled === false && typeof plk.data.sidh_status === "string", JSON.stringify(plk.data).slice(0, 120));
 
 // QA-056 (S1, checker): imported DOBs sit at IST midnight = previous day 18:30 UTC, and a
 // UTC-date comparison refused every such student's REAL birthday while accepting the day
 // before it. Both sides now canonicalize to the IST calendar date.
-const cIst = (await req(admin, "POST", "/api/candidates", { name: `${NAME} IstDob`, phone: `9${STAMP}3009`, location: loc._id, program: program._id, dob: "1998-12-31T18:30:00.000Z" }, 201)).data.item;
+const cIst = (await req(admin, "POST", "/api/candidates", { name: `${NAME} IstDob`, phone: `9${STAMP.slice(1)}3009`, location: loc._id, program: program._id, dob: "1998-12-31T18:30:00.000Z" }, 201)).data.item;
 const lkReal = await lookup({ phone: cIst.phone, dob: "1999-01-01" });
 ok("QA-056: the REAL birthday opens the portal for an IST-midnight-stored DOB", lkReal.status === 200, `got ${lkReal.status}`);
 const lkPrev = await lookup({ phone: cIst.phone, dob: "1998-12-31" });
@@ -441,7 +441,7 @@ ok("…and the student link shows the assessment date",
 // Walk a one-candidate batch all the way to Completed, then prove the two paths that used to
 // leak past the lock (certificate-field PATCH, closure PUT) are shut, while invoice-readiness
 // still works (invoicing naturally happens after completion).
-const t2 = (await req(admin, "POST", "/api/trainers", { name: `${NAME} LockTrainer`, phone: `9${STAMP}0002`, skills: ["Testing"] })).data.item;
+const t2 = (await req(admin, "POST", "/api/trainers", { name: `${NAME} LockTrainer`, phone: `9${STAMP.slice(1)}0002`, skills: ["Testing"] })).data.item;
 const room2 = (await req(admin, "POST", `/api/locations/${loc._id}/rooms`, { name: `${NAME} Lab 2`, type: "Lab", capacity: 30 })).data.item;
 const mk2 = await req(admin, "POST", "/api/batches", {
   location: loc._id, program: program._id, trainer: t2._id, room: room2._id,
@@ -449,7 +449,7 @@ const mk2 = await req(admin, "POST", "/api/batches", {
 });
 ok("lock fixture: batch2 created", mk2.status === 201, JSON.stringify(mk2.data).slice(0, 200));
 const batch2 = mk2.data.item;
-const c2 = (await req(admin, "POST", "/api/candidates", { name: `${NAME} Lockcase`, phone: `9${STAMP}2004`, location: loc._id, program: program._id })).data.item;
+const c2 = (await req(admin, "POST", "/api/candidates", { name: `${NAME} Lockcase`, phone: `9${STAMP.slice(1)}2004`, location: loc._id, program: program._id })).data.item;
 const m2 = (await req(admin, "POST", `/api/batches/${batch2._id}/members`, { candidate: c2._id })).data.item;
 await req(admin, "PATCH", `/api/members/${m2._id}`, { reg_done: true, kyc_done: true, accept_done: true });
 await req(admin, "POST", `/api/batches/${batch2._id}/transition`, { target: "Ready" });

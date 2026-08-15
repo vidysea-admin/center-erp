@@ -62,7 +62,7 @@ const intRead = (await req(admin, "GET", `/api/candidates/${intCand._id}`)).data
 ok("interested programs+locations stored and readable", intRead.interested_programs?.length === 1 && intRead.interested_locations?.length === 2, JSON.stringify({ p: intRead.interested_programs?.length, l: intRead.interested_locations?.length }));
 
 // ---- 3. Slot boundary: back-to-back slots do NOT clash; containment DOES ----
-const tr = (await req(admin, "POST", "/api/trainers", { name: `Trainer ${stamp}`, phone: "96666" + stamp.slice(2), skills: ["Skill" + stamp], capable_locations: [loc._id] })).data.item;
+const tr = (await req(admin, "POST", "/api/trainers", { name: `Trainer ${stamp}`, phone: "9666" + stamp.slice(2), skills: ["Skill" + stamp], capable_locations: [loc._id] })).data.item;
 const start = "2027-06-01";
 const b1 = (await req(admin, "POST", "/api/batches", { location: loc._id, program: prog._id, trainer: tr._id, planned_start: start, target_size: 3, slot_start: "09:00", slot_end: "13:00" }));
 ok("slot batch created", b1.status === 201);

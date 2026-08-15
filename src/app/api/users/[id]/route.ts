@@ -5,6 +5,7 @@ import { apiHandler, requireUser, requireEdit, requireRole, HttpError, invalidat
 import { requirePerm } from "@/lib/permissions";
 import { User } from "@/models";
 import { audit } from "@/lib/audit";
+import { emailError } from "@/lib/validate";
 import { renderMail, sendMail } from "@/lib/mailer";
 
 export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
@@ -61,6 +62,11 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   // A dropped account is terminal — the flow is drop → create a fresh account, not revive.
   if (doc.dropped) throw new HttpError(400, `${doc.name} was dropped. Create a new account instead of editing this one.`);
 
+  // QA-141 (Umesh): a changed login email must still be one (format-checked like creation).
+  if (body.email !== undefined) {
+    const eErr = emailError(body.email);
+    if (eErr) throw new HttpError(400, eErr);
+  }
   for (const f of ["name", "email", "role", "location_scope", "can_edit", "active", "extra_permissions", "revoked_permissions"]) {
     if (body[f] !== undefined) (doc as any)[f] = body[f];
   }

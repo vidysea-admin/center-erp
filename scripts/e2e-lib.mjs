@@ -49,6 +49,6 @@ export function finish() {
 // Run-unique stamp — key collisions with a previous run of the same suite read as "existing
 // entity" and corrupt assertions (the e2e-govt.mjs lesson).
 export const stamp = (p = "T") => p + Date.now().toString().slice(-7);
-export const phone = (prefix) => prefix + Date.now().toString().slice(-8);
+export const phone = (prefix) => prefix + Date.now().toString().slice(-(10 - String(prefix).length)); // QA-141: fixtures are exactly 10 digits now
 // LOCAL calendar date (what the UI sends) — see e2e.mjs note on the IST-midnight window.
 export const today = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`; };

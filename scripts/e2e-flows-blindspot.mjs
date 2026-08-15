@@ -46,7 +46,7 @@ async function multipart(cookie, path, fields, expect) {
 
 const admin = await login("admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
 const stamp = Date.now().toString().slice(-6);
-const phone = () => "7" + Date.now().toString().slice(-9) + Math.floor(Math.random() * 9);
+const phone = () => "7" + Date.now().toString().slice(-8) + Math.floor(Math.random() * 9); // QA-141: 10 digits
 
 // ---------------------------------------------------------------- fixtures
 const loc = (await req(admin, "POST", "/api/locations", {

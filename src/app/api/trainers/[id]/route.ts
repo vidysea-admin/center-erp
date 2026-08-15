@@ -6,6 +6,7 @@ import { Batch, Trainer, TrainerDocument } from "@/models";
 import { hasPermission } from "@/lib/permissions";
 import { assertLocationOperational, assertTrainerDocInScope, TRAINER_FLOW } from "@/lib/rules";
 import { audit } from "@/lib/audit";
+import { emailError, canonicalPhone, phoneError } from "@/lib/validate";
 import { maskTrainerSecrets } from "../route";
 
 // Same masking as the list route (2026-08-12) — opening one trainer by id was the obvious way
@@ -36,6 +37,16 @@ export const { GET, PATCH } = itemRoutes({
   permission: "trainers.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
   // F-B5: re-pointing a trainer's nomination at a halted centre is also hiring for it.
   async beforeUpdate(_id, body, existing) {
+    // QA-141 (Umesh): edits are as strict as creates — a fixed-up phone lands as the bare 10.
+    if (body.phone !== undefined) {
+      const pErr = phoneError(body.phone);
+      if (pErr) throw new HttpError(400, pErr);
+      body.phone = canonicalPhone(body.phone)!;
+    }
+    if (body.email !== undefined && body.email !== "") {
+      const eErr = emailError(body.email, { optional: true });
+      if (eErr) throw new HttpError(400, eErr);
+    }
     if (body.nominated_for_location && String(body.nominated_for_location) !== String(existing.nominated_for_location ?? "")) {
       await assertLocationOperational(body.nominated_for_location, "Nominating a trainer for this centre");
     }

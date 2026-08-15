@@ -1,6 +1,7 @@
 "use client";
 import { Fragment, useEffect, useState } from "react";
 import { api, fmtDT, fmtDate } from "@/lib/client";
+import { emailError } from "@/lib/validate";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
 
 const TABS = ["Programs", "Users & Access", "Permissions", "Sync Source", "Approvals", "Master Lists", "Defaults"];
@@ -313,7 +314,11 @@ function Users({ setError }: any) {
       <Drawer open={drawer} onClose={() => setDrawer(false)} title={edit ? `Edit ${edit.name}` : "Add User"}>
         <div className="space-y-3">
           <Field label="Name" required><input className={inputCls} value={form.name ?? ""} onChange={(e) => set("name", e.target.value)} /></Field>
-          <Field label="Email" required><input type="email" className={inputCls} value={form.email ?? ""} onChange={(e) => set("email", e.target.value)} /></Field>
+          {/* QA-141: a mistyped login email is an account nobody can ever mail or reset. */}
+          <Field label="Email" required>
+            <input type="email" className={inputCls} value={form.email ?? ""} onChange={(e) => set("email", e.target.value)} />
+            {form.email && emailError(form.email) && <p className="mt-1 text-xs text-red-600">{emailError(form.email)}</p>}
+          </Field>
           <Field label={edit ? "New password (blank = unchanged)" : "Password"} required={!edit}>
             <input type="password" className={inputCls} value={form.password ?? ""} onChange={(e) => set("password", e.target.value)} />
           </Field>
@@ -349,7 +354,7 @@ function Users({ setError }: any) {
               <Btn kind="danger" onClick={async () => { try { await api(`/api/users/${edit._id}`, { method: "PATCH", json: { approval: "reject" } }); setDrawer(false); load(); } catch (e: any) { setError(e.message); } }}>Reject</Btn>
             </div>
           )}
-          <Btn onClick={save} disabled={!form.name || !form.email || (!edit && !form.password)}>{edit ? "Save" : "Add User"}</Btn>
+          <Btn onClick={save} disabled={!form.name || !form.email || !!emailError(form.email) || (!edit && !form.password)}>{edit ? "Save" : "Add User"}</Btn>
         </div>
       </Drawer>
     </Section>

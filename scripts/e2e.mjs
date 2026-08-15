@@ -167,7 +167,7 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
 // figure for that day could never be entered. Editing note/photos still worked, which made the
 // failure look random. Reproduced on production before the fix.
 {
-  const fresh = (await req("POST", "/api/candidates", { name: `Drop Log ${stamp}`, phone: `77770${stamp}`, location: loc._id, program: prog._id }, 201)).data.item;
+  const fresh = (await req("POST", "/api/candidates", { name: `Drop Log ${stamp}`, phone: `7777${stamp}`, location: loc._id, program: prog._id }, 201)).data.item;
   const fm = (await req("POST", `/api/batches/${batch._id}/members`, { candidate: fresh._id }, 201)).data.item;
   const rosterBefore = (await req("GET", `/api/batches/${batch._id}/logs`)).data.items[0]?.roster_count;
   // put them on today's log, then drop them today
@@ -360,19 +360,19 @@ await req("POST", "/api/batches", { location: gateLoc._id, program: prog._id, pl
 
 // F-B5 (Manish): a halted centre must stop HIRING too, not just training.
 await req("POST", "/api/trainer-requests", { location: gateLoc._id, program: prog._id, required_by_date: today }, 409);
-await req("POST", "/api/trainers", { name: "Halted Nominee " + stamp, phone: "58" + stamp.slice(-8), nominated_for_location: gateLoc._id, nominated_for_program: prog._id }, 409);
-const reNom = (await req("POST", "/api/trainers", { name: "Re-nominee " + stamp, phone: "59" + stamp.slice(-8) }, 201)).data.item;
+await req("POST", "/api/trainers", { name: "Halted Nominee " + stamp, phone: "5800" + stamp, nominated_for_location: gateLoc._id, nominated_for_program: prog._id }, 409);
+const reNom = (await req("POST", "/api/trainers", { name: "Re-nominee " + stamp, phone: "5900" + stamp }, 201)).data.item;
 await req("PATCH", `/api/trainers/${reNom._id}`, { nominated_for_location: gateLoc._id }, 409); // re-pointing is hiring too
 await req("PATCH", `/api/locations/${gateLoc._id}`, { operational_status: "Active", status_reason: "resumed" }, 200);
 await req("POST", "/api/trainer-requests", { location: gateLoc._id, program: prog._id, required_by_date: today }, 201); // resumes with the centre
 await req("PATCH", `/api/locations/${gateLoc._id}`, { operational_status: "Stopped", status_reason: "test again" }, 200); // restore for Rule 1 asserts below
 
 // ---- F-A3: TOT must finish ≥ lead_tot_done_days (3) before batch start — HARD gate now ----
-const totTr = (await req("POST", "/api/trainers", { name: "TOT Lead " + stamp, phone: "56" + stamp.slice(-8), skills: ["totlead" + stamp], pipeline_status: "TOT In Progress" }, 201)).data.item;
+const totTr = (await req("POST", "/api/trainers", { name: "TOT Lead " + stamp, phone: "5600" + stamp, skills: ["totlead" + stamp], pipeline_status: "TOT In Progress" }, 201)).data.item;
 const totCert = await req("POST", `/api/trainers/${totTr._id}/transition`, { target: "Certified", payload: { tr_id: "TRL" + stamp } }, 200);
 ok("F-A3 fixture: certification stamps tot_done_on", !!totCert.data.item.tot_done_on, JSON.stringify(totCert.data.item.tot_done_on));
 const totBatch = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: totTr._id, room: room._id, planned_start: today, target_size: 1 }, 201)).data.item;
-const totCand = (await req("POST", "/api/candidates", { name: "TOT Cand " + stamp, phone: "55" + stamp.slice(-8), location: loc._id, program: prog._id }, 201)).data.item;
+const totCand = (await req("POST", "/api/candidates", { name: "TOT Cand " + stamp, phone: "5500" + stamp, location: loc._id, program: prog._id }, 201)).data.item;
 const totMem = (await req("POST", `/api/batches/${totBatch._id}/members`, { candidate: totCand._id }, 201)).data.item;
 await req("PATCH", `/api/members/${totMem._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
 const totBlocked = await req("POST", `/api/batches/${totBatch._id}/transition`, { target: "Ready" }, 409);
@@ -388,7 +388,7 @@ await req("POST", `/api/batches/${totBatch._id}/transition`, { target: "Cancelle
 const capBatch = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, planned_start: today, target_size: 1 }, 201)).data.item;
 const capCands = [];
 for (let i = 0; i < 2; i++) {
-  capCands.push((await req("POST", "/api/candidates", { name: `Cap ${i} ${stamp}`, phone: `77${stamp}${i}`, location: loc._id, program: prog._id }, 201)).data.item);
+  capCands.push((await req("POST", "/api/candidates", { name: `Cap ${i} ${stamp}`, phone: `770${stamp}${i}`, location: loc._id, program: prog._id }, 201)).data.item);
 }
 const capMembers = [];
 for (const c of capCands) capMembers.push((await req("POST", `/api/batches/${capBatch._id}/members`, { candidate: c._id }, 201)).data.item);
@@ -438,7 +438,7 @@ ok("F-A9: a halted centre's gap is skipped with the F-B5 reason",
 const b4 = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, room: room._id, planned_start: today, target_size: 3 }, 201)).data.item;
 const b4Cands = [];
 for (let i = 0; i < 3; i++) {
-  b4Cands.push((await req("POST", "/api/candidates", { name: `R${i} ${stamp}`, phone: `66${stamp}${i}`, location: loc._id, program: prog._id }, 201)).data.item);
+  b4Cands.push((await req("POST", "/api/candidates", { name: `R${i} ${stamp}`, phone: `660${stamp}${i}`, location: loc._id, program: prog._id }, 201)).data.item);
 }
 const b4Members = [];
 for (const c of b4Cands) b4Members.push((await req("POST", `/api/batches/${b4._id}/members`, { candidate: c._id }, 201)).data.item);
@@ -546,8 +546,8 @@ ok("cert bulk: Completed + existing file → frozen (DEC-6)",
 // But FILLING an absent file on a Completed batch is the CEO's own flow (the Gurgaon
 // case: batch long done, certificates arrive later as a folder) — allowed, once.
 const b5 = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, room: room._id, planned_start: today, target_size: 2 }, 201)).data.item;
-const c5a = (await req("POST", "/api/candidates", { name: `LateCert A ${stamp}`, phone: `67${stamp}7`, location: loc._id, program: prog._id, sidh_candidate_id: `CAN88${stamp.slice(-4)}` }, 201)).data.item;
-const c5b = (await req("POST", "/api/candidates", { name: `LateCert B ${stamp}`, phone: `67${stamp}8`, location: loc._id, program: prog._id }, 201)).data.item;
+const c5a = (await req("POST", "/api/candidates", { name: `LateCert A ${stamp}`, phone: `677${stamp}7`, location: loc._id, program: prog._id, sidh_candidate_id: `CAN88${stamp.slice(-4)}` }, 201)).data.item;
+const c5b = (await req("POST", "/api/candidates", { name: `LateCert B ${stamp}`, phone: `677${stamp}8`, location: loc._id, program: prog._id }, 201)).data.item;
 const m5 = [];
 for (const c of [c5a, c5b]) m5.push((await req("POST", `/api/batches/${b5._id}/members`, { candidate: c._id }, 201)).data.item);
 for (const m of m5) await req("PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
@@ -582,9 +582,9 @@ ok("cert bulk: second late upload refused — the fill is once (DEC-6)",
 // evidence: the upload creates the Pass row carrying it, and the recorded batch-level
 // closure figures stay exactly as typed (Rule 42 / S0 clobber guard).
 const b6 = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, room: room._id, planned_start: today, target_size: 2 }, 201)).data.item;
-const c6a = (await req("POST", "/api/candidates", { name: `LateRes A ${stamp}`, phone: `68${stamp}1`, location: loc._id, program: prog._id, sidh_candidate_id: `CAN99${stamp.slice(-4)}` }, 201)).data.item;
+const c6a = (await req("POST", "/api/candidates", { name: `LateRes A ${stamp}`, phone: `688${stamp}1`, location: loc._id, program: prog._id, sidh_candidate_id: `CAN99${stamp.slice(-4)}` }, 201)).data.item;
 // c6b carries its own CAN id so the QA-042 second-tranche case can be tested below.
-const c6b = (await req("POST", "/api/candidates", { name: `LateRes B ${stamp}`, phone: `68${stamp}2`, location: loc._id, program: prog._id, sidh_candidate_id: `CAN98${stamp.slice(-4)}` }, 201)).data.item;
+const c6b = (await req("POST", "/api/candidates", { name: `LateRes B ${stamp}`, phone: `688${stamp}2`, location: loc._id, program: prog._id, sidh_candidate_id: `CAN98${stamp.slice(-4)}` }, 201)).data.item;
 const m6 = [];
 for (const c of [c6a, c6b]) m6.push((await req("POST", `/api/batches/${b6._id}/members`, { candidate: c._id }, 201)).data.item);
 for (const m of m6) await req("PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
@@ -1001,7 +1001,7 @@ ok("row's pending changes auto-accepted after validation", !afterApply.some((c) 
 
 // All four compensation types the CEO named must be selectable.
 {
-  const tr = (await req("POST", "/api/trainers", { name: `Comp ${stamp}`, phone: "95555" + stamp.slice(2), skills: ["Skill" + stamp], compensation_type: "Incentive-based" }, 201)).data.item;
+  const tr = (await req("POST", "/api/trainers", { name: `Comp ${stamp}`, phone: "955555" + stamp.slice(2), skills: ["Skill" + stamp], compensation_type: "Incentive-based" }, 201)).data.item;
   ok("Incentive-based compensation accepted", tr.compensation_type === "Incentive-based");
   const tr2 = (await req("PATCH", `/api/trainers/${tr._id}`, { compensation_type: "Fixed", compensation_fixed: 25000 }, 200)).data.item;
   ok("Fixed compensation accepted with an amount", tr2.compensation_type === "Fixed" && tr2.compensation_fixed === 25000);

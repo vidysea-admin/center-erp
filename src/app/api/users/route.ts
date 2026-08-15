@@ -5,6 +5,7 @@ import { apiHandler, requireUser, requireEdit, requireRole, HttpError } from "@/
 import { requirePerm } from "@/lib/permissions";
 import { User } from "@/models";
 import { audit } from "@/lib/audit";
+import { emailError, canonicalPhone, phoneError } from "@/lib/validate";
 import { renderMail, sendMail } from "@/lib/mailer";
 
 export const GET = apiHandler(async () => {
@@ -35,6 +36,15 @@ export const POST = apiHandler(async (req: NextRequest) => {
     || (body.location_scope?.length ?? 0) === 0; // unscoped == sees every centre
   if (elevated && user.role !== "Admin") {
     throw new HttpError(403, "Only an Admin may create Admin/Operations accounts, unscoped accounts, or grant special rights.");
+  }
+  // QA-141 (Umesh): the login identity itself gets format-checked — a mistyped email here is
+  // an account nobody can ever mail or reset.
+  const eErr = emailError(body.email);
+  if (eErr) throw new HttpError(400, eErr);
+  if (body.phone) {
+    const pErr = phoneError(body.phone, { optional: true });
+    if (pErr) throw new HttpError(400, pErr);
+    body.phone = canonicalPhone(body.phone)!;
   }
   const doc = await User.create({
     name: body.name, email: body.email, phone: body.phone,

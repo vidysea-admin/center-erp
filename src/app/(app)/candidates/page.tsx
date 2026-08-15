@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { api } from "@/lib/client";
+import { emailError, phoneError } from "@/lib/validate";
 import { Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, ShareLinkPanel, SourceCell, copyText, inputCls , Tabs} from "@/components/ui";
 import { useLocationCtx } from "@/components/shell";
 import { BASE_PATH } from "@/lib/base-path";
@@ -477,11 +478,21 @@ function CandidatesInner() {
         <div className="space-y-3">
           <Field label="Name" required><input className={inputCls} value={form.name ?? ""} onChange={(e) => set("name", e.target.value)} /></Field>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Phone" required><input className={inputCls} value={form.phone ?? ""} onChange={(e) => set("phone", e.target.value)} /></Field>
-            <Field label="Alt phone"><input className={inputCls} value={form.alt_phone ?? ""} onChange={(e) => set("alt_phone", e.target.value)} /></Field>
+            {/* QA-141: same checks the API refuses with — shown while typing. */}
+            <Field label="Phone" required>
+              <input className={inputCls} value={form.phone ?? ""} onChange={(e) => set("phone", e.target.value)} />
+              {form.phone && phoneError(form.phone) && <p className="mt-1 text-xs text-red-600">{phoneError(form.phone)}</p>}
+            </Field>
+            <Field label="Alt phone">
+              <input className={inputCls} value={form.alt_phone ?? ""} onChange={(e) => set("alt_phone", e.target.value)} />
+              {form.alt_phone && phoneError(form.alt_phone, { optional: true }) && <p className="mt-1 text-xs text-red-600">{phoneError(form.alt_phone, { optional: true })}</p>}
+            </Field>
           </div>
           {/* 15/08 (Umesh): mandatory only on SELF-registration; staff may fill or fix it here. */}
-          <Field label="Email"><input className={inputCls} type="email" value={form.email ?? ""} onChange={(e) => set("email", e.target.value)} /></Field>
+          <Field label="Email">
+            <input className={inputCls} type="email" value={form.email ?? ""} onChange={(e) => set("email", e.target.value)} />
+            {form.email && emailError(form.email, { optional: true }) && <p className="mt-1 text-xs text-red-600">{emailError(form.email, { optional: true })}</p>}
+          </Field>
           {dupes.length > 0 && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
               <div className="font-medium">Possible duplicate — check before saving</div>
@@ -559,7 +570,8 @@ function CandidatesInner() {
           )}
           {/* Edit mode: location/program may legitimately be blank on a sheet-imported row — the
               save must not be held hostage to fields the user is not correcting. */}
-          <Btn onClick={saveCandidate} disabled={drawer === "add" ? (!form.name || !form.phone || !form.location || !form.program) : (!form.name || !form.phone)}>
+          <Btn onClick={saveCandidate} disabled={(drawer === "add" ? (!form.name || !form.phone || !form.location || !form.program) : (!form.name || !form.phone))
+            || !!phoneError(form.phone) || !!phoneError(form.alt_phone, { optional: true }) || !!emailError(form.email, { optional: true })}>
             {drawer === "edit" ? "Save changes" : "Add"}
           </Btn>
         </div>
