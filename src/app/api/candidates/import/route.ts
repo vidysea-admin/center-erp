@@ -78,7 +78,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
     }
     return ids;
   };
-  const candidates = rows
+  const mapped = rows
     .map((r, rowIdx) => {
       const c: Record<string, unknown> = { location, program, lifecycle_status: "Unassigned", created_by: user.id };
       for (const [col, field] of Object.entries(mapping)) {
@@ -115,8 +115,31 @@ export const POST = apiHandler(async (req: NextRequest) => {
         if (Object.keys(cf).length) c.custom_fields = cf;
       }
       return c;
-    })
-    .filter((c) => c.name && c.phone);
+    });
+  // QA-146 part 2 (-83, checker on Umesh's CHI-ITI import): the sheet's own HEADER and
+  // DESCRIPTION rows ("Salutation / FullName", "Input field, Mr, Ms, Mrs, Mx *") had been
+  // stored as candidates — the only guard was "name and phone are non-empty". This is NOT a
+  // format drop on a client row (Umesh's rule stands): a row is a template row only when its
+  // phone cell carries no digit at all AND the text reads like a column label / instruction.
+  // Skipped rows are named by sheet row number so the operator can see exactly what went.
+  const TEMPLATE_TEXT = /salutation|full\s*name|input\s*field|alphanumeric|validation|\bmr\b[\s,\/]*\bms\b|^\s*\*|\(\d+\)\s*\*?$/i;
+  const templateRows: string[] = [];
+  const looksTemplate = (c: Record<string, unknown>) => {
+    const name = String(c.name ?? ""), phone = String(c.phone ?? ""), email = String(c.email ?? "");
+    const digits = (phone.match(/\d/g) ?? []).length;
+    // the sheet's column-NUMBER row ("1" / "5" / "12"): a bare number as the name and a
+    // "phone" with fewer than 4 digits — no client row looks like that (checker, live row 3)
+    if (/^\d{1,3}$/.test(name.trim()) && digits < 4 && !/[a-z]/i.test(phone)) return true;
+    // 4+ digits = could be a phone someone typed badly → a CLIENT row, never a template row
+    // ("Alphanumeric (50)" carries two digits and is still an instruction, not a number)
+    if (digits >= 4) return false;
+    return TEMPLATE_TEXT.test(name) || TEMPLATE_TEXT.test(phone) || TEMPLATE_TEXT.test(email) || /^email\s*id$/i.test(phone);
+  };
+  const candidates = mapped.filter((c, i) => {
+    if (!(c.name && c.phone)) return false;
+    if (looksTemplate(c)) { templateRows.push(`row ${i + 2}: "${String(c.name).replace(/\s+/g, " ").slice(0, 40)}"`); return false; }
+    return true;
+  });
 
   // QA-141 (Umesh): canonicalize what we can, REPORT what we cannot — client rows are never
   // dropped over format (the custom_fields ruling), but a valid-shaped number lands as the
@@ -152,6 +175,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
     return NextResponse.json({
       preview: candidates.slice(0, 10), valid: candidates.length,
       skipped: rows.length - candidates.length,
+      template_rows_skipped: templateRows.slice(0, 10), template_rows_skipped_count: templateRows.length,
       duplicates: duplicates.slice(0, 25), duplicate_count: duplicates.length,
       education_unmatched: [...new Set(eduUnmatched)].slice(0, 25),
       interest_unmatched: [...new Set(interestUnmatched)].slice(0, 25),

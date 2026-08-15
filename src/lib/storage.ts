@@ -18,7 +18,8 @@
 // email as Editor). Steps: d:/erp/drive-storage-setup.md.
 import { google, drive_v3 } from "googleapis";
 import { Readable } from "stream";
-import { mkdir, readFile, writeFile } from "fs/promises";
+import { mkdir, readFile, stat, writeFile } from "fs/promises";
+import { createReadStream } from "fs";
 import path from "path";
 
 let cachedDrive: drive_v3.Drive | null = null;
@@ -128,7 +129,47 @@ export async function putFile(name: string, buf: Buffer, mime: string, folderSeg
   const dir = path.join(process.cwd(), "uploads");
   await mkdir(dir, { recursive: true });
   await writeFile(path.join(dir, name), buf);
-  return { backend: "local" };
+  // -83: even the (deploy-wiped) local write records WHERE the file belongs, so the row
+  // already answers "which batch / which folder" and a later move to Drive needs no guess.
+  return { backend: "local", folder_path: folderSegments.map((s) => String(s).trim()).filter(Boolean).join("/") || undefined };
+}
+
+// -83 (honest file reads): STREAM bytes back, with an optional byte range, instead of
+// loading the whole file into the heap. Video seeking (206) and iOS playback need Range;
+// a 200 MB clip must not be a 200 MB allocation per request. Drive answers Range on
+// alt=media; local disk uses createReadStream(start, end). Returns the total size and the
+// resolved range so the route can write Content-Range/Content-Length itself.
+export type FileStream = { stream: NodeJS.ReadableStream; size: number; start: number; end: number; partial: boolean };
+export async function getFileStream(
+  rec: { backend: string; drive_file_id?: string | null; size?: number | null } | null,
+  name: string,
+  range?: { start: number; end?: number } | { suffix: number } | null,
+): Promise<FileStream> {
+  const resolve = (size: number) => {
+    if (!range) return { start: 0, end: size - 1, partial: false };
+    if ("suffix" in range) return { start: Math.max(0, size - range.suffix), end: size - 1, partial: true };
+    return { start: Math.max(0, range.start), end: Math.min(range.end ?? size - 1, size - 1), partial: true };
+  };
+  if (rec?.backend === "drive" && rec.drive_file_id && storageConfigured()) {
+    let size = Number(rec.size ?? 0);
+    if (!size) {
+      const meta = await drive().files.get({ fileId: rec.drive_file_id, fields: "size", supportsAllDrives: true });
+      size = Number(meta.data.size ?? 0);
+    }
+    const { start, end, partial } = resolve(size);
+    if (partial && (start >= size || start > end)) throw Object.assign(new Error("Range not satisfiable"), { code: 416, size });
+    const res = await drive().files.get(
+      { fileId: rec.drive_file_id, alt: "media", supportsAllDrives: true },
+      { responseType: "stream", headers: partial ? { Range: `bytes=${start}-${end}` } : {} },
+    );
+    return { stream: res.data as unknown as NodeJS.ReadableStream, size, start, end, partial };
+  }
+  const fp = path.join(process.cwd(), "uploads", name);
+  const st = await stat(fp); // throws ENOENT → the route says 404
+  const size = st.size;
+  const { start, end, partial } = resolve(size);
+  if (partial && (start >= size || start > end)) throw Object.assign(new Error("Range not satisfiable"), { code: 416, size });
+  return { stream: createReadStream(fp, { start, end }), size, start, end, partial };
 }
 
 // Read bytes back. Drive by file id when the record says so, else local disk.

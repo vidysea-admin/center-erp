@@ -8,7 +8,7 @@ import { useSearchParams } from "next/navigation";
 import { api, fmtDT, fmtDate } from "@/lib/client";
 import { BASE_PATH } from "@/lib/base-path";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, inputCls } from "@/components/ui";
-import { useLocationCtx } from "@/components/shell";
+import { useLocationCtx, usePerms } from "@/components/shell";
 
 const MATCH_STYLE: Record<string, string> = {
   Matched: "bg-green-50 text-green-700 border-green-200",
@@ -23,6 +23,10 @@ export default function GovtAttendancePage() {
 function Inner() {
   const sp = useSearchParams();
   const [ctxLoc] = useLocationCtx();
+  // QA-153 (-83): a view-level holder reads the imports; the upload controls exist only
+  // for edit-level — the route guard already keeps everyone else off this screen.
+  const { can, loaded: permsLoaded } = usePerms();
+  const canImport = !permsLoaded || can("attendance.govt", "edit");
   const [imports, setImports] = useState<any[]>([]);
   const [open, setOpen] = useState<string | null>(sp.get("import"));
   const [detail, setDetail] = useState<any>(null);
@@ -99,7 +103,7 @@ function Inner() {
             importing for batch {batchInfo?.code ?? "…"}
           </span>
         )}
-        <div className="ml-auto flex items-center gap-2">
+        {canImport && <div className="ml-auto flex items-center gap-2">
           {/* QA-028: every importer offers its sample sheet. */}
           <a href={`${BASE_PATH}/templates/govt-attendance-sample.csv`} download className="text-xs font-medium text-blue-700 hover:underline">⬇ sample format</a>
           <select className={inputCls + " max-w-56 text-xs"} value={manualLoc} onChange={(e) => setManualLoc(e.target.value)} title="Used when the file's TC ID matches no centre">
@@ -113,7 +117,8 @@ function Inner() {
               {busy ? "Reading…" : "Upload portal export"}
             </span>
           </label>
-        </div>
+        </div>}
+        {!canImport && <span className="ml-auto text-xs text-gray-400">read-only</span>}
       </div>
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
 

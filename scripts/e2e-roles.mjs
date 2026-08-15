@@ -559,6 +559,19 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
       (await req(viewer, "POST", "/api/costs", { entry_date: "2026-08-16", location: jpr._id, amount: 1, category: "000000000000000000000000" })).status === 403);
     const me = await req(viewer, "GET", "/api/permissions/me");
     ok("QA-025 P1: /api/permissions/me names the level", me.status === 200 && me.data.levels?.["costs.manage"] === "view", JSON.stringify(me.data.levels?.["costs.manage"] ?? null));
+    // QA-153 (-83): the shell decides "does this door exist for you" from THIS payload — so
+    // it must carry the role and the togglable keys the route rules read (attendance.govt,
+    // costs.manage, sheet.sources), and say nothing for a right the person does not hold.
+    const meTr = await req(trainer, "GET", "/api/permissions/me");
+    ok("QA-153: a trainer's effective rights carry no attendance.govt / costs.manage / sheet.sources (so Govt Attendance, Costs, Sheet Sync do not exist for them)",
+      meTr.status === 200 && meTr.data.role === "Trainer" && !meTr.data.levels?.["attendance.govt"] && !meTr.data.levels?.["costs.manage"] && !meTr.data.levels?.["sheet.sources"] && meTr.data.levels?.["batches.daily_log"] === "edit",
+      JSON.stringify(meTr.data.levels));
+    const meSp = await req(spoc, "GET", "/api/permissions/me");
+    ok("QA-153: a SPOC's rights carry no attendance.govt / costs.manage (Umesh 13/08: attendance is off the SPOC plate)",
+      meSp.status === 200 && meSp.data.role === "Location" && !meSp.data.levels?.["attendance.govt"] && !meSp.data.levels?.["costs.manage"], JSON.stringify(meSp.data.levels));
+    const meOps = await req(ops, "GET", "/api/permissions/me");
+    ok("QA-153: Operations carries costs.manage + attendance.govt (their doors stay; the Costs page is post-only by role)",
+      meOps.status === 200 && meOps.data.levels?.["costs.manage"] === "edit" && meOps.data.levels?.["attendance.govt"] === "edit", JSON.stringify(meOps.data.levels));
     ok("QA-025: no invoices right at any level → still 403", (await req(viewer, "GET", "/api/invoices")).status === 403);
   }
   ok("QA-025/R-E: Operations still refused the ledger READ (edit-without-view stays code)",

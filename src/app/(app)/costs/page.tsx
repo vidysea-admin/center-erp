@@ -26,11 +26,14 @@ function CostsInner() {
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(true);
 
+  // QA-153 (-83): Operations is post-only on money — the invoice book is Admin's (QA-140),
+  // so this screen must not even ASK for it: the 403 banner that used to sit over a
+  // half-empty form was the product saying "no" and handing over the form anyway.
   const load = (asPostOnly: boolean) => Promise.all([
     asPostOnly
       ? api("/api/approvals?mine=1").then((d) => setMine((d.items ?? []).filter((i: any) => i.action === "cost.post")))
       : api("/api/costs").then((d) => setCosts(d.items)),
-    api("/api/invoices").then((d) => setInvoices(d.items)),
+    asPostOnly ? Promise.resolve() : api("/api/invoices").then((d) => setInvoices(d.items)),
     api("/api/master-lists/cost-categories").then((d) => setCats(d.items)),
     api("/api/locations?limit=2000").then((d) => setLocations(d.items)),
     api("/api/trainers?limit=2000").then((d) => setTrainers(d.items)),
@@ -74,7 +77,7 @@ function CostsInner() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-xl font-semibold">Costs & Invoices</h1>
+      <h1 className="text-xl font-semibold">{postOnly ? "Costs — post an expense" : "Costs & Invoices"}</h1>
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
       {notice && (
         <div className="flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-800">
@@ -82,7 +85,7 @@ function CostsInner() {
           <button className="text-xs underline" onClick={() => setNotice("")}>dismiss</button>
         </div>
       )}
-      <Tabs tabs={["Costs", "Invoices"]} active={tab} onChange={setTab} />
+      {!postOnly && <Tabs tabs={["Costs", "Invoices"]} active={tab} onChange={setTab} />}
       {tab === "Costs" ? (
         <>
           <Section title={postOnly ? "Post an expense / cost" : editId ? "Edit cost entry" : "Add cost entry"}>

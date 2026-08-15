@@ -1045,7 +1045,7 @@ function DailyExecution({ batchId, batch, role, setError }: any) {
     api(`/api/batches/${batchId}/logs`).then((d) => setLogs(d.items)),
     api(`/api/batches/${batchId}/members`).then((d) => setMembers(d.items.filter((m: any) => !m.left_on))),
   ]).catch((e: any) => setError(e.message)).finally(() => setLoaded(true));
-  useEffect(() => { load(); setQueued(getQueue().length); }, [batchId]);
+  useEffect(() => { load(); setQueued(getQueue(batchId).length); }, [batchId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function togglePresent(id: string) {
     const s = new Set<string>(form.present);
@@ -1060,23 +1060,29 @@ function DailyExecution({ batchId, batch, role, setError }: any) {
     setForm({ ...form, biometric: b });
   }
 
+  // -83: every evidence upload says where it belongs — Drive folder <Centre>/<Batch>/<kind>
+  // and the StoredFile entity link — and the retry queue is bound to THIS batch.
+  const evidenceHints = (kind: string) => ({
+    folder_centre: batch?.location?.code ?? batch?.location?.name ?? "", folder_batch: batch?.code ?? "", folder_kind: kind,
+    entity: "Batch", entity_id: batchId, batch_id: batchId,
+  });
   async function uploadFile(file: File, kind: "photos" | "videos" | "govt_screenshot") {
     try {
-      const url = await uploadWithRetry(file, kind); // compressed + 3 retries + offline queue
+      const url = await uploadWithRetry(file, kind, evidenceHints(kind)); // compressed + 3 retries + per-batch offline queue
       if (kind === "photos") setForm((f: any) => ({ ...f, photos: [...f.photos, url] }));
       else if (kind === "videos") setForm((f: any) => ({ ...f, videos: [...f.videos, url] }));
       else setForm((f: any) => ({ ...f, govt_screenshot: url }));
-    } catch (e: any) { setError(e.message); setQueued(getQueue().length); }
+    } catch (e: any) { setError(e.message); setQueued(getQueue(batchId).length); }
   }
 
   async function retryQueued() {
-    const done = await flushQueue();
+    const done = await flushQueue(batchId); // this batch's items only
     for (const d of done) {
       if (d.kind === "photos") setForm((f: any) => ({ ...f, photos: [...f.photos, d.url] }));
       else if (d.kind === "videos") setForm((f: any) => ({ ...f, videos: [...f.videos, d.url] }));
-      else setForm((f: any) => ({ ...f, govt_screenshot: d.url }));
+      else if (d.kind === "govt_screenshot") setForm((f: any) => ({ ...f, govt_screenshot: d.url }));
     }
-    setQueued(getQueue().length);
+    setQueued(getQueue(batchId).length);
   }
 
   async function save() {
@@ -1430,9 +1436,15 @@ function MediaCell({ r }: any) {
           <img src={p} alt={`Photo ${i + 1}`} className="h-8 w-8 rounded border border-gray-200 object-cover" />
         </a>
       ))}
-      {videos.map((v, i) => (
-        <a key={v} href={v} target="_blank" rel="noreferrer" title={`Video ${i + 1}`}
-          className="rounded border border-gray-200 bg-gray-50 px-1.5 py-1 text-xs text-gray-600">▶ {i + 1}</a>
+      {/* -83: evidence must be VIEWABLE — a video plays here (Range-served, seekable), a
+          voice note plays here; the link stays for a full-screen open. */}
+      {videos.map((v, i) => /\.(m4a|mp3|wav|amr|ogg)$/i.test(v) ? (
+        <audio key={v} src={v} controls preload="none" className="h-8 max-w-[160px]" title={`Voice note ${i + 1}`} />
+      ) : (
+        <span key={v} className="inline-flex items-center gap-1">
+          <video src={v} controls preload="none" playsInline className="h-16 max-w-[120px] rounded border border-gray-200 bg-black" title={`Video ${i + 1}`} />
+          <a href={v} target="_blank" rel="noreferrer" className="text-[10px] text-blue-700 underline" title="Open full size">↗</a>
+        </span>
       ))}
       {r.govt_screenshot && (
         <a href={r.govt_screenshot} target="_blank" rel="noreferrer" title="Govt attendance proof"

@@ -1,5 +1,5 @@
 "use client";
-import { ReactNode, useEffect, useRef, useState } from "react";
+import { ReactNode, createContext, useContext, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
@@ -10,6 +10,49 @@ import {
   IconSearch, IconMenu, IconLogout, IconChevronDown, IconBuilding, IconBell,
 } from "@/components/icons";
 
+// QA-153 (-83, Umesh 15/08): "unko dikhna hi nahi chahiye ki ye features system me hain — unko
+// bas itna dikhe jahan unka kaam hai." One decision, two surfaces: the SAME rule decides
+// whether a nav entry exists and whether a route renders at all. A role list is the coarse
+// door; where a right is togglable in the Admin matrix (attendance.govt, costs.manage,
+// sheet.sources) the EFFECTIVE level from /api/permissions/me decides — so an Admin-granted
+// right surfaces and a revoked one disappears, without a code change. Nothing here is a
+// security gate (every API still refuses on its own); it is the product keeping its word
+// that a person sees only their work.
+type Perms = { role: string; levels: Record<string, "view" | "edit">; loaded: boolean };
+const PermsContext = createContext<Perms>({ role: "", levels: {}, loaded: false });
+export function usePerms() {
+  const p = useContext(PermsContext);
+  const can = (key: string, level: "view" | "edit" = "view") => {
+    if (p.role === "Admin") return true;
+    const l = p.levels[key];
+    return level === "view" ? l === "view" || l === "edit" : l === "edit";
+  };
+  return { ...p, can };
+}
+// Route rules — prefix match on the pathname without basePath. `roles` = who the door is
+// for by default; `perm` = the togglable right that overrides the role list once known.
+const ROUTE_RULES: { prefix: string; roles?: string[]; perm?: string }[] = [
+  { prefix: "/sheet-watch", roles: ["Admin"], perm: "sheet.sources" },
+  { prefix: "/sync", roles: ["Admin"], perm: "sheet.sources" },
+  { prefix: "/locations", roles: ["Admin", "Operations", "Location", "Enrollment"] },
+  { prefix: "/trainers", roles: ["Admin", "Operations", "Location"] },
+  { prefix: "/candidates", roles: ["Admin", "Operations", "Location", "Enrollment"] },
+  { prefix: "/govt-attendance", roles: ["Admin", "Operations"], perm: "attendance.govt" },
+  { prefix: "/costs", roles: ["Admin", "Operations"], perm: "costs.manage" },
+  { prefix: "/admin", roles: ["Admin"] },
+];
+export function routeAllowed(pathname: string, perms: Perms): boolean {
+  const rule = ROUTE_RULES.find((r) => pathname === r.prefix || pathname.startsWith(r.prefix + "/") || pathname.startsWith(r.prefix + "?"));
+  if (!rule) return true; // Home, Batches, notifications, programs — everyone's work
+  if (perms.role === "Admin") return true;
+  const roleOk = !rule.roles || rule.roles.includes(perms.role);
+  if (rule.perm && perms.loaded) {
+    const l = perms.levels[rule.perm];
+    return l === "view" || l === "edit";
+  }
+  return roleOk;
+}
+
 // Locked navigation (§1)
 const NAV = [
   { href: "/", label: "Home", Icon: IconHome },
@@ -17,7 +60,7 @@ const NAV = [
   // tab; both routes stay alive for deep links. Badge = open items across both engines.
   // CEO 14/08 [17:26] (as the ops persona): "we should remove sheet sync, all of these
   // things" — the sheet machinery is the Admin's concern; everyone else just sees its output.
-  { href: "/sheet-watch", label: "Sheet Sync", Icon: IconSync, badge: "sheets" as string | undefined, roles: ["Admin"] },
+  { href: "/sheet-watch", label: "Sheet Sync", Icon: IconSync, badge: "sheets" as string | undefined, roles: ["Admin"], perm: "sheet.sources" },
   // R-I (CEO 14/08 [38:10-38:43], as the trainer persona): "I shouldn't be able to see
   // other trainers … why new location tab is here — this all should be disabled … I should
   // just see my batch-wise details." A Trainer's doors are Home and Batches, full stop.
@@ -32,9 +75,9 @@ const NAV = [
   { href: "/batches", label: "Batches", Icon: IconCap },
   // 2026-08-12: the portal attendance export Manish uploads, reconciled against our daily logs.
   // 2026-08-13 (Umesh): attendance is OFF the principal/SPOC plate entirely — Location removed.
-  { href: "/govt-attendance", label: "Govt Attendance", Icon: IconCap, roles: ["Admin", "Operations"] },
-  { href: "/costs", label: "Costs", Icon: IconWallet, roles: ["Admin", "Operations"] },
-];
+  { href: "/govt-attendance", label: "Govt Attendance", Icon: IconCap, roles: ["Admin", "Operations"], perm: "attendance.govt" },
+  { href: "/costs", label: "Costs", Icon: IconWallet, roles: ["Admin", "Operations"], perm: "costs.manage" },
+] as { href: string; label: string; Icon: any; badge?: string; roles?: string[]; perm?: string }[];
 
 // ---- Location context (header switcher; pages read via this hook) ----
 export function useLocationCtx(): [string, (v: string) => void] {
@@ -198,6 +241,13 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [syncCount, setSyncCount] = useState(0);
   const [watchCount, setWatchCount] = useState(0);
   const [alertCount, setAlertCount] = useState(0);
+  // QA-153: effective rights, fetched once per session; role-only decisions until they land.
+  const [perms, setPerms] = useState<Perms>({ role: "", levels: {}, loaded: false });
+  useEffect(() => {
+    if (!user) return;
+    setPerms((p) => ({ ...p, role: user.role }));
+    api("/api/permissions/me").then((d) => setPerms({ role: d.role ?? user.role, levels: d.levels ?? {}, loaded: true })).catch(() => setPerms({ role: user.role, levels: {}, loaded: false }));
+  }, [user?.id, user?.role]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!user) return;
@@ -208,7 +258,13 @@ export function AppShell({ children }: { children: ReactNode }) {
     api("/api/notifications?count=1").then((d) => setAlertCount(d.count ?? 0)).catch(() => {});
   }, [pathname, user]);
 
-  const nav = NAV.filter((n) => !n.roles || (user && n.roles.includes(user.role)));
+  // QA-153: nav and route obey the ONE rule (routeAllowed) — a door either exists or it doesn't.
+  // An entry with a togglable right follows the right; a plain entry keeps its own role
+  // list (Open Positions is a Trainers sub-door for Admin/Ops only) — and both obey the guard.
+  const nav = NAV.filter((n) => user
+    && (n.perm ? true : (!n.roles || n.roles.includes(user.role)))
+    && routeAllowed(n.href.split("?")[0], { ...perms, role: user.role }));
+  const allowedHere = !user || routeAllowed(pathname, { ...perms, role: user.role });
 
   const links = (
     <nav className="flex flex-col gap-0.5 p-3">
@@ -299,7 +355,18 @@ export function AppShell({ children }: { children: ReactNode }) {
             <aside className="absolute left-0 top-0 h-full w-64 bg-white pt-14 shadow-xl">{links}</aside>
           </div>
         )}
-        <main className="min-w-0 flex-1 p-4 md:p-6">{children}</main>
+        <main className="min-w-0 flex-1 p-4 md:p-6">
+          <PermsContext.Provider value={{ ...perms, role: user?.role ?? perms.role }}>
+            {allowedHere ? children : (
+              // QA-153: a plain closed door — no form, no chrome, no feature named.
+              <div className="mx-auto mt-16 max-w-md rounded-xl border border-gray-200 bg-white p-6 text-center">
+                <p className="text-sm font-medium text-gray-800">This screen is not part of your role&apos;s work.</p>
+                <p className="mt-1 text-xs text-gray-500">If you need it for your job, ask an Admin.</p>
+                <Link href="/" className="mt-4 inline-block rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">Go to Home</Link>
+              </div>
+            )}
+          </PermsContext.Provider>
+        </main>
       </div>
     </div>
   );

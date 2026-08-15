@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { mkdir, writeFile } from "fs/promises";
 import path from "path";
 import crypto from "crypto";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { BASE_PATH } from "@/lib/base-path";
-import { Batch, BatchMember, CandidateResult, Closure } from "@/models";
+import { Batch, BatchMember, CandidateResult, Closure, StoredFile } from "@/models";
+import { putFile } from "@/lib/storage";
 import { assertBatchInScope, recomputeClosureAggregates, upsertCandidateCertificate } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
@@ -30,7 +30,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   const { id } = await ctx.params;
   await assertBatchInScope(user, id); // Rule 38
 
-  const batch = await Batch.findById(id).select("status").lean<any>();
+  const batch = await Batch.findById(id).select("status code location").populate("location", "code name").lean<any>();
   if (!batch) throw new HttpError(404, "Batch not found");
   if (batch.status === "Cancelled") throw new HttpError(409, "A cancelled batch is frozen — no certificate uploads.");
 
@@ -88,11 +88,17 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
       continue;
     }
 
-    // All checks passed — store the file (upload-route pattern), then attach.
+    // All checks passed — store the file through the SAME adapter as /api/upload (-83: this
+    // route used to write straight to the task's disk with no StoredFile row, so certificates
+    // were lost on the next deploy even with Drive on — the exact QA-145 failure).
     const stored = crypto.randomBytes(16).toString("hex") + ext;
-    const dir = path.join(process.cwd(), "uploads");
-    await mkdir(dir, { recursive: true });
-    await writeFile(path.join(dir, stored), Buffer.from(await file.arrayBuffer()));
+    const buf = Buffer.from(await file.arrayBuffer());
+    const put = await putFile(stored, buf, file.type || "application/octet-stream", [batch.location?.code ?? batch.location?.name ?? String(batch.location ?? ""), batch.code, "certificates"]);
+    await StoredFile.create({
+      name: stored, original_name: file.name, mime: file.type, size: buf.length,
+      backend: put.backend, drive_file_id: put.drive_file_id, folder_path: put.folder_path,
+      entity: "Batch", entity_id: batch._id, uploaded_by: user.id,
+    });
     const url = `${BASE_PATH}/api/files/` + stored;
 
     try {

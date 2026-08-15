@@ -3,17 +3,18 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-82";
+export const RELEASE = "2026.08.14-83";
 export const RELEASE_NOTE =
-  "QA-152 part 2 + bulk day-wise attendance. The backward plan is now an " +
-  "ARTIFACT: its own page (/batches/<id>/plan) where the planner edits due " +
-  "dates, labels, notes and owners, adds and removes rows; a shareable link " +
-  "(/p/plan/<token>, no login, like the self-registration form) that reads " +
-  "the live plan and - only when shared that way - can tick milestones done " +
-  "(recorded as 'via link'); Excel download on both sides; copy-as-text and " +
-  "WhatsApp. Re-sharing rotates the old link off. Plan-only verdicts (TOT " +
-  "lead time) render here and nowhere else. And the Attendance tab gained " +
-  "'Mark attendance (bulk)': a date-range x roster grid, everyone starts " +
-  "Present, untick absentees, one save posts every day through the SAME " +
-  "per-day rules as a single entry (POST /logs/bulk -> createDailyLogChecked) " +
-  "and answers per day: saved / already logged / the rule that refused it.";
+  "QA-153 + QA-146 part 2 + QA-154/155/156. Umesh: 'unko bas itna dikhe jahan " +
+  "unka kaam hai' - one rule (routeAllowed) now decides whether a door EXISTS: " +
+  "the sidebar and the route itself obey it, effective rights from " +
+  "/api/permissions/me override the role list, and a screen outside a role's " +
+  "work renders a plain closed door instead of a form the API would refuse; " +
+  "Costs stops asking Operations for the invoice book. The candidate importer " +
+  "skips a sheet's own column-number/header/description rows and names them " +
+  "by row. File reads STREAM with Range (206) and real media types - video " +
+  "seeks, iOS plays, voice notes play inline; a bulk-uploaded certificate " +
+  "goes through the same storage adapter as every other file (StoredFile row, " +
+  "Drive when on). Every evidence upload says where it belongs (centre/batch/" +
+  "kind + entity), and the offline retry queue is bound to its batch - a parked " +
+  "photo can no longer land on another batch's log.";

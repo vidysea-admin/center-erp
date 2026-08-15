@@ -223,6 +223,33 @@ console.log("\n--- FL6: the import flags the file's own duplicates and refuses a
     JSON.stringify(preview.data.duplicates));
   ok("FL6: …and it is a flag, not a block — all 3 rows stay importable", preview.data.valid === 3, String(preview.data.valid));
 
+  // QA-146 part 2 (-83, checker on the CHI-ITI import): the sheet's own column-number,
+  // header and description rows were stored as candidates ("1"/"5", "Salutation"/"EmailID",
+  // "Input field, Mr, Ms, Mrs, Mx *"). Not a format drop on client rows — a template row is
+  // one whose phone is not a phone at all AND whose text reads like a label/instruction.
+  {
+    const trows = [
+      { "Student Name": "1", "Mobile": "5", "Email": "7" },
+      { "Student Name": "Salutation", "Mobile": "EmailID", "Email": "FullName" },
+      { "Student Name": "Input field,\nMr,\nMs,\nMrs,\nMx *", "Mobile": "Input field\nAlphanumeric (50) with email address validations *", "Email": "Input field\nText (50) *" },
+      { "Student Name": `FL Real ${stamp}`, "Mobile": "9811100077", "Email": `real${stamp}@t.local` },
+      { "Student Name": `FL OddPhone ${stamp}`, "Mobile": "12345", "Email": "" }, // a CLIENT row with a bad phone (5 digits) — stays, reported, never dropped
+    ];
+    const tws = XLSX.utils.json_to_sheet(trows);
+    const twb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(twb, tws, "Sheet1");
+    const tfile = new File([XLSX.write(twb, { type: "buffer", bookType: "xlsx" })], "template-rows.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const tp = await multipart(admin, "/api/candidates/import", {
+      file: tfile, location: loc._id, program: prog._id,
+      mapping: JSON.stringify({ "Student Name": "name", "Mobile": "phone", "Email": "email" }),
+    }, 200);
+    ok("QA-146p2: the three template/description rows are skipped and named by row number",
+      tp.data.template_rows_skipped_count === 3 && (tp.data.template_rows_skipped ?? []).some((r) => /row 2:/.test(r)) && (tp.data.template_rows_skipped ?? []).some((r) => /Salutation/.test(r)),
+      JSON.stringify(tp.data.template_rows_skipped));
+    ok("QA-146p2: the real rows stay importable — including the one with an odd phone (report-only, never dropped)",
+      tp.data.valid === 2 && tp.data.phone_invalid_count === 1, JSON.stringify({ valid: tp.data.valid, bad: tp.data.phone_invalid_count, skipped: tp.data.skipped }));
+  }
+
   // F-B4: the eligibility fields ride the same mapping — dob, education, last training,
   // and comma-separated interest NAMES resolving to real centres / job roles.
   rows[0]["Interests"] = `${prog.name}, Nonexistent Program`;

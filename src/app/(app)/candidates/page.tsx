@@ -255,7 +255,7 @@ function CandidatesInner() {
       setBusy(true);
       try {
         for (const file of Array.from(files)) {
-          const url = await uploadWithRetry(file, "candidate-doc");
+          const url = await uploadWithRetry(file, "candidate-doc", { folder_centre: "_candidates", folder_kind: "documents", entity: "Candidate", entity_id: candidateId });
           await api(`/api/candidates/${candidateId}/documents`, { method: "POST", json: { doc_type: guess(file.name), file_url: url, original_name: file.name } });
         }
         await loadDocs();
@@ -727,7 +727,12 @@ function CandidatesInner() {
                 );
               })()}
               {importState.preview && (
-                <p className="text-sm text-gray-600">{importState.preview.valid} valid, {importState.preview.skipped} skipped (missing name/phone).</p>
+                <p className="text-sm text-gray-600">{importState.preview.valid} valid, {importState.preview.skipped} skipped (missing name/phone{importState.preview.template_rows_skipped_count ? " or template/description rows" : ""}).</p>
+              )}
+              {importState.preview?.template_rows_skipped_count > 0 && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  <b>{importState.preview.template_rows_skipped_count} template/description row{importState.preview.template_rows_skipped_count === 1 ? "" : "s"} skipped</b> — the sheet's own header/instruction lines, not candidates: {importState.preview.template_rows_skipped.join("; ")}
+                </div>
               )}
               {/* QA-110: an operator who forgets to map a column must be able to notice. */}
               {importState.preview?.ignored_columns?.length > 0 && (

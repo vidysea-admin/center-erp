@@ -20,14 +20,27 @@ export async function compressImage(file: File): Promise<Blob> {
   }
 }
 
-type QueueItem = { dataUrl: string; name: string; kind: string; ts: number };
+// -83 (queue integrity): an item remembers WHICH batch and WHAT it is. Before this the
+// queue was global — a photo parked on batch A landed on batch B's daily log at "Retry
+// now", and document uploads queued from the trainer/candidate screens were jammed into a
+// daily log's govt_screenshot. Only daily-log kinds queue at all; documents fail loudly.
+type QueueItem = { dataUrl: string; name: string; kind: string; ts: number; batch_id?: string; hints?: UploadHints };
 const QKEY = "erp_upload_queue";
+const QUEUEABLE = new Set(["photos", "videos", "govt_screenshot"]);
 
-export function getQueue(): QueueItem[] {
-  try { return JSON.parse(localStorage.getItem(QKEY) ?? "[]"); } catch { return []; }
+// Where a file belongs — becomes the Drive folder <Centre>/<Batch>/<kind> and the
+// StoredFile's entity link ("which files belong to this batch?" finally has an answer).
+export type UploadHints = { folder_centre?: string; folder_batch?: string; folder_kind?: string; entity?: string; entity_id?: string; batch_id?: string };
+
+export function getQueue(batchId?: string): QueueItem[] {
+  try {
+    const all: QueueItem[] = JSON.parse(localStorage.getItem(QKEY) ?? "[]");
+    return batchId ? all.filter((i) => i.batch_id === batchId) : all;
+  } catch { return []; }
 }
-function setQueue(q: QueueItem[]) {
-  try { localStorage.setItem(QKEY, JSON.stringify(q)); } catch { /* storage full — queue is best-effort */ }
+// Returns false when the browser refused to keep it (quota) — the caller must SAY so.
+function setQueue(q: QueueItem[]): boolean {
+  try { localStorage.setItem(QKEY, JSON.stringify(q)); return true; } catch { return false; }
 }
 
 async function blobToDataUrl(b: Blob): Promise<string> {
@@ -39,9 +52,12 @@ async function blobToDataUrl(b: Blob): Promise<string> {
   });
 }
 
-async function post(blob: Blob, name: string): Promise<string> {
+async function post(blob: Blob, name: string, hints?: UploadHints): Promise<string> {
   const fd = new FormData();
   fd.append("file", new File([blob], name, { type: blob.type }));
+  for (const k of ["folder_centre", "folder_batch", "folder_kind", "entity", "entity_id"] as const) {
+    if (hints?.[k]) fd.append(k, String(hints[k]));
+  }
   // TEAM-BLOCKER root cause (15/08): this was the ONE fetch in the app without the
   // basePath prefix — on production every UI upload went to /api/upload (the marketing
   // site's 404) instead of /erp/api/upload, retried three times and died. The API-level
@@ -54,28 +70,34 @@ async function post(blob: Blob, name: string): Promise<string> {
 
 // Upload with 3 retries (1s/3s backoff). On final failure, park in the offline queue
 // and throw — caller shows the queued state.
-export async function uploadWithRetry(file: File, kind: string): Promise<string> {
+export async function uploadWithRetry(file: File, kind: string, hints?: UploadHints): Promise<string> {
   const blob = await compressImage(file);
   const name = file.name.replace(/\.[a-z0-9]+$/i, "") + (blob !== file ? ".jpg" : file.name.match(/\.[a-z0-9]+$/i)?.[0] ?? "");
   let lastErr: unknown;
   for (const delay of [0, 1000, 3000]) {
     if (delay) await new Promise((r) => setTimeout(r, delay));
-    try { return await post(blob, name); } catch (e) { lastErr = e; }
+    try { return await post(blob, name, hints); } catch (e) { lastErr = e; }
   }
+  const msg = lastErr instanceof Error ? lastErr.message : "Upload failed";
+  // Only daily-log evidence queues, and only bound to its batch. Documents are attached to a
+  // record in the same breath as they upload — parking them somewhere else would only ever
+  // land them in the wrong place.
+  if (!QUEUEABLE.has(kind) || !hints?.batch_id) throw new Error(msg + " — please retry now");
   const dataUrl = await blobToDataUrl(blob);
-  setQueue([...getQueue(), { dataUrl, name, kind, ts: Date.now() }]);
-  throw new Error((lastErr instanceof Error ? lastErr.message : "Upload failed") + " — saved to retry queue");
+  const kept = setQueue([...getQueue(), { dataUrl, name, kind, ts: Date.now(), batch_id: hints.batch_id, hints }]);
+  throw new Error(msg + (kept ? " — saved to this batch's retry queue" : " — could not be saved for retry (browser storage full); keep the file and retry when online"));
 }
 
-// Retry everything in the queue; returns urls of successes (with their kind).
-export async function flushQueue(): Promise<{ kind: string; url: string }[]> {
-  const q = getQueue();
+// Retry THIS batch's queue; returns urls of successes (with their kind). Other batches' items stay put.
+export async function flushQueue(batchId: string): Promise<{ kind: string; url: string }[]> {
+  const all = getQueue();
   const done: { kind: string; url: string }[] = [];
   const remaining: QueueItem[] = [];
-  for (const item of q) {
+  for (const item of all) {
+    if (item.batch_id !== batchId) { remaining.push(item); continue; }
     try {
       const blob = await (await fetch(item.dataUrl)).blob();
-      const url = await post(blob, item.name);
+      const url = await post(blob, item.name, item.hints);
       done.push({ kind: item.kind, url });
     } catch {
       remaining.push(item);

@@ -598,6 +598,20 @@ ok("cert bulk: Rule 45 names the Fail refusal",
 const afterUp = (await req("GET", `/api/batches/${b4._id}/results`)).data.items;
 const upPassRow = afterUp.find((i) => i.result?.result === "Pass").result;
 ok("cert bulk: certificate_file landed on the result row", /\/api\/files\//.test(upPassRow.certificate_file ?? ""), upPassRow.certificate_file);
+{
+  // -83 (QA-145 third door): certificates used to bypass the storage adapter (raw disk write, no
+  // StoredFile row) — Drive ON would still have lost them on the next deploy. Same adapter now.
+  const { MongoClient } = await import("mongodb");
+  const mc = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+  await mc.connect();
+  const certName = String(upPassRow.certificate_file).split("/").pop();
+  const certRow = await mc.db(process.env.MONGODB_DB || "center_erp_ci").collection("storedfiles").findOne({ name: certName });
+  await mc.close();
+  ok("-83: a bulk-uploaded certificate leaves a StoredFile row (entity Batch, folder …/certificates)",
+    !!certRow && certRow.entity === "Batch" && /certificates$/.test(certRow.folder_path ?? "") && certRow.backend === "local", JSON.stringify(certRow && { entity: certRow.entity, folder: certRow.folder_path, backend: certRow.backend }));
+  const certRead = await fetch(BASE + String(upPassRow.certificate_file).replace(/^\/erp/, ""));
+  ok("-83: …and it reads back through the proxy", certRead.status === 200 && certRead.headers.get("content-type") === "application/pdf", `${certRead.status}`);
+}
 // same CAN id again while file exists + batch still Closing → upsert path allows overwrite
 // pre-completion; the freeze is tested after Completed below.
 
@@ -1217,6 +1231,29 @@ ok("…with the contact details an approver needs", !!queued && queued.phone ===
     !!row && row.backend === "local" && row.size === 14 && row.original_name === "ev.png" && !!row.uploaded_by, JSON.stringify(row && { backend: row.backend, size: row.size }));
   const rd = await fetch(BASE + upJ.url.replace(/^\/erp/, ""));
   ok("QA-145: the proxied read serves the bytes back", rd.status === 200 && (await rd.text()) === "qa145-evidence", String(rd.status));
+  ok("-83 (QA-155): the folder hints and entity a caller sends are RECORDED (Drive tree + 'which files belong to this batch')",
+    row?.folder_path === "TEST-CENTRE/TEST-BATCH-01/evidence", JSON.stringify({ folder_path: row?.folder_path, entity: row?.entity }));
+  // -83 (QA-156): honest file reads — Range → 206 with the exact slice, Accept-Ranges advertised,
+  // media types real and inline, a missing file 404, a bad range 416.
+  const rangeRes = await fetch(BASE + upJ.url.replace(/^\/erp/, ""), { headers: { Range: "bytes=0-4" } });
+  ok("QA-156: Range request → 206 with exactly the asked bytes + Content-Range",
+    rangeRes.status === 206 && (await rangeRes.text()) === "qa145" && rangeRes.headers.get("content-range") === "bytes 0-4/14" && rangeRes.headers.get("accept-ranges") === "bytes",
+    `${rangeRes.status} ${rangeRes.headers.get("content-range")}`);
+  const tailRes = await fetch(BASE + upJ.url.replace(/^\/erp/, ""), { headers: { Range: "bytes=-3" } });
+  ok("QA-156: suffix Range (last 3 bytes) → 206", tailRes.status === 206 && (await tailRes.text()) === "nce", `${tailRes.status}`);
+  const badRange = await fetch(BASE + upJ.url.replace(/^\/erp/, ""), { headers: { Range: "bytes=50-60" } });
+  ok("QA-156: unsatisfiable Range → 416", badRange.status === 416, `${badRange.status}`);
+  const missing = await fetch(BASE + "/api/files/" + "0".repeat(32) + ".png");
+  ok("QA-156: a missing file is 404, not a crash", missing.status === 404, `${missing.status}`);
+  {
+    const fdA = new FormData();
+    fdA.append("file", new File([Buffer.from("voice-note-bytes")], "note.m4a", { type: "audio/mp4" }));
+    const upA = await (await fetch(BASE + "/api/upload", { method: "POST", headers: { cookie }, body: fdA })).json();
+    const rdA = await fetch(BASE + String(upA.url).replace(/^\/erp/, ""));
+    ok("QA-156: a voice note (.m4a) is served as audio/mp4 INLINE, not an octet-stream download",
+      rdA.status === 200 && rdA.headers.get("content-type") === "audio/mp4" && /^inline/.test(rdA.headers.get("content-disposition") ?? "") && rdA.headers.get("content-length") === "16",
+      `${rdA.headers.get("content-type")} ${rdA.headers.get("content-disposition")}`);
+  }
   const ver = await (await fetch(BASE + "/api/public/version")).json();
   ok("QA-145: version endpoint tells the truth — evidence_storage is local-ephemeral in CI", ver.evidence_storage === "local-ephemeral", ver.evidence_storage);
   const cfg = (await req("GET", "/api/test-email", undefined, 200)).data;
