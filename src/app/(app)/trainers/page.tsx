@@ -160,7 +160,12 @@ function TrainersInner() {
     setDrawer(true);
   }
 
+  // QA-141 rider (-72): in-flight guard — a double click was two POSTs (the 2nd died on the
+  // unique index only when the phone string matched exactly).
+  const [savingT, setSavingT] = useState(false);
   async function save() {
+    if (savingT) return;
+    setSavingT(true);
     try {
       const json = {
         ...form,
@@ -174,6 +179,7 @@ function TrainersInner() {
       else await api("/api/trainers", { method: "POST", json });
       setDrawer(false); setEdit(null); setForm({ max_concurrent_batches: 4, status: "Available" }); load();
     } catch (e: any) { setError(e.message); }
+    setSavingT(false);
   }
 
   function openReqEdit(r: any) {
@@ -560,12 +566,15 @@ function TrainersInner() {
                 hint="Single-use — the link stops working the moment the trainer submits the form. To send it again, generate a new link."
                 onDismiss={() => { setInvite(null); load(); }} />
             ) : (
-              <Btn disabled={!invite.form.name || !(invite.form.phone ?? "").trim() || !!phoneError(invite.form.phone) || !!emailError(invite.form.email, { optional: true })} onClick={async () => {
+              <Btn disabled={savingT || !invite.form.name || !(invite.form.phone ?? "").trim() || !!phoneError(invite.form.phone) || !!emailError(invite.form.email, { optional: true })} onClick={async () => {
+                if (savingT) return;
+                setSavingT(true);
                 try {
                   const d = await api("/api/trainers/quick-invite", { method: "POST", json: invite.form });
                   setInvite({ ...invite, link: `${window.location.origin}${BASE_PATH}${d.item.link}` });
                 } catch (e: any) { setError(e.message); }
-              }}>Create link</Btn>
+                setSavingT(false);
+              }}>{savingT ? "Creating…" : "Create link"}</Btn>
             )}
           </div>
         )}
@@ -664,7 +673,7 @@ function TrainersInner() {
             <Field label="Max concurrent batches"><input type="number" className={inputCls} value={form.max_concurrent_batches ?? 4} onChange={(e) => set("max_concurrent_batches", +e.target.value)} /></Field>
           </div>
           <Field label="Performance incentive note"><input className={inputCls} placeholder="e.g. ₹500/batch completion bonus" value={form.incentive_note ?? ""} onChange={(e) => set("incentive_note", e.target.value)} /></Field>
-          <Btn onClick={save} disabled={!form.name || !form.phone || !!phoneError(form.phone) || !!emailError(form.email, { optional: true })}>{edit ? "Save changes" : "Add Trainer"}</Btn>
+          <Btn onClick={save} disabled={savingT || !form.name || !form.phone || !!phoneError(form.phone) || !!emailError(form.email, { optional: true })}>{savingT ? "Saving…" : edit ? "Save changes" : "Add Trainer"}</Btn>
         </div>
       </Drawer>
 

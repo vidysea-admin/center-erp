@@ -798,7 +798,9 @@ NotificationSchema.index({ status: 1, createdAt: -1 });
 // This is the answer to "mail gaya ki nahi?": the CEO's [19:48] complaint was exactly a
 // send nobody could prove either way. Bodies are not stored (PII bloat); subject + to +
 // outcome are the record.
-export const MAIL_STATUS = ["sent", "failed", "skipped"] as const;
+// QA-132 (-72): "sent" was only ever SES ACCEPTANCE. Bounce/complaint notifications (SNS →
+// /api/public/ses-notifications) now revise the row — the one MailLog mutation in the system.
+export const MAIL_STATUS = ["sent", "failed", "skipped", "bounced", "complained"] as const;
 const MailLogSchema = new Schema({
   to: { type: String, required: true },
   subject: { type: String, required: true },

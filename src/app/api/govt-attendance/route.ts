@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, isScoped, HttpError } from "@/lib/authz";
-import { requirePerm } from "@/lib/permissions";
+import { requirePerm, requireView } from "@/lib/permissions";
 import { GovtAttendanceImport, GovtAttendanceRow, Notification } from "@/models";
 import { audit } from "@/lib/audit";
 import {
@@ -17,7 +17,7 @@ import {
 export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
-  await requirePerm(user, "attendance.govt");
+  await requireView(user, "attendance.govt") /* QA-025 P3: read = view */;
   const q: Record<string, unknown> = {};
   const batch = req.nextUrl.searchParams.get("batch");
   const location = req.nextUrl.searchParams.get("location");

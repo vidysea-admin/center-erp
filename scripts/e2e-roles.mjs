@@ -619,6 +619,45 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   await mc2.close();
 }
 
+// ---- QA-132/025-P3 (-72): the product listens for bounces, and more reads open at view.
+{
+  const s72 = Date.now().toString().slice(-6);
+  const B = process.env.BASE_URL || "http://localhost:3000/erp";
+  const sns = async (body, hdr = true) => {
+    const r = await fetch(B + "/api/public/ses-notifications", { method: "POST", headers: { "Content-Type": "application/json", ...(hdr ? { "x-amz-sns-message-type": "Notification" } : {}) }, body: JSON.stringify(body) });
+    return { status: r.status, data: await r.json().catch(() => ({})) };
+  };
+  ok("QA-132: a non-SNS post is refused (400)", (await sns({ Type: "Notification" }, false)).status === 400);
+  ok("QA-132: a non-AWS SubscribeURL is refused (SSRF guard)",
+    (await sns({ Type: "SubscriptionConfirmation", SubscribeURL: "https://evil.example.com/x" })).status === 400);
+  const { MongoClient } = await import("mongodb");
+  const mc72 = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+  await mc72.connect();
+  const db72 = mc72.db(process.env.MONGODB_DB || "center_erp_ci");
+  const mid = `q132-${s72}@ses.test`;
+  await db72.collection("maillogs").insertOne({ to: `victim.${s72}@test.local`, subject: "Q132 probe", status: "sent", message_id: mid, createdAt: new Date() });
+  const b = await sns({ Type: "Notification", Message: JSON.stringify({ notificationType: "Bounce", mail: { messageId: mid }, bounce: { bounceType: "Permanent", bouncedRecipients: [{ emailAddress: `victim.${s72}@test.local`, diagnosticCode: "550 no such user" }] } }) });
+  const row72 = await db72.collection("maillogs").findOne({ message_id: mid });
+  ok("QA-132: a bounce notification flips the row — 'sent' stops being forever",
+    b.status === 200 && b.data.updated === 1 && row72?.status === "bounced" && /550 no such user/.test(row72?.reason ?? ""),
+    JSON.stringify([b.data.updated ?? null, row72?.status ?? null]));
+  await mc72.close();
+
+  // QA-025 P3: users/sheet-changes/govt-attendance reads open at VIEW level.
+  const jpr72 = (await req(spoc, "GET", "/api/locations?limit=1")).data.items[0];
+  const em72 = `q025p3.${s72}@vidysea-test.local`;
+  const mkV = await req(admin, "POST", "/api/users", { name: "Q025 P3 Viewer", email: em72, password: "Q025p3pass!x", role: "Enrollment", location_scope: [jpr72._id], can_edit: true });
+  await req(admin, "PATCH", `/api/users/${mkV.data.item?._id}`, { extra_permissions: ["users.manage:view", "sheet.approve:view", "attendance.govt:view"] });
+  const viewer72 = await login(em72, "Q025p3pass!x");
+  ok("QA-025 P3: viewer signs in", !!viewer72);
+  if (viewer72) {
+    ok("P3: users list READS at view level", (await req(viewer72, "GET", "/api/users")).status === 200);
+    ok("P3: creating a user still needs EDIT (403)", (await req(viewer72, "POST", "/api/users", { name: "X", email: `x.${s72}@t.local`, password: "Xx12345678!", role: "Enrollment", location_scope: [jpr72._id] })).status === 403);
+    ok("P3: sheet-changes queue READS at view level", (await req(viewer72, "GET", "/api/sheet-changes")).status === 200);
+    ok("P3: govt-attendance READS at view level", (await req(viewer72, "GET", "/api/govt-attendance")).status === 200);
+  }
+}
+
 // ---- QA-070/093 (-70): hours everywhere staff look, and the scheme's ABSOLUTE
 // min_required_hours is the bar (the pct-collapse gave a different number whenever
 // program.hours ≠ scheme.total_hours).

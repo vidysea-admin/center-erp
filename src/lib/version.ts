@@ -3,14 +3,15 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-71";
+export const RELEASE = "2026.08.14-72";
 export const RELEASE_NOTE =
-  "QA-027 (loop tick 3): the status vocabularies are reconciled, on " +
-  "paper and in the product. The cell-by-cell table (client module " +
-  "spec vs live enums vs the CEO's own spoken renames) lives in " +
-  "qa/VOCAB-RECONCILE-QA027.md - one FIX, zero undecided cells, the " +
-  "rest intentional with the CEO's vocabulary quoted. The FIX ships " +
-  "here: the spec's blocker states (Trainer Required / Candidate " +
-  "Shortage / Infrastructure Pending) are FILTERABLE on the batch " +
-  "list now - computed from the Preparation engine's own blockers, " +
-  "joined by centre x role, never a parallel enum that could drift.";
+  "QA-132 maker-half + QA-025 P3 + double-submit guards. The product " +
+  "LISTENS for bounces now: /api/public/ses-notifications takes the " +
+  "SES SNS feed (subscription confirm with an AWS-only SSRF guard; " +
+  "Bounce/Complaint flip the MailLog row to BOUNCED/complained with " +
+  "the diagnostic) - a typo'd address stops looking like a success " +
+  "the moment devops points the SNS topic at this URL, their one " +
+  "console step. Rights phase 3: the user list, the sheet-changes " +
+  "queue and government attendance READ at view level; every write " +
+  "keeps needing edit. And the four main create forms carry in-flight " +
+  "guards - a double click is one POST now.";

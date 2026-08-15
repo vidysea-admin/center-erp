@@ -170,7 +170,11 @@ function Users({ setError }: any) {
     setForm(u ? { ...u, location_scope: (u.location_scope ?? []).map((l: any) => l._id ?? l), password: "" } : { role: "Location", can_edit: false, active: true, location_scope: [] });
     setDrawer(true);
   }
+  // QA-141 rider (-72): in-flight guard against double-submit.
+  const [savingU, setSavingU] = useState(false);
   async function save() {
+    if (savingU) return;
+    setSavingU(true);
     try {
       const json = { ...form };
       if (!json.password) delete json.password;
@@ -178,6 +182,7 @@ function Users({ setError }: any) {
       else await api("/api/users", { method: "POST", json });
       setDrawer(false); load();
     } catch (e: any) { setError(e.message); }
+    setSavingU(false);
   }
 
   // 2026-08-11 (CEO): self-signups queue here until an Admin approves them.
@@ -354,7 +359,7 @@ function Users({ setError }: any) {
               <Btn kind="danger" onClick={async () => { try { await api(`/api/users/${edit._id}`, { method: "PATCH", json: { approval: "reject" } }); setDrawer(false); load(); } catch (e: any) { setError(e.message); } }}>Reject</Btn>
             </div>
           )}
-          <Btn onClick={save} disabled={!form.name || !form.email || !!emailError(form.email) || (!edit && !form.password)}>{edit ? "Save" : "Add User"}</Btn>
+          <Btn onClick={save} disabled={savingU || !form.name || !form.email || !!emailError(form.email) || (!edit && !form.password)}>{savingU ? "Saving…" : edit ? "Save" : "Add User"}</Btn>
         </div>
       </Drawer>
     </Section>
@@ -937,6 +942,10 @@ function MailPanel({ setError }: any) {
     sent: { label: "accepted by SES — delivery not confirmed", cls: "text-green-700" },
     failed: { label: "failed", cls: "text-red-700" },
     skipped: { label: "skipped", cls: "text-gray-500" },
+    // QA-132 (-72): once devops points the SES SNS topic at /api/public/ses-notifications,
+    // these two arrive on their own and a typo'd address stops looking like a success.
+    bounced: { label: "BOUNCED — never delivered", cls: "text-red-700 font-semibold" },
+    complained: { label: "marked as spam by the recipient", cls: "text-red-700" },
   };
   return (
     <div className="rounded-lg border p-3">

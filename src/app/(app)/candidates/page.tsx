@@ -113,7 +113,11 @@ function CandidatesInner() {
     setSelected(s);
   }
 
+  // QA-141 rider (-72): in-flight guard against double-submit.
+  const [savingC, setSavingC] = useState(false);
   async function saveCandidate() {
+    if (savingC) return;
+    setSavingC(true);
     try {
       if (drawer === "edit" && editId) {
         // PATCH is partial: a blank select/date means "not changing this", never "cast '' to
@@ -123,6 +127,7 @@ function CandidatesInner() {
       } else await api("/api/candidates", { method: "POST", json: form });
       setDrawer(""); setForm({}); setEditId(""); load();
     } catch (e: any) { setError(e.message); }
+    setSavingC(false);
   }
 
   // Sheet-imported rows carry sheet mistakes (wrong phone, synthetic DOB from an "age" column,
@@ -606,7 +611,7 @@ function CandidatesInner() {
           )}
           {/* Edit mode: location/program may legitimately be blank on a sheet-imported row — the
               save must not be held hostage to fields the user is not correcting. */}
-          <Btn onClick={saveCandidate} disabled={(drawer === "add" ? (!form.name || !form.phone || !form.location || !form.program) : (!form.name || !form.phone))
+          <Btn onClick={saveCandidate} disabled={savingC || (drawer === "add" ? (!form.name || !form.phone || !form.location || !form.program) : (!form.name || !form.phone))
             || !!phoneError(form.phone) || !!phoneError(form.alt_phone, { optional: true }) || !!emailError(form.email, { optional: true })}>
             {drawer === "edit" ? "Save changes" : "Add"}
           </Btn>

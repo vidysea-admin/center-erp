@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, isScoped, HttpError } from "@/lib/authz";
-import { requirePerm } from "@/lib/permissions";
+import { requirePerm, requireView } from "@/lib/permissions";
 import { GovtAttendanceImport, GovtAttendanceRow } from "@/models";
 import { audit } from "@/lib/audit";
 
@@ -21,7 +21,7 @@ async function loadInScope(id: string, user: Awaited<ReturnType<typeof requireUs
 export const GET = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   await dbConnect();
   const user = await requireUser();
-  await requirePerm(user, "attendance.govt");
+  await requireView(user, "attendance.govt") /* QA-025 P3: read = view */;
   const { id } = await ctx.params;
   const imp = await loadInScope(id, user);
   // QA-023 (checker): every count on the summary is a question — each one answers as

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, requireRole, HttpError } from "@/lib/authz";
-import { requirePerm } from "@/lib/permissions";
+import { requirePerm, requireView } from "@/lib/permissions";
 import { User } from "@/models";
 import { audit } from "@/lib/audit";
 import { emailError, canonicalPhone, phoneError } from "@/lib/validate";
@@ -11,7 +11,7 @@ import { renderMail, sendMail } from "@/lib/mailer";
 export const GET = apiHandler(async () => {
   await dbConnect();
   const user = await requireUser();
-  await requirePerm(user, "users.manage"); // togglable (2026-08-11); Admin-only by default (Rule 40)
+  await requireView(user, "users.manage"); // QA-025 P3: reading the user list = view level
   const items = await User.find({}, "-password_hash").populate("location_scope", "name code").lean();
   return NextResponse.json({ items });
 });
