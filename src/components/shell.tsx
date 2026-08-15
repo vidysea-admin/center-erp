@@ -30,7 +30,9 @@ export function usePerms() {
   return { ...p, can };
 }
 // Route rules — prefix match on the pathname without basePath. `roles` = who the door is
-// for by default; `perm` = the togglable right that overrides the role list once known.
+// for (the ceiling — live proof 15/08: the prod matrix hands Trainers attendance.govt, and
+// R-I still says a Trainer's doors are Home and Batches); `perm` = the togglable right that
+// can CLOSE a door within that ceiling when an Admin revokes it.
 const ROUTE_RULES: { prefix: string; roles?: string[]; perm?: string }[] = [
   { prefix: "/sheet-watch", roles: ["Admin"], perm: "sheet.sources" },
   { prefix: "/sync", roles: ["Admin"], perm: "sheet.sources" },
@@ -46,11 +48,13 @@ export function routeAllowed(pathname: string, perms: Perms): boolean {
   if (!rule) return true; // Home, Batches, notifications, programs — everyone's work
   if (perms.role === "Admin") return true;
   const roleOk = !rule.roles || rule.roles.includes(perms.role);
+  if (!roleOk) return false; // the role list is the CEILING (R-I: a Trainer's doors are Home and Batches, full stop)
   if (rule.perm && perms.loaded) {
+    // …and a revoked right closes a door the role would otherwise have (the matrix can narrow, never widen past the role)
     const l = perms.levels[rule.perm];
     return l === "view" || l === "edit";
   }
-  return roleOk;
+  return true;
 }
 
 // Locked navigation (§1)
@@ -262,7 +266,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   // An entry with a togglable right follows the right; a plain entry keeps its own role
   // list (Open Positions is a Trainers sub-door for Admin/Ops only) — and both obey the guard.
   const nav = NAV.filter((n) => user
-    && (n.perm ? true : (!n.roles || n.roles.includes(user.role)))
+    && (!n.roles || n.roles.includes(user.role))
     && routeAllowed(n.href.split("?")[0], { ...perms, role: user.role }));
   const allowedHere = !user || routeAllowed(pathname, { ...perms, role: user.role });
 

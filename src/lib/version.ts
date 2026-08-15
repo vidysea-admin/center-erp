@@ -3,13 +3,11 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-84";
+export const RELEASE = "2026.08.14-85";
 export const RELEASE_NOTE =
-  "QA-146 part 2 rider: candidates get the QA-130 delete verb. The CHI-ITI " +
-  "import had left three of the sheet's own header/description rows in the " +
-  "candidate list and there was no way to remove them (405). Admin-only, " +
-  "refuses anyone with batch history (drop them from the batch instead), " +
-  "documents cascade, audited by name. Delete button in the edit drawer for " +
-  "Admin. Everything from -83 (role-scoped screens, template-row import " +
-  "guard, streamed Range file reads, batch-bound retry queue, certificates " +
-  "through the storage adapter) is unchanged.";
+  "QA-153 rider: the role list is the CEILING for a screen; the permission " +
+  "matrix can only close a door within it, never open one past it. Live " +
+  "proof on -83: the prod matrix hands Trainers attendance.govt, so the " +
+  "effective-rights override would have shown Manish's trainer login a Govt " +
+  "Attendance door - against R-I (a Trainer's doors are Home and Batches, " +
+  "full stop). One rule, both surfaces, now bounded by role.";
