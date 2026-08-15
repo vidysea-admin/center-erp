@@ -552,7 +552,9 @@ export async function transitionBatch(batchId: string, target: string, opts: { i
     case "Ready->Planning":
       break; // allow going back to fix things
     case "Ready->Active": {
-      if (dayStart(new Date()) < dayStart(batch.planned_start)) fail("Rule 17: cannot start before planned_start.");
+      // QA-101 (-69): the SERVER's day said "before planned_start" at 1am IST — IST calendar
+      // dates decide, in dayKey space (QA-081 pattern).
+      if (istToday() < dayKey(batch.planned_start)) fail("Rule 17: cannot start before planned_start.");
       await assertLocationOperational(batch.location, "Starting a batch"); // Rule 1
       const r = await batchReadiness(batchId);
       if (!r.enrollment_ok) fail(`Enrollment threshold not met: ${r.enrolled_count}/${r.enrollment_threshold} required (${(await getDefaults()).enrollment_threshold_pct}% of roster).`);
@@ -703,7 +705,7 @@ export function attendanceGap(log: { roster_count?: number; internal_present?: n
 
 // How many consecutive operating days (ending yesterday) have no daily log.
 export async function missingLogStreak(batch: any, operating: number[]): Promise<{ days: number; lastMissing: Date | null }> {
-  let d = addDays(dayStart(new Date()), -1);
+  let d = addDays(istToday(), -1); // QA-101 (-69): "yesterday" is the IST calendar's, not the server's
   let days = 0, lastMissing: Date | null = null, guard = 0;
   while (guard++ < 21) {
     if (!operating.includes(d.getDay())) { d = addDays(d, -1); continue; }
@@ -764,7 +766,7 @@ export async function batchHealth(batchId: string): Promise<BatchHealth> {
   if (["Planning", "Ready"].includes(batch.status)) {
     const r = await batchReadiness(batchId);
     const failing = Object.entries(r.checks).filter(([, ok]) => !ok).map(([k]) => k);
-    const overdue = dayStart(new Date()) > dayStart(batch.planned_start);
+    const overdue = istToday() > dayKey(batch.planned_start); // QA-101 (-69): IST day decides "overdue"
     if (failing.length) {
       reasons.push({
         code: "not_ready",
@@ -801,7 +803,7 @@ export async function missingLogQueue(locationScopeFilter: Record<string, unknow
     .populate("program", "name operating_days")
     .lean<any[]>();
   const out: any[] = [];
-  const today = dayStart(new Date());
+  const today = istToday(); // QA-101 (-69): the missing-log queue keys on the IST day
   for (const b of batches) {
     const operating: number[] = b.program?.operating_days?.length ? b.program.operating_days : [1, 2, 3, 4, 5, 6];
     // walk back to the previous operating day

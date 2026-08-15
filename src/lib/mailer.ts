@@ -19,7 +19,20 @@ import { getDefaults } from "@/lib/defaults";
 const FROM_NAME = () => process.env.MAIL_FROM_NAME || "Vidysea Center ERP";
 const FROM_EMAIL = () => process.env.MAIL_FROM_EMAIL || "product@vidysea.com";
 
+// QA-129 (-69, "make suppression the DEFAULT, not a flag someone must remember"): a test
+// environment is RECOGNISED, not declared. Every wall points the app at a test DB and a
+// localhost auth URL — if either shape is present, mail is off no matter what flags exist.
+// Production sets neither, so nothing changes there. MAIL_DISABLED stays as an extra
+// explicit off-switch; forgetting it can no longer send real mail from a test run.
+function testEnvironmentShape(): string | null {
+  const db = process.env.MONGODB_DB;
+  if (db && db !== "center_erp") return `test database (${db})`;
+  if ((process.env.AUTH_URL ?? "").includes("localhost")) return "localhost auth URL";
+  return null;
+}
+
 export function mailConfigured(): boolean {
+  if (testEnvironmentShape()) return false; // QA-129: structural, flag-free suppression
   // MAIL_DISABLED=1 is the CI/wall override: PowerShell deletes a variable assigned "",
   // so "blank the creds" cannot be expressed there — an explicit flag can. The e2e wall
   // runs with this set so no test run can ever send real mail (learned the hard way:
@@ -83,6 +96,9 @@ export async function sendMail(m: MailAttempt): Promise<{ status: "sent" | "fail
   };
   try {
     if (!m.to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(m.to)) return await log("skipped", { reason: "no valid recipient address" });
+    // QA-129: name the real reason — "not configured" would be a lie in a suppressed test env.
+    const shape = testEnvironmentShape();
+    if (shape) return await log("skipped", { reason: `test environment (${shape}) — mail suppressed by default` });
     const defaults = await getDefaults();
     if (defaults.email_enabled === false) return await log("skipped", { reason: "email_enabled is off in Defaults" });
     const t = getTransporter();

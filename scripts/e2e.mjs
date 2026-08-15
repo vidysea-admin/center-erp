@@ -1061,7 +1061,10 @@ ok("…with the contact details an approver needs", !!queued && queued.phone ===
     if (!row) await new Promise((r) => setTimeout(r, 200));
   }
   ok("QA-115: the register hook attempted the confirmation mail (MailLog row exists)", !!row, wantTo);
-  ok("QA-115: …and it is honestly 'skipped' with the reason named", row?.status === "skipped" && /not configured/.test(row?.reason ?? ""), JSON.stringify({ s: row?.status, r: row?.reason }));
+  // QA-129 (-69): the structural test-environment gate fires BEFORE the config check now,
+  // so the honest reason on a wall is "test environment (…)"; "not configured" stays valid
+  // for a non-test env without creds.
+  ok("QA-115: …and it is honestly 'skipped' with the reason named", row?.status === "skipped" && /not configured|test environment/.test(row?.reason ?? ""), JSON.stringify({ s: row?.status, r: row?.reason }));
   // Verify endpoint contract: admin POST without creds → 400 naming configuration.
   const post = await req("POST", "/api/test-email", {});
   ok("QA-115: admin test-email without creds → 400 naming the env gap", post.status === 400 && /not configured|environment/.test(post.data?.error ?? ""), `${post.status} ${post.data?.error ?? ""}`);

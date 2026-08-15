@@ -38,6 +38,9 @@ function TrainersInner() {
   const [tab, setTab] = useState(["Requests", "Open Positions"].includes(sp.get("tab") ?? "") ? sp.get("tab")! : "Trainers");
   const [items, setItems] = useState<any[]>([]);
   const [requests, setRequests] = useState<any[]>([]);
+  // QA-029: recognised job roles (master ∪ programme skills) for the skills input + list flag.
+  const [jobRoles, setJobRoles] = useState<any[]>([]);
+  const [programSkills, setProgramSkills] = useState<string[]>([]);
   const [locations, setLocations] = useState<any[]>([]);
   // Deep-link presets: /trainers?tag=Available (pill) or ?status=/?pipeline_status= (API-side).
   const [tag, setTag] = useState(sp.get("tag") ?? "");
@@ -88,8 +91,19 @@ function TrainersInner() {
     api(`/api/trainers?${sp.get("status") ? `status=${encodeURIComponent(sp.get("status")!)}&` : ""}${sp.get("pipeline_status") ? `pipeline_status=${encodeURIComponent(sp.get("pipeline_status")!)}&` : ""}limit=2000`).then((d) => setItems(d.items)),
     api("/api/trainer-requests?limit=2000").then((d) => setRequests(d.items)),
     api("/api/locations?limit=2000").then((d) => setLocations(d.items)),
+    // QA-029 (-69): the job-roles master + programme skills feed the skills input — a trainer
+    // without a recognised job role is what blanks the Preparation board at scale.
+    api("/api/master-lists/job-roles").then((d) => setJobRoles((d.items ?? []).filter((j: any) => j.active !== false))).catch(() => {}),
+    api("/api/programs?limit=1000").then((d) => setProgramSkills([...new Set<string>((d.items ?? []).map((p: any) => String(p.trainer_skill ?? "")).filter(Boolean))])).catch(() => {}),
   ]).catch((e) => setError(e.message)).finally(() => setLoading(false));
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // QA-029: a skill "counts" when it matches a recognised job role (master ∪ programme
+  // skills, case-insensitive). Warn — never block (house rule): the Preparation board and
+  // the batch dropdown both key on roles, so an unrecognised-only trainer is invisible there.
+  const knownRoles = [...new Set([...jobRoles.map((j: any) => j.name), ...programSkills])];
+  const roleMismatch = (skills?: string[]) =>
+    knownRoles.length > 0 && (skills ?? []).length > 0 &&
+    !(skills ?? []).some((s) => knownRoles.some((k) => String(k).trim().toLowerCase() === String(s).trim().toLowerCase()));
   // Positions load separately so the approved/all toggle refetches just the board.
   useEffect(() => {
     api(`/api/open-positions${posApproved === "all" ? "?approved=all" : ""}`)
@@ -345,7 +359,19 @@ function TrainersInner() {
             defaultSort={{ key: "name", dir: "asc" }}
             columns={[
               { key: "name", label: "Name", mobile: false, sortable: true, sortValue: (r: any) => r.name, render: (r: any) => <NameCell name={r.name} sub={r.phone} /> },
-              { key: "skills", label: "Skills", render: (r: any) => (r.skills ?? []).join(", ") },
+              {
+                // QA-029: flag rows whose skills name NO recognised job role — the exact rows
+                // that blank the Preparation board when the real cohort loads.
+                key: "skills", label: "Skills", render: (r: any) => (
+                  <span>
+                    {(r.skills ?? []).join(", ")}
+                    {roleMismatch(r.skills) && (
+                      <span className="ml-1.5 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700"
+                        title="No recognised job role — invisible to the Preparation board and the batch form's role counts">no job role</span>
+                    )}
+                  </span>
+                ),
+              },
               { key: "home_location", label: "Home location", sortable: true, sortValue: (r: any) => r.home_location?.name ?? r.home_location_other ?? null, render: (r: any) => r.home_location?.name ?? r.home_location_other ?? "—", mobile: false },
               {
                 // 2026-08-12: three states now, not two — a rejected profile and a dropped applicant
@@ -559,9 +585,20 @@ function TrainersInner() {
               {form.email && emailError(form.email, { optional: true }) && <p className="mt-1 text-xs text-red-600">{emailError(form.email, { optional: true })}</p>}
             </Field>
           </div>
-          {/* QA-133: skills no longer gate any dropdown — free text is honest labelling now. */}
-          <Field label="Skills (comma-separated)" required>
-            <input className={inputCls} value={Array.isArray(form.skills) ? form.skills.join(", ") : form.skills ?? ""} onChange={(e) => set("skills", e.target.value)} />
+          {/* QA-133: skills no longer gate any dropdown — free text is honest labelling now.
+              QA-029 (-69): but a JOB ROLE among them is what the Preparation board and the
+              batch dropdown count by — suggest from the master, warn on zero matches. */}
+          <Field label="Skills (comma-separated — include the job role)" required>
+            <input className={inputCls} list="job-role-suggestions" value={Array.isArray(form.skills) ? form.skills.join(", ") : form.skills ?? ""} onChange={(e) => set("skills", e.target.value)} />
+            <datalist id="job-role-suggestions">
+              {knownRoles.map((k) => <option key={k} value={k} />)}
+            </datalist>
+            {roleMismatch(typeof form.skills === "string" ? form.skills.split(",").map((s: string) => s.trim()).filter(Boolean) : form.skills) && (
+              <p className="mt-1 text-xs font-medium text-amber-700">
+                ⚠ None of these match a recognised job role — the Preparation board and the batch
+                form count trainers by job role, so this trainer will not appear there.
+              </p>
+            )}
           </Field>
           <Field label="Home location">
             <select className={inputCls} value={form.home_location ?? ""} onChange={(e) => set("home_location", e.target.value)}>

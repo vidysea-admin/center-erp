@@ -619,6 +619,27 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   await mc2.close();
 }
 
+// ---- QA-129 (-69): mail suppression is STRUCTURAL now — the wall points at a test DB and a
+// localhost auth URL, and either shape alone kills sending BEFORE any flag is consulted.
+// The skip reason must SAY so (a "not configured" lie would hide the new gate).
+{
+  const p129 = "91" + Date.now().toString().slice(-8);
+  const em129 = `q129.${Date.now()}@test.local`;
+  const qi = await req(admin, "POST", "/api/trainers/quick-invite", { name: "Q129 Probe", phone: p129, email: em129 });
+  ok("QA-129 fixture: quick-invite with an email lands", qi.status === 201, `got ${qi.status}`);
+  const { MongoClient } = await import("mongodb");
+  const mc129 = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+  await mc129.connect();
+  const row129 = await mc129.db(process.env.MONGODB_DB || "center_erp_ci").collection("maillogs").findOne({ to: em129 });
+  ok("QA-129: the skip names the TEST ENVIRONMENT, not a flag someone remembered",
+    row129?.status === "skipped" && /test environment/.test(row129?.reason ?? ""),
+    JSON.stringify([row129?.status ?? null, row129?.reason ?? null]));
+  await mc129.close();
+  if (qi.status === 201) {
+    ok("QA-129: probe leaves via the delete verb", (await req(admin, "DELETE", `/api/trainers/${qi.data.item.trainer}`)).status === 200);
+  }
+}
+
 // ---- QA-126/127/128 (-67): the manual is current, role-filtered and English-only.
 // (The manual sits behind sign-in like every staff screen — fetch it WITH a session.)
 {

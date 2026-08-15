@@ -191,6 +191,17 @@ function LocationsInner() {
           { key: "city", label: "City", mobile: false, hidden: true, sortValue: (r: any) => r.loc.city, filterText: (r: any) => r.loc.city, render: (r: any) => rep(r, r.loc.city) },
           { key: "approval_status", label: "Approval (centre)", hidden: true, sortable: true, sortValue: (r: any) => r.loc.approval_status, filterText: (r: any) => r.loc.approval_status, render: (r: any) => r.first ? <Chip value={r.loc.approval_status} /> : <span className="text-gray-300">〃</span> },
           { key: "operational_status", label: "Operational", hidden: true, sortValue: (r: any) => r.loc.operational_status, filterText: (r: any) => r.loc.operational_status, render: (r: any) => r.first ? <Chip value={r.loc.operational_status} /> : <span className="text-gray-300">〃</span> },
+          {
+            // QA-018 (-69): editing lives on the centre detail (Overview → Master fields) by
+            // design — but nothing on this table SAID so, and a row-click reads as "view".
+            // An explicit affordance ends the hunt; same destination, said out loud.
+            key: "_edit", label: "", render: (r: any) => r.first ? (
+              <span onClick={(e) => e.stopPropagation()}>
+                <Btn small kind="ghost" onClick={() => router.push(`/locations/${r.loc._id}`)}
+                  >Edit</Btn>
+              </span>
+            ) : null,
+          },
         ]}
         empty="No locations yet — create the first one."
       />
