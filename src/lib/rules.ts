@@ -506,6 +506,15 @@ export async function dropMemberChecked(memberId: string, left_on: Date, drop_re
 }
 
 // ---------- Batch lifecycle (Rules 14–19) ----------
+// QA-147: what each FAILED readiness check means in words. Keys mirror batchReadiness().checks.
+export const READINESS_FAILURE_TEXT: Record<string, string> = {
+  location_approved: "centre not approved / not operational",
+  room_assigned: "room not assigned",
+  trainer_ready: "trainer not ready",
+  tot_lead_ok: "TOT not done 3 days before start",
+  roster_80pct: "roster below threshold",
+};
+
 export async function batchReadiness(batchId: string) {
   const batch = await Batch.findById(batchId).populate("program").populate("room").populate("trainer").populate("location", "name code approval_status operational_status").lean<any>();
   if (!batch) throw new HttpError(404, "Batch not found");
@@ -781,7 +790,11 @@ export async function batchHealth(batchId: string): Promise<BatchHealth> {
     if (failing.length) {
       reasons.push({
         code: "not_ready",
-        label: `Not ready: ${failing.join(", ").replace(/_/g, " ")}`,
+        // QA-147 (Manish, 15/08 recording): the check KEYS are positive ("room_assigned"),
+        // so joining them after "Not ready:" read backwards — "Not ready: room assigned".
+        // He selected the line with the mouse and said "ye samajh nahi aaya". Say the
+        // failure, not the check.
+        label: `Not ready: ${failing.map((k) => READINESS_FAILURE_TEXT[k] ?? k.replace(/_/g, " ")).join(", ")}`,
         severity: overdue ? "red" : "amber",
       });
     }

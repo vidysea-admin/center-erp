@@ -52,11 +52,31 @@ ok("[best] all three steps → enrollment Completed", w.enrollment_status === "C
 const dupAdd = await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: cands[0]._id });
 ok("[worst] double-assignment refused", dupAdd.status >= 400, `got ${dupAdd.status}`);
 
-// ---- the 80% boundary (Rule 16) ----
-for (const c of cands.slice(1, 3)) {
-  const m = (await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: c._id }, 201)).data.item;
-  await req(admin, "PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+// ---- QA-147 (-76): bulk enrollment — Manish's 135-click wall. Two members, ONE request. ----
+{
+  const mA = (await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: cands[1]._id }, 201)).data.item;
+  const mB = (await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: cands[2]._id }, 201)).data.item;
+  const bad = await req(admin, "POST", `/api/batches/${batch._id}/members/bulk-enroll`, { step: "nonsense" });
+  ok("QA-147: bulk-enroll refuses an unknown step (400)", bad.status === 400, String(bad.status));
+  const one = await req(admin, "POST", `/api/batches/${batch._id}/members/bulk-enroll`, { step: "reg_done", member_ids: [mA._id, mB._id] }, 200);
+  ok("QA-147: bulk 'reg_done' updates both selected members", one.data.updated === 2 && one.data.skipped === 0, JSON.stringify(one.data));
+  const again = await req(admin, "POST", `/api/batches/${batch._id}/members/bulk-enroll`, { step: "reg_done", member_ids: [mA._id, mB._id] }, 200);
+  ok("QA-147: re-running the same step is idempotent (skipped, not re-stamped)", again.data.updated === 0 && again.data.skipped === 2, JSON.stringify(again.data));
+  const all = await req(admin, "POST", `/api/batches/${batch._id}/members/bulk-enroll`, { step: "all", member_ids: [mA._id, mB._id] }, 200);
+  ok("QA-147: 'all' completes enrollment for the selection in one call", all.data.updated === 2, JSON.stringify(all.data));
+  const wl = (await req(admin, "GET", `/api/batches/${batch._id}/members`, undefined, 200)).data.items ?? [];
+  const both = wl.filter((m) => [String(mA._id), String(mB._id)].includes(String(m._id)));
+  ok("QA-147: both members read back Completed via the same Rule 24 derivation", both.length === 2 && both.every((m) => m.enrollment_status === "Completed"), JSON.stringify(both.map((m) => m.enrollment_status)));
+  // Blocker text (Manish: "Not ready: room assigned" read backwards). Health on a Planning
+  // batch missing a room must SAY "room not assigned".
+  const noRoomBatch = (await req(admin, "POST", "/api/batches", { location: loc2._id, program: prog2._id, planned_start: today(), target_size: 5 }, 201)).data.item;
+  const health = (await req(admin, "GET", `/api/batches/${noRoomBatch._id}`, undefined, 200)).data;
+  const notReady = (health.health?.reasons ?? []).find((r) => r.code === "not_ready");
+  ok("QA-147: the readiness blocker names the FAILURE ('room not assigned'), never the check ('room assigned')",
+    !!notReady && /room not assigned/.test(notReady.label) && !/Not ready: room assigned/.test(notReady.label), notReady?.label);
+  await req(admin, "POST", `/api/batches/${noRoomBatch._id}/transition`, { target: "Cancelled", reason: "QA-147 pin cleanup" }, 200);
 }
+// ---- the 80% boundary (Rule 16) ---- (cands[1..2] already Completed via bulk above)
 // 3 of 5 = 60% — below the gate.
 await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Ready" }, 409);
 const m3 = (await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: cands[3]._id }, 201)).data.item;

@@ -129,6 +129,39 @@ function Overview({ data, role, onChanged, setError }: any) {
     ["roster_80pct", `Roster ≥ 80% of target (${r.roster_count}/${b.target_size})`, r.checks.roster_80pct],
   ];
 
+  // QA-147 (Manish): "room assign karne ka kahin koi option hi nahi aa raha." Rooms are
+  // per-centre already (his own requirement) — CHI-ITI simply had none, so the New Batch
+  // dropdown was empty and nothing on this page offered a way in. The failing check now
+  // carries the path: pick one of the centre's rooms, or add one right here.
+  const locId = String(b.location?._id ?? b.location ?? "");
+  const [rooms, setRooms] = useState<any[] | null>(null);
+  const [roomPick, setRoomPick] = useState("");
+  const [newRoom, setNewRoom] = useState<{ name: string; type: string } | null>(null);
+  const [roomBusy, setRoomBusy] = useState(false);
+  const canAssignRoom = canTransition && !r.checks.room_assigned && ["Planning", "Ready"].includes(b.status);
+  useEffect(() => {
+    if (!canAssignRoom || !locId) return;
+    api(`/api/locations/${locId}/rooms`).then((d) => setRooms(d.items ?? [])).catch(() => setRooms([]));
+  }, [canAssignRoom, locId]);
+  async function assignRoom(roomId: string) {
+    if (roomBusy || !roomId) return;
+    setRoomBusy(true);
+    try { await api(`/api/batches/${b._id}`, { method: "PATCH", json: { room: roomId } }); setRoomPick(""); onChanged(); }
+    catch (e: any) { setError(e.message); }
+    finally { setRoomBusy(false); }
+  }
+  async function createAndAssignRoom() {
+    if (roomBusy || !newRoom?.name) return;
+    setRoomBusy(true);
+    try {
+      const res = await api(`/api/locations/${locId}/rooms`, { method: "POST", json: { name: newRoom.name, type: newRoom.type || "Classroom" } });
+      if (res.queued) { setError("Room suggestion sent for approval — an Admin will add it."); setNewRoom(null); return; }
+      await api(`/api/batches/${b._id}`, { method: "PATCH", json: { room: res.item._id } });
+      setNewRoom(null); onChanged();
+    } catch (e: any) { setError(e.message); }
+    finally { setRoomBusy(false); }
+  }
+
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       {/* The count used to be hardcoded "/4" while five checks were rendered, so it silently
@@ -136,9 +169,35 @@ function Overview({ data, role, onChanged, setError }: any) {
       <Section title={`Readiness checklist (${CHECKS.filter(([, , v]) => v).length + (r.enrollment_ok ? 1 : 0)}/${CHECKS.length + 1})`}>
         <ul className="space-y-2 text-sm">
           {CHECKS.map(([k, label, ok]) => (
-            <li key={k} className="flex items-center gap-2">
+            <li key={k} className="flex flex-wrap items-center gap-2">
               <span className={`flex h-5 w-5 items-center justify-center rounded-full text-xs ${ok ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-400"}`}>{ok ? "✓" : "○"}</span>
               {label}
+              {k === "room_assigned" && canAssignRoom && (
+                <span className="flex flex-wrap items-center gap-1.5 text-xs">
+                  {rooms && rooms.length > 0 && (
+                    <>
+                      <select className="rounded-lg border border-gray-300 px-2 py-1 text-xs" value={roomPick} onChange={(e) => setRoomPick(e.target.value)}>
+                        <option value="">Assign room…</option>
+                        {rooms.map((rm: any) => <option key={rm._id} value={rm._id}>{rm.name} ({rm.type})</option>)}
+                      </select>
+                      <Btn small disabled={!roomPick || roomBusy} onClick={() => assignRoom(roomPick)}>Assign</Btn>
+                    </>
+                  )}
+                  {rooms && rooms.length === 0 && !newRoom && <span className="text-amber-700">This centre has no rooms yet.</span>}
+                  {!newRoom
+                    ? <button className="text-blue-700 underline" onClick={() => setNewRoom({ name: "", type: b.program?.requires_lab ? "Lab" : "Classroom" })}>+ Add room at this centre</button>
+                    : (
+                      <span className="flex flex-wrap items-center gap-1.5">
+                        <input className="w-32 rounded-lg border border-gray-300 px-2 py-1 text-xs" placeholder="Room name" value={newRoom.name} onChange={(e) => setNewRoom({ ...newRoom, name: e.target.value })} />
+                        <select className="rounded-lg border border-gray-300 px-2 py-1 text-xs" value={newRoom.type} onChange={(e) => setNewRoom({ ...newRoom, type: e.target.value })}>
+                          <option>Classroom</option><option>Lab</option>
+                        </select>
+                        <Btn small disabled={!newRoom.name.trim() || roomBusy} onClick={createAndAssignRoom}>{roomBusy ? "…" : "Add & assign"}</Btn>
+                        <button className="text-gray-500 underline" onClick={() => setNewRoom(null)}>cancel</button>
+                      </span>
+                    )}
+                </span>
+              )}
             </li>
           ))}
           <li className="flex items-center gap-2 border-t pt-2">
@@ -562,9 +621,58 @@ function Roster({ batchId, batch, setError, onChanged }: any) {
 }
 
 // ---------- Enrollment worklist (phone-first; Rules 22–24) ----------
+// QA-147 (Manish, 15/08 recording): three fixes live here. (1) StepToggle and Card were
+// declared INSIDE the component, so every setMembers created new component types and React
+// remounted the whole list — the "page upar bhaga" after each click. They are module-level
+// now; a click updates one card in place and the scroll position stays. (2) Bulk actions —
+// mark one step, or complete enrollment, for every pending member in ONE request. (3) The
+// card names the person in every state (Completed included) with a name→email→phone chain.
+function EnrolStepToggle({ m, field, label, onUpdate }: any) {
+  return (
+    <button onClick={() => onUpdate(m, { [field]: !m[field] })}
+      className={`rounded-lg border px-3 py-2 text-sm font-medium ${m[field] ? "border-green-300 bg-green-50 text-green-700" : "border-gray-300 bg-white text-gray-500"}`}>
+      {m[field] ? "✓ " : ""}{label}
+    </button>
+  );
+}
+function EnrolCard({ m, onUpdate, selected, onSelect }: any) {
+  const who = m.candidate?.name || m.candidate?.email || m.candidate?.phone || "(unnamed candidate)";
+  return (
+    <div className={`space-y-3 rounded-xl border bg-white p-4 ${selected ? "ring-2 ring-blue-200" : ""}`}>
+      <div className="flex items-center justify-between gap-2">
+        <label className="flex min-w-0 items-start gap-2">
+          {m.enrollment_status !== "Completed" && <input type="checkbox" className="mt-1" checked={!!selected} onChange={() => onSelect(m._id)} />}
+          <div className="min-w-0">
+            <div className="truncate font-semibold" title={who}>{who}</div>
+            <div className="text-sm text-gray-500">{m.candidate?.phone}{m.candidate?.email && m.candidate?.name ? ` · ${m.candidate.email}` : ""}</div>
+          </div>
+        </label>
+        <Chip value={m.enrollment_status} />
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <EnrolStepToggle m={m} field="reg_done" label="Registration" onUpdate={onUpdate} />
+        <EnrolStepToggle m={m} field="kyc_done" label="e-KYC" onUpdate={onUpdate} />
+        <EnrolStepToggle m={m} field="accept_done" label="Batch Accept" onUpdate={onUpdate} />
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <select className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm" value={m.issue ?? ""}
+          onChange={(e) => e.target.value ? onUpdate(m, { failed: true, issue: e.target.value }) : onUpdate(m, { failed: false, issue: null })}>
+          <option value="">No issue</option>
+          {["OTP not received", "Already registered", "KYC failed", "Portal error", "Duplicate", "Other"].map((i) => <option key={i}>{i}</option>)}
+        </select>
+        {m.enrollment_status === "Failed" && <Btn small kind="ghost" onClick={() => onUpdate(m, { failed: false, issue: null })}>Clear failure</Btn>}
+        <span className="ml-auto text-xs text-gray-400">{m.source}</span>
+      </div>
+    </div>
+  );
+}
+
 function Enrollment({ batchId, setError }: any) {
   const [members, setMembers] = useState<any[]>([]);
   const [idx, setIdx] = useState(0);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkMsg, setBulkMsg] = useState("");
 
   const load = () => api(`/api/batches/${batchId}/members`).then((d) => setMembers(d.items.filter((m: any) => !m.left_on))).catch((e: any) => setError(e.message));
   useEffect(() => { load(); }, [batchId]);
@@ -575,52 +683,54 @@ function Enrollment({ batchId, setError }: any) {
       setMembers((ms) => ms.map((x) => (x._id === m._id ? { ...x, ...res.item } : x)));
     } catch (e: any) { setError(e.message); }
   }
-
-  const StepToggle = ({ m, field, label }: any) => (
-    <button onClick={() => update(m, { [field]: !m[field] })}
-      className={`rounded-lg border px-3 py-2 text-sm font-medium ${m[field] ? "border-green-300 bg-green-50 text-green-700" : "border-gray-300 bg-white text-gray-500"}`}>
-      {m[field] ? "✓ " : ""}{label}
-    </button>
-  );
-
-  const Card = ({ m }: any) => (
-    <div className="space-y-3 rounded-xl border bg-white p-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="font-semibold">{m.candidate?.name}</div>
-          <div className="text-sm text-gray-500">{m.candidate?.phone}</div>
-        </div>
-        <Chip value={m.enrollment_status} />
-      </div>
-      <div className="flex flex-wrap gap-2">
-        <StepToggle m={m} field="reg_done" label="Registration" />
-        <StepToggle m={m} field="kyc_done" label="e-KYC" />
-        <StepToggle m={m} field="accept_done" label="Batch Accept" />
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <select className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm" value={m.issue ?? ""}
-          onChange={(e) => e.target.value ? update(m, { failed: true, issue: e.target.value }) : update(m, { failed: false, issue: null })}>
-          <option value="">No issue</option>
-          {["OTP not received", "Already registered", "KYC failed", "Portal error", "Duplicate", "Other"].map((i) => <option key={i}>{i}</option>)}
-        </select>
-        {m.enrollment_status === "Failed" && <Btn small kind="ghost" onClick={() => update(m, { failed: false, issue: null })}>Clear failure</Btn>}
-        <span className="ml-auto text-xs text-gray-400">{m.source}</span>
-      </div>
-    </div>
-  );
+  const toggleSel = (id: string) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const pending = members.filter((m) => m.enrollment_status !== "Completed");
+  async function bulk(step: string) {
+    if (bulkBusy) return;
+    const targets = selected.size ? [...selected] : pending.map((m) => m._id);
+    if (!targets.length) return;
+    const what = step === "all" ? "complete enrollment (all three steps)" : `mark ${step === "reg_done" ? "Registration" : step === "kyc_done" ? "e-KYC" : "Batch Accept"}`;
+    if (!confirm(`${what} for ${targets.length} candidate${targets.length > 1 ? "s" : ""}?`)) return;
+    setBulkBusy(true); setBulkMsg("");
+    try {
+      const r = await api(`/api/batches/${batchId}/members/bulk-enroll`, { method: "POST", json: { step, member_ids: targets } });
+      setBulkMsg(`${r.updated} updated${r.skipped ? `, ${r.skipped} already done` : ""}${r.failed?.length ? `, ${r.failed.length} failed` : ""}`);
+      setSelected(new Set());
+      await load();
+    } catch (e: any) { setError(e.message); }
+    finally { setBulkBusy(false); }
+  }
 
   if (!members.length) return <p className="p-6 text-center text-sm text-gray-400">No active members to enroll.</p>;
   const done = members.filter((m) => m.enrollment_status === "Completed").length;
+  const scope = selected.size ? `${selected.size} selected` : `all ${pending.length} pending`;
+  const cur = members[Math.min(idx, members.length - 1)];
 
   return (
     <div className="space-y-3">
-      <div className="text-sm text-gray-600">{done}/{members.length} enrolled · Failed: {members.filter((m) => m.enrollment_status === "Failed").length}</div>
+      <div className="flex flex-wrap items-center gap-2 text-sm text-gray-600">
+        <span>{done}/{members.length} enrolled · Failed: {members.filter((m) => m.enrollment_status === "Failed").length}</span>
+        {bulkMsg && <span className="text-green-700">✓ {bulkMsg}</span>}
+      </div>
+      {/* QA-147: bulk actions — the 135-click wall becomes three clicks (or one). */}
+      {pending.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs">
+          <span className="font-medium text-blue-900">Bulk ({scope}):</span>
+          <Btn small kind="ghost" disabled={bulkBusy} onClick={() => bulk("reg_done")}>Mark Registration</Btn>
+          <Btn small kind="ghost" disabled={bulkBusy} onClick={() => bulk("kyc_done")}>Mark e-KYC</Btn>
+          <Btn small kind="ghost" disabled={bulkBusy} onClick={() => bulk("accept_done")}>Mark Batch Accept</Btn>
+          <Btn small disabled={bulkBusy} onClick={() => bulk("all")}>{bulkBusy ? "Working…" : "Complete enrollment"}</Btn>
+          <button className="ml-auto text-blue-700 underline" onClick={() => setSelected(selected.size === pending.length ? new Set() : new Set(pending.map((m) => m._id)))}>
+            {selected.size === pending.length ? "Clear selection" : "Select all pending"}
+          </button>
+        </div>
+      )}
       {/* Desktop: all cards. Mobile: one at a time with prev/next (spec §0 Rule B) */}
       <div className="hidden gap-3 md:grid md:grid-cols-2 xl:grid-cols-3">
-        {members.map((m) => <Card key={m._id} m={m} />)}
+        {members.map((m) => <EnrolCard key={m._id} m={m} onUpdate={update} selected={selected.has(m._id)} onSelect={toggleSel} />)}
       </div>
       <div className="md:hidden">
-        <Card m={members[Math.min(idx, members.length - 1)]} />
+        <EnrolCard m={cur} onUpdate={update} selected={selected.has(cur._id)} onSelect={toggleSel} />
         <div className="mt-3 flex items-center justify-between">
           <Btn kind="ghost" onClick={() => setIdx((i) => Math.max(0, i - 1))} disabled={idx === 0}>← Prev</Btn>
           <span className="text-sm text-gray-500">{idx + 1} / {members.length}</span>
