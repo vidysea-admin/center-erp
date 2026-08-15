@@ -3,16 +3,14 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-64";
+export const RELEASE = "2026.08.14-65";
 export const RELEASE_NOTE =
-  "QA-141 (Umesh, after a 12-digit keyboard-mash phone sat on prod " +
-  "with nothing to stop it): identity fields are format-checked " +
-  "everywhere. Phone canon = the bare 10 digits (+91/0 forms " +
-  "normalize to the same ten, so one person cannot become three rows " +
-  "under the unique index); email must look like one. Strict on " +
-  "manual entry - trainers, candidates, users, quick-invite, on " +
-  "create AND edit, with the same errors inline in the forms while " +
-  "you type (shared validate.ts, one source). Bulk imports normalize " +
-  "what they can and REPORT what they cannot (phone_invalid counts) - " +
-  "client rows are never dropped over format. Legacy raw rows are " +
-  "not rewritten; backfill is a separate approved step.";
+  "QA-116: the OTP enrolment path exists - the second of the CEO's " +
+  "'one of the two'. A walk-in candidate with no centre link opens " +
+  "/p/enrol, proves their email with a 6-digit one-time code (hash-" +
+  "only storage, 10-minute expiry, 5 wrong tries burn it, rate-" +
+  "limited, honeypot), then registers through the same field set the " +
+  "link path uses - centre chosen from operational ones, phone " +
+  "format-checked (QA-141), confirmation mailed to the VERIFIED " +
+  "address. Single-use challenge; intake only, never unlocks an " +
+  "existing record. Linked from the signup page.";

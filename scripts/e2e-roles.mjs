@@ -494,6 +494,50 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   }
 }
 
+// ---- QA-116 (-65): the OTP enrolment path — a walk-in candidate proves their email with a
+// 6-digit code, then registers through the same field set the link path uses. The hash is
+// one-way, so the test plants a known code straight into the CI DB to walk the happy path.
+{
+  const B = process.env.BASE_URL || "http://localhost:3000/erp";
+  const pj = async (body) => {
+    const r = await fetch(B + "/api/public/enrol-otp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    return { status: r.status, data: await r.json().catch(() => ({})) };
+  };
+  const em = `otp.${Date.now()}@test.local`;
+  const reqOtp = await pj({ action: "request", email: em });
+  ok("QA-116: OTP request lands (mail skipped in CI, challenge stored)", reqOtp.status === 200 && !!reqOtp.data.token, `got ${reqOtp.status}`);
+  const tok = reqOtp.data.token;
+  ok("QA-116: a junk email is refused a code", (await pj({ action: "request", email: "nope" })).status === 400);
+  ok("QA-116: a wrong code is refused", (await pj({ action: "verify", token: tok, code: "000000" })).status === 400);
+  ok("QA-116: the form context stays locked before verification", (await fetch(B + `/api/public/enrol-otp?token=${tok}`)).status === 404);
+
+  const { MongoClient } = await import("mongodb");
+  const nodeCrypto = await import("crypto");
+  const mc = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+  await mc.connect();
+  const db = mc.db(process.env.MONGODB_DB || "center_erp_ci");
+  await db.collection("publictokens").updateOne({ token: tok }, { $set: { otp_hash: nodeCrypto.createHash("sha256").update("424242").digest("hex"), otp_attempts: 0 } });
+
+  ok("QA-116: the right code verifies", (await pj({ action: "verify", token: tok, code: "424242" })).status === 200);
+  const ctxRes = await fetch(B + `/api/public/enrol-otp?token=${tok}`);
+  const ctxD = await ctxRes.json().catch(() => ({}));
+  ok("QA-116: a verified session serves the form (operational centres + active programs)",
+    ctxRes.status === 200 && (ctxD.locations ?? []).length > 0 && (ctxD.programs ?? []).length > 0);
+  ok("QA-116/141: the OTP form refuses a junk phone too",
+    (await pj({ action: "register", token: tok, name: "OTP Cand", phone: "12345", location: ctxD.locations?.[0]?._id, program: ctxD.programs?.[0]?._id })).status === 400);
+  const reg = await pj({ action: "register", token: tok, name: "OTP Cand E2E", phone: "97" + Date.now().toString().slice(-8), location: ctxD.locations?.[0]?._id, program: ctxD.programs?.[0]?._id });
+  ok("QA-116: registration lands", reg.status === 201, `got ${reg.status} ${JSON.stringify(reg.data).slice(0, 120)}`);
+  ok("QA-116: the challenge is single-use",
+    (await pj({ action: "register", token: tok, name: "X", phone: "9733333331", location: ctxD.locations?.[0]?._id, program: ctxD.programs?.[0]?._id })).status === 404);
+  const found = ((await req(admin, "GET", `/api/candidates?q=${encodeURIComponent("OTP Cand E2E")}`)).data.items ?? []).find((c) => c.email === em);
+  ok("QA-116: the row carries the VERIFIED email and the OTP source", !!found && found.source === "Self Registration (OTP)", JSON.stringify(found?.source ?? null));
+
+  const r2 = await pj({ action: "request", email: `otp2.${Date.now()}@test.local` });
+  await db.collection("publictokens").updateOne({ token: r2.data.token }, { $set: { otp_expires_at: new Date(Date.now() - 1000) } });
+  ok("QA-116: an expired code is refused", (await pj({ action: "verify", token: r2.data.token, code: "111111" })).status === 400);
+  await mc.close();
+}
+
 // 2026-08-12 audit F-000 (S0): the generic list route copied every ?key=value into the Mongo
 // filter AFTER the Rule 38 scope filter, so ?location=<other centre> simply overwrote it and a
 // scoped user could read every centre's candidate PII. Scope is now applied last, client keys

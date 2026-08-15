@@ -24,6 +24,13 @@ export default function SignupPage() {
           <p className="mt-0.5 text-sm text-blue-800/80">View your training, attendance and enrollment — just your phone number is needed.</p>
         </a>
 
+        {/* QA-116: the OTP enrolment path — registration without a centre link. */}
+        <a href={`${BASE_PATH}/p/enrol`}
+          className="block rounded-xl border border-emerald-200 bg-emerald-50 p-4 transition-colors hover:border-emerald-400">
+          <div className="font-semibold text-emerald-900">📝 I want to register for training</div>
+          <p className="mt-0.5 text-sm text-emerald-800/80">No link needed — verify your email with a one-time code and register yourself.</p>
+        </a>
+
         <a href={`${BASE_PATH}/p/trainer-apply`}
           className="block rounded-xl border border-violet-200 bg-violet-50 p-4 transition-colors hover:border-violet-400">
           <div className="font-semibold text-violet-900">🧑‍🏫 I want to become a trainer</div>

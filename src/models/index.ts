@@ -810,7 +810,10 @@ MailLogSchema.index({ createdAt: -1 });
 // each student gets a link showing their own days/hours/eligibility, nobody else's).
 // trainer_apply added 2026-08-14 (CEO: "Add Trainer ke fields as a form uske paas chala
 // jaye, wo khud bhar de — Divya naam-email-phone dale, link WhatsApp/SMS chala jaye").
-export const PUBLIC_TOKEN_PURPOSE = ["register", "feedback", "attendance", "trainer_apply"] as const;
+// email_otp added 2026-08-16 (QA-116, CEO's "one of the two" enrolment paths + Umesh: email-OTP
+// ab feasible, mail live hai): a walk-in candidate with no link proves they own an email, then
+// registers through the same field set the link path uses.
+export const PUBLIC_TOKEN_PURPOSE = ["register", "feedback", "attendance", "trainer_apply", "email_otp"] as const;
 const PublicTokenSchema = new Schema({
   token: { type: String, required: true, unique: true },
   purpose: { type: String, enum: PUBLIC_TOKEN_PURPOSE, required: true },
@@ -818,6 +821,13 @@ const PublicTokenSchema = new Schema({
   program: oid("Program"),      // register: optional preselected program
   batch_member: oid("BatchMember"), // feedback: who this link belongs to
   trainer: oid("Trainer"),      // trainer_apply: the pre-created profile this link completes
+  // email_otp: the challenge state. Only the HASH of the code is stored; 10-minute expiry;
+  // 5 wrong attempts burn the token.
+  email: String,
+  otp_hash: String,
+  otp_expires_at: Date,
+  otp_attempts: { type: Number, default: 0 },
+  otp_verified: { type: Boolean, default: false },
   active: { type: Boolean, default: true },
   created_by: oid("User"),
 }, { timestamps: true });
