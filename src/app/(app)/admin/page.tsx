@@ -1005,6 +1005,12 @@ function MailPanel({ setError }: any) {
           {comp?.env && !mail.storage.configured && (
             <div className="mt-2 border-t border-current/20 pt-2">
               <div><b>Why:</b> {comp.env.hint}</div>
+              {comp.env.wif && (
+                <div className="mt-1 text-[11px]">
+                  WIF identity file: {comp.env.wif.present ? `✓ ${comp.env.wif.source}${comp.env.wif.impersonating ? ` → ${comp.env.wif.impersonating}` : ""}` : "✗ not present"} ·
+                  AWS: region {comp.env.aws?.region ?? "—"} · task credentials endpoint {comp.env.aws?.container_creds ? "✓ (ECS)" : "✗"} · env {comp.env.aws?.execution_env ?? "—"}
+                </div>
+              )}
               <details className="mt-1"><summary className="cursor-pointer">what this container sees (names only)</summary>
                 <ul className="mt-1 columns-2 text-[11px] font-mono">
                   {Object.entries(comp.env.env_seen ?? {}).map(([k, v]: any) => (

@@ -60,7 +60,15 @@ export const ENV_ALIASES = {
   // company-owned bucket, service account is the normal writer, signed/resumable direct uploads.
   gcs_bucket: ["GCS_BUCKET", "GOOGLE_CLOUD_BUCKET", "EVIDENCE_BUCKET"],
   gcs_sa_json: ["GCS_SA_JSON", "GCS_SERVICE_ACCOUNT_JSON", "GOOGLE_CLOUD_SA_JSON"],
+  // -93: Workload Identity Federation — an external_account config (NO private key, so it can be
+  // baked into the image at config/gcs-wif.json); the container proves who it is with its AWS
+  // task role and Google hands back a token for the impersonated service account.
+  gcs_wif_json: ["GCS_WIF_JSON", "GOOGLE_WIF_JSON"],
+  gcs_wif_file: ["GCS_WIF_FILE", "GOOGLE_APPLICATION_CREDENTIALS"],
 } as const;
+// Umesh names the bucket once; env overrides (Drive-folder-id pattern). Empty = not decided yet.
+export const DEFAULT_GCS_BUCKET = "";
+export const DEFAULT_WIF_FILE = "config/gcs-wif.json";
 export function parseEnvValue(raw: string | undefined | null): string {
   let v = String(raw ?? "").trim();
   if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1).trim();
@@ -78,9 +86,38 @@ function saJson(): { raw: string; name: string } | null {
   const e = readEnv(ENV_ALIASES.sa_json);
   return e ? { raw: e.value, name: e.name } : null;
 }
-function gcsConfig(): { bucket: string; raw: string; names: string[] } | null {
-  const b = readEnv(ENV_ALIASES.gcs_bucket), k = readEnv(ENV_ALIASES.gcs_sa_json);
-  return b && k ? { bucket: b.value, raw: k.value, names: [b.name, k.name] } : null;
+function wifFilePath(): string | null {
+  const e = readEnv(ENV_ALIASES.gcs_wif_file);
+  const cands = [e?.value, DEFAULT_WIF_FILE, path.join(process.cwd(), DEFAULT_WIF_FILE)].filter(Boolean) as string[];
+  for (const c of cands) { try { if (existsSync(c)) return c; } catch { /* ignore */ } }
+  return null;
+}
+function readWifJson(): { json: any; source: string } | null {
+  const inline = readEnv(ENV_ALIASES.gcs_wif_json);
+  if (inline) {
+    try { const raw = inline.value.trim().startsWith("{") ? inline.value : Buffer.from(inline.value, "base64").toString("utf8"); const j = JSON.parse(raw); if (j?.type === "external_account") return { json: j, source: inline.name }; } catch { /* fall through */ }
+  }
+  const fp = wifFilePath();
+  if (fp) {
+    try { const j = JSON.parse(require("fs").readFileSync(fp, "utf8")); if (j?.type === "external_account") return { json: j, source: `file ${fp}` }; } catch { /* unreadable → not configured */ }
+  }
+  return null;
+}
+type GcsCfg = { bucket: string; bucketFrom: string; kind: "sa" | "wif"; raw?: string; wif?: any; credFrom: string };
+function gcsConfig(): GcsCfg | null {
+  const b = readEnv(ENV_ALIASES.gcs_bucket);
+  const bucket = b?.value || DEFAULT_GCS_BUCKET;
+  if (!bucket) return null;
+  const sa = readEnv(ENV_ALIASES.gcs_sa_json);
+  if (sa) return { bucket, bucketFrom: b?.name ?? "default", kind: "sa", raw: sa.value, credFrom: sa.name };
+  const w = readWifJson();
+  if (w) return { bucket, bucketFrom: b?.name ?? "default", kind: "wif", wif: w.json, credFrom: w.source };
+  return null;
+}
+export function gcsWifPresent(): { present: boolean; source: string | null; impersonating: string | null } {
+  const w = readWifJson();
+  const m = w ? /serviceAccounts\/([^:]+):/.exec(String(w.json.service_account_impersonation_url ?? "")) : null;
+  return { present: !!w, source: w?.source ?? null, impersonating: m ? m[1] : null };
 }
 // Order (QA-161): GCS wins when present (the decided backend); the Drive shapes stay for the
 // files already there and for the interim.
@@ -94,13 +131,16 @@ export function storageMode(): "gcs" | "sa" | "oauth" | null {
 // .env" conversation ends with a fact instead of a guess.
 export function envDiagnostic() {
   const seen: Record<string, { present: boolean; length: number }> = {};
-  const all = [...ENV_ALIASES.gcs_bucket, ...ENV_ALIASES.gcs_sa_json, ...ENV_ALIASES.client_id, ...ENV_ALIASES.client_secret, ...ENV_ALIASES.refresh_token, ...ENV_ALIASES.sa_json, "SES_SMTP_USER", "MONGODB_URL", "AUTH_SECRET"];
+  const all = [...ENV_ALIASES.gcs_bucket, ...ENV_ALIASES.gcs_sa_json, ...ENV_ALIASES.gcs_wif_json, ...ENV_ALIASES.gcs_wif_file, ...ENV_ALIASES.client_id, ...ENV_ALIASES.client_secret, ...ENV_ALIASES.refresh_token, ...ENV_ALIASES.sa_json, "SES_SMTP_USER", "MONGODB_URL", "AUTH_SECRET"];
   for (const n of all) { const v = parseEnvValue(process.env[n]); seen[n] = { present: n in process.env, length: v.length }; }
   const other = Object.keys(process.env).filter((k) => /GDRIVE|DRIVE|GOOGLE|OAUTH|GAPI|GCS|BUCKET/i.test(k) && !all.includes(k)).map((k) => ({ name: k, length: parseEnvValue(process.env[k]).length }));
-  const t = oauthTriple(), sa = saJson(), g = gcsConfig();
+  const t = oauthTriple(), sa = saJson(), g = gcsConfig(), wif = gcsWifPresent();
   const anyDriveName = Object.entries(seen).some(([k, v]) => v.present && !["SES_SMTP_USER", "MONGODB_URL", "AUTH_SECRET"].includes(k));
   let hint: string;
-  if (g) hint = `Google Cloud Storage configured (${g.names.join(" / ")}) — bucket ${g.bucket}.`;
+  if (g) hint = g.kind === "wif"
+    ? `Google Cloud Storage via Workload Identity Federation (${g.credFrom}; impersonating ${wif.impersonating ?? "?"}) — bucket ${g.bucket} (${g.bucketFrom}). If the probe fails, the fix is IAM, not env: the AWS task role must be trusted by the pool provider, hold roles/iam.workloadIdentityUser on the service account, and the service account must hold roles/storage.objectAdmin on the bucket.`
+    : `Google Cloud Storage configured (${g.credFrom} + bucket ${g.bucket}).`;
+  else if (wif.present) hint = `WIF identity is baked in (${wif.source}, impersonating ${wif.impersonating ?? "?"}) but NO BUCKET NAME — set GCS_BUCKET (or the DEFAULT_GCS_BUCKET constant) and redeploy; nothing secret is needed.`;
   else if (sa) hint = `Service-account key found as ${sa.name}.`;
   else if (t) hint = `OAuth triple found as ${t.names.join(" / ")}${t.names.join() !== ENV_ALIASES.client_id[0] + "," + ENV_ALIASES.client_secret[0] + "," + ENV_ALIASES.refresh_token[0] ? " (accepted via alias)" : ""}.`;
   else if (anyDriveName) {
@@ -108,7 +148,7 @@ export function envDiagnostic() {
     const partial = Object.entries(seen).filter(([k, v]) => v.present && v.length > 0 && !["SES_SMTP_USER", "MONGODB_URL", "AUTH_SECRET"].includes(k)).map(([k]) => k);
     hint = `Some Drive names reached this container but not a complete set — present with a value: ${partial.join(", ") || "none"}; present but EMPTY: ${empties.join(", ") || "none"}. All three OAuth names (or the SA key) are needed.`;
   } else hint = `None of the storage names reached this container (GCS_BUCKET + GCS_SA_JSON, or the Drive names)${seen.SES_SMTP_USER.present ? " — SES_SMTP_USER did, so register them in the same place (task definition / pipeline variable list) and redeploy" : ""}.`;
-  return { env_seen: seen, other_names: other, hint };
+  return { env_seen: seen, other_names: other, hint, wif: { present: wif.present, source: wif.source, impersonating: wif.impersonating }, aws: { region: parseEnvValue(process.env.AWS_REGION) || parseEnvValue(process.env.AWS_DEFAULT_REGION) || null, container_creds: !!process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI, execution_env: parseEnvValue(process.env.AWS_EXECUTION_ENV) || null } };
 }
 export function storageConfigured(): boolean {
   return storageMode() !== null;
@@ -117,7 +157,7 @@ export function storageConfigured(): boolean {
 export function storageHealth(): { backend: "gcs" | "drive" | "local"; configured: boolean; mode: "gcs" | "sa" | "oauth" | null; reason: string; hint: string } {
   const mode = storageMode();
   const diag = envDiagnostic();
-  if (mode === "gcs") return { backend: "gcs", configured: true, mode, reason: cachedErr ? `Storage error: ${cachedErr}` : `Google Cloud Storage connected — bucket ${gcsConfig()!.bucket} — uploads survive deploys`, hint: diag.hint };
+  if (mode === "gcs") { const g = gcsConfig()!; return { backend: "gcs", configured: true, mode, reason: cachedErr ? `Storage error: ${cachedErr}` : `Google Cloud Storage connected (${g.kind === "wif" ? "Workload Identity Federation" : "service-account key"}) — bucket ${g.bucket} — uploads survive deploys`, hint: diag.hint }; }
   if (mode) return { backend: "drive", configured: true, mode, reason: cachedErr ? `Drive error: ${cachedErr}` : `Google Drive connected via ${mode === "sa" ? "service account" : "OAuth user"} (root folder ${rootFolderId()}) — uploads survive deploys`, hint: diag.hint };
   return {
     backend: "local",
@@ -128,6 +168,52 @@ export function storageHealth(): { backend: "gcs" | "drive" | "local"; configure
   };
 }
 
+// ---------- -93: AWS credentials for the WIF exchange, WITHOUT the AWS SDK (a 40-line resolver
+// mirrors the SDK's default chain: env keys → ECS/Fargate task-role endpoint (169.254.170.2 via
+// AWS_CONTAINER_CREDENTIALS_RELATIVE_URI / FULL_URI) → EC2 IMDSv2). Cached until expiry. The
+// SDK was tried first and Turbopack could not bundle its IMDS provider into the edge
+// instrumentation graph; this is smaller and does exactly what the container needs. ----------
+type AwsCreds = { accessKeyId: string; secretAccessKey: string; token?: string };
+let awsCache: { creds: AwsCreds; expiresAt: number } | null = null;
+async function awsCredentials(): Promise<AwsCreds> {
+  if (awsCache && awsCache.expiresAt - Date.now() > 60_000) return awsCache.creds;
+  const envId = parseEnvValue(process.env.AWS_ACCESS_KEY_ID), envSecret = parseEnvValue(process.env.AWS_SECRET_ACCESS_KEY);
+  if (envId && envSecret) {
+    const creds = { accessKeyId: envId, secretAccessKey: envSecret, token: parseEnvValue(process.env.AWS_SESSION_TOKEN) || undefined };
+    awsCache = { creds, expiresAt: Date.now() + 3600_000 };
+    return creds;
+  }
+  const rel = parseEnvValue(process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI), full = parseEnvValue(process.env.AWS_CONTAINER_CREDENTIALS_FULL_URI);
+  if (rel || full) {
+    const url = full || `http://169.254.170.2${rel}`;
+    const headers: Record<string, string> = {};
+    const tok = parseEnvValue(process.env.AWS_CONTAINER_AUTHORIZATION_TOKEN);
+    if (tok) headers["Authorization"] = tok;
+    const r = await fetch(url, { headers, signal: AbortSignal.timeout(3000) });
+    if (!r.ok) throw new Error(`ECS credential endpoint answered ${r.status}`);
+    const j: any = await r.json();
+    const creds = { accessKeyId: j.AccessKeyId, secretAccessKey: j.SecretAccessKey, token: j.Token };
+    awsCache = { creds, expiresAt: j.Expiration ? new Date(j.Expiration).getTime() : Date.now() + 15 * 60_000 };
+    return creds;
+  }
+  // EC2 launch type without a task role: instance metadata (IMDSv2)
+  try {
+    const t = await fetch("http://169.254.169.254/latest/api/token", { method: "PUT", headers: { "X-aws-ec2-metadata-token-ttl-seconds": "300" }, signal: AbortSignal.timeout(2000) });
+    const token = t.ok ? await t.text() : "";
+    const h: Record<string, string> = token ? { "X-aws-ec2-metadata-token": token } : {};
+    const roleRes = await fetch("http://169.254.169.254/latest/meta-data/iam/security-credentials/", { headers: h, signal: AbortSignal.timeout(2000) });
+    if (!roleRes.ok) throw new Error(`IMDS role list ${roleRes.status}`);
+    const role = (await roleRes.text()).split(String.fromCharCode(10))[0].trim();
+    const cr = await fetch(`http://169.254.169.254/latest/meta-data/iam/security-credentials/${role}`, { headers: h, signal: AbortSignal.timeout(2000) });
+    const j: any = await cr.json();
+    const creds = { accessKeyId: j.AccessKeyId, secretAccessKey: j.SecretAccessKey, token: j.Token };
+    awsCache = { creds, expiresAt: j.Expiration ? new Date(j.Expiration).getTime() : Date.now() + 15 * 60_000 };
+    return creds;
+  } catch (e: any) {
+    throw new Error(`No AWS credentials in this container (no env keys, no ECS task-role endpoint, IMDS unreachable: ${String(e?.message ?? e).slice(0, 60)})`);
+  }
+}
+
 // ---------- -92 GCS client (lazy; the SDK is only touched when the mode is gcs) ----------
 let cachedGcs: any = null;
 function gcs(): { bucket: any; name: string } {
@@ -135,9 +221,31 @@ function gcs(): { bucket: any; name: string } {
   if (!cachedGcs) {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { Storage } = require("@google-cloud/storage");
-    const raw = cfg.raw.trim().startsWith("{") ? cfg.raw : Buffer.from(cfg.raw, "base64").toString("utf8");
-    const credentials = JSON.parse(raw);
-    cachedGcs = new Storage({ credentials, projectId: credentials.project_id });
+    if (cfg.kind === "sa") {
+      const raw = cfg.raw!.trim().startsWith("{") ? cfg.raw! : Buffer.from(cfg.raw!, "base64").toString("utf8");
+      const credentials = JSON.parse(raw);
+      cachedGcs = new Storage({ credentials, projectId: credentials.project_id });
+    } else {
+      // -93 WIF. The file's own credential_source points at EC2 IMDS (169.254.169.254); on ECS the
+      // task role lives at 169.254.170.2 (AWS_CONTAINER_CREDENTIALS_RELATIVE_URI) and Fargate has no
+      // IMDS at all — so AWS credentials come from the AWS SDK's default provider chain (ECS task
+      // role, EC2 instance role, env, profile — all handled), and the WIF json supplies only the
+      // audience + impersonation target. No secret anywhere in the container.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { AwsClient } = require("google-auth-library");
+      const region = parseEnvValue(process.env.AWS_REGION) || parseEnvValue(process.env.AWS_DEFAULT_REGION) || "ap-south-1";
+      const supplier = {
+        getAwsRegion: async () => region,
+        getAwsSecurityCredentials: async () => awsCredentials(),
+      };
+      const { credential_source: _drop, ...rest } = cfg.wif;
+      void _drop;
+      // AwsClient directly (fromJSON dispatches on credential_source.environment_id, which we
+      // deliberately drop — our supplier replaces it).
+      const authClient = new AwsClient({ ...rest, aws_security_credentials_supplier: supplier });
+      authClient.scopes = ["https://www.googleapis.com/auth/devstorage.read_write"];
+      cachedGcs = new Storage({ authClient });
+    }
   }
   return { bucket: cachedGcs.bucket(cfg.bucket), name: cfg.bucket };
 }

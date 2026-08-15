@@ -21,6 +21,9 @@ RUN apk add --no-cache ghostscript
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
+# -93: Workload Identity Federation config (NO private key — the container proves itself with its
+# AWS task role; Google returns a token for the impersonated service account). Non-secret, baked in.
+COPY --from=builder /app/config ./config
 # uploads live on a mounted volume (see docker-compose.yml)
 RUN mkdir -p /app/uploads && chown -R app:app /app
 USER app

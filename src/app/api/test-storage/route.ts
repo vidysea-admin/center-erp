@@ -20,6 +20,17 @@ export const GET = apiHandler(async () => {
   return NextResponse.json({ storage: storageHealth(), env: envDiagnostic(), rss_mb: rssMb(), tools, compression: { totals: agg[0] ?? { files: 0, stored: 0, original: 0, compressed: 0 }, recent } });
 });
 
+// -93: when the probe fails on GCS/WIF the message says WHICH side to fix — STS (AWS role not
+// trusted by the pool), impersonation (workloadIdentityUser missing), or bucket IAM (objectAdmin).
+function classifyStorageError(msg: string): string {
+  if (/sts:GetCallerIdentity|invalid_target|Unable to acquire impersonated credentials|Error code invalid_grant/i.test(msg)) return "AWS→Google exchange failed: the ECS task role is not trusted by the Workload Identity pool provider (attribute condition / provider config).";
+  if (/generateAccessToken|impersonat|iam.serviceAccounts.getAccessToken|PERMISSION_DENIED.*serviceAccounts/i.test(msg)) return "Impersonation refused: grant roles/iam.workloadIdentityUser on the service account to the pool principal (principalSet://…/attribute.aws_role/…).";
+  if (/storage\.objects\.(create|get|delete)|does not have storage\./i.test(msg)) return "Bucket IAM: grant roles/storage.objectAdmin on the bucket to the service account.";
+  if (/bucket.*(not found|does not exist)|404/i.test(msg)) return "Bucket not found: check GCS_BUCKET / DEFAULT_GCS_BUCKET spelling and that the bucket exists.";
+  if (/Could not load credentials|CredentialsProviderError|Unable to locate credentials|no AWS credentials/i.test(msg)) return "No AWS credentials in the container: the task has no IAM role (or the SDK cannot reach the ECS credential endpoint).";
+  return "";
+}
+
 export const POST = apiHandler(async (_req: NextRequest) => {
   const user = await requireUser();
   requireRole(user, "Admin");
@@ -31,8 +42,15 @@ export const POST = apiHandler(async (_req: NextRequest) => {
   const name = `healthcheck-${stamp}.txt`;
   const payload = Buffer.from(`Center ERP storage probe ${stamp} by ${user.email}`);
   const started = Date.now();
-  const put = await putFile(name, payload, "text/plain", ["_healthcheck"]);
-  const back = await getFile({ backend: put.backend, drive_file_id: put.drive_file_id }, name);
+  let put, back;
+  try {
+    put = await putFile(name, payload, "text/plain", ["_healthcheck"]);
+    back = await getFile({ backend: put.backend, drive_file_id: put.drive_file_id }, name);
+  } catch (e: any) {
+    const msg = String(e?.message ?? e);
+    const why = classifyStorageError(msg);
+    return NextResponse.json({ ok: false, backend: health.backend, ms: Date.now() - started, error: msg.slice(0, 300), note: why || "Storage refused the probe — see error.", fix: why || null }, { status: 502 });
+  }
   const roundtrip = back.equals(payload);
   return NextResponse.json({
     ok: roundtrip,
@@ -43,7 +61,7 @@ export const POST = apiHandler(async (_req: NextRequest) => {
     roundtrip,
     ms: Date.now() - started,
     note: roundtrip
-      ? "Drive write + read-back succeeded — uploads on this build survive deploys."
-      : "Wrote to Drive but the read-back did not match — do NOT trust storage until this passes.",
+      ? `${put.backend === "gcs" ? "Bucket" : "Drive"} write + read-back succeeded — uploads on this build survive deploys.`
+      : "Wrote to storage but the read-back did not match — do NOT trust storage until this passes.",
   });
 });
