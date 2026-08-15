@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, HttpError } from "@/lib/authz";
 import { Batch, BatchMember, DailyLog, GovtAttendanceRow } from "@/models";
-import { assertBatchInScope, minAttendancePctForScheme, requiredAssessmentHours, slotHoursPerDay } from "@/lib/rules";
+import { assertBatchInScope, assessmentHoursBar, memberAttendedHours, slotHoursPerDay } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 
 // R-D (CEO 14/08): the batch's own "Attendance" tab — day-wise per student, BOTH meters
@@ -26,9 +26,9 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     getDefaults(),
   ]);
 
-  // QA-093: the scheme master's hours outrank the Defaults guess once they exist.
-  const { pct: minPct, source: minPctSource } = await minAttendancePctForScheme(batch.program?.scheme, defaults.min_attendance_pct ?? 50);
-  const requiredHours = requiredAssessmentHours(batch.program, minPct);
+  // QA-093 (-70): scheme's ABSOLUTE min_required_hours is the bar when the master has it;
+  // the Defaults pct is the honest fallback (assessmentHoursBar, one formula for every surface).
+  const { requiredHours, minPct, source: minPctSource } = await assessmentHoursBar(batch.program?.scheme, batch.program, defaults.min_attendance_pct ?? 50);
   const hoursPerDay = slotHoursPerDay(batch);
 
   // Latest Matched portal row per candidate — cumulative as of its import.
@@ -45,12 +45,9 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     const presentByDay = logs.map((l) => (l.present_member_ids ?? []).some((x: unknown) => String(x) === mid));
     const internalDays = presentByDay.filter(Boolean).length;
     const g = m.candidate ? govtByCand.get(String(m.candidate._id)) : undefined;
-    // QA-085/086: the GREEN verdict comes from the portal's hour meter ALONE — that is
-    // what the assessor settles against. Our own hours (days × slot) are shown beside it
-    // as their own column; with no slot on the batch they are null, never an assumed 8.
-    const govtHours = g?.total_hours_minutes != null ? Math.round(g.total_hours_minutes / 60) : null;
-    const ourHours = hoursPerDay != null ? Math.round(internalDays * hoursPerDay) : null;
-    const basis = govtHours != null ? "portal" : ourHours != null ? "estimate" : null;
+    // QA-070 (-70): the shared verdict (memberAttendedHours) — QA-085/086 semantics live
+    // there now: green from PORTAL hours alone, no assumed 8 when the batch has no slot.
+    const h = memberAttendedHours({ internalDays, hoursPerDay, govtMinutes: g?.total_hours_minutes, requiredHours });
     return {
       member_id: mid,
       candidate_id: m.candidate?._id ?? null,
@@ -59,17 +56,17 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
       left_on: m.left_on ?? null,
       present_by_day: presentByDay,
       internal_days: internalDays,
-      our_hours: ourHours,
+      our_hours: h.our_hours,
       govt: g ? {
         days_present: g.total_days_present ?? null,
         working_days: g.total_working_days ?? null,
-        hours: govtHours,
+        hours: h.govt_hours,
         hours_raw: g.total_hours_raw ?? null,
         as_of: g.createdAt,
       } : null,
-      attended_hours: govtHours ?? ourHours,
-      basis,
-      qualified: govtHours != null && govtHours >= requiredHours,
+      attended_hours: h.attended_hours,
+      basis: h.basis,
+      qualified: h.qualified,
     };
   });
 

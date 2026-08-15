@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, HttpError } from "@/lib/authz";
 import { CandidateResult, Closure, DailyLog, GovtAttendanceRow, PublicToken } from "@/models";
 import { getDefaults } from "@/lib/defaults";
-import { minAttendancePctForScheme, requiredAssessmentHours, slotHoursPerDay } from "@/lib/rules";
+import { assessmentHoursBar, memberAttendedHours, slotHoursPerDay } from "@/lib/rules";
 
 // Public per-student attendance view (2026-08-13, Manish: "bacche baar-baar request karte hain
 // sir hamein attendance dekhiye… 60 plus hona mandatory hai" — eligibility is min_attendance_pct
@@ -52,19 +52,17 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     .lean<any>();
 
   const defaults = await getDefaults();
-  // QA-093: scheme-master hours outrank the Defaults guess — same rule as the batch tab.
-  const { pct: minPct } = await minAttendancePctForScheme(batch?.program?.scheme, defaults.min_attendance_pct ?? 50);
-  // Shared with the batch Attendance tab (R-D) — one threshold formula, not two.
-  const requiredHours = requiredAssessmentHours(batch?.program, minPct);
+  // QA-093 (-70): scheme's ABSOLUTE min_required_hours is the bar when the master has it —
+  // one formula (assessmentHoursBar) shared with every staff surface, not two.
+  const { requiredHours, minPct } = await assessmentHoursBar(batch?.program?.scheme, batch?.program, defaults.min_attendance_pct ?? 50);
   const hoursPerDay = slotHoursPerDay(batch); // null when the batch has no slot (QA-085)
 
-  // QA-085/086: the ELIGIBLE verdict comes from the portal's hour meter alone — that is
-  // what the assessor settles against. Days × slot is only ever an estimate, shown as
-  // such; with no slot on the batch there is no estimate at all, never an assumed 8.
-  const govtHours = govtRow?.total_hours_minutes != null ? Math.round(govtRow.total_hours_minutes / 60) : null;
-  const estimatedHours = hoursPerDay != null ? Math.round(internalDays * hoursPerDay) : null;
-  const attendedHours = govtHours ?? estimatedHours;
-  const basis = govtHours != null ? "portal" : estimatedHours != null ? "estimate" : null;
+  // QA-070 (-70): shared verdict — QA-085/086 semantics live in memberAttendedHours now
+  // (green from PORTAL hours alone; estimate labelled; no assumed 8 without a slot).
+  const h = memberAttendedHours({ internalDays, hoursPerDay, govtMinutes: govtRow?.total_hours_minutes, requiredHours });
+  const govtHours = h.govt_hours;
+  const attendedHours = h.attended_hours;
+  const basis = h.basis;
 
   const closure = await Closure.findOne({ batch: batch._id }).select("assessment_date").lean<any>();
   // Result & certificate — the "aage kya hua" answer once the exam happens.

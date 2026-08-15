@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { api, fmtDate, toInputDate } from "@/lib/client";
 import { trainerSelectGroups } from "@/lib/trainer-select";
+import { slotHoursPerDay } from "@/lib/slot-rules";
 import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, HealthBanner, NameCell, Section, Tabs, inputCls } from "@/components/ui";
 import { Activity } from "@/components/activity";
 import { flushQueue, getQueue, uploadWithRetry } from "@/lib/upload";
@@ -494,6 +495,19 @@ function Roster({ batchId, batch, setError, onChanged }: any) {
                 : <span className="text-xs text-gray-400">—</span>,
             },
             {
+              // QA-070 (-70): HOURS on the roster — the CEO's ask ("without number of hours we
+              // don't know if the student has qualified"). Same shared verdict as the
+              // Attendance tab: green only on portal-verified hours.
+              key: "hours", label: "Hours", render: (r: any) => {
+                const h = r.hours;
+                if (!h) return <span className="text-xs text-gray-400">—</span>;
+                if (h.qualified) return <span className="rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-semibold text-green-700" title={`Portal-verified: ${h.govt_hours} of ${h.required_hours} hrs`}>✓ {h.govt_hours}/{h.required_hours} hrs</span>;
+                if (h.basis === "portal") return <span className="text-xs tabular-nums text-amber-700">{h.attended_hours}/{h.required_hours} hrs</span>;
+                if (h.basis === "estimate") return <span className="text-xs tabular-nums text-gray-500" title="Days × slot estimate — the portal meter decides">~{h.attended_hours}/{h.required_hours} hrs</span>;
+                return <span className="text-xs text-gray-400" title="No slot on the batch and no portal import yet">awaiting hrs</span>;
+              },
+            },
+            {
               // QA-043: the outcome, on the roster itself.
               key: "result", label: "Result", mobile: false, filterable: true,
               filterText: (r: any) => resultsByCand.get(String(r.candidate?._id))?.result ?? "—",
@@ -784,7 +798,9 @@ function DailyExecution({ batchId, batch, role, setError }: any) {
   const expSD = expDays * roster;
   const oursSD = logs.reduce((s: number, l: any) => s + (l.internal_present ?? 0), 0);
   const govtSD = logs.reduce((s: number, l: any) => s + (l.govt_present ?? 0), 0);
-  const hoursPerDay = batch.program?.hours && batch.program?.duration_days ? batch.program.hours / batch.program.duration_days : 8;
+  // QA-070 (-70): the SHARED slot formula — this summary carried its own hours/duration-or-8
+  // copy, the exact assumed-8 QA-085 removed elsewhere. No slot → no hours estimate shown.
+  const hoursPerDay = slotHoursPerDay(batch);
   const pct = (n: number) => (expSD > 0 ? Math.round((100 * n) / expSD) : null);
 
   return (
@@ -799,12 +815,12 @@ function DailyExecution({ batchId, batch, role, setError }: any) {
           <div className="rounded-xl border border-gray-200/80 bg-white p-3">
             <div className="text-[11px] font-medium uppercase tracking-wider text-gray-400">Expected so far (100%)</div>
             <div className="text-lg font-semibold text-gray-900">{expSD} <span className="text-xs font-normal text-gray-400">student-days</span></div>
-            <div className="text-[11px] text-gray-400">{expDays} operating days × {roster} on roster · ≈{Math.round(expSD * hoursPerDay)} hrs</div>
+            <div className="text-[11px] text-gray-400">{expDays} operating days × {roster} on roster{hoursPerDay != null ? <> · ≈{Math.round(expSD * hoursPerDay)} hrs</> : null}</div>
           </div>
           <div className={`rounded-xl border p-3 ${oursSD < expSD * 0.6 ? "border-amber-300 bg-amber-50" : "border-gray-200/80 bg-white"}`}>
             <div className="text-[11px] font-medium uppercase tracking-wider text-gray-400">Our records (trainer-marked)</div>
             <div className="text-lg font-semibold text-gray-900">{oursSD} <span className="text-xs font-normal text-gray-400">({pct(oursSD)}%)</span></div>
-            <div className="text-[11px] text-gray-400">≈{Math.round(oursSD * hoursPerDay)} hrs marked</div>
+            <div className="text-[11px] text-gray-400">{hoursPerDay != null ? `≈${Math.round(oursSD * hoursPerDay)} hrs marked` : "no slot on the batch — hours come from the portal meter"}</div>
           </div>
           <div className={`rounded-xl border p-3 ${govtSD > oursSD ? "border-amber-300 bg-amber-50" : "border-gray-200/80 bg-white"}`}>
             <div className="text-[11px] font-medium uppercase tracking-wider text-gray-400">Govt portal</div>
@@ -1342,9 +1358,15 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
   }
 
   const [loaded, setLoaded] = useState(false);
+  // QA-070 (-70): the marking screen was hours-blind — the CEO's exact ask is knowing WHO
+  // qualified while marking results. Same existing attendance API, joined by member_id.
+  const [hoursBy, setHoursBy] = useState<Map<string, any>>(new Map());
   const load = () => Promise.all([
     api(`/api/batches/${batchId}/results`).then((d) => { setItems(d.items); setSummary(d.summary); }),
     api("/api/master-lists/failure-reasons").then((d) => setReasons(d.items)).catch(() => setReasons([])),
+    api(`/api/batches/${batchId}/attendance`).then((d) =>
+      setHoursBy(new Map((d.members ?? []).map((m: any) => [String(m.member_id), { qualified: m.qualified, attended_hours: m.attended_hours, basis: m.basis, required_hours: d.required_hours }])))
+    ).catch(() => {}),
   ]).catch((e: any) => setError(e.message)).finally(() => setLoaded(true));
   useEffect(() => { load(); }, [batchId]);
 
@@ -1385,14 +1407,25 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
     </div>
   );
 
-  const Card = ({ i }: any) => (
+  const Card = ({ i }: any) => {
+    const h = hoursBy.get(String(i.member));
+    return (
     <div className="space-y-2 rounded-xl border bg-white p-3">
       <div className="flex items-center justify-between">
         <div>
           <div className="font-medium">{i.candidate?.name}</div>
           <div className="text-xs text-gray-500">{i.candidate?.phone}{i.left_on ? " · dropped" : ""}</div>
         </div>
-        <Chip value={i.result?.result ?? "Pending"} />
+        <span className="flex items-center gap-1.5">
+          {/* QA-070: the qualification verdict RIGHT where results are marked. */}
+          {h && (h.qualified
+            ? <span className="rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-semibold text-green-700" title={`Portal-verified: ${h.attended_hours} of ${h.required_hours} hrs`}>✓ Qualified</span>
+            : <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700"
+                title={h.basis === "estimate" ? "Estimate only — the portal meter decides" : h.basis == null ? "No hours data yet" : undefined}>
+                {h.attended_hours != null ? `${h.basis === "estimate" ? "~" : ""}${h.attended_hours}/${h.required_hours} hrs` : "hrs pending"}
+              </span>)}
+          <Chip value={i.result?.result ?? "Pending"} />
+        </span>
       </div>
       <ResultButtons i={i} />
       <div className="flex flex-wrap items-center gap-2">
@@ -1411,7 +1444,8 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
         {i.result?.certificate_status && i.result.certificate_status !== "Pending" && <Chip value={i.result.certificate_status} />}
       </div>
     </div>
-  );
+    );
+  };
 
   return (
     <Section

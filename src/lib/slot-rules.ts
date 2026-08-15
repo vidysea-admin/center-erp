@@ -19,6 +19,15 @@ const toMin = (hhmm: string) => {
  * deploy); the 4/8 pair is the scheme's own constant, so it is code, not a knob.
  * Blocking (not warning) on the API is deliberate: these are the guidelines an audit checks.
  */
+// QA-070 (-70): hours-per-day from the batch's slot, moved here CLIENT-SAFE for the same
+// reason as the guideline check above — the Daily Execution summary carried its own
+// hours/duration_days-or-8 copy (the exact assumed-8 QA-085 removed elsewhere). Unknown
+// slot returns null: callers show nothing rather than assume.
+export function slotHoursPerDay(batch: any): number | null {
+  const slotMin = (toMin(String(batch?.slot_end ?? "")) ?? 0) - (toMin(String(batch?.slot_start ?? "")) ?? 0);
+  return slotMin > 0 ? slotMin / 60 : null;
+}
+
 export function slotGuidelineErrors(
   slot: { slot_start?: string | null; slot_end?: string | null } | undefined,
   defaults: { day_start_time?: string; day_end_time?: string; max_session_hours?: number },

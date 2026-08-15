@@ -619,6 +619,47 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   await mc2.close();
 }
 
+// ---- QA-070/093 (-70): hours everywhere staff look, and the scheme's ABSOLUTE
+// min_required_hours is the bar (the pct-collapse gave a different number whenever
+// program.hours ≠ scheme.total_hours).
+{
+  const s70 = Date.now().toString().slice(-6);
+  const jpr = (await req(spoc, "GET", "/api/locations?limit=1")).data.items[0];
+  // Own program with an ENUM scheme + hours 100 — deliberately ≠ the scheme's 120, so the
+  // absolute-vs-pct difference is visible (absolute → 60; pct-collapse would give 50).
+  const progMk = await req(admin, "POST", "/api/programs", { code: `Q70${s70}`, name: `Q070 Prog ${s70}`, trainer_skill: `Q070 ${s70}`, scheme: "RPL-HSL", hours: 100, duration_days: 15 });
+  const prog = progMk.data.item;
+  ok("QA-093 fixture: program (scheme RPL-HSL, hours 100) created", progMk.status === 201 && !!prog?._id, `got ${progMk.status}`);
+  const schemeRow = ((await req(admin, "GET", "/api/master-lists/schemes")).data.items ?? []).find((x) => x.name === "RPL-HSL");
+  ok("QA-093 fixture: the lazy-seeded RPL-HSL master row exists", !!schemeRow?._id);
+  await req(admin, "PATCH", `/api/master-lists/schemes/${schemeRow._id}`, { total_hours: 120, min_required_hours: 60 });
+  const bat = (await req(admin, "POST", "/api/batches", { location: jpr._id, program: prog._id, planned_start: "2027-03-01", slot_start: "09:00", slot_end: "17:00" })).data.item;
+  ok("QA-070 fixture: batch with an 8h slot", !!bat?._id);
+
+  const att = (await req(admin, "GET", `/api/batches/${bat._id}/attendance`)).data;
+  ok("QA-093: required hours = the scheme's ABSOLUTE 60 (not a pct re-multiplication)",
+    att.required_hours === 60 && att.min_attendance_source === "scheme", JSON.stringify([att.required_hours, att.min_attendance_source]));
+  const mem = (await req(admin, "GET", `/api/batches/${bat._id}/members`)).data;
+  ok("QA-070: the roster API carries the bar too", mem.required_hours === 60, JSON.stringify(mem.required_hours));
+
+  // Member-level: one candidate, one present day, 8h slot → our_hours 8, not qualified (no portal row).
+  const cand = (await req(admin, "POST", "/api/candidates", { name: `Q070 Cand ${s70}`, phone: "93" + Date.now().toString().slice(-8), location: jpr._id, program: prog._id })).data.item;
+  await req(admin, "POST", `/api/batches/${bat._id}/members`, { candidate: cand._id });
+  const memRows = (await req(admin, "GET", `/api/batches/${bat._id}/members`)).data.items ?? [];
+  const row = memRows.find((m) => String(m.candidate?._id) === String(cand._id));
+  ok("QA-070: roster row carries the hours verdict object",
+    !!row?.hours && row.hours.required_hours === 60 && row.hours.qualified === false, JSON.stringify(row?.hours ?? null));
+
+  // Invalid scheme data (min > total) → honest fallback to the Defaults pct path.
+  // (This also RESTORES the pre-pin behaviour for other RPL-HSL programs: an invalid row
+  // is ignored, exactly like the empty row the wall started with.)
+  await req(admin, "PATCH", `/api/master-lists/schemes/${schemeRow._id}`, { min_required_hours: 130 });
+  const att2 = (await req(admin, "GET", `/api/batches/${bat._id}/attendance`)).data;
+  ok("QA-093: invalid scheme data falls back to the pct path, labelled 'defaults'",
+    att2.min_attendance_source === "defaults" && att2.required_hours === Math.ceil(att2.program_hours * (att2.min_attendance_pct / 100)),
+    JSON.stringify([att2.min_attendance_source, att2.required_hours, att2.program_hours, att2.min_attendance_pct]));
+}
+
 // ---- QA-129 (-69): mail suppression is STRUCTURAL now — the wall points at a test DB and a
 // localhost auth URL, and either shape alone kills sending BEFORE any flag is consulted.
 // The skip reason must SAY so (a "not configured" lie would hide the new gate).

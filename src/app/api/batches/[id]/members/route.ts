@@ -3,7 +3,8 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError, assertLocationInScope } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, BatchMember, Candidate, DailyLog, GovtAttendanceRow } from "@/models";
-import { addMemberChecked, assertBatchInScope, assertLocationOperational } from "@/lib/rules";
+import { addMemberChecked, assertBatchInScope, assertLocationOperational, assessmentHoursBar, memberAttendedHours, slotHoursPerDay } from "@/lib/rules";
+import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
 
 export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
@@ -26,24 +27,37 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   }
   // 2026-08-13: the government portal's cumulative figure per candidate (latest import wins) —
   // the roster shows both meters side by side, internal log days and portal days.
+  // QA-070 (-70): hours ride along now — this API never even FETCHED total_hours_minutes,
+  // which is why the roster showed days while the CEO asked for hours.
   const candIds = items.map((m: any) => m.candidate?._id).filter(Boolean);
   const govtLatest = candIds.length ? await GovtAttendanceRow.aggregate([
     { $match: { candidate: { $in: candIds }, match_status: "Matched" } },
     { $sort: { createdAt: -1 } },
-    { $group: { _id: "$candidate", days_present: { $first: "$total_days_present" }, working_days: { $first: "$total_working_days" }, as_of: { $first: "$createdAt" } } },
+    { $group: { _id: "$candidate", days_present: { $first: "$total_days_present" }, working_days: { $first: "$total_working_days" }, hours_minutes: { $first: "$total_hours_minutes" }, as_of: { $first: "$createdAt" } } },
   ]) : [];
   const govtBy = new Map(govtLatest.map((g: any) => [String(g._id), g]));
 
-  const withAttendance = items.map((m: any) => ({
-    ...m,
-    attendance: {
-      present: presentDays.get(String(m._id)) ?? 0,
-      days_held: daysHeld,
-      pct: daysHeld ? Math.round((100 * (presentDays.get(String(m._id)) ?? 0)) / daysHeld) : null,
-    },
-    govt_attendance: govtBy.get(String(m.candidate?._id)) ?? null,
-  }));
-  return NextResponse.json({ items: withAttendance });
+  // One bar, one verdict — the same shared formulas as the Attendance tab and the portal.
+  const batchDoc = await Batch.findById(id).populate("program", "hours duration_days scheme").select("program slot_start slot_end").lean<any>();
+  const defaults = await getDefaults();
+  const { requiredHours } = await assessmentHoursBar(batchDoc?.program?.scheme, batchDoc?.program, defaults.min_attendance_pct ?? 50);
+  const hoursPerDay = slotHoursPerDay(batchDoc);
+
+  const withAttendance = items.map((m: any) => {
+    const g = govtBy.get(String(m.candidate?._id));
+    const h = memberAttendedHours({ internalDays: presentDays.get(String(m._id)) ?? 0, hoursPerDay, govtMinutes: g?.hours_minutes, requiredHours });
+    return {
+      ...m,
+      attendance: {
+        present: presentDays.get(String(m._id)) ?? 0,
+        days_held: daysHeld,
+        pct: daysHeld ? Math.round((100 * (presentDays.get(String(m._id)) ?? 0)) / daysHeld) : null,
+      },
+      govt_attendance: g ?? null,
+      hours: { ...h, required_hours: requiredHours },
+    };
+  });
+  return NextResponse.json({ items: withAttendance, required_hours: requiredHours });
 });
 
 // POST { candidate, joined_on? } — add one member (Rules 20–21)

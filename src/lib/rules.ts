@@ -1617,13 +1617,51 @@ export function requiredAssessmentHours(program: any, minPct: number): number {
 // "qualified for assessments" mark ON for hours never attended. Unknown slot now returns
 // null: the caller shows "no slot on the batch" instead of assuming, and the green verdict
 // comes from PORTAL hours alone.
-export function slotHoursPerDay(batch: any): number | null {
-  const toMin = (s?: string | null) => {
-    const mm = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(String(s ?? ""));
-    return mm ? Number(mm[1]) * 60 + Number(mm[2]) : null;
+export { slotHoursPerDay } from "@/lib/slot-rules";
+
+// QA-093 (-70): when the scheme master carries VALID absolute hours, the bar IS
+// min_required_hours. The old path collapsed them to a rounded percentage and re-multiplied
+// by program.hours — whenever program.hours ≠ scheme.total_hours the required number silently
+// stopped equalling what the Admin typed into the master. The pct path stays as the honest
+// fallback for schemes without data (Defaults guess, labelled "defaults").
+export async function assessmentHoursBar(
+  scheme: string | undefined,
+  program: any,
+  fallbackPct: number,
+): Promise<{ requiredHours: number; minPct: number; source: "scheme" | "defaults" }> {
+  if (scheme) {
+    const s = await Scheme.findOne({ name: scheme, active: true }).select("total_hours min_required_hours").lean<any>();
+    if (s && Number.isFinite(s.total_hours) && Number.isFinite(s.min_required_hours)
+      && s.total_hours > 0 && s.min_required_hours > 0 && s.min_required_hours <= s.total_hours) {
+      return { requiredHours: s.min_required_hours, minPct: Math.round((s.min_required_hours / s.total_hours) * 100), source: "scheme" };
+    }
+  }
+  return { requiredHours: requiredAssessmentHours(program, fallbackPct), minPct: fallbackPct, source: "defaults" };
+}
+
+// (slotHoursPerDay moved to slot-rules.ts in -70 — client-safe for the Daily Execution
+// summary; re-exported below so the two server routes keep their import path.)
+
+// QA-070 (-70): the per-member hours verdict, extracted — the batch Attendance tab and the
+// public portal carried byte-identical inline copies, and the roster + closure surfaces are
+// about to become the third and fourth callers. QA-085/086 rules preserved verbatim: our
+// hours are days × slot (null when the batch has no slot — never an assumed 8), and the
+// GREEN verdict comes from the portal's hour meter ALONE.
+export function memberAttendedHours(opts: {
+  internalDays: number;
+  hoursPerDay: number | null;
+  govtMinutes?: number | null;
+  requiredHours: number;
+}): { our_hours: number | null; govt_hours: number | null; attended_hours: number | null; basis: "portal" | "estimate" | null; qualified: boolean } {
+  const govt_hours = opts.govtMinutes != null ? Math.round(opts.govtMinutes / 60) : null;
+  const our_hours = opts.hoursPerDay != null ? Math.round(opts.internalDays * opts.hoursPerDay) : null;
+  return {
+    our_hours,
+    govt_hours,
+    attended_hours: govt_hours ?? our_hours,
+    basis: govt_hours != null ? "portal" : our_hours != null ? "estimate" : null,
+    qualified: govt_hours != null && govt_hours >= opts.requiredHours,
   };
-  const slotMin = (toMin(batch?.slot_end) ?? 0) - (toMin(batch?.slot_start) ?? 0);
-  return slotMin > 0 ? slotMin / 60 : null;
 }
 
 // Rule T7 - the counters the client tracks per centre x job role, DERIVED rather than stored.
