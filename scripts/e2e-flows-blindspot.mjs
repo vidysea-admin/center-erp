@@ -437,7 +437,7 @@ console.log("\n--- FL10: batch import (QA-028) — centres/roles by name, unknow
   const listed = ((await req(admin, "GET", "/api/batches?limit=2000", undefined, 200)).data.items ?? []).find((b) => b.code === conf.data.created[0]);
   ok("FL10: the imported batch carries creator + file provenance",
     !!listed && listed.created_by?.name && /^Import: batches-probe\.xlsx$/.test(listed.source ?? ""), JSON.stringify({ code: listed?.code, by: listed?.created_by?.name, src: listed?.source }));
-  ok("FL10: backward-plan milestones were stored on the imported batch", ((await req(admin, "GET", `/api/batches/${listed?._id}`)).data.item?.milestones ?? []).length > 0);
+  ok("FL10 (QA-152, -81): an imported batch carries NO auto plan — planning is on demand", ((await req(admin, "GET", `/api/batches/${listed?._id}`)).data.item?.milestones ?? []).length === 0);
   // cleanup so room/trainer fixtures elsewhere stay unaffected
   await req(admin, "POST", `/api/batches/${listed?._id}/transition`, { target: "Cancelled", reason: "FL10 fixture cleanup" }, 200);
 

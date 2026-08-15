@@ -5,7 +5,7 @@ import {
   Batch, BatchMember, Candidate, CandidateResult, Closure, CostCategory, CostEntry, DailyLog, Invoice, Location,
   LocationTarget, Notification, Program, Room, Scheme, TRAINER_PIPELINE, Trainer, TrainerDocument,
 } from "@/models";
-import { auditDiff } from "@/lib/audit";
+import { audit, auditDiff } from "@/lib/audit";
 import { currentStageOf } from "@/lib/candidate-journey";
 import { getDefaults } from "@/lib/defaults";
 import { HttpError, isScoped } from "@/lib/authz";
@@ -536,7 +536,7 @@ export const READINESS_FAILURE_TEXT: Record<string, string> = {
   location_approved: "centre not approved / not operational",
   room_assigned: "room not assigned",
   trainer_ready: "trainer not ready",
-  tot_lead_ok: "TOT not done 3 days before start",
+  tot_lead_ok: "TOT not done 3 days before start", // plan_flags only since -81 (QA-150/152)
   roster_80pct: "roster below threshold",
 };
 
@@ -554,24 +554,36 @@ export async function batchReadiness(batchId: string) {
   const enrolled = roster.filter((m) => m.enrollment_status === "Completed").length;
   const enrollmentThreshold = Math.ceil((defaults.enrollment_threshold_pct / 100) * roster.length);
 
-  // F-A3 (Manish, 2026-08-14 — hard gate, was advisory): "TOT done at least three days
-  // before batch start." Enforced only when the TOT completion date is on record —
-  // trainers who predate the pipeline carry no tot_done_on and are not retro-blocked.
+  // F-A3 (Manish, 2026-08-14) asked for "TOT done at least three days before batch start" as
+  // a HARD gate on Mark Ready. QA-150/QA-152 (Umesh, 15/08, on his own Gurugram batch): the
+  // gate is a PLANNING verdict — it counts back from a FUTURE start — and on a batch entered
+  // after it began (planned_start 30-07, trainer bypass-certified 15-08, milestones ticked
+  // 15-08) it fails a deadline that can never be met, while the checklist hid it and read
+  // "5/5". His word: such warnings live ONLY inside the batch's plan, never on every batch
+  // as a gate. So: still computed, returned as plan_flags for the plan section, NOT a check.
   const totLeadDays = defaults.lead_tot_done_days ?? 3;
-  const totLeadOk = !trainer?.tot_done_on
-    || dayStart(trainer.tot_done_on) <= dayStart(addDays(batch.planned_start, -totLeadDays));
+  const totDue = dayStart(addDays(batch.planned_start, -totLeadDays));
+  const totLeadOk = !trainer?.tot_done_on || dayStart(trainer.tot_done_on) <= totDue;
 
+  // Rule 16: the FOUR operational checks that gate Planning → Ready. Exactly these are
+  // rendered on the Overview checklist (QA-150: the UI must show what gates, nothing else).
   const checks = {
     location_approved: location?.approval_status === "Approved"
       && !HALTED_LOCATION_STATUSES.includes(location?.operational_status), // Rule 1
     room_assigned: roomOk,
     trainer_ready: trainerAvailable,
-    tot_lead_ok: totLeadOk, // F-A3
     roster_80pct: roster.length >= Math.ceil((defaults.roster_threshold_pct / 100) * batch.target_size),
-  }; // Rule 16
+  };
   return {
     checks,
     ready: Object.values(checks).every(Boolean),
+    // QA-152: plan-only verdicts — meaningful when the batch HAS a plan (plan_enabled).
+    plan_flags: {
+      tot_lead_ok: totLeadOk,
+      tot_done_on: trainer?.tot_done_on ?? null,
+      tot_due: trainer?.tot_done_on ? totDue : null,
+      tot_lead_days: totLeadDays,
+    },
     roster_count: roster.length,
     enrolled_count: enrolled,
     enrollment_threshold: enrollmentThreshold,
@@ -581,7 +593,7 @@ export async function batchReadiness(batchId: string) {
   };
 }
 
-export async function transitionBatch(batchId: string, target: string, opts: { isAdmin?: boolean; reason?: string } = {}) {
+export async function transitionBatch(batchId: string, target: string, opts: { isAdmin?: boolean; reason?: string; actual_start?: string | Date | null; actor?: string } = {}) {
   const batch = await Batch.findById(batchId);
   if (!batch) throw new HttpError(404, "Batch not found");
   const from = batch.status;
@@ -603,7 +615,26 @@ export async function transitionBatch(batchId: string, target: string, opts: { i
       await assertLocationOperational(batch.location, "Starting a batch"); // Rule 1
       const r = await batchReadiness(batchId);
       if (!r.enrollment_ok) fail(`Enrollment threshold not met: ${r.enrolled_count}/${r.enrollment_threshold} required (${(await getDefaults()).enrollment_threshold_pct}% of roster).`);
-      batch.actual_start = new Date();
+      // -81 (Umesh, 15/08 — Gurugram DST-02 began 30-07, entered on 15-08): Start may carry
+      // the REAL start date. Before this, actual_start was always "now" and unwritable
+      // afterwards, so an after-the-fact batch got a wrong date forever and Rule 32 refused
+      // every real day. Rules: not in the future; default today (unchanged behaviour).
+      if (opts.actual_start) {
+        const requested = dayKey(opts.actual_start);
+        if (isNaN(requested.getTime())) throw new HttpError(400, "actual_start is not a valid date.");
+        if (requested > istToday()) throw new HttpError(400, "A batch cannot start in the future — actual start must be today or earlier.");
+        batch.actual_start = requested;
+        // The roster is counted from the day the batch really began: members added while
+        // catching up carry joined_on = the day of entry, which Rule 29 (rosterOnDate) would
+        // read as "not on the roster" for every real day. Restamp only those later than the
+        // start; audited once with the count.
+        const restamped = await BatchMember.updateMany({ batch: batchId, joined_on: { $gt: requested } }, { $set: { joined_on: requested } });
+        if (restamped.modifiedCount) {
+          await audit({ entity: "Batch", entityId: batch._id, field: "roster_backdated", newValue: `roster counted from ${requested.toISOString().slice(0, 10)} (${restamped.modifiedCount} members)`, actor: opts.actor });
+        }
+      } else {
+        batch.actual_start = new Date();
+      }
       break;
     }
     case "Active->Closing": {

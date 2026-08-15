@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, requireRole, locationFilter, assertLocationInScope, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, BatchMember, Candidate, Closure, Invoice, Location, Notification, Program, Trainer } from "@/models";
-import { assertLocationOperational, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, nextBatchCode, planBatchBackward, settlementStage, trainerBookingWarnings, trainerForLogin } from "@/lib/rules";
+import { assertLocationOperational, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, nextBatchCode, settlementStage, trainerBookingWarnings, trainerForLogin } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
 import { mailUsersByRole } from "@/lib/mailer";
@@ -118,8 +118,10 @@ export const POST = apiHandler(async (req: NextRequest) => {
       ? body.relevant_skills.filter((s: unknown) => typeof s === "string" && (s as string).trim()).slice(0, 50)
       : undefined,
     planned_start: start, planned_end: end,
-    // 2026-08-11: backward plan generated at creation — the checklist the boss hands out.
-    milestones: planBatchBackward(start, defaults),
+    // QA-152 (-81, Umesh): NO plan at creation — the backward plan is made on demand from
+    // the batch page ("Create backward plan"), never as a side-effect of saving a batch.
+    milestones: [],
+    plan_enabled: false,
     created_by: user.id,
   });
   if (trainer) await deriveTrainerStatus(trainer); // Rule 12

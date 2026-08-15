@@ -161,7 +161,8 @@ export async function evaluateAlerts(): Promise<{ raised: number; checked: strin
 
   // 4c. Backward-plan milestone overdue and not ticked off (2026-08-11 planner).
   checked.push("milestone_overdue");
-  const planned = await Batch.find({ status: { $in: ["Planning", "Ready"] }, "milestones.0": { $exists: true } })
+  // QA-152 (-81): only a REQUESTED plan raises overdue alerts (pre--81 auto-milestones stay silent).
+  const planned = await Batch.find({ status: { $in: ["Planning", "Ready"] }, plan_enabled: true, "milestones.0": { $exists: true } })
     .populate("location", "name").lean<any[]>();
   const msLate: unknown[] = [];
   for (const b of planned) {

@@ -184,6 +184,31 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: today, present_m
 // Rule 32: date before actual_start
 await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", present_member_ids: [] }, 400);
 
+// ---- -81 (Umesh 15/08, Gurugram DST-02 began 30-07, entered 15-08): Start with the REAL date ----
+{
+  const dayN = (n) => new Date(Date.now() + n * 864e5 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  const bdStart = dayN(-5);
+  const bdTrainer = (await req("POST", "/api/trainers", { name: "Backdate Trainer " + stamp, phone: "5300" + stamp, skills: ["bd" + stamp] }, 201)).data.item;
+  const bdRoom = (await req("POST", `/api/locations/${loc._id}/rooms`, { name: "Backdate Room " + stamp, type: "Classroom", capacity: 5 }, 201)).data.item;
+  const bdBatch = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: bdTrainer._id, room: bdRoom._id, planned_start: bdStart, target_size: 1 }, 201)).data.item;
+  const bdCand = (await req("POST", "/api/candidates", { name: "Backdate Cand " + stamp, phone: "5400" + stamp, location: loc._id, program: prog._id }, 201)).data.item;
+  const bdMem = (await req("POST", `/api/batches/${bdBatch._id}/members`, { candidate: bdCand._id }, 201)).data.item; // joined_on = today
+  await req("PATCH", `/api/members/${bdMem._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+  await req("POST", `/api/batches/${bdBatch._id}/transition`, { target: "Ready" }, 200);
+  const bdFuture = await req("POST", `/api/batches/${bdBatch._id}/transition`, { target: "Active", actual_start: dayN(1) }, 400);
+  ok("-81: a batch cannot start in the future", /future/i.test(bdFuture.data?.error ?? ""), bdFuture.data?.error);
+  const bdActive = (await req("POST", `/api/batches/${bdBatch._id}/transition`, { target: "Active", actual_start: bdStart }, 200)).data.item;
+  ok("-81: Start carries the real (past) start date", String(bdActive.actual_start).slice(0, 10) === bdStart, JSON.stringify(bdActive.actual_start));
+  const bdMemAfter = ((await req("GET", `/api/batches/${bdBatch._id}/members`)).data.items ?? []).find((m) => String(m._id) === String(bdMem._id));
+  ok("-81: roster is counted from the real start (joined_on restamped for members added while catching up)", String(bdMemAfter?.joined_on).slice(0, 10) === bdStart, JSON.stringify(bdMemAfter?.joined_on));
+  const bdLog = await req("POST", `/api/batches/${bdBatch._id}/logs`, { log_date: dayN(-3), present_member_ids: [bdMem._id], trainer_present: true }, 201);
+  ok("-81: a real past day (after the real start) can now be logged with the member present", bdLog.status === 201, JSON.stringify(bdLog.data?.error ?? bdLog.data?.item?.log_date));
+  await req("POST", `/api/batches/${bdBatch._id}/logs`, { log_date: dayN(-6), present_member_ids: [], trainer_present: true }, 400); // Rule 32 still holds before the real start
+  const bdAudit = ((await req("GET", `/api/audit/Batch/${bdBatch._id}`)).data.items ?? []);
+  ok("-81: the roster restamp is audited once with the count", bdAudit.some((a) => a.field === "roster_backdated" && /1 members/.test(String(a.new_value))), JSON.stringify(bdAudit.map((a) => a.field)));
+  await req("POST", `/api/batches/${bdBatch._id}/transition`, { target: "Cancelled", reason: "backdate fixture done" }, 200);
+}
+
 // 2026-08-12 audit F-007 (S1): dropping a candidate on day D used to lock day D's log. Rule 26
 // excludes them from that day's roster, the saved log still listed them present, and every later
 // PATCH touching present_member_ids or govt_present was refused — so the government attendance
@@ -390,7 +415,10 @@ await req("PATCH", `/api/locations/${gateLoc._id}`, { operational_status: "Activ
 await req("POST", "/api/trainer-requests", { location: gateLoc._id, program: prog._id, required_by_date: today }, 201); // resumes with the centre
 await req("PATCH", `/api/locations/${gateLoc._id}`, { operational_status: "Stopped", status_reason: "test again" }, 200); // restore for Rule 1 asserts below
 
-// ---- F-A3: TOT must finish ≥ lead_tot_done_days (3) before batch start — HARD gate now ----
+// ---- F-A3 → QA-150/QA-152 (-81): the TOT lead time is a PLAN verdict, not a Mark-Ready gate ----
+// Manish (14/08) asked for "TOT ≥ 3 days before start" as a hard gate; Umesh (15/08), on a batch
+// entered after it began, ruled such warnings live only inside the batch's plan. The verdict is
+// still computed (readiness.plan_flags) but the four operational checks alone gate Ready.
 const totTr = (await req("POST", "/api/trainers", { name: "TOT Lead " + stamp, phone: "5600" + stamp, skills: ["totlead" + stamp], pipeline_status: "TOT In Progress" }, 201)).data.item;
 const totCert = await req("POST", `/api/trainers/${totTr._id}/transition`, { target: "Certified", payload: { tr_id: "TRL" + stamp } }, 200);
 ok("F-A3 fixture: certification stamps tot_done_on", !!totCert.data.item.tot_done_on, JSON.stringify(totCert.data.item.tot_done_on));
@@ -398,12 +426,19 @@ const totBatch = (await req("POST", "/api/batches", { location: loc._id, program
 const totCand = (await req("POST", "/api/candidates", { name: "TOT Cand " + stamp, phone: "5500" + stamp, location: loc._id, program: prog._id }, 201)).data.item;
 const totMem = (await req("POST", `/api/batches/${totBatch._id}/members`, { candidate: totCand._id }, 201)).data.item;
 await req("PATCH", `/api/members/${totMem._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
-const totBlocked = await req("POST", `/api/batches/${totBatch._id}/transition`, { target: "Ready" }, 409);
-ok("F-A3: TOT finished today + start today → Ready refused naming tot_lead_ok", /tot_lead_ok/.test(totBlocked.data?.error ?? ""), totBlocked.data?.error);
-const in5 = new Date(Date.now() + 5 * 864e5 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-await req("PATCH", `/api/batches/${totBatch._id}`, { planned_start: in5 }, 200);
-await req("POST", `/api/batches/${totBatch._id}/transition`, { target: "Ready" }, 200); // 5-day lead clears it
+const totRead = (await req("GET", `/api/batches/${totBatch._id}`)).data.readiness;
+ok("QA-150: readiness.checks is exactly the four operational checks (what the checklist renders)",
+  JSON.stringify(Object.keys(totRead.checks)) === JSON.stringify(["location_approved", "room_assigned", "trainer_ready", "roster_80pct"]), JSON.stringify(Object.keys(totRead.checks)));
+ok("QA-152: TOT lead verdict still computed, as a plan flag (TOT today + start today → false)", totRead.plan_flags?.tot_lead_ok === false && !!totRead.plan_flags?.tot_due, JSON.stringify(totRead.plan_flags));
+const totHealth = (await req("GET", `/api/batches/${totBatch._id}`)).data.health;
+ok("QA-150: the health banner no longer says 'TOT not done' for a batch that is otherwise ready", !(totHealth?.reasons ?? []).some((r) => /TOT/.test(r.label)), JSON.stringify(totHealth?.reasons));
+await req("POST", `/api/batches/${totBatch._id}/transition`, { target: "Ready" }, 200); // TOT lead does not gate Ready any more
 await req("POST", `/api/batches/${totBatch._id}/transition`, { target: "Planning" }, 200);
+// bypass with an explicit TOT date (the trainer page's -81 prompt) is honoured
+const totBypass = await req("POST", `/api/trainers/${totTr._id}/transition`, { target: "TOT In Progress", bypass: true }, 200);
+ok("bypass fixture: back to TOT In Progress", totBypass.data.item.pipeline_status === "TOT In Progress");
+const totBack = await req("POST", `/api/trainers/${totTr._id}/transition`, { target: "Certified", bypass: true, date: "2026-01-05", payload: { tr_id: "TRL" + stamp } }, 200);
+ok("-81: bypass Certified with a date stamps tot_done_on = that date (paperwork after the fact)", String(totBack.data.item.tot_done_on).startsWith("2026-01-05"), JSON.stringify(totBack.data.item.tot_done_on));
 // Cancel the fixture so its future dates don't hold the shared room against later batches (Rule 13).
 await req("POST", `/api/batches/${totBatch._id}/transition`, { target: "Cancelled", reason: "F-A3 fixture done" }, 200);
 
@@ -791,7 +826,12 @@ const totMs = plan.milestones.find((m) => m.key === "tot_done");
 const totGap = Math.round((new Date("2026-09-20") - new Date(totMs?.due_date)) / 86400e3);
 ok("planner: TOT due 3 days before start", totGap === 3, `gap=${totGap}d due=${totMs?.due_date}`);
 const planBatch = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, planned_start: "2027-04-01", target_size: 3 }, 201)).data.item;
-ok("batch stores its backward plan", planBatch.milestones?.length === 7, `count=${planBatch.milestones?.length}`);
+// QA-152 (-81, Umesh): "planning is a deliberate act, not a side-effect of saving a batch".
+ok("QA-152: a new batch carries NO plan (milestones empty, plan_enabled false)", (planBatch.milestones?.length ?? 0) === 0 && planBatch.plan_enabled === false, JSON.stringify({ n: planBatch.milestones?.length, plan_enabled: planBatch.plan_enabled }));
+await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { key: "mobilization", done: true }, 409); // nothing to tick without a plan
+await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { regenerate: true }, 409); // nothing to regenerate either
+const planMade = (await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { create: true }, 200)).data.item;
+ok("QA-152: 'Create backward plan' makes the 7 milestones and enables the plan", planMade.milestones?.length === 7 && planMade.plan_enabled === true, `count=${planMade.milestones?.length} enabled=${planMade.plan_enabled}`);
 const ticked = (await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { key: "mobilization", done: true }, 200)).data.item;
 ok("milestone tick-off records done_on", !!ticked.milestones.find((m) => m.key === "mobilization")?.done_on);
 await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { regenerate: true }, 200);
@@ -1066,6 +1106,25 @@ ok("…with the contact details an approver needs", !!queued && queued.phone ===
   // 15/08 (team, via checker): voice notes are field evidence too.
   ok("T1: m4a audio uploads (voice notes)", (await up("t.m4a", "audio/mp4")) === 200);
   ok("T1: an executable is refused", (await up("t.exe", "application/octet-stream")) === 400);
+  // -81 (Umesh's video test, 15/08): a 24 MB body used to die at ~10 MB — Next buffers the
+  // body for src/proxy.ts (proxyClientMaxBodySize default 10 MB) and truncated it, formData()
+  // failed, the route said 413. /api/upload is now outside the proxy matcher: streams whole.
+  {
+    const big = Buffer.alloc(24 * 1024 * 1024, 7);
+    const fd = new FormData();
+    fd.append("file", new File([big], "big-evidence.mp4", { type: "video/mp4" }));
+    const res = await fetch(BASE + "/api/upload", { method: "POST", headers: { cookie }, body: fd });
+    const j = await res.json().catch(() => ({}));
+    ok("-81: a 24 MB video body reaches the handler whole (was 413 at ~10 MB)", res.status === 200 && !!j.url, `status=${res.status} ${JSON.stringify(j).slice(0, 120)}`);
+    if (j.url) {
+      const back = await fetch(BASE.replace(/\/erp$/, "") + j.url, { headers: { cookie } });
+      const bytes = Buffer.from(await back.arrayBuffer());
+      ok("-81: and reads back at full length", back.status === 200 && bytes.length === big.length, `status=${back.status} len=${bytes.length}`);
+    }
+    // the proxy skip must NOT open the door: no session → 401 from the route itself
+    const anon = await fetch(BASE + "/api/upload", { method: "POST", body: (() => { const f = new FormData(); f.append("file", new File([Buffer.from("x")], "a.png", { type: "image/png" })); return f; })() });
+    ok("-81: /api/upload without a session is still refused (route-level auth)", anon.status === 401, `status=${anon.status}`);
+  }
 }
 
 // ---- QA-145 (-77): durable evidence storage. CI runs UNCONFIGURED (no Drive creds), so

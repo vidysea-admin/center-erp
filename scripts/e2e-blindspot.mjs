@@ -200,6 +200,7 @@ ok("HTML page instead of sheet → Failed with clear error", wrFail.status === "
 
 // ---- 9. Milestones do not regenerate once batch is Ready (dates are history) ----
 const msBatch = (await req(admin, "POST", "/api/batches", { location: loc._id, program: prog._id, planned_start: "2027-12-01", target_size: 2 })).data.item;
+await req(admin, "PATCH", `/api/batches/${msBatch._id}/milestones`, { create: true }); // QA-152 (-81): plan only on demand
 const regenPlanning = await req(admin, "PATCH", `/api/batches/${msBatch._id}/milestones`, { regenerate: true });
 ok("regenerate allowed while Planning", regenPlanning.status === 200);
 

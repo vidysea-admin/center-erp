@@ -122,7 +122,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
 
   // Backward plan follows the start date while the batch is still being planned; once
   // Ready/Active the dates are history and stay put.
-  if (patch.planned_start && batch.status === "Planning") {
+  if (patch.planned_start && batch.status === "Planning" && batch.plan_enabled) { // QA-152: only a requested plan follows the date
     const doneByKey = new Map((batch.milestones ?? []).map((m: any) => [m.key, m]));
     patch.milestones = planBatchBackward(newStart, await getDefaults()).map((m) => ({
       ...m,

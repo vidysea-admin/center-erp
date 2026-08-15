@@ -56,5 +56,13 @@ export async function proxy(req: NextRequest) {
 export const config = {
   // "/" listed explicitly — the pattern below does not match the bare root path,
   // which left the Home route unguarded under basePath (verified 2026-08-10).
-  matcher: ["/", "/((?!_next/static|_next/image|favicon.ico).*)"],
+  // -81 (15/08, Umesh's video test): /api/upload is EXCLUDED on purpose. Whenever the proxy
+  // runs, Next.js clones and buffers the request body in memory, capped by
+  // experimental.proxyClientMaxBodySize = 10 MB by default — bodies beyond that are silently
+  // truncated, req.formData() then fails to parse, and the route answered 413. That was the
+  // "~8-10 MB upload cap" OPERATIONS.md blamed on the reverse proxy; the local server logged
+  // the real line ("Request body exceeded 10MB for /erp/api/upload"). Skipping the proxy for
+  // this one path streams the body straight to the handler with no cap and no RAM buffer;
+  // the route still authenticates itself (requireUser + requireEdit) — same 401 as before.
+  matcher: ["/", "/((?!_next/static|_next/image|favicon.ico|api/upload$).*)"],
 };

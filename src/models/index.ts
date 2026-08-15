@@ -410,6 +410,11 @@ const BatchSchema = new Schema({
   status: { type: String, enum: BATCH_STATUS, required: true, default: "Planning" },
   // Backward planner (2026-08-11): milestone dates computed back from planned_start with
   // configurable lead times, each tick-off-able. Regenerable while the batch is in Planning.
+  // QA-152 (Umesh, 15/08): "planning is a deliberate act, not a side-effect of saving a
+  // batch" — the plan exists only when someone asks for it (plan_enabled). Batches created
+  // before -81 keep their auto-generated milestones in the DB but they stay hidden (and raise
+  // no overdue alerts, no lead-time verdicts) until "Create backward plan" is pressed.
+  plan_enabled: { type: Boolean, default: false },
   milestones: [{
     key: String, label: String,
     due_date: Date,

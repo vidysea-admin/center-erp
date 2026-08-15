@@ -20,14 +20,16 @@ const ALLOWED = new Set([".jpg", ".jpeg", ".png", ".webp", ".heic", ".pdf", ".mp
 export const POST = apiHandler(async (req: NextRequest) => {
   const user = await requireUser();
   requireEdit(user);
-  // 15/08 live probe: multipart bodies over ~8-10 MB die inside the platform's form parse
-  // with a bare exception, which apiHandler turned into "Something went wrong". Name the
-  // real situation instead — the operator's move is a smaller file, not a retry.
+  // 15/08 live probe: multipart bodies over ~8-10 MB died inside the form parse. -81 found
+  // the cause: with a proxy (src/proxy.ts) in the app, Next buffers the body capped at
+  // experimental.proxyClientMaxBodySize (10 MB default) and truncates the rest, so
+  // formData() failed. /api/upload is now excluded from the proxy matcher — the body streams
+  // whole. If parsing still fails, name it; the operator's move is a smaller file, not a retry.
   let form: FormData;
   try {
     form = await req.formData();
   } catch {
-    throw new HttpError(413, "The upload failed on the server — files over ~8 MB currently fail here (infra cap under investigation). Compress the video or split the upload.");
+    throw new HttpError(413, "The upload could not be read on the server (body too large for the layer in front of the app). Compress the video or split the upload, and tell Admin the file size.");
   }
   const file = form.get("file") as File | null;
   if (!file) throw new HttpError(400, "file required");

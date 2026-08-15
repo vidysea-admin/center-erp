@@ -5,8 +5,7 @@ import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError 
 import { requirePerm } from "@/lib/permissions";
 import { Batch, Location, Program } from "@/models";
 import { audit } from "@/lib/audit";
-import { computePlannedEnd, nextBatchCode, parseSheetDate, planBatchBackward } from "@/lib/rules";
-import { getDefaults } from "@/lib/defaults";
+import { computePlannedEnd, nextBatchCode, parseSheetDate } from "@/lib/rules";
 
 // Batch bulk import (QA-028's second half — "bulk upload in every module"). Batch_Master
 // format: Centre + Job Role + Planned Start (+ Target Size, Session). Same contract as the
@@ -116,7 +115,6 @@ export const POST = apiHandler(async (req: NextRequest) => {
     });
   }
 
-  const defaults = await getDefaults();
   const created: string[] = [];
   let firstId: unknown = null;
   const refused: string[] = [];
@@ -132,7 +130,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
         location: b.location._id, program: b.program._id,
         session: b.session, target_size: b.target_size,
         planned_start: b.planned_start, planned_end: isNaN(end.getTime()) ? b.planned_start : end,
-        milestones: planBatchBackward(b.planned_start, defaults),
+        milestones: [], plan_enabled: false, // QA-152 (-81): plan only on demand
         created_by: user.id,
         source: `Import: ${file.name}`,
         custom_fields: b.custom_fields,

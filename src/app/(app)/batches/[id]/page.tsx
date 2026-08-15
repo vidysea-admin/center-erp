@@ -84,7 +84,7 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
       {tab === "Candidates" && <Roster batchId={id} batch={b} setError={setError} onChanged={load} />}
       {tab === "Enrollment" && <Enrollment batchId={id} setError={setError} />}
       {tab === "Daily Execution" && <DailyExecution batchId={id} batch={b} role={role} setError={setError} />}
-      {tab === "Attendance" && <AttendanceTab batchId={id} setError={setError} />}
+      {tab === "Attendance" && <AttendanceTab batchId={id} role={role} setError={setError} />}
       {tab === "Closure" && <ClosureTab batchId={id} batch={b} role={role} setError={setError} onChanged={load} />}
       {tab === "Feedback" && <FeedbackTab batchId={id} setError={setError} />}
       {tab === "Costs" && role === "Admin" && <CostsTab batchId={id} batch={b} setError={setError} />}
@@ -115,19 +115,43 @@ function Overview({ data, role, onChanged, setError }: any) {
     ...(!money?.closure?.dues_settled ? ["dues not attested as settled"] : []),
   ];
 
-  async function transition(target: string) {
+  async function transition(target: string, extra: Record<string, unknown> = {}) {
     try {
-      await api(`/api/batches/${b._id}/transition`, { method: "POST", json: { target, reason } });
+      await api(`/api/batches/${b._id}/transition`, { method: "POST", json: { target, reason, ...extra } });
       setConfirmCancel(false); setReason(""); onChanged();
     } catch (e: any) { setError(e.message); }
   }
 
-  const CHECKS: [string, string, boolean][] = [
-    ["location_approved", "Location approved", r.checks.location_approved],
-    ["room_assigned", "Room assigned (Lab if required)", r.checks.room_assigned],
-    ["trainer_ready", "Trainer assigned & available", r.checks.trainer_ready],
-    ["roster_80pct", `Roster ≥ 80% of target (${r.roster_count}/${b.target_size})`, r.checks.roster_80pct],
-  ];
+  // -81 (Umesh, 15/08 — Gurugram DST-02 began 30-07, entered 15-08): a batch whose planned
+  // start has passed is being entered after the fact; Start must carry the REAL date or
+  // actual_start is stamped "today" forever (it is not editable afterwards).
+  const plannedStartKey = b.planned_start ? String(b.planned_start).slice(0, 10) : "";
+  const todayKey = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10); // IST calendar day
+  const beganAlready = !!plannedStartKey && plannedStartKey < todayKey && ["Planning", "Ready"].includes(b.status);
+  const [startDate, setStartDate] = useState<string>(plannedStartKey);
+
+  // QA-150 (Umesh, 15/08): the checklist renders EXACTLY the checks that gate Mark Ready —
+  // rules.batchReadiness().checks, in its order — and counts only those. It used to list
+  // four of five and add a row that was not a check at all, so the header said "5/5" while
+  // the banner said "Not ready" for a check that never appeared on screen. The failing
+  // label is the same wording the health banner uses (READINESS_FAILURE_TEXT).
+  const CHECK_LABEL: Record<string, string> = {
+    location_approved: "Location approved",
+    room_assigned: "Room assigned (Lab if required)",
+    trainer_ready: "Trainer assigned & available",
+    roster_80pct: `Roster ≥ 80% of target (${r.roster_count}/${b.target_size})`,
+  };
+  const CHECK_FAIL: Record<string, string> = {
+    location_approved: "centre not approved / not operational",
+    room_assigned: "room not assigned",
+    trainer_ready: "trainer not ready",
+    roster_80pct: "roster below threshold",
+  };
+  const CHECKS: [string, string, boolean][] = Object.entries(r.checks as Record<string, boolean>).map(([k, ok]) => [
+    k,
+    ok ? (CHECK_LABEL[k] ?? k.replace(/_/g, " ")) : `${CHECK_LABEL[k] ?? k.replace(/_/g, " ")} — ${CHECK_FAIL[k] ?? "not met"}`,
+    ok,
+  ]);
 
   // QA-147 (Manish): "room assign karne ka kahin koi option hi nahi aa raha." Rooms are
   // per-centre already (his own requirement) — CHI-ITI simply had none, so the New Batch
@@ -164,9 +188,15 @@ function Overview({ data, role, onChanged, setError }: any) {
 
   return (
     <div className="grid gap-4 lg:grid-cols-2">
-      {/* The count used to be hardcoded "/4" while five checks were rendered, so it silently
-          excluded the enrollment gate — the one that actually blocks Start Batch (audit F-005). */}
-      <Section title={`Readiness checklist (${CHECKS.filter(([, , v]) => v).length + (r.enrollment_ok ? 1 : 0)}/${CHECKS.length + 1})`}>
+      {/* QA-150: the header counts the checks that gate Mark Ready and nothing else; the
+          enrollment line below the divider gates START (Rule 17 side) and is labelled so. */}
+      <Section title={`Readiness checklist (${CHECKS.filter(([, , v]) => v).length}/${CHECKS.length})`}>
+        {beganAlready && (
+          <p className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            Planned start {fmtDate(b.planned_start)} has passed — this batch is being entered after it began.
+            When you Start it, set the real start date so attendance can be recorded from that day.
+          </p>
+        )}
         <ul className="space-y-2 text-sm">
           {CHECKS.map(([k, label, ok]) => (
             <li key={k} className="flex flex-wrap items-center gap-2">
@@ -202,13 +232,21 @@ function Overview({ data, role, onChanged, setError }: any) {
           ))}
           <li className="flex items-center gap-2 border-t pt-2">
             <span className={`flex h-5 w-5 items-center justify-center rounded-full text-xs ${r.enrollment_ok ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-400"}`}>{r.enrollment_ok ? "✓" : "○"}</span>
-            Enrolled ≥ threshold for start ({r.enrolled_count}/{r.enrollment_threshold})
+            <span>For Start: enrolled ≥ threshold ({r.enrolled_count}/{r.enrollment_threshold})</span>
+            <span className="text-[10px] text-gray-400">not part of the count above</span>
           </li>
         </ul>
         {canTransition ? (
           <div className="mt-4 flex flex-wrap gap-2">
             {b.status === "Planning" && <Btn onClick={() => transition("Ready")} disabled={!r.ready}>Mark Ready</Btn>}
-            {b.status === "Ready" && <Btn onClick={() => transition("Active")}>Start Batch</Btn>}
+            {b.status === "Ready" && !beganAlready && <Btn onClick={() => transition("Active")}>Start Batch</Btn>}
+            {b.status === "Ready" && beganAlready && (
+              <span className="inline-flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1">
+                <label className="text-xs text-amber-800">Batch already began on</label>
+                <input type="date" className="rounded-lg border border-gray-300 px-2 py-1 text-xs" value={startDate} max={todayKey} onChange={(e) => setStartDate(e.target.value)} />
+                <Btn onClick={() => transition("Active", { actual_start: startDate || undefined })} disabled={!startDate}>Start Batch from that date</Btn>
+              </span>
+            )}
             {b.status === "Ready" && <Btn kind="ghost" onClick={() => transition("Planning")}>Back to Planning</Btn>}
             {b.status === "Active" && <Btn onClick={() => transition("Closing")}>Move to Closing</Btn>}
             {b.status === "Closing" && <Btn onClick={() => transition("Completed")}>Complete Batch</Btn>}
@@ -266,13 +304,34 @@ function Overview({ data, role, onChanged, setError }: any) {
           </div>
         )}
       </Section>
-      {(b.milestones?.length ?? 0) > 0 && (
-        <Section title="Backward plan (2026-08-11)" actions={b.status === "Planning" ? (
+      {/* QA-152 (Umesh, 15/08): the backward plan is made ON DEMAND — "planning is a deliberate
+          act, not a side-effect of saving a batch". No plan → one button. Batches created
+          before -81 keep their auto-milestones hidden until this button is pressed. Plan-only
+          verdicts (TOT lead time, F-A3) live HERE, never on the readiness checklist. */}
+      {!b.plan_enabled && canTransition && b.status === "Planning" && (
+        <Section title="Backward plan">
+          <p className="text-sm text-gray-600">No plan for this batch. A backward plan counts the trainer/TOT/mobilisation milestones back from the planned start — for a batch you are planning ahead, not one that has already run.</p>
+          <div className="mt-3">
+            <Btn onClick={async () => {
+              try { await api(`/api/batches/${b._id}/milestones`, { method: "PATCH", json: { create: true } }); onChanged(); }
+              catch (e: any) { setError(e.message); }
+            }}>Create backward plan</Btn>
+          </div>
+        </Section>
+      )}
+      {b.plan_enabled && (b.milestones?.length ?? 0) > 0 && (
+        <Section title="Backward plan" actions={b.status === "Planning" ? (
           <Btn small kind="ghost" onClick={async () => {
             try { await api(`/api/batches/${b._id}/milestones`, { method: "PATCH", json: { regenerate: true } }); onChanged(); }
             catch (e: any) { setError(e.message); }
           }}>Regenerate</Btn>
         ) : undefined}>
+          {r.plan_flags && r.plan_flags.tot_lead_ok === false && ["Planning", "Ready"].includes(b.status) && (
+            <p className="mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+              TOT completed {fmtDate(r.plan_flags.tot_done_on)} — the plan needed it by {fmtDate(r.plan_flags.tot_due)} ({r.plan_flags.tot_lead_days} days before start).
+              {b.trainer?._id && <> Wrong date on record? Correct it on the <Link className="underline" href={`/trainers/${b.trainer._id}`}>trainer&apos;s page</Link>.</>}
+            </p>
+          )}
           <ul className="space-y-2 text-sm">
             {b.milestones.map((m: any) => {
               const overdue = !m.done_on && m.due_date && new Date(m.due_date) < new Date(new Date().toDateString());
@@ -751,13 +810,31 @@ function Enrollment({ batchId, setError }: any) {
 // attendance … show them two types: the one they are taking and the government portal's —
 // days AND hours — and once the hours threshold is crossed, mark that child GREEN:
 // qualified for assessments." Visible to every login that can open the batch.
-function AttendanceTab({ batchId, setError }: any) {
+function AttendanceTab({ batchId, role, setError }: any) {
   const [data, setData] = useState<any>(null);
   useEffect(() => {
     api(`/api/batches/${batchId}/attendance`).then(setData).catch((e: any) => setError(e.message));
   }, [batchId]);
+  // QA-151 (Umesh, 15/08 — Gurugram DST-02): "Attendance tab me upload ka option nahi hai,
+  // blank hai." The batch-scoped bulk importer (?batch=, preview → confirm) was fully built
+  // and its only button sat inside Daily Execution, which stays locked until the batch is
+  // Active — so on every Planning/Ready batch the one control that does the job was
+  // invisible while the tab NAMED Attendance showed a read-only table of zeros. Same link,
+  // same Admin/Operations condition (attendance.govt), here, in every batch status.
+  const canImport = role === "Admin" || role === "Operations";
+  const importLink = canImport ? (
+    <a className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700" href={`${BASE_PATH}/govt-attendance?batch=${batchId}`}>
+      ⬆ Upload attendance sheet (bulk)
+    </a>
+  ) : null;
   if (!data) return <p className="p-6 text-center text-sm text-gray-400">Loading…</p>;
-  if (!data.members?.length) return <p className="p-6 text-center text-sm text-gray-400">No students on the roster yet.</p>;
+  if (!data.members?.length) return (
+    <div className="space-y-3">
+      {importLink && <div className="flex justify-end">{importLink}</div>}
+      <p className="p-6 text-center text-sm text-gray-400">No students on the roster yet.</p>
+    </div>
+  );
+  const portalAsOf = data.members.map((m: any) => m.govt?.as_of).filter(Boolean).sort().pop();
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -765,6 +842,11 @@ function AttendanceTab({ batchId, setError }: any) {
         <span className="rounded-full bg-gray-100 px-2 py-0.5" title={`${data.min_attendance_pct}% of programme hours`}>Needed for assessment: {data.required_hours} hrs</span>
         <span className="rounded-full bg-gray-100 px-2 py-0.5">{data.days_held} day{data.days_held === 1 ? "" : "s"} logged</span>
         <span className="rounded-full bg-green-100 px-2 py-0.5 font-medium text-green-700">{data.qualified_count} qualified for assessments</span>
+        {portalAsOf && <span className="rounded-full bg-blue-50 px-2 py-0.5 text-blue-700">Portal data as of {fmtDate(portalAsOf)}</span>}
+        <span className="ml-auto flex items-center gap-2">
+          <span className="text-gray-400">Day-wise marking opens in Daily Execution once the batch is Active.</span>
+          {importLink}
+        </span>
       </div>
       <DataTable rows={data.members}
         cardTitle={(r: any) => r.name}

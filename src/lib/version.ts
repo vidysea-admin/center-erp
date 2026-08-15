@@ -3,16 +3,19 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-80";
+export const RELEASE = "2026.08.14-81";
 export const RELEASE_NOTE =
-  "QA-145 - Drive storage PROVED against real Google, and a second way in. " +
-  "Umesh: 'mere credentials jo already available hain, .env me daal do' - " +
-  "the gws CLI on his machine holds an OAuth refresh token for his " +
-  "Workspace account with full Drive scope. storage.ts now accepts that " +
-  "triple (GDRIVE_OAUTH_CLIENT_ID/SECRET/REFRESH_TOKEN) alongside the " +
-  "service-account key, env-first. Local run with those creds against " +
-  "the real 'All Locations' folder: probe write+read-back ok (8.9s cold), " +
-  "real /api/upload of a 2KB mp4 -> Drive under _healthcheck/PROBE-" +
-  "BATCH-01/evidence/, proxy read-back byte-identical, StoredFile row " +
-  "carries backend=drive + Drive id + folder path; the folder tree is " +
-  "visible in Drive. What remains is the same three env values on ECS.";
+  "QA-150 + QA-151 + QA-152 (part 1) - the Gurugram live-batch round. Umesh, " +
+  "entering a batch that began 30-07 on 15-08, met a checklist reading 5/5 " +
+  "under a Red banner: readiness had five checks, the checklist drew four plus a " +
+  "row that was not a check, and the failing one (TOT lead time) never appeared. " +
+  "His ruling: planning verdicts live only inside a batch's plan, and the plan " +
+  "exists only when someone asks for it. So: readiness.checks = the four " +
+  "operational checks (rendered exactly, counted exactly); the TOT lead verdict " +
+  "is a plan flag shown in the plan section; batches are created WITHOUT a plan " +
+  "and 'Create backward plan' makes one; pre-81 auto-milestones stay hidden and " +
+  "silent until asked. Start Batch may carry the REAL start date (today or " +
+  "earlier) and restamps joined_on so Rule 29/32 accept the real days. The " +
+  "batch-scoped bulk attendance importer link now sits on the Attendance tab " +
+  "in every status (it was inside Daily Execution, locked until Active). The " +
+  "bypass-Certified prompt asks for the TOT completion date.";

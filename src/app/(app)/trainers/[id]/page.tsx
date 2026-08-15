@@ -236,8 +236,18 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
                     const trId = target === "Certified"
                       ? (window.prompt("TR ID (from NSDC) — optional. Leave blank if not issued yet; the profile stays flagged until it is recorded.") ?? "")
                       : "";
+                    // -81 (Umesh 15/08, Gurugram): the bypass is for a trainer whose paperwork
+                    // arrives AFTER the fact — so the TOT date is usually in the past, not
+                    // today. Ask for it; blank keeps today (the API's default).
+                    let totDate = "";
+                    if (target === "Certified") {
+                      const raw = window.prompt("TOT completed on (YYYY-MM-DD) — optional. Leave blank if it finished today.") ?? "";
+                      const m = raw.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/) ?? raw.trim().match(/^(\d{2})[-/](\d{2})[-/](\d{4})$/);
+                      if (raw.trim() && !m) { setErr("TOT date not understood — use YYYY-MM-DD (or DD-MM-YYYY)."); return; }
+                      if (m) totDate = m[1].length === 4 ? `${m[1]}-${m[2]}-${m[3]}` : `${m[3]}-${m[2]}-${m[1]}`;
+                    }
                     try {
-                      await api(`/api/trainers/${id}/transition`, { method: "POST", json: { target, bypass: true, reason, ...(trId.trim() ? { payload: { tr_id: trId.trim() } } : {}) } });
+                      await api(`/api/trainers/${id}/transition`, { method: "POST", json: { target, bypass: true, reason, ...(totDate ? { date: totDate } : {}), ...(trId.trim() ? { payload: { tr_id: trId.trim() } } : {}) } });
                       await load();
                     } catch (er: any) { setErr(er.message); }
                   }}>
