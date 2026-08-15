@@ -107,7 +107,12 @@ function BatchesInner() {
   };
   const blockCount = (c: string) => trainerScoped.filter((b) => b.status === "Planning" && blockersOf(b).has(c)).length;
   const statusShown = fStatus ? trainerScoped.filter((b) => b.status === fStatus) : trainerScoped;
-  const shown = fBlock ? statusShown.filter((b) => b.status === "Planning" && blockersOf(b).has(fBlock)) : statusShown;
+  // -86: "no attendance yet" = no day-wise log AND no matched portal import.
+  const noAttendance = (b: any) => !(b.attendance_days > 0) && !b.portal_as_of;
+  const shown = fBlock === "no-attendance"
+    ? statusShown.filter((b) => noAttendance(b) && ["Ready", "Active", "Closing", "Completed"].includes(b.status))
+    : fBlock ? statusShown.filter((b) => b.status === "Planning" && blockersOf(b).has(fBlock)) : statusShown;
+  const noAttendanceCount = trainerScoped.filter((b) => noAttendance(b) && ["Ready", "Active", "Closing", "Completed"].includes(b.status)).length;
 
   useEffect(() => {
     if (form.location) api(`/api/locations/${form.location}/rooms`).then((d) => setRooms(d.items)).catch(() => setRooms([]));
@@ -237,12 +242,14 @@ function BatchesInner() {
             options={[{ value: "", label: "All", count: trainerScoped.length },
               ...BATCH_STATUSES.map((s) => ({ value: s, label: s, count: statusCount(s) }))]} />
           {/* QA-027 (-71): the spec's blocker states, filterable — computed, never an enum. */}
-          {(blockCount("trainer") + blockCount("candidates") + blockCount("infrastructure") + blockCount("other")) > 0 && (
+          {(blockCount("trainer") + blockCount("candidates") + blockCount("infrastructure") + blockCount("other") + noAttendanceCount) > 0 && (
             <FilterPills active={fBlock} onChange={(v) => setFBlock(v === fBlock ? "" : v)}
               options={[
                 { value: "trainer", label: "Trainer required", count: blockCount("trainer") },
                 { value: "candidates", label: "Candidate shortage", count: blockCount("candidates") },
                 { value: "infrastructure", label: "Infrastructure pending", count: blockCount("infrastructure") },
+                // -86 (Umesh): which running/finished batches still have NO attendance on record
+                { value: "no-attendance", label: "No attendance yet", count: noAttendanceCount },
               ].filter((o) => o.count > 0)} />
           )}
           <DataTable rows={shown} storageKey="batches" onRowClick={(r) => router.push(`/batches/${r._id}`)}
@@ -273,6 +280,17 @@ function BatchesInner() {
               // requirement incomplete" is visible from the LIST, not just the detail page.
               { key: "health", label: "Health", render: (r: any) => <HealthChip health={r.health} inline={r.status === "Planning"} /> },
               { key: "roster", label: "Enrolled / Roster / Target", render: (r: any) => `${r.enrolled_count} / ${r.roster_count} / ${r.target_size}` },
+              // -86 (Umesh 15/08): "kis batch ki kitne din ki attendance available hai" — our
+              // day-wise logs and the portal import, per row; "none yet" says so in grey.
+              { key: "attendance", label: "Attendance", sortable: true, sortValue: (r: any) => (r.attendance_days ?? 0) * 1e6 + (r.portal_as_of ? new Date(r.portal_as_of).getTime() / 1e9 : 0),
+                filterText: (r: any) => (r.attendance_days > 0 || r.portal_as_of) ? `${r.attendance_days} days${r.portal_as_of ? " portal" : ""}` : "none yet",
+                render: (r: any) => (r.attendance_days > 0 || r.portal_as_of) ? (
+                  <span className="text-xs leading-4">
+                    {r.attendance_days > 0 ? <span className="font-medium">{r.attendance_days} day{r.attendance_days === 1 ? "" : "s"}</span> : <span className="text-gray-400">0 days</span>}
+                    {r.attendance_last && <span className="text-gray-500"> · last {fmtDate(r.attendance_last)}</span>}
+                    {r.portal_as_of && <div className="text-blue-700">portal {fmtDate(r.portal_as_of)}{r.portal_rows ? ` (${r.portal_rows})` : ""}</div>}
+                  </span>
+                ) : <span className="text-xs text-gray-400">— none yet</span> },
               { key: "trainer", label: "Trainer", sortable: true, sortValue: (r: any) => r.trainer?.name ?? null, render: (r: any) => r.trainer?.name ?? "—" },
               { key: "planned_start", label: "Start", sortable: true, sortValue: (r: any) => r.planned_start ? new Date(r.planned_start).getTime() : null, render: (r: any) => fmtDate(r.planned_start) },
               // 2026-08-13 (Manish): source link per row — click lands on that sheet tab.

@@ -27,6 +27,13 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
   const [tab, setTab] = useState(sp.get("tab") && TABS.includes(sp.get("tab")!) ? sp.get("tab")! : "Overview");
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState("");
+  // -86 (Umesh 15/08 22:55): the health and no-students banners get a ✕. A dismissal lasts
+  // for THIS session, per batch (and per score for health — a Red that turns Amber shows
+  // again). The 14/08 "not dismissible on purpose" is superseded by this ruling.
+  const [dismissTick, setDismissTick] = useState(0);
+  const dismissed = (key: string) => { try { return typeof window !== "undefined" && sessionStorage.getItem(key) === "1"; } catch { return false; } };
+  const dismiss = (key: string) => { try { sessionStorage.setItem(key, "1"); } catch {} setDismissTick((t) => t + 1); };
+  const undismiss = (key: string) => { try { sessionStorage.removeItem(key); } catch {} setDismissTick((t) => t + 1); };
 
   const load = () => api(`/api/batches/${id}`).then(setData).catch((e) => setError(e.message));
   useEffect(() => { load(); }, [id]);
@@ -53,10 +60,18 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
       </div>
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
       {/* 2026-08-14 (Umesh): a batch with nobody on it is not a batch — either its students
-          get uploaded or the empty shell gets deleted. Not dismissible on purpose: an empty
-          batch skews every count on the board until someone acts on it. */}
-      {(data.readiness?.roster_count ?? 0) === 0 && !["Cancelled"].includes(b.status) && (
-        <div className="rounded-xl border-2 border-red-300 bg-red-50 p-4">
+          get uploaded or the empty shell gets deleted. -86 (Umesh 15/08): dismissible with a
+          ✕ for the session — it collapses to a one-line chip so Add/Import stay one click away. */}
+      {(data.readiness?.roster_count ?? 0) === 0 && !["Cancelled"].includes(b.status) && dismissed(`erp_dismiss_roster_${id}`) && (
+        <button data-tick={dismissTick} onClick={() => undismiss(`erp_dismiss_roster_${id}`)}
+          className="w-fit rounded-full border border-red-200 bg-red-50 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-100">
+          No students yet · show
+        </button>
+      )}
+      {(data.readiness?.roster_count ?? 0) === 0 && !["Cancelled"].includes(b.status) && !dismissed(`erp_dismiss_roster_${id}`) && (
+        <div className="relative rounded-xl border-2 border-red-300 bg-red-50 p-4" data-tick={dismissTick}>
+          <button aria-label="Dismiss" title="Hide for now" onClick={() => dismiss(`erp_dismiss_roster_${id}`)}
+            className="absolute right-2 top-2 rounded px-1.5 text-lg leading-none text-red-400 hover:text-red-700">×</button>
           <div className="text-sm font-semibold text-red-800">This batch has no students yet — upload the roster</div>
           <p className="mt-1 text-sm text-red-700">
             {b.status === "Completed" || b.status === "Closing"
@@ -78,7 +93,9 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
           </div>
         </div>
       )}
-      <HealthBanner health={data.health} />
+      {!dismissed(`erp_dismiss_health_${id}_${data.health?.score}`) && (
+        <HealthBanner health={data.health} onDismiss={() => dismiss(`erp_dismiss_health_${id}_${data.health?.score}`)} />
+      )}
       <Tabs tabs={tabs} active={tab} onChange={setTab} />
       {tab === "Overview" && <Overview data={data} role={role} onChanged={load} setError={setError} />}
       {tab === "Candidates" && <Roster batchId={id} batch={b} setError={setError} onChanged={load} />}
@@ -900,9 +917,17 @@ function AttendanceTab({ batchId, batch, role, setError }: any) {
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="rounded-full bg-gray-100 px-2 py-0.5">Programme: {data.program_hours} hrs</span>
         <span className="rounded-full bg-gray-100 px-2 py-0.5" title={`${data.min_attendance_pct}% of programme hours`}>Needed for assessment: {data.required_hours} hrs</span>
-        <span className="rounded-full bg-gray-100 px-2 py-0.5">{data.days_held} day{data.days_held === 1 ? "" : "s"} logged</span>
+        {/* QA-159 (-86, checker): "0 days logged" next to 13 portal working days read as a lie —
+            two meters, named apart: OUR day-wise logs vs the PORTAL's cumulative import. */}
+        <span className="rounded-full bg-gray-100 px-2 py-0.5" title="Day-wise logs marked in this system (Daily Execution / bulk grid)">Our logs: {data.days_held} day{data.days_held === 1 ? "" : "s"}</span>
+        {(() => {
+          const withPortal = (data.members ?? []).filter((m: any) => m.govt);
+          const wd = Math.max(0, ...withPortal.map((m: any) => Number(m.govt?.working_days ?? 0)));
+          return withPortal.length
+            ? <span className="rounded-full bg-blue-50 px-2 py-0.5 text-blue-700" title="Skill India portal export, cumulative per student">Portal: {wd || "?"} working day{wd === 1 ? "" : "s"} · {withPortal.length}/{data.members.length} students · as of {fmtDate(portalAsOf)}</span>
+            : <span className="rounded-full bg-gray-100 px-2 py-0.5 text-gray-500">Portal: not imported yet</span>;
+        })()}
         <span className="rounded-full bg-green-100 px-2 py-0.5 font-medium text-green-700">{data.qualified_count} qualified for assessments</span>
-        {portalAsOf && <span className="rounded-full bg-blue-50 px-2 py-0.5 text-blue-700">Portal data as of {fmtDate(portalAsOf)}</span>}
         <span className="ml-auto flex flex-wrap items-center gap-2">
           {canMark && batchActive && !grid && (
             <button className="rounded-lg border border-blue-600 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50"
@@ -1511,16 +1536,20 @@ function ClosureTab({ batchId, batch, role, setError, onChanged }: any) {
     try { await api(`/api/batches/${batchId}/invoice`, { method: "PATCH", json: patch }); load(); }
     catch (e: any) { setError(e.message); }
   }
+  // -86 (checker, QA-157 bypass #1): the result/certificate files are the contractual
+  // artifacts and used to skip the one upload path (no compression, no retry, no folder,
+  // no entity). Same door as every other file now.
   async function uploadClosureFile(e: any, field: "result_file" | "certificate_file") {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
-    const fd = new FormData();
-    fd.append("file", file);
-    const res = await fetch(`${BASE_PATH}/api/upload`, { method: "POST", body: fd });
-    const d = await res.json().catch(() => ({}));
-    if (!res.ok) { setError(d.error ?? "Upload failed"); return; }
-    saveClosure({ [field]: d.url });
+    try {
+      const url = await uploadWithRetry(file, "closure", {
+        folder_centre: batch?.location?.code ?? batch?.location?.name ?? "", folder_batch: batch?.code ?? "", folder_kind: field === "result_file" ? "results" : "certificates",
+        entity: "Batch", entity_id: batchId,
+      });
+      saveClosure({ [field]: url });
+    } catch (err: any) { setError(err.message); }
   }
 
   const closed = ["Completed", "Cancelled"].includes(batch?.status);

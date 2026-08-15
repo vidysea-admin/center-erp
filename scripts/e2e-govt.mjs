@@ -198,6 +198,16 @@ ok("committed counts match the preview", done.data.matched_count === 4 && done.d
 const detail = await req(admin, "GET", `/api/govt-attendance/${done.data._id}`);
 ok("all 7 rows persisted", detail.data.rows?.length === 7, `got ${detail.data.rows?.length}`);
 
+// ---- QA-159 (-86, Umesh): the batches LIST says how much attendance each batch has ----
+{
+  const list = ((await req(admin, "GET", "/api/batches?limit=2000")).data.items ?? []);
+  const row = list.find((b) => String(b._id) === String(batch._id));
+  ok("QA-159: list row carries our day-wise count + last day (1 log written above)", !!row && row.attendance_days === 1 && !!row.attendance_last, JSON.stringify(row && { d: row.attendance_days, last: row.attendance_last }));
+  ok("QA-159: list row carries the newest matched portal import for the batch (as_of + rows)", !!row && !!row.portal_as_of && row.portal_rows >= 1, JSON.stringify(row && { as_of: row.portal_as_of, rows: row.portal_rows }));
+  const untouched = list.find((b) => String(b._id) !== String(batch._id) && !b.attendance_days && !b.portal_as_of);
+  ok("QA-159: a batch with nothing on record reads 0 / null (the UI says 'none yet')", !untouched || (untouched.attendance_days === 0 && untouched.portal_as_of === null), JSON.stringify(untouched && { d: untouched.attendance_days, p: untouched.portal_as_of }));
+}
+
 // ---- R-D (CEO 14/08): the batch Attendance tab — both meters + the green verdict ----
 {
   const att = await req(admin, "GET", `/api/batches/${batch._id}/attendance`);

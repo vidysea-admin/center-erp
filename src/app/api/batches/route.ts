@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, requireRole, locationFilter, assertLocationInScope, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
-import { Batch, BatchMember, Candidate, Closure, Invoice, Location, Notification, Program, Trainer } from "@/models";
+import { Batch, BatchMember, Candidate, Closure, DailyLog, GovtAttendanceRow, Invoice, Location, Notification, Program, Trainer } from "@/models";
 import { assertLocationOperational, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, nextBatchCode, settlementStage, trainerBookingWarnings, trainerForLogin } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
@@ -67,6 +67,16 @@ export const GET = apiHandler(async (req: NextRequest) => {
   const invoices = doneIds.length ? await Invoice.find({ batch: { $in: doneIds } }).select("batch status").lean<any[]>() : [];
   const clByB = new Map(closures.map((c) => [String(c.batch), c]));
   const invByB = new Map(invoices.map((i) => [String(i.batch), i]));
+  // -86 (Umesh 15/08): "table se pata chale kis batch ki kitne din ki attendance available
+  // hai" — two aggregates: our day-wise logs (count + last day) and the newest matched
+  // portal import per batch. Nothing else in the row tells this.
+  const ids = items.map((b) => b._id);
+  const [logAgg, portalAgg] = await Promise.all([
+    DailyLog.aggregate([{ $match: { batch: { $in: ids } } }, { $group: { _id: "$batch", days: { $sum: 1 }, last: { $max: "$log_date" } } }]),
+    GovtAttendanceRow.aggregate([{ $match: { batch: { $in: ids }, match_status: "Matched" } }, { $group: { _id: "$batch", as_of: { $max: "$createdAt" }, rows: { $sum: 1 } } }]),
+  ]);
+  const logByB = new Map(logAgg.map((a: any) => [String(a._id), a]));
+  const portalByB = new Map(portalAgg.map((a: any) => [String(a._id), a]));
   // R-I (CEO [38:54-39:10]): a Trainer's default view is "batches assigned to ME", with the
   // rest of their centre reachable as guest faculty. is_mine marks which is which — resolved
   // above via trainerForLogin (link, else email; never by name).
@@ -76,6 +86,10 @@ export const GET = apiHandler(async (req: NextRequest) => {
     roster_count: byBatch.get(String(b._id))?.roster ?? 0,
     enrolled_count: byBatch.get(String(b._id))?.enrolled ?? 0,
     settlement_stage: settlementStage(b.status, clByB.get(String(b._id)), invByB.get(String(b._id))),
+    attendance_days: logByB.get(String(b._id))?.days ?? 0,
+    attendance_last: logByB.get(String(b._id))?.last ?? null,
+    portal_as_of: portalByB.get(String(b._id))?.as_of ?? null,
+    portal_rows: portalByB.get(String(b._id))?.rows ?? 0,
     health: await batchHealth(String(b._id)),
     ...(user.role === "Trainer" ? { is_mine: myTrainerId != null && String(b.trainer?._id ?? b.trainer ?? "") === myTrainerId } : {}),
   })));

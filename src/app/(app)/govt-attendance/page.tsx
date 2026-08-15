@@ -5,6 +5,7 @@
 // where the portal and the centre's own daily logs disagree about who attended.
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { api, fmtDT, fmtDate } from "@/lib/client";
 import { BASE_PATH } from "@/lib/base-path";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, inputCls } from "@/components/ui";
@@ -129,6 +130,11 @@ function Inner() {
             defaultSort={{ key: "imported_at", dir: "desc" }} columns={[
             { key: "period_label", label: "Period", sortable: true, sortValue: (r: any) => r.period_label || r.file_name, render: (r: any) => <span className="font-medium">{r.period_label || r.file_name}</span> },
             { key: "location", label: "Centre", sortable: true, sortValue: (r: any) => r.location?.name, render: (r: any) => `${r.location?.name ?? "—"}${r.tc_id ? ` · ${r.tc_id}` : ""}` },
+            // QA-159 (-86): the record carries the batch; the table never showed it — from the
+            // import side nobody could tell which batch an upload went to.
+            { key: "batch", label: "Batch", sortable: true, sortValue: (r: any) => r.batch?.code ?? "", render: (r: any) => r.batch?.code
+              ? <Link className="text-blue-700 hover:underline" href={`/batches/${r.batch._id ?? r.batch}?tab=Attendance`} onClick={(e) => e.stopPropagation()}>{r.batch.code}</Link>
+              : <span className="text-gray-400">centre-wide</span> },
             { key: "row_count", label: "Rows", sortable: true },
             // QA-023: the counts on the list open the import pre-filtered to that subset.
             { key: "matched_count", label: "Matched", sortable: true, render: (r: any) => (

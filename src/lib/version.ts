@@ -3,11 +3,16 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-85";
+export const RELEASE = "2026.08.14-86";
 export const RELEASE_NOTE =
-  "QA-153 rider: the role list is the CEILING for a screen; the permission " +
-  "matrix can only close a door within it, never open one past it. Live " +
-  "proof on -83: the prod matrix hands Trainers attendance.govt, so the " +
-  "effective-rights override would have shown Manish's trainer login a Govt " +
-  "Attendance door - against R-I (a Trainer's doors are Home and Batches, " +
-  "full stop). One rule, both surfaces, now bounded by role.";
+  "Umesh 15/08 22:55 + QA-159. (1) The batch health and no-students banners " +
+  "get a cross - a dismissal lasts this session per batch (health: per " +
+  "score, so a Red that turns Amber shows again); the roster banner collapses " +
+  "to a 'No students yet - show' chip. (2) The batches list gains an " +
+  "Attendance column - our day-wise logs (count, last day) and the newest " +
+  "matched portal import per batch, '- none yet' otherwise - plus a 'No " +
+  "attendance yet' filter; the Attendance tab names its two meters apart " +
+  "(Our logs vs Portal) instead of one '0 days logged' next to 13 portal " +
+  "days; the Govt Attendance imports table shows the batch code. (3) The " +
+  "closure result/certificate upload now goes through the one upload path " +
+  "(compression, retry, folder + entity).";

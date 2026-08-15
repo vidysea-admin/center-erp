@@ -108,11 +108,17 @@ export function HealthChip({ health, inline }: { health?: { score: string; reaso
   return <span title={title}><Chip value={health.score} /></span>;
 }
 
-export function HealthBanner({ health }: { health?: { score: string; reasons: { label: string; severity: string }[] } }) {
+// -86 (Umesh 15/08 22:55): "there must be a cross button to close these" — onDismiss shows a ✕;
+// the page decides how long a dismissal lasts (per batch + score, this session).
+export function HealthBanner({ health, onDismiss }: { health?: { score: string; reasons: { label: string; severity: string }[] }; onDismiss?: () => void }) {
   if (!health || health.score === "Green") return null;
   const red = health.score === "Red";
   return (
-    <div className={`rounded-xl border px-4 py-3 ${red ? "border-red-200 bg-red-50" : "border-amber-200 bg-amber-50"}`}>
+    <div className={`relative rounded-xl border px-4 py-3 ${red ? "border-red-200 bg-red-50" : "border-amber-200 bg-amber-50"}`}>
+      {onDismiss && (
+        <button aria-label="Dismiss" title="Hide for now (comes back if the health changes)" onClick={onDismiss}
+          className={`absolute right-2 top-2 rounded px-1.5 text-lg leading-none ${red ? "text-red-400 hover:text-red-700" : "text-amber-500 hover:text-amber-800"}`}>×</button>
+      )}
       <div className={`text-sm font-semibold ${red ? "text-red-700" : "text-amber-700"}`}>
         Batch health: {health.score}
       </div>
