@@ -214,6 +214,30 @@ async function awsCredentials(): Promise<AwsCreds> {
   }
 }
 
+// -93: "who is this container on AWS?" — the exact principal ARN the WIF pool binding needs. Signed
+// GetCallerIdentity with the same credentials the exchange uses; cached; names only, no keys.
+let awsIdentityCache: { at: number; arn: string | null; error?: string } | null = null;
+export async function awsIdentity(): Promise<{ arn: string | null; account?: string | null; error?: string }> {
+  if (awsIdentityCache && Date.now() - awsIdentityCache.at < 10 * 60_000) return { arn: awsIdentityCache.arn, error: awsIdentityCache.error };
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { AwsRequestSigner } = require("google-auth-library");
+    const region = parseEnvValue(process.env.AWS_REGION) || parseEnvValue(process.env.AWS_DEFAULT_REGION) || "ap-south-1";
+    const signer = new AwsRequestSigner(async () => awsCredentials(), region);
+    const url = `https://sts.${region}.amazonaws.com?Action=GetCallerIdentity&Version=2011-06-15`;
+    const opts = await signer.getRequestOptions({ url, method: "POST" });
+    const r = await fetch(url, { method: "POST", headers: opts.headers as any, signal: AbortSignal.timeout(5000) });
+    const txt = await r.text();
+    const arn = /<Arn>([^<]+)<\/Arn>/.exec(txt)?.[1] ?? null;
+    const account = /<Account>([^<]+)<\/Account>/.exec(txt)?.[1] ?? null;
+    awsIdentityCache = { at: Date.now(), arn, error: arn ? undefined : `STS ${r.status}: ${txt.slice(0, 120)}` };
+    return { arn, account, error: awsIdentityCache.error };
+  } catch (e: any) {
+    awsIdentityCache = { at: Date.now(), arn: null, error: String(e?.message ?? e).slice(0, 160) };
+    return { arn: null, error: awsIdentityCache.error };
+  }
+}
+
 // ---------- -92 GCS client (lazy; the SDK is only touched when the mode is gcs) ----------
 let cachedGcs: any = null;
 function gcs(): { bucket: any; name: string } {

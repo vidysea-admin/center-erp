@@ -1009,6 +1009,7 @@ function MailPanel({ setError }: any) {
                 <div className="mt-1 text-[11px]">
                   WIF identity file: {comp.env.wif.present ? `✓ ${comp.env.wif.source}${comp.env.wif.impersonating ? ` → ${comp.env.wif.impersonating}` : ""}` : "✗ not present"} ·
                   AWS: region {comp.env.aws?.region ?? "—"} · task credentials endpoint {comp.env.aws?.container_creds ? "✓ (ECS)" : "✗"} · env {comp.env.aws?.execution_env ?? "—"}
+                  {comp.aws_identity && <> · this container's AWS identity: {comp.aws_identity.arn ? <code className="rounded bg-white/60 px-1">{comp.aws_identity.arn}</code> : <span className="text-red-700">unknown ({comp.aws_identity.error})</span>}</>}
                 </div>
               )}
               <details className="mt-1"><summary className="cursor-pointer">what this container sees (names only)</summary>
