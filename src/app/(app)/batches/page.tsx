@@ -59,8 +59,8 @@ function BatchesInner() {
       if (!res.ok) throw new Error(d.error ?? "Import failed");
       if (previewOnly) setImp({ ...imp, result: d });
       else {
-        // QA-110: remember the mapping per column-set so the same sheet shape is pre-filled next time.
-        try { localStorage.setItem("erp-import-map-batches", JSON.stringify({ sig: [...(imp.columns ?? [])].sort().join("|"), mapping: imp.mapping ?? {} })); } catch {}
+        // QA-110 memory (QA-146: -v2 key — old key could hold a poisoned mapping).
+        try { localStorage.setItem("erp-import-map-batches-v2", JSON.stringify({ sig: [...(imp.columns ?? [])].sort().join("|"), mapping: imp.mapping ?? {} })); } catch {}
         setImp(null); setInfo(`Imported ${d.created?.length ?? 0} batch(es)${d.refused?.length ? ` — ${d.refused.length} refused` : ""}${d.skipped_count ? ` — ${d.skipped_count} rows skipped` : ""}`); load();
       }
     } catch (e: any) { setError(e.message); }
@@ -543,9 +543,11 @@ function BatchesInner() {
                 const d = await res.json().catch(() => ({}));
                 if (!res.ok) throw new Error(d.error ?? "Could not read the file");
                 // QA-110: a remembered mapping for this exact column-set beats the name heuristic.
+                // QA-146: -v2 key; old key dropped.
                 let remembered: any = null;
                 try {
-                  const saved = JSON.parse(localStorage.getItem("erp-import-map-batches") ?? "null");
+                  localStorage.removeItem("erp-import-map-batches");
+                  const saved = JSON.parse(localStorage.getItem("erp-import-map-batches-v2") ?? "null");
                   if (saved?.sig === [...(d.columns ?? [])].sort().join("|")) remembered = saved.mapping;
                 } catch {}
                 setImp({ file, columns: d.columns, remembered: !!remembered, mapping: remembered ?? Object.fromEntries(d.columns.map((c: string) => {
@@ -561,9 +563,15 @@ function BatchesInner() {
             }} />
             {imp.columns && (
               <>
+                {/* QA-146: blank header cells shift labels — warn. */}
+                {imp.columns.some((c: string) => /^__EMPTY/.test(c)) && (
+                  <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                    <b>This sheet&apos;s header row has blank cells.</b> Columns marked &quot;unnamed&quot; had no header — check the preview values, not the labels.
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-2">
                   {imp.columns.map((c: string) => (
-                    <Field key={c} label={c}>
+                    <Field key={c} label={/^__EMPTY/.test(c) ? "(unnamed column — header was blank)" : c}>
                       <select className={inputCls} value={imp.mapping?.[c] ?? ""} onChange={(e) => setImp({ ...imp, mapping: { ...imp.mapping, [c]: e.target.value } })}>
                         <option value="">(ignore)</option>
                         {["location", "program", "planned_start", "target_size", "session"].map((f) => <option key={f} value={f}>{f}</option>)}

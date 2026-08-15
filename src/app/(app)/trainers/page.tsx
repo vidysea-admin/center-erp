@@ -71,10 +71,11 @@ function TrainersInner() {
       const res = await fetch(`${BASE_PATH}/api/trainers/import`, { method: "POST", body: fd });
       const d = await res.json();
       if (!res.ok) throw new Error(d.error ?? "import failed");
-      if (previewOnly) setImp({ ...imp, preview: d, done: null });
+      if (previewOnly) setImp({ ...imp, preview: d, done: null, force_bad: false });
       else {
-        // QA-110: remember the mapping per column-set so the same sheet shape is pre-filled next time.
-        try { localStorage.setItem("erp-import-map-trainers", JSON.stringify({ sig: [...(imp.columns ?? [])].sort().join("|"), mapping: imp.mapping ?? {} })); } catch {}
+        // QA-110 memory + QA-146 guard: never memorize a mapping whose preview was majority-invalid.
+        const bad = (imp.preview?.phone_invalid_count ?? 0) >= Math.max(1, Math.ceil((imp.preview?.valid ?? 0) / 2));
+        if (!bad) { try { localStorage.setItem("erp-import-map-trainers-v2", JSON.stringify({ sig: [...(imp.columns ?? [])].sort().join("|"), mapping: imp.mapping ?? {} })); } catch {} }
         setImp({ ...imp, done: d, preview: null }); load();
       }
     } catch (err: any) { setError(err.message); }
@@ -489,9 +490,11 @@ function TrainersInner() {
                 const d = await res.json();
                 if (!res.ok) throw new Error(d.error ?? "upload failed");
                 // QA-110: pre-fill the remembered mapping when this column-set was imported before.
+                // QA-146: key bumped to -v2 (the old key could hold a poisoned mapping).
                 let remembered: any = null;
                 try {
-                  const saved = JSON.parse(localStorage.getItem("erp-import-map-trainers") ?? "null");
+                  localStorage.removeItem("erp-import-map-trainers");
+                  const saved = JSON.parse(localStorage.getItem("erp-import-map-trainers-v2") ?? "null");
                   if (saved?.sig === [...(d.columns ?? [])].sort().join("|")) remembered = saved.mapping;
                 } catch {}
                 setImp({ file, columns: d.columns, total: d.total, mapping: remembered ?? {}, remembered: !!remembered });
@@ -500,9 +503,15 @@ function TrainersInner() {
             {imp.columns && (
               <>
                 <p className="text-sm text-gray-600">{imp.total} rows found. Map columns → fields (name and phone required). "Current Stage" accepts the display names (Fresh Lead, TOT Payment Done…).</p>
+                {/* QA-146: blank header cells shift every label one over — warn before the operator maps. */}
+                {imp.columns.some((c: string) => /^__EMPTY/.test(c)) && (
+                  <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                    <b>This sheet&apos;s header row has blank cells.</b> Columns marked &quot;unnamed&quot; had no header — check the preview values, not the labels.
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-2">
                   {imp.columns.map((c: string) => (
-                    <Field key={c} label={c}>
+                    <Field key={c} label={/^__EMPTY/.test(c) ? "(unnamed column — header was blank)" : c}>
                       <select className={inputCls} value={imp.mapping?.[c] ?? ""} onChange={(e) => setImp({ ...imp, mapping: { ...imp.mapping, [c]: e.target.value } })}>
                         <option value="">Ignore</option>
                         {["name", "phone", "email", "qualification", "skills", "industry_experience_years", "teaching_experience_years", "home_location_other", "pipeline_status", "tr_id", "nominated_for_location", "nominated_for_program", "source", "day_rate", "pipeline_note"].map((f) => <option key={f}>{f}</option>)}
@@ -510,11 +519,34 @@ function TrainersInner() {
                     </Field>
                   ))}
                 </div>
-                <div className="flex gap-2">
-                  <Btn kind="ghost" onClick={() => trainerImport(true)}>Preview</Btn>
-                  {imp.preview && <Btn onClick={() => trainerImport(false)}>Import {imp.preview.importable ?? imp.preview.valid} trainers</Btn>}
-                </div>
-                {imp.remembered && <p className="text-xs text-blue-700">Mapping pre-filled from your last import of this sheet shape — check it still fits.</p>}
+                {(() => {
+                  // QA-146: majority-invalid phones = the mapping is probably wrong. Explicit confirm gate.
+                  const badMapping = (imp.preview?.phone_invalid_count ?? 0) >= Math.max(1, Math.ceil((imp.preview?.valid ?? 0) / 2));
+                  return (
+                    <>
+                      {badMapping && (
+                        <div className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-800">
+                          <b>{imp.preview.phone_invalid_count} of {imp.preview.valid} phone numbers are invalid — the column mapping is probably wrong.</b>{" "}
+                          Fix the mapping and preview again, or confirm below.
+                          <label className="mt-1.5 flex items-center gap-2 font-normal">
+                            <input type="checkbox" checked={!!imp.force_bad} onChange={(e) => setImp({ ...imp, force_bad: e.target.checked })} />
+                            I have checked the mapping — import anyway
+                          </label>
+                        </div>
+                      )}
+                      <div className="flex gap-2">
+                        <Btn kind="ghost" onClick={() => trainerImport(true)}>Preview</Btn>
+                        {imp.preview && <Btn disabled={badMapping && !imp.force_bad} onClick={() => trainerImport(false)}>Import {imp.preview.importable ?? imp.preview.valid} trainers</Btn>}
+                      </div>
+                    </>
+                  );
+                })()}
+                {imp.remembered && (
+                  <p className="text-xs text-blue-700">
+                    Mapping pre-filled from your last import of this sheet shape — check it still fits.{" "}
+                    <button className="underline" onClick={() => { try { localStorage.removeItem("erp-import-map-trainers-v2"); } catch {}; setImp({ ...imp, mapping: {}, remembered: false }); }}>Clear</button>
+                  </p>
+                )}
                 {imp.preview && (
                   <div className="space-y-2 text-sm text-gray-600">
                     <p>{imp.preview.valid} valid, {imp.preview.skipped} skipped (missing name/phone).</p>

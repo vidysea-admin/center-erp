@@ -98,6 +98,13 @@ for (const bad of ["0", "-5", "abc", "1e9", "1.5", "999999"]) {
   ok(`[worst] limit=${bad} is refused 400 naming the bound, not silently coerced`,
     r.status === 400 && /between 1 and 2000/.test(r.data?.error ?? ""), `status=${r.status} err=${r.data?.error}`);
 }
+// QA-053 rider (-75): the batches list is a CUSTOM route and ignored ?limit entirely.
+const bl = await req(admin, "GET", "/api/batches?limit=3", undefined, 200);
+ok("[avg] /api/batches honours an explicit limit now", (bl.data.items ?? []).length <= 3, `items=${bl.data.items?.length}`);
+const blBad = await req(admin, "GET", "/api/batches?limit=abc");
+ok("[worst] /api/batches limit=abc refused 400 naming the bound", blBad.status === 400 && /between 1 and 2000/.test(blBad.data?.error ?? ""), `status=${blBad.status}`);
+const blAll = await req(admin, "GET", "/api/batches", undefined, 200);
+ok("[best] absent limit keeps returning the full scoped list (screens depend on it)", (blAll.data.items ?? []).length >= (bl.data.items ?? []).length, `all=${blAll.data.items?.length}`);
 
 // ---- shape 5 (2026-08-13, roster fix): a program-less import row joins a matching batch and
 // inherits its programme — the exact path the 572 prod rows take from the pool drawer.

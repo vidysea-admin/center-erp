@@ -287,13 +287,17 @@ function CandidatesInner() {
   // Excel import steps
   // QA-110: the same sheet shape shouldn't be re-mapped by hand every time — the last
   // mapping is remembered per column-set (localStorage; purely a convenience, server unchanged).
+  // QA-146: key bumped to -v2 — the old key held the poisoned CHI-ITI mapping (real phone
+  // under __EMPTY_4) in the operator's browser and would have re-applied it silently.
   const mapMemory = (columns: string[]) => {
     try {
-      const saved = JSON.parse(localStorage.getItem("erp-import-map-candidates") ?? "null");
+      localStorage.removeItem("erp-import-map-candidates");
+      const saved = JSON.parse(localStorage.getItem("erp-import-map-candidates-v2") ?? "null");
       if (saved?.sig === [...columns].sort().join("|")) return saved.mapping as Record<string, string>;
     } catch {}
     return null;
   };
+  const clearMapMemory = () => { try { localStorage.removeItem("erp-import-map-candidates-v2"); } catch {}; setImportState((s: any) => ({ ...s, mapping: {}, remembered: false })); };
   async function importUpload(file: File) {
     const fd = new FormData();
     fd.append("file", file); fd.append("location", importState.location); fd.append("program", importState.program);
@@ -312,9 +316,12 @@ function CandidatesInner() {
     if (!preview) fd.append("confirm", "1");
     try {
       const res = await api("/api/candidates/import", { method: "POST", body: fd });
-      if (preview) setImportState((s: any) => ({ ...s, preview: res }));
+      if (preview) setImportState((s: any) => ({ ...s, preview: res, force_bad: false }));
       else {
-        try { localStorage.setItem("erp-import-map-candidates", JSON.stringify({ sig: [...(importState.columns ?? [])].sort().join("|"), mapping: importState.mapping ?? {} })); } catch {}
+        // QA-146: never MEMORIZE a mapping whose preview showed majority-invalid phones —
+        // the remembered CHI-ITI mapping would have re-applied itself to every next sheet.
+        const bad = (res.phone_invalid_count ?? importState.preview?.phone_invalid_count ?? 0) >= Math.max(1, Math.ceil((importState.preview?.valid ?? 0) / 2));
+        if (!bad) { try { localStorage.setItem("erp-import-map-candidates-v2", JSON.stringify({ sig: [...(importState.columns ?? [])].sort().join("|"), mapping: importState.mapping ?? {} })); } catch {} }
         setDrawer(""); setImportState({}); load();
       }
     } catch (e: any) { setError(e.message); }
@@ -668,10 +675,24 @@ function CandidatesInner() {
           {importState.columns && (
             <>
               <p className="text-sm text-gray-600">{importState.total} rows found. Map columns → fields (name and phone required):</p>
-              {importState.remembered && <p className="text-xs text-blue-700">Mapping pre-filled from your last import of this sheet shape — check it still fits.</p>}
+              {importState.remembered && (
+                <p className="text-xs text-blue-700">
+                  Mapping pre-filled from your last import of this sheet shape — check it still fits.{" "}
+                  <button className="underline" onClick={clearMapMemory}>Clear</button>
+                </p>
+              )}
+              {/* QA-146: the CHI-ITI sheet had a blank header cell — SheetJS names such a column
+                  __EMPTY_n and the real phone number lived there while the visible labels shifted
+                  one over. Say it loudly instead of listing "__EMPTY_4" as if it were a name. */}
+              {importState.columns.some((c: string) => /^__EMPTY/.test(c)) && (
+                <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                  <b>This sheet&apos;s header row has blank cells.</b> The columns marked &quot;unnamed&quot; below had no
+                  header, so the labels may not line up with the data — check the preview values, not the names.
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-2">
                 {importState.columns.map((c: string) => (
-                  <Field key={c} label={c}>
+                  <Field key={c} label={/^__EMPTY/.test(c) ? `(unnamed column — header was blank)` : c}>
                     <select className={inputCls} value={importState.mapping?.[c] ?? ""} onChange={(e) => setImportState({ ...importState, mapping: { ...importState.mapping, [c]: e.target.value } })}>
                       <option value="">Ignore</option>
                       {/* F-B4: the eligibility fields (dob · education · last_training_date) are mappable now. */}
@@ -680,10 +701,31 @@ function CandidatesInner() {
                   </Field>
                 ))}
               </div>
-              <div className="flex gap-2">
-                <Btn kind="ghost" onClick={() => importConfirm(true)}>Preview</Btn>
-                {importState.preview && <Btn onClick={() => importConfirm(false)}>Import {importState.preview.valid} candidates</Btn>}
-              </div>
+              {(() => {
+                // QA-146: when MOST phones are invalid the mapping itself is almost certainly wrong
+                // (CHI-ITI: 45/45 invalid, imported anyway). The report stays a report — but the
+                // button waits for an explicit, informed confirmation.
+                const badMapping = (importState.preview?.phone_invalid_count ?? 0) >= Math.max(1, Math.ceil((importState.preview?.valid ?? 0) / 2));
+                return (
+                  <>
+                    {badMapping && (
+                      <div className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-800">
+                        <b>{importState.preview.phone_invalid_count} of {importState.preview.valid} phone numbers are invalid — the column mapping is probably wrong.</b>{" "}
+                        Check which column really holds the phone number (a blank header shifts everything), fix the mapping above and preview again.
+                        <label className="mt-1.5 flex items-center gap-2 font-normal">
+                          <input type="checkbox" checked={!!importState.force_bad}
+                            onChange={(e) => setImportState({ ...importState, force_bad: e.target.checked })} />
+                          I have checked the mapping — import anyway
+                        </label>
+                      </div>
+                    )}
+                    <div className="flex gap-2">
+                      <Btn kind="ghost" onClick={() => importConfirm(true)}>Preview</Btn>
+                      {importState.preview && <Btn disabled={badMapping && !importState.force_bad} onClick={() => importConfirm(false)}>Import {importState.preview.valid} candidates</Btn>}
+                    </div>
+                  </>
+                );
+              })()}
               {importState.preview && (
                 <p className="text-sm text-gray-600">{importState.preview.valid} valid, {importState.preview.skipped} skipped (missing name/phone).</p>
               )}

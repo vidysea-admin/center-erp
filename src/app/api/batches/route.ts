@@ -22,8 +22,22 @@ export const GET = apiHandler(async (req: NextRequest) => {
     assertLocationInScope(user, loc); // client filter may narrow scope, never widen it
     filter.location = loc;
   }
+  // QA-053 rider (-75): this custom list route ignored ?limit entirely — same explicit
+  // contract as the shared crud handler now: absent → no cap here was the old behaviour,
+  // so absent keeps returning everything the scope allows (list screens depend on it),
+  // but a PRESENT limit must be an integer in [1, 2000] or a 400 naming the bound.
+  const rawLimit = sp.get("limit");
+  let limit = 0; // 0 = no explicit limit (mongo .limit(0) = unlimited)
+  if (rawLimit != null && rawLimit !== "") {
+    const asked = Number(rawLimit);
+    if (!Number.isInteger(asked) || asked < 1 || asked > 2000) {
+      throw new HttpError(400, `limit must be a whole number between 1 and 2000 (got "${rawLimit}").`);
+    }
+    limit = asked;
+  }
   const items = await Batch.find(filter)
     .sort({ createdAt: -1 })
+    .limit(limit)
     .populate("location", "name code")
     .populate("program", "name code duration_days")
     .populate("trainer", "name")
