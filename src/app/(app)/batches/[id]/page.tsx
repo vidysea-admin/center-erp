@@ -1130,7 +1130,10 @@ function DailyExecution({ batchId, batch, role, setError }: any) {
   });
   async function uploadFile(file: File, kind: "photos" | "videos" | "govt_screenshot") {
     try {
-      const url = await uploadWithRetry(file, kind, evidenceHints(kind)); // compressed + 3 retries + per-batch offline queue
+      const url = await uploadWithRetry(file, kind, evidenceHints(kind), (p) => {
+        if (p.phase === "uploading") setUploadNote(`${file.name}: ${p.pct}% (${fmtBytes(p.sent)} / ${fmtBytes(p.total)}) — uploading straight to storage, resumes if the signal drops`);
+        else if (p.phase === "finalising") setUploadNote(`${file.name}: confirming with storage…`);
+      }); // compressed + 3 retries + per-batch offline queue; large/video → direct-to-Drive with progress
       const info = getLastUploadInfo();
       if (info) setUploadNote(`${file.name}: ${fmtBytes(file.size)} → ${fmtBytes(info.size)}${info.compression && !info.compression.startsWith("none") ? ` (${info.compression})` : ""}`);
       if (kind === "photos") setForm((f: any) => ({ ...f, photos: [...f.photos, url] }));

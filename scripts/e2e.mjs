@@ -1289,6 +1289,32 @@ ok("…with the contact details an approver needs", !!queued && queued.phone ===
   ok("-89: CI has no Drive names → the hint says so and points at where SES lives", typeof env?.hint === "string" && /None of the Drive names/.test(env.hint) && env.env_seen.MONGODB_URL.present === true, env?.hint);
   ok("-89: storage health itself carries the hint (the admin banner shows it)", typeof probeGet.data?.storage?.hint === "string" && probeGet.data.storage.hint.length > 20, probeGet.data?.storage?.hint);
   ok("-89: the probe's refusal names the hint, not a bare 'GDRIVE_SA_JSON missing'", /None of the Drive names|register the three/.test(probe.data?.error ?? ""), probe.data?.error);
+  ok("-90: storage health carries rss_mb (memory is measurable, not asserted)", typeof probeGet.data?.rss_mb === "number" && probeGet.data.rss_mb > 0, String(probeGet.data?.rss_mb));
+}
+
+// ---- -90 (DESIGN-video-upload.md): direct-to-Drive resumable path — CI has no Drive, so the
+// contract pins are structural: intent says 409 + fallback (the client then uses multipart),
+// validation is honest, complete/abort refuse unknown names, and the ordinary door still
+// stamps rows READY (the only state /api/files serves).
+{
+  const intent = await req("POST", "/api/upload/intent", { name: "session.mp4", size: 100 * 1024 * 1024, mime: "video/mp4", folder_centre: "TEST-CENTRE", folder_batch: "TEST-BATCH-01", folder_kind: "videos" }, 409);
+  ok("-90: with Drive off, intent answers 409 + fallback:true (client falls back to multipart)", intent.data?.fallback === true && /not connected/i.test(intent.data?.error ?? ""), JSON.stringify(intent.data));
+  await req("POST", "/api/upload/intent", { name: "evil.exe", size: 10, mime: "application/octet-stream" }, 400);
+  await req("POST", "/api/upload/intent", { name: "x.mp4", size: 0, mime: "video/mp4" }, 400);
+  await req("POST", "/api/upload/intent", { name: "x.mp4", size: 6 * 1024 * 1024 * 1024, mime: "video/mp4" }, 413);
+  await req("POST", "/api/upload/complete", { name: "0".repeat(32) + ".mp4", drive_file_id: "abc" }, 404);
+  await req("POST", "/api/upload/complete", { name: "not-a-name", drive_file_id: "abc" }, 400);
+  await req("POST", "/api/upload/abort", { name: "0".repeat(32) + ".mp4" }, 404);
+  const anonIntent = await fetch(BASE + "/api/upload/intent", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "a.mp4", size: 10, mime: "video/mp4" }) });
+  ok("-90: intent needs a session (401 anon)", anonIntent.status === 401, String(anonIntent.status));
+  {
+    const { MongoClient } = await import("mongodb");
+    const mc = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+    await mc.connect();
+    const anyRow = await mc.db(process.env.MONGODB_DB || "center_erp_ci").collection("storedfiles").findOne({}, { sort: { createdAt: -1 } });
+    await mc.close();
+    ok("-90: rows written by the multipart door are READY (the only state /api/files serves)", !!anyRow && (anyRow.status === "ready" || anyRow.status === undefined), JSON.stringify(anyRow && anyRow.status));
+  }
 }
 
 // ---- -87 (QA-157, Umesh 15/08: "jo kuch bhi media jaye — sab compress"): the ONE door compresses ----

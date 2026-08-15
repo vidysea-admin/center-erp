@@ -5,7 +5,7 @@ import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { BASE_PATH } from "@/lib/base-path";
 import { dbConnect } from "@/lib/db";
 import { StoredFile } from "@/models";
-import { putFile } from "@/lib/storage";
+import { ALLOWED_UPLOAD_EXT, putFile } from "@/lib/storage";
 
 // 2026-08-12 (Manish): 25 MB was too small for the twice-daily evidence videos.
 // 15/08 (Umesh): the app-side ceiling is GONE entirely — no size check here at all.
@@ -14,7 +14,7 @@ import { putFile } from "@/lib/storage";
 // as Word files, and without these the mandatory-document gate could never be satisfied.
 // 15/08 (team feedback): .heic added — iPhones hand photos over as HEIC by default.
 // 15/08 (team, via checker): audio too — voice notes are field evidence like photos are.
-const ALLOWED = new Set([".jpg", ".jpeg", ".png", ".webp", ".heic", ".pdf", ".mp4", ".mov", ".3gp", ".mp3", ".m4a", ".wav", ".amr", ".xlsx", ".xls", ".csv", ".doc", ".docx"]);
+const ALLOWED = ALLOWED_UPLOAD_EXT; // -90: shared with /api/upload/intent (lib/storage.ts)
 
 // POST multipart { file } → { url } (served from /uploads via next.config rewrite-free public dir)
 export const POST = apiHandler(async (req: NextRequest) => {

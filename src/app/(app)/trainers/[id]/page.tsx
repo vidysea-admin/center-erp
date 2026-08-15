@@ -127,7 +127,8 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
       if (dupes.length) throw new Error(`Duplicate filenames in the selection: ${dupes.map((f) => f.name).join(", ")} — rename and retry.`);
       let done = 0;
       for (const file of files) {
-        const url = await uploadWithRetry(file, "document", { folder_centre: t?.home_location?.code ?? t?.home_location?.name ?? "_trainers", folder_batch: t?.name ?? "", folder_kind: "documents", entity: "Trainer", entity_id: id });
+        const url = await uploadWithRetry(file, "document", { folder_centre: t?.home_location?.code ?? t?.home_location?.name ?? "_trainers", folder_batch: t?.name ?? "", folder_kind: "documents", entity: "Trainer", entity_id: id },
+          (p) => { if (p.phase === "uploading") setErr(`${file.name}: ${p.pct}% uploaded…`); else if (p.phase === "done") setErr(""); });
         const doc_type = files.length === 1 && fixedType ? fixedType : guessDocType(file.name);
         await api(`/api/trainers/${id}/documents`, { method: "POST", json: { doc_type, file_url: url, original_name: file.name } });
         done++;

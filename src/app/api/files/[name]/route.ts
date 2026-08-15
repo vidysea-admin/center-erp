@@ -37,7 +37,8 @@ export const GET = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   const { name } = await ctx.params;
   if (!/^[a-f0-9]{32}\.[a-z0-9]+$/.test(name)) throw new HttpError(400, "Bad file name");
   await dbConnect();
-  const rec = await StoredFile.findOne({ name }).select("backend drive_file_id size").lean<any>();
+  const rec = await StoredFile.findOne({ name }).select("backend drive_file_id size status").lean<any>();
+  if (rec && rec.status && rec.status !== "ready") throw new HttpError(404, rec.status === "pending" ? "This file is still uploading." : "This upload did not complete.");
   const ext = path.extname(name);
   const type = TYPES[ext] ?? "application/octet-stream";
   const disposition = `${INLINE.has(ext) ? "inline" : "attachment"}; filename="${name}"`;

@@ -613,7 +613,11 @@ export async function activateFromEvidence(batchId: string, opts: { actor?: stri
   if (!logs && !portal) return { activated: false, reason: "no attendance evidence" };
   const today = istToday();
   const planned = dayKey(batch.planned_start);
-  const start = planned.getTime() <= today.getTime() ? planned : today;
+  // QA-160 refinement (checker): when our own day-wise logs exist, the earliest logged day is
+  // the truest start we have; the planned start otherwise; never a future day.
+  const firstLog = logs ? await DailyLog.findOne({ batch: batchId }).sort({ log_date: 1 }).select("log_date").lean<any>() : null;
+  const candidates = [planned, ...(firstLog?.log_date ? [dayKey(firstLog.log_date)] : [])].filter((d) => d.getTime() <= today.getTime());
+  const start = candidates.length ? new Date(Math.min(...candidates.map((d) => d.getTime()))) : today;
   const from = batch.status;
   batch.actual_start = start;
   batch.status = "Active" as any;

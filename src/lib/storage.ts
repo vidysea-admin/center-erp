@@ -29,6 +29,7 @@ import { getDefaults } from "@/lib/defaults";
 const execFileP = promisify(execFile);
 
 let cachedDrive: drive_v3.Drive | null = null;
+let cachedAuth: any = null; // the auth client behind cachedDrive — needed for a bearer token (-90 resumable session)
 let cachedErr: string | null = null;
 const folderCache = new Map<string, string>(); // "parentId/name" → folderId
 
@@ -123,15 +124,71 @@ function drive(): drive_v3.Drive {
     const raw = sa.raw.trim().startsWith("{") ? sa.raw : Buffer.from(sa.raw, "base64").toString("utf8");
     const creds = JSON.parse(raw);
     const auth = new google.auth.GoogleAuth({ credentials: creds, scopes: ["https://www.googleapis.com/auth/drive"] });
+    cachedAuth = auth;
     cachedDrive = google.drive({ version: "v3", auth });
   } else {
     const t = oauthTriple()!;
     const auth = new google.auth.OAuth2(t.id, t.secret);
     auth.setCredentials({ refresh_token: t.refresh });
+    cachedAuth = auth;
     cachedDrive = google.drive({ version: "v3", auth });
   }
   return cachedDrive;
 }
+async function accessToken(): Promise<string> {
+  drive(); // ensures cachedAuth
+  const a = cachedAuth;
+  if (typeof a.getAccessToken === "function") {
+    const r = await a.getAccessToken();
+    const tok = typeof r === "string" ? r : r?.token;
+    if (tok) return tok;
+  }
+  if (typeof a.getClient === "function") {
+    const c = await a.getClient();
+    const r = await c.getAccessToken();
+    const tok = typeof r === "string" ? r : r?.token;
+    if (tok) return tok;
+  }
+  throw new Error("Could not obtain a Google access token");
+}
+
+// ---------- -90 (checker's DESIGN-video-upload.md, Umesh's "how the video upload really works"):
+// the server AUTHORISES and RECORDS; the bytes go browser → Drive. A resumable session URI is
+// minted here with the app's identity (the browser never sees keys), scoped to the intended
+// folder; the browser PUTs chunks straight to Google; the server confirms with Drive and marks
+// the row ready. Nothing large passes through the container — no RAM spike, no OOM, resume on
+// a dropped 4G, a real progress bar.
+export async function createResumableSession(opts: { name: string; mime: string; size: number; folderSegments: string[]; origin?: string | null }): Promise<{ session_uri: string; folder_id: string; folder_path: string }> {
+  const folder = await ensureFolder(opts.folderSegments);
+  const token = await accessToken();
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json; charset=UTF-8",
+    "X-Upload-Content-Type": opts.mime || "application/octet-stream",
+    "X-Upload-Content-Length": String(opts.size),
+  };
+  if (opts.origin) headers["Origin"] = opts.origin; // lets the browser PUT to the session (CORS on Google's side)
+  const res = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true", {
+    method: "POST", headers, body: JSON.stringify({ name: opts.name, parents: [folder.id] }),
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    cachedErr = `resumable session ${res.status}: ${txt.slice(0, 200)}`;
+    throw new Error(`Drive refused to open an upload session (${res.status}). ${txt.slice(0, 160)}`);
+  }
+  const loc = res.headers.get("location");
+  if (!loc) throw new Error("Drive did not return a session URI");
+  cachedErr = null;
+  return { session_uri: loc, folder_id: folder.id, folder_path: folder.path };
+}
+export async function finalizeDriveFile(fileId: string): Promise<{ id: string; size: number; md5?: string | null; parents: string[]; name?: string | null }> {
+  const r = await drive().files.get({ fileId, fields: "id,size,md5Checksum,parents,name", supportsAllDrives: true });
+  return { id: String(r.data.id), size: Number(r.data.size ?? 0), md5: r.data.md5Checksum ?? null, parents: (r.data.parents ?? []) as string[], name: r.data.name ?? null };
+}
+export async function deleteDriveFile(fileId: string): Promise<void> {
+  try { await drive().files.delete({ fileId, supportsAllDrives: true }); } catch { /* best-effort — an abandoned pending row is swept anyway */ }
+}
+export function rssMb(): number { return Math.round(process.memoryUsage().rss / 1048576); }
 
 // Folder-wise, auto-created, id-cached: <root>/<seg1>/<seg2>/... Names are used as given
 // (centre code, batch code, kind) — human-readable in Drive for anyone who does look.
@@ -169,6 +226,8 @@ export type PutResult = {
 // screen can bypass it again (the closure upload did). Client-side compression stays for the
 // trainer's 4G data; the server is what makes the rule true. Tools are optional at runtime —
 // missing → store as-is and RECORD why, never silently.
+// The one allowlist every upload door uses (multipart route + direct-to-Drive intent).
+export const ALLOWED_UPLOAD_EXT = new Set([".jpg", ".jpeg", ".png", ".webp", ".heic", ".pdf", ".mp4", ".mov", ".3gp", ".webm", ".mp3", ".m4a", ".wav", ".amr", ".xlsx", ".xls", ".csv", ".doc", ".docx"]);
 const IMAGE_EXT = new Set([".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"]);
 const VIDEO_EXT = new Set([".mp4", ".mov", ".3gp", ".webm"]);
 let gsPath: string | null | undefined; // undefined = not probed yet

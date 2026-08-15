@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiHandler, requireUser, requireRole, HttpError } from "@/lib/authz";
-import { compressionTools, envDiagnostic, getFile, putFile, storageHealth } from "@/lib/storage";
+import { compressionTools, envDiagnostic, getFile, putFile, rssMb, storageHealth } from "@/lib/storage";
 
 // QA-145 rider (Umesh, 15/08: "Drive wala code local me test karke dekha ki information ja
 // rahi hai ya bas push kar diya?") — the honest answer was: the Drive branch could not be
@@ -16,7 +16,8 @@ export const GET = apiHandler(async () => {
   const agg = await StoredFile.aggregate([{ $group: { _id: null, files: { $sum: 1 }, stored: { $sum: "$size" }, original: { $sum: { $ifNull: ["$original_size", "$size"] } }, compressed: { $sum: { $cond: ["$compressed", 1, 0] } } } }]);
   const recent = await StoredFile.find({}).sort({ createdAt: -1 }).limit(20).select("original_name mime original_size size compressed compression createdAt").lean();
   // -89: names only (never values) — which Drive env names reached THIS container, with SES/Mongo as the control.
-  return NextResponse.json({ storage: storageHealth(), env: envDiagnostic(), tools, compression: { totals: agg[0] ?? { files: 0, stored: 0, original: 0, compressed: 0 }, recent } });
+  // -90: rss_mb makes "the container's memory does not move with file size" measurable.
+  return NextResponse.json({ storage: storageHealth(), env: envDiagnostic(), rss_mb: rssMb(), tools, compression: { totals: agg[0] ?? { files: 0, stored: 0, original: 0, compressed: 0 }, recent } });
 });
 
 export const POST = apiHandler(async (_req: NextRequest) => {

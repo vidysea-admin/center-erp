@@ -846,8 +846,15 @@ const StoredFileSchema = new Schema({
   compression: String,
   compression_ms: Number,
   needs_compression: { type: Boolean, default: false },
+  // -90: direct-to-Drive (resumable) uploads live as "pending" between intent and complete;
+  // "ready" is the only state /api/files serves; abandoned pendings are swept to "failed".
+  status: { type: String, enum: ["ready", "pending", "failed"], default: "ready" },
+  bytes_expected: Number,
+  drive_folder_id: String,
+  expires_at: Date,
 }, { timestamps: true });
 StoredFileSchema.index({ entity: 1, entity_id: 1 });
+StoredFileSchema.index({ status: 1, expires_at: 1 });
 
 // ---------- Public tokens (2026-08-11: self-registration + candidate feedback) ----------
 // Capability URLs: the random token IS the credential. register tokens are per-location
