@@ -3,18 +3,13 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-83";
+export const RELEASE = "2026.08.14-84";
 export const RELEASE_NOTE =
-  "QA-153 + QA-146 part 2 + QA-154/155/156. Umesh: 'unko bas itna dikhe jahan " +
-  "unka kaam hai' - one rule (routeAllowed) now decides whether a door EXISTS: " +
-  "the sidebar and the route itself obey it, effective rights from " +
-  "/api/permissions/me override the role list, and a screen outside a role's " +
-  "work renders a plain closed door instead of a form the API would refuse; " +
-  "Costs stops asking Operations for the invoice book. The candidate importer " +
-  "skips a sheet's own column-number/header/description rows and names them " +
-  "by row. File reads STREAM with Range (206) and real media types - video " +
-  "seeks, iOS plays, voice notes play inline; a bulk-uploaded certificate " +
-  "goes through the same storage adapter as every other file (StoredFile row, " +
-  "Drive when on). Every evidence upload says where it belongs (centre/batch/" +
-  "kind + entity), and the offline retry queue is bound to its batch - a parked " +
-  "photo can no longer land on another batch's log.";
+  "QA-146 part 2 rider: candidates get the QA-130 delete verb. The CHI-ITI " +
+  "import had left three of the sheet's own header/description rows in the " +
+  "candidate list and there was no way to remove them (405). Admin-only, " +
+  "refuses anyone with batch history (drop them from the batch instead), " +
+  "documents cascade, audited by name. Delete button in the edit drawer for " +
+  "Admin. Everything from -83 (role-scoped screens, template-row import " +
+  "guard, streamed Range file reads, batch-bound retry queue, certificates " +
+  "through the storage adapter) is unchanged.";

@@ -635,6 +635,15 @@ function CandidatesInner() {
             || !!phoneError(form.phone) || !!phoneError(form.alt_phone, { optional: true }) || !!emailError(form.email, { optional: true })}>
             {drawer === "edit" ? "Save changes" : "Add"}
           </Btn>
+          {/* -84 (QA-146 part 2): junk rows (a sheet's own header/description lines) need a way
+              out — Admin only; the API refuses anyone with batch history (drop those instead). */}
+          {drawer === "edit" && editId && role === "Admin" && (
+            <Btn kind="ghost" onClick={async () => {
+              if (!window.confirm(`Delete "${form.name}" (${form.phone}) permanently? Their documents go too. A candidate with batch history should be dropped from the batch, not deleted.`)) return;
+              try { await api(`/api/candidates/${editId}`, { method: "DELETE" }); setDrawer(""); setEditId(""); load(); }
+              catch (e: any) { setError(e.message); }
+            }}>Delete</Btn>
+          )}
         </div>
       </Drawer>
 

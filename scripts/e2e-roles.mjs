@@ -562,6 +562,14 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
     // QA-153 (-83): the shell decides "does this door exist for you" from THIS payload — so
     // it must carry the role and the togglable keys the route rules read (attendance.govt,
     // costs.manage, sheet.sources), and say nothing for a right the person does not hold.
+    // -84: candidate delete is Admin-only (QA-130 shape) — Operations gets 403 even though they manage candidates
+    {
+      const c = (await req(admin, "POST", "/api/candidates", { name: "Del Probe " + s25, phone: "9700" + s25.slice(-6), location: jpr._id, program: (await req(admin, "GET", "/api/programs?limit=1")).data.items?.[0]?._id }, 201)).data.item;
+      if (c?._id) {
+        ok("-84: Operations cannot delete a candidate (Admin-only verb)", (await req(ops, "DELETE", `/api/candidates/${c._id}`)).status === 403);
+        ok("-84: Admin can", (await req(admin, "DELETE", `/api/candidates/${c._id}`)).status === 200);
+      } else ok("-84: fixture candidate created", false, JSON.stringify(c));
+    }
     const meTr = await req(trainer, "GET", "/api/permissions/me");
     ok("QA-153: a trainer's effective rights carry no attendance.govt / costs.manage / sheet.sources (so Govt Attendance, Costs, Sheet Sync do not exist for them)",
       meTr.status === 200 && meTr.data.role === "Trainer" && !meTr.data.levels?.["attendance.govt"] && !meTr.data.levels?.["costs.manage"] && !meTr.data.levels?.["sheet.sources"] && meTr.data.levels?.["batches.daily_log"] === "edit",

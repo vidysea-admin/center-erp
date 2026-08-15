@@ -921,6 +921,22 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
 }
 await req("POST", `/api/batches/${planBatch._id}/transition`, { target: "Cancelled", reason: "planner test cleanup" }, 200);
 
+// ---- -84 (QA-146 part 2): candidates get the QA-130 delete verb — junk rows can leave ----
+{
+  const junk = (await req("POST", "/api/candidates", { name: "Salutation", phone: "9800" + stamp.slice(-6), location: loc._id, program: prog._id }, 201)).data.item;
+  await req("DELETE", `/api/candidates/${junk._id}`, undefined, 200);
+  await req("GET", `/api/candidates/${junk._id}`, undefined, 404);
+  ok("-84: an Admin deletes a junk candidate row and it is gone", true);
+  const hist = ((await req("GET", `/api/audit/Candidate/${junk._id}`)).data.items ?? []);
+  ok("-84: the deletion is audited with what went", hist.some((a) => /deleted \(Salutation/.test(String(a.new_value))), JSON.stringify(hist.map((a) => a.new_value)));
+  const rosterCand = (await req("GET", `/api/batches/${batch._id}/members`)).data.items?.[0]?.candidate;
+  if (rosterCand?._id) {
+    const refused = await req("DELETE", `/api/candidates/${rosterCand._id}`, undefined, 409);
+    ok("-84: a candidate with batch history cannot be deleted (drop them from the batch instead)", /batch history/.test(refused.data?.error ?? ""), refused.data?.error);
+  }
+  await req("DELETE", `/api/candidates/${"0".repeat(24)}`, undefined, 404);
+}
+
 // ---- Candidate eligibility ----
 const oldCand = (await req("POST", "/api/candidates", {
   name: "Old Cand " + stamp, phone: "77770" + stamp.slice(0, 5), location: loc._id, program: prog._id,

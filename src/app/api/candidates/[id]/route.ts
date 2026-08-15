@@ -1,8 +1,11 @@
+import { NextRequest, NextResponse } from "next/server";
 import { itemRoutes } from "@/lib/crud";
-import { Candidate } from "@/models";
+import { BatchMember, Candidate, CandidateDocument } from "@/models";
 import { candidateEligibility } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
-import { HttpError } from "@/lib/authz";
+import { HttpError, apiHandler, requireUser, requireEdit } from "@/lib/authz";
+import { dbConnect } from "@/lib/db";
+import { audit } from "@/lib/audit";
 import { emailError, canonicalPhone, phoneError } from "@/lib/validate";
 
 export const { GET, PATCH } = itemRoutes({
@@ -36,4 +39,30 @@ export const { GET, PATCH } = itemRoutes({
     const defaults = await getDefaults();
     return items.map((c) => ({ ...c, eligibility: candidateEligibility(c, defaults) }));
   },
+});
+
+// QA-146 part 2 (-84, checker 15/08): three sheet header/description rows sat in the
+// candidate list as people ("1"/"5", "Salutation"/"EmailID", "Input field, Mr, Ms…") and
+// there was no verb to remove them — the trainer side got one in QA-130, candidates never
+// did. Same shape: Admin-only, refuses anyone with batch history (a real person is Dropped,
+// not erased), documents and public links cascade, the audit row names what went.
+export const DELETE = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
+  await dbConnect();
+  const user = await requireUser();
+  requireEdit(user);
+  if (user.role !== "Admin") throw new HttpError(403, "Only an Admin may delete a candidate.");
+  const { id } = await ctx.params;
+  const c = await Candidate.findById(id);
+  if (!c) throw new HttpError(404, "Candidate not found");
+  if (await BatchMember.exists({ candidate: id })) {
+    throw new HttpError(409, `${c.name} has batch history — drop them from the batch instead of deleting the record.`);
+  }
+  const docs = await CandidateDocument.deleteMany({ candidate: id });
+  await c.deleteOne();
+  await audit({
+    entity: "Candidate", entityId: c._id,
+    newValue: `deleted (${String(c.name).replace(/\s+/g, " ").slice(0, 60)}, ${String(c.phone).slice(0, 30)}${docs.deletedCount ? `, ${docs.deletedCount} document${docs.deletedCount === 1 ? "" : "s"}` : ""})`,
+    actor: user.id,
+  });
+  return NextResponse.json({ ok: true });
 });
