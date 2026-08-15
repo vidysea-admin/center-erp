@@ -87,7 +87,23 @@ function BatchesInner() {
   const BATCH_STATUSES = ["Planning", "Ready", "Active", "Closing", "Completed", "Closed", "Cancelled"];
   const trainerScoped = role === "Trainer" && mineFilter === "mine" ? items.filter((b) => b.is_mine) : items;
   const statusCount = (s: string) => trainerScoped.filter((b) => b.status === s).length;
-  const shown = fStatus ? trainerScoped.filter((b) => b.status === fStatus) : trainerScoped;
+  // QA-027 (-71): the client spec wanted Trainer Required / Candidate Shortage /
+  // Infrastructure Pending as REPORTABLE states. They stay computed (no enum fork) but are
+  // FILTERABLE now — a Planning batch joins its Preparation-board row by centre×role.
+  const [fBlock, setFBlock] = useState("");
+  const blockersOf = (b: any): Set<string> => {
+    const row = (prep?.items ?? []).find((r: any) =>
+      String(r.location?._id ?? r.location) === String(b.location?._id ?? b.location) &&
+      String(r.program?._id ?? r.program) === String(b.program?._id ?? b.program));
+    const cats = new Set<string>();
+    for (const bl of row?.blockers ?? []) {
+      cats.add(/trainer/i.test(bl) ? "trainer" : /candidate/i.test(bl) ? "candidates" : /room|lab|infra/i.test(bl) ? "infrastructure" : "other");
+    }
+    return cats;
+  };
+  const blockCount = (c: string) => trainerScoped.filter((b) => b.status === "Planning" && blockersOf(b).has(c)).length;
+  const statusShown = fStatus ? trainerScoped.filter((b) => b.status === fStatus) : trainerScoped;
+  const shown = fBlock ? statusShown.filter((b) => b.status === "Planning" && blockersOf(b).has(fBlock)) : statusShown;
 
   useEffect(() => {
     if (form.location) api(`/api/locations/${form.location}/rooms`).then((d) => setRooms(d.items)).catch(() => setRooms([]));
@@ -215,6 +231,15 @@ function BatchesInner() {
           <FilterPills active={fStatus} onChange={(v) => setFStatus(v === fStatus ? "" : v)}
             options={[{ value: "", label: "All", count: trainerScoped.length },
               ...BATCH_STATUSES.map((s) => ({ value: s, label: s, count: statusCount(s) }))]} />
+          {/* QA-027 (-71): the spec's blocker states, filterable — computed, never an enum. */}
+          {(blockCount("trainer") + blockCount("candidates") + blockCount("infrastructure") + blockCount("other")) > 0 && (
+            <FilterPills active={fBlock} onChange={(v) => setFBlock(v === fBlock ? "" : v)}
+              options={[
+                { value: "trainer", label: "Trainer required", count: blockCount("trainer") },
+                { value: "candidates", label: "Candidate shortage", count: blockCount("candidates") },
+                { value: "infrastructure", label: "Infrastructure pending", count: blockCount("infrastructure") },
+              ].filter((o) => o.count > 0)} />
+          )}
           <DataTable rows={shown} storageKey="batches" onRowClick={(r) => router.push(`/batches/${r._id}`)}
             cardTitle={(r: any) => <>{r.code} <Chip value={r.status} /></>}
             loading={loading}
