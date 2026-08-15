@@ -870,6 +870,7 @@ function DefaultsTab({ setError }: any) {
             <span className="mt-0.5 block text-[11px] text-gray-400">Superseded: slots are validated as exactly 4 or 8 hours.</span>
           </Field>
           <Field label="Max sessions per day"><input type="number" className={inputCls} value={form.max_batches_per_day ?? ""} onChange={(e) => setForm({ ...form, max_batches_per_day: +e.target.value })} /></Field>
+          <Field label="Max teaching hours per trainer per day"><input type="number" className={inputCls} value={form.max_daily_hours ?? ""} onChange={(e) => setForm({ ...form, max_daily_hours: +e.target.value })} /></Field>
           <Field label="Min attendance % for exam">
             <input type="number" className={inputCls} value={form.min_attendance_pct ?? 50} onChange={(e) => setForm({ ...form, min_attendance_pct: +e.target.value })} />
             <span className="mt-0.5 block text-[11px] text-gray-400">Of programme hours — e.g. 60 of 120 hrs at 50%. Drives the student attendance link.</span>

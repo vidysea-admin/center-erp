@@ -226,7 +226,7 @@ function slotsClash(aStart?: string | null, aEnd?: string | null, bStart?: strin
 
 // QA-138: the slot guideline rule moved to slot-rules.ts (client-safe) so the batch form can
 // run the SAME check while the operator types. One rule, two callers — no drifting copy.
-import { slotGuidelineErrors } from "@/lib/slot-rules";
+import { slotGuidelineErrors, slotHoursPerDay } from "@/lib/slot-rules";
 export { slotGuidelineErrors };
 
 export async function assertSlotWithinGuidelines(
@@ -265,11 +265,22 @@ export async function assertTrainerAvailableForBatch(
   // batches are counted — an unslotted batch is "whole day" and is already governed by the
   // concurrency cap, so counting it here would double-penalise legacy data.
   if (slot?.slot_start && slot?.slot_end) {
-    const maxPerDay = (await getDefaults()).max_batches_per_day ?? 2;
+    const dflt = await getDefaults();
+    const maxPerDay = dflt.max_batches_per_day ?? 2;
     const sameDaySlotted = overlapping.filter((b) => b.slot_start && b.slot_end);
     if (sameDaySlotted.length + 1 > maxPerDay) {
       throw new HttpError(409,
         `Scheme guideline: at most ${maxPerDay} sessions a day. Trainer ${trainer.name} already runs ${sameDaySlotted.length} slotted batch(es) over these dates (${sameDaySlotted.map((b) => `${b.code} ${b.slot_start}–${b.slot_end}`).join(", ")}).`);
+    }
+    // QA-144: the CEO's 8-hour rule. The session cap above bounds HOW MANY sessions; this
+    // bounds their TOTAL hours, because two 4-hour sessions pass the count while 4+8 must
+    // not. Slot-less batches carry no computable hours and stay outside, exactly as they
+    // do for the time-clash check.
+    const maxDailyHours = dflt.max_daily_hours ?? 8;
+    const hours = [slot, ...sameDaySlotted].reduce((sum, b) => sum + (slotHoursPerDay(b) ?? 0), 0);
+    if (hours > maxDailyHours) {
+      throw new HttpError(409,
+        `Rule 10: Trainer ${trainer.name} would teach ${hours}h on overlapping days (${sameDaySlotted.map((b) => `${b.code} ${b.slot_start}–${b.slot_end}`).join(", ")} + this batch ${slot.slot_start}–${slot.slot_end}); max daily hours = ${maxDailyHours}.`);
     }
   }
   // 2026-08-12 audit F-001: Admin → Defaults shows a "Max concurrent batches" field, but Rule 10
@@ -1617,7 +1628,7 @@ export function requiredAssessmentHours(program: any, minPct: number): number {
 // "qualified for assessments" mark ON for hours never attended. Unknown slot now returns
 // null: the caller shows "no slot on the batch" instead of assuming, and the green verdict
 // comes from PORTAL hours alone.
-export { slotHoursPerDay } from "@/lib/slot-rules";
+export { slotHoursPerDay };
 
 // QA-093 (-70): when the scheme master carries VALID absolute hours, the bar IS
 // min_required_hours. The old path collapsed them to a rounded percentage and re-multiplied

@@ -132,6 +132,29 @@ for (const id of extraBatches) {
   await req("POST", `/api/batches/${id}/transition`, { target: "Cancelled", reason: "concurrency test cleanup" }, 200);
 }
 
+// ---- QA-144 (-73): the CEO's 8-hour rule — slot-hours per day are capped, not just the
+// session COUNT. Inside the stock 09:00–18:00 window two 4h sessions (=8h) is the ceiling
+// anyway, so the rule only bites when the knobs move — which is exactly how we prove it:
+// widen the day + allow 3 sessions, then show the THIRD 4h session trips the HOURS cap.
+{
+  await req("PUT", "/api/defaults", { day_end_time: "21:00", max_batches_per_day: 3 }, 200);
+  const qa144 = [];
+  const mk = (ss, se, expect) => req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, planned_start: today, target_size: 3, slot_start: ss, slot_end: se }, expect);
+  const a = await mk("09:00", "13:00", 201); qa144.push(a.data.item?._id);
+  const b = await mk("13:00", "17:00", 201); qa144.push(b.data.item?._id);
+  ok("QA-144: two 4h sessions (=8h, the exact cap) are allowed", !!qa144[0] && !!qa144[1]);
+  const c = await mk("17:00", "21:00", 409);
+  ok("QA-144: a third 4h session (12h total) trips the hours cap BY NAME",
+    /max daily hours = 8/.test(c.data?.error ?? ""), c.data?.error);
+  await req("PUT", "/api/defaults", { max_daily_hours: 12 }, 200);
+  const c2 = await mk("17:00", "21:00", 201); qa144.push(c2.data.item?._id);
+  ok("QA-144: raising the Defaults knob to 12 admits the same batch (knob is live)", !!c2.data.item?._id);
+  await req("PUT", "/api/defaults", { day_end_time: "18:00", max_batches_per_day: 2, max_daily_hours: 8 }, 200);
+  for (const id of qa144.filter(Boolean)) {
+    await req("POST", `/api/batches/${id}/transition`, { target: "Cancelled", reason: "QA-144 test cleanup" }, 200);
+  }
+}
+
 // ---- daily log ----
 const mIds = members.map((m) => m._id);
 // Rule 29: present > roster

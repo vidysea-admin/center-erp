@@ -106,6 +106,9 @@ export const POST = apiHandler(async (req: NextRequest) => {
       location_unmatched: [...new Set(location_unmatched)].slice(0, 25),
       program_unmatched: [...new Set(program_unmatched)].slice(0, 25),
       unknown_columns: unknownCols,
+      // QA-110: say the quiet part — which columns are about to be DROPPED vs stored.
+      ignored_columns: acceptUnknown ? [] : unknownCols,
+      extra_columns_stored: acceptUnknown ? unknownCols : [],
       preview: importable.slice(0, 10).map((b) => ({
         location: b.location.name, program: b.program.name,
         planned_start: b.planned_start, target_size: b.target_size, session: b.session,
@@ -141,7 +144,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
     }
   }
   if (firstId) {
-    await audit({ entity: "Batch", entityId: firstId, field: "import", newValue: `${created.length} batches imported from ${file.name} (${refused.length} refused, ${skipped.length} rows skipped)`, actor: user.id });
+    await audit({ entity: "Batch", entityId: firstId, field: "import", newValue: `${created.length} batches imported from ${file.name} (${refused.length} refused, ${skipped.length} rows skipped${!acceptUnknown && unknownCols.length ? `, ${unknownCols.length} column(s) ignored: ${unknownCols.join(", ")}` : ""})`, actor: user.id });
   }
-  return NextResponse.json({ created, refused, skipped_count: skipped.length }, { status: 201 });
+  return NextResponse.json({ created, refused, skipped_count: skipped.length, ignored_columns: acceptUnknown ? [] : unknownCols }, { status: 201 });
 });

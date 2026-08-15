@@ -953,6 +953,10 @@ const DefaultsSchema = new Schema({
   day_end_time: { type: String, default: "18:00" },
   max_session_hours: { type: Number, default: 4 },
   max_batches_per_day: { type: Number, default: 2 },
+  // QA-144: the CEO's 8-hour rule — a trainer's slotted batches may not total more than this
+  // many teaching hours on any overlapping day. Counted from slots only; unslotted batches
+  // stay governed by the concurrency cap alone (same stance as the time-clash check).
+  max_daily_hours: { type: Number, default: 8 },
   // 2026-08-13 (Manish): "60 plus hona mandatory hai" — minimum attendance, as a percent of
   // programme hours, to qualify for the assessment. Contract-tunable like the counters below.
   min_attendance_pct: { type: Number, default: 50 },

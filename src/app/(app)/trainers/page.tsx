@@ -72,7 +72,11 @@ function TrainersInner() {
       const d = await res.json();
       if (!res.ok) throw new Error(d.error ?? "import failed");
       if (previewOnly) setImp({ ...imp, preview: d, done: null });
-      else { setImp({ ...imp, done: d, preview: null }); load(); }
+      else {
+        // QA-110: remember the mapping per column-set so the same sheet shape is pre-filled next time.
+        try { localStorage.setItem("erp-import-map-trainers", JSON.stringify({ sig: [...(imp.columns ?? [])].sort().join("|"), mapping: imp.mapping ?? {} })); } catch {}
+        setImp({ ...imp, done: d, preview: null }); load();
+      }
     } catch (err: any) { setError(err.message); }
   }
   const [positions, setPositions] = useState<any[]>([]);   // CEO: Open Positions tab
@@ -483,7 +487,13 @@ function TrainersInner() {
                 const res = await fetch(`${BASE_PATH}/api/trainers/import`, { method: "POST", body: fd });
                 const d = await res.json();
                 if (!res.ok) throw new Error(d.error ?? "upload failed");
-                setImp({ file, columns: d.columns, total: d.total, mapping: {} });
+                // QA-110: pre-fill the remembered mapping when this column-set was imported before.
+                let remembered: any = null;
+                try {
+                  const saved = JSON.parse(localStorage.getItem("erp-import-map-trainers") ?? "null");
+                  if (saved?.sig === [...(d.columns ?? [])].sort().join("|")) remembered = saved.mapping;
+                } catch {}
+                setImp({ file, columns: d.columns, total: d.total, mapping: remembered ?? {}, remembered: !!remembered });
               } catch (err: any) { setError(err.message); }
             }} />
             {imp.columns && (
@@ -503,9 +513,16 @@ function TrainersInner() {
                   <Btn kind="ghost" onClick={() => trainerImport(true)}>Preview</Btn>
                   {imp.preview && <Btn onClick={() => trainerImport(false)}>Import {imp.preview.importable ?? imp.preview.valid} trainers</Btn>}
                 </div>
+                {imp.remembered && <p className="text-xs text-blue-700">Mapping pre-filled from your last import of this sheet shape — check it still fits.</p>}
                 {imp.preview && (
                   <div className="space-y-2 text-sm text-gray-600">
                     <p>{imp.preview.valid} valid, {imp.preview.skipped} skipped (missing name/phone).</p>
+                    {/* QA-110: an operator who forgets to map a column must be able to notice. */}
+                    {(imp.preview.ignored_columns?.length ?? 0) > 0 && (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        {imp.preview.ignored_columns.length} column{imp.preview.ignored_columns.length > 1 ? "s" : ""} will be IGNORED — their values are not imported: {imp.preview.ignored_columns.join(" · ")}
+                      </div>
+                    )}
                     {/* 15/08 (Umesh): unknown columns accepted by default, stored per trainer. */}
                     {(imp.preview.unknown_columns?.length ?? 0) > 0 && (
                       <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">

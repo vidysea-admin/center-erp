@@ -158,9 +158,12 @@ export const POST = apiHandler(async (req: NextRequest) => {
       date_unparseable: dateUnparseable.slice(0, 25), date_unparseable_count: dateUnparseable.length,
       phone_invalid: phoneInvalid.slice(0, 25), phone_invalid_count: phoneInvalid.length,
       unknown_columns: unknownCols,
+      // QA-110: say the quiet part — which columns are about to be DROPPED vs stored.
+      ignored_columns: acceptUnknown ? [] : unknownCols,
+      extra_columns_stored: acceptUnknown ? unknownCols : [],
     });
   }
   const docs = await Candidate.insertMany(candidates);
-  await audit({ entity: "Candidate", entityId: docs[0]?._id ?? location, field: "import", newValue: `${docs.length} imported, ${duplicates.length} flagged as possible duplicates${dateUnparseable.length ? `, ${dateUnparseable.length} unreadable dates` : ""}${phoneInvalid.length ? `, ${phoneInvalid.length} un-normalizable phones` : ""}`, actor: user.id });
-  return NextResponse.json({ imported: docs.length, skipped: rows.length - candidates.length, duplicate_count: duplicates.length, date_unparseable: dateUnparseable.slice(0, 25), date_unparseable_count: dateUnparseable.length, phone_invalid: phoneInvalid.slice(0, 25), phone_invalid_count: phoneInvalid.length }, { status: 201 });
+  await audit({ entity: "Candidate", entityId: docs[0]?._id ?? location, field: "import", newValue: `${docs.length} imported, ${duplicates.length} flagged as possible duplicates${dateUnparseable.length ? `, ${dateUnparseable.length} unreadable dates` : ""}${phoneInvalid.length ? `, ${phoneInvalid.length} un-normalizable phones` : ""}${!acceptUnknown && unknownCols.length ? `, ${unknownCols.length} column(s) ignored: ${unknownCols.join(", ")}` : ""}`, actor: user.id });
+  return NextResponse.json({ imported: docs.length, skipped: rows.length - candidates.length, duplicate_count: duplicates.length, date_unparseable: dateUnparseable.slice(0, 25), date_unparseable_count: dateUnparseable.length, phone_invalid: phoneInvalid.slice(0, 25), phone_invalid_count: phoneInvalid.length, ignored_columns: acceptUnknown ? [] : unknownCols }, { status: 201 });
 });

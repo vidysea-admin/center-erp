@@ -85,23 +85,19 @@ await req(admin, "POST", "/api/candidates", { name: "TEST-ED Fam2 " + s, phone: 
 const fam = (await req(admin, "GET", `/api/candidates?q=${famPhone}&limit=10`, undefined, 200)).data.items ?? [];
 ok("[avg] two family members on one number both exist and both list", fam.length === 2, `${fam.length} rows`);
 
-// ---- full-scale contract: the list caps guard runaway queries, not the data ----
-const all = (await req(admin, "GET", "/api/candidates?limit=5000", undefined, 200)).data;
-ok("[best] limit=5000 is honoured (no hidden 200-cap regression)", all.items.length === Math.min(all.total, 5000), `items=${all.items.length} total=${all.total}`);
-const over = await req(admin, "GET", "/api/candidates?limit=999999");
-ok("[worst] a runaway limit is clamped, not honoured", over.status === 200 && over.data.items.length <= 5000, `items=${over.data?.items?.length}`);
-// maker-found M-02 (2026-08-14): a junk / zero / negative limit must fall back to the
-// default page, not dump the whole collection (or a mongo negative-slice).
-for (const bad of ["0", "-5", "abc"]) {
-  const r = await req(admin, "GET", `/api/candidates?limit=${bad}`, undefined, 200);
-  ok(`[worst] limit=${bad} falls back to the 50 default, not the full set`, r.data.limit === 50 && r.data.items.length <= 50, `limit=${r.data.limit} items=${r.data.items.length}`);
+// ---- QA-053 (-73): the ?limit contract is EXPLICIT now — absent → 50; otherwise an
+// integer in [1, 2000] or a 400 naming the bound. No more silent coercion: the checker's
+// re-measure showed every nonsense value fell through to SOME page nobody asked for, and
+// the old 5000 cap let one request dump a whole collection.
+const all = (await req(admin, "GET", "/api/candidates?limit=2000", undefined, 200)).data;
+ok("[best] limit=2000 (the UI's real dropdown ask) is honoured", all.limit === 2000 && all.items.length === Math.min(all.total, 2000), `items=${all.items.length} total=${all.total}`);
+const dflt = (await req(admin, "GET", "/api/candidates", undefined, 200)).data;
+ok("[avg] absent limit falls back to the 50 default", dflt.limit === 50, `limit=${dflt.limit}`);
+for (const bad of ["0", "-5", "abc", "1e9", "1.5", "999999"]) {
+  const r = await req(admin, "GET", `/api/candidates?limit=${bad}`);
+  ok(`[worst] limit=${bad} is refused 400 naming the bound, not silently coerced`,
+    r.status === 400 && /between 1 and 2000/.test(r.data?.error ?? ""), `status=${r.status} err=${r.data?.error}`);
 }
-// QA-053 (checker): parseInt stops at the first non-digit, so "1e9" and "1.5" both became 1
-// and a caller asking for a page silently got a single row. Numeric parse + ceil + clamp.
-const sci = await req(admin, "GET", "/api/candidates?limit=1e9", undefined, 200);
-ok("[worst] limit=1e9 clamps to the cap, not 1 row", sci.data.limit === 5000 && sci.data.items.length > 1, `limit=${sci.data.limit} items=${sci.data.items.length}`);
-const frac = await req(admin, "GET", "/api/candidates?limit=1.5", undefined, 200);
-ok("[worst] limit=1.5 rounds up to 2, not down to 1", frac.data.limit === 2 && frac.data.items.length <= 2, `limit=${frac.data.limit} items=${frac.data.items.length}`);
 
 // ---- shape 5 (2026-08-13, roster fix): a program-less import row joins a matching batch and
 // inherits its programme — the exact path the 572 prod rows take from the pool drawer.

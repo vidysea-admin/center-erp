@@ -313,6 +313,23 @@ console.log("\n--- FL6: the import flags the file's own duplicates and refuses a
     await multipart(admin, "/api/candidates/import", { file: file5, location: loc._id, program: prog._id, mapping: custMap, confirm: "1" }, 201);
     const cC = (await req(admin, "GET", `/api/candidates?q=${p4(3)}`)).data.items.find((c) => String(c.phone) === p4(3));
     ok("T3: without accept the unknown column is ignored (today's behaviour)", cC && cC.custom_fields == null, JSON.stringify(cC?.custom_fields));
+
+    // ---- QA-110 (-73): being ignored is never silent any more — both answers SAY it. ----
+    const prevIgn = await multipart(admin, "/api/candidates/import", { file: mkFile(), location: loc._id, program: prog._id, mapping: custMap }, 200);
+    ok("QA-110: preview without accept names the columns about to be DROPPED",
+      (prevIgn.data.ignored_columns ?? []).includes("Sponsor") && (prevIgn.data.extra_columns_stored ?? []).length === 0,
+      JSON.stringify([prevIgn.data.ignored_columns, prevIgn.data.extra_columns_stored]));
+    const prevAcc = await multipart(admin, "/api/candidates/import", { file: mkFile(), location: loc._id, program: prog._id, mapping: custMap, accept_unknown: "1" }, 200);
+    ok("QA-110: preview with accept reports them as STORED, ignored empty",
+      (prevAcc.data.ignored_columns ?? []).length === 0 && (prevAcc.data.extra_columns_stored ?? []).includes("Sponsor"),
+      JSON.stringify([prevAcc.data.ignored_columns, prevAcc.data.extra_columns_stored]));
+    const rows6 = [{ "Student Name": `FL Cust D ${stamp}`, "Mobile": p4(4), "Sponsor": "IgnoreMe2" }];
+    const wb6 = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb6, XLSX.utils.json_to_sheet(rows6), "Sheet1");
+    const file6 = new File([XLSX.write(wb6, { type: "buffer", bookType: "xlsx" })], "import-custom3.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const conf6 = await multipart(admin, "/api/candidates/import", { file: file6, location: loc._id, program: prog._id, mapping: custMap, confirm: "1" }, 201);
+    ok("QA-110: the CONFIRM response also carries ignored_columns (the operator's last chance to notice)",
+      (conf6.data.ignored_columns ?? []).includes("Sponsor"), JSON.stringify(conf6.data.ignored_columns));
   }
 }
 

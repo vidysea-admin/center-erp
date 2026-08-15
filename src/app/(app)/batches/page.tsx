@@ -58,7 +58,11 @@ function BatchesInner() {
       const d = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(d.error ?? "Import failed");
       if (previewOnly) setImp({ ...imp, result: d });
-      else { setImp(null); setInfo(`Imported ${d.created?.length ?? 0} batch(es)${d.refused?.length ? ` — ${d.refused.length} refused` : ""}${d.skipped_count ? ` — ${d.skipped_count} rows skipped` : ""}`); load(); }
+      else {
+        // QA-110: remember the mapping per column-set so the same sheet shape is pre-filled next time.
+        try { localStorage.setItem("erp-import-map-batches", JSON.stringify({ sig: [...(imp.columns ?? [])].sort().join("|"), mapping: imp.mapping ?? {} })); } catch {}
+        setImp(null); setInfo(`Imported ${d.created?.length ?? 0} batch(es)${d.refused?.length ? ` — ${d.refused.length} refused` : ""}${d.skipped_count ? ` — ${d.skipped_count} rows skipped` : ""}`); load();
+      }
     } catch (e: any) { setError(e.message); }
   }
   const [form, setForm] = useState<any>({ session: "Full Day" });
@@ -537,7 +541,13 @@ function BatchesInner() {
                 const res = await fetch(`${BASE_PATH}/api/batches/import`, { method: "POST", body: fd });
                 const d = await res.json().catch(() => ({}));
                 if (!res.ok) throw new Error(d.error ?? "Could not read the file");
-                setImp({ file, columns: d.columns, mapping: Object.fromEntries(d.columns.map((c: string) => {
+                // QA-110: a remembered mapping for this exact column-set beats the name heuristic.
+                let remembered: any = null;
+                try {
+                  const saved = JSON.parse(localStorage.getItem("erp-import-map-batches") ?? "null");
+                  if (saved?.sig === [...(d.columns ?? [])].sort().join("|")) remembered = saved.mapping;
+                } catch {}
+                setImp({ file, columns: d.columns, remembered: !!remembered, mapping: remembered ?? Object.fromEntries(d.columns.map((c: string) => {
                   const k = c.toLowerCase();
                   if (/centre|center|institution|location/.test(k)) return [c, "location"];
                   if (/job role|program|course/.test(k)) return [c, "program"];
@@ -563,9 +573,16 @@ function BatchesInner() {
                 <Btn kind="ghost" onClick={() => batchImport(true)}>Preview</Btn>
               </>
             )}
+            {imp.remembered && <p className="text-xs text-blue-700">Mapping pre-filled from your last import of this sheet shape — check it still fits.</p>}
             {imp.result && (
               <div className="space-y-2 text-sm">
                 <p><b>{imp.result.valid}</b> importable · {imp.result.skipped_count} rows skipped</p>
+                {/* QA-110: an operator who forgets to map a column must be able to notice. */}
+                {(imp.result.ignored_columns?.length ?? 0) > 0 && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+                    {imp.result.ignored_columns.length} column{imp.result.ignored_columns.length > 1 ? "s" : ""} will be IGNORED — their values are not imported: {imp.result.ignored_columns.join(" · ")}
+                  </div>
+                )}
                 {/* 15/08 (Umesh): unknown columns accepted by default, stored per batch. */}
                 {(imp.result.unknown_columns?.length ?? 0) > 0 && (
                   <div className="rounded-lg border border-blue-200 bg-blue-50 p-2 text-xs text-blue-800">

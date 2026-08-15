@@ -37,6 +37,7 @@ export type AppDefaults = {
   day_end_time: string;
   max_session_hours: number;   // a 4-hour batch is permitted
   max_batches_per_day: number; // two 4-hour batches; three 3-hour batches was refused
+  max_daily_hours: number;     // QA-144: CEO's 8-hour rule — slot-hours a trainer may teach per day
   // Client-contract counting rules (Manish, 2026-08-12)
   absent_counts_as_appeared: boolean; // absentees are NOT deducted from "appeared"
   dropped_pass_is_billable: boolean;  // a dropout who passed is not billable
@@ -87,6 +88,7 @@ export const DEFAULT_VALUES: AppDefaults = {
   day_end_time: "18:00",
   max_session_hours: 4,
   max_batches_per_day: 2,
+  max_daily_hours: 8,
   absent_counts_as_appeared: true,
   dropped_pass_is_billable: false,
   // 2026-08-13 (Manish): exam eligibility = this percent of programme hours attended.

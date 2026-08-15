@@ -194,6 +194,9 @@ export const POST = apiHandler(async (req: NextRequest) => {
     warnings: warnings.slice(0, 25),
     phone_invalid: phoneInvalid.slice(0, 25), phone_invalid_count: phoneInvalid.length,
     unknown_columns: unknownCols,
+    // QA-110: say the quiet part — which columns are about to be DROPPED vs stored.
+    ignored_columns: acceptUnknown ? [] : unknownCols,
+    extra_columns_stored: acceptUnknown ? unknownCols : [],
   };
   if (!confirm) {
     return NextResponse.json({ preview: importable.slice(0, 10), ...report });
@@ -202,7 +205,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // Same 0-import bug FL10 caught on the batch importer: with every row skipped there is no
   // ObjectId to anchor the audit on, and "import" as an id 400'd the WHOLE response.
   if (docs[0]?._id) {
-    await audit({ entity: "Trainer", entityId: docs[0]._id, field: "import", newValue: `${docs.length} imported, ${duplicates.length} duplicate flags`, actor: user.id });
+    await audit({ entity: "Trainer", entityId: docs[0]._id, field: "import", newValue: `${docs.length} imported, ${duplicates.length} duplicate flags${!acceptUnknown && unknownCols.length ? `, ${unknownCols.length} column(s) ignored: ${unknownCols.join(", ")}` : ""}`, actor: user.id });
   }
   return NextResponse.json({ imported: docs.length, ...report }, { status: 201 });
 });

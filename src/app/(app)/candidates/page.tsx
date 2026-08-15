@@ -285,12 +285,22 @@ function CandidatesInner() {
   }
 
   // Excel import steps
+  // QA-110: the same sheet shape shouldn't be re-mapped by hand every time — the last
+  // mapping is remembered per column-set (localStorage; purely a convenience, server unchanged).
+  const mapMemory = (columns: string[]) => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("erp-import-map-candidates") ?? "null");
+      if (saved?.sig === [...columns].sort().join("|")) return saved.mapping as Record<string, string>;
+    } catch {}
+    return null;
+  };
   async function importUpload(file: File) {
     const fd = new FormData();
     fd.append("file", file); fd.append("location", importState.location); fd.append("program", importState.program);
     try {
       const res = await api("/api/candidates/import", { method: "POST", body: fd });
-      setImportState((s: any) => ({ ...s, file, columns: res.columns, mapping: {}, total: res.total }));
+      const remembered = mapMemory(res.columns ?? []);
+      setImportState((s: any) => ({ ...s, file, columns: res.columns, mapping: remembered ?? {}, remembered: !!remembered, total: res.total }));
     } catch (e: any) { setError(e.message); }
   }
   async function importConfirm(preview: boolean) {
@@ -303,7 +313,10 @@ function CandidatesInner() {
     try {
       const res = await api("/api/candidates/import", { method: "POST", body: fd });
       if (preview) setImportState((s: any) => ({ ...s, preview: res }));
-      else { setDrawer(""); setImportState({}); load(); }
+      else {
+        try { localStorage.setItem("erp-import-map-candidates", JSON.stringify({ sig: [...(importState.columns ?? [])].sort().join("|"), mapping: importState.mapping ?? {} })); } catch {}
+        setDrawer(""); setImportState({}); load();
+      }
     } catch (e: any) { setError(e.message); }
   }
 
@@ -655,6 +668,7 @@ function CandidatesInner() {
           {importState.columns && (
             <>
               <p className="text-sm text-gray-600">{importState.total} rows found. Map columns → fields (name and phone required):</p>
+              {importState.remembered && <p className="text-xs text-blue-700">Mapping pre-filled from your last import of this sheet shape — check it still fits.</p>}
               <div className="grid grid-cols-2 gap-2">
                 {importState.columns.map((c: string) => (
                   <Field key={c} label={c}>
@@ -672,6 +686,12 @@ function CandidatesInner() {
               </div>
               {importState.preview && (
                 <p className="text-sm text-gray-600">{importState.preview.valid} valid, {importState.preview.skipped} skipped (missing name/phone).</p>
+              )}
+              {/* QA-110: an operator who forgets to map a column must be able to notice. */}
+              {importState.preview?.ignored_columns?.length > 0 && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  {importState.preview.ignored_columns.length} column{importState.preview.ignored_columns.length > 1 ? "s" : ""} will be IGNORED — their values are not imported: {importState.preview.ignored_columns.join(" · ")}
+                </div>
               )}
               {/* 15/08 (Umesh): naye columns restrict nahi hote — accept (default) → har row ka
                   data un columns ke naam se store, candidate par "Extra columns" me dikhta hai. */}

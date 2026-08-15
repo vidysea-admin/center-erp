@@ -102,14 +102,21 @@ export function collectionRoutes(cfg: CrudConfig) {
     // 2026-08-13, Umesh: "don't apply any capping — full scale banana hai." The 200 ceiling was
     // silently hiding 372 of 572 candidates. 5000 is a guard against a runaway query, not a
     // product limit; DataTable paginates client-side, and `total` is always returned.
-    // Sanitize before the ceiling: parseInt("abc")→NaN and limit=0 both make mongo's
-    // .limit() return the WHOLE collection, and a negative limit returns abs(n) rows
-    // (maker-found M-02, 2026-08-14). Coerce to a positive integer, default 50, hard-capped.
-    // QA-053: Number() not parseInt — parseInt stops at the first non-digit, so "1e9" and
-    // "1.5" both became 1, silently returning a single row for a caller that asked for a
-    // page. Number() reads them as 1e9 and 1.5; the ceil+clamp then does the right thing.
-    const asked = Number(sp.get("limit") ?? "");
-    const limit = Number.isFinite(asked) && asked >= 1 ? Math.min(5000, Math.ceil(asked)) : 50;
+    // QA-053 (re-measured by the checker on -41): silent coercion was the defect — every
+    // nonsense value fell through to SOME page size nobody asked for, and 5000 let any
+    // signed-in caller pull an entire collection in one request. The contract is explicit
+    // now: absent → 50; otherwise an INTEGER in [1, 2000] or a 400 that names the bound.
+    // 2000, not the checker's suggested 200, because the UI's own dropdown loaders
+    // legitimately ask for limit=1000–2000 (locations/programs/trainers pickers).
+    const rawLimit = sp.get("limit");
+    let limit = 50;
+    if (rawLimit != null && rawLimit !== "") {
+      const asked = Number(rawLimit);
+      if (!Number.isInteger(asked) || asked < 1 || asked > 2000) {
+        throw new HttpError(400, `limit must be a whole number between 1 and 2000 (got "${rawLimit}").`);
+      }
+      limit = asked;
+    }
     let query = cfg.model.find(filter).sort(cfg.defaultSort ?? { createdAt: -1 }).skip((page - 1) * limit).limit(limit);
     for (const p of cfg.populate ?? []) query = query.populate(p.path, p.select);
     let [items, total] = await Promise.all([query.lean(), cfg.model.countDocuments(filter)]);
