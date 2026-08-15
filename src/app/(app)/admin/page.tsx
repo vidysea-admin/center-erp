@@ -987,7 +987,7 @@ function MailPanel({ setError }: any) {
       {mail?.storage && (
         <div className={`mb-3 rounded-lg border px-3 py-2 text-xs ${mail.storage.configured ? "border-green-200 bg-green-50 text-green-800" : "border-red-300 bg-red-50 text-red-800"}`}>
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <span><b>Evidence storage:</b> {mail.storage.configured ? "Google Drive connected" : "NOT CONNECTED"} — {mail.storage.reason}</span>
+            <span><b>Evidence storage:</b> {mail.storage.configured ? (mail.storage.backend === "gcs" ? "Google Cloud Storage connected" : "Google Drive connected") : "NOT CONNECTED"} — {mail.storage.reason}</span>
             {/* QA-145 rider: one click proves the Drive path end to end (write probe → read back). */}
             <Btn small kind="ghost" disabled={busy || !mail.storage.configured} onClick={async () => {
               setBusy(true); setStorageCheck(null);

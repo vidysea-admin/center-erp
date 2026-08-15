@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { StoredFile } from "@/models";
-import { deleteDriveFile } from "@/lib/storage";
+import { deleteDriveFile, deleteGcsObject } from "@/lib/storage";
 
 // -90: the browser gave up (user cancelled / too many retries). The pending row is marked
 // failed and, if Google already assigned a file id, that partial file is removed.
@@ -20,7 +20,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   if (row.status === "ready") return NextResponse.json({ ok: true, note: "already complete — nothing aborted" });
   row.status = "failed";
   await row.save();
-  const fid = String(body.drive_file_id ?? "");
-  if (fid) await deleteDriveFile(fid);
+  if (row.backend === "gcs") { if (row.drive_folder_id) await deleteGcsObject(String(row.drive_folder_id)); }
+  else { const fid = String(body.drive_file_id ?? ""); if (fid) await deleteDriveFile(fid); }
   return NextResponse.json({ ok: true });
 });

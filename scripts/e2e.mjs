@@ -1273,8 +1273,8 @@ ok("…with the contact details an approver needs", !!queued && queued.phone ===
   const ver = await (await fetch(BASE + "/api/public/version")).json();
   ok("QA-145: version endpoint tells the truth — evidence_storage is local-ephemeral in CI", ver.evidence_storage === "local-ephemeral", ver.evidence_storage);
   const cfg = (await req("GET", "/api/test-email", undefined, 200)).data;
-  ok("QA-145: admin health names the loss honestly (NOT connected, lost on deploy)",
-    cfg.storage?.configured === false && /LOST on every deploy/.test(cfg.storage?.reason ?? ""), JSON.stringify(cfg.storage));
+  ok("QA-145: admin health names the loss honestly (NOT connected, lost on deploy) and names GCS as the decided backend",
+    cfg.storage?.configured === false && /LOST on every deploy/.test(cfg.storage?.reason ?? "") && /GCS_BUCKET/.test(cfg.storage?.reason ?? ""), JSON.stringify(cfg.storage));
   // -79 rider: the one-click storage probe REFUSES to run unconfigured (it would only prove
   // the disk that deploys wipe) and says why — the live proof is a click away once Drive is on.
   const probe = await req("POST", "/api/test-storage", {});
@@ -1286,9 +1286,10 @@ ok("…with the contact details an approver needs", !!queued && queued.phone ===
   // container (names only, never values), with SES/Mongo as the control, and a plain hint.
   const env = probeGet.data?.env;
   ok("-89: health carries the env diagnostic — names + lengths, never values", !!env?.env_seen && "GDRIVE_OAUTH_CLIENT_ID" in env.env_seen && "SES_SMTP_USER" in env.env_seen && "MONGODB_URL" in env.env_seen && typeof env.env_seen.MONGODB_URL.length === "number" && !JSON.stringify(env).includes(process.env.MONGODB_URL ?? "mongodb://127.0.0.1"), JSON.stringify(Object.keys(env?.env_seen ?? {}).slice(0, 5)));
-  ok("-89: CI has no Drive names → the hint says so and points at where SES lives", typeof env?.hint === "string" && /None of the Drive names/.test(env.hint) && env.env_seen.MONGODB_URL.present === true, env?.hint);
+  ok("-89/-92: CI has no storage names → the hint says so (GCS or Drive) and points at where SES lives", typeof env?.hint === "string" && /None of the storage names/.test(env.hint) && env.env_seen.MONGODB_URL.present === true, env?.hint);
+  ok("-92 (QA-161): the diagnostic lists the GCS names too (GCS_BUCKET, GCS_SA_JSON) — the decided backend", "GCS_BUCKET" in (env?.env_seen ?? {}) && "GCS_SA_JSON" in (env?.env_seen ?? {}), JSON.stringify(Object.keys(env?.env_seen ?? {}).slice(0, 4)));
   ok("-89: storage health itself carries the hint (the admin banner shows it)", typeof probeGet.data?.storage?.hint === "string" && probeGet.data.storage.hint.length > 20, probeGet.data?.storage?.hint);
-  ok("-89: the probe's refusal names the hint, not a bare 'GDRIVE_SA_JSON missing'", /None of the Drive names|register the three/.test(probe.data?.error ?? ""), probe.data?.error);
+  ok("-89: the probe's refusal names the hint, not a bare 'GDRIVE_SA_JSON missing'", /None of the storage names|register them/.test(probe.data?.error ?? ""), probe.data?.error);
   ok("-90: storage health carries rss_mb (memory is measurable, not asserted)", typeof probeGet.data?.rss_mb === "number" && probeGet.data.rss_mb > 0, String(probeGet.data?.rss_mb));
 }
 

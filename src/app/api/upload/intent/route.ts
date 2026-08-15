@@ -45,9 +45,9 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const session = await createResumableSession({ name, mime, size, folderSegments: folder, origin });
   await StoredFile.create({
     name, original_name: original, mime, size: 0, original_size: size, bytes_expected: size,
-    backend: "drive", folder_path: session.folder_path, drive_folder_id: session.folder_id,
+    backend: session.backend, folder_path: session.folder_path, drive_folder_id: session.folder_id,
     status: "pending", expires_at: new Date(Date.now() + 24 * 3600 * 1000),
-    compressed: !!String(body.client_compression ?? ""), compression: String(body.client_compression ?? "") ? `client:${String(body.client_compression).slice(0, 80)}` : "none:direct-to-drive",
+    compressed: !!String(body.client_compression ?? ""), compression: String(body.client_compression ?? "") ? `client:${String(body.client_compression).slice(0, 80)}` : "none:direct-to-storage",
     ...(Number(body.client_original_size) > size ? { original_size: Number(body.client_original_size) } : {}),
     entity: seg("entity") || undefined, entity_id: /^[a-f0-9]{24}$/.test(seg("entity_id")) ? seg("entity_id") : undefined,
     uploaded_by: user.id,

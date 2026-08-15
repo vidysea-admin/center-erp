@@ -827,7 +827,7 @@ MailLogSchema.index({ createdAt: -1 });
 // in Mongo pointing at nothing. This row is the durable record: WHERE the bytes live
 // (drive / local), the Drive file id + folder path when it is Drive, and what entity it
 // belongs to. The user never sees Drive — the app proxies every read through /api/files.
-export const FILE_BACKEND = ["local", "drive"] as const;
+export const FILE_BACKEND = ["local", "drive", "gcs"] as const;
 const StoredFileSchema = new Schema({
   name: { type: String, required: true, unique: true }, // the 32-hex capability name (+ext)
   original_name: String,

@@ -56,6 +56,10 @@ export const ENV_ALIASES = {
   client_secret: ["GDRIVE_OAUTH_CLIENT_SECRET", "GDRIVE_CLIENT_SECRET", "GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET"],
   refresh_token: ["GDRIVE_OAUTH_REFRESH_TOKEN", "GDRIVE_REFRESH_TOKEN", "GOOGLE_OAUTH_REFRESH_TOKEN", "GOOGLE_REFRESH_TOKEN"],
   sa_json: ["GDRIVE_SA_JSON", "GOOGLE_SA_JSON", "GOOGLE_APPLICATION_CREDENTIALS_JSON"],
+  // -92 (QA-161, Umesh 16/08 "gcs wala hi mere bhai"): evidence storage is Google Cloud Storage —
+  // company-owned bucket, service account is the normal writer, signed/resumable direct uploads.
+  gcs_bucket: ["GCS_BUCKET", "GOOGLE_CLOUD_BUCKET", "EVIDENCE_BUCKET"],
+  gcs_sa_json: ["GCS_SA_JSON", "GCS_SERVICE_ACCOUNT_JSON", "GOOGLE_CLOUD_SA_JSON"],
 } as const;
 export function parseEnvValue(raw: string | undefined | null): string {
   let v = String(raw ?? "").trim();
@@ -74,7 +78,14 @@ function saJson(): { raw: string; name: string } | null {
   const e = readEnv(ENV_ALIASES.sa_json);
   return e ? { raw: e.value, name: e.name } : null;
 }
-export function storageMode(): "sa" | "oauth" | null {
+function gcsConfig(): { bucket: string; raw: string; names: string[] } | null {
+  const b = readEnv(ENV_ALIASES.gcs_bucket), k = readEnv(ENV_ALIASES.gcs_sa_json);
+  return b && k ? { bucket: b.value, raw: k.value, names: [b.name, k.name] } : null;
+}
+// Order (QA-161): GCS wins when present (the decided backend); the Drive shapes stay for the
+// files already there and for the interim.
+export function storageMode(): "gcs" | "sa" | "oauth" | null {
+  if (gcsConfig()) return "gcs";
   if (saJson()) return "sa";
   if (oauthTriple()) return "oauth";
   return null;
@@ -83,36 +94,57 @@ export function storageMode(): "sa" | "oauth" | null {
 // .env" conversation ends with a fact instead of a guess.
 export function envDiagnostic() {
   const seen: Record<string, { present: boolean; length: number }> = {};
-  const all = [...ENV_ALIASES.client_id, ...ENV_ALIASES.client_secret, ...ENV_ALIASES.refresh_token, ...ENV_ALIASES.sa_json, "SES_SMTP_USER", "MONGODB_URL", "AUTH_SECRET"];
+  const all = [...ENV_ALIASES.gcs_bucket, ...ENV_ALIASES.gcs_sa_json, ...ENV_ALIASES.client_id, ...ENV_ALIASES.client_secret, ...ENV_ALIASES.refresh_token, ...ENV_ALIASES.sa_json, "SES_SMTP_USER", "MONGODB_URL", "AUTH_SECRET"];
   for (const n of all) { const v = parseEnvValue(process.env[n]); seen[n] = { present: n in process.env, length: v.length }; }
-  const other = Object.keys(process.env).filter((k) => /GDRIVE|DRIVE|GOOGLE|OAUTH|GAPI/i.test(k) && !all.includes(k)).map((k) => ({ name: k, length: parseEnvValue(process.env[k]).length }));
-  const t = oauthTriple(), sa = saJson();
+  const other = Object.keys(process.env).filter((k) => /GDRIVE|DRIVE|GOOGLE|OAUTH|GAPI|GCS|BUCKET/i.test(k) && !all.includes(k)).map((k) => ({ name: k, length: parseEnvValue(process.env[k]).length }));
+  const t = oauthTriple(), sa = saJson(), g = gcsConfig();
   const anyDriveName = Object.entries(seen).some(([k, v]) => v.present && !["SES_SMTP_USER", "MONGODB_URL", "AUTH_SECRET"].includes(k));
   let hint: string;
-  if (sa) hint = `Service-account key found as ${sa.name}.`;
+  if (g) hint = `Google Cloud Storage configured (${g.names.join(" / ")}) — bucket ${g.bucket}.`;
+  else if (sa) hint = `Service-account key found as ${sa.name}.`;
   else if (t) hint = `OAuth triple found as ${t.names.join(" / ")}${t.names.join() !== ENV_ALIASES.client_id[0] + "," + ENV_ALIASES.client_secret[0] + "," + ENV_ALIASES.refresh_token[0] ? " (accepted via alias)" : ""}.`;
   else if (anyDriveName) {
     const empties = Object.entries(seen).filter(([k, v]) => v.present && v.length === 0 && !["SES_SMTP_USER", "MONGODB_URL", "AUTH_SECRET"].includes(k)).map(([k]) => k);
     const partial = Object.entries(seen).filter(([k, v]) => v.present && v.length > 0 && !["SES_SMTP_USER", "MONGODB_URL", "AUTH_SECRET"].includes(k)).map(([k]) => k);
     hint = `Some Drive names reached this container but not a complete set — present with a value: ${partial.join(", ") || "none"}; present but EMPTY: ${empties.join(", ") || "none"}. All three OAuth names (or the SA key) are needed.`;
-  } else hint = `None of the Drive names reached this container${seen.SES_SMTP_USER.present ? " — SES_SMTP_USER did, so register the three GDRIVE_OAUTH_* names in the same place (task definition / pipeline variable list) and redeploy" : ""}.`;
+  } else hint = `None of the storage names reached this container (GCS_BUCKET + GCS_SA_JSON, or the Drive names)${seen.SES_SMTP_USER.present ? " — SES_SMTP_USER did, so register them in the same place (task definition / pipeline variable list) and redeploy" : ""}.`;
   return { env_seen: seen, other_names: other, hint };
 }
 export function storageConfigured(): boolean {
   return storageMode() !== null;
 }
 
-export function storageHealth(): { backend: "drive" | "local"; configured: boolean; mode: "sa" | "oauth" | null; reason: string; hint: string } {
+export function storageHealth(): { backend: "gcs" | "drive" | "local"; configured: boolean; mode: "gcs" | "sa" | "oauth" | null; reason: string; hint: string } {
   const mode = storageMode();
   const diag = envDiagnostic();
+  if (mode === "gcs") return { backend: "gcs", configured: true, mode, reason: cachedErr ? `Storage error: ${cachedErr}` : `Google Cloud Storage connected — bucket ${gcsConfig()!.bucket} — uploads survive deploys`, hint: diag.hint };
   if (mode) return { backend: "drive", configured: true, mode, reason: cachedErr ? `Drive error: ${cachedErr}` : `Google Drive connected via ${mode === "sa" ? "service account" : "OAuth user"} (root folder ${rootFolderId()}) — uploads survive deploys`, hint: diag.hint };
   return {
     backend: "local",
     configured: false,
     mode: null,
-    reason: "Evidence storage NOT connected — uploads are written to the server's own disk and are LOST on every deploy. Set GDRIVE_SA_JSON (service-account key) OR GDRIVE_OAUTH_CLIENT_ID/SECRET/REFRESH_TOKEN — the Drive folder is already known (see drive-storage-setup.md).",
+    reason: "Evidence storage NOT connected — uploads are written to the server's own disk and are LOST on every deploy. Set GCS_BUCKET + GCS_SA_JSON (Google Cloud Storage, the decided backend) — or, interim, GDRIVE_SA_JSON / GDRIVE_OAUTH_CLIENT_ID/SECRET/REFRESH_TOKEN.",
     hint: diag.hint,
   };
+}
+
+// ---------- -92 GCS client (lazy; the SDK is only touched when the mode is gcs) ----------
+let cachedGcs: any = null;
+function gcs(): { bucket: any; name: string } {
+  const cfg = gcsConfig()!;
+  if (!cachedGcs) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { Storage } = require("@google-cloud/storage");
+    const raw = cfg.raw.trim().startsWith("{") ? cfg.raw : Buffer.from(cfg.raw, "base64").toString("utf8");
+    const credentials = JSON.parse(raw);
+    cachedGcs = new Storage({ credentials, projectId: credentials.project_id });
+  }
+  return { bucket: cachedGcs.bucket(cfg.bucket), name: cfg.bucket };
+}
+// GCS has no folders — the "tree" <Centre>/<Batch>/<kind>/<name> is the object key (QA-155).
+export function gcsKey(folderSegments: string[], name: string): string {
+  const segs = folderSegments.map((s) => String(s).trim().replace(/[\\/]+/g, "-")).filter(Boolean);
+  return [...segs, name].join("/");
 }
 
 function drive(): drive_v3.Drive {
@@ -158,7 +190,15 @@ async function accessToken(): Promise<string> {
 // folder; the browser PUTs chunks straight to Google; the server confirms with Drive and marks
 // the row ready. Nothing large passes through the container — no RAM spike, no OOM, resume on
 // a dropped 4G, a real progress bar.
-export async function createResumableSession(opts: { name: string; mime: string; size: number; folderSegments: string[]; origin?: string | null }): Promise<{ session_uri: string; folder_id: string; folder_path: string }> {
+export async function createResumableSession(opts: { name: string; mime: string; size: number; folderSegments: string[]; origin?: string | null }): Promise<{ session_uri: string; folder_id: string; folder_path: string; backend: "gcs" | "drive" }> {
+  if (storageMode() === "gcs") {
+    // GCS resumable upload session, opened by the server with the SA, PUT by the browser (same
+    // 308/Range protocol the -90 client already speaks); the object key is the folder tree.
+    const key = gcsKey(opts.folderSegments, opts.name);
+    const [uri] = await gcs().bucket.file(key).createResumableUpload({ origin: opts.origin ?? undefined, metadata: { contentType: opts.mime || "application/octet-stream", cacheControl: "private, max-age=86400" } });
+    cachedErr = null;
+    return { session_uri: uri, folder_id: key, folder_path: opts.folderSegments.map((s) => String(s).trim()).filter(Boolean).join("/"), backend: "gcs" };
+  }
   const folder = await ensureFolder(opts.folderSegments);
   const token = await accessToken();
   const headers: Record<string, string> = {
@@ -179,7 +219,15 @@ export async function createResumableSession(opts: { name: string; mime: string;
   const loc = res.headers.get("location");
   if (!loc) throw new Error("Drive did not return a session URI");
   cachedErr = null;
-  return { session_uri: loc, folder_id: folder.id, folder_path: folder.path };
+  return { session_uri: loc, folder_id: folder.id, folder_path: folder.path, backend: "drive" };
+}
+// -92: confirm a GCS object after the browser's resumable PUTs — size from metadata.
+export async function finalizeGcsObject(key: string): Promise<{ key: string; size: number; md5?: string | null }> {
+  const [m] = await gcs().bucket.file(key).getMetadata();
+  return { key, size: Number(m.size ?? 0), md5: (m.md5Hash as string) ?? null };
+}
+export async function deleteGcsObject(key: string): Promise<void> {
+  try { await gcs().bucket.file(key).delete({ ignoreNotFound: true }); } catch { /* best-effort */ }
 }
 export async function finalizeDriveFile(fileId: string): Promise<{ id: string; size: number; md5?: string | null; parents: string[]; name?: string | null }> {
   const r = await drive().files.get({ fileId, fields: "id,size,md5Checksum,parents,name", supportsAllDrives: true });
@@ -216,7 +264,7 @@ async function ensureFolder(segments: string[]): Promise<{ id: string; path: str
 }
 
 export type PutResult = {
-  backend: "drive" | "local"; drive_file_id?: string; folder_path?: string;
+  backend: "gcs" | "drive" | "local"; drive_file_id?: string; folder_path?: string;
   // -87 (QA-157): what the ONE door did to the bytes — recorded on every StoredFile row.
   name: string; mime: string; original_size: number; size: number; compressed: boolean; compression: string; compression_ms: number; needs_compression: boolean;
 };
@@ -324,6 +372,17 @@ export async function putFile(nameIn: string, bufIn: Buffer, mimeIn: string, fol
   const c = await compressForStorage(nameIn, bufIn, mimeIn);
   const name = c.name, buf = c.buf, mime = c.mime;
   const meta = { name, mime, original_size: bufIn.length, size: buf.length, compressed: c.compressed, compression: c.compression, compression_ms: c.ms, needs_compression: c.needs_compression };
+  if (storageMode() === "gcs") {
+    try {
+      const key = gcsKey(folderSegments, name);
+      await gcs().bucket.file(key).save(buf, { contentType: mime || "application/octet-stream", resumable: false, metadata: { cacheControl: "private, max-age=86400" } });
+      cachedErr = null;
+      return { backend: "gcs", drive_file_id: key, folder_path: folderSegments.map((s) => String(s).trim()).filter(Boolean).join("/") || undefined, ...meta };
+    } catch (e: any) {
+      cachedErr = e?.message ?? String(e);
+      throw e;
+    }
+  }
   if (storageConfigured()) {
     try {
       const folder = await ensureFolder(folderSegments);
@@ -364,6 +423,14 @@ export async function getFileStream(
     if ("suffix" in range) return { start: Math.max(0, size - range.suffix), end: size - 1, partial: true };
     return { start: Math.max(0, range.start), end: Math.min(range.end ?? size - 1, size - 1), partial: true };
   };
+  if (rec?.backend === "gcs" && rec.drive_file_id && storageMode() === "gcs") {
+    const file = gcs().bucket.file(rec.drive_file_id);
+    let size = Number(rec.size ?? 0);
+    if (!size) { const [m] = await file.getMetadata(); size = Number(m.size ?? 0); }
+    const { start, end, partial } = resolve(size);
+    if (partial && (start >= size || start > end)) throw Object.assign(new Error("Range not satisfiable"), { code: 416, size });
+    return { stream: file.createReadStream({ start, end }) as unknown as NodeJS.ReadableStream, size, start, end, partial };
+  }
   if (rec?.backend === "drive" && rec.drive_file_id && storageConfigured()) {
     let size = Number(rec.size ?? 0);
     if (!size) {
@@ -388,6 +455,10 @@ export async function getFileStream(
 
 // Read bytes back. Drive by file id when the record says so, else local disk.
 export async function getFile(rec: { backend: string; drive_file_id?: string | null } | null, name: string): Promise<Buffer> {
+  if (rec?.backend === "gcs" && rec.drive_file_id && storageMode() === "gcs") {
+    const [buf] = await gcs().bucket.file(rec.drive_file_id).download();
+    return buf as Buffer;
+  }
   if (rec?.backend === "drive" && rec.drive_file_id && storageConfigured()) {
     const res = await drive().files.get({ fileId: rec.drive_file_id, alt: "media", supportsAllDrives: true }, { responseType: "arraybuffer" });
     return Buffer.from(res.data as ArrayBuffer);
