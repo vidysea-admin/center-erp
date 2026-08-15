@@ -20,7 +20,6 @@
   section.screen { background:#fff; border:1px solid var(--border); border-radius:14px; padding:22px 26px; margin:18px 0; scroll-margin-top:70px; }
   section.screen h2 { font-size:20px; margin-bottom:2px; }
   section.screen .sub { color:var(--muted); font-size:13.5px; margin-bottom:14px; }
-  section.screen img { width:100%; border:1px solid var(--border); border-radius:10px; margin:10px 0 16px; }
   ol.steps { padding-left:0; list-style:none; counter-reset:st; }
   ol.steps li { counter-increment:st; position:relative; padding:7px 0 7px 44px; border-bottom:1px dashed #f0f0f0; font-size:14.5px; }
   ol.steps li::before { content:counter(st); position:absolute; left:0; top:8px; width:26px; height:26px; border-radius:50%; background:#eff6ff; color:var(--blue); font-weight:700; font-size:13px; display:flex; align-items:center; justify-content:center; }
@@ -33,6 +32,7 @@
   th { background:#f9fafb; }
   .hero { background:linear-gradient(120deg,#1d4ed8,#3b82f6); color:#fff; border-radius:16px; padding:26px 30px; margin-bottom:8px; }
   .hero h1 { font-size:26px; } .hero p { opacity:.9; margin-top:4px; font-size:14.5px; }
+  .rolebar { background:#ecfdf5; border:1px solid #a7f3d0; border-radius:10px; padding:8px 14px; font-size:13.5px; margin:10px 0; display:none; }
   mark { background:#fef08a; }
   @media(max-width:900px){ nav.toc{display:none;} main{padding:16px;} }
 </style>
@@ -42,512 +42,273 @@
 <nav class="toc">
   <h2>Getting Started</h2>
   <a href="#overview">Product Overview</a>
-  <a href="#login">Login</a>
+  <a href="#login">Signing In &amp; Public Pages</a>
   <a href="#roles">Roles &amp; Access</a>
   <h2>Screens</h2>
   <a href="#home">Home (Action Center)</a>
-  <a href="#sync">Sync Inbox</a>
-  <a href="#locations">Locations</a>
-  <a href="#location-detail">Location Detail</a>
-  <a href="#trainers">Trainers</a>
-  <a href="#candidates">Candidates</a>
-  <a href="#batches">Batches</a>
-  <a href="#batch-detail">Batch Detail</a>
-  <a href="#enrollment">Enrollment Worklist</a>
-  <a href="#daily">Daily Execution</a>
-  <a href="#closure">Closure &amp; Invoice</a>
-  <a href="#costs">Costs</a>
-  <a href="#admin">Admin</a>
   <a href="#alerts">Alerts</a>
-  <a href="#approvals">Approvals</a>
-  <h2>New (Aug 2026)</h2>
-  <a href="#sheet-watch">Sheet Watch</a>
-  <a href="#contacts-notes">Contacts &amp; Notes</a>
-  <a href="#planner">Batch Planner</a>
-  <a href="#eligibility-sidh">Eligibility &amp; SIDH</a>
-  <a href="#feedback">Candidate Feedback</a>
-  <a href="#permissions">Permissions &amp; Signup</a>
-  <a href="#sheet-sources">Adding Any Sheet</a>
-  <a href="#govt-attendance">Govt Attendance Import</a>
-  <a href="#trainer-prep">Trainer Preparation</a>
-  <a href="#scheme-rules">Scheme Timing &amp; Counting</a>
-  <h2>Help</h2>
-  <a href="#faq">FAQ / Common Questions</a>
+  <a href="#locations" data-roles="Admin,Operations,Location">Locations</a>
+  <a href="#location-detail" data-roles="Admin,Operations,Location">Location Detail</a>
+  <a href="#trainers" data-roles="Admin,Operations,Location">Trainers</a>
+  <a href="#trainer-detail" data-roles="Admin,Operations,Location">Trainer Detail (Hiring Journey)</a>
+  <a href="#candidates" data-roles="Admin,Operations,Location,Enrollment">Candidates</a>
+  <a href="#batches" data-roles="Admin,Operations,Location,Trainer">Batches</a>
+  <a href="#batch-detail" data-roles="Admin,Operations,Location,Trainer">Batch Detail</a>
+  <a href="#enrollment" data-roles="Admin,Operations,Location,Enrollment">Enrollment</a>
+  <a href="#daily" data-roles="Admin,Operations,Location,Trainer">Daily Execution</a>
+  <a href="#closure" data-roles="Admin,Operations,Location">Closure, Assessment &amp; Invoice</a>
+  <a href="#govt" data-roles="Admin,Operations">Government Attendance</a>
+  <a href="#costs" data-roles="Admin,Operations,Location">Costs</a>
+  <a href="#sync" data-roles="Admin">Sync Inbox &amp; Sheet Watch</a>
+  <a href="#admin" data-roles="Admin">Admin</a>
 </nav>
 <main>
-  <div class="searchbar"><input id="search" type="search" placeholder="🔍  Search anything… (e.g. attendance, trainer, invoice, import)"></div>
+<div class="searchbar"><input id="q" type="search" placeholder="Search the manual… (type to filter sections)"></div>
 
-  <div class="hero">
-    <h1>Center Management ERP — User Manual</h1>
-    <p>The complete operational journey in one system: Location &amp; Target → Trainer → Batch → Candidate → Enrollment → Daily Attendance → Assessment → Certificate → Invoice → Cost. Step-by-step instructions for every screen are below. Use the search box above to find anything.</p>
-    <p style="margin-top:8px"><b>Updated August 2026</b> — new since the first release: <a href="#sheet-watch">Sheet Watch</a> (track the client's workbook automatically), <a href="#contacts-notes">Contacts &amp; Meeting Notes</a>, <a href="#planner">Backward Batch Planner</a> &amp; time slots, <a href="#eligibility-sidh">Candidate Eligibility &amp; SIDH registration</a>, <a href="#feedback">Candidate Feedback</a>, and <a href="#permissions">self-signup with Admin approval &amp; togglable role permissions</a>. Newest: <a href="#govt-attendance">Government Attendance Import</a>, the confirmed <a href="#scheme-rules">scheme timing &amp; counting rules</a>, the full <a href="#trainer-prep">Trainer Preparation journey</a> (documents &rarr; NSDC nomination &rarr; &#8377;3,250 &rarr; TOT &rarr; TR ID), centre readiness on Home (location + trainer + candidate, and the one thing still missing), and live sync of the client's sheets every 5 minutes.</p>
-  </div>
+<div class="hero" id="overview">
+  <h1>Center Management ERP — User Manual</h1>
+  <p>One system for the whole training operation: centres, trainer hiring, candidate intake,
+  batches, daily execution, assessment, closure and money — with the client's sheets synced in
+  and every change audited.</p>
+</div>
+<div class="rolebar" id="rolebar"></div>
 
-  <section class="screen" id="overview">
-    <h2>📋 Product Overview — what the system does</h2>
-    <p class="sub">The full flow agreed in the planning meeting, feature by feature</p>
-    <table>
-      <tr><th>Feature</th><th>What it does</th><th>Where to find it</th></tr>
-      <tr><td><b>Sheet Watch</b> (client workbook)</td><td>The client's shared workbook is downloaded automatically every 30 minutes — every tab, every column. Any cell they change appears as old → new, for review. Nothing enters the system by itself</td><td>Sheet Watch</td></tr>
-      <tr><td>Location &amp; Target Planning</td><td>Location approvals and targets sync from the AVPL/SDP sheet; every change is reviewed before any action is taken (start/stop/close a location, update targets). Multiple SPOCs/contacts and dated meeting notes per location</td><td>Sync Inbox + Locations</td></tr>
-      <tr><td>Capacity Math</td><td>As soon as a target is entered, the system calculates how many batches are needed and how many trainers are required (e.g. target 210 → 7 batches × 20 days → 2 trainers within 90 days), and shows achieved vs remaining</td><td>Location Detail → Capacity &amp; Target</td></tr>
-      <tr><td>Trainer Planning</td><td>The full journey: Applied → Shortlisted → TOT In Progress → <b>Ready to Train</b>, with NSDC TR ID, which locations they can teach at, and compensation (batch-wise/monthly + incentive). If no trainer is available, raise a Request — hiring, TOT and availability dates are tracked. A trainer may run up to <b>4 parallel batches</b> when the day is split into time slots; the same time twice is blocked</td><td>Trainers + Requests tab</td></tr>
-      <tr><td><b>Backward Batch Planner</b></td><td>Give a batch start date and get the countdown checklist — trainer identified, TOT done (≥3 days before), mobilization, enrollment — each with its due date, tickable, shareable</td><td>Batches → Plan a batch</td></tr>
-      <tr><td>Infra Planning</td><td>Classroom/Lab rooms per location; one room hosts only one batch per session (Morning/Afternoon/Full Day) — clashes are blocked automatically</td><td>Location Detail → Trainers &amp; Infra</td></tr>
-      <tr><td>Candidate Pool</td><td>Pool of mobilised students by location; three ways in — add one by one, bulk Excel import, or a <b>public self-registration link</b> candidates fill themselves. Eligibility (age 18–40, 10th pass, 6-month training gap) is checked automatically</td><td>Candidates</td></tr>
-      <tr><td><b>SIDH registration</b></td><td>Send the Skill India registration link on WhatsApp so the candidate registers themselves, or export the list in the assisted-registration CRM's format. Registration is tracked per candidate, independently of any batch</td><td>Candidates → SIDH column</td></tr>
-      <tr><td>Enrollment (govt portal)</td><td>Tick 3 steps per student: Registration → e-KYC → Batch Accept. If something fails, record the reason (OTP not received, already registered…) — the student is not lost and can be retried or moved to another batch</td><td>Batch Detail → Enrollment</td></tr>
-      <tr><td>Daily Execution</td><td>Daily attendance (tap names), topic covered, photos and videos (at least twice a day), plus the government portal attendance figure with a screenshot. The gap between internal and government attendance is highlighted automatically (amber/red)</td><td>Batch Detail → Daily Execution</td></tr>
-      <tr><td>Assessment → Certificate → Invoice</td><td>Per-candidate Pass/Fail/Absent with reassessment history → certification → "Ready for Invoice" → invoice Raised → Paid — every state is enforced by the system</td><td>Batch Detail → Closure</td></tr>
-      <tr><td><b>Candidate Feedback</b></td><td>One private link per student at batch end — stars, what they liked, suggestions. The batch average is shown to the team</td><td>Batch Detail → Feedback</td></tr>
-      <tr><td>Cost Capture</td><td>Costs at every stage: trainer fees, incentives, TOT, rent, materials — linked to a location, batch or trainer</td><td>Costs + Batch Detail → Costs</td></tr>
-      <tr><td>Alerts</td><td>The system watches for you: missing daily logs, too few photos, attendance gaps, overdue plan milestones, unreviewed sheet changes, trainer requests coming due, assessments past their date, invoices sitting unraised</td><td>🔔 bell in the header</td></tr>
-      <tr><td><b>Roles &amp; Rights</b></td><td>Everyone signs up through one login and picks a role; an Admin approves the account. What each role can do is a <b>set of toggles</b> the Admin controls — including who may approve sheet changes — with special one-off rights per person</td><td>Admin → Permissions / Users &amp; Access</td></tr>
-    </table>
-    <div class="tip">💡 Every action leaves an <b>audit trail</b> — who changed what, and when — under the <span class="chip">Activity</span> tab of each detail page.</div>
-  </section>
+<section class="screen" id="login">
+  <h2>Signing In &amp; Public Pages</h2>
+  <p class="sub">Staff sign in with email + password. Candidates and applicants use public pages — no account needed.</p>
+  <ol class="steps">
+    <li>Open the ERP and sign in with your email and password. New staff accounts are created by an Admin, or requested via <b>Create an account</b> and activated only after an Admin approves them.</li>
+    <li><b>Candidates</b> never need an account: <span class="chip">/p/me</span> shows a candidate their own training, attendance and enrollment from just their phone number.</li>
+    <li><b>Candidate registration</b> works two ways: a centre shares its registration link (Candidates → Portal links), or the candidate self-registers at <span class="chip">/p/enrol</span> — they verify their email with a 6-digit one-time code, then fill in their details and pick a centre and program. The code lasts 10 minutes; five wrong tries burn it.</li>
+    <li><b>Trainer applicants</b> fill the public application form at <span class="chip">/p/trainer-apply</span> (or the single-use link a coordinator sends from Trainers → Quick add). Their profile enters the hiring pipeline at "Fresh Lead".</li>
+  </ol>
+  <div class="tip">Every registration or application sends a confirmation email — mails come from the ERP for real now. An Admin can mute all outbound mail from Admin → Defaults.</div>
+</section>
 
-  <section class="screen" id="login">
-    <h2>🔐 Login</h2>
-    <p class="sub">The first step</p>
-    <img src="/erp/manual/m01-login.png" alt="Login screen">
-    <ol class="steps">
-      <li>Open the ERP link in your browser</li>
-      <li><b>Already have an account?</b> Enter your <b>email</b> and <b>password</b> → <span class="btn">Sign in</span> — you will land on the Home screen</li>
-      <li><b>New here?</b> Click <mark>Create an account</mark> below the button — fill your details, <b>choose your role</b> (Trainer / Location SPOC / Enrollment / Operations) and submit</li>
-      <li>A new account is <b>Pending</b> until an Admin approves it — you cannot log in before that. The Admin sees your request immediately and approves or corrects it</li>
-    </ol>
-    <div class="warn">⚠️ If sign-in fails, either the email/password is wrong <b>or your account is still awaiting approval</b>. Forgot your password? Ask the Admin to reset it (Admin → Users &amp; Access).</div>
-  </section>
+<section class="screen" id="roles">
+  <h2>Roles &amp; Access</h2>
+  <p class="sub">A role is a preset rights profile. An Admin can change any role's rights (Admin → Permissions) and give or remove rights per person.</p>
+  <table>
+    <tr><th>Role</th><th>What they hold by default</th></tr>
+    <tr><td><b>Admin</b></td><td>Everything, always — Admin bypasses the permission matrix.</td></tr>
+    <tr><td><b>Operations</b></td><td>Locations, trainers &amp; requests, candidates (create/import/assign), batches &amp; daily logs, assessment/certification/closure, government attendance, cost entry, invoicing work, public links. <b>Not</b>: the sync/sheet machinery, deciding approvals, or reading the cost ledger / invoice book (they submit; the Admin reads the books).</td></tr>
+    <tr><td><b>Location (SPOC / Principal)</b></td><td>Their own centre(s) only: locations, trainers, candidates, assignment, closure/certificates, public links. No batch editing, no attendance entry (the Trainer's job), no finance.</td></tr>
+    <tr><td><b>Enrollment</b></td><td>Candidates: registration and assignment, plus the enrollment worklist. No trainer directory, no hiring surface, no finance.</td></tr>
+    <tr><td><b>Trainer</b></td><td>Their own batches and daily logs/evidence. No candidate pool, no directory of other trainers.</td></tr>
+  </table>
+  <ol class="steps">
+    <li><b>Three levels per right</b>: every right in Admin → Permissions is <span class="chip">—</span> (none), <span class="chip">view</span> (read-only where the screen supports it) or <span class="chip">edit</span> (full). View-level is live on the finance screens; writes always need edit.</li>
+    <li><b>Per-person deltas</b>: open a user in Admin → Users &amp; Access to grant <b>special rights</b> on top of the role, or <b>remove</b> a right from that one person (removal wins).</li>
+    <li><b>View-only accounts</b>: the "Can edit" switch off means the person can look at everything their rights allow but change nothing.</li>
+    <li><b>Stopping people</b>: <span class="btn">Stop access</span> on a user row blocks sign-in immediately. <span class="btn">Drop…</span> is terminal — the login dies, the email is freed for a new account, and all history stays (their activity remains readable via <span class="btn">Activity</span>).</li>
+  </ol>
+  <div class="warn">Location scope is enforced by the server on every read and write (not just hidden in menus). A scoped user cannot reach another centre's records by any route — lists, single records, documents, or history.</div>
+</section>
 
-  <section class="screen" id="roles">
-    <h2>👥 Roles &amp; Access — who sees what</h2>
-    <table>
-      <tr><th>Role</th><th>What they can do (by default)</th></tr>
-      <tr><td><b>Admin</b></td><td>Everything — Admin panel, users, permissions, programs, sync sources, force-close actions</td></tr>
-      <tr><td><b>Operations</b></td><td>All operational work: locations, batches, sync inbox, Sheet Watch, costs, invoices</td></tr>
-      <tr><td><b>Location (SPOC)</b></td><td>Only their own location — its batches, candidates, daily logs, rooms, trainer requests</td></tr>
-      <tr><td><b>Location (Principal, view-only)</b></td><td>Can view their location but cannot change anything</td></tr>
-      <tr><td><b>Enrollment</b></td><td>Enrollment worklist + candidates — ticking registration/KYC/accept steps</td></tr>
-      <tr><td><b>Trainer</b></td><td>Their own location's batches, and entering the daily log — attendance, topic, photos and videos</td></tr>
-    </table>
-    <div class="tip">💡 These are only the <b>defaults</b>. An Admin can add or remove any right from any role in <b>Admin → Permissions</b>, and grant an individual person a special right their role doesn't have. See <a href="#permissions">Permissions &amp; Signup</a>.</div>
-    <div class="tip">💡 Anything outside your rights simply won't appear on screen, or will respond with "You do not have the … right" — that's access control, not a bug.</div>
-  </section>
+<section class="screen" id="home">
+  <h2>Home (Action Center)</h2>
+  <p class="sub">What needs attention today, sized to your role — KPIs, pending work, and the same numbers the detail pages will show.</p>
+  <ol class="steps">
+    <li>Cards link straight to the work: pending approvals, open trainer requests, batches not ready, today's attendance.</li>
+    <li>"Today" is the Indian calendar day everywhere — early-morning entries land on the right date.</li>
+  </ol>
+</section>
 
-  <section class="screen" id="home">
-    <h2>🏠 Home — Action Center</h2>
-    <p class="sub">The first screen after login. It shows only the things that need action TODAY.</p>
-    <img src="/erp/manual/m02-home.png" alt="Home Action Center">
-    <img src="/erp/manual/m16-home-readiness.png" alt="Centres Ready to Start queue on Home">
-    <ol class="steps">
-      <li>The 5 <b>cards</b> on top — Active Locations, Active Batches, Enrolled Students, Trainer Requests, Follow-ups. <mark>Click any card</mark> to open the corresponding list</li>
-      <li><b>Centres Ready to Start</b> — one row per centre &times; job role, showing certified trainers vs required, SIDH-registered candidates vs needed, and <mark>the single next action</mark> (e.g. "no trainer nominated for this job role"). When a row turns green, that centre can open a batch today</li>
-      <li><b>Registration Failed on SIDH</b> — candidates the government portal refused, each with the reason. Work these for registration; don't plan them into batches</li>
-      <li><b>Missing Daily Logs</b> — any batch whose log for the previous working day wasn't filled appears here with the owner's name. Click a row to open that batch's Daily Execution form directly</li>
-      <li><b>Sheet Changes Pending Review</b> — changes detected in the AVPL sheet. Click to open the Sync Inbox</li>
-      <li><b>Government Attendance Gap</b> — days where our attendance and the government portal's attendance differ (−8 pts shows amber; larger gaps show red). Click to open that day's log</li>
-      <li><b>Enrollment Failures</b> — students whose enrollment failed (OTP issues, etc.). Click to open that batch's enrollment list</li>
-      <li><b>Invoices Pending</b> — invoices waiting to be raised or paid. Click to open that batch's Closure tab</li>
-    </ol>
-    <div class="tip">💡 Start every day from Home — when these queues are empty, the day's work is done. Check the 🔔 <b>bell</b> too: it carries everything the system noticed on its own (see <a href="#alerts">Alerts</a>).</div>
-  </section>
+<section class="screen" id="alerts">
+  <h2>Alerts</h2>
+  <p class="sub">The in-app inbox. Everything that alerts here also goes out by email to the affected people.</p>
+  <ol class="steps">
+    <li>New batch opened at your centre, signup awaiting approval, trainer application received, approval decided — each lands as an alert with a link.</li>
+    <li>Alerts are scoped: a centre's people see their centre's news, not everyone's.</li>
+  </ol>
+</section>
 
-  <section class="screen" id="sync">
-    <h2>🔄 Sync Inbox — actionable changes from the AVPL/SDP sheet</h2>
-    <p class="sub">For anyone with the "approve sheet changes" right. The external sheet is crawled on schedule; whatever changed in the fields we track lands here — nothing is ever applied automatically.</p>
-    <div class="tip">💡 Two screens, two jobs: <b>Sheet Watch</b> shows <i>every</i> cell the client touched anywhere in the workbook (a full audit of their edits). <b>Sync Inbox</b> is the smaller, actionable list — target and status changes that can start, hold, stop or close a location.</div>
-    <img src="/erp/manual/m03-sync.png" alt="Sync Inbox with review panel">
-    <ol class="steps">
-      <li>Go to <span class="btn">Sync Inbox</span> in the sidebar (the blue badge shows how many changes are pending)</li>
-      <li>Click any <b>Open</b> row — a review panel opens on the right</li>
-      <li>The panel shows <b>what changed</b> (old → new) and the <b>Impact</b> — how many active batches, trainers and candidates this location has</li>
-      <li>Choose an <b>Action</b>: <span class="chip">No action</span> <span class="chip">Update target</span> <span class="chip">Start location</span> <span class="chip">Put on hold</span> <span class="chip">Stop location</span> <span class="chip">Close location</span></li>
-      <li>Stop/Close actions <b>require a reason</b></li>
-      <li>Click <span class="btn">Apply &amp; Acknowledge</span></li>
-    </ol>
-    <div class="warn">⚠️ When you Stop/Close a location, the system automatically creates <b>follow-up tasks</b> (stop batches, release trainers, return candidates to the pool). These appear on Home, and the change stays "Open" until every follow-up is resolved. Nothing is shut down silently.</div>
-    <ol class="steps">
-      <li>To ignore several changes at once: select their checkboxes → <span class="btn">Bulk Ignore</span></li>
-    </ol>
-  </section>
+<section class="screen" id="locations" data-roles="Admin,Operations,Location">
+  <h2>Locations</h2>
+  <p class="sub">Every training centre: status, capacity, targets and identity.</p>
+  <ol class="steps">
+    <li>The table shows each centre with its approval and operational status. Click a row to open the centre's detail page — that is where editing lives.</li>
+    <li><b>Institution ID</b> is the centre's unique external identity (used by the client's sheets); it is searchable and editable on the detail page.</li>
+    <li>A centre that is On Hold / Stopped / Closed stops taking new work automatically: no new batches, no new trainer nominations, no public registration.</li>
+  </ol>
+</section>
 
-  <section class="screen" id="locations">
-    <h2>📍 Locations — all centers</h2>
-    <img src="/erp/manual/m04-locations.png" alt="Locations list">
-    <ol class="steps">
-      <li>Sidebar → <span class="btn">Locations</span></li>
-      <li>Each row shows: Code, Name, City, <b>Approval</b> status (from AVPL — Pending/Approved/Rejected), <b>Operational</b> status (ours — Active/On Hold/Stopped/Closed), and the SPOC</li>
-      <li>To add a center: <span class="btn">New Location</span> → fill the form → Create. Set <b>External ID</b> to the center's ID in the AVPL sheet — that's how sheet rows are matched</li>
-      <li>Click any row to open that location's detail page</li>
-    </ol>
-  </section>
+<section class="screen" id="location-detail" data-roles="Admin,Operations,Location">
+  <h2>Location Detail</h2>
+  <p class="sub">One centre end to end: master fields, contacts &amp; notes, capacity &amp; targets, trainers &amp; infrastructure, batches, and the full change history.</p>
+  <ol class="steps">
+    <li><b>Overview</b> — edit the centre's master fields (including Institution ID). Saves are diff-based and audited.</li>
+    <li><b>Capacity &amp; Target</b> — per-program targets; the reconciliation view compares the master sheet's claims with live counts.</li>
+    <li><b>Trainers &amp; Infra</b> — rooms/labs and the trainers tied to this centre.</li>
+    <li><b>Activity</b> — who changed what, when: every field change with the old and new value and the person's name.</li>
+  </ol>
+</section>
 
-  <section class="screen" id="location-detail">
-    <h2>🏫 Location Detail — 6 tabs</h2>
-    <img src="/erp/manual/m05-location-detail.png" alt="Location detail overview">
-    <ol class="steps">
-      <li><b>Overview</b> — update name, city, and the primary SPOC/Principal names and phone numbers here → <span class="btn">Save</span>. Changing the operational status <b>requires a reason</b></li>
-      <li><b>Contacts &amp; Notes</b> — see <a href="#contacts-notes">Contacts &amp; Meeting Notes</a>: as many contact people as the centre needs, plus a dated diary of every conversation</li>
-      <li><b>Capacity &amp; Target</b> — see below 👇</li>
-      <li><b>Trainers &amp; Infra</b> — the <b>Trainer slots</b> per job role (who fills each required seat, at what stage — see <a href="#trainer-prep">Trainer Preparation</a>), rooms (named, e.g. "Classroom 1", "Lab 1"; <b>a centre with no room — or no Lab where the course needs one — is blocked from starting</b>), and <b>Trainer Requests</b></li>
-      <li><b>Batches</b> — all batches at this location</li>
-      <li><b>Activity</b> — a full record of who changed what</li>
-    </ol>
-    <h2 style="margin-top:18px">🎯 Capacity &amp; Target</h2>
-    <img src="/erp/manual/m06-capacity.png" alt="Capacity and targets">
-    <img src="/erp/manual/m17-targets-crosscheck.png" alt="Targets with derived trainer counts and the sheet claims side by side">
-    <ol class="steps">
-      <li>Each program shows its <b>Approved target</b> (from AVPL) and <b>Allocated target</b> (what we commit internally)</li>
-      <li>The <b>Capacity math</b> appears automatically: <mark>"Target 210 → 7 batches × 20 days = 140 trainer-days → 2 trainers required within 90 days"</mark> — this tells you how many trainers are needed</li>
-      <li><b>Achieved</b> shows both bases side by side — how many are <b>enrolled</b> and how many are <b>certified</b> — with the remaining count, so "target mila vs kiya" is answered at a glance</li>
-      <li><b>Trainers</b> counts certified vs required <i>from our own trainer records</i>, and <b>Sheet says</b> shows the client sheet's claim beside it. When the two disagree the variance is called out — the sheet is a cross-check, never a rival master</li>
-      <li>To set a target: choose the Program → enter the numbers → <span class="btn">Save target</span></li>
-    </ol>
-  </section>
+<section class="screen" id="trainers" data-roles="Admin,Operations,Location">
+  <h2>Trainers</h2>
+  <p class="sub">The trainer directory and the hiring pipeline in one place. Open Positions shows demand; Requests track "we need a trainer here".</p>
+  <ol class="steps">
+    <li>Every trainer row shows their <b>pipeline stage</b> (Fresh Lead → Shortlisted → Documents Completed → Sent to NSDC → NSDC Approved → TOT Payment Done → TOT Scheduled → TOT In Progress → Certified; NSDC Rejected and Dropped are the off-ramps) and their <b>TR ID</b>. A Certified trainer without a TR ID shows a standing <span class="chip">TR ID pending</span> flag until it is recorded.</li>
+    <li><span class="btn">Add Trainer</span> — full profile entry. Phone must be a real 10-digit mobile (+91/0 prefixes are accepted and stored as the bare 10); email must be a real address — the form checks as you type.</li>
+    <li><span class="btn">Quick add + send link</span> — enter just name and phone; a single-use application link is created to send over WhatsApp/SMS (and mailed if you enter an email). The applicant fills the rest themselves.</li>
+    <li><span class="btn">Import (Excel)</span> — bulk upload with column mapping. Unknown columns can be accepted as extra fields; duplicates (same phone) are skipped and named; phone numbers that cannot be read as 10 digits are counted and reported, never silently dropped.</li>
+    <li><span class="btn">Delete</span> (Admin only) — permanently removes a junk row (test rows, duplicate imports) and its documents. Anyone referenced by a batch cannot be deleted — real people are <b>Dropped</b>, not erased.</li>
+    <li>Click a row to open the trainer's detail page — the hiring journey lives there.</li>
+  </ol>
+  <div class="tip">Who created a trainer shows on the row itself ("added by …") and in the Activity tab — nothing enters the system anonymously.</div>
+</section>
 
-  <section class="screen" id="trainers">
-    <h2>🧑‍🏫 Trainers — pool and requests</h2>
-    <img src="/erp/manual/m07-trainers.png" alt="Trainers list">
-    <ol class="steps">
-      <li>Sidebar → <span class="btn">Trainers</span>. Two statuses are shown: <b>Pipeline</b> (where they are in hiring) and <b>Status</b> (set automatically — <span class="chip">Assigned</span> when a batch is allocated, otherwise <span class="chip">Available</span>)</li>
-      <li><b>The hiring journey</b> — click a trainer's name to open their page and move them stage by stage (see <a href="#trainer-prep">Trainer Preparation</a>). The list shows where everyone stands: amber = in the pipeline, green = <span class="chip">Certified (Ready to Train)</span>, red = rejected or dropped</li>
-      <li>To add a trainer: <span class="btn">Add Trainer</span> → name, phone, <b>skills</b> (must match a program's trainer skill), pipeline stage, TR ID, and <b>Can train at</b> — pick every location they can travel to (one, two or ten). Leave it empty to mean "anywhere"</li>
-      <li><b>Compensation:</b> choose <span class="chip">Batch-wise</span> or <span class="chip">Monthly</span>, enter the fixed amount, and note the performance incentive separately</li>
-      <li><b>Max concurrent batches</b> is 4 by default — a trainer can run up to four batches when the day is divided into time slots</li>
-      <li><b>Requests tab</b> — trainer requests for locations that need one: location, program, required-by date, TOT date. Update the status right here (Open → In Progress → Fulfilled). <b>Raising a request alerts Admin and Operations immediately</b></li>
-    </ol>
-    <div class="warn">⚠️ Assigning one trainer to two batches at the <b>same time slot</b> is blocked outright, and so is going past their batch limit — the system names the conflicting batch and dates. Booking someone who is not yet "Ready to Train", or not listed for that location, gives you a <b>warning</b> (planning ahead is allowed) — but the batch still cannot <i>start</i> before their availability date.</div>
-  </section>
+<section class="screen" id="trainer-detail" data-roles="Admin,Operations,Location">
+  <h2>Trainer Detail — the Hiring Journey</h2>
+  <p class="sub">CV → documents → nomination → NSDC → eligibility payment → TOT → TR ID. The stage rail shows where the person stands; every move is guarded and audited.</p>
+  <ol class="steps">
+    <li><b>Move to next stage</b> — the drawer offers only the moves the rules allow from the current stage.</li>
+    <li><b>Documents</b> — Aadhaar, PAN, photo, CV, qualification, certificates; each uploads and verifies separately. The documents gate blocks "Documents Completed" until the mandatory set is present.</li>
+    <li><b>Nomination</b> — which centre × job role this person is being hired for. Required before the papers go out; a halted centre cannot be nominated for.</li>
+    <li><b>NSDC round-trip</b> — submission and verdict dates; a rejection records the remarks so the papers can be fixed and resent.</li>
+    <li><b>TOT &amp; TR ID</b> — the eligibility payment books itself as a cost entry; certification requires the NSDC TR ID (it is what the government portal asks for when a batch is formed).</li>
+    <li><b>Set status directly (bypass)</b> — Admin/granted only, loudly confirmed, audited in as many words. A bypass to Certified asks for the TR ID right there (optional — the profile stays flagged until it is recorded).</li>
+    <li><b>Activity</b> — the full change history of this trainer with actor names.</li>
+  </ol>
+  <div class="warn">Nothing about a missing TR ID ever blocks planning — batches can be created with a flagged trainer — but the government portal will refuse them until the TR ID is recorded. The flags exist so that surprise never happens on portal day.</div>
+</section>
 
+<section class="screen" id="candidates" data-roles="Admin,Operations,Location,Enrollment">
+  <h2>Candidates</h2>
+  <p class="sub">Two buckets, each with a real journey inside: <b>Fresh</b> (Fresh Lead → Portal Link Sent → Registered on Portal) and <b>Enrolled</b> (Enrolled → In Training → Assessment → Certified / Failed / Dropped — derived from recorded results, not from stale status fields).</p>
+  <ol class="steps">
+    <li>Filter by stage chips inside each bucket; search covers name, phone, alt phone, source and the portal CAN_ id.</li>
+    <li><span class="btn">Add Candidate</span> — phone and email are format-checked as you type (10-digit rule, like trainers). Eligibility (age / education / six-month cooldown) computes live and updates itself.</li>
+    <li><span class="btn">Import (Excel)</span> — map columns, preview, confirm. Possible duplicates are flagged (never blocked — one phone often serves a household); unreadable dates and un-normalizable phones are counted and reported.</li>
+    <li><b>Portal links</b> — generate the centre's public registration link; candidates can also self-register with an email code at <span class="chip">/p/enrol</span>.</li>
+    <li><b>Documents</b> — per-candidate uploads (ID, certificates) with per-file verify and delete.</li>
+    <li><b>Assign to batch</b> — multi-select candidates and place them into a batch; the batch's Enrollment tab completes the paperwork.</li>
+  </ol>
+</section>
 
-  <section class="screen" id="trainer-prep">
-    <h2>&#128736; Trainer Preparation — from CV to "Certified (Ready to Train)"</h2>
-    <p class="sub">Click any trainer's name to open their page. This is the hiring journey Manish sir described — the system walks it stage by stage and refuses shortcuts.</p>
-    <ol class="steps">
-      <li><b>The stages, in order:</b> <span class="chip">Applied</span> → <span class="chip">CV Reviewed</span> → <span class="chip">Shortlisted</span> → <span class="chip">Docs Pending</span> → <span class="chip">Docs Complete</span> → <span class="chip">Nomination Prepared</span> → <span class="chip">Submitted to NSDC</span> → <span class="chip">NSDC Approved</span> → <span class="chip">Payment Done</span> → <span class="chip">TOT Scheduled</span> → <span class="chip">TOT In Progress</span> → <span class="chip">Certified</span>. Use <span class="btn">Move to next stage</span> on the Pipeline tab; skipping a stage is refused with the reason</li>
-      <li><b>Documents tab</b> — upload Aadhaar, PAN, Photo, CV and Educational Qualification (always required), plus whatever the job role itself demands — e.g. <b>Industry Experience and Teaching Experience certificates</b>, which are mandatory to qualify for TVP. "Docs Complete" is refused until every required document is on file, and the banner names exactly what is still missing</li>
-      <li><b>Nomination</b> needs a target: which centre and which job role this trainer is being nominated for. That choice also decides which extra documents apply</li>
-      <li><b>The NSDC round-trip</b> — after <span class="chip">Submitted to NSDC</span> the answer comes back as <span class="chip">NSDC Approved</span> or <span class="chip">NSDC Rejected</span>. A rejection <b>must</b> record NSDC's remarks (the "truti"); the page then shows the way back: correct the documents → Docs Pending → resubmit. Nothing dead-ends</li>
-      <li><b>&#8377;3,250 eligibility payment</b> — recording <span class="chip">Payment Done</span> stores the reference <i>and books the fee into Costs automatically</i> (once, never twice)</li>
-      <li><b>TOT → TR ID</b> — after TOT, "Certified" requires the <b>TR ID</b> from NSDC. That TR ID is what the SIDH portal asks for when a batch is formed — a trainer without one cannot be accepted on a batch</li>
-      <li><b>Dropping</b> a trainer needs a reason, and is refused while they still run a live batch — reassign the batch first. A dropped trainer who returns can be re-opened</li>
-    </ol>
-    <div class="tip">&#128161; <b>Trainer slots on the location page</b> (Location → Trainers &amp; Infra): one slot per required trainer for each job role — each slot shows the named person and their stage, and an empty slot says plainly "hiring not started". This is the "Trainer 1, Trainer 2, Trainer 3" view from the requirements.</div>
-    <img src="/erp/manual/m18-trainer-slots.png" alt="Trainer slots per job role on the location page">
-  </section>
+<section class="screen" id="batches" data-roles="Admin,Operations,Location,Trainer">
+  <h2>Batches</h2>
+  <p class="sub">Plan and track batches. Trainers see their own (and can look at their centre's others); planning is for Admin/Operations.</p>
+  <ol class="steps">
+    <li><span class="btn">New Batch</span> — pick centre, program and planned start. The batch code follows the standard: centre code – course – number.</li>
+    <li><b>Trainer dropdown tells the truth</b>: the top group is <i>Certified with a TR ID, cleared for this centre</i> (nomination first, capability as fallback); everyone else is listed underneath <b>with the reason next to their name</b> — "Certified — no TR ID yet", "Fresh Lead", "nominated: another centre". Nobody is silently hidden, and Dropped trainers are not offered at all.</li>
+    <li><b>Skills relevant to this batch</b> — your own recorded pick (multi-select). It never filters the trainer list; it documents what this batch is about.</li>
+    <li><b>Time slots</b> — a session is exactly 4 or 8 hours inside the training day (09:00–18:00). The form shows the exact rule violation while you type; the save enforces it.</li>
+    <li><b>Earliest possible start</b> — computed from mobilisation lead time and the trainer's availability. Pick an earlier date and the form (and the save response) warn you — nothing blocks, but you know it will not be ready.</li>
+    <li><b>Preparation board</b> — for every centre × program target: what is missing before a batch can start (trainer, candidates, infrastructure), with a one-click trainer request when hiring is the blocker.</li>
+    <li><span class="btn">Plan a batch</span> — the backward planner: give a start date, get the dated checklist of everything that must happen first.</li>
+  </ol>
+</section>
 
-  <section class="screen" id="candidates">
-    <h2>🧑‍🎓 Candidates — the student pool</h2>
-    <img src="/erp/manual/m08-candidates.png" alt="Candidates list">
-    <ol class="steps">
-      <li>Sidebar → <span class="btn">Candidates</span>. Filter by location and status (Unassigned/Assigned/Enrolled/Dropped/Completed)</li>
-      <li><b>Three ways a candidate enters the pool:</b></li>
-      <li>1️⃣ Single student on a call: <span class="btn">Add Candidate</span> → name, phone, location, program, date of birth, education, last government training date, <b>which programs and locations they are interested in</b> (so you can shortlist them quickly later), source</li>
-      <li>2️⃣ <b>Bulk import from Excel:</b> <span class="btn">Import Excel</span> → first click <mark>"Download sample sheet format"</mark> to get the blank template → fill it → upload → map the columns (which column is name, which is phone) → Preview → Import. Possible duplicates are flagged, never blocked</li>
-      <li>3️⃣ <b>Self-registration link:</b> pick a location in the filter → <span class="btn">Self-reg link</span> → the link is copied to your clipboard. Share it on WhatsApp; candidates fill their own details and land straight in that location's pool</li>
-      <li>Each row shows an <b>Eligible</b> badge and the <b>SIDH</b> column with one-click actions: <span class="btn">WhatsApp</span>/<span class="btn">SMS</span> send the registration link, <span class="btn">Portal&#8599;</span> opens the SIDH portal itself, <span class="btn">&#10003; Reg.</span> marks them registered, and <span class="btn">&#10007; Failed</span> records that the portal refused them — <b>with the reason</b>, which puts them on Home's "Registration Failed" queue instead of losing them. See <a href="#eligibility-sidh">Eligibility &amp; SIDH</a></li>
-      <li><b>Register first, batch later:</b> SIDH registration needs only the phone and email — it does <i>not</i> wait for a batch. Start registration the day the candidate arrives; "Registered" is a stage, not the finish line. Batch assignment is a separate step and works even before registration (the readiness check simply counts them as not-yet-registered)</li>
-      <li><b>Assign to a batch:</b> tick the students' checkboxes ✔ → <span class="btn">Assign to Batch</span> → pick the batch — done. If someone is not eligible you get a warning naming them, and the assignment still goes through</li>
-    </ol>
-    <div class="tip">💡 A student can be in only one batch at a time. If you try to assign them again, the system tells you which batch they are already in.</div>
-  </section>
+<section class="screen" id="batch-detail" data-roles="Admin,Operations,Location,Trainer">
+  <h2>Batch Detail</h2>
+  <p class="sub">One batch end to end — Overview, Candidates, Enrollment, Daily Execution, Attendance, Closure, Feedback, Costs, Activity.</p>
+  <ol class="steps">
+    <li><b>Overview</b> — dates, trainer, room, milestones (tick off the backward plan), the government batch id (SIDH) and the Drive evidence folder, reassignment while Planning.</li>
+    <li><b>Candidates / Enrollment</b> — roster in, paperwork done, fee state where it applies.</li>
+    <li><b>Attendance</b> — day-wise records; candidates can check their own at <span class="chip">/p/attendance</span> links.</li>
+    <li><b>Feedback</b> — per-student feedback links; results collect on this tab.</li>
+    <li><b>Activity</b> — the audit trail of the batch with actor names.</li>
+  </ol>
+</section>
 
-  <section class="screen" id="batches">
-    <h2>🎓 Batches — from planning to completion</h2>
-    <img src="/erp/manual/m09-batches.png" alt="Batches list">
-    <img src="/erp/manual/m19-new-batch-readiness.png" alt="New Batch drawer with the three-way readiness check">
-    <ol class="steps">
-      <li>Sidebar → <span class="btn">Batches</span>. Each row shows: code, location, status, <b>Health</b> (Green/Amber/Red with its reasons), <b>Enrolled/Roster/Target</b>, trainer, start date</li>
-      <li><span class="btn">Plan a batch</span> — the countdown checklist <i>before</i> you create anything. See <a href="#planner">Backward Batch Planner</a></li>
-      <li>New batch: <span class="btn">New Batch</span> → choose Location + Program + Start date → optional <b>time slot</b> (e.g. 09:00–13:00, so one trainer can run parallel batches) → Trainer → Room → <span class="btn">Create Batch</span></li>
-      <li><b>The trainer dropdown is grouped by TR ID</b> — "Certified, has a TR ID and is cleared for this centre" on top (the only ones the SIDH portal will accept), everyone else below with a warning. Picking a not-yet-certified trainer is allowed for planning, but the batch cannot start with them</li>
-      <li>As soon as Location + Program are chosen, the drawer answers the three-way question: <mark>location + trainer + candidate — what is still missing?</mark> A green note means all three are in place; an amber box names each blocker ("no trainer nominated", "no room at the centre", "0 of 30 candidates registered on SIDH")</li>
-      <li>Creating a batch <b>notifies that centre's own users</b> with their candidate-pool count — the "batch open hote hi, tere pool mein 50" rule</li>
-      <li>The drawer shows the <b>"Earliest possible start"</b> (based on mobilisation lead time and trainer availability)</li>
-      <li>The end date is computed automatically: start + course duration + buffer, and the <b>backward plan checklist</b> is attached to the batch straight away</li>
-    </ol>
-    <div class="tip">💡 A batch's lifecycle: <span class="chip">Planning</span> → <span class="chip">Ready</span> → <span class="chip">Active</span> → <span class="chip">Closing</span> → <span class="chip">Completed</span>. Each next step unlocks only when the previous conditions are met.</div>
-  </section>
+<section class="screen" id="enrollment" data-roles="Admin,Operations,Location,Enrollment">
+  <h2>Enrollment</h2>
+  <p class="sub">The worklist for getting assigned candidates fully enrolled — batch-wise, with the portal round-trip tracked.</p>
+  <ol class="steps">
+    <li>Work the queue: each row is a candidate placed in a batch whose paperwork or portal registration is incomplete.</li>
+    <li>Portal state (link sent / registered / failure reason) rides on each candidate; fix and resend from here.</li>
+  </ol>
+</section>
 
-  <section class="screen" id="batch-detail">
-    <h2>📊 Batch Detail — Overview &amp; readiness</h2>
-    <img src="/erp/manual/m10-batch-overview.png" alt="Batch overview with readiness checklist">
-    <ol class="steps">
-      <li>Opening a batch shows the <b>Readiness checklist</b>: ✓ Location approved, ✓ Room, ✓ Trainer, ✓ Roster ≥ 80% of target</li>
-      <li>Once all four are ✓, click <span class="btn">Mark Ready</span></li>
-      <li><span class="btn">Start Batch</span> works only when <b>enough students are enrolled</b> (80%, configurable) and the start date has arrived</li>
-      <li>Trainer/room/dates/<b>time slot</b> can be edited in the Details panel — any clash is blocked by the system. The panel also holds the <b>Government batch ID (SIDH)</b> — the portal's own identifier for this batch — and the <b>Drive evidence folder</b> link (the parallel backup kept in the project Drive, one click away)</li>
-      <li>The <b>Candidates</b> tab shows each member's <b>running attendance</b> (present days / days held, with %) counted live from the daily logs — below 70% turns red</li>
-      <li>The <b>Backward plan</b> panel lists every milestone with its due date — tick them off as they finish; overdue ones turn red and raise an alert. While the batch is in Planning you can <span class="btn">Regenerate</span> the dates after changing the start date</li>
-      <li>Cancelling requires a reason; once daily logs exist, only an Admin can force-close</li>
-    </ol>
-    <p>Tabs: <span class="chip">Candidates</span> (roster + drops) · <span class="chip">Enrollment</span> · <span class="chip">Daily Execution</span> · <span class="chip">Closure</span> · <span class="chip">Feedback</span> · <span class="chip">Costs</span> · <span class="chip">Activity</span></p>
-  </section>
+<section class="screen" id="daily" data-roles="Admin,Operations,Location,Trainer">
+  <h2>Daily Execution</h2>
+  <p class="sub">The trainer's daily log: who was present, what was covered, photo evidence — the record the whole downstream (hours, eligibility, settlement) hangs on.</p>
+  <ol class="steps">
+    <li>Enter the day's attendance and session notes; attach evidence photos (uploads retry on flaky networks).</li>
+    <li>You can edit your own log within 48 hours; Operations/Admin can edit any time. Everything is audited.</li>
+  </ol>
+</section>
 
-  <section class="screen" id="enrollment">
-    <h2>✅ Enrollment Worklist — the 3 portal steps</h2>
-    <p class="sub">Batch Detail → Enrollment tab. Works comfortably on a phone (one card at a time).</p>
-    <img src="/erp/manual/m11-enrollment.png" alt="Enrollment worklist">
-    <ol class="steps">
-      <li>One card per student — as you complete each step on the government portal, tick it here: <span class="chip">Registration</span> → <span class="chip">e-KYC</span> → <span class="chip">Batch Accept</span></li>
-      <li>All three ✓ = student <b>Completed</b> (Enrolled) — the status updates automatically</li>
-      <li>Ran into a problem? Pick the reason from the dropdown: <mark>OTP not received / Already registered / KYC failed / Portal error / Duplicate</mark> — the card is marked <b>Failed</b></li>
-      <li>A failure does NOT lose the student — fix the issue and click "Clear failure", or move them to another batch</li>
-    </ol>
-  </section>
+<section class="screen" id="closure" data-roles="Admin,Operations,Location">
+  <h2>Closure, Assessment &amp; Invoice</h2>
+  <p class="sub">Batch end: assessment results, certificates, closure evidence, and the invoice work that follows.</p>
+  <ol class="steps">
+    <li>Record per-candidate results (pass/fail/absent, with reasons from the master list). The attendance threshold for assessment eligibility derives from the scheme master's hours.</li>
+    <li>Upload certificates; a completed batch is nudged for its government batch id, Drive folder and slot if any are missing.</li>
+    <li>Invoice work flows through the approvals queue; the invoice book itself is read by the Admin.</li>
+  </ol>
+</section>
 
-  <section class="screen" id="daily">
-    <h2>📅 Daily Execution — the daily log</h2>
-    <p class="sub">Batch Detail → Daily Execution. The SPOC or trainer can fill this from a phone.</p>
-    <img src="/erp/manual/m12-daily.png" alt="Daily execution form and history">
-    <ol class="steps">
-      <li>Pick the date (today is pre-selected)</li>
-      <li><b>Attendance:</b> <mark>tap the name</mark> of each student who is present — it turns green with a ✓</li>
-      <li>Enter the topic covered, take photos and videos (directly from the camera; the system compresses images automatically — works on slow networks, and failed uploads go to a "Retry" queue). <b>Upload at least twice a day</b> — if fewer arrive, the system raises an alert the next morning</li>
-      <li><b>Government portal present:</b> enter the number shown on the portal + upload a <b>screenshot</b> as proof. Leaving it blank means "Not verified" (which is different from 0)</li>
-      <li>Click <span class="btn">Save Daily Log</span></li>
-      <li>The <b>History</b> below shows each day's Internal % vs Government % and the <b>Gap</b> — <span style="color:#d97706;font-weight:700">amber (5–10 pts)</span> / <span style="color:#dc2626;font-weight:700">red (10+ pts)</span>. If a gap appears, get the biometric attendance verified</li>
-      <li>Made a mistake? Click <span class="btn">Edit</span> — your own log within 48 hours; Operations/Admin any time. Every edit is recorded</li>
-    </ol>
-    <div class="warn">⚠️ The attendance denominator is that day's roster and is <b>frozen the moment the log is saved</b> — if a student drops later, historical percentages do not change.</div>
-  </section>
+<section class="screen" id="govt" data-roles="Admin,Operations">
+  <h2>Government Attendance</h2>
+  <p class="sub">Import the government portal's attendance export and reconcile it against the ERP's own records.</p>
+  <ol class="steps">
+    <li>Upload the export; rows match by portal ids and names, and every unmatched row is named.</li>
+    <li>Differences (portal says present, ERP says absent, or vice versa) list per batch per day for follow-up.</li>
+  </ol>
+</section>
 
-  <section class="screen" id="closure">
-    <h2>🏁 Closure — Assessment → Certificate → Invoice</h2>
-    <p class="sub">Batch Detail → Closure tab</p>
-    <img src="/erp/manual/m13-closure.png" alt="Closure tab">
-    <div class="tip">💡 <b>Per-candidate marking (new):</b> click <span class="btn">Start per-candidate marking</span> to record a result for every student instead of just totals. Tap Pass / Fail / Absent on each card (Fail asks for a reason), add scores, then use <b>Issue certificates</b> to enter numbers in bulk. Appeared and Passed are then calculated for you and shown as "derived" — you never type them again. A batch cannot be marked assessment-complete while anyone is still Pending, and no certificate can be issued without a Pass. Older batches keep their existing totals exactly as they were.</div>
-    <ol class="steps">
-      <li><b>Assessment:</b> date, how many appeared, how many passed — <span class="btn">Mark Completed</span>. (Appeared cannot exceed the roster)</li>
-      <li>The batch can now be moved to <span class="btn">Move to Closing</span> (from the Overview tab)</li>
-      <li><b>Certification:</b> date + number of certificates issued — <span class="btn">Mark Completed</span></li>
-      <li>Click <span class="btn">Mark Ready for Invoice</span> — the invoice automatically becomes "Ready"</li>
-      <li>Enter the invoice number, date and amount, then <span class="btn">Mark Raised</span>; once payment arrives, <span class="btn">Mark Paid</span></li>
-      <li>Finally, <span class="btn">Complete</span> the batch — remaining students automatically become "Completed" and the trainer is released</li>
-    </ol>
-  </section>
+<section class="screen" id="costs" data-roles="Admin,Operations,Location">
+  <h2>Costs</h2>
+  <p class="sub">Money entry vs the money book — deliberately separate.</p>
+  <ol class="steps">
+    <li><b>Entering costs</b> (Operations and granted roles): per-centre / per-batch / per-trainer entries with categories from the master list. Trainer eligibility payments book themselves when the pipeline stage moves.</li>
+    <li><b>Submissions go for approval</b>; your own submissions and their state are under "My submissions".</li>
+    <li><b>The ledger</b> (the full book of what everyone posted) is the Admin's screen. Operations posts but does not read the book — by the CEO's design.</li>
+  </ol>
+</section>
 
-  <section class="screen" id="costs">
-    <h2>💰 Costs &amp; Invoices</h2>
-    <p class="sub">Admin &amp; Operations only</p>
-    <img src="/erp/manual/m14-costs.png" alt="Costs page">
-    <ol class="steps">
-      <li>Sidebar → <span class="btn">Costs</span>. <b>Costs tab:</b> add an entry — date, location/trainer, category (Trainer Fee, Incentive, TOT, Rent, Materials…), amount</li>
-      <li>Batch-level costs are added from that batch's <b>Costs tab</b>, which also shows the running total</li>
-      <li><b>Invoices tab:</b> all invoices in one place — status, amount, dates. Raising and marking paid happens on the batch's Closure tab</li>
-    </ol>
-  </section>
+<section class="screen" id="sync" data-roles="Admin">
+  <h2>Sync Inbox &amp; Sheet Watch</h2>
+  <p class="sub">The client's Google/OneDrive workbooks feed the ERP. Changes queue for review; nothing applies itself to master data without an Admin's click.</p>
+  <ol class="steps">
+    <li><b>Sheet Watch</b> — each watched workbook, its tabs, and what changed since last look; whole-row deletions are called out.</li>
+    <li><b>Sync Inbox</b> — apply or ignore each change; applied values write to the record and audit as external sync.</li>
+    <li><b>Tab mappings</b> (Admin → Sync Source) — map a sheet tab's columns to an entity to auto-ingest new rows. Approve mappings carefully: an active Trainer/Candidate mapping creates records from sheet rows on every sync cycle.</li>
+  </ol>
+</section>
 
-  <section class="screen" id="admin">
-    <h2>⚙️ Admin — Admin role only</h2>
-    <img src="/erp/manual/m15-admin.png" alt="Admin panel">
-    <img src="/erp/manual/m20-select-all-rights.png" alt="Select all in the special rights grid">
-    <ol class="steps">
-      <li><b>Programs:</b> the master list of courses — duration, buffer, batch size, completion deadline, trainer skill, scheme + priority, and the <b>extra mandatory trainer documents</b> for that job role (e.g. Industry/Teaching Experience) — these gate the trainer's "Docs Complete" stage on top of the standard five. <mark>All capacity math runs on these numbers</mark></li>
-      <li><b>Users &amp; Access:</b> pending signups appear in an amber box at the top — Approve, "Review &amp; edit…" first, or Reject. You can also create users directly: pick a role, set the <b>location scope</b> (for Location/Trainer users), <b>Can edit</b> (off = view only) and any <b>special rights</b> — a <b>Select all</b> box at the top of the rights grid grants (or removes) every right in one tick for trusted people. Passwords are reset here too</li>
-      <li><b>Permissions:</b> the roles × rights grid — tick what each role's group can do, including <mark>who may approve sheet changes</mark>. See <a href="#permissions">Permissions &amp; Signup</a></li>
-      <li><b>Sync Source:</b> two modes. <b>Mapped</b> = the AVPL sheet's link + <b>column mapping</b> (sheet column ↔ system field) that feeds the Sync Inbox — on a column mismatch the sync stops itself, so wrong data is never imported. <b>Watch</b> = track the client's whole workbook cell by cell (set the poll interval and which columns identify a row) which feeds <a href="#sheet-watch">Sheet Watch</a>. OneDrive and Google-Sheets share links work as they are — the engine reads the workbook directly and finds the header row even under a totals row. "Sync Now" runs either immediately. <mark>How fast does a sheet edit reach the system?</mark> Watch sources poll every <b>5 minutes</b>; a detected change lands as a review item (never applied silently) and raises a notification</li>
-      <li><b>Approvals:</b> optionally require a second person to sign off on critical actions — see <a href="#approvals">Approvals</a></li>
-      <li><b>Master Lists:</b> cost categories, drop reasons, failure reasons</li>
-      <li><b>Defaults:</b> three groups — planning (batch size 30, duration 15+5, 90-day deadline, attendance gap thresholds, enrollment threshold, max 4 batches per trainer), <b>candidate eligibility</b> (min/max age, training cooldown months, minimum daily photo uploads, SIDH portal URL, <b>project Drive folder</b> for evidence backups), and <b>backward-plan lead times</b> (how many days before the start each milestone is due). All configurable here, no code changes needed</li>
-    </ol>
-  </section>
+<section class="screen" id="admin" data-roles="Admin">
+  <h2>Admin</h2>
+  <p class="sub">Programs, users &amp; access, the permission matrix, sync sources, approvals, master lists, defaults.</p>
+  <ol class="steps">
+    <li><b>Programs</b> — job-role programs per scheme; the trainer-skill field suggests from the job-roles master.</li>
+    <li><b>Users &amp; Access</b> — create/approve/edit users; per-user special rights and removals; <span class="btn">Stop access</span> (instant), <span class="btn">Drop…</span> (terminal, frees the email), and <span class="btn">Activity</span> — what did this person do, dropped accounts included.</li>
+    <li><b>Permissions</b> — the role matrix, three levels per cell: — / view / edit. Applies within seconds, no re-login. Admin's own rights are fixed.</li>
+    <li><b>Approvals</b> — the decision queue (costs, invoices, closures, cancellations) with each request's full context; deciding needs the edit level, seeing the queue needs view.</li>
+    <li><b>Master Lists</b> — cost categories, drop reasons, failure reasons, job roles, and <b>schemes</b> (hours &amp; amount). The per-scheme amount is visible to Admin only; hours stay open because the rules read them.</li>
+    <li><b>Defaults</b> — planning knobs (mobilisation lead, day window, fee rules), the outbound-email switch, and the <b>Mail panel</b>: the last 20 mail attempts with honest statuses — "accepted by SES — delivery not confirmed" is exactly what it says.</li>
+  </ol>
+</section>
 
-  <section class="screen" id="alerts">
-    <h2>🔔 Alerts</h2>
-    <p class="sub">The bell in the header — conditions the system watches for you, raised automatically</p>
-    <ol class="steps">
-      <li>The bell shows a red count when something needs attention. Click it to open the Alerts page</li>
-      <li>Each alert says exactly what is wrong and where — for example <mark>"B011 at Kota 02 has no daily log for 3 operating days"</mark></li>
-      <li>Colour shows urgency: red is critical, amber is a warning</li>
-      <li><span class="btn">Open</span> jumps straight to the screen where you can fix it</li>
-      <li><span class="btn">Acknowledge</span> means "I have seen this"; <span class="btn">Resolve</span> means "this is handled"</li>
-    </ol>
-    <div class="tip">💡 Alerts <b>clear themselves</b> once the condition stops being true — enter the missing daily log and the alert disappears on its own. The system watches for: sheet changes unreviewed for 48 hours (both Sync Inbox and Sheet Watch), <b>new signups awaiting approval</b>, <b>new trainer requests</b>, trainer requests coming due, missing daily logs, <b>too few photo/video uploads yesterday</b>, government attendance gaps, <b>overdue plan milestones</b>, assessments past their date, invoices ready but unraised, and batches stuck past their start date.</div>
-  </section>
+<p style="color:var(--muted);font-size:12.5px;margin-top:24px">Manual for release 2026.08.14-67. The Help button opens this manual filtered to your role; append <span class="chip">?role=</span> (empty) to the URL to see everything.</p>
 
-  <section class="screen" id="approvals">
-    <h2>✅ Approvals (optional)</h2>
-    <p class="sub">Admin → Approvals — require a second person to sign off on critical actions</p>
-    <ol class="steps">
-      <li><b>Everything is switched OFF by default</b> — the system behaves exactly as before until an Admin turns something on</li>
-      <li>Admin → <span class="btn">Approvals</span> lists the six gateable actions: close/stop a location, cancel/complete a batch, mark an invoice raised/paid</li>
-      <li>Tick one and choose who approves it (Admin or Operations)</li>
-      <li>From then on, when someone performs that action it is <b>not applied</b> — it is parked and the approver is notified</li>
-      <li>The approver opens Admin → Approvals, reviews the request, and clicks <span class="btn">Approve &amp; apply</span> or <span class="btn">Reject</span></li>
-    </ol>
-    <div class="warn">⚠️ Nobody can approve their own request — that is the whole point of the control. Turn a switch back off at any time and that action becomes immediate again.</div>
-  </section>
-
-  <section class="screen" id="sheet-watch">
-    <div class="tip">&#9200; <b>Latency:</b> every watched sheet is re-read every <b>5 minutes</b>. A cell edited in the client's sheet appears here within ~5 minutes as a reviewable change — it is never written into the system without a human's OK (the OK-per-change rule).</div>
-    <h2>👁️ Sheet Watch</h2>
-    <p class="sub">Sidebar → Sheet Watch — every change the client makes in the shared workbook, caught automatically</p>
-    <ol class="steps">
-      <li>The client's OneDrive workbook is downloaded automatically <b>every 30 minutes</b> — every tab, every column</li>
-      <li>Any difference from the previous copy becomes a row here: which <b>tab</b>, which <b>row</b> (institution + job role), which <b>column</b>, and <mark>old value → new value</mark></li>
-      <li>Green = a row was added, red = a row was removed, amber = a cell was modified</li>
-      <li>Click <span class="btn">Seen</span> once you have read it, <span class="btn">Accept</span> once it has been handled — select many rows to act in bulk</li>
-      <li>The sidebar badge counts unreviewed changes; anything unreviewed for 48 hours raises an alert</li>
-    </ol>
-    <div class="tip">💡 Accepting a change here does <b>not</b> change any ERP record — it only marks the change as reviewed. Location/target updates still go through the Sync Inbox or the record itself, so nothing is ever overwritten blindly.</div>
-    <div class="warn">⚠️ The sheet's TC Password column is masked for everyone except Admin.</div>
-  </section>
-
-  <section class="screen" id="contacts-notes">
-    <h2>👥 Location Contacts &amp; Meeting Notes</h2>
-    <p class="sub">Location Detail → Contacts &amp; Notes — any number of contacts, and a diary of every conversation</p>
-    <ol class="steps">
-      <li>Add as many contact persons as a location needs — a second SPOC, the Cluster Head, any local contact — with name, phone and role</li>
-      <li>The original SPOC/Principal from the master fields still show at the top, labelled "from master fields"</li>
-      <li>Below that, <b>Meeting notes</b>: date, who you met, and what was discussed — press <span class="btn">Add note</span></li>
-      <li>Every note records who logged it, so Admin and Operations always see the same history of "who spoke to whom, when, about what"</li>
-    </ol>
-  </section>
-
-  <section class="screen" id="planner">
-    <h2>📅 Backward Batch Planner &amp; Time Slots</h2>
-    <p class="sub">Batches → Plan a batch — pick a start date, get the full countdown checklist</p>
-    <ol class="steps">
-      <li>Click <span class="btn">Plan a batch</span> on the Batches page and choose a start date</li>
-      <li>The system counts <b>backwards</b>: trainer identified → TOT done (at least 3 days before) → mobilization → trainer ready → registration &amp; enrollment done (day before) — each with its due date</li>
-      <li><span class="btn">Copy as text</span> or <span class="btn">Print</span> to hand the checklist to anyone: <mark>"तेरे को batch start करना है तो ये-ये काम इस-इस date तक"</mark></li>
-      <li>Every new batch stores this checklist on its Overview tab — tick milestones off as they finish; overdue ones turn red and raise an alert</li>
-      <li>All lead times are configurable in Admin → Defaults</li>
-      <li><b>Time slots:</b> a trainer may run up to <b>4 parallel batches</b> across dates when the day is divided by time. Give each batch a slot (e.g. 09:00–13:00) — the system hard-blocks the same trainer being in two places at the same time, and enforces the scheme guidelines (9–6, max 4 hours, max two sessions a day — see <a href="#scheme-rules">Scheme Timing</a>)</li>
-    </ol>
-  </section>
-
-  <section class="screen" id="eligibility-sidh">
-    <h2>🎯 Candidate Eligibility &amp; SIDH Registration</h2>
-    <p class="sub">Candidates page — who qualifies, and getting them onto the Skill India portal</p>
-    <ol class="steps">
-      <li>Each candidate row shows an eligibility badge: <b>Eligible</b> (green), <b>Not eligible</b> (red — hover to see why), or <b>Unverified</b> (DOB/education not recorded yet)</li>
-      <li>The rules: age 18–40, 10th pass, and no government training in the last 6 months — record the <b>last training date</b> and the system knows exactly when they become eligible again. Thresholds live in Admin → Defaults</li>
-      <li>Assigning an ineligible candidate to a batch <b>warns</b> you; completing their enrollment is <b>blocked</b></li>
-      <li><b>SIDH column:</b> <span class="btn">WhatsApp</span> or <span class="btn">SMS</span> opens that app with the Skill India registration link pre-filled — the candidate registers themselves. Click <span class="btn">✓ Reg.</span> once they are registered on the portal. <mark>SMS is there because rural candidates often do not use WhatsApp</mark></li>
-      <li><span class="btn">Bulk SMS file</span> downloads a phone-plus-message CSV for everyone in the current view who is not yet registered — the format a bulk-SMS gateway takes, for when sending sixty links by hand is not realistic</li>
-      <li><span class="btn">Export for SIDH CRM</span> downloads an Excel in the assisted-registration tool's format, for candidates who need an agent's help on the call (the Aadhaar column is left blank on purpose — the agent fills it during the call; the ERP never stores Aadhaar)</li>
-      <li><span class="btn">Self-reg link</span> creates a public link for a location — share it on WhatsApp and candidates fill in their own details, which land straight in your pool marked "Self Registration"</li>
-    </ol>
-  </section>
-
-  <section class="screen" id="feedback">
-    <h2>⭐ Candidate Feedback</h2>
-    <p class="sub">Batch Detail → Feedback — every candidate rates their training</p>
-    <ol class="steps">
-      <li>Open a batch → <b>Feedback</b> tab → <span class="btn">Get feedback links</span> — one private link per candidate on the roster</li>
-      <li>Send each link on WhatsApp with one click (the message is pre-written)</li>
-      <li>The candidate opens it on their phone — no login — gives 1–5 stars, what they liked, and suggestions. Each link works exactly once</li>
-      <li>Responses and the batch average appear on the tab for Admin, Operations and the SPOC</li>
-    </ol>
-  </section>
-
-  <section class="screen" id="permissions">
-    <h2>🔐 Permissions, Signup &amp; Approval</h2>
-    <p class="sub">Admin → Permissions / Users &amp; Access — who can do what, decided by you</p>
-    <ol class="steps">
-      <li><b>Sign up:</b> new trainers/SPOCs/staff open the <mark>Create an account</mark> link on the login page, fill their details and choose their role. They <b>cannot log in yet</b></li>
-      <li>Admin gets a bell alert and sees the pending signup at the top of <b>Users &amp; Access</b> — Approve as-is, "Review &amp; edit…" to correct the role/location first, or Reject</li>
-      <li><b>Permissions tab:</b> a grid of roles × rights (like AWS groups). Tick = everyone in that role gets the right; untick = the whole role loses it. Takes effect in seconds, no re-login</li>
-      <li>The first row is the key one: <b>who approves sheet changes</b> — grant it to exactly the people the CEO names</li>
-      <li><b>Special rights:</b> open any user and expand "Special rights" to grant one person something their role does not have</li>
-      <li>Admin always has every right — you cannot lock yourself out</li>
-    </ol>
-    <div class="tip">💡 In Sheet Watch, a <b>new row</b> in the client's sheet shows a <span class="btn">Create location…</span> button: the form comes prefilled from the sheet itself, you correct anything that is wrong, and only then it enters the system. Nothing from the sheet ever writes itself into the database.</div>
-  </section>
-
-  <section class="screen" id="sheet-sources">
-    <h2>🔗 Adding Any Sheet to Watch</h2>
-    <p class="sub">Sheet Watch → Manage sheets — point the system at any spreadsheet, not just the client's</p>
-    <ol class="steps">
-      <li>Open <b>Sheet Watch</b> and click <span class="btn">Manage sheets</span>. Every sheet the system is watching is listed, with when it last ran and whether that run worked</li>
-      <li><span class="btn">Add a sheet</span> → <b>paste the link straight out of your browser's address bar</b>. You do not need a special download link — the system works out the right one for Google Sheets, Google Drive, OneDrive, SharePoint, Dropbox, or any direct CSV/Excel URL</li>
-      <li>Click <span class="btn">Test this link</span> <b>before</b> saving. It fetches the sheet and shows you every tab it found with its row count and column names — so you can see it is the right sheet. If it cannot open it, it tells you exactly why and what to change</li>
-      <li><mark>The sheet must be shared as "anyone with the link can view"</mark>. A sheet restricted to named people cannot be opened by the server, no matter who is logged into the ERP — the server is not a person and has no Google or Microsoft account</li>
-      <li><b>Watch mode</b> (recommended) checks every tab on a timer and reports every changed cell. <b>Mapped mode</b> maps columns to ERP fields and sends changes to the Sync Inbox for approval — nothing from a sheet ever writes itself into the database</li>
-      <li><b>Row identity columns:</b> leave blank and the first column is used. Set them (e.g. "Institution Name, Job role") when rows get renumbered or re-sorted — that is what stops a re-sorted sheet looking like every row changed at once</li>
-      <li>Click any sheet in the list to <b>edit its link, rename it or change how often it is checked</b>. <span class="btn">Run now</span> checks immediately instead of waiting for the timer</li>
-      <li><b>Pause</b> (untick Active) stops checking but keeps the history — for a sheet the client has stopped updating. <b>Remove</b> deletes it entirely; it will refuse if changes from that sheet are still waiting in the Sync Inbox, so nothing pending is lost</li>
-    </ol>
-    <div class="tip">💡 New sheets can be added by anyone with the <b>Configure sync sources</b> right (Admin → Permissions). When the client sends a new or replacement sheet, nobody has to touch the code or call the developer.</div>
-  </section>
-
-  <section class="screen" id="govt-attendance">
-    <h2>🗂️ Government Attendance Import</h2>
-    <p class="sub">Govt Attendance — upload the portal's attendance export and see where it disagrees with us</p>
-    <ol class="steps">
-      <li>Download the attendance report from the government portal as usual (CSV or Excel — either works, and the file does not need reformatting)</li>
-      <li>Click <span class="btn">Upload portal export</span> and pick the file. The system reads <b>every row</b>, works out which centre it belongs to from the <b>TC ID</b> in the Org Name column, and shows you a preview <b>before</b> anything is saved</li>
-      <li>Each row is matched to a candidate — first by the portal's own <b>Candidate ID</b> (CAN_…), and if that is missing, by name. Rows are labelled <b>Matched</b>, <b>Ambiguous</b> (two candidates share the name — set the Candidate ID on the right one to fix it) or <b>Unmatched</b> (the portal knows someone we do not)</li>
-      <li>The important column is <b>Variance</b>: the portal's days-present minus what the centre actually logged. <mark>A positive number means the portal credits more days than our own daily logs do</mark> — that is the number the client is invoiced on, so it is the one to chase</li>
-      <li>Click <span class="btn">Import</span> to save. Admin and Operations get an alert if anything is unmatched or shows a variance. Use the <b>Variance</b> and <b>Unmatched</b> filters on the import to jump straight to the problems</li>
-      <li>Trainer rows in the file are matched to trainers, not candidates — the portal lists them alongside the trainees</li>
-      <li><b>Tip:</b> fill in <b>Portal Candidate ID</b> on the candidate record (it is on the Add/Edit form). Once it is set, every future import matches that person automatically and can never be confused with a same-name candidate</li>
-      <li>Re-uploading a newer export creates a <b>new</b> import rather than overwriting the old one — the history of what the portal said on each date is preserved. A wrong file can be deleted</li>
-    </ol>
-  </section>
-
-  <section class="screen" id="scheme-rules">
-    <h2>⏰ Scheme Timing &amp; Counting Rules</h2>
-    <p class="sub">Admin → Defaults — the guideline numbers, confirmed with Manish (Aug 2026)</p>
-    <ol class="steps">
-      <li><b>Training day:</b> 9:00 to 18:00. A batch time slot outside this window is refused — a 7:00 AM start was asked for and is not permitted</li>
-      <li><b>Session length:</b> up to <b>4 hours</b> per batch. A 5-hour slot is refused</li>
-      <li><b>Sessions per day:</b> <b>two</b> 4-hour batches is the sanctioned pattern. Three 3-hour batches was asked for and refused, so a third slotted session on the same day is blocked</li>
-      <li><b>Breaks:</b> no minimum break between sessions is prescribed, so none is enforced</li>
-      <li><b>"Appeared" count:</b> candidates marked Absent <b>are</b> counted as appeared for the client contract — they are not deducted</li>
-      <li><b>Dropped but passed:</b> their result is kept, but they are <b>not billable</b>. The Closure summary shows both the passed figure and the billable figure so the difference is never a surprise</li>
-      <li><b>Mid-batch replacement:</b> when someone drops out, the seat can be filled by a new candidate with a <b>later joining date</b> — just add them to the roster as usual</li>
-      <li><b>Re-assessment after closing</b> and <b>reopening a completed batch</b> both stay <b>locked</b>, as confirmed. A mistyped certificate number cannot be corrected after closure — check it before completing</li>
-      <li><b>Uploads:</b> the file size limit is now <b>100 MB</b> (was 25 MB) so the twice-daily videos fit, and phone formats .mov and .3gp are accepted</li>
-      <li>Every number above is editable in <b>Admin → Defaults</b> — if a scheme circular changes them, no software release is needed</li>
-    </ol>
-  </section>
-
-  <section class="screen" id="faq">
-    <h2>❓ FAQ — Common Questions</h2>
-    <table>
-      <tr><th>Question</th><th>Answer</th></tr>
-      <tr><td>There's no trainer — how do I plan a batch?</td><td>Create the batch without a trainer (it stays in Planning). Raise a <b>Trainer Request</b> from Location Detail → Trainers &amp; Infra. The request stays highlighted on Home and under Trainers → Requests until it is Fulfilled.</td></tr>
-      <tr><td>A student's enrollment failed — now what?</td><td>Record the reason (OTP/KYC…). The student stays in the pool — fix the issue and clear the failure, or assign them to another batch tomorrow.</td></tr>
-      <tr><td>Why is the attendance gap showing red?</td><td>Our attendance and the government portal's differ by 10+ points. Get the biometric attendance verified at the center, and double-check the portal figure that was entered.</td></tr>
-      <tr><td>A new column appeared in the AVPL sheet?</td><td>Add it under Admin → Sync Source → Field Mappings. Until you do, the sync stops with a "Partial" status — it never imports incorrectly.</td></tr>
-      <tr><td>A location has to be shut down — what happens?</td><td>Via the Sync Inbox (on a sheet change) or Location Detail → Overview, set the status to "Closed" with a reason. The system generates follow-ups: stop batches, release trainers, return students to the pool — the work is only considered done once all of them are resolved.</td></tr>
-      <tr><td>I can't see a location/batch at all</td><td>Your role is location-scoped — you only see your own centers. Ask the admin to widen your scope if needed.</td></tr>
-      <tr><td>A wrong entry was saved</td><td>Everything can be edited within its rules (daily logs: 48 hours). Every change is recorded in the Activity tab.</td></tr>
-      <tr><td>Photo upload is failing (slow network)</td><td>The system retries 3 times automatically, then shows a "pending uploads — Retry" button. Once the network is back, hit Retry — no need to retake the photo.</td></tr>
-      <tr><td>The client changed something in their sheet — how will I know?</td><td>You don't have to ask them. The workbook is re-read every 30 minutes and every changed cell appears in <b>Sheet Watch</b> with old → new. Anything left unreviewed for 48 hours raises an alert.</td></tr>
-      <tr><td>The client added a brand-new centre in the sheet</td><td>It appears in Sheet Watch as an <b>Added</b> row with a <span class="btn">Create location…</span> button. The form is prefilled from the sheet; check it, correct anything wrong, then add. It never creates itself.</td></tr>
-      <tr><td>Someone says "I can't do X anymore"</td><td>Check <b>Admin → Permissions</b> — that right may have been unticked for their role. Either tick it back for the whole role, or open that person in Users &amp; Access and give them the <b>special right</b> individually.</td></tr>
-      <tr><td>A new trainer joined — how do they get access?</td><td>They open the ERP link, click <b>Create an account</b>, choose the <b>Trainer</b> role and submit. You get a bell alert; approve them in Admin → Users &amp; Access after setting their location scope. They can then log in and fill daily logs.</td></tr>
-      <tr><td>A candidate shows "Not eligible" — can I still enrol them?</td><td>You can <b>assign</b> them to a batch (you'll see a warning), but you cannot complete their <b>enrollment</b>. Hover the badge to see why. If it's the 6-month training gap, the badge clears itself on the day they become eligible again.</td></tr>
-      <tr><td>The badge says "Unverified" instead of Eligible</td><td>Date of birth or education is missing on that candidate. Missing information never marks someone ineligible — just fill it in and the badge resolves.</td></tr>
-      <tr><td>One trainer for two batches on the same day?</td><td>Allowed, up to 4 batches — but give each batch a <b>time slot</b> (e.g. 09:00–13:00 and 14:00–18:00). Overlapping times for the same trainer are blocked outright.</td></tr>
-      <tr><td>How do I tell a centre what to finish before a batch starts?</td><td>Batches → <span class="btn">Plan a batch</span> → enter the start date → <b>Copy as text</b> or <b>Print</b>. It lists every task with its deadline, counted backwards from the start date.</td></tr>
-    </table>
-  </section>
-
-  <p style="text-align:center;color:var(--muted);font-size:12.5px;margin-top:24px">Center Management ERP · User Manual v2 (August 2026) · The <b>? Help</b> button at the top of every screen opens this manual at the relevant section</p>
 </main>
 </div>
 <script>
-  // live search: filter sections
-  const input = document.getElementById("search");
-  const sections = [...document.querySelectorAll("section.screen")];
-  input.addEventListener("input", () => {
-    const q = input.value.trim().toLowerCase();
-    sections.forEach((s) => {
-      const hit = !q || s.textContent.toLowerCase().includes(q);
-      s.style.display = hit ? "" : "none";
-    });
+// Search filter
+document.getElementById("q").addEventListener("input", function () {
+  var q = this.value.toLowerCase();
+  document.querySelectorAll("section.screen").forEach(function (s) {
+    s.style.display = !q || s.textContent.toLowerCase().includes(q) ? "" : "none";
   });
-  // open at hash section if provided
-  if (location.hash) {
-    const el = document.querySelector(location.hash);
-    if (el) setTimeout(() => el.scrollIntoView({ behavior: "smooth" }), 100);
+});
+// QA-127: role filtering — display only, never a gate. No role param (or Admin) = everything.
+(function () {
+  var role = new URLSearchParams(location.search).get("role");
+  if (!role || role === "Admin") return;
+  var hidden = 0;
+  document.querySelectorAll("[data-roles]").forEach(function (el) {
+    if (el.getAttribute("data-roles").split(",").indexOf(role) === -1) { el.style.display = "none"; hidden++; }
+  });
+  var bar = document.getElementById("rolebar");
+  if (bar && hidden) {
+    bar.style.display = "block";
+    bar.innerHTML = "Showing the manual for the <b>" + role.replace(/[<>&]/g, "") +
+      "</b> role — screens this role cannot open are hidden. <a href='?role='>Show everything</a>";
   }
+})();
 </script>
 </body>
 </html>

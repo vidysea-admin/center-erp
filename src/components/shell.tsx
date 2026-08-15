@@ -141,8 +141,9 @@ function GlobalSearch() {
 // Context-aware Help: opens the user manual at the section for the current screen.
 function manualAnchor(pathname: string, search: string): string {
   if (pathname === "/") return "home";
-  if (pathname.startsWith("/sheet-watch")) return "sheet-watch";
+  if (pathname.startsWith("/sheet-watch")) return "sync"; // QA-126: one section covers both
   if (pathname.startsWith("/sync")) return "sync";
+  if (pathname.startsWith("/govt-attendance")) return "govt";
   if (pathname.startsWith("/notifications")) return "alerts";
   if (/^\/locations\/[^/]+/.test(pathname)) return "location-detail";
   if (pathname.startsWith("/locations")) return "locations";
@@ -164,10 +165,14 @@ function manualAnchor(pathname: string, search: string): string {
 
 function HelpButton() {
   const pathname = usePathname();
+  const { data: session } = useSession();
+  const role = (session?.user as any)?.role ?? "";
   return (
     <button
       title="User Manual — help for this screen"
-      onClick={() => window.open(`${BASE_PATH}/manual.html#${manualAnchor(pathname, window.location.search)}`, "_blank")}
+      // QA-127: the manual filters itself to the reader's role — a Trainer's Help no longer
+      // describes seven screens they are refused. ?role= is display filtering only, no gate.
+      onClick={() => window.open(`${BASE_PATH}/manual.html?role=${encodeURIComponent(role)}#${manualAnchor(pathname, window.location.search)}`, "_blank")}
       className="flex h-9 items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 text-sm font-semibold text-gray-500 hover:border-blue-300 hover:text-blue-600">
       <span className="flex h-5 w-5 items-center justify-center rounded-full border-[1.5px] border-current text-[11px]">?</span>
       <span className="hidden lg:block">Help</span>

@@ -570,6 +570,21 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   ok("QA-025: role matrix restored for the rest of the wall", restore.status === 200);
 }
 
+// ---- QA-126/127/128 (-67): the manual is current, role-filtered and English-only.
+// (The manual sits behind sign-in like every staff screen — fetch it WITH a session.)
+{
+  const B = process.env.BASE_URL || "http://localhost:3000/erp";
+  const r = await fetch(B + "/manual.html", { headers: { cookie: admin } });
+  const html = await r.text();
+  ok("QA-126: the manual serves", r.status === 200);
+  ok("QA-127: sections carry role tags for the Help filter", html.includes('data-roles="Admin"') && html.includes("rolebar"));
+  ok("QA-126: it documents the current release features (OTP path, three-level rights, TR ID flag)",
+    html.includes("/p/enrol") && html.includes("view") && html.includes("TR ID pending"));
+  ok("QA-128: English-only — no Devanagari anywhere", !/[ऀ-ॿ]/.test(html));
+  ok("QA-037: the Operations row tells the truth (no sheet-sync claim, ledgers named as Admin's)",
+    !/Operations<\/b><\/td><td>[^<]*Sheet Watch/i.test(html) && /they submit; the Admin reads the books/.test(html));
+}
+
 // 2026-08-12 audit F-000 (S0): the generic list route copied every ?key=value into the Mongo
 // filter AFTER the Rule 38 scope filter, so ?location=<other centre> simply overwrote it and a
 // scoped user could read every centre's candidate PII. Scope is now applied last, client keys
