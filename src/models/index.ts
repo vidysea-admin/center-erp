@@ -419,6 +419,11 @@ const BatchSchema = new Schema({
     key: String, label: String,
     due_date: Date,
     done_on: Date, done_by: oid("User"),
+    // QA-152 part 2 (-82): the plan is an editable artifact — notes and an owner per row,
+    // rows the planner adds by hand (custom), and how a tick arrived (user | link).
+    notes: String, owner_label: String,
+    custom: { type: Boolean, default: false },
+    done_via: String,
   }],
   cancel_reason: String,
   created_by: oid("User"),
@@ -846,7 +851,10 @@ StoredFileSchema.index({ entity: 1, entity_id: 1 });
 // email_otp added 2026-08-16 (QA-116, CEO's "one of the two" enrolment paths + Umesh: email-OTP
 // ab feasible, mail live hai): a walk-in candidate with no link proves they own an email, then
 // registers through the same field set the link path uses.
-export const PUBLIC_TOKEN_PURPOSE = ["register", "feedback", "attendance", "trainer_apply", "email_otp"] as const;
+// plan added 2026-08-15 (QA-152 part 2, Umesh): the batch's backward plan as a shareable
+// artifact — "jaise self-registration form open hota hai" — the creator edits, the person
+// holding the link reads, and (only when the link was minted with allow_updates) ticks status.
+export const PUBLIC_TOKEN_PURPOSE = ["register", "feedback", "attendance", "trainer_apply", "email_otp", "plan"] as const;
 const PublicTokenSchema = new Schema({
   token: { type: String, required: true, unique: true },
   purpose: { type: String, enum: PUBLIC_TOKEN_PURPOSE, required: true },
@@ -854,6 +862,8 @@ const PublicTokenSchema = new Schema({
   program: oid("Program"),      // register: optional preselected program
   batch_member: oid("BatchMember"), // feedback: who this link belongs to
   trainer: oid("Trainer"),      // trainer_apply: the pre-created profile this link completes
+  batch: oid("Batch"),          // plan: which batch's plan this link opens (attendance links also set it)
+  allow_updates: { type: Boolean, default: false }, // plan: the link holder may tick milestones
   // email_otp: the challenge state. Only the HASH of the code is stored; 10-minute expiry;
   // 5 wrong attempts burn the token.
   email: String,

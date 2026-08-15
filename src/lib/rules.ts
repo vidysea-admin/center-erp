@@ -756,6 +756,54 @@ export async function validateDailyLog(batchId: string, log_date: Date, payload:
   return { roster_count: roster.length, internal_present }; // Rule 28: frozen at save
 }
 
+
+// -82 (Umesh, 15/08: "Attendance tab se bhi us batch ki attendance fill ho, that too bulk").
+// The ONE path that turns a request into a DailyLog — the single-day POST and the bulk
+// grid both call this, so every rule holds per day whichever door was used:
+// Rule 53 (no future day; a Trainer only today/yesterday), Rule 27 (one log per day),
+// then validateDailyLog (status, Rule 32 window, Rule 29 roster-on-date, Rule 51, Rule 30).
+export async function createDailyLogChecked(
+  user: { id: string; role?: string },
+  batchId: string,
+  body: any,
+) {
+  // QA-082: the portal figures never come from a trainer's request.
+  if (user.role === "Trainer") { delete body.govt_present; delete body.govt_source; delete body.govt_screenshot; }
+  if (!body.log_date) throw new HttpError(400, "log_date is required");
+  const D = dayKey(body.log_date); // F-008: the calendar date itself
+  const todayD = istToday(); // QA-081: the one shared definition of "today"
+  if (D.getTime() > todayD.getTime()) throw new HttpError(400, "Rule 53: attendance cannot be taken for a future date.");
+  if (user.role === "Trainer" && (todayD.getTime() - D.getTime()) > 86_400_000) {
+    throw new HttpError(403, "Rule 53: trainers may log only today or yesterday. Ask Operations/Admin to enter an older day.");
+  }
+  const clash = await DailyLog.findOne({ batch: batchId, log_date: dayRange(D) }).select("_id").lean();
+  if (clash) throw new HttpError(409, "Rule 27: a log already exists for this batch on that date.");
+  const { roster_count, internal_present } = await validateDailyLog(batchId, D, {
+    present_member_ids: body.present_member_ids ?? [],
+    govt_present: body.govt_present ?? null,
+    trainer_present: body.trainer_present,
+    biometric_member_ids: body.biometric_member_ids ?? [], // Rule 51
+  });
+  const doc = await DailyLog.create({
+    batch: batchId, log_date: D,
+    planned_topic: body.planned_topic, actual_topic: body.actual_topic,
+    present_member_ids: body.present_member_ids ?? [],
+    biometric_member_ids: body.biometric_member_ids ?? [],
+    // Karunn 2026-08-13: every marking is a timestamped ROUND; the day starts with round 1.
+    sessions: [{ at: new Date(), present_member_ids: body.present_member_ids ?? [], biometric_member_ids: body.biometric_member_ids ?? [], marked_by: user.id }],
+    trainer_present: body.trainer_present,
+    internal_present, roster_count, // Rule 28: frozen
+    govt_present: body.govt_present ?? null,
+    govt_source: body.govt_source ?? "Manual",
+    govt_screenshot: body.govt_screenshot,
+    photos: body.photos ?? [], videos: body.videos ?? [],
+    note: body.note,
+    entered_by: user.id, entered_at: new Date(),
+  });
+  await audit({ entity: "DailyLog", entityId: doc._id, newValue: "created", actor: user.id });
+  return doc;
+}
+
 export async function canEditDailyLog(log: { entered_by: unknown; entered_at: Date }, userId: string, role: string): Promise<boolean> {
   if (role === "Admin" || role === "Operations") return true; // Rule 27
   const defaults = await getDefaults();
@@ -1429,6 +1477,67 @@ export function candidateEligibility(
 // पहले, trainer एक दिन पहले trained, TOT done at least three days before" — each lead time
 // configurable in Defaults, the whole plan shareable as a checklist.
 export type Milestone = { key: string; label: string; due_date: Date };
+
+// QA-152 part 2 (-82, Umesh 15/08): the batch plan as an ARTIFACT — its own view, a
+// shareable link (like the self-registration form: the token is the credential), Excel
+// download; the planner edits, the link holder reads (and ticks status only if the link was
+// minted with allow_updates). One shape for the signed-in page, the public page and the
+// export, built here so all three say the same thing.
+export async function planArtifact(batchId: string) {
+  const batch = await Batch.findById(batchId)
+    .populate("program", "name code")
+    .populate("location", "name code")
+    .populate("trainer", "name tr_id tot_done_on")
+    .lean<any>();
+  if (!batch) throw new HttpError(404, "Batch not found");
+  const today = istToday();
+  const rows = (batch.milestones ?? [])
+    .slice()
+    .sort((a: any, b: any) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime())
+    .map((m: any) => ({
+      key: m.key, label: m.label, due_date: m.due_date, done_on: m.done_on ?? null,
+      done_via: m.done_via ?? null, notes: m.notes ?? "", owner_label: m.owner_label ?? "",
+      custom: !!m.custom,
+      overdue: !m.done_on && !!m.due_date && dayKey(m.due_date).getTime() < today.getTime(),
+    }));
+  const defaults = await getDefaults();
+  const totLeadDays = defaults.lead_tot_done_days ?? 3;
+  const totDue = dayStart(addDays(batch.planned_start, -totLeadDays));
+  const tr = batch.trainer;
+  const plan_flags = {
+    tot_lead_ok: !tr?.tot_done_on || dayStart(tr.tot_done_on) <= totDue,
+    tot_done_on: tr?.tot_done_on ?? null,
+    tot_due: tr?.tot_done_on ? totDue : null,
+    tot_lead_days: totLeadDays,
+  };
+  return {
+    batch: {
+      _id: batch._id, code: batch.code, status: batch.status, plan_enabled: !!batch.plan_enabled,
+      planned_start: batch.planned_start, planned_end: batch.planned_end ?? null,
+      program: batch.program ? { name: batch.program.name, code: batch.program.code } : null,
+      location: batch.location ? { name: batch.location.name, code: batch.location.code } : null,
+      trainer: tr ? { name: tr.name, tr_id: tr.tr_id ?? null } : null,
+      target_size: batch.target_size,
+    },
+    milestones: rows,
+    plan_flags,
+    counts: { total: rows.length, done: rows.filter((r: any) => r.done_on).length, overdue: rows.filter((r: any) => r.overdue).length },
+  };
+}
+
+// Rows for the Excel export — plain values, one line per milestone.
+export function planExportRows(art: Awaited<ReturnType<typeof planArtifact>>) {
+  const d = (x: any) => (x ? new Date(x).toISOString().slice(0, 10) : "");
+  return art.milestones.map((m: any, i: number) => ({
+    "#": i + 1,
+    Milestone: m.label,
+    "Due date": d(m.due_date),
+    Status: m.done_on ? "Done" : m.overdue ? "OVERDUE" : "Pending",
+    "Done on": d(m.done_on),
+    Owner: m.owner_label ?? "",
+    Notes: m.notes ?? "",
+  }));
+}
 
 export function planBatchBackward(
   planned_start: Date,

@@ -3,8 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { DailyLog } from "@/models";
-import { assertBatchInScope, dayKey, dayRange, istToday, validateDailyLog } from "@/lib/rules";
-import { audit } from "@/lib/audit";
+import { assertBatchInScope, createDailyLogChecked } from "@/lib/rules";
 
 export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   await dbConnect();
@@ -17,6 +16,8 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
 
 // POST create a daily log (Rules 26–32). Body: { log_date, planned_topic?, actual_topic?,
 // present_member_ids: [], govt_present?, govt_source?, govt_screenshot?, photos?, videos?, note? }
+// -82: the rules and the write live in rules.createDailyLogChecked — the bulk grid
+// (POST /logs/bulk) goes through the same function, one day at a time.
 export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   await dbConnect();
   const user = await requireUser();
@@ -25,56 +26,6 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   const { id } = await ctx.params;
   await assertBatchInScope(user, id); // Rule 38
   const body = await req.json();
-  // QA-082 (CEO [41:31] "I don't think they will have it"): the govt figures left the
-  // Trainer's FORM in R-C but not their API — a hand-crafted request could still write
-  // them. The portal numbers come from the reconciliation import, never from a trainer.
-  if (user.role === "Trainer") {
-    delete body.govt_present; delete body.govt_source; delete body.govt_screenshot;
-  }
-  if (!body.log_date) throw new HttpError(400, "log_date is required");
-  // F-008: store the calendar date itself (UTC midnight), not midnight in whatever timezone this
-  // process happens to run in — otherwise the same day written by two processes is two instants.
-  const D = dayKey(body.log_date);
-  // R-C (CEO 14/08 [40:51]): "the trainer should be able to work only on today's date —
-  // maximum minus 1, definitely not plus 1." A future day is fiction for EVERY role; the
-  // deeper backdate stays open to Operations/Admin for corrections (Manish to confirm the
-  // trainer window). "Today" is the IST calendar date — the server clock runs in UTC, and
-  // at 1am IST the UTC date is still yesterday (the same class as the QA-056 DOB bug).
-  const todayD = istToday(); // QA-081: the one shared definition
-  if (D.getTime() > todayD.getTime()) {
-    throw new HttpError(400, "Rule 53: attendance cannot be taken for a future date.");
-  }
-  if (user.role === "Trainer" && (todayD.getTime() - D.getTime()) > 86_400_000) {
-    throw new HttpError(403, "Rule 53: trainers may log only today or yesterday. Ask Operations/Admin to enter an older day.");
-  }
-  // Rule 27 is backed by a unique index on {batch, log_date}, which only catches an exact repeat.
-  // Check the whole calendar day as well, so a row written under the old timezone-dependent
-  // encoding cannot be duplicated by a new one for the same day.
-  const clash = await DailyLog.findOne({ batch: id, log_date: dayRange(D) }).select("_id").lean();
-  if (clash) throw new HttpError(409, "Rule 27: a log already exists for this batch on that date.");
-  const { roster_count, internal_present } = await validateDailyLog(id, D, {
-    present_member_ids: body.present_member_ids ?? [],
-    govt_present: body.govt_present ?? null,
-    trainer_present: body.trainer_present,
-    biometric_member_ids: body.biometric_member_ids ?? [], // Rule 51
-  });
-  const doc = await DailyLog.create({
-    batch: id, log_date: D,
-    planned_topic: body.planned_topic, actual_topic: body.actual_topic,
-    present_member_ids: body.present_member_ids ?? [],
-    biometric_member_ids: body.biometric_member_ids ?? [],
-    // Karunn 2026-08-13: every marking is a timestamped ROUND; the day starts with round 1.
-    // Further rounds append via POST /api/logs/[id]/sessions and union into the day arrays.
-    sessions: [{ at: new Date(), present_member_ids: body.present_member_ids ?? [], biometric_member_ids: body.biometric_member_ids ?? [], marked_by: user.id }],
-    trainer_present: body.trainer_present,
-    internal_present, roster_count, // Rule 28: frozen
-    govt_present: body.govt_present ?? null,
-    govt_source: body.govt_source ?? "Manual",
-    govt_screenshot: body.govt_screenshot,
-    photos: body.photos ?? [], videos: body.videos ?? [],
-    note: body.note,
-    entered_by: user.id, entered_at: new Date(),
-  });
-  await audit({ entity: "DailyLog", entityId: doc._id, newValue: "created", actor: user.id });
+  const doc = await createDailyLogChecked(user, id, body);
   return NextResponse.json({ item: doc }, { status: 201 });
 });

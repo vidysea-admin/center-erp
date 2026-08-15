@@ -206,6 +206,29 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   await req("POST", `/api/batches/${bdBatch._id}/logs`, { log_date: dayN(-6), present_member_ids: [], trainer_present: true }, 400); // Rule 32 still holds before the real start
   const bdAudit = ((await req("GET", `/api/audit/Batch/${bdBatch._id}`)).data.items ?? []);
   ok("-81: the roster restamp is audited once with the count", bdAudit.some((a) => a.field === "roster_backdated" && /1 members/.test(String(a.new_value))), JSON.stringify(bdAudit.map((a) => a.field)));
+
+  // ---- -82 (Umesh): bulk day-wise marking from the Attendance tab — same rules per day ----
+  // day -3 is already logged above; -4 and -2 are open; -6 is before the real start; +1 is the future.
+  const bulk = (await req("POST", `/api/batches/${bdBatch._id}/logs/bulk`, { days: [
+    { log_date: dayN(-4), present_member_ids: [bdMem._id], trainer_present: true },
+    { log_date: dayN(-3), present_member_ids: [bdMem._id], trainer_present: true },
+    { log_date: dayN(-2), present_member_ids: [], trainer_present: true },
+    { log_date: dayN(-6), present_member_ids: [bdMem._id], trainer_present: true },
+    { log_date: dayN(1), present_member_ids: [bdMem._id], trainer_present: true },
+  ] }, 201)).data;
+  const byDay = Object.fromEntries((bulk.results ?? []).map((r) => [r.log_date, r]));
+  ok("-82: bulk creates the open days (2) and answers per day", bulk.created === 2 && byDay[dayN(-4)]?.status === "created" && byDay[dayN(-2)]?.status === "created", JSON.stringify(bulk.results));
+  ok("-82: an already-logged day is reported 'exists', not duplicated", byDay[dayN(-3)]?.status === "exists", JSON.stringify(byDay[dayN(-3)]));
+  ok("-82: a day before the real start fails Rule 32 for that day only", byDay[dayN(-6)]?.status === "error" && /Rule 32/.test(byDay[dayN(-6)]?.message ?? ""), JSON.stringify(byDay[dayN(-6)]));
+  ok("-82: a future day fails Rule 53 for that day only", byDay[dayN(1)]?.status === "error" && /Rule 53/.test(byDay[dayN(1)]?.message ?? ""), JSON.stringify(byDay[dayN(1)]));
+  const bdAtt = (await req("GET", `/api/batches/${bdBatch._id}/attendance`)).data;
+  ok("-82: the Attendance tab now counts 3 days held, member present on 2 of them", bdAtt.days_held === 3 && bdAtt.members.find((m) => m.member_id === String(bdMem._id))?.internal_days === 2, JSON.stringify({ held: bdAtt.days_held, m: bdAtt.members.map((m) => [m.name, m.internal_days]) }));
+  const again = (await req("POST", `/api/batches/${bdBatch._id}/logs/bulk`, { days: [{ log_date: dayN(-4), present_member_ids: [], trainer_present: true }] }, 200)).data;
+  ok("-82: repeating a bulk save is idempotent (exists, nothing created)", again.created === 0 && again.results?.[0]?.status === "exists", JSON.stringify(again));
+  await req("POST", `/api/batches/${bdBatch._id}/logs/bulk`, { days: [] }, 400);
+  await req("POST", `/api/batches/${bdBatch._id}/logs/bulk`, { days: [{ log_date: dayN(-1), present_member_ids: ["000000000000000000000000"], trainer_present: true }] }, 200); // Rule 29 → error for that day, 200 overall
+  const bdBulkAudit = ((await req("GET", `/api/audit/Batch/${bdBatch._id}`)).data.items ?? []);
+  ok("-82: the bulk save is audited on the batch with the count", bdBulkAudit.some((a) => a.field === "attendance_bulk" && /2 day/.test(String(a.new_value))), JSON.stringify(bdBulkAudit.filter((a) => a.field === "attendance_bulk").map((a) => a.new_value)));
   await req("POST", `/api/batches/${bdBatch._id}/transition`, { target: "Cancelled", reason: "backdate fixture done" }, 200);
 }
 
@@ -837,6 +860,51 @@ ok("milestone tick-off records done_on", !!ticked.milestones.find((m) => m.key =
 await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { regenerate: true }, 200);
 const regen = (await req("GET", `/api/batches/${planBatch._id}`)).data.item;
 ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.key === "mobilization")?.done_on);
+
+// ---- QA-152 part 2 (-82): the plan as an editable, shareable, exportable artifact ----
+{
+  const edited = (await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { edit: { key: "tot_done", due_date: "2027-03-20", notes: "TOT at Gurugram HO", owner_label: "Divya" } }, 200)).data.item;
+  const td = edited.milestones.find((m) => m.key === "tot_done");
+  ok("-82: planner edits a row (due date, notes, owner)", String(td.due_date).startsWith("2027-03-20") && td.notes === "TOT at Gurugram HO" && td.owner_label === "Divya", JSON.stringify(td));
+  await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { edit: { key: "tot_done", label: "" } }, 400);
+  const added = (await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { add: { label: "Lab equipment delivered", due_date: "2027-03-25", owner_label: "Ops" } }, 201)).data.item;
+  const custom = added.milestones.find((m) => m.custom);
+  ok("-82: planner adds a custom row, kept in date order", !!custom && custom.label === "Lab equipment delivered" && added.milestones.length === 8
+    && added.milestones.every((m, i, a) => i === 0 || new Date(a[i - 1].due_date) <= new Date(m.due_date)), JSON.stringify(added.milestones.map((m) => [m.key, String(m.due_date).slice(0, 10)])));
+  const planView = (await req("GET", `/api/batches/${planBatch._id}/plan`)).data;
+  ok("-82: GET /plan returns the artifact (batch, 8 milestones, counts, plan_flags, no share yet)", planView.batch?.code === planBatch.code && planView.milestones?.length === 8 && planView.counts?.total === 8 && "tot_lead_ok" in (planView.plan_flags ?? {}) && planView.share === null, JSON.stringify({ n: planView.milestones?.length, counts: planView.counts, share: planView.share }));
+  const xl = await fetch(BASE + `/api/batches/${planBatch._id}/plan/export`, { headers: { cookie } });
+  const xlBuf = Buffer.from(await xl.arrayBuffer());
+  ok("-82: Excel export is a real xlsx (PK zip header, xlsx content-type, filename carries the batch code)", xl.status === 200 && xlBuf.slice(0, 2).toString() === "PK" && /spreadsheetml/.test(xl.headers.get("content-type") ?? "") && (xl.headers.get("content-disposition") ?? "").includes(planBatch.code), `status=${xl.status} ct=${xl.headers.get("content-type")} len=${xlBuf.length}`);
+  // share: read-only link
+  const linkRO = (await req("POST", "/api/public-tokens", { purpose: "plan", batch: planBatch._id }, 201)).data.item;
+  ok("-82: a plan link is minted (32-hex, purpose plan, read-only by default)", /^[a-f0-9]{32}$/.test(linkRO.token) && linkRO.purpose === "plan" && linkRO.allow_updates === false, JSON.stringify({ t: linkRO.token?.length, p: linkRO.purpose, u: linkRO.allow_updates }));
+  const pub = await fetch(BASE + `/api/public/plan/${linkRO.token}`);
+  const pubJ = await pub.json();
+  ok("-82: the public plan opens with NO login and carries the same rows", pub.status === 200 && pubJ.milestones?.length === 8 && pubJ.batch?.code === planBatch.code && pubJ.allow_updates === false && !pubJ.batch?._id, JSON.stringify({ s: pub.status, n: pubJ.milestones?.length, code: pubJ.batch?.code, id: pubJ.batch?._id }));
+  const pubTick = await fetch(BASE + `/api/public/plan/${linkRO.token}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: "trainer_found", done: true }) });
+  ok("-82: a read-only link cannot tick (403)", pubTick.status === 403, `status=${pubTick.status}`);
+  const pubXl = await fetch(BASE + `/api/public/plan/${linkRO.token}?format=xlsx`);
+  ok("-82: the public link also downloads the Excel", pubXl.status === 200 && /spreadsheetml/.test(pubXl.headers.get("content-type") ?? ""), `status=${pubXl.status}`);
+  ok("-82: GET /plan now shows the active share link", (await req("GET", `/api/batches/${planBatch._id}/plan`)).data.share?.token === linkRO.token);
+  // re-share as status-updatable: old link dies, new one ticks
+  const linkRW = (await req("POST", "/api/public-tokens", { purpose: "plan", batch: planBatch._id, allow_updates: true }, 201)).data.item;
+  ok("-82: re-sharing switches the old link off", (await fetch(BASE + `/api/public/plan/${linkRO.token}`)).status === 404);
+  const tick2 = await fetch(BASE + `/api/public/plan/${linkRW.token}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: "trainer_found", done: true }) });
+  const tick2J = await tick2.json();
+  const tf = (tick2J.milestones ?? []).find((m) => m.key === "trainer_found");
+  ok("-82: a status-updatable link ticks a milestone (recorded as via link, no user)", tick2.status === 200 && !!tf?.done_on && tf.done_via === "link", JSON.stringify({ s: tick2.status, tf }));
+  const after = (await req("GET", `/api/batches/${planBatch._id}`)).data.item;
+  const tfDb = after.milestones.find((m) => m.key === "trainer_found");
+  ok("-82: the tick from the link is on the batch itself (done_by empty)", !!tfDb?.done_on && !tfDb.done_by && tfDb.done_via === "link", JSON.stringify(tfDb));
+  await fetch(BASE + `/api/public/plan/${linkRW.token}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: "trainer_found", done: false }) });
+  ok("-82: unknown key via link → 404", (await fetch(BASE + `/api/public/plan/${linkRW.token}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: "nope", done: true }) })).status === 404);
+  const removed = (await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { remove: custom.key }, 200)).data.item;
+  ok("-82: planner removes the custom row", removed.milestones.length === 7 && !removed.milestones.some((m) => m.key === custom.key));
+  await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { remove: "nope" }, 404);
+  await req("POST", "/api/public-tokens", { purpose: "plan" }, 400); // batch required
+  ok("-82: a bad public token → 404", (await fetch(BASE + `/api/public/plan/${"0".repeat(32)}`)).status === 404);
+}
 await req("POST", `/api/batches/${planBatch._id}/transition`, { target: "Cancelled", reason: "planner test cleanup" }, 200);
 
 // ---- Candidate eligibility ----

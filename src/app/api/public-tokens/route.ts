@@ -84,5 +84,21 @@ export const POST = apiHandler(async (req: NextRequest) => {
     return NextResponse.json({ items }, { status: 201 });
   }
 
-  throw new HttpError(400, "purpose must be register, feedback or attendance");
+  // QA-152 part 2 (-82): one link per batch plan; re-minting rotates the old one off.
+  if (purpose === "plan") {
+    if (!body.batch) throw new HttpError(400, "batch is required for a plan link");
+    await assertBatchInScope(user, String(body.batch));
+    const b = await Batch.findById(body.batch).select("plan_enabled code").lean<any>();
+    if (!b) throw new HttpError(404, "Batch not found");
+    if (!b.plan_enabled) throw new HttpError(409, "This batch has no plan yet — create one first.");
+    await PublicToken.updateMany({ purpose: "plan", batch: body.batch, active: true }, { $set: { active: false } });
+    const doc = await PublicToken.create({
+      token: crypto.randomBytes(16).toString("hex"),
+      purpose, batch: body.batch, allow_updates: !!body.allow_updates, created_by: user.id,
+    });
+    await audit({ entity: "Batch", entityId: body.batch, field: "plan_link", newValue: `shared${body.allow_updates ? " (link may tick status)" : " (read-only)"}`, actor: user.id });
+    return NextResponse.json({ item: doc }, { status: 201 });
+  }
+
+  throw new HttpError(400, "purpose must be register, feedback, attendance or plan");
 });

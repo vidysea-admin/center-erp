@@ -84,7 +84,7 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
       {tab === "Candidates" && <Roster batchId={id} batch={b} setError={setError} onChanged={load} />}
       {tab === "Enrollment" && <Enrollment batchId={id} setError={setError} />}
       {tab === "Daily Execution" && <DailyExecution batchId={id} batch={b} role={role} setError={setError} />}
-      {tab === "Attendance" && <AttendanceTab batchId={id} role={role} setError={setError} />}
+      {tab === "Attendance" && <AttendanceTab batchId={id} batch={data.item} role={role} setError={setError} />}
       {tab === "Closure" && <ClosureTab batchId={id} batch={b} role={role} setError={setError} onChanged={load} />}
       {tab === "Feedback" && <FeedbackTab batchId={id} setError={setError} />}
       {tab === "Costs" && role === "Admin" && <CostsTab batchId={id} batch={b} setError={setError} />}
@@ -320,12 +320,17 @@ function Overview({ data, role, onChanged, setError }: any) {
         </Section>
       )}
       {b.plan_enabled && (b.milestones?.length ?? 0) > 0 && (
-        <Section title="Backward plan" actions={b.status === "Planning" ? (
-          <Btn small kind="ghost" onClick={async () => {
-            try { await api(`/api/batches/${b._id}/milestones`, { method: "PATCH", json: { regenerate: true } }); onChanged(); }
-            catch (e: any) { setError(e.message); }
-          }}>Regenerate</Btn>
-        ) : undefined}>
+        <Section title="Backward plan" titleHref={`/batches/${b._id}/plan`} actions={
+          <span className="flex flex-wrap items-center gap-2">
+            <Link className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700" href={`/batches/${b._id}/plan`}>Open plan · share · Excel ↗</Link>
+            {b.status === "Planning" && (
+              <Btn small kind="ghost" onClick={async () => {
+                try { await api(`/api/batches/${b._id}/milestones`, { method: "PATCH", json: { regenerate: true } }); onChanged(); }
+                catch (e: any) { setError(e.message); }
+              }}>Regenerate</Btn>
+            )}
+          </span>
+        }>
           {r.plan_flags && r.plan_flags.tot_lead_ok === false && ["Planning", "Ready"].includes(b.status) && (
             <p className="mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
               TOT completed {fmtDate(r.plan_flags.tot_done_on)} — the plan needed it by {fmtDate(r.plan_flags.tot_due)} ({r.plan_flags.tot_lead_days} days before start).
@@ -810,11 +815,66 @@ function Enrollment({ batchId, setError }: any) {
 // attendance … show them two types: the one they are taking and the government portal's —
 // days AND hours — and once the hours threshold is crossed, mark that child GREEN:
 // qualified for assessments." Visible to every login that can open the batch.
-function AttendanceTab({ batchId, role, setError }: any) {
+function AttendanceTab({ batchId, batch, role, setError }: any) {
   const [data, setData] = useState<any>(null);
-  useEffect(() => {
-    api(`/api/batches/${batchId}/attendance`).then(setData).catch((e: any) => setError(e.message));
-  }, [batchId]);
+  const load = () => api(`/api/batches/${batchId}/attendance`).then(setData).catch((e: any) => setError(e.message));
+  useEffect(() => { load(); }, [batchId]); // eslint-disable-line react-hooks/exhaustive-deps
+  // -82 (Umesh, 15/08): "batch ke andar Attendance tab se bhi us batch ki attendance fill karne
+  // ka option, that too bulk." A date-range × roster grid: every cell starts Present, the
+  // operator unticks absentees, one save posts every day through the same per-day rules
+  // (POST /logs/bulk → createDailyLogChecked). Admin/Ops/Trainer (batches.daily_log);
+  // Trainer's Rule 53 window still applies per day and is reported per day.
+  const canMark = role === "Admin" || role === "Operations" || role === "Trainer";
+  const batchActive = ["Active", "Closing"].includes(batch?.status);
+  const todayKey = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+  const [grid, setGrid] = useState<null | { from: string; to: string; trainer_present: boolean; absent: Record<string, Set<string>> }>(null);
+  const [gridBusy, setGridBusy] = useState(false);
+  const [gridResult, setGridResult] = useState<any[] | null>(null);
+  const operating: number[] = batch?.program?.operating_days ?? [1, 2, 3, 4, 5, 6];
+  const loggedDays = new Set<string>((data?.days ?? []).map((d: string) => String(d).slice(0, 10)));
+  const gridDays: string[] = (() => {
+    if (!grid?.from || !grid?.to || grid.from > grid.to) return [];
+    const out: string[] = [];
+    const cur = new Date(grid.from + "T00:00:00Z");
+    const end = new Date(grid.to + "T00:00:00Z");
+    while (cur <= end && out.length < 31) {
+      const k = cur.toISOString().slice(0, 10);
+      const dow = cur.getUTCDay();
+      if (operating.includes(dow) && !loggedDays.has(k) && k <= todayKey) out.push(k);
+      cur.setUTCDate(cur.getUTCDate() + 1);
+    }
+    return out;
+  })();
+  const activeMembers = (data?.members ?? []).filter((m: any) => !m.left_on);
+  const toggleAbsent = (day: string, memberId: string) => {
+    if (!grid) return;
+    const next = { ...grid, absent: { ...grid.absent } };
+    const set = new Set(next.absent[day] ?? []);
+    if (set.has(memberId)) set.delete(memberId); else set.add(memberId);
+    next.absent[day] = set;
+    setGrid(next);
+  };
+  const setDay = (day: string, allPresent: boolean) => {
+    if (!grid) return;
+    const next = { ...grid, absent: { ...grid.absent } };
+    next.absent[day] = allPresent ? new Set() : new Set(activeMembers.map((m: any) => m.member_id));
+    setGrid(next);
+  };
+  async function saveGrid() {
+    if (!grid || !gridDays.length) return;
+    setGridBusy(true); setGridResult(null);
+    try {
+      const days = gridDays.map((day) => ({
+        log_date: day,
+        trainer_present: grid.trainer_present,
+        present_member_ids: activeMembers.map((m: any) => m.member_id).filter((id: string) => !(grid.absent[day]?.has(id))),
+      }));
+      const res = await api(`/api/batches/${batchId}/logs/bulk`, { method: "POST", json: { days } });
+      setGridResult(res.results ?? []);
+      await load();
+    } catch (e: any) { setError(e.message); }
+    finally { setGridBusy(false); }
+  }
   // QA-151 (Umesh, 15/08 — Gurugram DST-02): "Attendance tab me upload ka option nahi hai,
   // blank hai." The batch-scoped bulk importer (?batch=, preview → confirm) was fully built
   // and its only button sat inside Daily Execution, which stays locked until the batch is
@@ -843,11 +903,81 @@ function AttendanceTab({ batchId, role, setError }: any) {
         <span className="rounded-full bg-gray-100 px-2 py-0.5">{data.days_held} day{data.days_held === 1 ? "" : "s"} logged</span>
         <span className="rounded-full bg-green-100 px-2 py-0.5 font-medium text-green-700">{data.qualified_count} qualified for assessments</span>
         {portalAsOf && <span className="rounded-full bg-blue-50 px-2 py-0.5 text-blue-700">Portal data as of {fmtDate(portalAsOf)}</span>}
-        <span className="ml-auto flex items-center gap-2">
-          <span className="text-gray-400">Day-wise marking opens in Daily Execution once the batch is Active.</span>
+        <span className="ml-auto flex flex-wrap items-center gap-2">
+          {canMark && batchActive && !grid && (
+            <button className="rounded-lg border border-blue-600 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50"
+              onClick={() => { setGridResult(null); setGrid({ from: todayKey, to: todayKey, trainer_present: true, absent: {} }); }}>
+              ✎ Mark attendance (bulk)
+            </button>
+          )}
+          {canMark && !batchActive && (
+            <span className="text-gray-400" title="Daily logs are only taken on a running batch (Rule 26)">Start the batch (Overview → Start Batch) to mark day-wise attendance.</span>
+          )}
+          {!canMark && <span className="text-gray-400">Day-wise marking is done by the trainer / Operations.</span>}
           {importLink}
         </span>
       </div>
+      {grid && (
+        <div className="space-y-2 rounded-xl border border-blue-200 bg-blue-50/50 p-3">
+          <div className="flex flex-wrap items-end gap-3 text-xs">
+            <label className="flex flex-col gap-1">From
+              <input type="date" className="rounded-lg border border-gray-300 px-2 py-1" value={grid.from} max={todayKey} min={batch?.actual_start ? String(batch.actual_start).slice(0, 10) : undefined} onChange={(e) => setGrid({ ...grid, from: e.target.value })} />
+            </label>
+            <label className="flex flex-col gap-1">To
+              <input type="date" className="rounded-lg border border-gray-300 px-2 py-1" value={grid.to} max={todayKey} onChange={(e) => setGrid({ ...grid, to: e.target.value })} />
+            </label>
+            <label className="flex items-center gap-1 pb-1"><input type="checkbox" checked={grid.trainer_present} onChange={(e) => setGrid({ ...grid, trainer_present: e.target.checked })} /> Trainer present</label>
+            <span className="pb-1 text-gray-500">{gridDays.length} day{gridDays.length === 1 ? "" : "s"} to mark · everyone starts Present — untick the absentees{role === "Trainer" ? " · as a trainer you may mark only today/yesterday" : ""}</span>
+            <span className="ml-auto flex gap-2 pb-0.5">
+              <Btn small disabled={gridBusy || !gridDays.length} onClick={saveGrid}>{gridBusy ? "Saving…" : `Save ${gridDays.length} day${gridDays.length === 1 ? "" : "s"}`}</Btn>
+              <Btn small kind="ghost" onClick={() => { setGrid(null); setGridResult(null); }}>Close</Btn>
+            </span>
+          </div>
+          {gridDays.length === 0 && (
+            <p className="text-xs text-amber-700">No open days in this range — already-logged days are left out (edit those in Daily Execution), as are non-operating days and future dates.</p>
+          )}
+          {gridDays.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="text-xs">
+                <thead>
+                  <tr>
+                    <th className="sticky left-0 bg-blue-50/50 px-2 py-1 text-left">Candidate</th>
+                    {gridDays.map((d) => (
+                      <th key={d} className="px-1 py-1 text-center font-medium">
+                        <div>{d.slice(8, 10)}/{d.slice(5, 7)}</div>
+                        <div className="text-[10px] font-normal text-gray-500">
+                          <button className="underline" onClick={() => setDay(d, true)}>all</button>{" · "}<button className="underline" onClick={() => setDay(d, false)}>none</button>
+                        </div>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {activeMembers.map((m: any) => (
+                    <tr key={m.member_id} className="border-t">
+                      <td className="sticky left-0 bg-white px-2 py-1 whitespace-nowrap">{m.name}</td>
+                      {gridDays.map((d) => (
+                        <td key={d} className="px-1 py-1 text-center">
+                          <input type="checkbox" checked={!(grid.absent[d]?.has(m.member_id))} onChange={() => toggleAbsent(d, m.member_id)} title={`${m.name} — ${d}`} />
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {gridResult && (
+            <ul className="space-y-0.5 text-xs">
+              {gridResult.map((r: any) => (
+                <li key={r.log_date} className={r.status === "created" ? "text-green-700" : r.status === "exists" ? "text-gray-500" : "text-red-700"}>
+                  {r.log_date}: {r.status === "created" ? "saved" : r.status === "exists" ? "already logged — edit in Daily Execution" : r.message}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
       <DataTable rows={data.members}
         cardTitle={(r: any) => r.name}
         defaultSort={{ key: "name", dir: "asc" }}
