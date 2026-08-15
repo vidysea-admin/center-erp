@@ -3,16 +3,16 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-79";
+export const RELEASE = "2026.08.14-80";
 export const RELEASE_NOTE =
-  "QA-145 rider - the storage probe. Umesh asked the right question: was " +
-  "the Drive path tested against real Google or just pushed? Honest " +
-  "answer: without a service-account key that branch cannot run, so it " +
-  "was compiled, not exercised. This build adds the mail panel's 'send " +
-  "test mail' twin for storage: POST /api/test-storage writes a probe " +
-  "under <root>/_healthcheck/, reads it back through the same proxy " +
-  "path, and reports backend / Drive id / folder / round-trip match - " +
-  "one click the moment the key lands. Refuses to run unconfigured (it " +
-  "would only prove the disk deploys wipe). Also aligns code comments " +
-  "with the checker's minted numbers (login link = QA-149, blocker " +
-  "text = QA-148) and documents the Shared-Drive quota caveat.";
+  "QA-145 - Drive storage PROVED against real Google, and a second way in. " +
+  "Umesh: 'mere credentials jo already available hain, .env me daal do' - " +
+  "the gws CLI on his machine holds an OAuth refresh token for his " +
+  "Workspace account with full Drive scope. storage.ts now accepts that " +
+  "triple (GDRIVE_OAUTH_CLIENT_ID/SECRET/REFRESH_TOKEN) alongside the " +
+  "service-account key, env-first. Local run with those creds against " +
+  "the real 'All Locations' folder: probe write+read-back ok (8.9s cold), " +
+  "real /api/upload of a 2KB mp4 -> Drive under _healthcheck/PROBE-" +
+  "BATCH-01/evidence/, proxy read-back byte-identical, StoredFile row " +
+  "carries backend=drive + Drive id + folder path; the folder tree is " +
+  "visible in Drive. What remains is the same three env values on ECS.";

@@ -34,25 +34,49 @@ export function rootFolderId(): string {
   return String(process.env.GDRIVE_ROOT_FOLDER_ID || DEFAULT_DRIVE_ROOT_FOLDER_ID);
 }
 
+// Two ways to be the app's Google identity — env-first, whichever is set:
+//   (a) service account: GDRIVE_SA_JSON (base64 key JSON)
+//   (b) OAuth user (Umesh, 15/08: "mere credentials jo already available hain, .env me daal
+//       do"): GDRIVE_OAUTH_CLIENT_ID + GDRIVE_OAUTH_CLIENT_SECRET + GDRIVE_OAUTH_REFRESH_TOKEN
+//       — the same triple the gws CLI holds; the app then writes AS that user.
+function oauthTriple(): { id: string; secret: string; refresh: string } | null {
+  const id = process.env.GDRIVE_OAUTH_CLIENT_ID, secret = process.env.GDRIVE_OAUTH_CLIENT_SECRET, refresh = process.env.GDRIVE_OAUTH_REFRESH_TOKEN;
+  return id && secret && refresh ? { id, secret, refresh } : null;
+}
+export function storageMode(): "sa" | "oauth" | null {
+  if (process.env.GDRIVE_SA_JSON) return "sa";
+  if (oauthTriple()) return "oauth";
+  return null;
+}
 export function storageConfigured(): boolean {
-  return !!process.env.GDRIVE_SA_JSON;
+  return storageMode() !== null;
 }
 
-export function storageHealth(): { backend: "drive" | "local"; configured: boolean; reason: string } {
-  if (storageConfigured()) return { backend: "drive", configured: true, reason: cachedErr ? `Drive error: ${cachedErr}` : `Google Drive connected (root folder ${rootFolderId()}) — uploads survive deploys` };
+export function storageHealth(): { backend: "drive" | "local"; configured: boolean; mode: "sa" | "oauth" | null; reason: string } {
+  const mode = storageMode();
+  if (mode) return { backend: "drive", configured: true, mode, reason: cachedErr ? `Drive error: ${cachedErr}` : `Google Drive connected via ${mode === "sa" ? "service account" : "OAuth user"} (root folder ${rootFolderId()}) — uploads survive deploys` };
   return {
     backend: "local",
     configured: false,
-    reason: "Evidence storage NOT connected — uploads are written to the server's own disk and are LOST on every deploy. Set GDRIVE_SA_JSON (service-account key, base64) — the Drive folder is already known (see drive-storage-setup.md).",
+    mode: null,
+    reason: "Evidence storage NOT connected — uploads are written to the server's own disk and are LOST on every deploy. Set GDRIVE_SA_JSON (service-account key) OR GDRIVE_OAUTH_CLIENT_ID/SECRET/REFRESH_TOKEN — the Drive folder is already known (see drive-storage-setup.md).",
   };
 }
 
 function drive(): drive_v3.Drive {
   if (cachedDrive) return cachedDrive;
-  const raw = Buffer.from(String(process.env.GDRIVE_SA_JSON), "base64").toString("utf8");
-  const creds = JSON.parse(raw);
-  const auth = new google.auth.GoogleAuth({ credentials: creds, scopes: ["https://www.googleapis.com/auth/drive"] });
-  cachedDrive = google.drive({ version: "v3", auth });
+  const mode = storageMode();
+  if (mode === "sa") {
+    const raw = Buffer.from(String(process.env.GDRIVE_SA_JSON), "base64").toString("utf8");
+    const creds = JSON.parse(raw);
+    const auth = new google.auth.GoogleAuth({ credentials: creds, scopes: ["https://www.googleapis.com/auth/drive"] });
+    cachedDrive = google.drive({ version: "v3", auth });
+  } else {
+    const t = oauthTriple()!;
+    const auth = new google.auth.OAuth2(t.id, t.secret);
+    auth.setCredentials({ refresh_token: t.refresh });
+    cachedDrive = google.drive({ version: "v3", auth });
+  }
   return cachedDrive;
 }
 
