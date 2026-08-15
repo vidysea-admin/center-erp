@@ -79,7 +79,8 @@ export default function SheetWatchPage() {
           <h1 className="text-xl font-semibold">Sheet Sync</h1>
           <p className="text-sm text-gray-500">Every change the client makes in the shared workbook — row, column, old → new</p>
         </div>
-        <div className="flex gap-2">
+        {/* QA-120: flex-wrap — three toggles + two selects cannot sit on one phone-width line. */}
+        <div className="flex flex-wrap gap-2">
           <Btn small kind="ghost" onClick={() => setShowSources((s) => !s)}>{showSources ? "Hide sheets" : "Manage sheets"}</Btn>
           <Btn small kind="ghost" onClick={() => setShowMappings((s) => !s)}>{showMappings ? "Hide mappings" : "Map tabs"}</Btn>
           <Btn small kind="ghost" onClick={() => setShowHistory((s) => !s)}>{showHistory ? "Hide history" : "Version history"}</Btn>
@@ -134,7 +135,8 @@ export default function SheetWatchPage() {
           { key: "status", label: "Status", render: (r: any) => <Chip value={r.status} /> },
           {
             key: "_act", label: "", render: (r: any) => (
-              <span className="flex gap-1">
+              /* QA-120: wrap — three action buttons overflowed the phone card view. */
+              <span className="flex flex-wrap gap-1">
                 {r.change_type === "Added" && r.status !== "Accepted" && (
                   <Btn small kind="ghost" disabled={busy} onClick={() => openCreate(r)}>Create location…</Btn>
                 )}

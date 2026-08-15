@@ -22,7 +22,9 @@ export function BackLink({ fallback, label = "Back" }: { fallback: string; label
 // Sibling-page switcher (2026-08-14): Sheet Watch ⇄ Sync Inbox live under ONE nav entry.
 export function RouteTabs({ tabs, active }: { tabs: { href: string; label: string; count?: number }[]; active: string }) {
   return (
-    <div className="flex gap-1 border-b">
+    // QA-120: overflow-x-auto — the button-based Tabs below always had it; this Link variant
+    // was the one pushing Sheet Watch and Sync Inbox 82px past a phone screen.
+    <div className="flex gap-1 overflow-x-auto border-b">
       {tabs.map((t) => (
         <Link key={t.href} href={t.href}
           className={`whitespace-nowrap border-b-2 px-3.5 py-2.5 text-sm font-medium ${active === t.href ? "border-blue-600 text-blue-700" : "border-transparent text-gray-500 hover:text-gray-800"}`}>
@@ -754,7 +756,10 @@ export function NameCell({ name, sub }: { name?: string; sub?: string }) {
 export function Section({ title, children, actions, titleHref }: { title: string; children: ReactNode; actions?: ReactNode; titleHref?: string }) {
   return (
     <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(16,24,40,.04)]">
-      <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
+      {/* QA-120: flex-wrap — a Section whose actions carry two buttons (Closure's marking
+          header) pushed the whole card 124px past a phone screen; now the actions drop to
+          a second line instead. */}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 px-4 py-3">
         {titleHref ? (
           <Link href={titleHref} className="text-sm font-semibold text-gray-900 hover:text-blue-700 hover:underline">{title}</Link>
         ) : (

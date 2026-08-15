@@ -209,8 +209,9 @@ function TrainersInner() {
         <h1 className="text-xl font-semibold">Trainers</h1>
         {/* QA-065: no buttons that exist only to bounce — a view-only user or a role the
             server refuses (Enrollment/Trainer) gets no Add/Import/Quick-add affordance. */}
+        {/* QA-120: flex-wrap — this row overflowed every trainers tab by 50px on a phone. */}
         {canWrite && (
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           {/* CEO 13/08: "naam-email-phone dala, link bana, WhatsApp chala gaya — trainer khud bhare" */}
           <Btn kind="ghost" onClick={() => setImp({})}>Import (Excel)</Btn>
           <Btn kind="ghost" onClick={() => setInvite({ form: {} })}>Quick add + send link</Btn>

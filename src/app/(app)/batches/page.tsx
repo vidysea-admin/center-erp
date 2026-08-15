@@ -184,7 +184,8 @@ function BatchesInner() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-xl font-semibold">Batches</h1>
-        <div className="flex gap-2">
+        {/* QA-120: wrap on narrow screens — this row was the batch list's only horizontal overflow. */}
+        <div className="flex flex-wrap gap-2">
           <select className={inputCls + " max-w-44"} value={fLoc} onChange={(e) => setFLoc(e.target.value)}>
             <option value="">All locations</option>
             {locations.map((l) => <option key={l._id} value={l._id}>{l.name}</option>)}
