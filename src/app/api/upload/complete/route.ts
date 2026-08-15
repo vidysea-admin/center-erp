@@ -35,8 +35,9 @@ export const POST = apiHandler(async (req: NextRequest) => {
   row.drive_file_id = meta.id;
   row.size = meta.size;
   row.status = "ready";
-  row.needs_compression = isVideo && meta.size > 20 * 1024 * 1024;
-  row.compression = isVideo ? "none:direct-to-drive (compress-first on the device is the next release)" : "none:direct-to-drive";
+  const clientDid = String(row.compression ?? "").startsWith("client:");
+  row.needs_compression = !clientDid && isVideo && meta.size > 20 * 1024 * 1024;
+  if (!clientDid) row.compression = isVideo ? "none:direct-to-drive (device did not compress)" : "none:direct-to-drive";
   await row.save();
   return NextResponse.json({ url: `${BASE_PATH}/api/files/` + name, name: row.original_name, backend: "drive", size: meta.size, original_size: row.original_size, compression: row.compression });
 });

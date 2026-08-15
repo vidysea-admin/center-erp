@@ -1355,6 +1355,28 @@ ok("…with the contact details an approver needs", !!queued && queued.phone ===
   fdMp4.append("file", new File([mp4], "clip.mp4", { type: "video/mp4" }));
   const upMp4 = await (await fetch(BASE + "/api/upload", { method: "POST", headers: { cookie }, body: fdMp4 })).json();
   ok("-87: video is untouched here and says why (client-side compress-first is the next release)", /^none:video/.test(upMp4.compression ?? "") && upMp4.size === 1024, JSON.stringify(upMp4.compression));
+  // -91 (Umesh: "pehle compress, phir upload"): when the DEVICE compressed the clip, it says so and the row records it.
+  const fdWebm = new FormData();
+  fdWebm.append("file", new File([Buffer.alloc(2048, 3)], "evidence-2026-08-16.webm", { type: "video/webm" }));
+  fdWebm.append("client_compression", "video-720p-1500k"); fdWebm.append("client_original_size", String(50 * 1024 * 1024));
+  const upWebm = await (await fetch(BASE + "/api/upload", { method: "POST", headers: { cookie }, body: fdWebm })).json();
+  ok("-91: an in-app/browser-compressed video (.webm) is accepted and the row records client:video-720p-1500k with the original size", upWebm.compression === "client:video-720p-1500k" && upWebm.original_size === 50 * 1024 * 1024 && /\.webm$/.test(upWebm.url), JSON.stringify({ c: upWebm.compression, o: upWebm.original_size, u: upWebm.url }));
+  const rdWebm = await fetch(BASE + String(upWebm.url).replace(/^\/erp/, ""));
+  ok("-91: .webm reads back as video/webm inline", rdWebm.status === 200 && rdWebm.headers.get("content-type") === "video/webm" && /^inline/.test(rdWebm.headers.get("content-disposition") ?? ""), `${rdWebm.headers.get("content-type")}`);
+  {
+    const { MongoClient } = await import("mongodb");
+    const mc = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+    await mc.connect();
+    const row = await mc.db(process.env.MONGODB_DB || "center_erp_ci").collection("storedfiles").findOne({ name: String(upWebm.url).split("/").pop() });
+    await mc.close();
+    ok("-91: StoredFile row: compressed=true, compression client:…, needs_compression=false", !!row && row.compressed === true && row.compression === "client:video-720p-1500k" && row.needs_compression === false, JSON.stringify(row && { c: row.compression, comp: row.compressed, need: row.needs_compression }));
+  }
+  const defsV = (await req("GET", "/api/defaults", undefined, 200)).data.item;
+  ok("-91: Defaults carry the video knobs (compress on, 720p, 1500 kbps, 64 kbps)", defsV.video_compress === true && Number(defsV.video_max_height) === 720 && Number(defsV.video_bitrate_kbps) === 1500 && Number(defsV.video_audio_kbps) === 64, JSON.stringify({ c: defsV.video_compress, h: defsV.video_max_height, b: defsV.video_bitrate_kbps, a: defsV.video_audio_kbps }));
+  await req("PUT", "/api/defaults", { video_max_height: 480, video_bitrate_kbps: 800 }, 200);
+  const defsV2 = (await req("GET", "/api/defaults", undefined, 200)).data.item;
+  ok("-91: the video knobs are live-tunable", Number(defsV2.video_max_height) === 480 && Number(defsV2.video_bitrate_kbps) === 800);
+  await req("PUT", "/api/defaults", { video_max_height: 720, video_bitrate_kbps: 1500 }, 200);
   // knobs: the door reads Defaults — turn the edge to 800 and a fresh upload obeys
   const defsBefore = (await req("GET", "/api/defaults", undefined, 200)).data.item ?? (await req("GET", "/api/defaults")).data;
   ok("-87: Defaults carry the compression knobs (image_max_px 1600, image_quality 75, pdf_compress on)", Number(defsBefore.image_max_px) === 1600 && Number(defsBefore.image_quality) === 75 && defsBefore.pdf_compress !== false, JSON.stringify({ px: defsBefore.image_max_px, q: defsBefore.image_quality, pdf: defsBefore.pdf_compress }));

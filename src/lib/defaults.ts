@@ -30,6 +30,11 @@ export type AppDefaults = {
   image_max_px: number;      // longest edge after resize (never upscaled)
   image_quality: number;     // JPEG/WebP quality 30–95
   pdf_compress: boolean;     // Ghostscript /ebook pass on PDFs
+  // -91: video compress-first on the device
+  video_compress: boolean;
+  video_max_height: number;  // 720 → ~11-12 MB per minute at 1500 kbps
+  video_bitrate_kbps: number;
+  video_audio_kbps: number;
   // SIDH portal registration link sent to candidates
   sidh_url: string;
   // Manish's Drive: RPL project → All Locations → District — the evidence backup root.
@@ -84,6 +89,10 @@ export const DEFAULT_VALUES: AppDefaults = {
   image_max_px: 1600,
   image_quality: 75,
   pdf_compress: true,
+  video_compress: true,
+  video_max_height: 720,
+  video_bitrate_kbps: 1500,
+  video_audio_kbps: 64,
   lead_tot_start_days: 10,
   lead_trainer_ready_for_tot_days: 15,
   lead_trainer_found_days: 20,

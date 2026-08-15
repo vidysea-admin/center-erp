@@ -42,7 +42,7 @@ const QUEUEABLE = new Set(["photos", "videos", "govt_screenshot"]);
 
 // Where a file belongs — becomes the Drive folder <Centre>/<Batch>/<kind> and the
 // StoredFile's entity link ("which files belong to this batch?" finally has an answer).
-export type UploadHints = { folder_centre?: string; folder_batch?: string; folder_kind?: string; entity?: string; entity_id?: string; batch_id?: string };
+export type UploadHints = { folder_centre?: string; folder_batch?: string; folder_kind?: string; entity?: string; entity_id?: string; batch_id?: string; client_compression?: string; client_original_size?: number };
 
 export function getQueue(batchId?: string): QueueItem[] {
   try {
@@ -67,7 +67,7 @@ async function blobToDataUrl(b: Blob): Promise<string> {
 async function post(blob: Blob, name: string, hints?: UploadHints): Promise<string> {
   const fd = new FormData();
   fd.append("file", new File([blob], name, { type: blob.type }));
-  for (const k of ["folder_centre", "folder_batch", "folder_kind", "entity", "entity_id"] as const) {
+  for (const k of ["folder_centre", "folder_batch", "folder_kind", "entity", "entity_id", "client_compression", "client_original_size"] as const) {
     if (hints?.[k]) fd.append(k, String(hints[k]));
   }
   // TEAM-BLOCKER root cause (15/08): this was the ONE fetch in the app without the
@@ -85,6 +85,88 @@ export type LastUpload = { name: string; sent: number; original_size: number; si
 let lastUpload: LastUpload | null = null;
 export function getLastUploadInfo(): LastUpload | null { return lastUpload; }
 export function fmtBytes(n: number): string { return n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`; }
+
+// ---------- -91: video compress-first ON THE DEVICE (Umesh: "pehle compress phir upload,
+// highest compression — par chehre pehchane jaayen"; checker: fix transport first, then this).
+// No dependency, no wasm: the clip plays into a canvas at ≤ video_max_height and a MediaRecorder
+// re-encodes canvas + audio at video_bitrate_kbps. Real time (a 1-min clip takes ~1 min) — fine
+// for field evidence, and the numbers are Admin knobs. Skipped when the clip is already within
+// target (small, ≤ height, ≤ bitrate) or when the browser cannot do it (old Safari): then the
+// original goes via the -90 resumable path and the row says needs_compression.
+export type VideoKnobs = { video_compress: boolean; video_max_height: number; video_bitrate_kbps: number; video_audio_kbps: number };
+let knobsCache: { at: number; k: VideoKnobs } | null = null;
+export async function videoKnobs(): Promise<VideoKnobs> {
+  if (knobsCache && Date.now() - knobsCache.at < 5 * 60_000) return knobsCache.k;
+  const d: VideoKnobs = { video_compress: true, video_max_height: 720, video_bitrate_kbps: 1500, video_audio_kbps: 64 };
+  try {
+    const r = await fetch(`${BASE_PATH}/api/defaults`); const j = await r.json(); const it = j.item ?? j;
+    if (it) { d.video_compress = it.video_compress !== false; d.video_max_height = Number(it.video_max_height) || 720; d.video_bitrate_kbps = Number(it.video_bitrate_kbps) || 1500; d.video_audio_kbps = Number(it.video_audio_kbps) || 64; }
+  } catch { /* defaults unreachable → built-ins */ }
+  knobsCache = { at: Date.now(), k: d };
+  return d;
+}
+export function pickRecorderMime(): string {
+  const cands = ["video/mp4;codecs=avc1.42E01E,mp4a.40.2", "video/mp4", "video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"];
+  const MR = (globalThis as any).MediaRecorder;
+  if (!MR?.isTypeSupported) return "";
+  return cands.find((c) => MR.isTypeSupported(c)) ?? "";
+}
+export function canCompressVideo(): boolean {
+  return typeof (globalThis as any).MediaRecorder !== "undefined" && !!pickRecorderMime() && typeof HTMLCanvasElement !== "undefined" && "captureStream" in HTMLCanvasElement.prototype;
+}
+export type VideoCompressResult = { file: File; label: string; skipped: boolean; reason?: string; original_size: number };
+export async function compressVideo(file: File, onProgress?: (pct: number) => void): Promise<VideoCompressResult> {
+  const knobs = await videoKnobs();
+  const orig = file.size;
+  if (!knobs.video_compress) return { file, label: "", skipped: true, reason: "video compression is off (Admin)", original_size: orig };
+  if (!canCompressVideo()) return { file, label: "", skipped: true, reason: "this browser cannot re-encode video", original_size: orig };
+  const url = URL.createObjectURL(file);
+  const video = document.createElement("video");
+  video.src = url; video.muted = false; video.playsInline = true; (video as any).crossOrigin = "anonymous";
+  await new Promise<void>((res, rej) => { video.onloadedmetadata = () => res(); video.onerror = () => rej(new Error("cannot decode this video")); });
+  const dur = video.duration || 0, vw = video.videoWidth, vh = video.videoHeight;
+  const bitrateKbps = dur > 0 ? (orig * 8) / dur / 1000 : Infinity;
+  const withinHeight = vh > 0 && vh <= knobs.video_max_height;
+  const withinBitrate = bitrateKbps <= knobs.video_bitrate_kbps * 1.25;
+  if (withinHeight && withinBitrate) { URL.revokeObjectURL(url); return { file, label: "", skipped: true, reason: `already ≤ ${knobs.video_max_height}p / ≤ ${knobs.video_bitrate_kbps} kbps`, original_size: orig }; }
+  if (!dur || !vw || !vh) { URL.revokeObjectURL(url); return { file, label: "", skipped: true, reason: "no duration/size metadata", original_size: orig }; }
+  const scale = Math.min(1, knobs.video_max_height / vh);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(vw * scale / 2) * 2; canvas.height = Math.round(vh * scale / 2) * 2;
+  const ctx = canvas.getContext("2d")!;
+  const fps = 25;
+  const canvasStream = (canvas as any).captureStream(fps) as MediaStream;
+  // audio: route the element's audio into the recording (muted for the user)
+  let audioCtx: AudioContext | null = null;
+  try {
+    audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const src = audioCtx.createMediaElementSource(video);
+    const dest = audioCtx.createMediaStreamDestination();
+    src.connect(dest);
+    for (const t of dest.stream.getAudioTracks()) canvasStream.addTrack(t);
+  } catch { /* no audio track → video-only re-encode */ }
+  const mime = pickRecorderMime();
+  const rec = new MediaRecorder(canvasStream, { mimeType: mime, videoBitsPerSecond: knobs.video_bitrate_kbps * 1000, audioBitsPerSecond: knobs.video_audio_kbps * 1000 });
+  const chunks: Blob[] = [];
+  rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+  const stopped = new Promise<void>((res) => { rec.onstop = () => res(); });
+  let raf = 0;
+  const draw = () => { ctx.drawImage(video, 0, 0, canvas.width, canvas.height); onProgress?.(Math.min(99, Math.round((100 * video.currentTime) / dur))); raf = requestAnimationFrame(draw); };
+  rec.start(1000);
+  await video.play();
+  draw();
+  await new Promise<void>((res) => { video.onended = () => res(); });
+  cancelAnimationFrame(raf);
+  rec.stop();
+  await stopped;
+  try { audioCtx?.close(); } catch { /* ignore */ }
+  URL.revokeObjectURL(url);
+  const ext = mime.startsWith("video/mp4") ? ".mp4" : ".webm";
+  const out = new File(chunks, file.name.replace(/\.[a-z0-9]+$/i, "") + ext, { type: mime.split(";")[0] });
+  if (!out.size || out.size >= orig) return { file, label: "", skipped: true, reason: "re-encode did not shrink it", original_size: orig };
+  onProgress?.(100);
+  return { file: out, label: `video-${canvas.height}p-${knobs.video_bitrate_kbps}k`, skipped: false, original_size: orig };
+}
 
 // ---------- -90: direct-to-Drive, resumable (the shape from qa/DESIGN-video-upload.md) ----------
 // The server opens a Drive session (intent), the BROWSER puts the bytes to Google in 8 MiB
@@ -169,7 +251,15 @@ export async function uploadResumable(file: File, hints: UploadHints | undefined
 // and throw — caller shows the queued state.
 // -90: large files and every video first try the direct-to-Drive resumable path (progress,
 // resume, no server RAM); when Drive is not connected they fall back to the multipart door.
-export async function uploadWithRetry(file: File, kind: string, hints?: UploadHints, onProgress?: (p: Progress) => void): Promise<string> {
+export async function uploadWithRetry(fileIn: File, kind: string, hintsIn?: UploadHints, onProgress?: (p: Progress) => void): Promise<string> {
+  let file = fileIn; let hints = hintsIn;
+  // -91: video is compressed on the device FIRST (Umesh's order), then travels.
+  if (isVideoName(file.name) || file.type.startsWith("video/")) {
+    try {
+      const vc = await compressVideo(file, (pct) => onProgress?.({ sent: 0, total: file.size, pct, phase: "compressing" }));
+      if (!vc.skipped) { file = vc.file; hints = { ...(hints ?? {}), client_compression: vc.label, client_original_size: vc.original_size }; }
+    } catch { /* fall through: upload as recorded; the row will say needs_compression */ }
+  }
   if (file.size >= DIRECT_MIN_BYTES || isVideoName(file.name) || file.type.startsWith("video/")) {
     try {
       const direct = await uploadResumable(file, hints, onProgress);

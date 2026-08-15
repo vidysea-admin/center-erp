@@ -29,6 +29,7 @@ export const PUT = apiHandler(async (req: NextRequest) => {
     "min_daily_evidence", "sidh_url", "drive_root_url", "snapshot_retention_per_tab",
     // -87 (QA-157): media compression knobs
     "image_max_px", "image_quality", "pdf_compress",
+    "video_compress", "video_max_height", "video_bitrate_kbps", "video_audio_kbps",
     // 2026-08-12: scheme timing guidelines + client-contract counting rules (Manish)
     "day_start_time", "day_end_time", "max_session_hours", "max_batches_per_day", "max_daily_hours",
     // QA-104 (15/08): max_upload_mb dropped from the whitelist — the app has no size cap.

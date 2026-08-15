@@ -867,7 +867,18 @@ function DefaultsTab({ setError }: any) {
               <option value="on">On</option><option value="off">Off</option>
             </select>
           </Field>
+          {/* -91: video is compressed ON THE DEVICE before upload (record in-app at these settings,
+              or re-encode a gallery clip in the browser). ~11–12 MB per minute at 720p/1500 kbps. */}
+          <Field label="Compress video on the device before upload">
+            <select className={inputCls} value={form.video_compress === false ? "off" : "on"} onChange={(e) => setForm({ ...form, video_compress: e.target.value === "on" })}>
+              <option value="on">On</option><option value="off">Off (upload as recorded)</option>
+            </select>
+          </Field>
+          <Field label="Video max height (px)"><input type="number" min={360} max={1080} step={120} className={inputCls} value={form.video_max_height ?? ""} onChange={(e) => setForm({ ...form, video_max_height: +e.target.value })} /></Field>
+          <Field label="Video bitrate (kbps)"><input type="number" min={400} max={8000} step={100} className={inputCls} value={form.video_bitrate_kbps ?? ""} onChange={(e) => setForm({ ...form, video_bitrate_kbps: +e.target.value })} /></Field>
+          <Field label="Audio bitrate (kbps)"><input type="number" min={32} max={192} step={16} className={inputCls} value={form.video_audio_kbps ?? ""} onChange={(e) => setForm({ ...form, video_audio_kbps: +e.target.value })} /></Field>
         </div>
+        <p className="mt-2 text-[11px] text-gray-500">Rule of thumb: 720p @ 1500 kbps ≈ 11–12 MB per minute and faces stay recognisable; 480p @ 800 kbps ≈ 6 MB per minute (max compression). Record ONE sample after changing and look at it.</p>
       </Section>
 
       {/* 2026-08-12 — Manish confirmed these against the scheme guidelines. They are settings

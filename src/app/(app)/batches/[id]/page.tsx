@@ -1,5 +1,5 @@
 "use client";
-import { use, useEffect, useState } from "react";
+import { use, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
@@ -8,7 +8,7 @@ import { trainerSelectGroups } from "@/lib/trainer-select";
 import { slotHoursPerDay } from "@/lib/slot-rules";
 import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, HealthBanner, NameCell, Section, Tabs, inputCls } from "@/components/ui";
 import { Activity } from "@/components/activity";
-import { flushQueue, fmtBytes, getLastUploadInfo, getQueue, uploadWithRetry } from "@/lib/upload";
+import { flushQueue, fmtBytes, getLastUploadInfo, getQueue, pickRecorderMime, uploadWithRetry, videoKnobs, type VideoKnobs } from "@/lib/upload";
 import { BASE_PATH } from "@/lib/base-path";
 import { bulkSmsCsv, smsLink, waLink } from "@/lib/messaging";
 
@@ -1103,6 +1103,7 @@ function DailyExecution({ batchId, batch, role, setError }: any) {
 
   const [loaded, setLoaded] = useState(false);
   const [uploadNote, setUploadNote] = useState(""); // -87: "photo.jpg: 3.8 MB → 420 KB"
+  const [recOpen, setRecOpen] = useState(false); // -91: in-app recorder
   const load = () => Promise.all([
     api(`/api/batches/${batchId}/logs`).then((d) => setLogs(d.items)),
     api(`/api/batches/${batchId}/members`).then((d) => setMembers(d.items.filter((m: any) => !m.left_on))),
@@ -1280,6 +1281,12 @@ function DailyExecution({ batchId, batch, role, setError }: any) {
             </Field>
             <Field label={`Videos (${form.videos.length})`}>
               <input type="file" accept="video/mp4,video/*" capture="environment" multiple className={inputCls} onChange={(e) => { for (const f of Array.from(e.target.files ?? [])) uploadFile(f, "videos"); }} />
+              {/* -91: record IN the app at the compression targets — compressed at source, nothing to
+                  transcode. Gallery clips picked above are re-encoded in the browser before upload. */}
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+                <button type="button" className="rounded-lg border border-blue-600 px-2 py-1 font-medium text-blue-700 hover:bg-blue-50" onClick={() => setRecOpen(true)}>● Record video</button>
+                <span className="text-gray-400">compressed on your phone before upload — no big files, resumes if the signal drops</span>
+              </div>
             </Field>
             {/* CEO 14/08 [41:31]: "Government attendance screenshot — I don't think they
                 [trainers] will have it, so they won't be able to provide." Ops/Admin keep it. */}
@@ -1293,6 +1300,7 @@ function DailyExecution({ batchId, batch, role, setError }: any) {
           <div className="flex items-center gap-3">
             <Btn onClick={save} disabled={busy}>{busy ? "Saving…" : "Save Daily Log"}</Btn>
             {uploadNote && <span className="text-xs text-gray-500" title="What the server stored (compressed at the storage door)">{uploadNote}</span>}
+            <VideoRecorder open={recOpen} onClose={() => setRecOpen(false)} onRecorded={(f) => { setRecOpen(false); uploadFile(f, "videos"); }} />
             {queued > 0 && (
               <button onClick={retryQueued} className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
                 {queued} upload{queued > 1 ? "s" : ""} pending — Retry now
@@ -2157,5 +2165,69 @@ function CostsTab({ batchId, batch, setError }: any) {
         <div className="flex items-end"><Btn onClick={save} disabled={!form.category || !form.amount}>Add Cost</Btn></div>
       </div>
     </Section>
+  );
+}
+
+// -91 (Umesh: "pehle compress, phir upload"): record evidence IN the app at the Admin's video
+// targets (720p / 1500 kbps by default) — the clip is compressed at source, nothing to
+// transcode, and it goes straight into the same upload path (resumable when Drive is on).
+function VideoRecorder({ open, onClose, onRecorded }: { open: boolean; onClose: () => void; onRecorded: (f: File) => void }) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [rec, setRec] = useState<MediaRecorder | null>(null);
+  const [stream, setStream] = useState<MediaStream | null>(null);
+  const [secs, setSecs] = useState(0);
+  const [bytes, setBytes] = useState(0);
+  const [err, setErr] = useState("");
+  const [knobs, setKnobs] = useState<VideoKnobs | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    (async () => {
+      try {
+        const k = await videoKnobs(); if (!alive) return; setKnobs(k);
+        const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: Math.round(k.video_max_height * 16 / 9) }, height: { ideal: k.video_max_height }, frameRate: { ideal: 25 } }, audio: true });
+        if (!alive) { s.getTracks().forEach((t) => t.stop()); return; }
+        setStream(s);
+        if (videoRef.current) { videoRef.current.srcObject = s; videoRef.current.muted = true; await videoRef.current.play().catch(() => {}); }
+      } catch (e: any) { setErr(e?.message ?? "Camera not available"); }
+    })();
+    return () => { alive = false; };
+  }, [open]);
+  useEffect(() => { if (!open) { stream?.getTracks().forEach((t) => t.stop()); setStream(null); setRec(null); setSecs(0); setBytes(0); setErr(""); } }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!rec) return; const id = setInterval(() => setSecs((x) => x + 1), 1000); return () => clearInterval(id); }, [rec]);
+  const start = () => {
+    if (!stream || !knobs) return;
+    const mime = pickRecorderMime();
+    if (!mime) { setErr("This browser cannot record video — pick a file instead."); return; }
+    chunksRef.current = [];
+    const r = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: knobs.video_bitrate_kbps * 1000, audioBitsPerSecond: knobs.video_audio_kbps * 1000 });
+    r.ondataavailable = (e) => { if (e.data?.size) { chunksRef.current.push(e.data); setBytes((b) => b + e.data.size); } };
+    r.onstop = () => {
+      const ext = mime.startsWith("video/mp4") ? ".mp4" : ".webm";
+      const f = new File(chunksRef.current, `evidence-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}${ext}`, { type: mime.split(";")[0] });
+      onRecorded(f);
+    };
+    r.start(1000);
+    setRec(r); setSecs(0); setBytes(0);
+  };
+  const stop = () => { rec?.stop(); setRec(null); };
+  if (!open) return null;
+  return (
+    <Drawer open={open} onClose={() => { if (rec) stop(); onClose(); }} title="Record video evidence">
+      <div className="space-y-3">
+        {err && <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{err}</div>}
+        <video ref={videoRef} playsInline muted className="w-full rounded-lg bg-black" />
+        <div className="flex flex-wrap items-center gap-3 text-xs">
+          {knobs && <span className="text-gray-500">{knobs.video_max_height}p · {knobs.video_bitrate_kbps} kbps ≈ {Math.round(knobs.video_bitrate_kbps * 60 / 8 / 1024 * 10) / 10} MB/min</span>}
+          {rec && <span className="font-medium text-red-600">● {Math.floor(secs / 60)}:{String(secs % 60).padStart(2, "0")} · {fmtBytes(bytes)}</span>}
+        </div>
+        <div className="flex gap-2">
+          {!rec ? <Btn onClick={start} disabled={!stream}>Start recording</Btn> : <Btn kind="danger" onClick={stop}>Stop & upload</Btn>}
+          <Btn kind="ghost" onClick={() => { if (rec) { rec.onstop = null; rec.stop(); setRec(null); } onClose(); }}>Cancel</Btn>
+        </div>
+        <p className="text-[11px] text-gray-400">Recorded at the Admin's compression targets, so nothing large ever leaves the phone; the upload resumes on its own if the signal drops.</p>
+      </div>
+    </Drawer>
   );
 }

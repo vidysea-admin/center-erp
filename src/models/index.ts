@@ -993,6 +993,12 @@ const DefaultsSchema = new Schema({
   image_max_px: { type: Number, default: 1600 },
   image_quality: { type: Number, default: 75 },
   pdf_compress: { type: Boolean, default: true },
+  // -91 (Umesh: "pehle compress, phir upload — highest compression, par chehre pehchane
+  // jaayen"): video is compressed ON THE DEVICE before it travels; these are the targets.
+  video_compress: { type: Boolean, default: true },
+  video_max_height: { type: Number, default: 720 },
+  video_bitrate_kbps: { type: Number, default: 1500 },
+  video_audio_kbps: { type: Number, default: 64 },
   sidh_url: { type: String, default: "https://www.skillindiadigital.gov.in/" },
   // 2026-08-13 eval sweep: these two were in the PUT whitelist and in DEFAULT_VALUES but NOT in
   // this schema — strict mode silently dropped every write, so the Admin panel's knob never
