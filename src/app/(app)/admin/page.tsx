@@ -852,6 +852,24 @@ function DefaultsTab({ setError }: any) {
         </div>
       </Section>
 
+      {/* -87 (QA-157, Umesh 15/08): every stored file passes one compression door; these are its
+          numbers. Turn them after looking at ONE sample — faces and text must stay readable. */}
+      <Section title="Media compression (-87)" actions={<Btn small onClick={save}>Save</Btn>}>
+        <p className="mb-3 text-xs text-gray-500">
+          Applied on the server to every upload (photos, scans, certificates) — no screen can bypass it. Faces and text must stay
+          readable for the NSDC audit: change a value, upload one sample, look at it. Video is compressed on the device before upload (coming next).
+        </p>
+        <div className="grid gap-3 md:grid-cols-3">
+          <Field label="Image longest edge (px)"><input type="number" min={800} max={4000} className={inputCls} value={form.image_max_px ?? ""} onChange={(e) => setForm({ ...form, image_max_px: +e.target.value })} /></Field>
+          <Field label="Image quality (30–95)"><input type="number" min={30} max={95} className={inputCls} value={form.image_quality ?? ""} onChange={(e) => setForm({ ...form, image_quality: +e.target.value })} /></Field>
+          <Field label="Compress PDFs (Ghostscript /ebook)">
+            <select className={inputCls} value={form.pdf_compress === false ? "off" : "on"} onChange={(e) => setForm({ ...form, pdf_compress: e.target.value === "on" })}>
+              <option value="on">On</option><option value="off">Off</option>
+            </select>
+          </Field>
+        </div>
+      </Section>
+
       {/* 2026-08-12 — Manish confirmed these against the scheme guidelines. They are settings
           rather than constants because a circular can move them without a deploy. */}
       <Section title="Scheme timing guidelines (Manish, 2026-08-12)" actions={<Btn small onClick={save}>Save</Btn>}>
@@ -938,8 +956,10 @@ function MailPanel({ setError }: any) {
   const [mail, setMail] = useState<any>(null);
   const [busy, setBusy] = useState(false);
   const [storageCheck, setStorageCheck] = useState<any>(null);
+  const [comp, setComp] = useState<any>(null); // -87: compression tools + totals + last 20
   const loadMail = () => api("/api/test-email").then(setMail).catch((e: any) => setError(e.message));
-  useEffect(() => { loadMail(); }, []);
+  useEffect(() => { loadMail(); api("/api/test-storage").then(setComp).catch(() => setComp(null)); }, []);
+  const mb = (n: number) => n >= 1024 * 1024 * 1024 ? `${(n / 1024 / 1024 / 1024).toFixed(2)} GB` : n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`;
   const STATUS: Record<string, { label: string; cls: string }> = {
     sent: { label: "accepted by SES — delivery not confirmed", cls: "text-green-700" },
     failed: { label: "failed", cls: "text-red-700" },
@@ -967,6 +987,24 @@ function MailPanel({ setError }: any) {
           {storageCheck && (
             <div className={`mt-1 ${storageCheck.ok ? "text-green-800" : "text-red-800"}`}>
               {storageCheck.ok ? "✓" : "✗"} {storageCheck.note}{storageCheck.folder_path ? ` — ${storageCheck.folder_path}/ (id ${storageCheck.drive_file_id}, ${storageCheck.ms} ms)` : ""}
+            </div>
+          )}
+          {/* -87 (QA-157): what the compression door has done — tools present, totals, last 20 files. */}
+          {comp && (
+            <div className="mt-2 border-t border-current/20 pt-2 text-gray-800">
+              <div>
+                <b>Compression:</b> images {comp.tools?.sharp ? "✓ sharp" : "✗ sharp missing"} · PDFs {comp.tools?.gs ? "✓ Ghostscript" : "✗ Ghostscript missing (stored as-is, recorded)"}
+                {comp.compression?.totals && <> · {comp.compression.totals.files} file{comp.compression.totals.files === 1 ? "" : "s"} · {mb(comp.compression.totals.stored ?? 0)} stored ({mb(comp.compression.totals.original ?? 0)} before) · {comp.compression.totals.compressed} compressed</>}
+              </div>
+              {(comp.compression?.recent ?? []).length > 0 && (
+                <details className="mt-1"><summary className="cursor-pointer">last {comp.compression.recent.length} uploads</summary>
+                  <ul className="mt-1 space-y-0.5">
+                    {comp.compression.recent.map((r: any) => (
+                      <li key={r._id} className="font-mono text-[11px]">{(r.original_name ?? "").slice(0, 40)} · {mb(r.original_size ?? r.size ?? 0)} → {mb(r.size ?? 0)} · {r.compression ?? "—"}</li>
+                    ))}
+                  </ul>
+                </details>
+              )}
             </div>
           )}
         </div>

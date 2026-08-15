@@ -4,17 +4,29 @@ import { BASE_PATH } from "@/lib/base-path";
 // Client-side image compression (spec §0: budget for compression + retry on weak connections).
 // Downscales to max 1600px and re-encodes JPEG q0.75. Non-images pass through untouched.
 export async function compressImage(file: File): Promise<Blob> {
-  if (!file.type.startsWith("image/")) return file;
+  const isHeic = /\.hei[cf]$/i.test(file.name) || /image\/hei[cf]/i.test(file.type);
+  if (!file.type.startsWith("image/") && !isHeic) return file;
   try {
-    const bmp = await createImageBitmap(file);
+    let src: Blob = file;
+    // -87 (QA-157, checker): createImageBitmap cannot decode HEIC in Chrome/Firefox/Edge, so an
+    // iPhone photo used to go through whole. Convert to JPEG in the browser first (lazy-loaded
+    // libheif wasm); if that fails, the server tries and records "none:heic undecodable".
+    if (isHeic) {
+      try {
+        const heic2any = (await import("heic2any")).default as any;
+        const out = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.85 });
+        src = Array.isArray(out) ? out[0] : out;
+      } catch { return file; }
+    }
+    const bmp = await createImageBitmap(src);
     const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
-    if (scale === 1 && file.size < 400_000) return file;
+    if (scale === 1 && file.size < 400_000 && !isHeic) return file;
     const canvas = document.createElement("canvas");
     canvas.width = Math.round(bmp.width * scale);
     canvas.height = Math.round(bmp.height * scale);
     canvas.getContext("2d")!.drawImage(bmp, 0, 0, canvas.width, canvas.height);
     const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, "image/jpeg", 0.75));
-    return blob ?? file;
+    return blob ?? (isHeic ? src : file);
   } catch {
     return file;
   }
@@ -65,8 +77,14 @@ async function post(blob: Blob, name: string, hints?: UploadHints): Promise<stri
   const res = await fetch(`${BASE_PATH}/api/upload`, { method: "POST", body: fd });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `Upload failed (${res.status})`);
+  // -87: remember what the server did with the last file so a screen can say "3.8 MB → 420 KB".
+  lastUpload = { name, sent: blob.size, original_size: data.original_size ?? blob.size, size: data.size ?? blob.size, compression: data.compression ?? "" };
   return data.url as string;
 }
+export type LastUpload = { name: string; sent: number; original_size: number; size: number; compression: string };
+let lastUpload: LastUpload | null = null;
+export function getLastUploadInfo(): LastUpload | null { return lastUpload; }
+export function fmtBytes(n: number): string { return n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`; }
 
 // Upload with 3 retries (1s/3s backoff). On final failure, park in the offline queue
 // and throw — caller shows the queued state.

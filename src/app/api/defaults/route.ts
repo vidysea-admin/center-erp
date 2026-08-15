@@ -27,6 +27,8 @@ export const PUT = apiHandler(async (req: NextRequest) => {
     "min_age", "max_age", "training_cooldown_months",
     "lead_enrollment_days", "lead_mobilization_days", "lead_trainer_ready_days", "lead_tot_done_days", "lead_tot_start_days", "lead_trainer_ready_for_tot_days", "lead_trainer_found_days",
     "min_daily_evidence", "sidh_url", "drive_root_url", "snapshot_retention_per_tab",
+    // -87 (QA-157): media compression knobs
+    "image_max_px", "image_quality", "pdf_compress",
     // 2026-08-12: scheme timing guidelines + client-contract counting rules (Manish)
     "day_start_time", "day_end_time", "max_session_hours", "max_batches_per_day", "max_daily_hours",
     // QA-104 (15/08): max_upload_mb dropped from the whitelist — the app has no size cap.

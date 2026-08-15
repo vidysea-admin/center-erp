@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiHandler, requireUser, requireRole, HttpError } from "@/lib/authz";
-import { getFile, putFile, storageHealth } from "@/lib/storage";
+import { compressionTools, getFile, putFile, storageHealth } from "@/lib/storage";
 
 // QA-145 rider (Umesh, 15/08: "Drive wala code local me test karke dekha ki information ja
 // rahi hai ya bas push kar diya?") — the honest answer was: the Drive branch could not be
@@ -10,7 +10,12 @@ import { getFile, putFile, storageHealth } from "@/lib/storage";
 // backend, Drive file id, folder path, round-trip match. Admin-only; nothing else is written.
 export const GET = apiHandler(async () => {
   await requireUser().then((u) => requireRole(u, "Admin"));
-  return NextResponse.json({ storage: storageHealth() });
+  // -87 (QA-157): the tools behind the compression door + what it has done so far.
+  const tools = await compressionTools();
+  const { StoredFile } = await import("@/models");
+  const agg = await StoredFile.aggregate([{ $group: { _id: null, files: { $sum: 1 }, stored: { $sum: "$size" }, original: { $sum: { $ifNull: ["$original_size", "$size"] } }, compressed: { $sum: { $cond: ["$compressed", 1, 0] } } } }]);
+  const recent = await StoredFile.find({}).sort({ createdAt: -1 }).limit(20).select("original_name mime original_size size compressed compression createdAt").lean();
+  return NextResponse.json({ storage: storageHealth(), tools, compression: { totals: agg[0] ?? { files: 0, stored: 0, original: 0, compressed: 0 }, recent } });
 });
 
 export const POST = apiHandler(async (_req: NextRequest) => {

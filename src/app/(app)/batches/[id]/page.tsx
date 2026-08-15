@@ -8,7 +8,7 @@ import { trainerSelectGroups } from "@/lib/trainer-select";
 import { slotHoursPerDay } from "@/lib/slot-rules";
 import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, HealthBanner, NameCell, Section, Tabs, inputCls } from "@/components/ui";
 import { Activity } from "@/components/activity";
-import { flushQueue, getQueue, uploadWithRetry } from "@/lib/upload";
+import { flushQueue, fmtBytes, getLastUploadInfo, getQueue, uploadWithRetry } from "@/lib/upload";
 import { BASE_PATH } from "@/lib/base-path";
 import { bulkSmsCsv, smsLink, waLink } from "@/lib/messaging";
 
@@ -1066,6 +1066,7 @@ function DailyExecution({ batchId, batch, role, setError }: any) {
   const [roundLog, setRoundLog] = useState<any>(null); // "mark another round" target (Karunn: P-P-P multiple times a day)
 
   const [loaded, setLoaded] = useState(false);
+  const [uploadNote, setUploadNote] = useState(""); // -87: "photo.jpg: 3.8 MB → 420 KB"
   const load = () => Promise.all([
     api(`/api/batches/${batchId}/logs`).then((d) => setLogs(d.items)),
     api(`/api/batches/${batchId}/members`).then((d) => setMembers(d.items.filter((m: any) => !m.left_on))),
@@ -1094,6 +1095,8 @@ function DailyExecution({ batchId, batch, role, setError }: any) {
   async function uploadFile(file: File, kind: "photos" | "videos" | "govt_screenshot") {
     try {
       const url = await uploadWithRetry(file, kind, evidenceHints(kind)); // compressed + 3 retries + per-batch offline queue
+      const info = getLastUploadInfo();
+      if (info) setUploadNote(`${file.name}: ${fmtBytes(file.size)} → ${fmtBytes(info.size)}${info.compression && !info.compression.startsWith("none") ? ` (${info.compression})` : ""}`);
       if (kind === "photos") setForm((f: any) => ({ ...f, photos: [...f.photos, url] }));
       else if (kind === "videos") setForm((f: any) => ({ ...f, videos: [...f.videos, url] }));
       else setForm((f: any) => ({ ...f, govt_screenshot: url }));
@@ -1250,6 +1253,7 @@ function DailyExecution({ batchId, batch, role, setError }: any) {
           <Field label="Note"><input className={inputCls} value={form.note ?? ""} onChange={(e) => setForm({ ...form, note: e.target.value })} /></Field>
           <div className="flex items-center gap-3">
             <Btn onClick={save} disabled={busy}>{busy ? "Saving…" : "Save Daily Log"}</Btn>
+            {uploadNote && <span className="text-xs text-gray-500" title="What the server stored (compressed at the storage door)">{uploadNote}</span>}
             {queued > 0 && (
               <button onClick={retryQueued} className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
                 {queued} upload{queued > 1 ? "s" : ""} pending — Retry now

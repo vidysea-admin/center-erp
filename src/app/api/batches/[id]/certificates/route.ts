@@ -95,11 +95,12 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     const buf = Buffer.from(await file.arrayBuffer());
     const put = await putFile(stored, buf, file.type || "application/octet-stream", [batch.location?.code ?? batch.location?.name ?? String(batch.location ?? ""), batch.code, "certificates"]);
     await StoredFile.create({
-      name: stored, original_name: file.name, mime: file.type, size: buf.length,
+      name: put.name, original_name: file.name, mime: put.mime, size: put.size,
+      original_size: put.original_size, compressed: put.compressed, compression: put.compression, compression_ms: put.compression_ms,
       backend: put.backend, drive_file_id: put.drive_file_id, folder_path: put.folder_path,
       entity: "Batch", entity_id: batch._id, uploaded_by: user.id,
     });
-    const url = `${BASE_PATH}/api/files/` + stored;
+    const url = `${BASE_PATH}/api/files/` + put.name;
 
     try {
       let resultId: string;

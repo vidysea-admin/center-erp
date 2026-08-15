@@ -26,6 +26,10 @@ export type AppDefaults = {
   lead_trainer_found_days: number;   // trainer identified
   // Daily evidence (2026-08-11: photos/videos "दिन में दो बार कम से कम")
   min_daily_evidence: number;
+  // -87 (QA-157): media compression at the storage door
+  image_max_px: number;      // longest edge after resize (never upscaled)
+  image_quality: number;     // JPEG/WebP quality 30–95
+  pdf_compress: boolean;     // Ghostscript /ebook pass on PDFs
   // SIDH portal registration link sent to candidates
   sidh_url: string;
   // Manish's Drive: RPL project → All Locations → District — the evidence backup root.
@@ -77,6 +81,9 @@ export const DEFAULT_VALUES: AppDefaults = {
   lead_mobilization_days: 2,
   lead_trainer_ready_days: 1,
   lead_tot_done_days: 3,
+  image_max_px: 1600,
+  image_quality: 75,
+  pdf_compress: true,
   lead_tot_start_days: 10,
   lead_trainer_ready_for_tot_days: 15,
   lead_trainer_found_days: 20,

@@ -18,9 +18,15 @@
 // email as Editor). Steps: d:/erp/drive-storage-setup.md.
 import { google, drive_v3 } from "googleapis";
 import { Readable } from "stream";
-import { mkdir, readFile, stat, writeFile } from "fs/promises";
-import { createReadStream } from "fs";
+import { mkdir, readFile, stat, writeFile, unlink } from "fs/promises";
+import { createReadStream, existsSync } from "fs";
+import { execFile } from "child_process";
+import { promisify } from "util";
+import os from "os";
+import crypto from "crypto";
 import path from "path";
+import { getDefaults } from "@/lib/defaults";
+const execFileP = promisify(execFile);
 
 let cachedDrive: drive_v3.Drive | null = null;
 let cachedErr: string | null = null;
@@ -106,10 +112,113 @@ async function ensureFolder(segments: string[]): Promise<{ id: string; path: str
   return { id: parent, path: walked.join("/") };
 }
 
-export type PutResult = { backend: "drive" | "local"; drive_file_id?: string; folder_path?: string };
+export type PutResult = {
+  backend: "drive" | "local"; drive_file_id?: string; folder_path?: string;
+  // -87 (QA-157): what the ONE door did to the bytes — recorded on every StoredFile row.
+  name: string; mime: string; original_size: number; size: number; compressed: boolean; compression: string; compression_ms: number; needs_compression: boolean;
+};
+
+// ---------- -87 (QA-157, Umesh 15/08 22:55: "jo kuch bhi media jaye — photo, certificate PDF, sab
+// compress hone chahiye"). Compression lives HERE, at the one door every write passes, so no
+// screen can bypass it again (the closure upload did). Client-side compression stays for the
+// trainer's 4G data; the server is what makes the rule true. Tools are optional at runtime —
+// missing → store as-is and RECORD why, never silently.
+const IMAGE_EXT = new Set([".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"]);
+const VIDEO_EXT = new Set([".mp4", ".mov", ".3gp", ".webm"]);
+let gsPath: string | null | undefined; // undefined = not probed yet
+function findGs(): string | null {
+  if (gsPath !== undefined) return gsPath;
+  const cands = [process.env.GS_PATH, "/usr/bin/gs", "/usr/local/bin/gs", "gs"].filter(Boolean) as string[];
+  gsPath = null;
+  for (const c of cands) {
+    if (c === "gs") { gsPath = "gs"; break; } // resolved via PATH by execFile; verified by the first run
+    if (existsSync(c)) { gsPath = c; break; }
+  }
+  return gsPath;
+}
+let gsVerified: boolean | null = null;
+async function gsAvailable(): Promise<boolean> {
+  if (gsVerified !== null) return gsVerified;
+  const g = findGs();
+  if (!g) return (gsVerified = false);
+  try { await execFileP(g, ["--version"], { timeout: 5000 }); gsVerified = true; } catch { gsVerified = false; }
+  return gsVerified;
+}
+let sharpMod: any | null | undefined;
+function loadSharp(): any | null {
+  if (sharpMod !== undefined) return sharpMod;
+  try { sharpMod = require("sharp"); } catch { sharpMod = null; }
+  return sharpMod;
+}
+export async function compressionTools(): Promise<{ sharp: boolean; gs: boolean }> {
+  return { sharp: !!loadSharp(), gs: await gsAvailable() };
+}
+
+export type Compressed = { buf: Buffer; name: string; mime: string; compressed: boolean; compression: string; ms: number; needs_compression: boolean };
+export async function compressForStorage(name: string, buf: Buffer, mime: string): Promise<Compressed> {
+  const t0 = Date.now();
+  const ext = path.extname(name).toLowerCase();
+  const done = (out: Buffer, n: string, m: string, label: string, needs = false): Compressed =>
+    ({ buf: out, name: n, mime: m, compressed: out !== buf, compression: label, ms: Date.now() - t0, needs_compression: needs });
+  let knobs: any = {};
+  try { knobs = await getDefaults(); } catch { /* defaults unreachable → built-in numbers */ }
+  const maxPx = Number(knobs.image_max_px ?? 1600) || 1600;
+  const quality = Math.min(95, Math.max(30, Number(knobs.image_quality ?? 75) || 75));
+  const pdfOn = knobs.pdf_compress !== false;
+
+  if (IMAGE_EXT.has(ext)) {
+    const sharp = loadSharp();
+    if (!sharp) return done(buf, name, mime, "none:sharp unavailable");
+    try {
+      const img = sharp(buf, { failOn: "none" }).rotate(); // EXIF orientation baked in
+      const meta = await img.metadata();
+      const w = meta.width ?? 0, h = meta.height ?? 0;
+      const within = Math.max(w, h) <= maxPx;
+      const isHeic = ext === ".heic" || ext === ".heif";
+      if (within && buf.length < 300 * 1024 && !isHeic) return done(buf, name, mime, "none:already small");
+      let pipe = img.resize({ width: maxPx, height: maxPx, fit: "inside", withoutEnlargement: true });
+      let outName = name, outMime = mime, label = `image-${maxPx}-q${quality}`;
+      if (ext === ".png" && meta.hasAlpha) { pipe = pipe.png({ compressionLevel: 9, palette: true }); label = `image-${maxPx}-png`; }
+      else if (ext === ".png") { pipe = pipe.jpeg({ quality, mozjpeg: true }); outName = name.replace(/\.png$/i, ".jpg"); outMime = "image/jpeg"; }
+      else if (ext === ".webp") { pipe = pipe.webp({ quality }); label = `image-${maxPx}-webp-q${quality}`; }
+      else { pipe = pipe.jpeg({ quality, mozjpeg: true }); if (isHeic) { outName = name.replace(/\.hei[cf]$/i, ".jpg"); outMime = "image/jpeg"; label = `image-heic-${maxPx}-q${quality}`; } }
+      const out = await pipe.toBuffer();
+      if (out.length >= buf.length && outName === name) return done(buf, name, mime, "none:original smaller");
+      return done(out, outName, outMime, label);
+    } catch (e: any) {
+      const why = /heif|heic|unsupported image format/i.test(String(e?.message)) ? "heic undecodable" : `image error: ${String(e?.message ?? e).slice(0, 60)}`;
+      return done(buf, name, mime, `none:${why}`);
+    }
+  }
+  if (ext === ".pdf") {
+    if (!pdfOn) return done(buf, name, mime, "none:pdf compression off");
+    if (buf.length > 200 * 1024 * 1024) return done(buf, name, mime, "none:too large for pdf pass");
+    if (!(await gsAvailable())) return done(buf, name, mime, "none:gs unavailable");
+    const tmpIn = path.join(os.tmpdir(), `erp-${crypto.randomBytes(8).toString("hex")}-in.pdf`);
+    const tmpOut = tmpIn.replace(/-in\.pdf$/, "-out.pdf");
+    try {
+      await writeFile(tmpIn, buf);
+      await execFileP(findGs()!, ["-sDEVICE=pdfwrite", "-dCompatibilityLevel=1.5", "-dPDFSETTINGS=/ebook", "-dNOPAUSE", "-dBATCH", "-dQUIET", "-dSAFER", `-sOutputFile=${tmpOut}`, tmpIn], { timeout: 60_000, maxBuffer: 8 * 1024 * 1024 });
+      const out = await readFile(tmpOut);
+      if (!out.length || out.length >= buf.length) return done(buf, name, mime, "none:original smaller");
+      return done(out, name, mime, "pdf-gs-ebook");
+    } catch (e: any) {
+      return done(buf, name, mime, `none:gs error: ${String(e?.message ?? e).slice(0, 60)}`);
+    } finally {
+      await unlink(tmpIn).catch(() => {}); await unlink(tmpOut).catch(() => {});
+    }
+  }
+  if (VIDEO_EXT.has(ext)) return done(buf, name, mime, "none:video (compress-first client, -89)", buf.length > 20 * 1024 * 1024);
+  return done(buf, name, mime, "none:not compressible here");
+}
 
 // Write bytes under the given folder segments. Drive when configured, else local disk.
-export async function putFile(name: string, buf: Buffer, mime: string, folderSegments: string[]): Promise<PutResult> {
+// -87: the bytes are compressed FIRST (images via sharp, PDFs via Ghostscript) — the returned
+// name/mime may differ from the request (PNG→JPEG, HEIC→JPEG); callers store what came back.
+export async function putFile(nameIn: string, bufIn: Buffer, mimeIn: string, folderSegments: string[]): Promise<PutResult> {
+  const c = await compressForStorage(nameIn, bufIn, mimeIn);
+  const name = c.name, buf = c.buf, mime = c.mime;
+  const meta = { name, mime, original_size: bufIn.length, size: buf.length, compressed: c.compressed, compression: c.compression, compression_ms: c.ms, needs_compression: c.needs_compression };
   if (storageConfigured()) {
     try {
       const folder = await ensureFolder(folderSegments);
@@ -120,7 +229,7 @@ export async function putFile(name: string, buf: Buffer, mime: string, folderSeg
         supportsAllDrives: true,
       });
       cachedErr = null;
-      return { backend: "drive", drive_file_id: String(res.data.id), folder_path: folder.path };
+      return { backend: "drive", drive_file_id: String(res.data.id), folder_path: folder.path, ...meta };
     } catch (e: any) {
       cachedErr = e?.message ?? String(e);
       throw e; // configured-but-failing must be a visible error, not a silent local write
@@ -131,7 +240,7 @@ export async function putFile(name: string, buf: Buffer, mime: string, folderSeg
   await writeFile(path.join(dir, name), buf);
   // -83: even the (deploy-wiped) local write records WHERE the file belongs, so the row
   // already answers "which batch / which folder" and a later move to Drive needs no guess.
-  return { backend: "local", folder_path: folderSegments.map((s) => String(s).trim()).filter(Boolean).join("/") || undefined };
+  return { backend: "local", folder_path: folderSegments.map((s) => String(s).trim()).filter(Boolean).join("/") || undefined, ...meta };
 }
 
 // -83 (honest file reads): STREAM bytes back, with an optional byte range, instead of

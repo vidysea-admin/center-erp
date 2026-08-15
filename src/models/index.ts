@@ -838,6 +838,14 @@ const StoredFileSchema = new Schema({
   folder_path: String,            // human path inside the Drive root, e.g. CHI-ITI/CHI-ITI-RPLAVP-DST-03/evidence
   entity: String, entity_id: Schema.Types.ObjectId, // what this file is about (batch/trainer/candidate/...) when known
   uploaded_by: { type: Schema.Types.ObjectId, ref: "User" },
+  // -87 (QA-157): what the one door did — original vs stored bytes and the label of the pass
+  // ("image-1600-q75", "pdf-gs-ebook", "none:gs unavailable"…). Answers "did it compress?"
+  // per file, and makes the storage estimate honest.
+  original_size: Number,
+  compressed: { type: Boolean, default: false },
+  compression: String,
+  compression_ms: Number,
+  needs_compression: { type: Boolean, default: false },
 }, { timestamps: true });
 StoredFileSchema.index({ entity: 1, entity_id: 1 });
 
@@ -974,6 +982,10 @@ const DefaultsSchema = new Schema({
   lead_trainer_ready_for_tot_days: { type: Number, default: 15 },
   lead_trainer_found_days: { type: Number, default: 20 },
   min_daily_evidence: { type: Number, default: 2 },
+  // -87 (QA-157): media compression knobs — Umesh turns them after eyeballing one clip/scan.
+  image_max_px: { type: Number, default: 1600 },
+  image_quality: { type: Number, default: 75 },
+  pdf_compress: { type: Boolean, default: true },
   sidh_url: { type: String, default: "https://www.skillindiadigital.gov.in/" },
   // 2026-08-13 eval sweep: these two were in the PUT whitelist and in DEFAULT_VALUES but NOT in
   // this schema — strict mode silently dropped every write, so the Admin panel's knob never

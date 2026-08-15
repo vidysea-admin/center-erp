@@ -45,15 +45,18 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // Drive tree reads like the product: <Centre code>/<Batch code>/<kind>/file.
   const seg = (k: string) => String(form.get(k) ?? "").trim();
   const folder = [seg("folder_centre"), seg("folder_batch"), seg("folder_kind") || "uploads"].filter(Boolean);
+  // -87 (QA-157): the ONE door compresses (images via sharp, PDFs via Ghostscript) and may
+  // hand back a different name/mime (PNG→JPEG, HEIC→JPEG); the row and the URL use what it stored.
   const put = await putFile(name, buf, file.type, folder);
   await dbConnect();
   await StoredFile.create({
-    name, original_name: file.name, mime: file.type, size: buf.length,
+    name: put.name, original_name: file.name, mime: put.mime, size: put.size,
+    original_size: put.original_size, compressed: put.compressed, compression: put.compression, compression_ms: put.compression_ms, needs_compression: put.needs_compression,
     backend: put.backend, drive_file_id: put.drive_file_id, folder_path: put.folder_path,
     entity: seg("entity") || undefined, entity_id: /^[a-f0-9]{24}$/.test(seg("entity_id")) ? seg("entity_id") : undefined,
     uploaded_by: user.id,
   });
   // Served via /api/files/[name] — the app proxies the bytes; the user never sees Drive.
   // URL is stored in the DB, so it carries the basePath prefix explicitly.
-  return NextResponse.json({ url: `${BASE_PATH}/api/files/` + name, name: file.name, backend: put.backend });
+  return NextResponse.json({ url: `${BASE_PATH}/api/files/` + put.name, name: file.name, backend: put.backend, original_size: put.original_size, size: put.size, compression: put.compression });
 });

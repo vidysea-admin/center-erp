@@ -1281,6 +1281,57 @@ ok("…with the contact details an approver needs", !!queued && queued.phone ===
   ok("QA-145: storage probe refuses unconfigured with the reason named (400)", probe.status === 400 && /not connected/i.test(probe.data?.error ?? ""), `${probe.status} ${probe.data?.error}`);
   const probeGet = await req("GET", "/api/test-storage", undefined, 200);
   ok("QA-145: storage probe GET reports health", probeGet.data?.storage?.configured === false);
+  ok("-87 (QA-157): the storage health names its compression tools + totals", typeof probeGet.data?.tools?.sharp === "boolean" && typeof probeGet.data?.tools?.gs === "boolean" && typeof probeGet.data?.compression?.totals?.files === "number", JSON.stringify(probeGet.data?.tools));
+}
+
+// ---- -87 (QA-157, Umesh 15/08: "jo kuch bhi media jaye — sab compress"): the ONE door compresses ----
+{
+  const sharp = (await import("sharp")).default;
+  const big = await sharp({ create: { width: 3000, height: 2000, channels: 3, background: { r: 200, g: 120, b: 40 } } })
+    .composite([{ input: Buffer.from(`<svg width="3000" height="2000"><rect x="100" y="100" width="1200" height="800" fill="#123456"/><text x="200" y="600" font-size="200" fill="#fff">EVIDENCE</text></svg>`), top: 0, left: 0 }])
+    .jpeg({ quality: 95 }).toBuffer();
+  const fdBig = new FormData();
+  fdBig.append("file", new File([big], "field-photo.jpg", { type: "image/jpeg" }));
+  const upBig = await (await fetch(BASE + "/api/upload", { method: "POST", headers: { cookie }, body: fdBig })).json();
+  ok("-87: a 3000×2000 photo is compressed at the storage door (label image-1600-q75, stored < original)",
+    upBig.compression === "image-1600-q75" && upBig.size < upBig.original_size && upBig.original_size === big.length, JSON.stringify({ o: upBig.original_size, s: upBig.size, c: upBig.compression }));
+  const backBig = Buffer.from(await (await fetch(BASE + String(upBig.url).replace(/^\/erp/, ""))).arrayBuffer());
+  const metaBig = await sharp(backBig).metadata();
+  ok("-87: what reads back is the compressed image — longest edge 1600, still a JPEG", metaBig.width === 1600 && metaBig.height === 1067 && metaBig.format === "jpeg" && backBig.length === upBig.size, JSON.stringify({ w: metaBig.width, h: metaBig.height, f: metaBig.format }));
+  {
+    const { MongoClient } = await import("mongodb");
+    const mc = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+    await mc.connect();
+    const row = await mc.db(process.env.MONGODB_DB || "center_erp_ci").collection("storedfiles").findOne({ name: String(upBig.url).split("/").pop() });
+    await mc.close();
+    ok("-87: the StoredFile row records original vs stored + the label", !!row && row.original_size === big.length && row.size === upBig.size && row.compressed === true && row.compression === "image-1600-q75" && typeof row.compression_ms === "number", JSON.stringify(row && { o: row.original_size, s: row.size, c: row.compression, comp: row.compressed }));
+  }
+  const small = await sharp({ create: { width: 200, height: 150, channels: 3, background: { r: 10, g: 200, b: 90 } } }).png().toBuffer();
+  const fdSmall = new FormData();
+  fdSmall.append("file", new File([small], "tiny.png", { type: "image/png" }));
+  const upSmall = await (await fetch(BASE + "/api/upload", { method: "POST", headers: { cookie }, body: fdSmall })).json();
+  ok("-87: a tiny image is left alone and SAYS so (none:already small)", upSmall.compression === "none:already small" && upSmall.size === small.length && /\.png$/.test(upSmall.url), JSON.stringify({ c: upSmall.compression, s: upSmall.size }));
+  const pdf = Buffer.from(["%PDF-1.4", "1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj 2 0 obj<</Type/Pages/Kids[]/Count 0>>endobj", "trailer<</Root 1 0 R>>", "%%EOF"].join(String.fromCharCode(10)));
+  const fdPdf = new FormData();
+  fdPdf.append("file", new File([pdf], "scan.pdf", { type: "application/pdf" }));
+  const upPdf = await (await fetch(BASE + "/api/upload", { method: "POST", headers: { cookie }, body: fdPdf })).json();
+  ok("-87: a PDF passes the door with a recorded verdict (Ghostscript pass, or 'none:gs …' where gs is absent, never silent)",
+    typeof upPdf.compression === "string" && (/^pdf-gs-ebook$/.test(upPdf.compression) || /^none:(gs |original smaller)/.test(upPdf.compression)), JSON.stringify(upPdf.compression));
+  const mp4 = Buffer.alloc(1024, 1);
+  const fdMp4 = new FormData();
+  fdMp4.append("file", new File([mp4], "clip.mp4", { type: "video/mp4" }));
+  const upMp4 = await (await fetch(BASE + "/api/upload", { method: "POST", headers: { cookie }, body: fdMp4 })).json();
+  ok("-87: video is untouched here and says why (client-side compress-first is the next release)", /^none:video/.test(upMp4.compression ?? "") && upMp4.size === 1024, JSON.stringify(upMp4.compression));
+  // knobs: the door reads Defaults — turn the edge to 800 and a fresh upload obeys
+  const defsBefore = (await req("GET", "/api/defaults", undefined, 200)).data.item ?? (await req("GET", "/api/defaults")).data;
+  ok("-87: Defaults carry the compression knobs (image_max_px 1600, image_quality 75, pdf_compress on)", Number(defsBefore.image_max_px) === 1600 && Number(defsBefore.image_quality) === 75 && defsBefore.pdf_compress !== false, JSON.stringify({ px: defsBefore.image_max_px, q: defsBefore.image_quality, pdf: defsBefore.pdf_compress }));
+  await req("PUT", "/api/defaults", { image_max_px: 800 }, 200);
+  const fdBig2 = new FormData();
+  fdBig2.append("file", new File([big], "field-photo-2.jpg", { type: "image/jpeg" }));
+  const upBig2 = await (await fetch(BASE + "/api/upload", { method: "POST", headers: { cookie }, body: fdBig2 })).json();
+  const back2 = Buffer.from(await (await fetch(BASE + String(upBig2.url).replace(/^\/erp/, ""))).arrayBuffer());
+  ok("-87: turning the knob changes the next upload (800 px edge, label image-800-q75)", upBig2.compression === "image-800-q75" && (await sharp(back2).metadata()).width === 800, JSON.stringify(upBig2.compression));
+  await req("PUT", "/api/defaults", { image_max_px: 1600 }, 200);
 }
 
 // ---- QA-115 (15/08): the mail layer — CI runs UNCONFIGURED, so this pins the SKIP path:

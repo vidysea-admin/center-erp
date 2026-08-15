@@ -14,6 +14,10 @@ FROM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 RUN addgroup -S app && adduser -S app -G app
+# -87 (QA-157): Ghostscript compresses scanned PDFs (certificates, documents) at the storage
+# door; sharp (npm) does images. Both are optional at runtime — the app records "none:gs
+# unavailable" instead of failing — but production should have them.
+RUN apk add --no-cache ghostscript
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
