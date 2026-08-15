@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiHandler, requireUser, requireRole, HttpError } from "@/lib/authz";
-import { compressionTools, getFile, putFile, storageHealth } from "@/lib/storage";
+import { compressionTools, envDiagnostic, getFile, putFile, storageHealth } from "@/lib/storage";
 
 // QA-145 rider (Umesh, 15/08: "Drive wala code local me test karke dekha ki information ja
 // rahi hai ya bas push kar diya?") — the honest answer was: the Drive branch could not be
@@ -15,7 +15,8 @@ export const GET = apiHandler(async () => {
   const { StoredFile } = await import("@/models");
   const agg = await StoredFile.aggregate([{ $group: { _id: null, files: { $sum: 1 }, stored: { $sum: "$size" }, original: { $sum: { $ifNull: ["$original_size", "$size"] } }, compressed: { $sum: { $cond: ["$compressed", 1, 0] } } } }]);
   const recent = await StoredFile.find({}).sort({ createdAt: -1 }).limit(20).select("original_name mime original_size size compressed compression createdAt").lean();
-  return NextResponse.json({ storage: storageHealth(), tools, compression: { totals: agg[0] ?? { files: 0, stored: 0, original: 0, compressed: 0 }, recent } });
+  // -89: names only (never values) — which Drive env names reached THIS container, with SES/Mongo as the control.
+  return NextResponse.json({ storage: storageHealth(), env: envDiagnostic(), tools, compression: { totals: agg[0] ?? { files: 0, stored: 0, original: 0, compressed: 0 }, recent } });
 });
 
 export const POST = apiHandler(async (_req: NextRequest) => {
@@ -23,7 +24,7 @@ export const POST = apiHandler(async (_req: NextRequest) => {
   requireRole(user, "Admin");
   const health = storageHealth();
   if (!health.configured) {
-    throw new HttpError(400, "Evidence storage is not connected (GDRIVE_SA_JSON missing) — the probe would only touch the server's own disk, which is the very thing that is lost on deploy. Connect Drive first (drive-storage-setup.md).");
+    throw new HttpError(400, `Evidence storage is not connected — the probe would only touch the server's own disk, which is the very thing that is lost on deploy. ${health.hint}`);
   }
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const name = `healthcheck-${stamp}.txt`;

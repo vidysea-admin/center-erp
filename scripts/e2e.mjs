@@ -1282,6 +1282,13 @@ ok("…with the contact details an approver needs", !!queued && queued.phone ===
   const probeGet = await req("GET", "/api/test-storage", undefined, 200);
   ok("QA-145: storage probe GET reports health", probeGet.data?.storage?.configured === false);
   ok("-87 (QA-157): the storage health names its compression tools + totals", typeof probeGet.data?.tools?.sharp === "boolean" && typeof probeGet.data?.tools?.gs === "boolean" && typeof probeGet.data?.compression?.totals?.files === "number", JSON.stringify(probeGet.data?.tools));
+  // -89 (Umesh: "sab .env me hai, tu check kar le"): the app SAYS which Drive names reached this
+  // container (names only, never values), with SES/Mongo as the control, and a plain hint.
+  const env = probeGet.data?.env;
+  ok("-89: health carries the env diagnostic — names + lengths, never values", !!env?.env_seen && "GDRIVE_OAUTH_CLIENT_ID" in env.env_seen && "SES_SMTP_USER" in env.env_seen && "MONGODB_URL" in env.env_seen && typeof env.env_seen.MONGODB_URL.length === "number" && !JSON.stringify(env).includes(process.env.MONGODB_URL ?? "mongodb://127.0.0.1"), JSON.stringify(Object.keys(env?.env_seen ?? {}).slice(0, 5)));
+  ok("-89: CI has no Drive names → the hint says so and points at where SES lives", typeof env?.hint === "string" && /None of the Drive names/.test(env.hint) && env.env_seen.MONGODB_URL.present === true, env?.hint);
+  ok("-89: storage health itself carries the hint (the admin banner shows it)", typeof probeGet.data?.storage?.hint === "string" && probeGet.data.storage.hint.length > 20, probeGet.data?.storage?.hint);
+  ok("-89: the probe's refusal names the hint, not a bare 'GDRIVE_SA_JSON missing'", /None of the Drive names|register the three/.test(probe.data?.error ?? ""), probe.data?.error);
 }
 
 // ---- -87 (QA-157, Umesh 15/08: "jo kuch bhi media jaye — sab compress"): the ONE door compresses ----

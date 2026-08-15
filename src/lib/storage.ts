@@ -46,27 +46,71 @@ export function rootFolderId(): string {
 //   (b) OAuth user (Umesh, 15/08: "mere credentials jo already available hain, .env me daal
 //       do"): GDRIVE_OAUTH_CLIENT_ID + GDRIVE_OAUTH_CLIENT_SECRET + GDRIVE_OAUTH_REFRESH_TOKEN
 //       — the same triple the gws CLI holds; the app then writes AS that user.
-function oauthTriple(): { id: string; secret: string; refresh: string } | null {
-  const id = process.env.GDRIVE_OAUTH_CLIENT_ID, secret = process.env.GDRIVE_OAUTH_CLIENT_SECRET, refresh = process.env.GDRIVE_OAUTH_REFRESH_TOKEN;
-  return id && secret && refresh ? { id, secret, refresh } : null;
+// -89 (Umesh 15/08 23:45: "sab .env me hai, tu check kar le, gap ho to fix kar"): the app used
+// to be strict — exact names, raw values — and mute about what it saw. Now it reads liberally
+// (aliases; trimmed; surrounding quotes stripped — a `.env`-style KEY="value " pasted into a
+// console field is the classic silent miss) and can SAY which names reached the container.
+export const ENV_ALIASES = {
+  client_id: ["GDRIVE_OAUTH_CLIENT_ID", "GDRIVE_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_CLIENT_ID"],
+  client_secret: ["GDRIVE_OAUTH_CLIENT_SECRET", "GDRIVE_CLIENT_SECRET", "GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_CLIENT_SECRET"],
+  refresh_token: ["GDRIVE_OAUTH_REFRESH_TOKEN", "GDRIVE_REFRESH_TOKEN", "GOOGLE_OAUTH_REFRESH_TOKEN", "GOOGLE_REFRESH_TOKEN"],
+  sa_json: ["GDRIVE_SA_JSON", "GOOGLE_SA_JSON", "GOOGLE_APPLICATION_CREDENTIALS_JSON"],
+} as const;
+export function parseEnvValue(raw: string | undefined | null): string {
+  let v = String(raw ?? "").trim();
+  if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1).trim();
+  return v;
+}
+function readEnv(aliases: readonly string[]): { value: string; name: string } | null {
+  for (const n of aliases) { const v = parseEnvValue(process.env[n]); if (v) return { value: v, name: n }; }
+  return null;
+}
+function oauthTriple(): { id: string; secret: string; refresh: string; names: string[] } | null {
+  const id = readEnv(ENV_ALIASES.client_id), secret = readEnv(ENV_ALIASES.client_secret), refresh = readEnv(ENV_ALIASES.refresh_token);
+  return id && secret && refresh ? { id: id.value, secret: secret.value, refresh: refresh.value, names: [id.name, secret.name, refresh.name] } : null;
+}
+function saJson(): { raw: string; name: string } | null {
+  const e = readEnv(ENV_ALIASES.sa_json);
+  return e ? { raw: e.value, name: e.name } : null;
 }
 export function storageMode(): "sa" | "oauth" | null {
-  if (process.env.GDRIVE_SA_JSON) return "sa";
+  if (saJson()) return "sa";
   if (oauthTriple()) return "oauth";
   return null;
+}
+// Names only — never values. What the running container actually holds, so the "we put it in
+// .env" conversation ends with a fact instead of a guess.
+export function envDiagnostic() {
+  const seen: Record<string, { present: boolean; length: number }> = {};
+  const all = [...ENV_ALIASES.client_id, ...ENV_ALIASES.client_secret, ...ENV_ALIASES.refresh_token, ...ENV_ALIASES.sa_json, "SES_SMTP_USER", "MONGODB_URL", "AUTH_SECRET"];
+  for (const n of all) { const v = parseEnvValue(process.env[n]); seen[n] = { present: n in process.env, length: v.length }; }
+  const other = Object.keys(process.env).filter((k) => /GDRIVE|DRIVE|GOOGLE|OAUTH|GAPI/i.test(k) && !all.includes(k)).map((k) => ({ name: k, length: parseEnvValue(process.env[k]).length }));
+  const t = oauthTriple(), sa = saJson();
+  const anyDriveName = Object.entries(seen).some(([k, v]) => v.present && !["SES_SMTP_USER", "MONGODB_URL", "AUTH_SECRET"].includes(k));
+  let hint: string;
+  if (sa) hint = `Service-account key found as ${sa.name}.`;
+  else if (t) hint = `OAuth triple found as ${t.names.join(" / ")}${t.names.join() !== ENV_ALIASES.client_id[0] + "," + ENV_ALIASES.client_secret[0] + "," + ENV_ALIASES.refresh_token[0] ? " (accepted via alias)" : ""}.`;
+  else if (anyDriveName) {
+    const empties = Object.entries(seen).filter(([k, v]) => v.present && v.length === 0 && !["SES_SMTP_USER", "MONGODB_URL", "AUTH_SECRET"].includes(k)).map(([k]) => k);
+    const partial = Object.entries(seen).filter(([k, v]) => v.present && v.length > 0 && !["SES_SMTP_USER", "MONGODB_URL", "AUTH_SECRET"].includes(k)).map(([k]) => k);
+    hint = `Some Drive names reached this container but not a complete set — present with a value: ${partial.join(", ") || "none"}; present but EMPTY: ${empties.join(", ") || "none"}. All three OAuth names (or the SA key) are needed.`;
+  } else hint = `None of the Drive names reached this container${seen.SES_SMTP_USER.present ? " — SES_SMTP_USER did, so register the three GDRIVE_OAUTH_* names in the same place (task definition / pipeline variable list) and redeploy" : ""}.`;
+  return { env_seen: seen, other_names: other, hint };
 }
 export function storageConfigured(): boolean {
   return storageMode() !== null;
 }
 
-export function storageHealth(): { backend: "drive" | "local"; configured: boolean; mode: "sa" | "oauth" | null; reason: string } {
+export function storageHealth(): { backend: "drive" | "local"; configured: boolean; mode: "sa" | "oauth" | null; reason: string; hint: string } {
   const mode = storageMode();
-  if (mode) return { backend: "drive", configured: true, mode, reason: cachedErr ? `Drive error: ${cachedErr}` : `Google Drive connected via ${mode === "sa" ? "service account" : "OAuth user"} (root folder ${rootFolderId()}) — uploads survive deploys` };
+  const diag = envDiagnostic();
+  if (mode) return { backend: "drive", configured: true, mode, reason: cachedErr ? `Drive error: ${cachedErr}` : `Google Drive connected via ${mode === "sa" ? "service account" : "OAuth user"} (root folder ${rootFolderId()}) — uploads survive deploys`, hint: diag.hint };
   return {
     backend: "local",
     configured: false,
     mode: null,
     reason: "Evidence storage NOT connected — uploads are written to the server's own disk and are LOST on every deploy. Set GDRIVE_SA_JSON (service-account key) OR GDRIVE_OAUTH_CLIENT_ID/SECRET/REFRESH_TOKEN — the Drive folder is already known (see drive-storage-setup.md).",
+    hint: diag.hint,
   };
 }
 
@@ -74,7 +118,9 @@ function drive(): drive_v3.Drive {
   if (cachedDrive) return cachedDrive;
   const mode = storageMode();
   if (mode === "sa") {
-    const raw = Buffer.from(String(process.env.GDRIVE_SA_JSON), "base64").toString("utf8");
+    const sa = saJson()!;
+    // base64 OR raw JSON (a console field may hold the JSON itself)
+    const raw = sa.raw.trim().startsWith("{") ? sa.raw : Buffer.from(sa.raw, "base64").toString("utf8");
     const creds = JSON.parse(raw);
     const auth = new google.auth.GoogleAuth({ credentials: creds, scopes: ["https://www.googleapis.com/auth/drive"] });
     cachedDrive = google.drive({ version: "v3", auth });

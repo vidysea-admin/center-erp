@@ -989,6 +989,22 @@ function MailPanel({ setError }: any) {
               {storageCheck.ok ? "✓" : "✗"} {storageCheck.note}{storageCheck.folder_path ? ` — ${storageCheck.folder_path}/ (id ${storageCheck.drive_file_id}, ${storageCheck.ms} ms)` : ""}
             </div>
           )}
+          {/* -89: what the container actually holds (names, never values) — the fact that ends the
+              ".env me daal diya" guesswork; screenshot this for devops. */}
+          {comp?.env && !mail.storage.configured && (
+            <div className="mt-2 border-t border-current/20 pt-2">
+              <div><b>Why:</b> {comp.env.hint}</div>
+              <details className="mt-1"><summary className="cursor-pointer">what this container sees (names only)</summary>
+                <ul className="mt-1 columns-2 text-[11px] font-mono">
+                  {Object.entries(comp.env.env_seen ?? {}).map(([k, v]: any) => (
+                    <li key={k}>{v.present ? (v.length ? "✓" : "∅") : "✗"} {k}{v.present ? ` (${v.length ? `${v.length} chars` : "EMPTY"})` : ""}</li>
+                  ))}
+                  {(comp.env.other_names ?? []).map((o: any) => <li key={o.name}>? {o.name} ({o.length} chars) — not a name the app reads</li>)}
+                </ul>
+                <div className="mt-1 text-[11px]">✓ present with a value · ∅ present but empty · ✗ not in this container. Values are never shown.</div>
+              </details>
+            </div>
+          )}
           {/* -87 (QA-157): what the compression door has done — tools present, totals, last 20 files. */}
           {comp && (
             <div className="mt-2 border-t border-current/20 pt-2 text-gray-800">
