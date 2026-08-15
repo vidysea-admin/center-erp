@@ -450,10 +450,16 @@ function Permissions({ setError }: any) {
   const load = () => api("/api/permissions").then((d) => { setCatalog(d.catalog); setRoles(d.roles); }).catch((e: any) => setError(e.message));
   useEffect(() => { load(); }, []);
 
-  async function toggle(role: string, key: string) {
+  // QA-025 P1: a cell is none / view / edit now. Encoding stays backward-compatible — a
+  // bare key means edit (its meaning since day one), "key:view" is the new middle level.
+  const levelOf = (r: any, key: string) =>
+    r.permissions.includes(key) ? "edit" : r.permissions.includes(`${key}:view`) ? "view" : "none";
+  async function setLevel(role: string, key: string, level: string) {
     const r = roles.find((x) => x.role === role);
     if (!r) return;
-    const next = r.permissions.includes(key) ? r.permissions.filter((k: string) => k !== key) : [...r.permissions, key];
+    const next = r.permissions.filter((k: string) => k !== key && k !== `${key}:view` && k !== `${key}:edit`);
+    if (level === "edit") next.push(key);
+    if (level === "view") next.push(`${key}:view`);
     setSaving(role + key);
     try {
       await api("/api/permissions", { method: "PUT", json: { role, permissions: next } });
@@ -468,9 +474,10 @@ function Permissions({ setError }: any) {
   return (
     <Section title="Role permissions — what each role's group can do">
       <p className="mb-3 text-sm text-gray-500">
-        Tick a box to grant that right to everyone in the role; untick to revoke. Admin always has everything.
-        Individual users can get <b>special rights</b> on top via Users &amp; Access → open the user.
+        Each cell is <b>—</b> (no access), <b>view</b> (read-only where the screen supports it) or <b>edit</b> (full right).
+        Admin always has everything. Individual users can get <b>special rights</b> on top via Users &amp; Access → open the user.
         The key control the CEO asked for — <b>who approves sheet changes</b> — is the first row.
+        View-level enforcement is live on the finance screens (costs, invoices, approvals queue); more screens join phase by phase.
       </p>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[640px] text-sm">
@@ -487,13 +494,20 @@ function Permissions({ setError }: any) {
                 {catalog.filter((p) => p.group === g).map((p) => (
                   <tr key={p.key} className="border-b border-gray-100">
                     <td className="py-1.5 pr-3">{p.label}</td>
-                    {editableRoles.map((r) => (
-                      <td key={r.role} className="px-2 py-1.5 text-center">
-                        <input type="checkbox" disabled={saving === r.role + p.key}
-                          checked={r.permissions.includes(p.key)}
-                          onChange={() => toggle(r.role, p.key)} />
-                      </td>
-                    ))}
+                    {editableRoles.map((r) => {
+                      const lv = levelOf(r, p.key);
+                      return (
+                        <td key={r.role} className="px-2 py-1.5 text-center">
+                          <select disabled={saving === r.role + p.key}
+                            className={`rounded border px-1 py-0.5 text-xs ${lv === "edit" ? "border-green-300 bg-green-50 text-green-800" : lv === "view" ? "border-blue-300 bg-blue-50 text-blue-800" : "border-gray-200 bg-gray-50 text-gray-400"}`}
+                            value={lv} onChange={(e) => setLevel(r.role, p.key, e.target.value)}>
+                            <option value="none">—</option>
+                            <option value="view">view</option>
+                            <option value="edit">edit</option>
+                          </select>
+                        </td>
+                      );
+                    })}
                   </tr>
                 ))}
               </Fragment>

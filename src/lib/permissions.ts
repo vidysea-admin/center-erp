@@ -77,25 +77,78 @@ export async function getRolePermissions(role: string): Promise<Set<string>> {
 
 export function invalidatePermissionCache() { cache = null; }
 
-export async function getEffectivePermissions(user: SessionUser): Promise<Set<string>> {
-  const set = new Set(await getRolePermissions(user.role));
-  // extra grants live on the user document, not the JWT — a grant works without re-login
-  const doc = await User.findById(user.id).select("extra_permissions revoked_permissions").lean<any>();
-  for (const p of doc?.extra_permissions ?? []) set.add(p);
-  // CEO 14/08: per-user REMOVAL of a right. Deny wins over the role set and extra grants
-  // alike — otherwise a revoke could be undone by the very grant list the same screen edits.
-  for (const p of doc?.revoked_permissions ?? []) set.delete(p);
-  return set;
+// (getEffectivePermissions — the flat-set predecessor — retired in QA-025 P1; every caller
+// moved to getEffectiveLevels below. Deny-wins semantics carried over verbatim.)
+
+// ---- QA-025 P1 (Umesh-approved design, DESIGN-3-level-rights.md): three-level rights ----
+// Every entry in the matrix / grants / revokes is either a bare key (= EDIT, today's exact
+// meaning — zero migration by construction) or "key:view" / "key:edit". parseLevel is THE
+// parser; nothing else reads the suffix.
+export type PermLevel = "view" | "edit";
+const LEVEL_RANK: Record<PermLevel, number> = { view: 1, edit: 2 };
+
+export function parseLevel(entry: string): { key: string; level: PermLevel } {
+  const i = entry.lastIndexOf(":");
+  if (i > 0) {
+    const suffix = entry.slice(i + 1);
+    if (suffix === "view" || suffix === "edit") return { key: entry.slice(0, i), level: suffix };
+  }
+  return { key: entry, level: "edit" };
 }
 
+// Effective level per key: max(role, grants) — a grant only ever UPGRADES (downgrade is what
+// revoke is for). Deny wins like R-B: a bare revoke = none; a ":edit" revoke strips edit but
+// leaves view standing. Rule 39 stays exactly itself as a cap: can_edit=false ⇒ nothing
+// above view. Admin: always edit on everything (bypass, as today).
+export async function getEffectiveLevels(user: SessionUser): Promise<Map<string, PermLevel>> {
+  const levels = new Map<string, PermLevel>();
+  if (user.role === "Admin") {
+    for (const p of PERMISSIONS) levels.set(p.key, "edit");
+    return levels;
+  }
+  const bump = (entry: string) => {
+    const { key, level } = parseLevel(entry);
+    const cur = levels.get(key);
+    if (!cur || LEVEL_RANK[level] > LEVEL_RANK[cur]) levels.set(key, level);
+  };
+  for (const e of await getRolePermissions(user.role)) bump(e);
+  const doc = await User.findById(user.id).select("extra_permissions revoked_permissions can_edit").lean<any>();
+  for (const e of doc?.extra_permissions ?? []) bump(e);
+  for (const e of doc?.revoked_permissions ?? []) {
+    const { key } = parseLevel(e);
+    if (String(e).endsWith(":edit")) { if (levels.get(key) === "edit") levels.set(key, "view"); }
+    else levels.delete(key); // bare (or :view) revoke = the whole right is gone
+  }
+  if (doc && doc.can_edit === false) {
+    for (const [k, l] of levels) if (l === "edit") levels.set(k, "view");
+  }
+  return levels;
+}
+
+// level ≥ view. The historical name kept on purpose — its callers are read-side decisions
+// (masking, UI capability checks) and their meaning does not change.
 export async function hasPermission(user: SessionUser, perm: string): Promise<boolean> {
   if (user.role === "Admin") return true;
-  return (await getEffectivePermissions(user)).has(perm);
+  return (await getEffectiveLevels(user)).has(parseLevel(perm).key);
 }
 
-export async function requirePerm(user: SessionUser, perm: string): Promise<void> {
+// level ≥ view, throwing — the read-side gate (QA-025 P2: finance GETs sit on this).
+export async function requireView(user: SessionUser, perm: string): Promise<void> {
   if (!(await hasPermission(user, perm))) {
-    const label = PERMISSIONS.find((p) => p.key === perm)?.label ?? perm;
+    const label = PERMISSIONS.find((p) => p.key === parseLevel(perm).key)?.label ?? perm;
     throw new HttpError(403, `You do not have the "${label}" right. Ask an Admin to grant it.`);
   }
+}
+
+// level = EDIT required. Every existing caller is a write-ish gate, so their meaning is
+// unchanged for everyone holding bare keys — a ":view" holder now reads but cannot write.
+export async function requirePerm(user: SessionUser, perm: string): Promise<void> {
+  if (user.role === "Admin") return;
+  const key = parseLevel(perm).key;
+  const level = (await getEffectiveLevels(user)).get(key);
+  if (level === "edit") return;
+  const label = PERMISSIONS.find((p) => p.key === key)?.label ?? perm;
+  throw new HttpError(403, level === "view"
+    ? `Your "${label}" right is view-only. Ask an Admin for the edit level.`
+    : `You do not have the "${label}" right. Ask an Admin to grant it.`);
 }

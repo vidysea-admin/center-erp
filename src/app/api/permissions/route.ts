@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, HttpError } from "@/lib/authz";
-import { requirePerm, PERMISSIONS, DEFAULT_ROLE_PERMISSIONS, invalidatePermissionCache } from "@/lib/permissions";
+import { requirePerm, parseLevel, PERMISSIONS, DEFAULT_ROLE_PERMISSIONS, invalidatePermissionCache } from "@/lib/permissions";
 import { RolePermission, USER_ROLE } from "@/models";
 import { audit } from "@/lib/audit";
 
@@ -35,7 +35,9 @@ export const PUT = apiHandler(async (req: NextRequest) => {
   if (!USER_ROLE.includes(role as any)) throw new HttpError(400, "Unknown role");
   if (role === "Admin") throw new HttpError(400, "Admin rights are fixed — Admin bypasses all checks.");
   const valid = new Set(PERMISSIONS.map((p) => p.key));
-  const permissions = (Array.isArray(body.permissions) ? body.permissions : []).filter((p: string) => valid.has(p));
+  // QA-025 P1: entries may carry a level suffix ("costs.manage:view") — validate the KEY,
+  // keep the entry verbatim (parseLevel is the one reader of the suffix).
+  const permissions = (Array.isArray(body.permissions) ? body.permissions : []).filter((p: string) => valid.has(parseLevel(String(p)).key));
   const doc = await RolePermission.findOneAndUpdate(
     { role },
     { $set: { permissions } },

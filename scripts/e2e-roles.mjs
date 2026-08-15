@@ -538,6 +538,38 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   await mc.close();
 }
 
+// ---- QA-025 P1+P2 (-66): three-level rights (none/view/edit). Bare key = edit (its meaning
+// since day one — zero migration); "key:view" is the new middle level. Finance reads sit on
+// view; every write keeps needing edit. The R-E Operations hardcode on the ledgers STAYS —
+// an ordered lattice cannot express the CEO's post-yes/read-no shape, so that stays code.
+{
+  const s25 = Date.now().toString().slice(-6);
+  const jpr = (await req(spoc, "GET", "/api/locations?limit=1")).data.items[0];
+  const em = `q025.${s25}@vidysea-test.local`;
+  const mkU = await req(admin, "POST", "/api/users", { name: "Q025 Viewer", email: em, password: "Q025pass!xyz", role: "Enrollment", location_scope: [jpr._id], can_edit: true });
+  ok("QA-025: fixture user created", mkU.status === 201 || mkU.status === 200, `got ${mkU.status}`);
+  const uid = mkU.data.item?._id;
+  const grant = await req(admin, "PATCH", `/api/users/${uid}`, { extra_permissions: ["costs.manage:view"] });
+  ok("QA-025: a :view grant is stored verbatim", grant.status === 200 && (grant.data.item?.extra_permissions ?? []).includes("costs.manage:view"));
+  const viewer = await login(em, "Q025pass!xyz");
+  ok("QA-025: the viewer signs in", !!viewer);
+  if (viewer) {
+    ok("QA-025 P2: view level READS the cost ledger", (await req(viewer, "GET", "/api/costs")).status === 200);
+    ok("QA-025 P2: view level cannot WRITE a cost entry",
+      (await req(viewer, "POST", "/api/costs", { entry_date: "2026-08-16", location: jpr._id, amount: 1, category: "000000000000000000000000" })).status === 403);
+    const me = await req(viewer, "GET", "/api/permissions/me");
+    ok("QA-025 P1: /api/permissions/me names the level", me.status === 200 && me.data.levels?.["costs.manage"] === "view", JSON.stringify(me.data.levels?.["costs.manage"] ?? null));
+    ok("QA-025: no invoices right at any level → still 403", (await req(viewer, "GET", "/api/invoices")).status === 403);
+  }
+  ok("QA-025/R-E: Operations still refused the ledger READ (edit-without-view stays code)",
+    (await req(ops, "GET", "/api/costs")).status === 403);
+  const put = await req(admin, "PUT", "/api/permissions", { role: "Enrollment", permissions: ["candidates.manage", "candidates.assign", "costs.manage:view"] });
+  ok("QA-025 P1: the matrix PUT keeps a :view entry verbatim",
+    put.status === 200 && (put.data.item?.permissions ?? []).includes("costs.manage:view"), JSON.stringify(put.data.item?.permissions ?? null));
+  const restore = await req(admin, "PUT", "/api/permissions", { role: "Enrollment", permissions: ["candidates.manage", "candidates.assign"] });
+  ok("QA-025: role matrix restored for the rest of the wall", restore.status === 200);
+}
+
 // 2026-08-12 audit F-000 (S0): the generic list route copied every ?key=value into the Mongo
 // filter AFTER the Rule 38 scope filter, so ?location=<other centre> simply overwrote it and a
 // scoped user could read every centre's candidate PII. Scope is now applied last, client keys

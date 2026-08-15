@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, requireRole, locationFilter, HttpError } from "@/lib/authz";
-import { requirePerm } from "@/lib/permissions";
+import { requirePerm, requireView } from "@/lib/permissions";
 import { CostEntry } from "@/models";
 import { assertCostEntryValid } from "@/lib/rules";
 import { requireApproval } from "@/lib/approvals";
@@ -10,10 +10,13 @@ import { audit } from "@/lib/audit";
 export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
-  await requirePerm(user, "costs.manage"); // read follows the same togglable right as write
+  // QA-025 P2: reading the ledger needs the VIEW level; posting keeps needing edit below.
+  await requireView(user, "costs.manage");
   // R-E (CEO 14/08 [25:06]): Operations POSTS money entries but "shouldn't be able to see
   // what has been posted" — the ledger lives with the Admin. Their own submissions are
-  // visible via /api/approvals?mine=1, never the book.
+  // visible via /api/approvals?mine=1, never the book. This hardcode STAYS by design: an
+  // ordered none<view<edit lattice cannot express edit-without-view, and the CEO asked for
+  // exactly that shape here (checker re-verified 16/08 — [24:42] + [25:06]).
   if (user.role === "Operations") {
     throw new HttpError(403, "Operations posts entries for approval; the cost ledger is Admin-only. Your own submissions are under My submissions.");
   }
