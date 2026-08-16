@@ -1136,11 +1136,27 @@ function DailyExecution({ batchId, batch, role, setError }: any) {
         else if (p.phase === "finalising") setUploadNote(`${file.name}: confirming with storage…`);
       }); // compressed + 3 retries + per-batch offline queue; large/video → direct-to-Drive with progress
       const info = getLastUploadInfo();
-      if (info) setUploadNote(`${file.name}: ${fmtBytes(file.size)} → ${fmtBytes(info.size)}${info.compression && !info.compression.startsWith("none") ? ` (${info.compression})` : ""}`);
+      // -97 (QA-164): the screen tells the per-file truth — shrunk (how) or NOT shrunk (why).
+      if (info) {
+        const c = info.compression ?? "";
+        const why = /\(device: ([^)]+)\)/.exec(c)?.[1] ?? (c.startsWith("none:") ? c.slice(5).trim() : "");
+        setUploadNote(c && !c.startsWith("none")
+          ? `${file.name}: ${fmtBytes(file.size)} → ${fmtBytes(info.size)} (${c.replace(/^client:/, "")})`
+          : `⚠ ${file.name}: uploaded as recorded (${fmtBytes(info.size)}) — not compressed on this device${why ? `: ${why}` : ""}`);
+      }
       if (kind === "photos") setForm((f: any) => ({ ...f, photos: [...f.photos, url] }));
       else if (kind === "videos") setForm((f: any) => ({ ...f, videos: [...f.videos, url] }));
       else setForm((f: any) => ({ ...f, govt_screenshot: url }));
     } catch (e: any) { setError(e.message); setQueued(getQueue(batchId).length); }
+  }
+
+  // -97 (Umesh: delete must work too): a wrong photo/video can be dropped BEFORE Save — the
+  // object is discarded from storage (uploader-only, unreferenced), not left as an orphan.
+  async function discardUpload(url: string, kind: "photos" | "videos") {
+    const name = url.split("/").pop() ?? "";
+    try { await api(`/api/files/${name}`, { method: "DELETE" }); }
+    catch (e: any) { if (!/removed|already|not found/i.test(String(e?.message))) { setError(e.message); return; } }
+    setForm((f: any) => ({ ...f, [kind]: (f[kind] as string[]).filter((u) => u !== url) }));
   }
 
   async function retryQueued() {
@@ -1278,14 +1294,18 @@ function DailyExecution({ batchId, batch, role, setError }: any) {
                 compressed/retry/offline-queue path and appends to the day's arrays. */}
             <Field label={`Photos (${form.photos.length})`}>
               <input type="file" accept="image/*" capture="environment" multiple className={inputCls} onChange={(e) => { for (const f of Array.from(e.target.files ?? [])) uploadFile(f, "photos"); }} />
+              <PendingMedia urls={form.photos} kind="photos" onRemove={(u) => discardUpload(u, "photos")} />
             </Field>
             <Field label={`Videos (${form.videos.length})`}>
               <input type="file" accept="video/mp4,video/*" capture="environment" multiple className={inputCls} onChange={(e) => { for (const f of Array.from(e.target.files ?? [])) uploadFile(f, "videos"); }} />
+              <PendingMedia urls={form.videos} kind="videos" onRemove={(u) => discardUpload(u, "videos")} />
               {/* -91: record IN the app at the compression targets — compressed at source, nothing to
-                  transcode. Gallery clips picked above are re-encoded in the browser before upload. */}
+                  transcode. Gallery clips picked above are re-encoded in the browser before upload.
+                  -97 (QA-164): the copy no longer promises what the device may not manage — the
+                  per-file note above says what actually happened; and re-encoding runs in real time. */}
               <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
                 <button type="button" className="rounded-lg border border-blue-600 px-2 py-1 font-medium text-blue-700 hover:bg-blue-50" onClick={() => setRecOpen(true)}>● Record video</button>
-                <span className="text-gray-400">compressed on your phone before upload — no big files, resumes if the signal drops</span>
+                <span className="text-gray-400">gallery clips are re-encoded on your phone first (takes about as long as the clip); the note above says if a clip could not be shrunk. Uploads resume if the signal drops.</span>
               </div>
             </Field>
             {/* CEO 14/08 [41:31]: "Government attendance screenshot — I don't think they
@@ -1501,6 +1521,23 @@ function LogEditDrawer({ log, members, onClose, onSaved, setError }: any) {
 
 // Evidence must be viewable, not just counted — the daily verification loop depends on
 // someone opening the govt screenshot (transcript 13:12–14:33).
+// -97: what is attached to the day BEFORE it is saved — thumbnails with a ✕ each.
+function PendingMedia({ urls, kind, onRemove }: { urls: string[]; kind: "photos" | "videos"; onRemove: (u: string) => void }) {
+  if (!urls?.length) return null;
+  return (
+    <div className="mt-1 flex flex-wrap gap-2">
+      {urls.map((u, i) => (
+        <div key={u} className="relative">
+          {kind === "photos"
+            ? <img src={u} alt={`photo ${i + 1}`} className="h-14 w-14 rounded border object-cover" />
+            : <video src={u} className="h-14 w-20 rounded border bg-black object-cover" muted playsInline preload="metadata" />}
+          <button type="button" aria-label="Remove" title="Remove this file (it is deleted from storage)" onClick={() => onRemove(u)}
+            className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full border border-gray-300 bg-white text-xs text-gray-700 shadow hover:bg-red-50 hover:text-red-700">✕</button>
+        </div>
+      ))}
+    </div>
+  );
+}
 function MediaCell({ r }: any) {
   const photos: string[] = r.photos ?? [];
   const videos: string[] = r.videos ?? [];

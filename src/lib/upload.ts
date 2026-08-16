@@ -153,7 +153,15 @@ export async function compressVideo(file: File, onProgress?: (pct: number) => vo
   let raf = 0;
   const draw = () => { ctx.drawImage(video, 0, 0, canvas.width, canvas.height); onProgress?.(Math.min(99, Math.round((100 * video.currentTime) / dur))); raf = requestAnimationFrame(draw); };
   rec.start(1000);
-  await video.play();
+  // -97 (QA-164, checker's 570 MB run): unmuted play() is refused without user activation
+  // (NotAllowedError) — instead of giving up (and sending 8× the bytes) retry muted: the clip
+  // still shrinks, only its audio is dropped, and the label says so.
+  let noAudio = false;
+  try { await video.play(); }
+  catch (e: any) {
+    if (e?.name === "NotAllowedError") { video.muted = true; await video.play(); noAudio = true; }
+    else throw e;
+  }
   draw();
   await new Promise<void>((res) => { video.onended = () => res(); });
   cancelAnimationFrame(raf);
@@ -165,7 +173,7 @@ export async function compressVideo(file: File, onProgress?: (pct: number) => vo
   const out = new File(chunks, file.name.replace(/\.[a-z0-9]+$/i, "") + ext, { type: mime.split(";")[0] });
   if (!out.size || out.size >= orig) return { file, label: "", skipped: true, reason: "re-encode did not shrink it", original_size: orig };
   onProgress?.(100);
-  return { file: out, label: `video-${canvas.height}p-${knobs.video_bitrate_kbps}k`, skipped: false, original_size: orig };
+  return { file: out, label: `video-${canvas.height}p-${knobs.video_bitrate_kbps}k${noAudio ? "-noaudio" : ""}`, skipped: false, original_size: orig };
 }
 
 // ---------- -90: direct-to-Drive, resumable (the shape from qa/DESIGN-video-upload.md) ----------
@@ -251,16 +259,47 @@ export async function uploadResumable(file: File, hints: UploadHints | undefined
 // and throw — caller shows the queued state.
 // -90: large files and every video first try the direct-to-Drive resumable path (progress,
 // resume, no server RAM); when Drive is not connected they fall back to the multipart door.
+// -97 (QA-162, checker): TWO decisions used to share one `if` — "compress?" and "direct or
+// proxied?" — so anything ≥ 8 MB skipped compression on the way to the direct door. Now the
+// order is fixed: COMPRESS FIRST (always, size-blind — Umesh's rule), THEN route on the
+// compressed size (size stays the routing key — that is what broke the 100 MB ceiling).
+//   video   → device re-encode (compressVideo) → direct
+//   image   → device downscale (compressImage) → size-routed
+//   PDF     → server Ghostscript is the only compressor → proxied door up to 64 MB, direct above
+//   other   → size-routed
+// -97 (QA-164, checker): a skipped/failed device compression is no longer silent — the REASON
+// travels as client_compression "none:<reason>" and lands on the row and the screen.
+const PDF_PROXY_MAX = 64 * 1024 * 1024;
+const isPdfName = (n: string, t: string) => /\.pdf$/i.test(n) || t === "application/pdf";
 export async function uploadWithRetry(fileIn: File, kind: string, hintsIn?: UploadHints, onProgress?: (p: Progress) => void): Promise<string> {
   let file = fileIn; let hints = hintsIn;
-  // -91: video is compressed on the device FIRST (Umesh's order), then travels.
-  if (isVideoName(file.name) || file.type.startsWith("video/")) {
+  const isVideo = isVideoName(file.name) || file.type.startsWith("video/");
+  const isImage = file.type.startsWith("image/") || /\.(jpe?g|png|webp|gif|bmp|tiff?|hei[cf])$/i.test(file.name);
+  let compressedBlob: Blob | null = null; // the multipart fallback must not compress twice
+  let name = file.name;
+  // 1) COMPRESS — on the device, size-blind.
+  if (isVideo) {
     try {
       const vc = await compressVideo(file, (pct) => onProgress?.({ sent: 0, total: file.size, pct, phase: "compressing" }));
       if (!vc.skipped) { file = vc.file; hints = { ...(hints ?? {}), client_compression: vc.label, client_original_size: vc.original_size }; }
-    } catch { /* fall through: upload as recorded; the row will say needs_compression */ }
+      else hints = { ...(hints ?? {}), client_compression: `none:${vc.reason ?? "not compressed"}`, client_original_size: vc.original_size };
+    } catch (e) {
+      // e.g. video.play() refused without user activation, out of memory, codec missing — SAY so
+      hints = { ...(hints ?? {}), client_compression: `none:${(e as Error)?.message || "compression failed"}`, client_original_size: file.size };
+    }
+  } else if (isImage) {
+    onProgress?.({ sent: 0, total: file.size, pct: 0, phase: "compressing" });
+    const blob = await compressImage(file);
+    if (blob !== file) {
+      name = file.name.replace(/\.[a-z0-9]+$/i, "") + ".jpg";
+      file = new File([blob], name, { type: blob.type || "image/jpeg" });
+      hints = { ...(hints ?? {}), client_compression: "image-1600-q75 (device)", client_original_size: fileIn.size };
+    }
+    compressedBlob = blob;
   }
-  if (file.size >= DIRECT_MIN_BYTES || isVideoName(file.name) || file.type.startsWith("video/")) {
+  // 2) ROUTE — on the size the file has NOW.
+  const goDirect = isVideo || (isPdfName(file.name, file.type) ? file.size > PDF_PROXY_MAX : file.size >= DIRECT_MIN_BYTES);
+  if (goDirect) {
     try {
       const direct = await uploadResumable(file, hints, onProgress);
       if (direct) return direct.url;
@@ -269,9 +308,8 @@ export async function uploadWithRetry(fileIn: File, kind: string, hintsIn?: Uplo
       if (file.size > 64 * 1024 * 1024) throw e;
     }
   }
-  onProgress?.({ sent: 0, total: file.size, pct: 0, phase: "compressing" });
-  const blob = await compressImage(file);
-  const name = file.name.replace(/\.[a-z0-9]+$/i, "") + (blob !== file ? ".jpg" : file.name.match(/\.[a-z0-9]+$/i)?.[0] ?? "");
+  // 3) SEND through the proxied door (server-side sharp/gs still runs there).
+  const blob: Blob = compressedBlob ?? file;
   let lastErr: unknown;
   for (const delay of [0, 1000, 3000]) {
     if (delay) await new Promise((r) => setTimeout(r, delay));

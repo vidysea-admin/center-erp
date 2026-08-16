@@ -1326,6 +1326,79 @@ ok("…with the contact details an approver needs", !!queued && queued.phone ===
   }
 }
 
+// ---- -97: QA-162 / QA-164 (compress first, reasons travel), file lifecycle (delete → 410),
+// "where did it go" (admin list), CORS hygiene ----
+{
+  const { MongoClient } = await import("mongodb");
+  const mc = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+  await mc.connect();
+  const sf = mc.db(process.env.MONGODB_DB || "center_erp_ci").collection("storedfiles");
+  const upload = async (bytes, name, type, extra = {}) => {
+    const fd = new FormData();
+    fd.append("file", new File([Buffer.from(bytes)], name, { type }));
+    fd.append("folder_centre", "TEST-CENTRE"); fd.append("folder_batch", "TEST-BATCH-01"); fd.append("folder_kind", "evidence");
+    for (const [k, v] of Object.entries(extra)) fd.append(k, String(v));
+    const r = await fetch(BASE + "/api/upload", { method: "POST", headers: { cookie }, body: fd });
+    return { status: r.status, data: await r.json().catch(() => ({})) };
+  };
+  // QA-164: a device REASON ("none:<why>") is recorded as the reason, never as a compression
+  const r1 = await upload("qa164-video-bytes", "clip.mp4", "video/mp4", { client_compression: "none:this browser cannot re-encode video", client_original_size: 17 });
+  const row1 = r1.status === 200 ? await sf.findOne({ name: String(r1.data.url).split("/").pop() }) : null;
+  ok("-97 (QA-164): a 'none:<reason>' from the device lands on the row as the REASON, compressed=false", !!row1 && /\(device: this browser cannot re-encode video\)/.test(row1.compression ?? "") && row1.compressed === false, JSON.stringify(row1 && { c: row1.compression, compressed: row1.compressed }));
+  ok("-97 (QA-164): …and the response label carries it too (the screen shows why)", /device: this browser cannot re-encode video/.test(r1.data?.compression ?? ""), r1.data?.compression);
+  // QA-164: a real device label is combined with what the server did (never overwritten)
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
+  const r2 = await upload(png, "device.jpg", "image/jpeg", { client_compression: "image-1600-q75 (device)", client_original_size: 5000000 });
+  const row2 = r2.status === 200 ? await sf.findOne({ name: String(r2.data.url).split("/").pop() }) : null;
+  ok("-97 (QA-162): a device-compressed image records client:<label> and keeps the device's original size", !!row2 && /^client:image-1600-q75 \(device\)/.test(row2.compression ?? "") && row2.compressed === true && row2.original_size === 5000000, JSON.stringify(row2 && { c: row2.compression, o: row2.original_size }));
+  // intent path: reason vs label
+  const i1 = await req("POST", "/api/upload/intent", { name: "big.mp4", size: 50 * 1024 * 1024, mime: "video/mp4", client_compression: "none:no duration/size metadata" });
+  ok("-97 (QA-164): intent with a device reason is refused only because storage is off (409), never for the reason field", i1.status === 409, String(i1.status));
+
+  // Lifecycle: an unreferenced upload can be DISCARDED by its uploader → 410 afterwards; row kept as audit
+  const r3 = await upload("discard-me", "wrong.png", "image/png");
+  const n3 = String(r3.data.url).split("/").pop();
+  const before = await fetch(BASE + "/api/files/" + n3);
+  const del = await req("DELETE", "/api/files/" + n3);
+  const after = await fetch(BASE + "/api/files/" + n3);
+  const row3 = await sf.findOne({ name: n3 });
+  ok("-97 (lifecycle): uploader discards an unattached upload → 200, then the URL answers 410 and the row stays as 'deleted' with who/when", before.status === 200 && del.status === 200 && after.status === 410 && row3?.status === "deleted" && !!row3?.deleted_at && !!row3?.deleted_by, JSON.stringify({ b: before.status, d: del.status, a: after.status, s: row3?.status }));
+  ok("-97 (lifecycle): discarding again is idempotent (200 already)", (await req("DELETE", "/api/files/" + n3)).data?.already === true);
+  ok("-97 (lifecycle): a bad name is 400, an unknown name is 404", (await req("DELETE", "/api/files/not-a-name")).status === 400 && (await req("DELETE", "/api/files/" + "0".repeat(32) + ".png")).status === 404);
+  // someone else's upload → 403 (ops is not Admin and not the uploader)
+  const r4 = await upload("not-yours", "mine.png", "image/png");
+  const n4 = String(r4.data.url).split("/").pop();
+  const opsC = await loginAs("ops@vidysea.com", "CiOnly@123");
+  const foreign = await fetch(BASE + "/api/files/" + n4, { method: "DELETE", headers: { cookie: opsC } });
+  ok("-97 (lifecycle): only the uploader (or an Admin) may discard — Operations on the Admin's file → 403", foreign.status === 403, String(foreign.status));
+  // a referenced file (attached to a saved candidate document) → 409 from the discard door; the record's own delete removes it → 410
+  const candList = await req("GET", "/api/candidates?limit=1");
+  const cand = (candList.data?.items ?? [])[0];
+  if (cand) {
+    const r5 = await upload("%PDF-1.4 aadhaar", "aadhaar.pdf", "application/pdf");
+    const n5 = String(r5.data.url).split("/").pop();
+    const att = await req("POST", `/api/candidates/${cand._id}/documents`, { doc_type: "Aadhaar", file_url: r5.data.url, original_name: "aadhaar.pdf" });
+    const blocked = await req("DELETE", "/api/files/" + n5);
+    ok("-97 (lifecycle): a file attached to a saved record cannot be discarded through the file door (409) — it leaves through the record", att.status === 201 && blocked.status === 409, `${att.status} ${blocked.status}`);
+    const docId = att.data?.item?._id ?? att.data?._id;
+    const rm = docId ? await req("DELETE", `/api/candidates/${cand._id}/documents/${docId}`) : { status: 0 };
+    const gone = await fetch(BASE + "/api/files/" + n5);
+    const row5 = await sf.findOne({ name: n5 });
+    ok("-97 (lifecycle): deleting the candidate document deletes the stored object too — URL 410, row 'deleted'", rm.status === 200 && gone.status === 410 && row5?.status === "deleted", JSON.stringify({ rm: rm.status, gone: gone.status, s: row5?.status }));
+  } else ok("-97 (lifecycle): candidate available for the attach/delete pin", false, "no candidate in CI");
+
+  // "where did it go": Admin list, filterable, console link shape (gcs only), non-admin 403
+  const list = await req("GET", "/api/files?prefix=TEST-CENTRE/TEST-BATCH-01&limit=20");
+  ok("-97 (visibility): GET /api/files lists stored files newest-first with folder_path, status, uploader, url", list.status === 200 && Array.isArray(list.data?.items) && list.data.items.length > 0 && list.data.items.every((i) => /^TEST-CENTRE\/TEST-BATCH-01/.test(i.folder_path ?? "")) && list.data.items[0].url?.startsWith("/erp/api/files/") && "console_url" in list.data.items[0] && list.data.layout === "<Centre>/<Batch>/<kind>/<file>", JSON.stringify(list.data?.items?.[0]));
+  ok("-97 (visibility): status filter works and deleted rows are kept in the list as the audit trail", (await req("GET", "/api/files?status=deleted&limit=5")).data?.items?.some((i) => i.name === n3 && i.status === "deleted") === true);
+  const forbidden = await fetch(BASE + "/api/files?limit=1", { headers: { cookie: opsC } });
+  ok("-97 (visibility): the file list is Admin-only (Operations → 403)", forbidden.status === 403, String(forbidden.status));
+  // CORS hygiene: production origin only (the wall sets APP_ORIGIN to the production origin)
+  const envNow = (await req("GET", "/api/test-storage")).data?.env;
+  ok("-97 (hygiene): the CORS rule names ONLY the production origin (no localhost on the production bucket)", Array.isArray(envNow?.cors_rule?.origin) && envNow.cors_rule.origin.length === 1 && envNow.cors_rule.origin[0] === "https://www.vidysea.com", JSON.stringify(envNow?.cors_rule?.origin));
+  await mc.close();
+}
+
 // ---- -87 (QA-157, Umesh 15/08: "jo kuch bhi media jaye — sab compress"): the ONE door compresses ----
 {
   const sharp = (await import("sharp")).default;

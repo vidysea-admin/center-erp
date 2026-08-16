@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import { Readable } from "stream";
-import { apiHandler, HttpError } from "@/lib/authz";
+import { apiHandler, HttpError, requireUser } from "@/lib/authz";
 import { dbConnect } from "@/lib/db";
-import { StoredFile } from "@/models";
-import { getFileStream } from "@/lib/storage";
+import { StoredFile, DailyLog, CandidateDocument, TrainerDocument, CandidateResult, Closure } from "@/models";
+import { getFileStream, removeStoredFile } from "@/lib/storage";
+import { audit } from "@/lib/audit";
 
 // -83: every extension /api/upload accepts is served with its real type and rendered
 // inline where a browser can render it — .mov/.heic/.m4a were being handed out as
@@ -38,6 +39,8 @@ export const GET = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   if (!/^[a-f0-9]{32}\.[a-z0-9]+$/.test(name)) throw new HttpError(400, "Bad file name");
   await dbConnect();
   const rec = await StoredFile.findOne({ name }).select("backend drive_file_id size status").lean<any>();
+  // -97: a deleted file says so (410) — the row is kept as the audit trail, the object is gone.
+  if (rec && rec.status === "deleted") throw new HttpError(410, "This file was removed.");
   if (rec && rec.status && rec.status !== "ready") throw new HttpError(404, rec.status === "pending" ? "This file is still uploading." : "This upload did not complete.");
   const ext = path.extname(name);
   const type = TYPES[ext] ?? "application/octet-stream";
@@ -65,4 +68,33 @@ export const GET = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   if (fs.partial) headers["Content-Range"] = `bytes ${fs.start}-${fs.end}/${fs.size}`;
   const body = Readable.toWeb(fs.stream as unknown as Readable) as unknown as ReadableStream;
   return new NextResponse(body, { status: fs.partial ? 206 : 200, headers });
+});
+
+// -97 (Umesh: view/edit/delete must all work): DISCARD an upload that is not attached to any
+// record yet — the daily-log form's ✕ before Save (a wrong photo/video should not become an
+// orphan in the bucket). Only the uploader (or an Admin) may discard, and only while nothing
+// references it: a file that a saved log / document / certificate / closure points at is part
+// of the record and leaves only through that record's own delete (which calls removeStoredFile).
+export const DELETE = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ name: string }> }) => {
+  const { name } = await ctx.params;
+  if (!/^[a-f0-9]{32}\.[a-z0-9]+$/.test(name)) throw new HttpError(400, "Bad file name");
+  const user = await requireUser();
+  await dbConnect();
+  const rec = await StoredFile.findOne({ name }).select("status uploaded_by backend folder_path original_name entity entity_id").lean<any>();
+  if (!rec) throw new HttpError(404, "File not found");
+  if (rec.status === "deleted") return NextResponse.json({ ok: true, already: true });
+  const isAdmin = user.role === "Admin";
+  if (!isAdmin && String(rec.uploaded_by ?? "") !== String(user.id)) throw new HttpError(403, "Only the person who uploaded this file (or an Admin) can discard it.");
+  const url = new RegExp(`/api/files/${name}$`);
+  const referenced =
+    (await DailyLog.exists({ $or: [{ photos: url }, { videos: url }, { govt_screenshot: url }] })) ||
+    (await CandidateDocument.exists({ file_url: url })) ||
+    (await TrainerDocument.exists({ file_url: url })) ||
+    (await CandidateResult.exists({ certificate_file: url })) ||
+    (await Closure.exists({ certificate_file: url }));
+  if (referenced) throw new HttpError(409, "This file is attached to a saved record — remove it through that record, not here.");
+  const r = await removeStoredFile(name, user.id);
+  if (!r.removed) throw new HttpError(502, `Storage refused to delete the object: ${r.reason ?? "unknown"}`);
+  await audit({ entity: "StoredFile", entityId: rec._id, field: "discarded", oldValue: `${rec.folder_path ?? ""}/${rec.original_name ?? name}`, newValue: `discarded by ${user.name} (${r.backend})`, actor: user.id });
+  return NextResponse.json({ ok: true, backend: r.backend });
 });

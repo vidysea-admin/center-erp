@@ -46,7 +46,9 @@ export const POST = apiHandler(async (req: NextRequest) => {
   row.status = "ready";
   const clientDid = String(row.compression ?? "").startsWith("client:");
   row.needs_compression = !clientDid && isVideo && storedSize > 20 * 1024 * 1024;
-  if (!clientDid) row.compression = isVideo ? "none:direct-to-storage (device did not compress)" : "none:direct-to-storage";
+  // -97 (QA-164): keep the device's own reason when it gave one ("(device: …)" from intent);
+  // only a bare "none:direct-to-storage" gets the generic wording.
+  if (!clientDid && !/\(device: /.test(String(row.compression ?? ""))) row.compression = isVideo ? "none:direct-to-storage (device did not compress)" : "none:direct-to-storage";
   await row.save();
   return NextResponse.json({ url: `${BASE_PATH}/api/files/` + name, name: row.original_name, backend: row.backend, size: storedSize, original_size: row.original_size, compression: row.compression });
 });

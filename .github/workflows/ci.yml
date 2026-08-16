@@ -41,6 +41,8 @@ jobs:
       # -95: the bucket is named in code; the wall must never touch the real bucket (its AWS
       # identity is not one the pool trusts anyway). Off-switch for CI/test ONLY — never on prod.
       STORAGE_DISABLE: "1"
+      # -97: CORS rule pins assert the production origin (the app derives it from APP_ORIGIN / AUTH_URL)
+      APP_ORIGIN: https://www.vidysea.com
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

@@ -47,7 +47,14 @@ export const POST = apiHandler(async (req: NextRequest) => {
     name, original_name: original, mime, size: 0, original_size: size, bytes_expected: size,
     backend: session.backend, folder_path: session.folder_path, drive_folder_id: session.folder_id,
     status: "pending", expires_at: new Date(Date.now() + 24 * 3600 * 1000),
-    compressed: !!String(body.client_compression ?? ""), compression: String(body.client_compression ?? "") ? `client:${String(body.client_compression).slice(0, 80)}` : "none:direct-to-storage",
+    // -97 (QA-164): a "none:<reason>" from the device is recorded as the REASON (why it was not
+    // compressed), never as a compression.
+    ...((): { compressed: boolean; compression: string } => {
+      const c = String(body.client_compression ?? "").trim().slice(0, 120);
+      if (!c) return { compressed: false, compression: "none:direct-to-storage" };
+      if (c.startsWith("none:")) return { compressed: false, compression: `none:direct-to-storage (device: ${c.slice(5).trim()})` };
+      return { compressed: true, compression: `client:${c}` };
+    })(),
     ...(Number(body.client_original_size) > size ? { original_size: Number(body.client_original_size) } : {}),
     entity: seg("entity") || undefined, entity_id: /^[a-f0-9]{24}$/.test(seg("entity_id")) ? seg("entity_id") : undefined,
     uploaded_by: user.id,

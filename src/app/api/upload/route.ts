@@ -50,16 +50,22 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const put = await putFile(name, buf, file.type, folder);
   // -91: when the DEVICE already compressed a video (recorded in-app / re-encoded in the
   // browser) the client says so; the row records that label instead of "none:video".
-  const clientComp = seg("client_compression").slice(0, 80);
+  const clientComp = seg("client_compression").slice(0, 120);
   const clientOriginal = Number(seg("client_original_size")) || 0;
-  const finalCompression = clientComp ? `client:${clientComp}` : put.compression;
+  // -97 (QA-164): "none:<reason>" from the device is a REASON, not a compression — the row keeps
+  // it (why the device did not shrink it) next to whatever the server managed; a real device
+  // label is combined with the server's when both did something.
+  const clientDid = !!clientComp && !clientComp.startsWith("none:");
+  const finalCompression = clientDid
+    ? (put.compressed ? `client:${clientComp} + ${put.compression}` : `client:${clientComp}`)
+    : clientComp ? `${put.compression} (device: ${clientComp.slice(5).trim()})` : put.compression;
   const finalOriginal = clientOriginal > put.original_size ? clientOriginal : put.original_size;
   await dbConnect();
   await StoredFile.create({
     name: put.name, original_name: file.name, mime: put.mime, size: put.size,
     original_size: finalOriginal,
-    compressed: put.compressed || !!clientComp, compression: finalCompression, compression_ms: put.compression_ms,
-    needs_compression: clientComp ? false : put.needs_compression,
+    compressed: put.compressed || clientDid, compression: finalCompression, compression_ms: put.compression_ms,
+    needs_compression: clientDid ? false : put.needs_compression,
     backend: put.backend, drive_file_id: put.drive_file_id, folder_path: put.folder_path,
     entity: seg("entity") || undefined, entity_id: /^[a-f0-9]{24}$/.test(seg("entity_id")) ? seg("entity_id") : undefined,
     uploaded_by: user.id,

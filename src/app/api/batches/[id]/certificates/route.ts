@@ -6,7 +6,7 @@ import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { BASE_PATH } from "@/lib/base-path";
 import { Batch, BatchMember, CandidateResult, Closure, StoredFile } from "@/models";
-import { putFile } from "@/lib/storage";
+import { putFile, removeStoredFile } from "@/lib/storage";
 import { assertBatchInScope, recomputeClosureAggregates, upsertCandidateCertificate } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
@@ -126,7 +126,12 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
         await doc.save();
         resultId = String(doc._id);
       } else {
+        // -97: replace = the old certificate object leaves the bucket with the record's pointer
+        // (a not-yet-Completed batch may re-upload a corrected certificate; the previous file
+        // must not linger as a reachable orphan). Audit of the swap sits in upsertCandidateCertificate.
+        const prev = row?.certificate_file ? String(row.certificate_file) : "";
         await upsertCandidateCertificate(String(row._id), { certificate_file: url }, user.id);
+        if (prev && prev !== url) await removeStoredFile(prev, user.id).catch(() => null);
         resultId = String(row._id);
       }
       claimed.add(can);

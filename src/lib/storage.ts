@@ -88,7 +88,10 @@ export function appOrigin(): string {
   return DEFAULT_APP_ORIGIN;
 }
 export function gcsCorsRule(): { origin: string[]; method: string[]; responseHeader: string[]; maxAgeSeconds: number } {
-  const origins = Array.from(new Set([appOrigin(), DEFAULT_APP_ORIGIN, "http://localhost:3000", "http://localhost:3001"]));
+  // -97 (checker hygiene): production bucket → production origin only. localhost origins are added
+  // only when the app itself runs on localhost (a local run against the real bucket).
+  const app = appOrigin();
+  const origins = /^https?:\/\/localhost(:\d+)?$/i.test(app) ? Array.from(new Set([app, "http://localhost:3000", "http://localhost:3001"])) : [app];
   return {
     origin: origins,
     method: ["GET", "HEAD", "PUT", "POST", "OPTIONS"],
@@ -375,7 +378,10 @@ export async function gcsBucketReport(): Promise<BucketReport> {
   const pap = m.iamConfiguration?.publicAccessPrevention ? String(m.iamConfiguration.publicAccessPrevention) : null;
   const corsOrigins: string[] = Array.from(new Set(((m.cors ?? []) as any[]).flatMap((c) => (c.origin ?? []) as string[])));
   const want = gcsCorsRule();
-  const corsOk = ((m.cors ?? []) as any[]).some((c) => (c.origin ?? []).includes(appOrigin()) && ["PUT", "POST"].every((x) => (c.method ?? []).includes(x)) && ["Location", "Range", "Content-Range"].every((h) => (c.responseHeader ?? []).map((s: string) => s.toLowerCase()).includes(h.toLowerCase())));
+  // -97: EXACT match on the origin set (not just "app origin present") so a stale rule with extra
+  // origins is re-applied and tightened by ensureBucketCors.
+  const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
+  const corsOk = ((m.cors ?? []) as any[]).some((c) => sameSet(((c.origin ?? []) as string[]).map((s) => s.toLowerCase()), want.origin.map((s) => s.toLowerCase())) && ["PUT", "POST"].every((x) => (c.method ?? []).includes(x)) && ["Location", "Range", "Content-Range"].every((h) => (c.responseHeader ?? []).map((s: string) => s.toLowerCase()).includes(h.toLowerCase())));
   const expected = { location: "ASIA-SOUTH1", ubla: true, pap: "enforced" };
   const warnings: string[] = [];
   if (location && location.toUpperCase() !== expected.location) warnings.push(`location is ${location} — expected ${expected.location} (Mumbai). Location is immutable: a wrong region needs a new bucket while this one is still empty.`);
@@ -507,6 +513,35 @@ export async function finalizeDriveFile(fileId: string): Promise<{ id: string; s
 }
 export async function deleteDriveFile(fileId: string): Promise<void> {
   try { await drive().files.delete({ fileId, supportsAllDrives: true }); } catch { /* best-effort — an abandoned pending row is swept anyway */ }
+}
+// -97 (Umesh: "sirf upload nahi — view, edit, delete sab chalna chahiye"): the ONE way a stored
+// file leaves. Deletes the object on its own backend (bucket / Drive / local disk) and keeps the
+// StoredFile row as the audit trail with status "deleted" — /api/files/<name> answers 410 from
+// then on. Before this, deleting a candidate/trainer document removed only the DB row and
+// unlinked a LOCAL file, so a bucket object (and its URL) outlived the record.
+export async function removeStoredFile(nameOrUrl: string, actorId?: string | null): Promise<{ removed: boolean; backend?: string; reason?: string }> {
+  const name = String(nameOrUrl ?? "").split("/").pop() ?? "";
+  if (!/^[a-f0-9]{32}\.[a-z0-9]+$/i.test(name)) return { removed: false, reason: "not a stored-file name" };
+  const { StoredFile } = await import("@/models");
+  const row = await StoredFile.findOne({ name });
+  if (!row) {
+    // legacy local upload without a row (pre -77) — best-effort disk unlink
+    await unlink(path.join(process.cwd(), "uploads", name)).catch(() => {});
+    return { removed: true, backend: "local", reason: "no row (legacy)" };
+  }
+  if (row.status === "deleted") return { removed: true, backend: row.backend, reason: "already deleted" };
+  try {
+    if (row.backend === "gcs" && row.drive_file_id) await deleteGcsObject(String(row.drive_file_id));
+    else if (row.backend === "drive" && row.drive_file_id) await deleteDriveFile(String(row.drive_file_id));
+    else await unlink(path.join(process.cwd(), "uploads", name)).catch(() => {});
+  } catch (e: any) {
+    return { removed: false, backend: row.backend, reason: String(e?.message ?? e).slice(0, 160) };
+  }
+  row.status = "deleted";
+  (row as any).deleted_at = new Date();
+  if (actorId) (row as any).deleted_by = actorId;
+  await row.save();
+  return { removed: true, backend: row.backend };
 }
 export function rssMb(): number { return Math.round(process.memoryUsage().rss / 1048576); }
 

@@ -3,10 +3,14 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-96";
+export const RELEASE = "2026.08.14-97";
 export const RELEASE_NOTE =
-  "-96: prod ladder on -95 proved token + bucket (ASIA-SOUTH1, uniform, PAP enforced) and " +
-  "stopped at cors: 'Provided scope(s) are not authorized' - the WIF token was scoped " +
-  "devstorage.read_write; bucket-metadata PATCH needs full_control (now the SDK's default " +
-  "scopes). The cors rung is non-fatal so every rung reports; verdict stays red until CORS " +
-  "is in place.";
+  "-97: QA-162 compress FIRST then route (device image/video compression is size-blind; " +
+  "size still decides direct-vs-proxied); QA-164 a skipped/failed device compression " +
+  "travels as its reason and the screen says so (no more 'compressed on your phone' over " +
+  "a 570 MB upload; unmuted-play refusal now retries muted instead of giving up); file " +
+  "lifecycle: deleting a candidate/trainer document or replacing a certificate deletes " +
+  "the stored object too and the URL answers 410; a wrong photo/video can be discarded " +
+  "before Save (uploader-only, unreferenced); Admin 'Files' table shows where every " +
+  "upload lives (<Centre>/<Batch>/<kind>) with a Google Cloud console link; bucket CORS " +
+  "= production origin only.";

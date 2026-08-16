@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { unlink } from "fs/promises";
-import path from "path";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { TrainerDocument } from "@/models";
 import { assertTrainerDocDeleteInScope, trainerDocSummary } from "@/lib/rules";
 import { audit } from "@/lib/audit";
+import { removeStoredFile } from "@/lib/storage";
 
 // QA-112 (checker, 15/08): a wrong file on a trainer was PERMANENT — no delete, no
 // replace. These are Aadhaar/PAN-grade documents; a mis-attached file has to be removable
@@ -27,11 +26,9 @@ export const DELETE = apiHandler(async (_req: NextRequest, ctx: { params: Promis
   if (!doc) throw new HttpError(404, "Document not found on this trainer.");
 
   await doc.deleteOne();
-  // Best-effort disk cleanup — the DB row is the record; a stray file is only disk space.
-  const name = String(doc.file_url ?? "").split("/").pop();
-  if (name && /^[a-f0-9]{32}\.[a-z0-9]+$/i.test(name)) {
-    await unlink(path.join(process.cwd(), "uploads", name)).catch(() => {});
-  }
+  // -97: the stored object leaves WITH the record (bucket / Drive / local) and its URL answers 410
+  // from now on — before this only a local file was unlinked and a bucket object outlived the row.
+  await removeStoredFile(String(doc.file_url ?? ""), user.id).catch(() => null);
   await audit({
     entity: "Trainer", entityId: id, field: "document_deleted",
     oldValue: `${doc.doc_type}${doc.original_name ? ` (${doc.original_name})` : ""}`,

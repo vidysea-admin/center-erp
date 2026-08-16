@@ -963,6 +963,69 @@ function DefaultsTab({ setError }: any) {
 // call the API by hand to answer "mail gayi ki nahi". This panel is that answer, and it is
 // honest about what SES can and cannot promise: "sent" means SES ACCEPTED the message; the
 // system never learns about a bounce (that needs SNS hooks — devops). Labels say so.
+// -97: the "where did it go" table — Admin-only list from /api/files (names/paths, never bytes).
+function FilesPanel({ mb }: { mb: (n: number) => string }) {
+  const [open, setOpen] = useState(false);
+  const [prefix, setPrefix] = useState("");
+  const [status, setStatus] = useState("");
+  const [data, setData] = useState<any>(null);
+  const [busy, setBusy] = useState(false);
+  const load = async (pfx = prefix, st = status) => {
+    setBusy(true);
+    try { setData(await api(`/api/files?limit=100&prefix=${encodeURIComponent(pfx)}&status=${encodeURIComponent(st)}`)); }
+    catch (e: any) { setData({ error: e.message }); }
+    finally { setBusy(false); }
+  };
+  useEffect(() => { if (open && !data) load(); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div className="mt-2 border-t border-current/20 pt-2 text-gray-800">
+      <button type="button" className="text-left font-semibold underline-offset-2 hover:underline" onClick={() => setOpen((o) => !o)}>{open ? "▾" : "▸"} Files — where every upload lives</button>
+      {open && (
+        <div className="mt-1">
+          <div className="text-[11px] text-gray-600">
+            Objects are stored at <code>&lt;Centre&gt;/&lt;Batch&gt;/&lt;kind&gt;/&lt;file&gt;</code>{data?.bucket ? <> in bucket <b>{data.bucket}</b> (Vidysea's Google Cloud project) — <a className="text-blue-700 underline" href={data.console_url} target="_blank" rel="noreferrer">open the bucket in the Google Cloud console ↗</a></> : data?.backend ? <> on the <b>{data.backend}</b> backend</> : null}.
+            The app serves them through <code>/api/files/&lt;name&gt;</code> (login + rights); nothing in the bucket is public.
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+            <input className="rounded border px-2 py-1" placeholder="folder prefix — e.g. AVP-GURU/AVP-GURU-RPLAVP-DST-02" value={prefix} onChange={(e) => setPrefix(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") load(); }} style={{ minWidth: 280 }} />
+            <select className="rounded border px-2 py-1" value={status} onChange={(e) => { setStatus(e.target.value); load(prefix, e.target.value); }}>
+              <option value="">all statuses</option><option value="ready">ready</option><option value="pending">pending</option><option value="failed">failed</option><option value="deleted">deleted</option>
+            </select>
+            <Btn small kind="ghost" disabled={busy} onClick={() => load()}>{busy ? "Loading…" : "Refresh"}</Btn>
+            {data?.by_status && <span className="text-gray-500">{Object.entries(data.by_status).map(([k, v]: any) => `${k}: ${v.n} (${mb(v.bytes ?? 0)})`).join(" · ")}</span>}
+          </div>
+          {data?.error && <div className="mt-1 text-red-700">{data.error}</div>}
+          {Array.isArray(data?.items) && (
+            <div className="mt-1 max-h-72 overflow-auto rounded border bg-white">
+              <table className="w-full text-[11px]">
+                <thead className="sticky top-0 bg-gray-50 text-left"><tr><th className="px-2 py-1">When</th><th className="px-2 py-1">Where</th><th className="px-2 py-1">File</th><th className="px-2 py-1">Size</th><th className="px-2 py-1">Compression</th><th className="px-2 py-1">By</th><th className="px-2 py-1">Status</th><th className="px-2 py-1"></th></tr></thead>
+                <tbody>
+                  {data.items.map((r: any) => (
+                    <tr key={r.name} className={`border-t ${r.status === "deleted" ? "text-gray-400 line-through" : ""}`}>
+                      <td className="whitespace-nowrap px-2 py-1">{new Date(r.created_at).toLocaleString()}</td>
+                      <td className="px-2 py-1 font-mono">{r.folder_path ?? "—"}</td>
+                      <td className="px-2 py-1">{(r.original_name ?? r.name).slice(0, 40)}</td>
+                      <td className="whitespace-nowrap px-2 py-1">{mb(r.size ?? 0)}{r.original_size && r.original_size > (r.size ?? 0) ? ` (was ${mb(r.original_size)})` : ""}</td>
+                      <td className="px-2 py-1">{r.compression ?? "—"}</td>
+                      <td className="px-2 py-1">{r.uploaded_by ?? "—"}</td>
+                      <td className="px-2 py-1">{r.status}{r.status === "deleted" && r.deleted_by ? ` by ${r.deleted_by}` : ""}</td>
+                      <td className="whitespace-nowrap px-2 py-1">
+                        {r.status === "ready" && <a className="text-blue-700 underline" href={r.url} target="_blank" rel="noreferrer">open</a>}
+                        {r.console_url && <> · <a className="text-blue-700 underline" href={r.console_url} target="_blank" rel="noreferrer" title={r.object_path ?? ""}>folder in console ↗</a></>}
+                      </td>
+                    </tr>
+                  ))}
+                  {data.items.length === 0 && <tr><td className="px-2 py-2 text-gray-500" colSpan={8}>No files match.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MailPanel({ setError }: any) {
   const [mail, setMail] = useState<any>(null);
   const [busy, setBusy] = useState(false);
@@ -1058,6 +1121,10 @@ function MailPanel({ setError }: any) {
               )}
             </div>
           )}
+          {/* -97 (Umesh: "server me kahan ja raha hai, kaise dekhen"): every stored file, where it
+              lives (<Centre>/<Batch>/<kind>/<file>), who put it there, and a link to the same folder
+              in the Google Cloud console. Deleted rows stay listed as the audit trail. */}
+          <FilesPanel mb={mb} />
         </div>
       )}
       <div className="mb-1 flex items-center justify-between">

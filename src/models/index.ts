@@ -848,7 +848,8 @@ const StoredFileSchema = new Schema({
   needs_compression: { type: Boolean, default: false },
   // -90: direct-to-Drive (resumable) uploads live as "pending" between intent and complete;
   // "ready" is the only state /api/files serves; abandoned pendings are swept to "failed".
-  status: { type: String, enum: ["ready", "pending", "failed"], default: "ready" },
+  status: { type: String, enum: ["ready", "pending", "failed", "deleted"], default: "ready" }, // -97: deleted = object gone, row kept for audit
+  deleted_at: Date, deleted_by: { type: Schema.Types.ObjectId, ref: "User" },
   bytes_expected: Number,
   drive_folder_id: String,
   expires_at: Date,
