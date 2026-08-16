@@ -147,11 +147,23 @@ export async function assertPublicUrl(raw: string): Promise<URL> {
  * Redirects are followed by hand because `redirect: "follow"` would happily chase a public URL
  * into 169.254.169.254 — the check has to run again on each Location.
  */
+// -98 (QA-163): /api/files now needs a login. The sync engine's loopback read of a sheet that
+// was uploaded INTO the ERP is the one server-to-server consumer — it proves itself with a
+// header only this process can mint (HMAC of the file NAME under AUTH_SECRET; never leaves the box).
+export function internalFileToken(fileName: string): string {
+  const secret = process.env.AUTH_SECRET || "";
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require("crypto").createHmac("sha256", `erp-internal-files:${secret}`).update(fileName).digest("hex");
+}
+export const INTERNAL_FILE_HEADER = "x-erp-internal-file";
 export async function safeFetch(raw: string, init: RequestInit = {}): Promise<Response> {
   let target = raw;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     const url = await assertPublicUrl(target);
-    const res = await fetch(url, { ...init, redirect: "manual" });
+    const loopbackHost = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]" || url.hostname === "::1";
+    const headers: Record<string, string> = { ...((init.headers as Record<string, string>) ?? {}) };
+    if (loopbackHost && url.pathname.startsWith(`${BASE_PATH}/api/files/`)) headers[INTERNAL_FILE_HEADER] = internalFileToken(url.pathname.split("/").pop() ?? "");
+    const res = await fetch(url, { ...init, headers, redirect: "manual" });
     if (res.status >= 300 && res.status < 400) {
       const loc = res.headers.get("location");
       if (!loc) return res;

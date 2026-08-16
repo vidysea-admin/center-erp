@@ -184,6 +184,39 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: today, present_m
 // Rule 32: date before actual_start
 await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", present_member_ids: [] }, 400);
 
+// ---- -98 (QA-165, checker): a daily log can be READ singly and DELETED (audited, evidence leaves with it) ----
+{
+  const one = await req("GET", `/api/batches/${batch._id}/logs/${log._id}`);
+  ok("-98 (QA-165): a single daily log can be read", one.status === 200 && String(one.data?.item?._id) === String(log._id), String(one.status));
+  ok("-98 (QA-165): a bad log id is 400, an unknown one 404", (await req("GET", `/api/batches/${batch._id}/logs/not-an-id`)).status === 400 && (await req("GET", `/api/batches/${batch._id}/logs/${"0".repeat(24)}`)).status === 404);
+  // Rule 32 refuses a day before the start and Rule 27 allows one log per day, so the fixture's own
+  // day (`log`, today) is the delete target — attach an evidence photo to it via Edit first, delete,
+  // then re-create it so the rest of the file keeps its fixture.
+  const fdE = new FormData();
+  fdE.append("file", new File([Buffer.from("qa165-photo")], "day.png", { type: "image/png" }));
+  const upE = await (await fetch(BASE + "/api/upload", { method: "POST", headers: { cookie }, body: fdE })).json();
+  const { MongoClient, ObjectId } = await import("mongodb");
+  const mc = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+  await mc.connect();
+  const dbx = mc.db(process.env.MONGODB_DB || "center_erp_ci");
+  await dbx.collection("dailylogs").updateOne({ _id: new ObjectId(String(log._id)) }, { $set: { photos: [upE.url] } });
+  const del = await req("DELETE", `/api/batches/${batch._id}/logs/${log._id}`, { reason: "QA-165 pin — wrong day" });
+  const gone = await req("GET", `/api/batches/${batch._id}/logs/${log._id}`);
+  const photoRead = await fetch(BASE + String(upE.url).replace(/^\/erp/, ""), { headers: { cookie } });
+  ok("-98 (QA-165): DELETE removes the day (200 → 404), and its evidence photo leaves storage with it (URL 410)", del.status === 200 && del.data?.evidence_removed === 1 && gone.status === 404 && photoRead.status === 410, JSON.stringify({ d: del.status, g: gone.status, p: photoRead.status, r: del.data }));
+  const aud = await dbx.collection("auditlogs").findOne({ field: "daily_log_deleted", entity_id: new ObjectId(String(batch._id)) }, { sort: { created_at: -1 } });
+  ok("-98 (QA-165): the deletion is audited with the snapshot (date, present, photos) and the reason", !!aud && /QA-165 pin/.test(String(aud.new_value ?? "")) && /"present":2/.test(String(aud.old_value ?? "")), JSON.stringify(aud && { n: aud.new_value }).slice(0, 200));
+  await mc.close();
+  // re-create the fixture day exactly as before so the rest of the file is unchanged
+  const re = await req("POST", `/api/batches/${batch._id}/logs`, { log_date: today, present_member_ids: mIds.slice(0, 2), govt_present: 2, actual_topic: "Day 1" }, 201);
+  ok("-98 (QA-165): the day can be entered again after a delete (Rule 27 slot freed)", re.status === 201, String(re.status));
+  if (re.status === 201) log._id = re.data.item._id;
+  // rights: view-only / out-of-scope cannot delete
+  const enrDel = await fetch(BASE + `/api/batches/${batch._id}/logs/${log._id}`, { method: "DELETE", headers: { cookie: await loginAs("enroll@vidysea.com", "CiOnly@123") } });
+  const anonDel = await fetch(BASE + `/api/batches/${batch._id}/logs/${log._id}`, { method: "DELETE" });
+  ok("-98 (QA-165): Enrollment (no batches.daily_log) → 403, anonymous → 401 — the fixture day stays", enrDel.status === 403 && anonDel.status === 401 && (await req("GET", `/api/batches/${batch._id}/logs/${log._id}`)).status === 200, `${enrDel.status} ${anonDel.status}`);
+}
+
 // ---- -81 (Umesh 15/08, Gurugram DST-02 began 30-07, entered 15-08): Start with the REAL date ----
 {
   const dayN = (n) => new Date(Date.now() + n * 864e5 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
@@ -609,7 +642,7 @@ ok("cert bulk: certificate_file landed on the result row", /\/api\/files\//.test
   await mc.close();
   ok("-83: a bulk-uploaded certificate leaves a StoredFile row (entity Batch, folder …/certificates)",
     !!certRow && certRow.entity === "Batch" && /certificates$/.test(certRow.folder_path ?? "") && certRow.backend === "local", JSON.stringify(certRow && { entity: certRow.entity, folder: certRow.folder_path, backend: certRow.backend }));
-  const certRead = await fetch(BASE + String(upPassRow.certificate_file).replace(/^\/erp/, ""));
+  const certRead = await fetch(BASE + String(upPassRow.certificate_file).replace(/^\/erp/, ""), { headers: { cookie } });
   ok("-83: …and it reads back through the proxy", certRead.status === 200 && certRead.headers.get("content-type") === "application/pdf", `${certRead.status}`);
 }
 // same CAN id again while file exists + batch still Closing → upsert path allows overwrite
@@ -1245,27 +1278,27 @@ ok("…with the contact details an approver needs", !!queued && queued.phone ===
   await mc.close();
   ok("QA-145: every upload leaves a StoredFile row (backend, size, original name, uploader)",
     !!row && row.backend === "local" && row.size === 14 && row.original_name === "ev.png" && !!row.uploaded_by, JSON.stringify(row && { backend: row.backend, size: row.size }));
-  const rd = await fetch(BASE + upJ.url.replace(/^\/erp/, ""));
+  const rd = await fetch(BASE + upJ.url.replace(/^\/erp/, ""), { headers: { cookie } });
   ok("QA-145: the proxied read serves the bytes back", rd.status === 200 && (await rd.text()) === "qa145-evidence", String(rd.status));
   ok("-83 (QA-155): the folder hints and entity a caller sends are RECORDED (Drive tree + 'which files belong to this batch')",
     row?.folder_path === "TEST-CENTRE/TEST-BATCH-01/evidence", JSON.stringify({ folder_path: row?.folder_path, entity: row?.entity }));
   // -83 (QA-156): honest file reads — Range → 206 with the exact slice, Accept-Ranges advertised,
   // media types real and inline, a missing file 404, a bad range 416.
-  const rangeRes = await fetch(BASE + upJ.url.replace(/^\/erp/, ""), { headers: { Range: "bytes=0-4" } });
+  const rangeRes = await fetch(BASE + upJ.url.replace(/^\/erp/, ""), { headers: { Range: "bytes=0-4", cookie } });
   ok("QA-156: Range request → 206 with exactly the asked bytes + Content-Range",
     rangeRes.status === 206 && (await rangeRes.text()) === "qa145" && rangeRes.headers.get("content-range") === "bytes 0-4/14" && rangeRes.headers.get("accept-ranges") === "bytes",
     `${rangeRes.status} ${rangeRes.headers.get("content-range")}`);
-  const tailRes = await fetch(BASE + upJ.url.replace(/^\/erp/, ""), { headers: { Range: "bytes=-3" } });
+  const tailRes = await fetch(BASE + upJ.url.replace(/^\/erp/, ""), { headers: { Range: "bytes=-3", cookie } });
   ok("QA-156: suffix Range (last 3 bytes) → 206", tailRes.status === 206 && (await tailRes.text()) === "nce", `${tailRes.status}`);
-  const badRange = await fetch(BASE + upJ.url.replace(/^\/erp/, ""), { headers: { Range: "bytes=50-60" } });
+  const badRange = await fetch(BASE + upJ.url.replace(/^\/erp/, ""), { headers: { Range: "bytes=50-60", cookie } });
   ok("QA-156: unsatisfiable Range → 416", badRange.status === 416, `${badRange.status}`);
-  const missing = await fetch(BASE + "/api/files/" + "0".repeat(32) + ".png");
+  const missing = await fetch(BASE + "/api/files/" + "0".repeat(32) + ".png", { headers: { cookie } });
   ok("QA-156: a missing file is 404, not a crash", missing.status === 404, `${missing.status}`);
   {
     const fdA = new FormData();
     fdA.append("file", new File([Buffer.from("voice-note-bytes")], "note.m4a", { type: "audio/mp4" }));
     const upA = await (await fetch(BASE + "/api/upload", { method: "POST", headers: { cookie }, body: fdA })).json();
-    const rdA = await fetch(BASE + String(upA.url).replace(/^\/erp/, ""));
+    const rdA = await fetch(BASE + String(upA.url).replace(/^\/erp/, ""), { headers: { cookie } });
     ok("QA-156: a voice note (.m4a) is served as audio/mp4 INLINE, not an octet-stream download",
       rdA.status === 200 && rdA.headers.get("content-type") === "audio/mp4" && /^inline/.test(rdA.headers.get("content-disposition") ?? "") && rdA.headers.get("content-length") === "16",
       `${rdA.headers.get("content-type")} ${rdA.headers.get("content-disposition")}`);
@@ -1358,9 +1391,9 @@ ok("…with the contact details an approver needs", !!queued && queued.phone ===
   // Lifecycle: an unreferenced upload can be DISCARDED by its uploader → 410 afterwards; row kept as audit
   const r3 = await upload("discard-me", "wrong.png", "image/png");
   const n3 = String(r3.data.url).split("/").pop();
-  const before = await fetch(BASE + "/api/files/" + n3);
+  const before = await fetch(BASE + "/api/files/" + n3, { headers: { cookie } });
   const del = await req("DELETE", "/api/files/" + n3);
-  const after = await fetch(BASE + "/api/files/" + n3);
+  const after = await fetch(BASE + "/api/files/" + n3, { headers: { cookie } });
   const row3 = await sf.findOne({ name: n3 });
   ok("-97 (lifecycle): uploader discards an unattached upload → 200, then the URL answers 410 and the row stays as 'deleted' with who/when", before.status === 200 && del.status === 200 && after.status === 410 && row3?.status === "deleted" && !!row3?.deleted_at && !!row3?.deleted_by, JSON.stringify({ b: before.status, d: del.status, a: after.status, s: row3?.status }));
   ok("-97 (lifecycle): discarding again is idempotent (200 already)", (await req("DELETE", "/api/files/" + n3)).data?.already === true);
@@ -1382,7 +1415,7 @@ ok("…with the contact details an approver needs", !!queued && queued.phone ===
     ok("-97 (lifecycle): a file attached to a saved record cannot be discarded through the file door (409) — it leaves through the record", att.status === 201 && blocked.status === 409, `${att.status} ${blocked.status}`);
     const docId = att.data?.item?._id ?? att.data?._id;
     const rm = docId ? await req("DELETE", `/api/candidates/${cand._id}/documents/${docId}`) : { status: 0 };
-    const gone = await fetch(BASE + "/api/files/" + n5);
+    const gone = await fetch(BASE + "/api/files/" + n5, { headers: { cookie } });
     const row5 = await sf.findOne({ name: n5 });
     ok("-97 (lifecycle): deleting the candidate document deletes the stored object too — URL 410, row 'deleted'", rm.status === 200 && gone.status === 410 && row5?.status === "deleted", JSON.stringify({ rm: rm.status, gone: gone.status, s: row5?.status }));
   } else ok("-97 (lifecycle): candidate available for the attach/delete pin", false, "no candidate in CI");
@@ -1399,6 +1432,29 @@ ok("…with the contact details an approver needs", !!queued && queued.phone ===
   await mc.close();
 }
 
+// ---- -98 (QA-163, checker): stored evidence needs a LOGIN — anonymous 401 (the 32-hex name stays
+// as the second layer); same-origin tags send the cookie; the sync engine's loopback read of an
+// uploaded sheet still works through the internal header (never exposed). ----
+{
+  const fd = new FormData();
+  fd.append("file", new File([Buffer.from("TC ID,Name\nTC-1,Asha\nTC-2,Ravi\n")], "roster.csv", { type: "text/csv" }));
+  fd.append("folder_centre", "TEST-CENTRE"); fd.append("folder_batch", "TEST-BATCH-01"); fd.append("folder_kind", "sheets");
+  const up = await fetch(BASE + "/api/upload", { method: "POST", headers: { cookie }, body: fd });
+  const upJ = await up.json();
+  const url = String(upJ.url ?? "");
+  const anon = await fetch(BASE + url.replace(/^\/erp/, ""));
+  ok("-98 (QA-163): an ANONYMOUS read of a stored file is refused (401) — the link alone no longer opens evidence", anon.status === 401, String(anon.status));
+  const anonRange = await fetch(BASE + url.replace(/^\/erp/, ""), { headers: { Range: "bytes=0-4" } });
+  ok("-98 (QA-163): …a Range request without a session is refused too", anonRange.status === 401, String(anonRange.status));
+  const authed = await fetch(BASE + url.replace(/^\/erp/, ""), { headers: { cookie } });
+  ok("-98 (QA-163): a signed-in read still serves the bytes (200) — same-origin <img>/<video>/PDF viewers send the cookie", authed.status === 200 && /TC-1,Asha/.test(await authed.text()), String(authed.status));
+  const forged = await fetch(BASE + url.replace(/^\/erp/, ""), { headers: { "x-erp-internal-file": "0".repeat(64) } });
+  ok("-98 (QA-163): a forged internal header is refused (401)", forged.status === 401, String(forged.status));
+  // the sync engine's loopback read of a sheet uploaded INTO the ERP (safe-fetch's narrow exception) still probes green
+  const probe = await req("POST", "/api/sync-sources/test", { source_url: `http://127.0.0.1:${new URL(BASE).port || 3000}${url}` });
+  ok("-98 (QA-163): the sync engine can still read an uploaded sheet over loopback (internal header, never exposed) — probe green with its columns", probe.data?.ok === true && JSON.stringify(probe.data?.tabs ?? []).includes("TC ID"), `${probe.status} ${JSON.stringify(probe.data).slice(0, 160)}`);
+}
+
 // ---- -87 (QA-157, Umesh 15/08: "jo kuch bhi media jaye — sab compress"): the ONE door compresses ----
 {
   const sharp = (await import("sharp")).default;
@@ -1410,7 +1466,7 @@ ok("…with the contact details an approver needs", !!queued && queued.phone ===
   const upBig = await (await fetch(BASE + "/api/upload", { method: "POST", headers: { cookie }, body: fdBig })).json();
   ok("-87: a 3000×2000 photo is compressed at the storage door (label image-1600-q75, stored < original)",
     upBig.compression === "image-1600-q75" && upBig.size < upBig.original_size && upBig.original_size === big.length, JSON.stringify({ o: upBig.original_size, s: upBig.size, c: upBig.compression }));
-  const backBig = Buffer.from(await (await fetch(BASE + String(upBig.url).replace(/^\/erp/, ""))).arrayBuffer());
+  const backBig = Buffer.from(await (await fetch(BASE + String(upBig.url).replace(/^\/erp/, ""), { headers: { cookie } })).arrayBuffer());
   const metaBig = await sharp(backBig).metadata();
   ok("-87: what reads back is the compressed image — longest edge 1600, still a JPEG", metaBig.width === 1600 && metaBig.height === 1067 && metaBig.format === "jpeg" && backBig.length === upBig.size, JSON.stringify({ w: metaBig.width, h: metaBig.height, f: metaBig.format }));
   {
@@ -1443,7 +1499,7 @@ ok("…with the contact details an approver needs", !!queued && queued.phone ===
   fdWebm.append("client_compression", "video-720p-1500k"); fdWebm.append("client_original_size", String(50 * 1024 * 1024));
   const upWebm = await (await fetch(BASE + "/api/upload", { method: "POST", headers: { cookie }, body: fdWebm })).json();
   ok("-91: an in-app/browser-compressed video (.webm) is accepted and the row records client:video-720p-1500k with the original size", upWebm.compression === "client:video-720p-1500k" && upWebm.original_size === 50 * 1024 * 1024 && /\.webm$/.test(upWebm.url), JSON.stringify({ c: upWebm.compression, o: upWebm.original_size, u: upWebm.url }));
-  const rdWebm = await fetch(BASE + String(upWebm.url).replace(/^\/erp/, ""));
+  const rdWebm = await fetch(BASE + String(upWebm.url).replace(/^\/erp/, ""), { headers: { cookie } });
   ok("-91: .webm reads back as video/webm inline", rdWebm.status === 200 && rdWebm.headers.get("content-type") === "video/webm" && /^inline/.test(rdWebm.headers.get("content-disposition") ?? ""), `${rdWebm.headers.get("content-type")}`);
   {
     const { MongoClient } = await import("mongodb");
@@ -1466,7 +1522,7 @@ ok("…with the contact details an approver needs", !!queued && queued.phone ===
   const fdBig2 = new FormData();
   fdBig2.append("file", new File([big], "field-photo-2.jpg", { type: "image/jpeg" }));
   const upBig2 = await (await fetch(BASE + "/api/upload", { method: "POST", headers: { cookie }, body: fdBig2 })).json();
-  const back2 = Buffer.from(await (await fetch(BASE + String(upBig2.url).replace(/^\/erp/, ""))).arrayBuffer());
+  const back2 = Buffer.from(await (await fetch(BASE + String(upBig2.url).replace(/^\/erp/, ""), { headers: { cookie } })).arrayBuffer());
   ok("-87: turning the knob changes the next upload (800 px edge, label image-800-q75)", upBig2.compression === "image-800-q75" && (await sharp(back2).metadata()).width === 800, JSON.stringify(upBig2.compression));
   await req("PUT", "/api/defaults", { image_max_px: 1600 }, 200);
 }

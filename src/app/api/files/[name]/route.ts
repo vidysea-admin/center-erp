@@ -6,6 +6,8 @@ import { dbConnect } from "@/lib/db";
 import { StoredFile, DailyLog, CandidateDocument, TrainerDocument, CandidateResult, Closure } from "@/models";
 import { getFileStream, removeStoredFile } from "@/lib/storage";
 import { audit } from "@/lib/audit";
+import { INTERNAL_FILE_HEADER, internalFileToken } from "@/lib/safe-fetch";
+import { auth } from "@/auth";
 
 // -83: every extension /api/upload accepts is served with its real type and rendered
 // inline where a browser can render it — .mov/.heic/.m4a were being handed out as
@@ -29,14 +31,24 @@ function parseRange(h: string | null): { start: number; end?: number } | { suffi
   return { start: parseInt(m[1], 10), end: m[2] === "" ? undefined : parseInt(m[2], 10) };
 }
 
-// Capability-URL access: the 16-hex random filename is the secret. No session required —
-// lets <img>/<video> tags, PDF viewers and the sync engine's server-side fetch all work.
+// -98 (QA-163, checker measured live: certificates / candidate documents / trainee photos opened
+// for an ANONYMOUS request and the link never expired): a read now needs a LOGIN — the 32-hex
+// capability name stays as the second layer (no enumeration), the session is the first. Same-origin
+// <img>/<video>/PDF viewers send the cookie themselves; the only server-side consumer (the sync
+// engine reading a sheet uploaded into the ERP over loopback) proves itself with the internal
+// header minted in safe-fetch. Public /p/* pages do not embed evidence.
 // -83 (honest file reads): the bytes STREAM (no heap copy), Range is honoured (206) so
 // video seeks and iOS plays, and failures are told apart — 404 missing, 416 bad range,
 // 502 when the storage backend refused (was: everything became "File not found").
 export const GET = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ name: string }> }) => {
   const { name } = await ctx.params;
   if (!/^[a-f0-9]{32}\.[a-z0-9]+$/.test(name)) throw new HttpError(400, "Bad file name");
+  const internal = req.headers.get(INTERNAL_FILE_HEADER);
+  const isInternal = !!internal && internal === internalFileToken(name);
+  if (!isInternal) {
+    const session = await auth();
+    if (!session?.user) throw new HttpError(401, "Please sign in to open this file.");
+  }
   await dbConnect();
   const rec = await StoredFile.findOne({ name }).select("backend drive_file_id size status").lean<any>();
   // -97: a deleted file says so (410) — the row is kept as the audit trail, the object is gone.

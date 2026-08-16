@@ -3,14 +3,12 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-97";
+export const RELEASE = "2026.08.14-98";
 export const RELEASE_NOTE =
-  "-97: QA-162 compress FIRST then route (device image/video compression is size-blind; " +
-  "size still decides direct-vs-proxied); QA-164 a skipped/failed device compression " +
-  "travels as its reason and the screen says so (no more 'compressed on your phone' over " +
-  "a 570 MB upload; unmuted-play refusal now retries muted instead of giving up); file " +
-  "lifecycle: deleting a candidate/trainer document or replacing a certificate deletes " +
-  "the stored object too and the URL answers 410; a wrong photo/video can be discarded " +
-  "before Save (uploader-only, unreferenced); Admin 'Files' table shows where every " +
-  "upload lives (<Centre>/<Batch>/<kind>) with a Google Cloud console link; bucket CORS " +
-  "= production origin only.";
+  "-98: QA-163 stored evidence (certificates, candidate documents, trainee photos, video) " +
+  "now needs a LOGIN to open - anonymous and forged-header reads answer 401; the 32-hex " +
+  "capability name stays as the second layer; same-origin <img>/<video>/PDF viewers send " +
+  "the cookie themselves; the sync engine's loopback read of an uploaded sheet keeps " +
+  "working through a server-internal header. QA-165 a daily log can be read singly and " +
+  "DELETED (same right that creates it, frozen batches refuse, audited with the snapshot " +
+  "+ reason, the day's own evidence leaves storage with it) - Delete on the log row.";

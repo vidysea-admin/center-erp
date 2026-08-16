@@ -1372,6 +1372,13 @@ function DailyExecution({ batchId, batch, role, setError }: any) {
               <span className="flex gap-1.5">
                 <Btn small kind="ghost" onClick={() => setRoundLog(r)}>+ Round</Btn>
                 <Btn small kind="ghost" onClick={() => setEditLog(r)}>Edit</Btn>
+                {/* -98 (QA-165): a wrong day can be undone — audited, its own evidence leaves with it. */}
+                <Btn small kind="ghost" onClick={async () => {
+                  const reason = window.prompt(`Delete the daily log for ${fmtDate(r.log_date)}? This removes the day's attendance and its photos/videos from storage (recorded in the audit). Reason:`);
+                  if (reason === null) return;
+                  try { await api(`/api/batches/${batchId}/logs/${r._id}`, { method: "DELETE", json: { reason } }); load(); }
+                  catch (e: any) { setError(e.message); }
+                }}>Delete</Btn>
               </span>
             ) : null },
           ]} empty="No logs yet." />
