@@ -998,8 +998,25 @@ function MailPanel({ setError }: any) {
           {storageCheck && (
             <div className={`mt-1 ${storageCheck.ok ? "text-green-800" : "text-red-800"}`}>
               {storageCheck.ok ? "✓" : "✗"} {storageCheck.note}{storageCheck.folder_path ? ` — ${storageCheck.folder_path}/ (id ${storageCheck.drive_file_id}, ${storageCheck.ms} ms)` : ""}
+              {storageCheck.fix && <div className="mt-0.5"><b>Fix:</b> {storageCheck.fix}</div>}
+              {/* -95: the ladder — one rung per thing that can break, so red says WHAT broke. */}
+              {Array.isArray(storageCheck.steps) && storageCheck.steps.length > 0 && (
+                <ol className="mt-1 space-y-0.5 font-mono text-[11px]">
+                  {storageCheck.steps.map((s: any) => (
+                    <li key={s.step}>{s.ok ? "✓" : "✗"} {s.step} · {s.ms} ms{!s.ok && typeof s.detail === "string" ? ` — ${s.detail}` : ""}{s.step === "cors" && s.ok ? ` — ${s.detail?.state}` : ""}{s.step === "session-put" && s.ok ? ` — HTTP ${s.detail?.status}` : ""}</li>
+                  ))}
+                </ol>
+              )}
             </div>
           )}
+          {/* -95: the bucket's immutable facts (checker 16/08) — location · uniform access · public
+              access prevention · CORS. Anything off the expected values is called out in red. */}
+          {(storageCheck?.bucket ?? comp?.bucket) && (() => { const b = storageCheck?.bucket ?? comp?.bucket; return (
+            <div className="mt-1 text-[11px]">
+              <b>Bucket {b.name}:</b> location {b.location ?? "?"} {b.location && b.location.toUpperCase() === b.expected?.location ? "✓" : "✗"} · uniform access {b.ubla === true ? "✓ on" : "✗ off"} · public access prevention {b.pap ?? "?"} {(b.pap ?? "").toLowerCase() === "enforced" ? "✓" : "✗"} · CORS {b.cors_ok ? `✓ ${(b.cors_origins ?? []).join(", ")}` : "✗ not yet"} · checked {new Date(b.checked_at).toLocaleString()}
+              {(b.warnings ?? []).length > 0 && <div className="mt-0.5 text-red-700">⚠ {b.warnings.join(" ")}</div>}
+            </div>
+          ); })()}
           {/* -89: what the container actually holds (names, never values) — the fact that ends the
               ".env me daal diya" guesswork; screenshot this for devops. */}
           {comp?.env && !mail.storage.configured && (

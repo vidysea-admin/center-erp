@@ -1274,7 +1274,7 @@ ok("…with the contact details an approver needs", !!queued && queued.phone ===
   ok("QA-145: version endpoint tells the truth — evidence_storage is local-ephemeral in CI", ver.evidence_storage === "local-ephemeral", ver.evidence_storage);
   const cfg = (await req("GET", "/api/test-email", undefined, 200)).data;
   ok("QA-145: admin health names the loss honestly (NOT connected, lost on deploy) and names GCS as the decided backend",
-    cfg.storage?.configured === false && /LOST on every deploy/.test(cfg.storage?.reason ?? "") && /GCS_BUCKET/.test(cfg.storage?.reason ?? "") && /WIF identity is baked in|None of the storage names/.test(cfg.storage?.hint ?? ""), JSON.stringify(cfg.storage));
+    cfg.storage?.configured === false && /LOST on every deploy/.test(cfg.storage?.reason ?? "") && /GCS_BUCKET/.test(cfg.storage?.reason ?? "") && /WIF identity is baked in|None of the storage names|forced OFF by STORAGE_DISABLE/.test(cfg.storage?.hint ?? ""), JSON.stringify(cfg.storage));
   // -79 rider: the one-click storage probe REFUSES to run unconfigured (it would only prove
   // the disk that deploys wipe) and says why — the live proof is a click away once Drive is on.
   const probe = await req("POST", "/api/test-storage", {});
@@ -1286,11 +1286,18 @@ ok("…with the contact details an approver needs", !!queued && queued.phone ===
   // container (names only, never values), with SES/Mongo as the control, and a plain hint.
   const env = probeGet.data?.env;
   ok("-89: health carries the env diagnostic — names + lengths, never values", !!env?.env_seen && "GDRIVE_OAUTH_CLIENT_ID" in env.env_seen && "SES_SMTP_USER" in env.env_seen && "MONGODB_URL" in env.env_seen && typeof env.env_seen.MONGODB_URL.length === "number" && !JSON.stringify(env).includes(process.env.MONGODB_URL ?? "mongodb://127.0.0.1"), JSON.stringify(Object.keys(env?.env_seen ?? {}).slice(0, 5)));
-  ok("-89/-92/-93: CI has no bucket → the hint says exactly what is missing (WIF identity is baked in, bucket name is not) and SES/Mongo are the control", typeof env?.hint === "string" && /WIF identity is baked in|None of the storage names/.test(env.hint) && env.env_seen.MONGODB_URL.present === true, env?.hint);
+  // -95: the bucket is named in code, so the wall runs with STORAGE_DISABLE=1 and the diagnostic
+  // says so — and still names the bucket this build is for (would_be), so nobody mistakes the
+  // switch for a missing bucket.
+  ok("-95: CI wall is forced off by STORAGE_DISABLE and the hint SAYS so (never 'bucket missing') and names the bucket the build is for", typeof env?.hint === "string" && /forced OFF by STORAGE_DISABLE/.test(env.hint) && /vidysea-erp-storage/.test(env.hint) && env.env_seen.MONGODB_URL.present === true, env?.hint);
+  ok("-95: would_be says gcs + vidysea-erp-storage (default) via the baked WIF file", env?.would_be?.mode === "gcs" && env?.would_be?.bucket === "vidysea-erp-storage" && env?.would_be?.bucket_from === "default" && /gcs-wif\.json/.test(env?.would_be?.cred_from ?? ""), JSON.stringify(env?.would_be));
+  ok("-95: the CORS rule the app applies names the production origin, PUT+POST, and exposes Location/Range/Content-Range/x-goog-resumable", Array.isArray(env?.cors_rule?.origin) && env.cors_rule.origin.includes("https://www.vidysea.com") && ["PUT", "POST", "GET"].every((m) => env.cors_rule.method.includes(m)) && ["Location", "Range", "Content-Range", "x-goog-resumable"].every((h) => env.cors_rule.responseHeader.includes(h)) && env.cors_rule.maxAgeSeconds === 3600, JSON.stringify(env?.cors_rule));
+  ok("-95: the project id is derived from the impersonated SA (no GOOGLE_CLOUD_PROJECT needed)", env?.project === "gen-lang-client-0677023624", String(env?.project));
+  ok("-95: STORAGE_DISABLE is listed in the diagnostic (names only) and reported as the reason", "STORAGE_DISABLE" in (env?.env_seen ?? {}) && env?.disabled?.on === true && env?.disabled?.name === "STORAGE_DISABLE", JSON.stringify(env?.disabled));
   ok("-93: the WIF identity file ships in the build (no private key) and names the impersonated service account", env?.wif?.present === true && /erp-storage-380@/.test(env?.wif?.impersonating ?? "") && typeof env?.aws?.container_creds === "boolean", JSON.stringify(env?.wif));
   ok("-92 (QA-161): the diagnostic lists the GCS names too (GCS_BUCKET, GCS_SA_JSON) — the decided backend", "GCS_BUCKET" in (env?.env_seen ?? {}) && "GCS_SA_JSON" in (env?.env_seen ?? {}), JSON.stringify(Object.keys(env?.env_seen ?? {}).slice(0, 4)));
   ok("-89: storage health itself carries the hint (the admin banner shows it)", typeof probeGet.data?.storage?.hint === "string" && probeGet.data.storage.hint.length > 20, probeGet.data?.storage?.hint);
-  ok("-89: the probe's refusal names the hint, not a bare 'GDRIVE_SA_JSON missing'", /None of the storage names|register them|WIF identity is baked in/.test(probe.data?.error ?? ""), probe.data?.error);
+  ok("-89: the probe's refusal names the hint, not a bare 'GDRIVE_SA_JSON missing'", /None of the storage names|register them|WIF identity is baked in|forced OFF by STORAGE_DISABLE/.test(probe.data?.error ?? ""), probe.data?.error);
   ok("-90: storage health carries rss_mb (memory is measurable, not asserted)", typeof probeGet.data?.rss_mb === "number" && probeGet.data.rss_mb > 0, String(probeGet.data?.rss_mb));
 }
 

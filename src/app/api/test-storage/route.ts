@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiHandler, requireUser, requireRole, HttpError } from "@/lib/authz";
-import { awsIdentity, compressionTools, envDiagnostic, getFile, gcsWifPresent, putFile, rssMb, storageHealth } from "@/lib/storage";
+import { awsIdentity, compressionTools, createResumableSession, deleteGcsObject, ensureBucketCors, envDiagnostic, getFile, gcsAccessToken, gcsBucketReport, gcsWifPresent, lastBucketReportCached, putFile, putToSession, rssMb, storageHealth } from "@/lib/storage";
 
 // QA-145 rider (Umesh, 15/08: "Drive wala code local me test karke dekha ki information ja
 // rahi hai ya bas push kar diya?") — the honest answer was: the Drive branch could not be
@@ -19,7 +19,7 @@ export const GET = apiHandler(async () => {
   // -90: rss_mb makes "the container's memory does not move with file size" measurable.
   // -93: with a WIF identity baked in, say WHO this container is on AWS (the ARN the pool binding needs).
   const identity = gcsWifPresent().present ? await awsIdentity() : null;
-  return NextResponse.json({ storage: storageHealth(), env: envDiagnostic(), aws_identity: identity, rss_mb: rssMb(), tools, compression: { totals: agg[0] ?? { files: 0, stored: 0, original: 0, compressed: 0 }, recent } });
+  return NextResponse.json({ storage: storageHealth(), env: envDiagnostic(), aws_identity: identity, bucket: lastBucketReportCached(), rss_mb: rssMb(), tools, compression: { totals: agg[0] ?? { files: 0, stored: 0, original: 0, compressed: 0 }, recent } });
 });
 
 // -93: when the probe fails on GCS/WIF the message says WHICH side to fix — STS (AWS role not
@@ -44,16 +44,43 @@ export const POST = apiHandler(async (_req: NextRequest) => {
   const name = `healthcheck-${stamp}.txt`;
   const payload = Buffer.from(`Center ERP storage probe ${stamp} by ${user.email}`);
   const started = Date.now();
-  let put, back;
-  try {
-    put = await putFile(name, payload, "text/plain", ["_healthcheck"]);
-    back = await getFile({ backend: put.backend, drive_file_id: put.drive_file_id }, name);
-  } catch (e: any) {
+  // -95: a LADDER — each rung proves one thing, stops at the first failure and names the fix,
+  // so a red result says what broke instead of inviting a guess (checker, 16/08).
+  const steps: { step: string; ok: boolean; ms: number; detail: any }[] = [];
+  const run = async (step: string, fn: () => Promise<any>) => {
+    const t = Date.now();
+    try { const detail = await fn(); steps.push({ step, ok: true, ms: Date.now() - t, detail }); return detail; }
+    catch (e: any) { steps.push({ step, ok: false, ms: Date.now() - t, detail: String(e?.message ?? e).slice(0, 300) }); throw e; }
+  };
+  const fail = (e: any) => {
     const msg = String(e?.message ?? e);
     const why = classifyStorageError(msg);
-    return NextResponse.json({ ok: false, backend: health.backend, ms: Date.now() - started, error: msg.slice(0, 300), note: why || "Storage refused the probe — see error.", fix: why || null }, { status: 502 });
+    const failed = steps.find((x) => !x.ok)?.step ?? null;
+    return NextResponse.json({ ok: false, backend: health.backend, ms: Date.now() - started, failed_step: failed, steps, bucket: lastBucketReportCached(), error: msg.slice(0, 300), note: why || `Storage refused the probe at step "${failed}" — see error.`, fix: why || null }, { status: 502 });
+  };
+  let put: any, back: Buffer, bucketReport: any = null, cors: any = null, session: any = null, sessionPut: any = null;
+  try {
+    if (health.backend === "gcs") {
+      // 1 — token: federation + impersonation only
+      await run("token", () => gcsAccessToken());
+      // 2 — bucket: metadata (name + bucket IAM) + the immutable facts + CORS (self-applied)
+      bucketReport = await run("bucket", () => gcsBucketReport());
+      cors = await run("cors", async () => { const c = await ensureBucketCors(); if (c.state === "failed") throw new Error(`CORS could not be applied: ${c.error} — run: ${c.gcloud}`); return c; });
+    }
+    // 3 — write + read-back through the same doors the app uses
+    put = await run("write", () => putFile(name, payload, "text/plain", ["_healthcheck"]));
+    back = await run("read", () => getFile({ backend: put.backend, drive_file_id: put.drive_file_id }, name));
+    if (health.backend === "gcs") {
+      // 4 — a resumable session (what /api/upload/intent mints for the browser)
+      session = await run("session", async () => { const sres = await createResumableSession({ name: `session-${name}`, mime: "text/plain", size: payload.length, folderSegments: ["_healthcheck"], origin: null }); return { host: new URL(sres.session_uri).host, key: sres.folder_id, uri: sres.session_uri }; });
+      // 5 — the server PUTs to it (curl-equivalent, no CORS) — a browser failure after this is CORS only
+      sessionPut = await run("session-put", async () => { const r = await putToSession(session.uri, payload, "text/plain"); if (!r.ok) throw new Error(`session PUT ${r.status}: ${r.body}`); await deleteGcsObject(session.key); return { status: r.status }; });
+      delete session.uri;
+    }
+  } catch (e: any) {
+    return fail(e);
   }
-  const roundtrip = back.equals(payload);
+  const roundtrip = back!.equals(payload);
   return NextResponse.json({
     ok: roundtrip,
     backend: put.backend,
@@ -62,8 +89,13 @@ export const POST = apiHandler(async (_req: NextRequest) => {
     bytes: payload.length,
     roundtrip,
     ms: Date.now() - started,
+    steps,
+    bucket: bucketReport,
+    cors,
+    session,
+    session_put: sessionPut,
     note: roundtrip
-      ? `${put.backend === "gcs" ? "Bucket" : "Drive"} write + read-back succeeded — uploads on this build survive deploys.`
+      ? `${put.backend === "gcs" ? `Bucket write + read-back + resumable session + server PUT succeeded (${steps.length} steps)` : "Drive write + read-back succeeded"} — uploads on this build survive deploys.${bucketReport?.warnings?.length ? ` ⚠ ${bucketReport.warnings.join(" ")}` : ""}`
       : "Wrote to storage but the read-back did not match — do NOT trust storage until this passes.",
   });
 });

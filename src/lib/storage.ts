@@ -65,10 +65,46 @@ export const ENV_ALIASES = {
   // task role and Google hands back a token for the impersonated service account.
   gcs_wif_json: ["GCS_WIF_JSON", "GOOGLE_WIF_JSON"],
   gcs_wif_file: ["GCS_WIF_FILE", "GOOGLE_APPLICATION_CREDENTIALS"],
+  // -95: env-only WIF — devops' "5 vars" package (audience + service-account email) builds the
+  // same external_account config in code; the baked file is the default, these override it.
+  gcs_wif_audience: ["GCP_WIF_AUDIENCE", "GCS_WIF_AUDIENCE", "GOOGLE_WIF_AUDIENCE"],
+  gcs_sa_email: ["GCP_SA_EMAIL", "GCS_SA_EMAIL", "GOOGLE_SA_EMAIL"],
+  gcp_project: ["GOOGLE_CLOUD_PROJECT", "GCP_PROJECT", "GCLOUD_PROJECT"],
 } as const;
-// Umesh names the bucket once; env overrides (Drive-folder-id pattern). Empty = not decided yet.
-export const DEFAULT_GCS_BUCKET = "";
+// -95 (Umesh 16/08, console verified): the bucket is named in code — no env needed anywhere;
+// GCS_BUCKET still overrides (Drive-folder-id pattern).
+export const DEFAULT_GCS_BUCKET = "vidysea-erp-storage";
 export const DEFAULT_WIF_FILE = "config/gcs-wif.json";
+// -95: the browser PUTs resumable chunks straight to storage.googleapis.com from THIS origin, so
+// the bucket's CORS must name it (checker, 16/08: "curl chalega, browser nahi"). APP_ORIGIN env →
+// origin of AUTH_URL → the production default. localhost stays listed so a local run against the
+// real bucket behaves the same.
+export const DEFAULT_APP_ORIGIN = "https://www.vidysea.com";
+export function appOrigin(): string {
+  const explicit = parseEnvValue(process.env.APP_ORIGIN);
+  if (explicit) return explicit.replace(/\/+$/, "");
+  const auth = parseEnvValue(process.env.AUTH_URL);
+  if (auth) { try { return new URL(auth).origin; } catch { /* fall through */ } }
+  return DEFAULT_APP_ORIGIN;
+}
+export function gcsCorsRule(): { origin: string[]; method: string[]; responseHeader: string[]; maxAgeSeconds: number } {
+  const origins = Array.from(new Set([appOrigin(), DEFAULT_APP_ORIGIN, "http://localhost:3000", "http://localhost:3001"]));
+  return {
+    origin: origins,
+    method: ["GET", "HEAD", "PUT", "POST", "OPTIONS"],
+    responseHeader: ["Content-Type", "Content-Length", "Content-Range", "Range", "Location", "x-goog-resumable", "x-goog-upload-status"],
+    maxAgeSeconds: 3600,
+  };
+}
+// -95: with the bucket named in code every build would talk to the REAL bucket — including the CI
+// wall on a laptop / GitHub runner, whose AWS identity the pool must NOT trust. This is the one
+// explicit off-switch (CI/test only; never set on prod): storage behaves exactly as unconfigured,
+// and the diagnostic says so instead of pretending the bucket is missing.
+export const STORAGE_DISABLE_NAMES = ["STORAGE_DISABLE", "EVIDENCE_STORAGE_DISABLE"] as const;
+export function storageDisabled(): { on: boolean; name: string | null } {
+  for (const n of STORAGE_DISABLE_NAMES) { const v = parseEnvValue(process.env[n]).toLowerCase(); if (v && v !== "0" && v !== "false" && v !== "no" && v !== "off") return { on: true, name: n }; }
+  return { on: false, name: null };
+}
 export function parseEnvValue(raw: string | undefined | null): string {
   let v = String(raw ?? "").trim();
   if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1).trim();
@@ -97,11 +133,36 @@ function readWifJson(): { json: any; source: string } | null {
   if (inline) {
     try { const raw = inline.value.trim().startsWith("{") ? inline.value : Buffer.from(inline.value, "base64").toString("utf8"); const j = JSON.parse(raw); if (j?.type === "external_account") return { json: j, source: inline.name }; } catch { /* fall through */ }
   }
+  // -95: env-only shape (GCP_WIF_AUDIENCE + GCP_SA_EMAIL) — the same client, built in code.
+  const aud = readEnv(ENV_ALIASES.gcs_wif_audience), sa = readEnv(ENV_ALIASES.gcs_sa_email);
+  if (aud && sa) {
+    return {
+      json: {
+        type: "external_account",
+        audience: aud.value,
+        subject_token_type: "urn:ietf:params:aws:token-type:aws4_request",
+        token_url: "https://sts.googleapis.com/v1/token",
+        service_account_impersonation_url: `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${sa.value}:generateAccessToken`,
+        universe_domain: "googleapis.com",
+      },
+      source: `${aud.name} + ${sa.name}`,
+    };
+  }
   const fp = wifFilePath();
   if (fp) {
     try { const j = JSON.parse(require("fs").readFileSync(fp, "utf8")); if (j?.type === "external_account") return { json: j, source: `file ${fp}` }; } catch { /* unreadable → not configured */ }
   }
   return null;
+}
+// -95: the GCP project id for the Storage client — env (GOOGLE_CLOUD_PROJECT) or derived from the
+// impersonated service account's domain (<sa>@<project>.iam.gserviceaccount.com). Bucket
+// operations do not strictly need it; naming it avoids the SDK's project lookup.
+export function gcpProjectId(): string | null {
+  const e = readEnv(ENV_ALIASES.gcp_project);
+  if (e) return e.value;
+  const w = readWifJson();
+  const m = w ? /@([^.]+)\.iam\.gserviceaccount\.com/.exec(String(w.json.service_account_impersonation_url ?? "")) : null;
+  return m ? m[1] : null;
 }
 type GcsCfg = { bucket: string; bucketFrom: string; kind: "sa" | "wif"; raw?: string; wif?: any; credFrom: string };
 function gcsConfig(): GcsCfg | null {
@@ -122,6 +183,12 @@ export function gcsWifPresent(): { present: boolean; source: string | null; impe
 // Order (QA-161): GCS wins when present (the decided backend); the Drive shapes stay for the
 // files already there and for the interim.
 export function storageMode(): "gcs" | "sa" | "oauth" | null {
+  if (storageDisabled().on) return null; // -95: CI/test switch — never set on prod
+  return storageModeRaw();
+}
+// What the mode WOULD be without the switch — the diagnostic reports it so a disabled build still
+// says which bucket it is built for.
+export function storageModeRaw(): "gcs" | "sa" | "oauth" | null {
   if (gcsConfig()) return "gcs";
   if (saJson()) return "sa";
   if (oauthTriple()) return "oauth";
@@ -131,13 +198,14 @@ export function storageMode(): "gcs" | "sa" | "oauth" | null {
 // .env" conversation ends with a fact instead of a guess.
 export function envDiagnostic() {
   const seen: Record<string, { present: boolean; length: number }> = {};
-  const all = [...ENV_ALIASES.gcs_bucket, ...ENV_ALIASES.gcs_sa_json, ...ENV_ALIASES.gcs_wif_json, ...ENV_ALIASES.gcs_wif_file, ...ENV_ALIASES.client_id, ...ENV_ALIASES.client_secret, ...ENV_ALIASES.refresh_token, ...ENV_ALIASES.sa_json, "SES_SMTP_USER", "MONGODB_URL", "AUTH_SECRET"];
+  const all = [...ENV_ALIASES.gcs_bucket, ...ENV_ALIASES.gcs_sa_json, ...ENV_ALIASES.gcs_wif_json, ...ENV_ALIASES.gcs_wif_file, ...ENV_ALIASES.gcs_wif_audience, ...ENV_ALIASES.gcs_sa_email, ...ENV_ALIASES.gcp_project, ...STORAGE_DISABLE_NAMES, ...ENV_ALIASES.client_id, ...ENV_ALIASES.client_secret, ...ENV_ALIASES.refresh_token, ...ENV_ALIASES.sa_json, "SES_SMTP_USER", "MONGODB_URL", "AUTH_SECRET"];
   for (const n of all) { const v = parseEnvValue(process.env[n]); seen[n] = { present: n in process.env, length: v.length }; }
   const other = Object.keys(process.env).filter((k) => /GDRIVE|DRIVE|GOOGLE|OAUTH|GAPI|GCS|BUCKET/i.test(k) && !all.includes(k)).map((k) => ({ name: k, length: parseEnvValue(process.env[k]).length }));
-  const t = oauthTriple(), sa = saJson(), g = gcsConfig(), wif = gcsWifPresent();
-  const anyDriveName = Object.entries(seen).some(([k, v]) => v.present && !["SES_SMTP_USER", "MONGODB_URL", "AUTH_SECRET"].includes(k));
+  const t = oauthTriple(), sa = saJson(), g = gcsConfig(), wif = gcsWifPresent(), off = storageDisabled();
+  const anyDriveName = Object.entries(seen).some(([k, v]) => v.present && !["SES_SMTP_USER", "MONGODB_URL", "AUTH_SECRET", ...STORAGE_DISABLE_NAMES].includes(k));
   let hint: string;
-  if (g) hint = g.kind === "wif"
+  if (off.on) hint = `Storage forced OFF by ${off.name} (CI/test switch — never set on production). Without it this build would use ${g ? `Google Cloud Storage bucket ${g.bucket} (${g.bucketFrom}; ${g.kind === "wif" ? `WIF ${g.credFrom}` : g.credFrom})` : storageModeRaw() ? "Google Drive" : "nothing (unconfigured)"}.`;
+  else if (g) hint = g.kind === "wif"
     ? `Google Cloud Storage via Workload Identity Federation (${g.credFrom}; impersonating ${wif.impersonating ?? "?"}) — bucket ${g.bucket} (${g.bucketFrom}). If the probe fails, the fix is IAM, not env: the AWS task role must be trusted by the pool provider, hold roles/iam.workloadIdentityUser on the service account, and the service account must hold roles/storage.objectAdmin on the bucket.`
     : `Google Cloud Storage configured (${g.credFrom} + bucket ${g.bucket}).`;
   else if (wif.present) hint = `WIF identity is baked in (${wif.source}, impersonating ${wif.impersonating ?? "?"}) but NO BUCKET NAME — set GCS_BUCKET (or the DEFAULT_GCS_BUCKET constant) and redeploy; nothing secret is needed.`;
@@ -148,7 +216,7 @@ export function envDiagnostic() {
     const partial = Object.entries(seen).filter(([k, v]) => v.present && v.length > 0 && !["SES_SMTP_USER", "MONGODB_URL", "AUTH_SECRET"].includes(k)).map(([k]) => k);
     hint = `Some Drive names reached this container but not a complete set — present with a value: ${partial.join(", ") || "none"}; present but EMPTY: ${empties.join(", ") || "none"}. All three OAuth names (or the SA key) are needed.`;
   } else hint = `None of the storage names reached this container (GCS_BUCKET + GCS_SA_JSON, or the Drive names)${seen.SES_SMTP_USER.present ? " — SES_SMTP_USER did, so register them in the same place (task definition / pipeline variable list) and redeploy" : ""}.`;
-  return { env_seen: seen, other_names: other, hint, wif: { present: wif.present, source: wif.source, impersonating: wif.impersonating }, aws: { region: parseEnvValue(process.env.AWS_REGION) || parseEnvValue(process.env.AWS_DEFAULT_REGION) || null, container_creds: !!process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI, execution_env: parseEnvValue(process.env.AWS_EXECUTION_ENV) || null } };
+  return { env_seen: seen, other_names: other, hint, disabled: off, would_be: { mode: storageModeRaw(), bucket: g?.bucket ?? null, bucket_from: g?.bucketFrom ?? null, cred_from: g?.credFrom ?? null }, app_origin: appOrigin(), cors_rule: gcsCorsRule(), project: gcpProjectId(), wif: { present: wif.present, source: wif.source, impersonating: wif.impersonating }, aws: { region: parseEnvValue(process.env.AWS_REGION) || parseEnvValue(process.env.AWS_DEFAULT_REGION) || null, container_creds: !!process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI, execution_env: parseEnvValue(process.env.AWS_EXECUTION_ENV) || null } };
 }
 export function storageConfigured(): boolean {
   return storageMode() !== null;
@@ -159,11 +227,14 @@ export function storageHealth(): { backend: "gcs" | "drive" | "local"; configure
   const diag = envDiagnostic();
   if (mode === "gcs") { const g = gcsConfig()!; return { backend: "gcs", configured: true, mode, reason: cachedErr ? `Storage error: ${cachedErr}` : `Google Cloud Storage connected (${g.kind === "wif" ? "Workload Identity Federation" : "service-account key"}) — bucket ${g.bucket} — uploads survive deploys`, hint: diag.hint }; }
   if (mode) return { backend: "drive", configured: true, mode, reason: cachedErr ? `Drive error: ${cachedErr}` : `Google Drive connected via ${mode === "sa" ? "service account" : "OAuth user"} (root folder ${rootFolderId()}) — uploads survive deploys`, hint: diag.hint };
+  const off = storageDisabled();
   return {
     backend: "local",
     configured: false,
     mode: null,
-    reason: "Evidence storage NOT connected — uploads are written to the server's own disk and are LOST on every deploy. Set GCS_BUCKET + GCS_SA_JSON (Google Cloud Storage, the decided backend) — or, interim, GDRIVE_SA_JSON / GDRIVE_OAUTH_CLIENT_ID/SECRET/REFRESH_TOKEN.",
+    reason: off.on
+      ? `Evidence storage NOT connected — forced off by ${off.name} (CI/test switch); uploads go to the server's own disk and are LOST on every deploy. Set GCS_BUCKET + WIF (or GCS_SA_JSON) for Google Cloud Storage, the decided backend.`
+      : "Evidence storage NOT connected — uploads are written to the server's own disk and are LOST on every deploy. Set GCS_BUCKET + GCS_SA_JSON (Google Cloud Storage, the decided backend) — or, interim, GDRIVE_SA_JSON / GDRIVE_OAUTH_CLIENT_ID/SECRET/REFRESH_TOKEN.",
     hint: diag.hint,
   };
 }
@@ -240,6 +311,7 @@ export async function awsIdentity(): Promise<{ arn: string | null; account?: str
 
 // ---------- -92 GCS client (lazy; the SDK is only touched when the mode is gcs) ----------
 let cachedGcs: any = null;
+let cachedGcsAuth: any = null; // -95: the auth client itself, so the probe can prove the token step alone
 function gcs(): { bucket: any; name: string } {
   const cfg = gcsConfig()!;
   if (!cachedGcs) {
@@ -249,6 +321,7 @@ function gcs(): { bucket: any; name: string } {
       const raw = cfg.raw!.trim().startsWith("{") ? cfg.raw! : Buffer.from(cfg.raw!, "base64").toString("utf8");
       const credentials = JSON.parse(raw);
       cachedGcs = new Storage({ credentials, projectId: credentials.project_id });
+      cachedGcsAuth = null;
     } else {
       // -93 WIF. The file's own credential_source points at EC2 IMDS (169.254.169.254); on ECS the
       // task role lives at 169.254.170.2 (AWS_CONTAINER_CREDENTIALS_RELATIVE_URI) and Fargate has no
@@ -268,10 +341,73 @@ function gcs(): { bucket: any; name: string } {
       // deliberately drop — our supplier replaces it).
       const authClient = new AwsClient({ ...rest, aws_security_credentials_supplier: supplier });
       authClient.scopes = ["https://www.googleapis.com/auth/devstorage.read_write"];
-      cachedGcs = new Storage({ authClient });
+      cachedGcsAuth = authClient;
+      cachedGcs = new Storage({ authClient, projectId: gcpProjectId() ?? undefined });
     }
   }
   return { bucket: cachedGcs.bucket(cfg.bucket), name: cfg.bucket };
+}
+
+// ---------- -95: the probe ladder (checker, 16/08: "har test ek hi cheez tode") ----------
+// Rung 1 — token: AWS→GCP federation + impersonation, nothing else. Length only, never the token.
+export async function gcsAccessToken(): Promise<{ token_length: number; expires_at: string | null }> {
+  gcs(); // builds the client
+  const auth = cachedGcsAuth ?? cachedGcs.authClient;
+  const r = await auth.getAccessToken();
+  const token = typeof r === "string" ? r : r?.token;
+  if (!token) throw new Error("no access token returned");
+  const exp = cachedGcsAuth?.credentials?.expiry_date ? new Date(cachedGcsAuth.credentials.expiry_date).toISOString() : null;
+  return { token_length: String(token).length, expires_at: exp };
+}
+// Rung 2 — bucket: metadata (proves bucket IAM + name), and the immutable facts the checker asked
+// to confirm — location, uniform bucket-level access, public access prevention — plus CORS state.
+export type BucketReport = { name: string; location: string | null; location_type: string | null; storage_class: string | null; ubla: boolean | null; pap: string | null; cors_origins: string[]; cors_ok: boolean; expected: { location: string; ubla: boolean; pap: string }; warnings: string[]; checked_at: string };
+let lastBucketReport: BucketReport | null = null;
+export function lastBucketReportCached(): BucketReport | null { return lastBucketReport; }
+export async function gcsBucketReport(): Promise<BucketReport> {
+  const { bucket, name } = gcs();
+  const [m] = await bucket.getMetadata();
+  const location = m.location ? String(m.location) : null;
+  const ubla = m.iamConfiguration?.uniformBucketLevelAccess?.enabled ?? null;
+  const pap = m.iamConfiguration?.publicAccessPrevention ? String(m.iamConfiguration.publicAccessPrevention) : null;
+  const corsOrigins: string[] = Array.from(new Set(((m.cors ?? []) as any[]).flatMap((c) => (c.origin ?? []) as string[])));
+  const want = gcsCorsRule();
+  const corsOk = ((m.cors ?? []) as any[]).some((c) => (c.origin ?? []).includes(appOrigin()) && ["PUT", "POST"].every((x) => (c.method ?? []).includes(x)) && ["Location", "Range", "Content-Range"].every((h) => (c.responseHeader ?? []).map((s: string) => s.toLowerCase()).includes(h.toLowerCase())));
+  const expected = { location: "ASIA-SOUTH1", ubla: true, pap: "enforced" };
+  const warnings: string[] = [];
+  if (location && location.toUpperCase() !== expected.location) warnings.push(`location is ${location} — expected ${expected.location} (Mumbai). Location is immutable: a wrong region needs a new bucket while this one is still empty.`);
+  if (ubla !== true) warnings.push("uniform bucket-level access is OFF — expected ON.");
+  if ((pap ?? "").toLowerCase() !== "enforced") warnings.push(`public access prevention is ${pap ?? "unset"} — expected enforced.`);
+  if (!corsOk) warnings.push(`CORS does not yet allow ${appOrigin()} (${want.method.join("/")}, exposing Location/Range/Content-Range) — the probe applies it.`);
+  lastBucketReport = { name, location, location_type: m.locationType ? String(m.locationType) : null, storage_class: m.storageClass ? String(m.storageClass) : null, ubla, pap, cors_origins: corsOrigins, cors_ok: corsOk, expected, warnings, checked_at: new Date().toISOString() };
+  return lastBucketReport;
+}
+// CORS self-apply (idempotent). Bucket-level Storage Admin covers storage.buckets.update; if it is
+// refused, the answer carries the exact gcloud line + JSON so nothing is silent.
+export async function ensureBucketCors(): Promise<{ state: "present" | "applied" | "failed"; origins: string[]; error?: string; gcloud?: string }> {
+  const rule = gcsCorsRule();
+  const gcloud = `gcloud storage buckets update gs://${gcsConfig()?.bucket ?? DEFAULT_GCS_BUCKET} --cors-file=cors.json   # cors.json = ${JSON.stringify([rule])}`;
+  try {
+    const rep = lastBucketReport ?? await gcsBucketReport();
+    if (rep.cors_ok) return { state: "present", origins: rep.cors_origins };
+    const { bucket } = gcs();
+    await bucket.setCorsConfiguration([rule]);
+    lastBucketReport = null; // re-read next time
+    return { state: "applied", origins: rule.origin };
+  } catch (e: any) {
+    return { state: "failed", origins: rule.origin, error: String(e?.message ?? e).slice(0, 200), gcloud };
+  }
+}
+let corsOnce: Promise<unknown> | null = null;
+function ensureCorsOnce(): void {
+  if (!corsOnce) corsOnce = ensureBucketCors().catch(() => null);
+}
+// Rung 5 — the server itself PUTs bytes to a session URI (the curl-equivalent: no CORS involved),
+// so a browser failure right after this can only be CORS.
+export async function putToSession(sessionUri: string, buf: Buffer, mime = "application/octet-stream"): Promise<{ status: number; ok: boolean; body: string }> {
+  const r = await fetch(sessionUri, { method: "PUT", headers: { "Content-Type": mime, "Content-Length": String(buf.length), "Content-Range": `bytes 0-${buf.length - 1}/${buf.length}` }, body: new Uint8Array(buf), signal: AbortSignal.timeout(20_000) });
+  const body = await r.text().catch(() => "");
+  return { status: r.status, ok: r.ok, body: body.slice(0, 200) };
 }
 // GCS has no folders — the "tree" <Centre>/<Batch>/<kind>/<name> is the object key (QA-155).
 export function gcsKey(folderSegments: string[], name: string): string {
@@ -327,6 +463,7 @@ export async function createResumableSession(opts: { name: string; mime: string;
     // GCS resumable upload session, opened by the server with the SA, PUT by the browser (same
     // 308/Range protocol the -90 client already speaks); the object key is the folder tree.
     const key = gcsKey(opts.folderSegments, opts.name);
+    ensureCorsOnce(); // -95: the browser is about to PUT cross-origin — make sure the bucket allows it (once per process, best-effort)
     const [uri] = await gcs().bucket.file(key).createResumableUpload({ origin: opts.origin ?? undefined, metadata: { contentType: opts.mime || "application/octet-stream", cacheControl: "private, max-age=86400" } });
     cachedErr = null;
     return { session_uri: uri, folder_id: key, folder_path: opts.folderSegments.map((s) => String(s).trim()).filter(Boolean).join("/"), backend: "gcs" };

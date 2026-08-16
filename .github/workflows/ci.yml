@@ -38,6 +38,9 @@ jobs:
       AUTH_TRUST_HOST: "true"
       BASE_URL: http://localhost:3000/erp
       ADMIN_PASSWORD: admin123
+      # -95: the bucket is named in code; the wall must never touch the real bucket (its AWS
+      # identity is not one the pool trusts anyway). Off-switch for CI/test ONLY — never on prod.
+      STORAGE_DISABLE: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
