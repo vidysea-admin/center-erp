@@ -340,7 +340,10 @@ function gcs(): { bucket: any; name: string } {
       // AwsClient directly (fromJSON dispatches on credential_source.environment_id, which we
       // deliberately drop — our supplier replaces it).
       const authClient = new AwsClient({ ...rest, aws_security_credentials_supplier: supplier });
-      authClient.scopes = ["https://www.googleapis.com/auth/devstorage.read_write"];
+      // -96: full_control, not read_write — the prod ladder stopped at "cors" with "Provided
+      // scope(s) are not authorized": bucket-metadata PATCH (setCorsConfiguration) needs it.
+      // Same scopes the Storage SDK asks for by default; IAM (bucket-level Storage Admin) was fine.
+      authClient.scopes = ["https://www.googleapis.com/auth/devstorage.full_control", "https://www.googleapis.com/auth/cloud-platform"];
       cachedGcsAuth = authClient;
       cachedGcs = new Storage({ authClient, projectId: gcpProjectId() ?? undefined });
     }

@@ -65,7 +65,9 @@ export const POST = apiHandler(async (_req: NextRequest) => {
       await run("token", () => gcsAccessToken());
       // 2 — bucket: metadata (name + bucket IAM) + the immutable facts + CORS (self-applied)
       bucketReport = await run("bucket", () => gcsBucketReport());
-      cors = await run("cors", async () => { const c = await ensureBucketCors(); if (c.state === "failed") throw new Error(`CORS could not be applied: ${c.error} — run: ${c.gcloud}`); return c; });
+      // -96: CORS is non-fatal for the ladder — the remaining rungs still report (a CORS miss
+      // blocks the BROWSER, not the server), but the final verdict is red until it is in place.
+      cors = await run("cors", async () => { const c = await ensureBucketCors(); if (c.state === "failed") throw new Error(`CORS could not be applied: ${c.error} — run: ${c.gcloud}`); return c; }).catch((e: any) => ({ state: "failed", error: String(e?.message ?? e).slice(0, 300) }));
     }
     // 3 — write + read-back through the same doors the app uses
     put = await run("write", () => putFile(name, payload, "text/plain", ["_healthcheck"]));
@@ -81,8 +83,9 @@ export const POST = apiHandler(async (_req: NextRequest) => {
     return fail(e);
   }
   const roundtrip = back!.equals(payload);
+  const corsFailed = cors?.state === "failed";
   return NextResponse.json({
-    ok: roundtrip,
+    ok: roundtrip && !corsFailed,
     backend: put.backend,
     drive_file_id: put.drive_file_id ?? null,
     folder_path: put.folder_path ?? null,
@@ -94,8 +97,10 @@ export const POST = apiHandler(async (_req: NextRequest) => {
     cors,
     session,
     session_put: sessionPut,
-    note: roundtrip
-      ? `${put.backend === "gcs" ? `Bucket write + read-back + resumable session + server PUT succeeded (${steps.length} steps)` : "Drive write + read-back succeeded"} — uploads on this build survive deploys.${bucketReport?.warnings?.length ? ` ⚠ ${bucketReport.warnings.join(" ")}` : ""}`
-      : "Wrote to storage but the read-back did not match — do NOT trust storage until this passes.",
+    note: !roundtrip
+      ? "Wrote to storage but the read-back did not match — do NOT trust storage until this passes."
+      : corsFailed
+        ? `Server side works (token, bucket, write, read, session, server PUT) but bucket CORS is NOT in place — browser uploads from ${health.backend === "gcs" ? "the app" : "the browser"} will be blocked until it is: ${cors.error}`
+        : `${put.backend === "gcs" ? `Bucket write + read-back + resumable session + server PUT succeeded (${steps.length} steps)` : "Drive write + read-back succeeded"} — uploads on this build survive deploys.${bucketReport?.warnings?.length ? ` ⚠ ${bucketReport.warnings.join(" ")}` : ""}`,
   });
 });
