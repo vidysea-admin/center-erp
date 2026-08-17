@@ -213,6 +213,10 @@ export type MatchedRow = GovtRow & {
   candidate?: unknown; trainer?: unknown; batch?: unknown; batch_member?: unknown;
   match_status: MatchStatus; match_by: string; match_note?: string;
   internal_days_present?: number | null; variance_days?: number | null;
+  // -108: set only on an UNAMBIGUOUS candidate match whose candidate has no portal ID yet. The
+  // commit path writes it onto the candidate, so the certificate matcher (which joins on exactly
+  // that field) stops coming up empty. Never set on an Ambiguous row.
+  stamp_candidate_id?: string;
 };
 
 /**
@@ -282,7 +286,20 @@ export async function matchGovtRows(
     else if (nk && byName.has(nk)) { hits = byName.get(nk)!; by = "Name"; }
 
     if (hits.length === 1) {
-      out.push({ ...r, candidate: hits[0].candidate?._id ?? hits[0].candidate, batch: hits[0].batch, batch_member: hits[0]._id, match_status: "Matched", match_by: by });
+      // -108: the portal ID finally travels BACK to the candidate. This function has always READ
+      // `sidh_candidate_id` to match on and never written it, which is the whole reason Manish's
+      // eight correctly-named certificates all failed: the Gurugram roster carried no portal IDs,
+      // so the certificate matcher's lookup was empty and every file "matched no candidate" — while
+      // this very function had already worked out, by name, which candidate each CAN id belongs to.
+      // Only the UNAMBIGUOUS branch stamps (the `hits.length > 1` path below never does), and the
+      // caller refuses to overwrite an id that already exists — a government ID is identity data.
+      const cand = hits[0].candidate;
+      const stamp = gid && !cand?.sidh_candidate_id ? r.govt_candidate_id.trim() : undefined;
+      out.push({
+        ...r, candidate: cand?._id ?? hits[0].candidate, batch: hits[0].batch, batch_member: hits[0]._id,
+        match_status: "Matched", match_by: by,
+        ...(stamp ? { stamp_candidate_id: stamp } : {}),
+      });
     } else if (hits.length > 1) {
       out.push({ ...r, match_status: "Ambiguous", match_by: by, match_note: `${hits.length} candidates share this ${by.toLowerCase()} — set the portal Candidate ID on the right record to resolve.` });
     } else {

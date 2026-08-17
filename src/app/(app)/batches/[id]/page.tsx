@@ -1951,28 +1951,82 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
   const [certDrawer, setCertDrawer] = useState(false);
   const [certForm, setCertForm] = useState<any>({});
   const [idx, setIdx] = useState(0);
-  const [certUpload, setCertUpload] = useState<any>(null); // last bulk-upload report
+  const [certUpload, setCertUpload] = useState<any>(null); // last confirm report
   const [uploading, setUploading] = useState(false);
   const closed = ["Completed", "Cancelled"].includes(batch?.status);
+  // -108: bulk upload is preview-first — the staged files and their proposed mapping, editable
+  // before anything is written. Umesh: "agar koi wrong auto map hua ya nahi map ho paye toh preview
+  // me map kar sakte hain, har certificate ke aligned."
+  const [mapping, setMapping] = useState<any>(null);
+  const [linkPlan, setLinkPlan] = useState<any>(null); // portal-id readiness for the pre-flight panel
+  const [linking, setLinking] = useState(false);
+  const [certBusy, setCertBusy] = useState<string | null>(null); // per-candidate upload in flight
 
   // 2026-08-14 (CEO 49:33): "sare certificate ek folder mein ID ke saath — upload hote
   // hi bachche ke saamne assign." Multi-file picker → the CAN id in each FILENAME joins
   // to the roster's sidh_candidate_id server-side; the report below names every file
   // that could not be placed and why. Available on Completed batches too — the endpoint
   // only ever FILLS an absent certificate_file there (DEC-6 stays intact).
+  // -108 step 1: stage the files and get a proposed mapping. Nothing is attached yet.
   async function uploadCertificates(list: FileList | null) {
     if (!list?.length) return;
     setUploading(true);
+    setCertUpload(null);
     try {
       const fd = new FormData();
       for (const f of Array.from(list)) fd.append("files", f);
       const res = await fetch(`${BASE_PATH}/api/batches/${batchId}/certificates`, { method: "POST", body: fd });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? `Upload failed (${res.status})`);
-      setCertUpload(data);
-      await load(); onChanged();
+      // Each staged file carries its own chosen member, seeded from the server's proposal so a
+      // correct auto-match needs no clicks and a wrong one is one dropdown away.
+      setMapping({ ...data, choice: Object.fromEntries((data.staged ?? []).map((s: any) => [s.url, s.member ?? ""])) });
     } catch (e: any) { setError(e.message); }
     finally { setUploading(false); }
+  }
+
+  // -108 step 2: attach exactly the pairs the operator confirmed — the correction wins, not the
+  // filename. Anything left unmapped is discarded rather than abandoned in the bucket.
+  async function confirmMapping() {
+    if (!mapping) return;
+    const pairs = (mapping.staged ?? [])
+      .filter((s: any) => mapping.choice[s.url])
+      .map((s: any) => ({ url: s.url, member: mapping.choice[s.url] }));
+    const discard = (mapping.staged ?? []).filter((s: any) => !mapping.choice[s.url]).map((s: any) => s.url);
+    if (!pairs.length) { setError("Nothing to attach — point at least one certificate at a candidate, or press Cancel to discard them."); return; }
+    setUploading(true);
+    try {
+      const data = await api(`/api/batches/${batchId}/certificates`, { method: "POST", json: { confirm: true, pairs, discard } });
+      setCertUpload(data);
+      setMapping(null);
+      await load(); onChanged(); loadLinkPlan();
+    } catch (e: any) { setError(e.message); }
+    finally { setUploading(false); }
+  }
+
+  // Cancel = the staged files leave the bucket. An abandoned preview is not a reason to keep bytes.
+  async function cancelMapping() {
+    const urls = (mapping?.staged ?? []).map((s: any) => s.url);
+    setMapping(null);
+    for (const u of urls) {
+      const name = String(u).split("/").pop();
+      await api(`/api/files/${name}`, { method: "DELETE" }).catch(() => null);
+    }
+  }
+
+  // -108: the roster's portal-ID readiness — the one fact that explained Manish's eight red lines.
+  const loadLinkPlan = () => api(`/api/batches/${batchId}/link-portal-ids`).then(setLinkPlan).catch(() => setLinkPlan(null));
+  async function linkPortalIds() {
+    setLinking(true);
+    try {
+      const res = await api(`/api/batches/${batchId}/link-portal-ids`, { method: "POST" });
+      setCertUpload(null);
+      await load(); await loadLinkPlan();
+      if (!res.linked) setError(res.conflicts?.length
+        ? `Nothing linked — ${res.conflicts.length} candidate(s) have conflicting portal IDs, left untouched. Fix them on the candidate record.`
+        : "Nothing to link — the portal attendance imported so far names no new IDs for this roster.");
+    } catch (e: any) { setError(e.message); }
+    finally { setLinking(false); }
   }
 
   const [loaded, setLoaded] = useState(false);
@@ -1986,7 +2040,7 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
       setHoursBy(new Map((d.members ?? []).map((m: any) => [String(m.member_id), { qualified: m.qualified, attended_hours: m.attended_hours, basis: m.basis, required_hours: d.required_hours }])))
     ).catch(() => {}),
   ]).catch((e: any) => setError(e.message)).finally(() => setLoaded(true));
-  useEffect(() => { load(); }, [batchId]);
+  useEffect(() => { load(); loadLinkPlan(); }, [batchId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function mark(member: string, patch: any) {
     try {
@@ -2004,9 +2058,38 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
     catch (e: any) { setError(e.message); }
   }
 
+  // -108: one certificate, one candidate. Goes through the SAME upload door as every other file
+  // (uploadWithRetry: compression, 3 retries, offline queue) and then the existing certificate
+  // field patch — no new server contract, and no file-name matching to get wrong.
+  async function uploadOneCertificate(i: any, file: File) {
+    if (!i.result?._id) { setError("Mark this candidate's result first — a certificate attaches to a result (Rule 45)."); return; }
+    setCertBusy(String(i.result._id));
+    try {
+      const url = await uploadWithRetry(file, "closure", {
+        folder_centre: batch?.location?.code ?? batch?.location?.name ?? "", folder_batch: batch?.code ?? "", folder_kind: "certificates",
+        entity: "Batch", entity_id: batchId,
+      });
+      await certPatch(String(i.result._id), { certificate_file: url });
+    } catch (e: any) { setError(e.message); }
+    finally { setCertBusy(null); }
+  }
+
   const active = items.filter((i) => !i.left_on);
   const pending = active.filter((i) => !i.result || i.result.result === "Pending");
   const passes = items.filter((i) => i.result?.result === "Pass");
+  // -108: the pre-flight numbers, in the words the panel says them in.
+  const certReady = passes.filter((i) => !i.result?.certificate_file);
+  const certDone = passes.filter((i) => i.result?.certificate_file);
+  const notPassed = active.filter((i) => i.result && ["Fail", "Absent"].includes(i.result.result));
+  // The exact file names this batch's matcher would accept, for the candidates who can actually
+  // take a certificate. Same normalisation as the server's canOf(), so the list cannot promise a
+  // name the matcher would then reject.
+  const expectedNames = certReady
+    .map((i) => {
+      const m = /CAN[\s_-]*(\d+)/i.exec(String(i.candidate?.sidh_candidate_id ?? ""));
+      return m ? { name: i.candidate?.name, file: `CAN${m[1]}.pdf` } : null;
+    })
+    .filter(Boolean) as { name: string; file: string }[];
 
   const ResultButtons = ({ i }: any) => (
     <div className="flex flex-wrap gap-1.5">
@@ -2061,6 +2144,43 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
         )}
         {i.result?.certificate_status && i.result.certificate_status !== "Pending" && <Chip value={i.result.certificate_status} />}
       </div>
+      {/* -108, Umesh 17/08: "ya toh bachche ke wahan se kar le" — one file, straight to this
+          candidate, no file name and no portal ID involved. The route that cannot fail on matching.
+          Rule 45 still decides: without a Pass there is nothing to attach a certificate to, and the
+          line says what to do instead of hiding the control silently. */}
+      <div className="flex flex-wrap items-center gap-2 border-t border-gray-100 pt-2 text-xs">
+        {i.result?.result !== "Pass" ? (
+          <span className="text-gray-400">
+            {i.result?.result ? `${i.result.result} — no certificate (Rule 45)` : "Certificate: mark Pass first (Rule 45)"}
+          </span>
+        ) : (
+          <>
+            <span className="text-gray-500">Certificate</span>
+            {i.result?.certificate_file ? (
+              <>
+                <a className="text-blue-700 underline" href={i.result.certificate_file} target="_blank" rel="noreferrer">open</a>
+                {!closed && (
+                  <button className="text-red-600 hover:underline"
+                    onClick={async () => {
+                      const reason = window.prompt(`Remove ${i.candidate?.name}'s certificate file? The number and status stay (Rule 46 owns those). Reason:`);
+                      if (reason === null) return;
+                      try { await api(`/api/results/${i.result._id}/certificate`, { method: "DELETE", json: { reason } }); await load(); onChanged(); }
+                      catch (e: any) { setError(e.message); }
+                    }}>remove</button>
+                )}
+              </>
+            ) : <span className="text-gray-400">none</span>}
+            {!closed || !i.result?.certificate_file ? (
+              <label className="cursor-pointer rounded-lg border border-blue-600 px-2 py-0.5 font-medium text-blue-700 hover:bg-blue-50">
+                {certBusy === String(i.result?._id) ? "Uploading…" : i.result?.certificate_file ? "Replace" : "⬆ Upload"}
+                <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden"
+                  disabled={certBusy === String(i.result?._id)}
+                  onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) uploadOneCertificate(i, f); }} />
+              </label>
+            ) : null}
+          </>
+        )}
+      </div>
     </div>
     );
   };
@@ -2101,28 +2221,85 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
         </div>
       )}
 
+      {/* -108, Umesh 17/08: "trainer ko rules pata thodi hote hain na — proper highlight karna
+          chahiye ki kya issue aaya, format kya hona chahiye, sab kuch pehle hi bata do."
+          Everything a trainer needs BEFORE picking a file, from data this screen already has. */}
       {batch?.status !== "Cancelled" && (
-        <div className="mb-3 rounded-lg border border-gray-200 bg-white p-3">
+        <div className="mb-3 space-y-2 rounded-lg border border-gray-200 bg-white p-3">
+          {/* 1. Is this roster even ready for automatic matching? This one line is what would have
+                explained Manish's eight red lines: the files were right, the roster had no IDs. */}
+          {linkPlan && (linkPlan.without_portal_id > 0 || linkPlan.linkable?.length > 0) && (
+            <div className={`rounded-lg border px-3 py-2 text-xs ${linkPlan.with_portal_id === 0 ? "border-amber-300 bg-amber-50 text-amber-900" : "border-blue-200 bg-blue-50 text-blue-900"}`}>
+              <b>{linkPlan.with_portal_id} of {linkPlan.roster} candidates carry a portal ID.</b>{" "}
+              {linkPlan.with_portal_id === 0
+                ? "Automatic matching by filename cannot work at all until at least one does — a correctly named file will still be reported as “matches no candidate”."
+                : `${linkPlan.without_portal_id} without one can only be mapped by hand.`}
+              {linkPlan.linkable?.length > 0 && (
+                <span className="ml-1">
+                  The portal attendance already imported names <b>{linkPlan.linkable.length}</b> of them.
+                  <button onClick={linkPortalIds} disabled={linking}
+                    className="ml-2 rounded-lg bg-blue-600 px-2.5 py-1 font-medium text-white hover:bg-blue-700 disabled:bg-blue-300">
+                    {linking ? "Linking…" : `Link portal IDs (${linkPlan.linkable.length})`}
+                  </button>
+                </span>
+              )}
+              {!linkPlan.linkable?.length && linkPlan.without_portal_id > 0 && (
+                <span className="ml-1">Nothing to link from the imports so far — map by hand below, or upload from each candidate&apos;s own card.</span>
+              )}
+              {linkPlan.conflicts?.length > 0 && (
+                <div className="mt-1 text-amber-800">
+                  {linkPlan.conflicts.length} left untouched because the portal gives conflicting IDs: {linkPlan.conflicts.slice(0, 3).map((c: any) => c.name).join(", ")}
+                  {linkPlan.conflicts.length > 3 ? ` +${linkPlan.conflicts.length - 3}` : ""}.
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 2. Who can take a certificate today, and who cannot — in words, not rule numbers. */}
+          <p className="text-xs text-gray-600">
+            <b className="text-green-700">{certReady.length} can take a certificate now</b> (Pass, none attached yet)
+            {certDone.length > 0 && <> · <span className="text-gray-500">{certDone.length} already have one</span></>}
+            {pending.length > 0 && <> · <span className="text-amber-700">{pending.length} not marked yet — mark the result first</span></>}
+            {notPassed.length > 0 && <> · <span className="text-gray-500">{notPassed.length} Fail/Absent — no certificate (Rule 45)</span></>}
+          </p>
+
+          {/* 3. This batch's REAL expected filenames, copyable. Built with the same normalisation the
+                matcher uses, so the list can never disagree with what the matcher accepts. */}
+          {expectedNames.length > 0 && (
+            <details className="text-xs">
+              <summary className="cursor-pointer text-blue-700">Expected file names for this batch ({expectedNames.length}) — rename to these and every file will land on its own</summary>
+              <div className="mt-1 flex items-start gap-2">
+                <pre className="max-h-40 flex-1 overflow-auto rounded-lg bg-gray-50 p-2 font-mono text-[11px] leading-5">{expectedNames.map((e) => `${e.file}   ${e.name}`).join("\n")}</pre>
+                <Btn small kind="ghost" onClick={() => navigator.clipboard?.writeText(expectedNames.map((e) => `${e.file}\t${e.name}`).join("\n"))}>Copy</Btn>
+              </div>
+            </details>
+          )}
+
           <div className="flex flex-wrap items-center gap-3">
             <label className={`cursor-pointer rounded-lg px-3 py-1.5 text-xs font-medium text-white ${uploading ? "bg-gray-400" : "bg-blue-600 hover:bg-blue-700"}`}>
-              {uploading ? "Uploading…" : "⬆ Upload certificates (bulk)"}
-              <input type="file" multiple accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,.heic" className="hidden" disabled={uploading}
+              {uploading ? "Reading…" : "⬆ Upload certificates (bulk)"}
+              <input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" disabled={uploading}
                 onChange={(e) => { uploadCertificates(e.target.files); e.target.value = ""; }} />
             </label>
             <span className="text-xs text-gray-500">
-              File names carry the candidate id — <span className="font-mono">CAN_12345.pdf</span> lands on that candidate automatically. Pass results only (Rule 45).
+              You will see every file with the candidate it is going to, and can change any of them, <b>before</b> anything is saved.
+              A file named <span className="font-mono">CAN_12345.pdf</span> is matched for you. Or upload from a candidate&apos;s own card below — no file name needed.
             </span>
           </div>
+
           {certUpload && (
-            <div className="mt-2 space-y-1 text-xs">
+            <div className="space-y-1 border-t border-gray-100 pt-2 text-xs">
               <p className="font-medium text-gray-700">
-                {certUpload.summary?.matched ?? 0} placed · {certUpload.summary?.unmatched ?? 0} not placed (of {certUpload.summary?.received ?? 0})
+                {certUpload.summary?.attached ?? 0} attached
+                {certUpload.summary?.refused ? ` · ${certUpload.summary.refused} refused` : ""}
+                {certUpload.summary?.discarded ? ` · ${certUpload.summary.discarded} discarded` : ""}
+                {certUpload.linked != null ? ` · ${certUpload.linked} portal IDs linked` : ""}
               </p>
-              {(certUpload.matched ?? []).map((m: any, i: number) => (
-                <p key={`m${i}`} className="text-green-700">✓ {m.original} → {m.candidate} ({m.can_id})</p>
+              {(certUpload.attached ?? []).map((m: any, i: number) => (
+                <p key={`a${i}`} className="text-green-700">✓ {m.original} → {m.candidate}</p>
               ))}
-              {(certUpload.unmatched ?? []).map((u: any, i: number) => (
-                <p key={`u${i}`} className="text-amber-700">✗ {u.filename} — {u.reason}</p>
+              {(certUpload.refused ?? []).map((u: any, i: number) => (
+                <p key={`r${i}`} className="text-amber-700">✗ {u.reason}</p>
               ))}
             </div>
           )}
@@ -2160,6 +2337,112 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
           </div>
         </>
       )}
+
+      {/* -108, Umesh 17/08: "bulk me karay toh mapping kar le ki ye certificate kis bachche ka hai…
+          plus preview mapping — agar koi wrong auto map hua ya nahi map ho paye toh preview me map
+          kar sakte hain, har certificate ke aligned." Every staged file, its proposed candidate,
+          changeable — and nothing is written until Attach. */}
+      <Drawer open={!!mapping} onClose={cancelMapping} title="Map each certificate to its candidate" wide>
+        {mapping && (() => {
+          const byMember = new Map((mapping.candidates ?? []).map((c: any) => [c.member, c]));
+          const chosenCount = new Map<string, number>();
+          for (const s of mapping.staged ?? []) {
+            const m = mapping.choice[s.url];
+            if (m) chosenCount.set(m, (chosenCount.get(m) ?? 0) + 1);
+          }
+          const rowState = (s: any) => {
+            const m = mapping.choice[s.url];
+            if (!m) return { tone: "border-gray-200", msg: s.reason ?? "not mapped — this file will be discarded", bad: true };
+            if ((chosenCount.get(m) ?? 0) > 1) return { tone: "border-red-300 bg-red-50", msg: "two files point at this same candidate — only one certificate per candidate", bad: true };
+            const c: any = byMember.get(m);
+            if (!c) return { tone: "border-red-300 bg-red-50", msg: "that candidate is not on this roster", bad: true };
+            if (c.result !== "Pass") {
+              return {
+                tone: "border-amber-300 bg-amber-50", bad: true,
+                msg: c.result ? `${c.name}: result is ${c.result} — a certificate needs a Pass (Rule 45)` : `${c.name}: result not marked yet — mark Pass and this will attach (Rule 45)`,
+                markPass: !c.result || c.result === "Pending" ? m : null,
+              };
+            }
+            if (c.has_certificate) return { tone: "border-blue-200 bg-blue-50", msg: `${c.name} already has a certificate — this replaces it and the old file is removed`, bad: false };
+            return { tone: "border-green-200 bg-green-50", msg: `${c.name} — ready to attach`, bad: false };
+          };
+          const rows = (mapping.staged ?? []).map((s: any) => ({ s, st: rowState(s) }));
+          const okCount = rows.filter((r: any) => !r.st.bad && mapping.choice[r.s.url]).length;
+          return (
+            <div className="space-y-3">
+              <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700">
+                <b>{mapping.summary?.staged ?? 0} file{(mapping.summary?.staged ?? 0) === 1 ? "" : "s"} uploaded, {mapping.summary?.auto_matched ?? 0} matched automatically.</b>{" "}
+                Nothing is saved yet. Change any candidate below, then press Attach.
+                {mapping.roster_has_no_portal_ids && (
+                  <div className="mt-1 text-amber-800">
+                    No candidate on this roster has a portal ID, so none of these could be matched by file name — <b>your files are not the problem</b>. Pick each candidate here, or close this and use <b>Link portal IDs</b> first.
+                  </div>
+                )}
+                {mapping.discarded_stale > 0 && <div className="mt-1 text-gray-500">{mapping.discarded_stale} file(s) left over from an earlier unfinished upload were discarded.</div>}
+              </div>
+
+              {(mapping.rejected ?? []).map((r: any, n: number) => (
+                <p key={`rej${n}`} className="text-xs text-red-700">✗ {r.filename} — {r.reason}</p>
+              ))}
+
+              <div className="max-h-[26rem] space-y-2 overflow-y-auto">
+                {rows.map(({ s, st }: any) => (
+                  <div key={s.url} className={`rounded-lg border p-2 text-xs ${st.tone}`}>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <a className="min-w-0 flex-1 truncate font-medium text-blue-700 underline" href={s.url} target="_blank" rel="noreferrer" title="Open the uploaded file to check it is the right one">
+                        {s.original_name}
+                      </a>
+                      <span className="shrink-0 text-gray-400">{fmtBytes(s.size)}</span>
+                      <select className="max-w-64 rounded-lg border border-gray-300 px-2 py-1"
+                        value={mapping.choice[s.url] ?? ""}
+                        onChange={(e) => setMapping({ ...mapping, choice: { ...mapping.choice, [s.url]: e.target.value } })}>
+                        <option value="">— not mapped (discard) —</option>
+                        {(mapping.candidates ?? []).map((c: any) => (
+                          <option key={c.member} value={c.member}>
+                            {c.name}{c.portal_id ? ` · ${c.portal_id}` : ""}{c.phone ? ` · ${c.phone}` : ""}
+                            {c.result === "Pass" ? (c.has_certificate ? " · Pass, has one" : " · Pass") : c.result ? ` · ${c.result}` : " · not marked"}
+                            {c.left_on ? " · dropped" : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      <span className={st.bad ? "text-amber-800" : "text-green-800"}>{st.msg}</span>
+                      {s.match_by && mapping.choice[s.url] === s.member && <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-gray-500">matched by {s.match_by}</span>}
+                      {mapping.choice[s.url] && mapping.choice[s.url] !== s.member && <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-gray-500">you chose this</span>}
+                      {st.markPass && (
+                        <button className="rounded-lg border border-amber-500 px-2 py-0.5 font-medium text-amber-800 hover:bg-amber-100"
+                          onClick={async () => {
+                            await mark(st.markPass, { result: "Pass" });
+                            const fresh = await api(`/api/batches/${batchId}/results`).then((d) => d.items).catch(() => null);
+                            if (fresh) {
+                              const row = fresh.find((x: any) => String(x.member) === String(st.markPass));
+                              setMapping((mp: any) => mp && ({
+                                ...mp,
+                                candidates: (mp.candidates ?? []).map((c: any) => c.member === st.markPass
+                                  ? { ...c, result: row?.result?.result ?? "Pass", has_certificate: !!row?.result?.certificate_file } : c),
+                              }));
+                            }
+                          }}>Mark Pass</button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3 border-t border-gray-100 pt-2">
+                <Btn onClick={confirmMapping} disabled={uploading || !okCount}>
+                  {uploading ? "Attaching…" : `Attach ${okCount} certificate${okCount === 1 ? "" : "s"}`}
+                </Btn>
+                <Btn kind="ghost" onClick={cancelMapping} disabled={uploading}>Cancel &amp; discard</Btn>
+                <span className="text-xs text-gray-500">
+                  {rows.length - okCount > 0 ? `${rows.length - okCount} file(s) will not be attached${rows.some((r: any) => !mapping.choice[r.s.url]) ? " — unmapped ones are discarded" : ""}.` : "Every file is mapped and ready."}
+                </span>
+              </div>
+            </div>
+          );
+        })()}
+      </Drawer>
 
       <Drawer open={certDrawer} onClose={() => setCertDrawer(false)} title="Issue certificates" wide>
         <div className="space-y-3">

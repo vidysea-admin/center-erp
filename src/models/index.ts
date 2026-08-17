@@ -853,9 +853,15 @@ const StoredFileSchema = new Schema({
   bytes_expected: Number,
   drive_folder_id: String,
   expires_at: Date,
+  // -108: a certificate uploaded for the mapping PREVIEW and not yet attached to anyone. The
+  // preview stores the bytes once so the operator does not re-pick 30 files after correcting a
+  // mapping; this flag is what lets the next preview find and discard an abandoned batch of them.
+  // Cleared the moment the file lands on a result row.
+  staged_certificate: { type: Boolean, default: false },
 }, { timestamps: true });
 StoredFileSchema.index({ entity: 1, entity_id: 1 });
 StoredFileSchema.index({ status: 1, expires_at: 1 });
+StoredFileSchema.index({ entity_id: 1, staged_certificate: 1 });
 
 // ---------- Public tokens (2026-08-11: self-registration + candidate feedback) ----------
 // Capability URLs: the random token IS the credential. register tokens are per-location

@@ -344,6 +344,109 @@ const again = await upload(admin, { file: csvFile(), confirm: "1", period_label:
 ok("re-import creates a second import rather than rewriting the first", again.status === 201 && again.data._id !== done.data._id);
 ok("the first import is still intact", (await req(admin, "GET", `/api/govt-attendance/${done.data._id}`)).data.rows?.length === 7);
 
+// ---- -108: the portal ID travels BACK to the candidate ----
+// The defect Umesh hit on 17/08: eight correctly-named certificate files all refused, because not
+// one of 39 roster candidates carried a sidh_candidate_id — and the certificate matcher joins on
+// exactly that field. The mapping was never missing, only unwritten: this importer had already
+// matched every row to a candidate BY NAME and stored the CAN id on the row. Now it writes it back.
+{
+  const g = await req(admin, "GET", `/api/govt-attendance/${done.data._id}`);
+  const rows = g.data.rows ?? [];
+  // Charlie matched by NAME (no portal id on the candidate at fixture time) — so the import should
+  // have stamped Charlie's id from the file.
+  const charlie = rows.find((r) => r.name === `${NAME} Charlie`);
+  const cand = charlie?.candidate?._id ? (await req(admin, "GET", `/api/candidates/${charlie.candidate._id}`)).data.item : null;
+  ok("-108: an UNAMBIGUOUS name match stamps the portal ID onto the candidate",
+    !!cand && /^CAN/i.test(String(cand.sidh_candidate_id ?? "")) && String(cand.sidh_candidate_id).replace(/[_\s-]/g, "").toUpperCase() === String(charlie.govt_candidate_id).replace(/[_\s-]/g, "").toUpperCase(),
+    JSON.stringify({ on_candidate: cand?.sidh_candidate_id, on_row: charlie?.govt_candidate_id }));
+  ok("-108: …and the stamp is audited, naming the import it came from",
+    ((await req(admin, "GET", `/api/audit/Candidate/${charlie.candidate._id}`)).data.items ?? [])
+      .some((a) => a.field === "sidh_candidate_id" && /linked from portal import/i.test(String(a.new_value))));
+  // Alpha already carried CAN_<STAMP>0001 before the import — an existing id is never overwritten.
+  const alpha = rows.find((r) => r.name === `${NAME} Alpha`);
+  const alphaCand = (await req(admin, "GET", `/api/candidates/${alpha.candidate._id}`)).data.item;
+  ok("-108: an id already on record is NEVER overwritten by an import",
+    alphaCand.sidh_candidate_id === `CAN_${STAMP}0001`, String(alphaCand.sidh_candidate_id));
+  // The two Twins are Ambiguous — an identity field must never be written off a guess.
+  const twins = rows.filter((r) => r.name === `${NAME} Twin`);
+  const twinCands = await Promise.all(members.filter((m) => m.name === `${NAME} Twin`).map((m) => req(admin, "GET", `/api/candidates/${m.candidate._id}`).then((r) => r.data.item)));
+  ok("-108: an AMBIGUOUS row stamps nothing — a government ID is never written off a guess",
+    twinCands.every((c) => !c.sidh_candidate_id), JSON.stringify(twinCands.map((c) => c.sidh_candidate_id)));
+  ok("-108: the import reports how many portal IDs it linked", typeof done.data.portal_ids_linked === "number" && done.data.portal_ids_linked >= 1, String(done.data.portal_ids_linked));
+}
+
+// ---- -108 follow-up: the write-back is CONSENTED TO before it happens ----
+// The checker's point, and it is a fair one: the evidence for stamping a permanent government ID is
+// a NAME match. That is unavoidable — a row matched on the portal ID means the candidate already has
+// one — so the answer is that the operator sees who is about to receive an ID, and on what evidence,
+// while the import is still only a preview.
+{
+  const pre = await upload(admin, { file: csvFile(), batch: batch._id });
+  ok("-108: the import PREVIEW names every portal ID it would write, and on what evidence",
+    Array.isArray(pre.data.portal_ids_to_link)
+    && pre.data.portal_ids_to_link.every((p) => p.name && p.id && p.matched_by),
+    JSON.stringify(pre.data.portal_ids_to_link?.slice(0, 3)));
+  ok("-108: …and an AMBIGUOUS candidate is never on that list (a shared name stamps nothing)",
+    !(pre.data.portal_ids_to_link ?? []).some((p) => p.name === `${NAME} Twin`),
+    JSON.stringify((pre.data.portal_ids_to_link ?? []).map((p) => p.name)));
+  ok("-108: …and a candidate who already carries an ID is not on it either (never overwritten)",
+    !(pre.data.portal_ids_to_link ?? []).some((p) => p.name === `${NAME} Alpha`));
+  ok("-108: the preview wrote nothing — the IDs are still unlinked until confirm",
+    !((await req(admin, "GET", "/api/govt-attendance")).data.items ?? []).some((i) => i.file_name === "govt-attendance-sample.csv" && String(i.batch?._id ?? "") === String(batch._id)));
+}
+
+// ---- -108: the one-click back-fill for data imported BEFORE the write-back existed ----
+// Nobody should have to re-upload a file they already imported. This door reads the Matched rows
+// already on record and links the roster from them.
+{
+  // A fresh batch + candidate with no portal id, then an import that matches by name.
+  const lb = (await req(admin, "POST", "/api/batches", { location: loc._id, program: program._id, target_size: 1, planned_start: localDate() })).data.item;
+  const lc = (await req(admin, "POST", "/api/candidates", { name: `${NAME} Backfill`, phone: "9555" + STAMP, location: loc._id, program: program._id })).data.item;
+  const lm = (await req(admin, "POST", `/api/batches/${lb._id}/members`, { candidate: lc._id })).data.item;
+  const plan0 = await req(admin, "GET", `/api/batches/${lb._id}/link-portal-ids`);
+  ok("-108: the back-fill GET previews without writing — nothing to link before any import",
+    plan0.status === 200 && plan0.data.roster === 1 && plan0.data.with_portal_id === 0 && (plan0.data.linkable ?? []).length === 0,
+    JSON.stringify({ roster: plan0.data.roster, with: plan0.data.with_portal_id, linkable: plan0.data.linkable?.length }));
+
+  // Import one row for that candidate, matched by name, and REMOVE the id it stamps so this test
+  // exercises the back-fill rather than the write-back.
+  const lines = csvText.split(String.fromCharCode(10));
+  const alphaAt = lines.findIndex((l) => l.includes(`${NAME} Alpha`));
+  const one = [lines[0], lines[alphaAt]].join(String.fromCharCode(10))
+    .replace(`${NAME} Alpha`, `${NAME} Backfill`).replace(`CAN_${STAMP}0001`, `CAN_${STAMP}7777`);
+  const impRes = await upload(admin, { file: new File([Buffer.from(one)], "backfill.csv", { type: "text/csv" }), batch: lb._id, confirm: "1", period_label: `backfill ${STAMP}` });
+  ok("-108 fixture: the row imported and matched", impRes.status === 201 && impRes.data.matched_count === 1, JSON.stringify(impRes.data).slice(0, 140));
+  await req(admin, "PATCH", `/api/candidates/${lc._id}`, { sidh_candidate_id: "" });
+
+  const plan1 = await req(admin, "GET", `/api/batches/${lb._id}/link-portal-ids`);
+  ok("-108: the back-fill now SEES the link the import already knows, and says so before writing",
+    (plan1.data.linkable ?? []).length === 1 && plan1.data.linkable[0].can === `CAN${STAMP}7777`,
+    JSON.stringify(plan1.data.linkable));
+  const did = await req(admin, "POST", `/api/batches/${lb._id}/link-portal-ids`);
+  const lcAfter = (await req(admin, "GET", `/api/candidates/${lc._id}`)).data.item;
+  ok("-108: the click links it, and the candidate now carries the portal ID",
+    did.data.linked === 1 && String(lcAfter.sidh_candidate_id).replace(/_/g, "") === `CAN${STAMP}7777`,
+    JSON.stringify({ linked: did.data.linked, id: lcAfter.sidh_candidate_id }));
+  ok("-108: …audited as coming from the already-imported attendance",
+    ((await req(admin, "GET", `/api/audit/Candidate/${lc._id}`)).data.items ?? [])
+      .some((a) => a.field === "sidh_candidate_id" && /already imported/i.test(String(a.new_value))));
+  const again2 = await req(admin, "POST", `/api/batches/${lb._id}/link-portal-ids`);
+  ok("-108: running it twice links nothing more — idempotent, and it never overwrites",
+    again2.data.linked === 0 && again2.data.with_portal_id === 1, JSON.stringify(again2.data));
+  // And now the certificate matcher can finally see this candidate.
+  ok("-108: the whole point — a certificate named for that id is now proposed to this candidate",
+    await (async () => {
+      const fd = new FormData();
+      fd.append("files", new File([new Uint8Array([0x25, 0x50, 0x44, 0x46])], `CAN_${STAMP}7777.pdf`, { type: "application/pdf" }));
+      const r2 = await fetch(`${BASE}/api/batches/${lb._id}/certificates`, { method: "POST", headers: { cookie: admin }, body: fd });
+      const d2 = await r2.json().catch(() => ({}));
+      const hit = (d2.staged ?? [])[0];
+      if (hit?.url) await req(admin, "DELETE", `/api/files/${String(hit.url).split("/").pop()}`);
+      return hit?.member === String(lm._id);
+    })());
+  await req(admin, "POST", `/api/batches/${lb._id}/transition`, { target: "Cancelled", reason: "-108 backfill fixture done" });
+}
+
 // ---- -102 (Manish 17/08): the import grid carries the QUALIFICATION verdict ----
 // [11:02] "isme ek status wala chahiye… wo gayab ho gaya, qualified wala aa raha tha"
 // [11:53] "qualify ka rule yahi hai ki 60 plus hours, 60 or above" / "60 se niche not eligible"

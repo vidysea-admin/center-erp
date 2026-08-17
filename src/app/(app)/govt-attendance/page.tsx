@@ -278,6 +278,27 @@ function Inner() {
                 read blank on the grid. The rest still imports. If the portal renamed it, send the file over and the reader can learn the new name.
               </p>
             )}
+            {/* -108: the portal ID this import will write onto a candidate, named before it is
+                written. The evidence is a NAME match (a row matched on the ID means the candidate
+                already has one), so the operator gets to see and refuse it rather than find out
+                from an audit row afterwards. */}
+            {!!upload.portal_ids_to_link?.length && (
+              <div className="rounded-lg border border-blue-200 bg-blue-50 p-2 text-xs text-blue-900">
+                <b>{upload.portal_ids_to_link.length} candidate{upload.portal_ids_to_link.length === 1 ? "" : "s"} will also get their portal ID from this file</b>{" "}
+                — which is what lets certificates named <span className="font-mono">CAN_….pdf</span> land on them later.
+                <details className="mt-1">
+                  <summary className="cursor-pointer">See exactly who, and on what evidence</summary>
+                  <ul className="mt-1 space-y-0.5">
+                    {upload.portal_ids_to_link.map((p: any, i: number) => (
+                      <li key={i}>• <b>{p.name}</b> → <span className="font-mono">{p.id}</span> <span className="text-blue-700">(matched by {p.matched_by})</span></li>
+                    ))}
+                  </ul>
+                  <p className="mt-1 text-blue-800">
+                    A candidate who already has an ID is never changed, and a name shared by two candidates is never stamped at all.
+                  </p>
+                </details>
+              </div>
+            )}
             {upload.hours_parsed === 0 && upload.row_count > 0 && (
               <p className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
                 <b>No hour figure could be read from any row</b>, so nobody in this file can be judged qualified

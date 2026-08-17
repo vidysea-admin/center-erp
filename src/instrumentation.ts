@@ -73,8 +73,43 @@ export async function register() {
     }
   };
 
+  // -108 follow-up (checker, 17/08): the certificate mapping preview stages file bytes so an
+  // operator does not have to re-pick thirty files after correcting one mapping. The first cut only
+  // cleaned those up when somebody previewed on the SAME batch again — so a preview opened once and
+  // abandoned left its bytes in the bucket forever. That is the exact shape -101 closed three times
+  // over, and "less often" is not "closed". This sweep does not depend on anyone coming back: any
+  // staged certificate past its expiry is discarded wherever it is.
+  const stagedSweep = async () => {
+    try {
+      await dbConnect();
+      if (!(await takeLock("staged-certificates", 9 * 60_000))) return;
+      const { StoredFile, CandidateResult } = await import("@/models");
+      const { removeStoredFile } = await import("@/lib/storage");
+      const { BASE_PATH } = await import("@/lib/base-path");
+      const stale = await StoredFile.find({
+        staged_certificate: true, status: "ready", expires_at: { $lt: new Date() },
+      }).select("name entity_id").limit(500).lean<any[]>();
+      let gone = 0;
+      for (const f of stale) {
+        const url = `${BASE_PATH}/api/files/` + f.name;
+        // Belt and braces: never discard something a record ended up pointing at.
+        if (await CandidateResult.exists({ certificate_file: url })) {
+          await StoredFile.updateOne({ name: f.name }, { $set: { staged_certificate: false }, $unset: { expires_at: "" } });
+          continue;
+        }
+        await removeStoredFile(url, null).catch(() => null);
+        gone++;
+      }
+      if (gone) console.log(`[staged-certificates] discarded ${gone} certificate(s) staged for mapping and never attached`);
+    } catch (e) {
+      console.error("[staged-certificates] sweep failed:", e);
+    }
+  };
+
   setInterval(syncTick, 60_000);
   setInterval(alertTick, 10 * 60_000);
+  setInterval(stagedSweep, 30 * 60_000);
   setTimeout(alertTick, 15_000); // one pass shortly after boot
-  console.log("[scheduler] registered — sheet sync every minute, alerts every 10 minutes");
+  setTimeout(stagedSweep, 45_000);
+  console.log("[scheduler] registered — sheet sync every minute, alerts every 10 minutes, staged-certificate sweep every 30");
 }

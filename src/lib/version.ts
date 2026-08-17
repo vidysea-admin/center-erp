@@ -3,8 +3,25 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-107";
+export const RELEASE = "2026.08.14-108";
 export const RELEASE_NOTE =
+  "-108: certificate upload. The reason none of Manish's eight files would attach was not the "
+  "files - every one was named correctly - but that NOT ONE of the 39 roster candidates carried a "
+  "portal ID, and that field is the only key the matcher joins on. So the lookup was empty, every "
+  "file had to fail, and the screen blamed the file. The mapping was never missing either: the "
+  "portal import had already matched all 24 rows to those candidates BY NAME and stored each CAN "
+  "id - the importer just never wrote it back. It does now, on unambiguous matches only and never "
+  "over an existing id, plus a one-click Link portal IDs for everything imported before, so "
+  "nobody re-uploads a file they already imported. Bulk upload is preview-first: every file is "
+  "listed with the candidate it is going to and any of them can be changed BEFORE anything is "
+  "written, which is what makes a wrong auto-match fixable instead of silently committed; "
+  "unmapped files are discarded, an abandoned preview is cleaned up by the next one, and a url "
+  "this batch never staged cannot be attached. Each candidate card also takes a certificate "
+  "directly - no file name, no ID. And the screen now says everything up front: how many of the "
+  "roster carry a portal ID, who can take a certificate today and who cannot in plain words, this "
+  "batch's own expected file names to copy, and when a file cannot be matched it says the roster "
+  "has no IDs rather than blaming the file. Rule 45 still stands, shown in the preview and "
+  "enforced on the write, with a Mark Pass button beside it. "
   "-107: the trainer dashboard gets the government-sheet upload - and the reason it was missing "
   "was a DEAD TOGGLE, not an absent feature. The importer API has always gated on the "
   "attendance.govt right, but every screen gated on the ROLE, so granting a trainer that right "

@@ -346,6 +346,116 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   await req("POST", `/api/logs/${log._id}/sessions`, { present_member_ids: [mIds[1]], biometric_member_ids: [mIds[1]] }, 201);
 }
 
+// ---- -108: certificates are PREVIEWED and MAPPED, never committed off a filename alone ----
+// Umesh 17/08, on eight certificate files every one of which was refused: the files were correct.
+// Not one of 39 roster candidates carried a portal ID, so the matcher's lookup was EMPTY and every
+// file had to fail — while the screen blamed the file. The route now stages, proposes, and lets the
+// operator correct the proposal before anything is written.
+{
+  // Rule 13: the fixture room is already hosting a full-day batch across these dates, so this
+  // batch gets its own room. Phones are exactly 10 digits (3 + 6-digit stamp + index).
+  const cRoom = (await req("POST", `/api/locations/${loc._id}/rooms`, { name: `Cert Room ${stamp}`, type: "Classroom", capacity: 30 }, 201)).data.item;
+  const cb = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, room: cRoom._id, planned_start: today, target_size: 2 }, 201)).data.item;
+  const cc2 = [];
+  for (let i = 0; i < 2; i++) cc2.push((await req("POST", "/api/candidates", { name: `Cert Map ${i} ${stamp}`, phone: `840${stamp}${i}`, location: loc._id, program: prog._id }, 201)).data.item);
+  const cm = [];
+  for (const c of cc2) cm.push((await req("POST", `/api/batches/${cb._id}/members`, { candidate: c._id }, 201)).data.item);
+  for (const m of cm) await req("PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+  await req("POST", `/api/batches/${cb._id}/transition`, { target: "Ready" }, 200);
+  await req("POST", `/api/batches/${cb._id}/transition`, { target: "Active" }, 200);
+  const pdf2 = new Uint8Array([0x25, 0x50, 0x44, 0x46]);
+
+  // (a) The roster carries NO portal ids — the reason must blame the ROSTER, not the file.
+  const noIds = await certPreview(cb._id, [["CAN_555000111.pdf", pdf2]], 200);
+  ok("-108: preview with an id-less roster says the ROSTER has no portal IDs — it does not blame the file",
+    noIds.roster_has_no_portal_ids === true
+    && /your file is fine/i.test(String(noIds.staged?.[0]?.reason ?? ""))
+    && !/matches no candidate/i.test(String(noIds.staged?.[0]?.reason ?? "")),
+    JSON.stringify(noIds.staged?.[0]?.reason));
+  ok("-108: a preview attaches NOTHING", (await req("GET", `/api/batches/${cb._id}/results`)).data.items.every((i) => !i.result?.certificate_file));
+  ok("-108: …and it still stages the file and offers the whole roster to map onto",
+    !!noIds.staged?.[0]?.url && (noIds.candidates ?? []).length === 2, JSON.stringify({ url: !!noIds.staged?.[0]?.url, cands: noIds.candidates?.length }));
+
+  // (b) Give both candidates portal ids and a Pass, then prove the operator's correction WINS over
+  //     the filename — the case Umesh asked for ("agar koi wrong auto map hua").
+  await req("PATCH", `/api/candidates/${cc2[0]._id}`, { sidh_candidate_id: `CAN_881${stamp}` }, 200);
+  await req("PATCH", `/api/candidates/${cc2[1]._id}`, { sidh_candidate_id: `CAN_882${stamp}` }, 200);
+  await req("PUT", `/api/batches/${cb._id}/results`, { rows: cm.map((m) => ({ member: String(m._id), result: "Pass", score: 70, max_score: 100, assessed_on: today })) }, 200);
+  const pre = await certPreview(cb._id, [[`CAN_881${stamp}.pdf`, pdf2]], 200);
+  ok("-108: a correctly named file is proposed to the right candidate, with the reason it matched",
+    pre.staged?.[0]?.member === String(cm[0]._id) && /portal id/i.test(String(pre.staged?.[0]?.match_by)),
+    JSON.stringify({ m: pre.staged?.[0]?.member, by: pre.staged?.[0]?.match_by }));
+  // …and the operator points it at the OTHER candidate instead.
+  const fixed = await certConfirm(cb._id, [{ url: pre.staged[0].url, member: String(cm[1]._id) }]);
+  const afterFix = (await req("GET", `/api/batches/${cb._id}/results`)).data.items;
+  const on0 = afterFix.find((i) => String(i.member) === String(cm[0]._id))?.result?.certificate_file;
+  const on1 = afterFix.find((i) => String(i.member) === String(cm[1]._id))?.result?.certificate_file;
+  ok("-108: the operator's correction WINS — the file lands where they said, not where the filename said",
+    fixed.summary?.attached === 1 && !on0 && !!on1, JSON.stringify({ attached: fixed.summary?.attached, on0: !!on0, on1: !!on1 }));
+
+  // (b2) PER-CANDIDATE upload — Umesh's "ya toh bachche ke wahan se kar le". There is no new route
+  //      for this and there should not be: PATCH /api/results/<id> { certificate_file } already
+  //      carries the whole guard set (upsertCandidateCertificate — Rule 45, DEC-6, and the Rule 46
+  //      status ladder is skipped when no status is sent). -108 wires each candidate card to it, so
+  //      one file goes to one candidate with no file name and no portal ID involved. Pinned here
+  //      because a reviewer reading results/[id]/certificate/route.ts finds only DELETE and could
+  //      reasonably conclude the upload half is missing.
+  {
+    const row0 = (await req("GET", `/api/batches/${cb._id}/results`)).data.items.find((i) => String(i.member) === String(cm[0]._id)).result;
+    const fdp = new FormData();
+    fdp.append("file", new File([pdf2], "one-candidate.pdf", { type: "application/pdf" }));
+    fdp.append("folder_centre", "_e2e"); fdp.append("folder_kind", "certificates");
+    const up = await fetch(`${BASE}/api/upload`, { method: "POST", headers: { cookie }, body: fdp }).then((r) => r.json()).catch(() => ({}));
+    ok("-108: a single certificate uploads through the ONE upload door (no bulk, no filename)", /\/api\/files\//.test(String(up?.url)), JSON.stringify(up).slice(0, 120));
+    const attached1 = await req("PATCH", `/api/results/${row0._id}`, { certificate_file: up.url }, 200);
+    const check1 = (await req("GET", `/api/batches/${cb._id}/results`)).data.items.find((i) => String(i.member) === String(cm[0]._id)).result;
+    ok("-108: …and PATCH /api/results/<id> attaches it to that one candidate — the per-candidate door",
+      attached1.status === 200 && check1.certificate_file === up.url, JSON.stringify({ st: attached1.status, f: check1.certificate_file }));
+    ok("-108: the per-candidate door still obeys Rule 45 — a non-Pass candidate is refused (409)", await (async () => {
+      await req("PUT", `/api/batches/${cb._id}/results`, { rows: [{ member: String(cm[1]._id), result: "Absent", assessed_on: today }] }, 200);
+      const row1 = (await req("GET", `/api/batches/${cb._id}/results`)).data.items.find((i) => String(i.member) === String(cm[1]._id)).result;
+      const refused = await req("PATCH", `/api/results/${row1._id}`, { certificate_file: up.url });
+      await req("PUT", `/api/batches/${cb._id}/results`, { rows: [{ member: String(cm[1]._id), result: "Pass", score: 70, assessed_on: today }] }, 200);
+      return refused.status === 409 && /Rule 45/.test(String(refused.data?.error ?? ""));
+    })());
+    // …and the -101 remove door still takes it off again, which is what the card offers beside it.
+    ok("-108: the -101 removal door still works on a per-candidate upload",
+      (await req("DELETE", `/api/results/${row0._id}/certificate`, { reason: "-108 pin: per-candidate upload cleanup" })).status === 200);
+  }
+
+  // (c) Rule 45 still refuses on confirm, and says what to do.
+  await req("DELETE", `/api/results/${afterFix.find((i) => String(i.member) === String(cm[1]._id)).result._id}/certificate`, { reason: "-108 pin: clearing for the Rule 45 check" }, 200);
+  await req("PUT", `/api/batches/${cb._id}/results`, { rows: [{ member: String(cm[1]._id), result: "Absent", assessed_on: today }] }, 200);
+  const pre2 = await certPreview(cb._id, [[`CAN_882${stamp}.pdf`, pdf2]], 200);
+  ok("-108: the PREVIEW already names the Rule 45 blocker, before anything is written",
+    pre2.staged?.[0]?.ok === false && /Rule 45/.test(String(pre2.staged?.[0]?.blocker)), JSON.stringify(pre2.staged?.[0]?.blocker));
+  const refused = await certConfirm(cb._id, [{ url: pre2.staged[0].url, member: String(cm[1]._id) }]);
+  ok("-108: and confirming it anyway is still refused (Rule 45 is enforced on the write, not just shown)",
+    refused.summary?.attached === 0 && /Rule 45/.test(String(refused.refused?.[0]?.reason)), JSON.stringify(refused.refused?.[0]?.reason));
+
+  // (d) An unmapped file is discarded, not abandoned in the bucket.
+  const pre3 = await certPreview(cb._id, [["no-id-at-all.pdf", pdf2]], 200);
+  const strayUrl = pre3.staged[0].url;
+  ok("-108: a file with no id in its name is staged and asks to be mapped", !pre3.staged[0].member && /pick the candidate/i.test(String(pre3.staged[0].reason)));
+  const withDiscard = await certConfirm(cb._id, [{ url: pre.staged[0].url, member: String(cm[0]._id) }], [strayUrl]);
+  ok("-108: an unmapped file is discarded on confirm and reported", withDiscard.discarded === 1, JSON.stringify(withDiscard.summary));
+  ok("-108: …and its URL is gone (410), so nothing lingers unreachable", (await req("GET", strayUrl.replace(/^\/erp/, ""))).status === 410);
+
+  // (e) A file from somewhere else cannot be attached by confirm.
+  const foreign = await certConfirm(cb._id, [{ url: "/erp/api/files/deadbeefdeadbeefdeadbeefdeadbeef.pdf", member: String(cm[0]._id) }]);
+  ok("-108: confirm refuses a url this batch never staged — the door cannot point a record at any object",
+    foreign.summary?.attached === 0 && /not one of this batch/i.test(String(foreign.refused?.[0]?.reason)), JSON.stringify(foreign.refused?.[0]?.reason));
+  ok("-108: confirm without pairs is a 400, not a silent no-op", (await req("POST", `/api/batches/${cb._id}/certificates`, { confirm: true, pairs: [] })).status === 400);
+
+  // (f) A re-preview discards the previous, still-unattached staging.
+  const s1 = await certPreview(cb._id, [["stale-one.pdf", pdf2]], 200);
+  const s2 = await certPreview(cb._id, [["stale-two.pdf", pdf2]], 200);
+  ok("-108: a new preview discards the abandoned files from the last one", s2.discarded_stale >= 1, String(s2.discarded_stale));
+  ok("-108: …and the abandoned file is genuinely gone (410)", (await req("GET", s1.staged[0].url.replace(/^\/erp/, ""))).status === 410);
+  await certConfirm(cb._id, [], []).catch(() => null);
+  await req("POST", `/api/batches/${cb._id}/transition`, { target: "Cancelled", reason: "-108 fixture done" }, 200);
+}
+
 // ---- -102 (Manish 17/08): a roster row that should never have existed can be REMOVED ----
 // Rule 25's drop is the honest record of a student who left. It is the wrong answer for a wrongly
 // enrolled row, and until -102 a BatchMember could not be erased at all — which is why Manish's own
@@ -711,13 +821,38 @@ ok("Rule 42: certificates_issued derived", certd.closure.certificates_issued ===
 // sidh_candidate_id is the join key; everything unplaceable is reported with a reason.
 await req("PATCH", `/api/candidates/${b4Cands[0]._id}`, { sidh_candidate_id: `CAN77${stamp.slice(-4)}1` }, 200);
 await req("PATCH", `/api/candidates/${b4Cands[1]._id}`, { sidh_candidate_id: `CAN77${stamp.slice(-4)}2` }, 200);
-async function certUpload(batchId, files, expect) {
+// -108: the route is preview → confirm now. `certPreview` stages files and returns the proposed
+// mapping (nothing attached); `certConfirm` attaches the pairs given. `certUpload` keeps the old
+// call shape for the existing pins by doing both with the server's own proposal — which is exactly
+// the "auto-match and commit" behaviour those pins were written against.
+async function certPreview(batchId, files, expect) {
   const fd = new FormData();
   for (const [name, bytes] of files) fd.append("files", new File([bytes], name, { type: "application/pdf" }));
   const res = await fetch(`${BASE}/api/batches/${batchId}/certificates`, { method: "POST", headers: { cookie }, body: fd });
   const data = await res.json().catch(() => ({}));
-  if (expect !== undefined) ok(`POST certificates bulk → ${expect}`, res.status === expect, `(got ${res.status}: ${JSON.stringify(data).slice(0, 140)})`);
+  if (expect !== undefined) ok(`POST certificates preview → ${expect}`, res.status === expect, `(got ${res.status}: ${JSON.stringify(data).slice(0, 140)})`);
   return data;
+}
+async function certConfirm(batchId, pairs, discard) {
+  return (await req("POST", `/api/batches/${batchId}/certificates`, { confirm: true, pairs, discard: discard ?? [] })).data;
+}
+async function certUpload(batchId, files, expect) {
+  const pre = await certPreview(batchId, files, expect);
+  const pairs = (pre.staged ?? []).filter((s) => s.member).map((s) => ({ url: s.url, member: s.member }));
+  const discard = (pre.staged ?? []).filter((s) => !s.member).map((s) => s.url);
+  const done = pairs.length ? await certConfirm(batchId, pairs, discard) : { attached: [], refused: [], summary: { attached: 0 } };
+  // Fold both halves into the shape the older pins read.
+  const unmatched = [
+    ...(pre.rejected ?? []).map((r) => ({ filename: r.filename, reason: r.reason })),
+    ...(pre.staged ?? []).filter((s) => !s.member).map((s) => ({ filename: s.original_name, reason: s.reason })),
+    ...(done.refused ?? []).map((r) => ({ filename: r.candidate ?? r.url, reason: r.reason })),
+  ];
+  return {
+    preview: pre,
+    matched: (done.attached ?? []).map((a) => ({ candidate: a.candidate, file: a.file, original: a.original, ...(a.created_result ? { created_result: true } : {}) })),
+    unmatched,
+    summary: { received: files.length, matched: (done.attached ?? []).length, unmatched: unmatched.length },
+  };
 }
 const pdf = new Uint8Array([0x25, 0x50, 0x44, 0x46]); // "%PDF"
 const up1 = await certUpload(b4._id, [

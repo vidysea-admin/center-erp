@@ -13,7 +13,10 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   const { id } = await ctx.params;
   await assertBatchInScope(user, id); // Rule 38
 
-  const members = await BatchMember.find({ batch: id }).populate("candidate", "name phone lifecycle_status").sort({ joined_on: 1 }).lean<any[]>();
+  // -108: sidh_candidate_id rides along so the closure screen can show the EXACT file name the
+  // certificate matcher would accept for each candidate, instead of a generic "CAN_12345.pdf"
+  // format hint that told a trainer nothing about their own batch.
+  const members = await BatchMember.find({ batch: id }).populate("candidate", "name phone lifecycle_status sidh_candidate_id").sort({ joined_on: 1 }).lean<any[]>();
   const rows = await CandidateResult.find({ batch: id }).lean<any[]>();
   const byCandidate = new Map(rows.map((r) => [String(r.candidate), r]));
 

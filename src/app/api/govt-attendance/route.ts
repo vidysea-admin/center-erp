@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, isScoped, HttpError } from "@/lib/authz";
 import { requirePerm, requireView } from "@/lib/permissions";
-import { GovtAttendanceImport, GovtAttendanceRow, Notification } from "@/models";
+import { Candidate, GovtAttendanceImport, GovtAttendanceRow, Notification } from "@/models";
 import { activateFromEvidence } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 import {
@@ -87,6 +87,15 @@ export const POST = apiHandler(async (req: NextRequest) => {
       // explained BEFORE the import is committed rather than looking like missing data.
       missing_columns: parsed.missing_columns,
       hours_parsed: matched.filter((m) => m.total_hours_minutes != null).length,
+      // -108 follow-up (checker, 17/08): the write-back's evidence is a NAME match — that is
+      // unavoidable, because a row matched on the portal ID means the candidate already has it. So
+      // the honest answer is consent before the write, not a stricter rule that would make the
+      // feature do nothing: the operator sees WHO is about to receive a permanent government ID and
+      // on what evidence, and can walk away. Ambiguous rows are absent from this list by
+      // construction — matchGovtRows never stamps one.
+      portal_ids_to_link: matched.filter((r) => r.stamp_candidate_id).map((r) => ({
+        name: r.name, id: r.stamp_candidate_id, matched_by: r.match_by,
+      })),
     });
   }
 
@@ -115,6 +124,30 @@ export const POST = apiHandler(async (req: NextRequest) => {
     actor: user.id,
   });
 
+  // -108: carry the portal ID back onto the candidate. This is the missing write that made every
+  // one of Manish's correctly-named certificates fail — the certificate matcher joins on
+  // Candidate.sidh_candidate_id, and on the Gurugram roster not one of 39 had it, while the rows
+  // being inserted right here already knew which CAN id belonged to which candidate.
+  // Two guards, both deliberate: only rows the matcher resolved UNAMBIGUOUSLY carry a stamp
+  // (matchGovtRows never sets it on an Ambiguous row), and the update is conditional on the field
+  // still being empty — an id already on record is never overwritten by an import.
+  let portal_ids_linked = 0;
+  for (const r of matched) {
+    if (!r.stamp_candidate_id || !r.candidate) continue;
+    const res = await Candidate.updateOne(
+      { _id: r.candidate, $or: [{ sidh_candidate_id: null }, { sidh_candidate_id: "" }, { sidh_candidate_id: { $exists: false } }] },
+      { $set: { sidh_candidate_id: r.stamp_candidate_id } },
+    );
+    if (res.modifiedCount) {
+      portal_ids_linked++;
+      await audit({
+        entity: "Candidate", entityId: r.candidate, field: "sidh_candidate_id",
+        oldValue: null, newValue: `${r.stamp_candidate_id} — linked from portal import ${imp.period_label} (matched by ${r.match_by})`,
+        actor: user.id,
+      });
+    }
+  }
+
   // -88 (Umesh): attendance on record = the batch is running. A Planning/Ready batch that
   // just received matched portal rows becomes Active on its own (audited); nobody is asked
   // to click Mark Ready / Start after the fact.
@@ -137,5 +170,5 @@ export const POST = apiHandler(async (req: NextRequest) => {
       location: locationId ?? undefined,
     });
   }
-  return NextResponse.json({ auto_activated: autoActivated,  _id: imp._id, ...counts }, { status: 201 });
+  return NextResponse.json({ auto_activated: autoActivated, portal_ids_linked, _id: imp._id, ...counts }, { status: 201 });
 });
