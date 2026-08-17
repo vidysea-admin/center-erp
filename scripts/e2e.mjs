@@ -184,6 +184,36 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: today, present_m
 // Rule 32: date before actual_start
 await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", present_member_ids: [] }, 400);
 
+// ---- -99 (QA-159 second half, measured on production 17/08): the batches list said "0 days"
+// in bold next to "(36)" for a batch whose attendance exists only in the portal — 36 was the
+// number of STUDENTS matched, never days, so the row could not answer "kitne din". The portal's
+// own working-day meter now rides on the row. ----
+{
+  const { MongoClient, ObjectId } = await import("mongodb");
+  const mc = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+  await mc.connect();
+  const dbp = mc.db(process.env.MONGODB_DB || "center_erp_ci");
+  const before = ((await req("GET", "/api/batches?limit=100")).data?.items ?? []).find((b) => String(b._id) === String(batch._id));
+  ok("-99 (QA-159): a batch with no portal import reports portal_days 0 and no as_of", (before?.portal_days ?? null) === 0 && !before?.portal_as_of, JSON.stringify({ d: before?.portal_days, a: before?.portal_as_of }));
+  // two matched portal rows for this batch: 13 working days, 11 and 12 days present
+  const imp = await dbp.collection("govtattendanceimports").insertOne({ location: null, source: "e2e-pin", createdAt: new Date(), updatedAt: new Date() });
+  await dbp.collection("govtattendancerows").insertMany([13, 13].map((wd, i) => ({
+    import: imp.insertedId, batch: new ObjectId(String(batch._id)), name: `Portal Pin ${i + 1}`,
+    total_working_days: wd, total_days_present: 11 + i, match_status: "Matched",
+    createdAt: new Date(), updatedAt: new Date(),
+  })));
+  const after = ((await req("GET", "/api/batches?limit=100")).data?.items ?? []).find((b) => String(b._id) === String(batch._id));
+  ok("-99 (QA-159): the list row now carries the portal's WORKING DAYS (13), the student count (2) and the import date — the three things 'kis batch ki kitne din' needs", after?.portal_days === 13 && after?.portal_rows === 2 && !!after?.portal_as_of && after?.portal_days_present_max === 12, JSON.stringify({ d: after?.portal_days, r: after?.portal_rows, p: after?.portal_days_present_max, a: !!after?.portal_as_of }));
+  ok("-99 (QA-159): our own day-wise logs stay a SEPARATE number (the portal import does not inflate them)", after?.attendance_days === before?.attendance_days, JSON.stringify({ b: before?.attendance_days, a: after?.attendance_days }));
+  // an UNMATCHED portal row is not counted (it belongs to nobody on this roster yet)
+  await dbp.collection("govtattendancerows").insertOne({ import: imp.insertedId, batch: new ObjectId(String(batch._id)), name: "Unmatched Pin", total_working_days: 99, total_days_present: 99, match_status: "Unmatched", createdAt: new Date(), updatedAt: new Date() });
+  const after2 = ((await req("GET", "/api/batches?limit=100")).data?.items ?? []).find((b) => String(b._id) === String(batch._id));
+  ok("-99 (QA-159): an UNMATCHED portal row is ignored — days stay 13, not 99", after2?.portal_days === 13 && after2?.portal_rows === 2, JSON.stringify({ d: after2?.portal_days, r: after2?.portal_rows }));
+  await dbp.collection("govtattendancerows").deleteMany({ import: imp.insertedId });
+  await dbp.collection("govtattendanceimports").deleteOne({ _id: imp.insertedId });
+  await mc.close();
+}
+
 // ---- -98 (QA-165, checker): a daily log can be READ singly and DELETED (audited, evidence leaves with it) ----
 {
   const one = await req("GET", `/api/batches/${batch._id}/logs/${log._id}`);

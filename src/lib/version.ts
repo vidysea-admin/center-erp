@@ -3,12 +3,11 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-98";
+export const RELEASE = "2026.08.14-99";
 export const RELEASE_NOTE =
-  "-98: QA-163 stored evidence (certificates, candidate documents, trainee photos, video) " +
-  "now needs a LOGIN to open - anonymous and forged-header reads answer 401; the 32-hex " +
-  "capability name stays as the second layer; same-origin <img>/<video>/PDF viewers send " +
-  "the cookie themselves; the sync engine's loopback read of an uploaded sheet keeps " +
-  "working through a server-internal header. QA-165 a daily log can be read singly and " +
-  "DELETED (same right that creates it, frozen batches refuse, audited with the snapshot " +
-  "+ reason, the day's own evidence leaves storage with it) - Delete on the log row.";
+  "-99: QA-159 (second half) the batches list can finally answer \"which batch has " +
+  "attendance, and for how many days\" when the attendance came from the government " +
+  "portal. The row read \"0 days\" in bold with \"(36)\" beside it, and 36 was the number " +
+  "of STUDENTS matched, never days. The row now carries the portal's own working-day " +
+  "meter: \"0 days ours\" and \"portal 13 days - 36 students\", it sorts on whichever " +
+  "source actually has days, and unmatched portal rows are ignored.";

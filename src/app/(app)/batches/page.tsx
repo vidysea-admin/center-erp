@@ -282,13 +282,24 @@ function BatchesInner() {
               { key: "roster", label: "Enrolled / Roster / Target", render: (r: any) => `${r.enrolled_count} / ${r.roster_count} / ${r.target_size}` },
               // -86 (Umesh 15/08): "kis batch ki kitne din ki attendance available hai" — our
               // day-wise logs and the portal import, per row; "none yet" says so in grey.
-              { key: "attendance", label: "Attendance", sortable: true, sortValue: (r: any) => (r.attendance_days ?? 0) * 1e6 + (r.portal_as_of ? new Date(r.portal_as_of).getTime() / 1e9 : 0),
-                filterText: (r: any) => (r.attendance_days > 0 || r.portal_as_of) ? `${r.attendance_days} days${r.portal_as_of ? " portal" : ""}` : "none yet",
+              // -99 (QA-159, second half): a batch whose attendance came from the portal read
+              // "0 days" in bold with "(36)" beside it — 36 was STUDENTS, not days, so the row
+              // still could not answer "kitne din". The portal's own working-day meter is now
+              // the headline for such a row, students move into the label, and sorting counts
+              // whichever source actually has days.
+              { key: "attendance", label: "Attendance", sortable: true, sortValue: (r: any) => Math.max(r.attendance_days ?? 0, r.portal_days ?? 0) * 1e6 + (r.portal_as_of ? new Date(r.portal_as_of).getTime() / 1e9 : 0),
+                filterText: (r: any) => (r.attendance_days > 0 || r.portal_as_of) ? `${r.attendance_days} days ours${r.portal_as_of ? ` ${r.portal_days ?? 0} days portal ${r.portal_rows ?? 0} students` : ""}` : "none yet",
                 render: (r: any) => (r.attendance_days > 0 || r.portal_as_of) ? (
                   <span className="text-xs leading-4">
-                    {r.attendance_days > 0 ? <span className="font-medium">{r.attendance_days} day{r.attendance_days === 1 ? "" : "s"}</span> : <span className="text-gray-400">0 days</span>}
+                    {r.attendance_days > 0
+                      ? <span className="font-medium">{r.attendance_days} day{r.attendance_days === 1 ? "" : "s"} <span className="font-normal text-gray-500">ours</span></span>
+                      : <span className={r.portal_days > 0 ? "text-gray-500" : "text-gray-400"} title="Day-wise logs marked in this system">0 days ours</span>}
                     {r.attendance_last && <span className="text-gray-500"> · last {fmtDate(r.attendance_last)}</span>}
-                    {r.portal_as_of && <div className="text-blue-700">portal {fmtDate(r.portal_as_of)}{r.portal_rows ? ` (${r.portal_rows})` : ""}</div>}
+                    {r.portal_as_of && <div className="text-blue-700" title={`Government portal working days, imported ${fmtDate(r.portal_as_of)}`}>
+                      {r.portal_days > 0
+                        ? <><span className="font-medium">portal {r.portal_days} day{r.portal_days === 1 ? "" : "s"}</span>{r.portal_rows ? ` · ${r.portal_rows} student${r.portal_rows === 1 ? "" : "s"}` : ""}</>
+                        : <>portal {fmtDate(r.portal_as_of)}{r.portal_rows ? ` (${r.portal_rows} student${r.portal_rows === 1 ? "" : "s"})` : ""}</>}
+                    </div>}
                   </span>
                 ) : <span className="text-xs text-gray-400">— none yet</span> },
               { key: "trainer", label: "Trainer", sortable: true, sortValue: (r: any) => r.trainer?.name ?? null, render: (r: any) => r.trainer?.name ?? "—" },

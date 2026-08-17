@@ -73,7 +73,11 @@ export const GET = apiHandler(async (req: NextRequest) => {
   const ids = items.map((b) => b._id);
   const [logAgg, portalAgg] = await Promise.all([
     DailyLog.aggregate([{ $match: { batch: { $in: ids } } }, { $group: { _id: "$batch", days: { $sum: 1 }, last: { $max: "$log_date" } } }]),
-    GovtAttendanceRow.aggregate([{ $match: { batch: { $in: ids }, match_status: "Matched" } }, { $group: { _id: "$batch", as_of: { $max: "$createdAt" }, rows: { $sum: 1 } } }]),
+    // -99 (QA-159, second half): the portal row count answered "how many students", never
+    // "kitne din" — a portal-only batch read "0 days" in bold next to 36 matched rows. The
+    // portal's own working-day meter (total_working_days, the same figure the batch page
+    // shows) is aggregated here so the list column can say "portal 13 days (36 students)".
+    GovtAttendanceRow.aggregate([{ $match: { batch: { $in: ids }, match_status: "Matched" } }, { $group: { _id: "$batch", as_of: { $max: "$createdAt" }, rows: { $sum: 1 }, days: { $max: "$total_working_days" }, present_max: { $max: "$total_days_present" } } }]),
   ]);
   const logByB = new Map(logAgg.map((a: any) => [String(a._id), a]));
   const portalByB = new Map(portalAgg.map((a: any) => [String(a._id), a]));
@@ -90,6 +94,8 @@ export const GET = apiHandler(async (req: NextRequest) => {
     attendance_last: logByB.get(String(b._id))?.last ?? null,
     portal_as_of: portalByB.get(String(b._id))?.as_of ?? null,
     portal_rows: portalByB.get(String(b._id))?.rows ?? 0,
+    portal_days: portalByB.get(String(b._id))?.days ?? 0,
+    portal_days_present_max: portalByB.get(String(b._id))?.present_max ?? 0,
     health: await batchHealth(String(b._id)),
     ...(user.role === "Trainer" ? { is_mine: myTrainerId != null && String(b.trainer?._id ?? b.trainer ?? "") === myTrainerId } : {}),
   })));
