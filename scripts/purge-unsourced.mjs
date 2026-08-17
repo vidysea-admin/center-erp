@@ -53,7 +53,12 @@ const KEEP = [
 // syncsources is a special case: the client's real OneDrive workbook must survive, but the test
 // suites have created dozens of throwaway sources ("Test sheet …", "Watch Source …") which are
 // exactly the unsourced rows this script removes. Keep only what points at a real client sheet.
-const REAL_SOURCE = { $or: [{ source_url: /onedrive\.live\.com/i }, { source_url: /docs\.google\.com/i }] };
+//
+// -100 (checker QA-166, 17/08): this keep-list used to whitelist `docs.google.com` too — so the
+// cleanup script written to remove strays PRESERVED the two Google workbooks Umesh had ordered
+// removed on 13/08. The single-truth policy is the client's OneDrive workbook and nothing else
+// (src/lib/workbook.ts `sourceAllowed()`), and this predicate now says the same thing.
+const REAL_SOURCE = { source_url: /onedrive\.live\.com|1drv\.ms/i };
 
 const client = new MongoClient(url);
 await client.connect();

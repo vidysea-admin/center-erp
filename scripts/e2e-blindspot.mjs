@@ -194,7 +194,11 @@ const realRun = (await req(admin, "POST", `/api/sync-sources/${realSrc._id}/run`
 ok("REAL Vidysea-RPL OneDrive workbook fetched via badger flow", realRun.status === "OK" && realRun.tabs >= 1, JSON.stringify(realRun));
 
 // ---- 8. Watch failure mode: login-wall HTML must fail loudly, not diff garbage ----
-await req(admin, "PATCH", `/api/sync-sources/${wsrc._id}`, { source_url: "https://www.vidysea.com/erp/login" });
+// -100: this used to point the source at https://www.vidysea.com/erp/login, which the
+// single-truth policy now refuses before it can be saved (only the client workbook may be
+// registered). The behaviour under test is "an HTML page where a spreadsheet should be", so it is
+// driven from THIS server's own login page instead — same HTML, same detection, policy respected.
+await req(admin, "PATCH", `/api/sync-sources/${wsrc._id}`, { source_url: `${BASE}/login` });
 const wrFail = (await req(admin, "POST", `/api/sync-sources/${wsrc._id}/run`, {})).data;
 ok("HTML page instead of sheet → Failed with clear error", wrFail.status === "Failed" && String(wrFail.error ?? "").length > 0, JSON.stringify(wrFail));
 

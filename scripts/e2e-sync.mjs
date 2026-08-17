@@ -250,6 +250,89 @@ const realDyn = (await req("POST", "/api/sync-sources", {
 const realRun = (await req("POST", `/api/sync-sources/${realDyn._id}/run`, {}, 200)).data;
 ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.status === "OK" && realRun.tabs >= 1, JSON.stringify(realRun));
 
+// ---- -100: THE SINGLE-TRUTH POLICY (Umesh 17/08: "bus OneDrive wala sync karna hai, baaki
+// sheets nahi — this is a must thing"). He decided this once on 13/08, the two Google workbooks
+// were deleted from production, and a setup script upserted them straight back on 14/08 06:35:38.
+// It is a gate in code now, so the wall is where it must be proved. ----
+{
+  const GOOGLE = "https://docs.google.com/spreadsheets/d/1f9veYSwuLktmggOJdUlspl_yydotdqnf/edit";
+  const CLIENT = "https://onedrive.live.com/:x:/g/personal/c1d310c499f08fba/IQBHQGQ1_HmBRZjCmC1XQMK8AQCFnOpu1H8GXm3MNvZnypE";
+  const g1 = await req("POST", "/api/sync-sources", { name: "Google master " + tabStamp, mode: "watch", source_url: GOOGLE });
+  ok("-100: our own Google workbook is REFUSED at registration (this is the exact sheet that came back on 14/08)", g1.status === 400 && /client's OneDrive sheet/i.test(String(g1.data?.error ?? "")), `${g1.status} ${JSON.stringify(g1.data).slice(0, 160)}`);
+  const gone = (await req("GET", "/api/sync-sources?limit=1000")).data.items ?? [];
+  ok("-100: …and nothing was created by the attempt", !gone.some((x) => /docs\.google\.com/i.test(String(x.source_url))), JSON.stringify(gone.filter((x) => /google/i.test(String(x.source_url))).map((x) => x.name)));
+  const hiring = await req("POST", "/api/sync-sources", { name: "Trainer hiring " + tabStamp, mode: "watch", source_url: "https://docs.google.com/spreadsheets/d/1d-2n2kXkiqV5YHV4n6Cs5-KE3FVsNwGbPGvfCNXRZXQ" });
+  ok("-100: the second Google sheet (trainer hiring) is refused too — the rule is the workbook, not a blocklist of two", hiring.status === 400, String(hiring.status));
+  // An EXISTING source cannot be walked off the client workbook by editing it either.
+  const walk = await req("PATCH", `/api/sync-sources/${realDyn._id}`, { source_url: GOOGLE });
+  ok("-100: an existing source cannot be EDITED onto a Google sheet (400)", walk.status === 400, String(walk.status));
+  const stillReal = (await req("GET", `/api/sync-sources/${realDyn._id}`)).data.item;
+  ok("-100: …and the refused edit did not partially land — the URL is unchanged", /onedrive\.live\.com/i.test(String(stillReal?.source_url)), String(stillReal?.source_url).slice(0, 60));
+  // "Test link" is a server-side fetch of whatever was pasted — same gate, or it is the way round.
+  const probe = await req("POST", "/api/sync-sources/test", { source_url: GOOGLE });
+  ok("-100: the 'Test link' probe refuses it as well (no server-side fetch of a foreign sheet)", probe.status === 400, String(probe.status));
+  // The duplicate that produced the doubling: the SAME workbook, twice, in mapped mode.
+  const m1 = await req("POST", "/api/sync-sources", { name: "Client mapped A " + tabStamp, mode: "mapped", source_url: CLIENT, field_mappings: { "TC ID": "external_id" } }, 201);
+  const m2 = await req("POST", "/api/sync-sources", { name: "Client mapped B " + tabStamp, mode: "mapped", source_url: CLIENT + "?rtime=abc123&redeem=xyz", field_mappings: { "TC ID": "external_id" } });
+  ok("-100 (the 37-shown-as-74 defect): the same workbook cannot be registered twice in mapped mode — even with a different query string", m1.status === 201 && m2.status === 400 && /already registered in mapped mode/i.test(String(m2.data?.error ?? "")), `${m1.status} ${m2.status} ${String(m2.data?.error ?? "").slice(0, 120)}`);
+  await req("DELETE", `/api/sync-sources/${m1.data.item._id}`);
+  // A row that predates the policy (written straight to Mongo, as the setup script does) still
+  // cannot be RUN — the API gate alone would not have stopped what happened on 14/08.
+  const { MongoClient } = await import("mongodb");
+  const mc = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+  await mc.connect();
+  const dbs = mc.db(process.env.MONGODB_DB || "center_erp_ci");
+  const ins = await dbs.collection("syncsources").insertOne({
+    name: "Legacy Google row " + tabStamp, source_url: GOOGLE, mode: "watch",
+    interval_minutes: 5, frequency: "Manual only", key_columns: [], active: true,
+    field_mappings: {}, createdAt: new Date(), updatedAt: new Date(),
+  });
+  const legacyRun = await req("POST", `/api/sync-sources/${ins.insertedId}/run`, {});
+  ok("-100: a Google source written STRAIGHT INTO MONGO (how the setup script re-armed them) cannot be run — 400, not a sync", legacyRun.status === 400, `${legacyRun.status} ${String(legacyRun.data?.error ?? "").slice(0, 100)}`);
+  await dbs.collection("syncsources").deleteOne({ _id: ins.insertedId });
+  await mc.close();
+  // The client workbook itself must still work — the whole point is one sheet, not no sheets.
+  const okProbe = await req("POST", "/api/sync-sources/test", { source_url: CLIENT });
+  ok("-100: the client's own workbook still probes green (the policy allows exactly one sheet, and this is it)", okProbe.status === 200 && okProbe.data?.ok === true, JSON.stringify(okProbe.data).slice(0, 120));
+}
+
+// ---- -100 (checker QA-170): "Create location…" was offered on ANY added row of ANY tab. In
+// Umesh's 17/08 screenshot it sat beside a Trainer_Nomination row — one click from minting a
+// centre out of a trainer's nomination. A centre row is one carrying an Institution Name. ----
+{
+  const nomTab = [["Trainer Name", "For Which Location", "Status"], ["Paurush", "Mirzapur GGP", "Nominated"]];
+  const src = (await req("POST", "/api/sync-sources", {
+    name: "Nomination-shaped " + tabStamp, mode: "watch", key_columns: ["Trainer Name"],
+    source_url: wbDataUrl({ Trainer_Nomination: nomTab }),
+  }, 201)).data.item;
+  await req("POST", `/api/sync-sources/${src._id}/run`, {}, 200); // baseline
+  await req("PATCH", `/api/sync-sources/${src._id}`, {
+    source_url: wbDataUrl({ Trainer_Nomination: [...nomTab, ["Ravi", "Kanpur", "Nominated"]] }),
+  }, 200);
+  await req("POST", `/api/sync-sources/${src._id}/run`, {}, 200); // the new row is detected
+  const added = ((await req("GET", "/api/workbook-changes?status=all&tab=Trainer_Nomination")).data.items ?? [])
+    .find((r) => r.change_type === "Added" && /Ravi/.test(String(r.row_key)));
+  ok("-100 (QA-170): a nomination row IS detected as an added row (the feed still works)", !!added, JSON.stringify(added && { t: added.tab, k: added.row_key }));
+  if (added) {
+    const prefill = await req("GET", `/api/workbook-changes/${added._id}/create-location`);
+    ok("-100 (QA-170): …but it cannot be turned into a centre — 400, naming the tab, on the prefill itself", prefill.status === 400 && /not a centre row/i.test(String(prefill.data?.error ?? "")), `${prefill.status} ${String(prefill.data?.error ?? "").slice(0, 120)}`);
+    const create = await req("POST", `/api/workbook-changes/${added._id}/create-location`, { name: "Sneaky Centre", code: "SNEAK1" });
+    const made = (await req("GET", "/api/locations?limit=200")).data.items ?? [];
+    ok("-100 (QA-170): and POSTing it directly is refused too — no Location is created behind the UI's back", create.status === 400 && !made.some((l) => l.name === "Sneaky Centre"), `${create.status}`);
+  }
+}
+
+// ---- -100 (checker QA-169): which sheet a row came from is on the row, and filterable — the
+// fact whose absence let two Google workbooks poll for three days in plain sight. ----
+{
+  const feed = (await req("GET", "/api/workbook-changes?status=all")).data;
+  ok("-100 (QA-169): the Sheet Watch feed lists the sheets its rows came from, flagging any that is not the client workbook", Array.isArray(feed.sources) && feed.sources.length > 0 && feed.sources.every((x) => "is_client_workbook" in x && x.name), JSON.stringify(feed.sources?.slice(0, 3)));
+  ok("-100 (QA-169): every row carries its source name, so the Sheet column can never be blank", (feed.items ?? []).every((r) => !!r.sync_source?.name), String((feed.items ?? []).filter((r) => !r.sync_source?.name).length) + " row(s) without a source");
+  const one = feed.sources[0];
+  const filtered = (await req("GET", `/api/workbook-changes?status=all&source=${one._id}`)).data;
+  ok("-100 (QA-169): filtering by sheet returns only that sheet's rows, and the tab list narrows with it", (filtered.items ?? []).every((r) => String(r.sync_source?._id ?? r.sync_source) === String(one._id)) && (filtered.items ?? []).length > 0, `${(filtered.items ?? []).length} row(s)`);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 2026-08-12 audit — the five sync S1 defects
 // ─────────────────────────────────────────────────────────────────────────────

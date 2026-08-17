@@ -8,7 +8,7 @@ export async function register() {
   const { dbConnect } = await import("@/lib/db");
   const { SyncSource, mongoose } = await import("@/models");
   const { runSync } = await import("@/lib/sync");
-  const { runWatch } = await import("@/lib/workbook");
+  const { runWatch, sourceAllowed } = await import("@/lib/workbook");
   const { evaluateAlerts } = await import("@/lib/alerts");
 
   // Identifies this container for lock ownership; uniqueness per boot is all that matters.
@@ -30,10 +30,14 @@ export async function register() {
       await dbConnect();
       if (!(await takeLock("sync", 5 * 60_000))) return;
       const now = new Date();
-      const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+      // -100 (QA-168, checker): this read the CONTAINER clock, which is UTC on Fargate — an admin
+      // who set "Daily 07:00" got the sync at 12:30 IST. Everyone who types a time here means IST.
+      const hhmm = now.toLocaleTimeString("en-GB", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" });
       const sources = await SyncSource.find({ frequency: "Daily", mode: { $ne: "watch" }, active: { $ne: false } }).lean<any[]>();
       for (const s of sources) {
         if (!s.sync_time) continue;
+        // -100: a row that is not the client workbook never runs, however it got into Mongo.
+        if (!sourceAllowed(String(s.source_url)).ok) { console.log(`[sync-scheduler] skipping ${s.name}: not the client workbook`); continue; }
         const due = s.sync_time.slice(0, 5) <= hhmm;
         const doneToday = s.last_synced_at && new Date(s.last_synced_at).toDateString() === now.toDateString();
         if (due && !doneToday) {
@@ -45,6 +49,9 @@ export async function register() {
       // Watch-mode sources (2026-08-11): poll every interval_minutes, not once a day.
       const watches = await SyncSource.find({ mode: "watch", active: { $ne: false } }).lean<any[]>();
       for (const s of watches) {
+        // -100: the same gate on the watch side — this is the loop that kept polling our OWN
+        // Google sheets every 5 minutes after a setup script re-armed them (checker QA-166).
+        if (!sourceAllowed(String(s.source_url)).ok) { console.log(`[workbook-watch] skipping ${s.name}: not the client workbook`); continue; }
         const intervalMs = Math.max(5, s.interval_minutes ?? 30) * 60_000;
         if (s.last_synced_at && now.getTime() - new Date(s.last_synced_at).getTime() < intervalMs) continue;
         const res = await runWatch(String(s._id)).catch((e) => ({ status: "Failed", tabs: 0, changes: 0, error: String(e) }));

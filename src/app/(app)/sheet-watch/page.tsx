@@ -19,6 +19,10 @@ const TYPE_STYLE: Record<string, string> = {
 export default function SheetWatchPage() {
   const [items, setItems] = useState<any[]>([]);
   const [tabs, setTabs] = useState<string[]>([]);
+  // -100 (checker QA-169): which workbook a row came from was nowhere on this screen, so two
+  // Google sheets polled for three days in plain sight. Sheet is now a column and a filter.
+  const [sources, setSources] = useState<any[]>([]);
+  const [source, setSource] = useState("");
   const [status, setStatus] = useState("New");
   const [tab, setTab] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -30,10 +34,20 @@ export default function SheetWatchPage() {
   const [showMappings, setShowMappings] = useState(false);
 
   const load = () =>
-    api(`/api/workbook-changes?status=${status}${tab ? `&tab=${encodeURIComponent(tab)}` : ""}`)
-      .then((d) => { setItems(d.items); setTabs(d.tabs ?? []); setSelected(new Set()); })
+    api(`/api/workbook-changes?status=${status}${tab ? `&tab=${encodeURIComponent(tab)}` : ""}${source ? `&source=${source}` : ""}`)
+      .then((d) => { setItems(d.items); setTabs(d.tabs ?? []); setSources(d.sources ?? []); setSelected(new Set()); })
       .catch((e) => setError(e.message)).finally(() => setLoading(false));
-  useEffect(() => { load(); }, [status, tab]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [status, tab, source]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // -100 (QA-170): "Create location…" used to appear on ANY added row of ANY tab — in Umesh's
+  // 17/08 screenshot it sat beside a Trainer_Nomination row, one click from minting a centre out
+  // of a trainer nomination. Only the client's own workbook describes centres. The server refuses
+  // the rest as well (it checks the row for an Institution Name), so this is the visible half.
+  function fromClientWorkbook(r: any): boolean {
+    const id = String(r?.sync_source?._id ?? r?.sync_source ?? "");
+    const src = sources.find((x: any) => String(x._id) === id);
+    return src ? !!src.is_client_workbook : sources.length === 0;
+  }
 
   function toggle(id: string) {
     const s = new Set(selected);
@@ -84,6 +98,12 @@ export default function SheetWatchPage() {
           <Btn small kind="ghost" onClick={() => setShowSources((s) => !s)}>{showSources ? "Hide sheets" : "Manage sheets"}</Btn>
           <Btn small kind="ghost" onClick={() => setShowMappings((s) => !s)}>{showMappings ? "Hide mappings" : "Map tabs"}</Btn>
           <Btn small kind="ghost" onClick={() => setShowHistory((s) => !s)}>{showHistory ? "Hide history" : "Version history"}</Btn>
+          {sources.length > 1 && (
+            <select className={inputCls + " max-w-52"} value={source} onChange={(e) => { setSource(e.target.value); setTab(""); }}>
+              <option value="">All sheets ({sources.length})</option>
+              {sources.map((x: any) => <option key={x._id} value={x._id}>{x.is_client_workbook ? "" : "⚠ "}{x.name}</option>)}
+            </select>
+          )}
           <select className={inputCls + " max-w-40"} value={tab} onChange={(e) => setTab(e.target.value)}>
             <option value="">All tabs</option>
             {tabs.map((t) => <option key={t}>{t}</option>)}
@@ -115,6 +135,11 @@ export default function SheetWatchPage() {
         cardTitle={(r: any) => r.row_key}
         columns={[
           { key: "_sel", label: "", mobile: false, render: (r: any) => r.status !== "Accepted" ? <input type="checkbox" checked={selected.has(r._id)} onChange={() => toggle(r._id)} onClick={(e) => e.stopPropagation()} /> : null },
+          // -100: the sheet a row came from, flagged when it is not the client's workbook — the
+          // single fact whose absence hid the 14/08 regression for three days.
+          { key: "_sheet", label: "Sheet", mobile: false, sortValue: (r: any) => r.sync_source?.name ?? "",
+            filterText: (r: any) => r.sync_source?.name ?? "",
+            render: (r: any) => <span className="text-xs text-gray-600">{r.sync_source?.name ?? "—"}</span> },
           { key: "tab", label: "Tab", mobile: false },
           { key: "row_key", label: "Row", minWidth: 200, render: (r: any) => <span className="text-[13px] font-medium">{r.row_key}</span> },
           { key: "change_type", label: "Type", render: (r: any) => <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${TYPE_STYLE[r.change_type] ?? ""}`}>{r.change_type}</span> },
@@ -137,7 +162,10 @@ export default function SheetWatchPage() {
             key: "_act", label: "", render: (r: any) => (
               /* QA-120: wrap — three action buttons overflowed the phone card view. */
               <span className="flex flex-wrap gap-1">
-                {r.change_type === "Added" && r.status !== "Accepted" && (
+                {/* -100 (QA-170): this was offered on ANY added row of ANY tab — in Umesh's
+                    screenshot it sat next to a Trainer_Nomination row. A nomination or a resume
+                    is not a centre; the server refuses those too. */}
+                {r.change_type === "Added" && r.status !== "Accepted" && fromClientWorkbook(r) && (
                   <Btn small kind="ghost" disabled={busy} onClick={() => openCreate(r)}>Create location…</Btn>
                 )}
                 {r.status === "New" && <Btn small kind="ghost" disabled={busy} onClick={() => mark("Seen", [r._id])}>Seen</Btn>}

@@ -54,6 +54,54 @@ function isOneDriveShare(url: string): boolean {
   return /^(https:\/\/)(onedrive\.live\.com|1drv\.ms)\//i.test(url);
 }
 
+// ---------------------------------------------------------------------------
+// -100 (Umesh, 17/08: "Sheet sync kewal OneDrive wala hona chahiye, location wala …
+// baaki sheets nahi. This is a must thing.") — THE SINGLE-TRUTH POLICY, IN CODE.
+//
+// He decided this once already, on 2026-08-13: the two Google-workbook watches were
+// deleted from production and OPERATIONS.md was written to say "do not re-add them —
+// two masters race". They came back on 14/08 06:35:38 because
+// scripts/setup-watch-source.mjs still listed them and upserts on every run. Prose in a
+// runbook cannot stop a script, so the rule now lives here and is enforced by the API
+// routes and by the scheduler: the ONLY workbook this ERP may watch or sync is the
+// client's own OneDrive share.
+//
+// Identity is the share PATH, never the whole URL: production carries the same workbook
+// three times over — once clean, once with "?rtime=…&redeem=…" — and all of them must
+// collapse to one identity, otherwise the same sheet registers twice and every client
+// change is queued for review twice (exactly the "AVPL workbook" defect).
+export const CLIENT_WORKBOOK_URL =
+  process.env.CLIENT_WORKBOOK_URL ||
+  "https://onedrive.live.com/:x:/g/personal/c1d310c499f08fba/IQBHQGQ1_HmBRZjCmC1XQMK8AQCFnOpu1H8GXm3MNvZnypE";
+
+export function workbookIdentity(url: string): string {
+  return String(url ?? "").split("?")[0].trim().replace(/\/+$/, "").toLowerCase();
+}
+
+// The wall and CI register synthetic fixtures (data: URLs, a local CSV upload) to pin the
+// engine itself. They are allowed ONLY behind this flag, which production never sets — and
+// even then a public host is still refused, so "docs.google.com is rejected" is a claim the
+// wall can actually prove rather than a claim only production could disprove.
+function testSourcesAllowed(): boolean {
+  return process.env.SYNC_ALLOW_TEST_SOURCES === "1";
+}
+
+export function sourceAllowed(url: string): { ok: boolean; reason?: string } {
+  const raw = String(url ?? "").trim();
+  if (!raw) return { ok: false, reason: "A sheet needs a link." };
+  if (workbookIdentity(raw) === workbookIdentity(CLIENT_WORKBOOK_URL)) return { ok: true };
+  if (testSourcesAllowed() && /^data:/i.test(raw)) return { ok: true };
+  if (testSourcesAllowed() && /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//i.test(raw)) return { ok: true };
+  return {
+    ok: false,
+    reason:
+      "This ERP syncs ONE workbook: the client's OneDrive sheet (the location master). " +
+      "Our own Google sheets — trainer nomination, resumes, registered trainers — are not " +
+      "synced and their rows must never land in the review queue. Decided 2026-08-13, " +
+      "enforced in code 2026-08-17; see OPERATIONS.md “Sync sources — single-truth policy”.",
+  };
+}
+
 async function fetchOneDriveShare(url: string): Promise<Buffer> {
   // Strip query params (rtime etc.) — the share id is in the path.
   const clean = url.split("?")[0];

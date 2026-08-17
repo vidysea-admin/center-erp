@@ -524,59 +524,58 @@ ok("an import can be deleted (wrong file, wrong centre)",
   (await req(admin, "GET", `/api/govt-attendance/${done.data._id}`)).status === 404);
 
 
-// ---------------------------------------------------------------- universal sheet sources (2026-08-12)
-// The feature used to be one hard-coded URL registered by a script. These assertions pin the
-// thing that actually matters: any link a person pastes out of their browser can be added,
-// tested, edited, paused and removed.
+// ---------------------------------------------------------------- sheet sources (2026-08-12, rewritten -100)
+// Until -100 this section pinned the OPPOSITE contract: "any link a person pastes out of their
+// browser can be added". That freedom is exactly what let two of OUR OWN Google workbooks be
+// registered and poll trainer/resume/nomination tabs into the review queue for three days after
+// the CEO ordered them removed. Since -100 the contract is one workbook — the client's OneDrive
+// location sheet — and these assertions pin THAT, plus the lifecycle that still has to work on it.
+const CLIENT_WB = "https://onedrive.live.com/:x:/g/personal/c1d310c499f08fba/IQBHQGQ1_HmBRZjCmC1XQMK8AQCFnOpu1H8GXm3MNvZnypE";
 
-// A Google Sheets /edit link is not downloadable; the export endpoint is. The system must make
-// that translation itself — expecting a user to know it is how a source ends up silently dead.
+// The sheet that came back on 14/08 — refused at the probe, before any server-side fetch.
 const gTest = await req(admin, "POST", "/api/sync-sources/test", {
   source_url: "https://docs.google.com/spreadsheets/d/1f9veYSwuLktmggOJdUlspl_yydotdqnf/edit?gid=1579134034#gid=1579134034",
 });
-ok("a Google Sheets browser link is rewritten to its export URL",
-  gTest.data.normalized_url === "https://docs.google.com/spreadsheets/d/1f9veYSwuLktmggOJdUlspl_yydotdqnf/export?format=xlsx",
-  gTest.data.normalized_url);
-// 2026-08-13: this sheet WAS the private fixture until Umesh opened its sharing — reality
-// changed under the test. It now proves the happy path (probe succeeds, tabs listed); the
-// private-failure path is proven against an ID that cannot exist.
-ok("the (now shared) sheet probes clean with its tabs listed",
-  gTest.data.ok === true && (gTest.data.tabs?.length ?? 0) >= 1, JSON.stringify(gTest.data).slice(0, 160));
-const privTest = await req(admin, "POST", "/api/sync-sources/test", {
-  source_url: "https://docs.google.com/spreadsheets/d/1PrivateFixture_DoesNotExist_0000000000000000/edit",
-});
-ok("a sheet the server cannot read fails the probe instead of being saved as a dead source",
-  privTest.data.ok === false, JSON.stringify(privTest.data).slice(0, 200));
-ok("and the failure explains what to do rather than a generic error",
-  /anyone with the link|moved, renamed or deleted|sign-?in/i.test(`${privTest.data.error ?? ""} ${privTest.data.hint ?? ""}`),
-  JSON.stringify({ e: privTest.data.error, h: privTest.data.hint }).slice(0, 300));
-
+ok("-100: a Google Sheets link is refused by the probe, naming the policy rather than a generic error",
+  gTest.status === 400 && /client's OneDrive sheet/i.test(String(gTest.data?.error ?? "")),
+  `${gTest.status} ${String(gTest.data?.error ?? "").slice(0, 140)}`);
 const dTest = await req(admin, "POST", "/api/sync-sources/test", { source_url: "https://drive.google.com/file/d/ABC123def/view?usp=sharing" });
-ok("a Drive file link is rewritten to its download URL",
-  dTest.data.normalized_url === "https://drive.google.com/uc?export=download&id=ABC123def", dTest.data.normalized_url);
+ok("-100: a Drive file link is refused too — the rule is the workbook, not a list of hosts",
+  dTest.status === 400, String(dTest.status));
 
 const notALink = await req(admin, "POST", "/api/sync-sources/test", { source_url: "just some text" });
 ok("something that is not a link is refused up front", notALink.status === 400, `got ${notALink.status}`);
 
 // The client's real OneDrive workbook — the one case that must keep working end to end.
-const odTest = await req(admin, "POST", "/api/sync-sources/test", {
-  source_url: "https://onedrive.live.com/:x:/g/personal/c1d310c499f08fba/IQBHQGQ1_HmBRZjCmC1XQMK8AQCFnOpu1H8GXm3MNvZnypE",
-});
+const odTest = await req(admin, "POST", "/api/sync-sources/test", { source_url: CLIENT_WB });
 ok("the client's OneDrive workbook still probes green", odTest.data.ok === true, JSON.stringify(odTest.data).slice(0, 200));
 ok("and the probe reports its tabs and columns back", (odTest.data.tabs?.[0]?.columns ?? []).some((c) => /tc\s*id/i.test(c)),
   JSON.stringify(odTest.data.tabs?.[0]?.columns ?? []).slice(0, 200));
 
-// Add → edit → pause → remove, all through the API the screen uses.
+// A link the server cannot actually read still fails the probe rather than being saved as a dead
+// source. Driven from this server (allowed as a test fixture) now that foreign hosts are refused.
+const deadTest = await req(admin, "POST", "/api/sync-sources/test", { source_url: `${BASE}/api/no-such-endpoint-${NAME}` });
+ok("a sheet the server cannot read fails the probe instead of being saved as a dead source",
+  deadTest.data.ok === false && String(deadTest.data.error ?? "").length > 0, JSON.stringify(deadTest.data).slice(0, 200));
+ok("and the failure explains what to do rather than a generic error",
+  /anyone with the link|moved, renamed or deleted|without signing in|sign-?in/i.test(`${deadTest.data.error ?? ""} ${deadTest.data.hint ?? ""}`),
+  JSON.stringify({ e: deadTest.data.error, h: deadTest.data.hint }).slice(0, 300));
+
+// Add → edit → pause → remove, all through the API the screen uses — on the one workbook allowed.
 const created = await req(admin, "POST", "/api/sync-sources", {
-  name: `${NAME} sheet`, source_url: "https://example.invalid/whatever.csv",
+  name: `${NAME} sheet`, source_url: CLIENT_WB,
   mode: "watch", interval_minutes: 45, key_columns: ["Institution Name", "Job role"], frequency: "Manual only",
 });
-ok("any URL can be registered as a source", created.status === 201, JSON.stringify(created.data).slice(0, 200));
+ok("-100: the client workbook can be registered", created.status === 201, JSON.stringify(created.data).slice(0, 200));
 const srcId = created.data.item?._id;
-const edited = await req(admin, "PATCH", `/api/sync-sources/${srcId}`, { source_url: "https://example.invalid/renamed.csv", interval_minutes: 60 });
-ok("its URL and cadence can be edited afterwards",
-  edited.data.item?.source_url === "https://example.invalid/renamed.csv" && edited.data.item?.interval_minutes === 60,
-  JSON.stringify(edited.data.item).slice(0, 200));
+const foreign = await req(admin, "POST", "/api/sync-sources", {
+  name: `${NAME} foreign`, source_url: "https://example.invalid/whatever.csv", mode: "watch", key_columns: [],
+});
+ok("-100: …and an arbitrary URL cannot (this pin asserted the opposite until -100)", foreign.status === 400, JSON.stringify(foreign.data).slice(0, 160));
+const edited = await req(admin, "PATCH", `/api/sync-sources/${srcId}`, { interval_minutes: 60 });
+ok("its cadence can be edited afterwards", edited.data.item?.interval_minutes === 60, JSON.stringify(edited.data.item?.interval_minutes));
+const walked = await req(admin, "PATCH", `/api/sync-sources/${srcId}`, { source_url: "https://example.invalid/renamed.csv" });
+ok("-100: but its URL cannot be walked off the client workbook by editing", walked.status === 400 && (await req(admin, "GET", `/api/sync-sources/${srcId}`)).data.item?.source_url === CLIENT_WB, String(walked.status));
 const paused = await req(admin, "PATCH", `/api/sync-sources/${srcId}`, { active: false });
 ok("it can be paused without losing its history", paused.data.item?.active === false, JSON.stringify(paused.data.item?.active));
 const removed = await req(admin, "DELETE", `/api/sync-sources/${srcId}`);

@@ -43,6 +43,9 @@ jobs:
       STORAGE_DISABLE: "1"
       # -97: CORS rule pins assert the production origin (the app derives it from APP_ORIGIN / AUTH_URL)
       APP_ORIGIN: https://www.vidysea.com
+      # -100: the single-truth sheet policy is ON in CI (a Google URL must be refused there too);
+      # this only additionally permits the suites' data:/localhost fixtures, never a public host.
+      SYNC_ALLOW_TEST_SOURCES: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

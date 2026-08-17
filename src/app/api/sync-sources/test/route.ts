@@ -3,7 +3,7 @@ import * as XLSX from "xlsx";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
-import { fetchWorkbook, normalizeSheetUrl } from "@/lib/workbook";
+import { fetchWorkbook, normalizeSheetUrl, sourceAllowed } from "@/lib/workbook";
 
 // Probe a sheet link before saving it as a sync source (2026-08-12).
 //
@@ -20,6 +20,13 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const raw = String(source_url ?? "").trim();
   if (!raw) throw new HttpError(400, "Paste the sheet link first.");
   if (!/^https?:\/\//i.test(raw)) throw new HttpError(400, "That does not look like a link — it should start with https://");
+  // -100: the probe is a server-side fetch of whatever URL was pasted, so it gets the same gate as
+  // saving — otherwise "Test link" stays an open door onto arbitrary hosts after the door beside
+  // it was locked, and it is how someone would discover a Google sheet "works" before saving it.
+  {
+    const verdict = sourceAllowed(raw);
+    if (!verdict.ok) throw new HttpError(400, verdict.reason ?? "This sheet cannot be synced.");
+  }
 
   const normalized = normalizeSheetUrl(raw);
   let wb;

@@ -19,13 +19,25 @@ const CELL_MAP: [string, string][] = [
   ["TC ID", "external_id"],
 ];
 
+// -100 (checker QA-170, and the row Umesh screenshotted): this button was offered on ANY row of
+// ANY tab whose change_type was "Added" — including `Trainer_Nomination`, where one click would
+// have minted a centre out of a trainer's nomination. A centre row is one that carries the
+// client sheet's own identifying column; anything else is refused here, not just hidden in the UI.
+export function isCentreRow(cells: Record<string, unknown>): boolean {
+  return Object.entries(cells ?? {}).some(([k, v]) => /^institution name$/i.test(String(k).trim()) && String(v ?? "").trim() !== "");
+}
+
 async function loadRow(id: string) {
   const change = await WorkbookChange.findById(id).lean<any>();
   if (!change) throw new HttpError(404, "Change not found");
   const snap = await WorkbookSnapshot.findOne({ sync_source: change.sync_source, tab: change.tab })
     .sort({ taken_at: -1 }).lean<any>();
   const row = (snap?.rows as any[])?.find((r) => r.key === change.row_key);
-  return { change, cells: row?.cells ?? {} };
+  const cells = row?.cells ?? {};
+  if (!isCentreRow(cells)) {
+    throw new HttpError(400, `This row is not a centre row — "${change.tab}" has no Institution Name on it. Only rows from the client's location sheet can become a centre.`);
+  }
+  return { change, cells };
 }
 
 export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {

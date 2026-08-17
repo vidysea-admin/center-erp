@@ -110,7 +110,9 @@ every scoped user. There is a regression test in `scripts/e2e-roles.mjs` (`F-000
 - **Attendance date migration (run once, AFTER a DB backup):**
   `node --env-file=.env scripts/migrate-logdate-tz.mjs` (dry run), then `--apply`.
 - **Sheet Watch setup:** `node scripts/setup-watch-source.mjs` registers the client OneDrive
-  workbook; the scheduler then polls every 30 min.
+  workbook twice — once `watch` (cell history, polls every 5 min) and once `mapped` (Sync Inbox,
+  daily 07:00 IST). It registers NOTHING else, and it reports any other source it finds instead of
+  removing it. (Until -100 it also registered two Google workbooks; see the policy below.)
 - **Backup:** confirm `scripts/backup.sh` runs nightly and note where backups land.
 
 ## Sync sources — single-truth policy (2026-08-13)
@@ -123,6 +125,19 @@ every scoped user. There is a regression test in `scripts/e2e-roles.mjs` (`F-000
   DELETED via the app API on 2026-08-13 (4,925 tracked changes + 63 snapshots cascaded;
   audit-logged). Do not re-add them — two masters race. The Google export stays reachable
   only for manual comparison (`seed-rpl.mjs --google`).
+- **⚠️ This policy was prose only, and prose did not hold.** On 2026-08-14 06:35:38
+  `setup-watch-source.mjs` — never edited after the 13/08 decision — upserted both Google
+  workbooks straight back, plus a SECOND mapped source on the client workbook (`AVPL workbook`),
+  which queued every location change for review twice (37 changes shown as 74). They polled our
+  own trainer/resume/nomination tabs for three days before Umesh spotted the rows on screen.
+- **Since -100 (2026-08-17) the policy is enforced in code, not here.**
+  `src/lib/workbook.ts` `sourceAllowed()` is the single gate: only the client workbook
+  (`CLIENT_WORKBOOK_URL`, compared on the share PATH so `?rtime=…` variants are the same sheet)
+  may be registered, edited, probed with "Test link", run with "Sync Now", or polled by either
+  scheduler loop — and it may not be registered twice in the same mode. `SYNC_ALLOW_TEST_SOURCES=1`
+  relaxes it for CI/local fixtures only (`data:` and localhost, never a public host); production
+  never sets it. Sheet Watch now shows a **Sheet** column and a source filter, so a stray workbook
+  is visible on the screen rather than three days later.
 - Remnant sweeps: `node scripts/cleanup-sync-remnants.mjs` (dry-run; `--apply` to write) —
   orphaned watch data, stale target pairs vs the truth sheet, leaked `@vidysea-test.local`
   users. Never touches `counters` (batch-code sequence) or `sheetchanges` (audit trail).

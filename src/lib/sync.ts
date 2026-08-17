@@ -7,10 +7,44 @@ import { audit } from "@/lib/audit";
 import { HttpError } from "@/lib/authz";
 import { safeFetch } from "@/lib/safe-fetch";
 import * as XLSX from "xlsx";
-import { fetchWorkbook, gridFromSheet } from "@/lib/workbook";
+import { fetchWorkbook, gridFromSheet, sourceAllowed, workbookIdentity } from "@/lib/workbook";
 import { fieldSpec } from "@/lib/field-catalog";
 
 const ACTIVE_BATCH_STATUSES = ["Planning", "Ready", "Active", "Closing"];
+
+// -100 (Umesh, 17/08, "bus OneDrive wala sync karna hai, baaki sheets nahi — this is a must
+// thing"): the gate every write path to `syncsources` goes through. Two refusals, both learned
+// from what production actually did:
+//   1. a sheet that is not the client's workbook — our own Google sheets (trainer nomination,
+//      resumes, registered trainers) put THEIR rows in the review queue, which is what he saw;
+//   2. the SAME workbook registered twice in the same mode — that is how one client change came
+//      to be queued for review twice (37 identical rows under two names, measured 17/08).
+// `existingId` is the row being edited (so a PATCH does not collide with itself).
+export async function assertSyncSourceAllowed(
+  data: Record<string, unknown>,
+  existingId: string | null,
+  existing?: { source_url?: string; mode?: string } | null,
+): Promise<void> {
+  const url = String(data.source_url ?? existing?.source_url ?? "");
+  const mode = String(data.mode ?? existing?.mode ?? "mapped");
+  const verdict = sourceAllowed(url);
+  if (!verdict.ok) throw new HttpError(400, verdict.reason ?? "This sheet cannot be synced.");
+  // The wall registers the real client workbook as a WATCH source in two suites on purpose (the
+  // badger fetch has to be proved end to end), so watch-mode duplicates are tolerated when test
+  // sources are allowed. The defect Umesh actually saw — the Sync Inbox showing every location
+  // change twice — is a MAPPED duplicate, and that stays guarded everywhere, so the wall covers
+  // the real bug rather than a stand-in for it.
+  if (mode === "watch" && process.env.SYNC_ALLOW_TEST_SOURCES === "1") return;
+  // Compare IDENTITIES, not URLs: production carried the same workbook clean and again with
+  // "?rtime=…&redeem=…", and a plain string match saw two different sheets.
+  const same = await SyncSource.find({ mode, ...(existingId ? { _id: { $ne: existingId } } : {}) })
+    .select("name source_url mode").lean<any[]>();
+  const dup = same.find((x) => workbookIdentity(String(x.source_url)) === workbookIdentity(url));
+  if (dup) {
+    throw new HttpError(400, `This workbook is already registered in ${mode} mode as "${dup.name}". Registering it twice queues every change for review twice — edit that one instead.`);
+  }
+}
+
 
 // Minimal CSV parser (handles quotes and commas-in-quotes)
 export function parseCsv(text: string): string[][] {

@@ -5,6 +5,7 @@ import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { SheetChange, SyncSource, WorkbookChange, WorkbookSnapshot } from "@/models";
 import { audit } from "@/lib/audit";
+import { assertSyncSourceAllowed } from "@/lib/sync";
 
 export const { GET, PATCH } = itemRoutes({
   model: SyncSource, entity: "SyncSource", scopeField: null,
@@ -12,6 +13,9 @@ export const { GET, PATCH } = itemRoutes({
   writeRoles: ["Admin"],
   permission: "sheet.sources", // 2026-08-11 togglable right (writeRoles = fallback only)
   readPermission: "sheet.sources", // read follows the same togglable right as write (Rule 40 baseline)
+  // -100: editing a source cannot walk it off the client workbook either — the same gate as
+  // creation, with the row itself excluded from the duplicate check.
+  beforeUpdate: async (id, data, existing) => { await assertSyncSourceAllowed(data, id, existing); },
 });
 
 // 2026-08-12: a sheet added by mistake, or one the client has retired, has to be removable —
