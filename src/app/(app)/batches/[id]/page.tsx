@@ -6,7 +6,7 @@ import { useSession } from "next-auth/react";
 import { api, fmtDate, toInputDate } from "@/lib/client";
 import { trainerSelectGroups } from "@/lib/trainer-select";
 import { slotHoursPerDay } from "@/lib/slot-rules";
-import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, HealthBanner, NameCell, Section, Tabs, inputCls } from "@/components/ui";
+import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, HealthBanner, NameCell, Section, Tabs, inputCls, statusLabel } from "@/components/ui";
 import { Activity } from "@/components/activity";
 import { flushQueue, fmtBytes, getLastUploadInfo, getQueue, pickRecorderMime, uploadWithRetry, videoKnobs, type VideoKnobs } from "@/lib/upload";
 import { BASE_PATH } from "@/lib/base-path";
@@ -233,7 +233,9 @@ function Overview({ data, role, onChanged, setError }: any) {
     <div className="grid gap-4 lg:grid-cols-2">
       {running && (
         <div className="lg:col-span-2 flex flex-wrap items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-2 text-xs text-green-900">
-          <span className="font-semibold">{b.status === "Active" ? "Running" : b.status}</span>
+          {/* -104: this banner printed the raw enum, so the Overview said "Result Awaited" in the
+              header chip and "Closing" two lines below it. Same label map as the chip. */}
+          <span className="font-semibold">{b.status === "Active" ? "Running" : statusLabel(b.status)}</span>
           {b.actual_start && <span>since {fmtDate(b.actual_start)}</span>}
           {dayN && dayM && b.status === "Active" && <span>· day {Math.min(dayN, dayM)} of {dayM}</span>}
           {att && <span>· our logs {att.days_held} day{att.days_held === 1 ? "" : "s"}</span>}

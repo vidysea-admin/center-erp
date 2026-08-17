@@ -3,8 +3,14 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-104";
+export const RELEASE = "2026.08.14-105";
 export const RELEASE_NOTE =
+  "-105: two more places the batch status was still printing the raw enum, both found in the "
+  "browser rather than by grep: the green running banner on a batch Overview said 'Closing' two "
+  "lines under a header chip that said 'Result Awaited', and the batches-list search index only "
+  "matched the enum, so typing what the screen shows found nothing. The banner uses the same "
+  "label map now, and the list is searchable by BOTH words - the client types 'Result Awaited', "
+  "an engineer reading an audit row types 'Closing'. "
   "-104: found by driving the -102 resolve drawer in a real browser, not by reading code. Two "
   "same-name candidates carrying no portal ID rendered as two IDENTICAL option rows, so the one "
   "screen whose entire job is 'pick the right one' gave the operator nothing to pick on - the "

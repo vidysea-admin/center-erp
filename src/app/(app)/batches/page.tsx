@@ -273,7 +273,9 @@ function BatchesInner() {
                 // batch status to hai hi idhar, iske bagal me daal dijiye") — the status is the
                 // column he reads the list by, so it is no longer hidden on a phone.
                 key: "status", label: "Status", sortable: true, sortValue: (r: any) => r.status,
-                filterText: (r: any) => r.settlement_stage ? `${r.status} — ${r.settlement_stage}` : r.status,
+                // -104: searchable by BOTH words — the client types "Result Awaited", an engineer
+                // reading an audit row types "Closing", and either must find the row.
+                filterText: (r: any) => [statusLabel(r.status), r.status === statusLabel(r.status) ? "" : r.status, r.settlement_stage].filter(Boolean).join(" — "),
                 render: (r: any) => (
                   <span className="flex flex-col gap-0.5">
                     <Chip value={r.status} />
