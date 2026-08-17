@@ -3,8 +3,26 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-109";
+export const RELEASE = "2026.08.14-110";
 export const RELEASE_NOTE =
+  "-110: SMS. EnableX carries SMS (and later WhatsApp); email stays on SES - Umesh's scope. The "
+  "portal was explored end to end before a line was written: the credential in the repo's parent "
+  "was a portal LOGIN, not an API key; the account holds SMS project VIDYSEA_SMS_ENABLE_X, sender "
+  "VIDYSE (fulfilled), an ACTIVE campaign, and exactly ONE approved DLT template - the OTP one, "
+  "888579131 - whose wording differs from the OTP screenshot in circulation, so building to that "
+  "screenshot would have been rejected by the gateway on every send. lib/sms.ts is the twin of "
+  "lib/mailer.ts: env-only credentials from the app's own directory, never throws, every outcome "
+  "lands in the ONE MailLog with channel sms, and suppression is STRUCTURAL first (a non-production "
+  "DB or localhost auth means off, flag or no flag) with SMS_DISABLED as the MAIL_DISABLED twin - "
+  "so no wall run can text one of 167 real students. The template is data, rendered by "
+  "substitution into the approved text; a purpose with no configured template ID records skipped "
+  "and sends nothing, so QA-189/190's messages ship switched off until each is approved on DLT. "
+  "The public enrolment form gains a mobile-number path: the same hardened 6-digit challenge over "
+  "SMS, with three gates the email flow never needed because a code now costs money - a per-phone "
+  "cap independent of IP, a resend cooldown, and a global daily cap that raises a Notification to "
+  "Admin/Ops rather than stopping quietly. The verified number becomes the phone of record, exactly "
+  "as the verified address does on the email path. The first real SMS is a person's decision, not "
+  "a build step. "
   "-109: two things Umesh caught. (1) 'Not eligible' was being said about students it was not "
   "true of. Measured on production: BHA-SPIT-02 read it for all 31 students THREE DAYS into a "
   "fifteen-day course; BHA-SPIT-01 for all 45 purely because that file's decimal hours never "

@@ -414,14 +414,19 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   const noMail = (await req("POST", "/api/candidates", { name: `No Mail ${stamp}`, phone: `832${stamp}0`, location: loc._id, program: prog._id }, 201)).data.item;
   const logs2 = (await req("GET", "/api/test-email")).data.log ?? [];
   const skipped = logs2.find((l) => String(l.entity) === "Candidate" && String(l.entity_id) === String(noMail._id));
-  ok("-109: a phone-only student is not an error — the skip is RECORDED with its reason, not silent",
-    !!skipped && skipped.status === "skipped" && /recipient/i.test(String(skipped.reason ?? "")),
-    JSON.stringify(skipped && { st: skipped.status, r: skipped.reason, to: skipped.to }));
-  // MailLog.to is a required field, so an empty address used to make the row fail validation and the
-  // skip went unrecorded — the one case where "did it go?" was unanswerable was the case where it
-  // certainly had not. Found by this pin.
-  ok("-109: …and the row survives a missing address instead of vanishing on schema validation",
-    !!skipped && /no address on record/i.test(String(skipped.to ?? "")), String(skipped?.to));
+  // -110 changed what a phone-only student gets: not a mail-skip but an SMS ATTEMPT (Umesh: "email
+  // hai toh mail pe, warna phone pe"). The row is still on record, still a skip, still naming the
+  // honest reason — today that reason is "no approved DLT template" (or CI suppression), because
+  // the registration SMS is switched off by construction until its template is approved.
+  ok("-109/-110: a phone-only student is not an error — an attempt is RECORDED with its reason, on the SMS channel",
+    !!skipped && skipped.channel === "sms" && skipped.status === "skipped" && /template|test environment|SMS_DISABLED/i.test(String(skipped.reason ?? "")),
+    JSON.stringify(skipped && { ch: skipped.channel, st: skipped.status, r: String(skipped.reason).slice(0, 70) }));
+  ok("-110: …and the row carries the E.164 number it would have gone to", !!skipped && /^\+91\d{10}$/.test(String(skipped.to ?? "")), String(skipped?.to));
+  // -109's own finding (MailLog.to required -> an empty recipient's log row was silently lost) is
+  // proved on the one path that CAN reach the mail door with no address: the OTP register step on
+  // the SMS path, where the confirmation mail is sent to the candidate's optional email. That is
+  // pinned in e2e-roles (-110 block: "registration lands on the SMS path"), where a phone-only
+  // registration must leave a recorded email skip, not silence.
   await req("DELETE", `/api/candidates/${withMail._id}`, undefined, 200);
   await req("DELETE", `/api/candidates/${noMail._id}`, undefined, 200);
 }

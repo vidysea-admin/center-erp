@@ -24,7 +24,9 @@ const FROM_EMAIL = () => process.env.MAIL_FROM_EMAIL || "product@vidysea.com";
 // localhost auth URL — if either shape is present, mail is off no matter what flags exist.
 // Production sets neither, so nothing changes there. MAIL_DISABLED stays as an extra
 // explicit off-switch; forgetting it can no longer send real mail from a test run.
-function testEnvironmentShape(): string | null {
+// -110: exported so the SMS door (lib/sms.ts) suppresses on the SAME structural signal. Two copies
+// of "is this a test environment" is how one of them drifts and a wall run texts real students.
+export function testEnvironmentShape(): string | null {
   const db = process.env.MONGODB_DB;
   if (db && db !== "center_erp") return `test database (${db})`;
   if ((process.env.AUTH_URL ?? "").includes("localhost")) return "localhost auth URL";

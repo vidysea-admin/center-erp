@@ -538,6 +538,113 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   await mc.close();
 }
 
+// ---- -110 (Umesh 17/08, checker QA-187/188): the SAME challenge over SMS, and the wall must never
+// text a real student. The account's ONLY approved DLT template is the OTP one (888579131), so OTP is
+// the only purpose that can send; every other purpose is switched off by construction.
+{
+  const B = process.env.BASE_URL || "http://localhost:3000/erp";
+  const pj = async (body) => {
+    const r = await fetch(B + "/api/public/enrol-otp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    return { status: r.status, data: await r.json().catch(() => ({})) };
+  };
+  const { MongoClient } = await import("mongodb");
+  const nodeCrypto = await import("crypto");
+  const mc = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+  await mc.connect();
+  const db = mc.db(process.env.MONGODB_DB || "center_erp_ci");
+
+  // (1) THE GUARD. The wall runs on center_erp_ci: sending is off STRUCTURALLY, whatever env is set.
+  const health = (await req(admin, "GET", "/api/test-email")).data.sms;
+  ok("-110: the admin panel reports SMS health with presence only, never a value",
+    !!health && typeof health.configured === "boolean" && Array.isArray(health.templates) && !JSON.stringify(health).match(/[0-9a-f]{24,}/i),
+    JSON.stringify(health).slice(0, 200));
+  ok("-110: on the CI database SMS is NOT configured — the wall cannot text anyone, flag or no flag",
+    health.configured === false && /test environment|SMS_DISABLED|not configured/i.test(String(health.reason)), String(health.reason));
+
+  // (2) the phone challenge — same shape as the email one
+  const ph = "97" + Date.now().toString().slice(-8);
+  const r1 = await pj({ action: "request", phone: ph });
+  ok("-110: a phone OTP request lands and returns a token (SMS suppressed in CI, challenge stored)", r1.status === 200 && !!r1.data.token && r1.data.channel === "sms", `got ${r1.status} ${JSON.stringify(r1.data).slice(0, 120)}`);
+  const tok = r1.data.token;
+  const row = await db.collection("publictokens").findOne({ token: tok });
+  ok("-110: the challenge is stored as phone_otp with the number and only a HASH of the code", row?.purpose === "phone_otp" && row?.phone === ph && /^[0-9a-f]{64}$/.test(String(row?.otp_hash)) && !row?.email);
+  ok("-110: a junk phone is refused a code", (await pj({ action: "request", phone: "12345" })).status === 400);
+  ok("-110: a wrong code is refused", (await pj({ action: "verify", token: tok, code: "000000" })).status === 400);
+  // the SMS attempt is on record — as a SKIP, naming why — and the code is NOT in the log (QA-142)
+  const smsLog = ((await req(admin, "GET", "/api/test-email")).data.log ?? []).find((l) => l.channel === "sms" && l.entity === "PublicToken");
+  ok("-110: the SMS attempt is recorded in the ONE log with channel 'sms', as a skip that names the reason",
+    !!smsLog && smsLog.status === "skipped" && /test environment|SMS_DISABLED|not configured|template/i.test(String(smsLog.reason)),
+    JSON.stringify(smsLog && { st: smsLog.status, r: smsLog.reason, ch: smsLog.channel }));
+  ok("-110: the live code never reaches the log (QA-142 holds for SMS too)", !!smsLog && !/\b\d{6}\b/.test(String(smsLog.subject ?? "")), String(smsLog?.subject));
+
+  await db.collection("publictokens").updateOne({ token: tok }, { $set: { otp_hash: nodeCrypto.createHash("sha256").update("313131").digest("hex"), otp_attempts: 0 } });
+  ok("-110: the right code verifies", (await pj({ action: "verify", token: tok, code: "313131" })).status === 200);
+  const ctxRes = await fetch(B + `/api/public/enrol-otp?token=${tok}`);
+  const ctxD = await ctxRes.json().catch(() => ({}));
+  ok("-110: a verified SMS session serves the form and says which channel proved it",
+    ctxRes.status === 200 && ctxD.channel === "sms" && ctxD.phone === ph, JSON.stringify({ ch: ctxD.channel, ph: ctxD.phone }));
+  // register — the VERIFIED number is the phone of record; a typed one is ignored
+  const reg = await pj({ action: "register", token: tok, name: "SMS OTP Cand E2E", phone: "9000000000", location: ctxD.locations?.[0]?._id, program: ctxD.programs?.[0]?._id });
+  ok("-110: registration lands on the SMS path", reg.status === 201, `got ${reg.status} ${JSON.stringify(reg.data).slice(0, 120)}`);
+  // -109's mailer fix, proved where it is genuinely reachable: this registration gave NO email, so the
+  // confirmation mail has no recipient — the row must still exist (placeholder), never be lost.
+  {
+    const c = ((await req(admin, "GET", `/api/candidates?q=${encodeURIComponent("SMS OTP Cand E2E")}`)).data.items ?? [])[0];
+    const mailRow = ((await req(admin, "GET", "/api/test-email")).data.log ?? []).find((l) => (l.channel ?? "email") === "email" && String(l.entity_id) === String(c?._id));
+    ok("-109/-110: an email attempt with NO address is still RECORDED (placeholder recipient), never silently lost",
+      !!mailRow && mailRow.status === "skipped" && /no address on record/i.test(String(mailRow.to)) && /recipient/i.test(String(mailRow.reason)),
+      JSON.stringify(mailRow && { to: mailRow.to, st: mailRow.status, r: mailRow.reason }));
+  }
+  const found = ((await req(admin, "GET", `/api/candidates?q=${encodeURIComponent("SMS OTP Cand E2E")}`)).data.items ?? [])[0];
+  ok("-110: the row carries the VERIFIED phone (not the typed one) and the SMS-OTP source",
+    !!found && found.phone === ph && found.source === "Self Registration (SMS OTP)", JSON.stringify(found && { p: found.phone, s: found.source }));
+  ok("-110: the challenge is single-use", (await pj({ action: "register", token: tok, name: "X", location: ctxD.locations?.[0]?._id, program: ctxD.programs?.[0]?._id })).status === 404);
+
+  // (3) TOLL FRAUD — the gates that go beyond the email flow. Keyed on the PHONE, not the IP.
+  const ph2 = "96" + Date.now().toString().slice(-8);
+  const a = await pj({ action: "request", phone: ph2 });
+  const b = await pj({ action: "request", phone: ph2 });
+  ok("-110: an immediate resend to the SAME number is refused (cooldown) — rotating IPs would not help",
+    a.status === 200 && b.status === 429 && /wait/i.test(String(b.data?.error)), `${a.status}/${b.status} ${String(b.data?.error ?? "").slice(0, 60)}`);
+  // per-phone cap: burn the cooldown by rewinding the last-send marker is not possible from outside,
+  // so prove the per-phone bucket exists via its message on a fresh number after the daily cap test.
+  // (4) DAILY CAP: with the process cap set low for CI (SMS_DAILY_CAP), the next number trips it and
+  //     raises a Notification instead of failing quietly.
+  if (Number(process.env.SMS_DAILY_CAP ?? 0) > 0) {
+    // The per-IP allowance (5/hour) would trip before a cap of 6 does. The cap is a PROCESS-wide
+    // gate keyed on nothing the caller controls, so vary the forwarded IP per request — exactly what
+    // an attacker does — and prove the cap still stops it. That is the whole point of the cap.
+    let tripped = null;
+    for (let i = 0; i < Number(process.env.SMS_DAILY_CAP) + 3; i++) {
+      const r = await fetch(B + "/api/public/enrol-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-forwarded-for": `10.9.${i}.${i}` },
+        body: JSON.stringify({ action: "request", phone: "95" + String(1000000000 + i).slice(-8) }),
+      }).then(async (x) => ({ status: x.status, data: await x.json().catch(() => ({})) }));
+      if (r.status === 429 && /paused/i.test(String(r.data?.error))) { tripped = r; break; }
+    }
+    ok("-110: the global daily cap trips and says so to the student in plain words", !!tripped, JSON.stringify(tripped?.data ?? "did not trip"));
+    const notif = ((await req(admin, "GET", "/api/notifications?status=New&limit=100")).data.items ?? []).find((n) => n.type === "sms_daily_cap");
+    ok("-110: ...and raises a Notification to Admin/Ops rather than stopping silently", !!notif, JSON.stringify(notif && { t: notif.type, m: String(notif.message).slice(0, 80) }));
+  } else {
+    ok("-110: the daily-cap pin was NOT exercised — run the wall with SMS_DAILY_CAP=6 so it is", false, "SMS_DAILY_CAP unset");
+  }
+
+  // (5) a purpose with NO approved template cannot send, and says so on the record
+  const noTpl = (await req(admin, "POST", "/api/candidates", { name: `SMS NoTemplate ${Date.now().toString().slice(-6)}`, phone: "94" + Date.now().toString().slice(-8), location: ctxD.locations?.[0]?._id, program: ctxD.programs?.[0]?._id })).data.item;
+  const noTplLog = ((await req(admin, "GET", "/api/test-email")).data.log ?? []).find((l) => String(l.entity_id) === String(noTpl?._id));
+  ok("-110: a phone-only student registered by admin gets an SMS ATTEMPT on record...", !!noTplLog && noTplLog.channel === "sms", JSON.stringify(noTplLog && { ch: noTplLog.channel, st: noTplLog.status }));
+  ok("-110: ...recorded as skipped for the honest reason — no approved DLT template for that purpose (or suppressed in CI)",
+    !!noTplLog && noTplLog.status === "skipped" && /template|test environment|SMS_DISABLED/i.test(String(noTplLog.reason)), String(noTplLog?.reason));
+  if (noTpl?._id) await req(admin, "DELETE", `/api/candidates/${noTpl._id}`);
+
+  // (6) the ONE log answers "did anything reach this person?" per channel
+  const both = ((await req(admin, "GET", "/api/test-email")).data.log ?? []);
+  ok("-110: MailLog carries BOTH channels side by side, so 'kuch gaya ki nahi' is one query",
+    both.some((l) => l.channel === "sms") && both.some((l) => (l.channel ?? "email") === "email"));
+  await mc.close();
+}
+
 // ---- QA-025 P1+P2 (-66): three-level rights (none/view/edit). Bare key = edit (its meaning
 // since day one — zero migration); "key:view" is the new middle level. Finance reads sit on
 // view; every write keeps needing edit. The R-E Operations hardcode on the ledgers STAYS —

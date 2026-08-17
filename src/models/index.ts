@@ -811,15 +811,24 @@ NotificationSchema.index({ status: 1, createdAt: -1 });
 // QA-132 (-72): "sent" was only ever SES ACCEPTANCE. Bounce/complaint notifications (SNS →
 // /api/public/ses-notifications) now revise the row — the one MailLog mutation in the system.
 export const MAIL_STATUS = ["sent", "failed", "skipped", "bounced", "complained"] as const;
+// -110 (Umesh 17/08, checker QA-187..190): SMS lands in the SAME log. "Is bachche ko kuch gaya ki
+// nahi" stays one query and one Admin screen — a second log would split that answer in two. So
+// `channel` says which door it went through, `subject` becomes optional (an SMS has none; the
+// template id and the first words of the body stand in), and `template_id` carries the DLT
+// template an SMS was rendered from. Every existing row is email, so nothing migrates.
+export const MESSAGE_CHANNEL = ["email", "sms"] as const;
 const MailLogSchema = new Schema({
+  channel: { type: String, enum: MESSAGE_CHANNEL, default: "email" },
   to: { type: String, required: true },
-  subject: { type: String, required: true },
+  subject: String,                             // -110: optional — SMS carries template_id + a body preview instead
+  template_id: String,                         // -110: DLT template the SMS body was rendered from
   status: { type: String, enum: MAIL_STATUS, required: true },
   reason: String,                              // skip reason or failure message
-  message_id: String,                          // SES message id on success
+  message_id: String,                          // SES message id / EnableX message id on success
   entity: String, entity_id: Schema.Types.ObjectId, // what this mail was about
 }, { timestamps: true });
 MailLogSchema.index({ createdAt: -1 });
+MailLogSchema.index({ channel: 1, createdAt: -1 });
 
 // ---------- Stored files (QA-145, 2026-08-15) ----------
 // Every upload gets a row — "koi bhi data miss na ho" (Umesh). The checker proved that
@@ -876,7 +885,7 @@ StoredFileSchema.index({ entity_id: 1, staged_certificate: 1 });
 // plan added 2026-08-15 (QA-152 part 2, Umesh): the batch's backward plan as a shareable
 // artifact — "jaise self-registration form open hota hai" — the creator edits, the person
 // holding the link reads, and (only when the link was minted with allow_updates) ticks status.
-export const PUBLIC_TOKEN_PURPOSE = ["register", "feedback", "attendance", "trainer_apply", "email_otp", "plan"] as const;
+export const PUBLIC_TOKEN_PURPOSE = ["register", "feedback", "attendance", "trainer_apply", "email_otp", "phone_otp", "plan"] as const; // -110: phone_otp = the same challenge over SMS
 const PublicTokenSchema = new Schema({
   token: { type: String, required: true, unique: true },
   purpose: { type: String, enum: PUBLIC_TOKEN_PURPOSE, required: true },
@@ -886,9 +895,10 @@ const PublicTokenSchema = new Schema({
   trainer: oid("Trainer"),      // trainer_apply: the pre-created profile this link completes
   batch: oid("Batch"),          // plan: which batch's plan this link opens (attendance links also set it)
   allow_updates: { type: Boolean, default: false }, // plan: the link holder may tick milestones
-  // email_otp: the challenge state. Only the HASH of the code is stored; 10-minute expiry;
-  // 5 wrong attempts burn the token.
+  // email_otp / phone_otp: the challenge state. Only the HASH of the code is stored; 10-minute
+  // expiry; 5 wrong attempts burn the token. -110: phone_otp proves a mobile number instead.
   email: String,
+  phone: String,
   otp_hash: String,
   otp_expires_at: Date,
   otp_attempts: { type: Number, default: 0 },

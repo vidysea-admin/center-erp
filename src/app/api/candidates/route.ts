@@ -5,6 +5,7 @@ import { emailError, canonicalPhone, phoneError } from "@/lib/validate";
 import { candidateEligibility } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { renderMail, sendMail } from "@/lib/mailer";
+import { sendSms } from "@/lib/sms";
 
 export const { GET, POST } = collectionRoutes({
   model: Candidate, entity: "Candidate",
@@ -51,14 +52,23 @@ export const { GET, POST } = collectionRoutes({
   // Umesh also asked for an SMS fallback where there is no email; that needs a provider and its
   // credentials, so it is raised separately rather than half-built here.
   async afterWrite(doc, user) {
-    if (!doc?.email) {
-      await sendMail({ to: "", subject: "Your training registration is received", html: "", text: "", entity: "Candidate", entity_id: doc?._id }).catch(() => {});
-      return;
-    }
     const [loc, prog] = await Promise.all([
       Location.findById(doc.location).select("name").lean<any>().catch(() => null),
       Program.findById(doc.program).select("name").lean<any>().catch(() => null),
     ]);
+    // -110 (Umesh 17/08: "mail id hai toh mail pe jaye, otherwise phone pe jaye"): the SMS arm.
+    // Fires only when there is NO email — a student with an address gets the mail below. It is
+    // switched off by construction until Umesh gets this purpose's DLT template approved
+    // (ENABLEX_SMS_TEMPLATE_REGISTRATION unset → sendSms records "skipped: no approved DLT
+    // template"), so the row exists and never claims a send that could not happen.
+    if (!doc?.email) {
+      sendSms({
+        to: doc?.phone, purpose: "registration",
+        values: { name: String(doc?.name ?? ""), program: prog?.name ?? "training", centre: loc?.name ?? "our training centre" },
+        entity: "Candidate", entity_id: doc?._id,
+      }).catch(() => {});
+      return;
+    }
     const { html, text } = renderMail({
       title: "Your training registration is received",
       lines: [

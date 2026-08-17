@@ -46,6 +46,11 @@ jobs:
       # -100: the single-truth sheet policy is ON in CI (a Google URL must be refused there too);
       # this only additionally permits the suites' data:/localhost fixtures, never a public host.
       SYNC_ALLOW_TEST_SOURCES: "1"
+      # -110: SMS. Suppression is structural first (MONGODB_DB=center_erp_ci), so no wall run can
+      # text a real student even with credentials present; SMS_DISABLED is the MAIL_DISABLED twin
+      # as belt-and-braces. SMS_DAILY_CAP=6 lets the roles suite exercise the daily-cap trip.
+      SMS_DISABLED: "1"
+      SMS_DAILY_CAP: "6"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

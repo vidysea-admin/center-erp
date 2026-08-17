@@ -4,6 +4,7 @@ import { apiHandler, requireUser, requireRole, HttpError } from "@/lib/authz";
 import { MailLog } from "@/models";
 import { getTransporter, mailConfigured, renderMail, sendMail } from "@/lib/mailer";
 import { storageHealth } from "@/lib/storage";
+import { smsHealth } from "@/lib/sms";
 
 // QA-115: the one-click "is mail actually working?" check, Admin-only.
 // GET  → config state + the last 20 MailLog rows (the audit answer to "mail gaya ki nahi").
@@ -17,7 +18,9 @@ export const GET = apiHandler(async () => {
   requireRole(user, "Admin");
   const log = await MailLog.find({}).sort({ createdAt: -1 }).limit(20).lean();
   // QA-145: evidence-storage health rides along — same admin panel, one call.
-  return NextResponse.json({ configured: mailConfigured(), log, storage: storageHealth() });
+  // -110: SMS health rides along too — presence of each ENABLEX_SMS_* key and which purposes
+  // have an approved template, never a value (SEC-01).
+  return NextResponse.json({ configured: mailConfigured(), log, storage: storageHealth(), sms: smsHealth() });
 });
 
 export const POST = apiHandler(async (req: NextRequest) => {
