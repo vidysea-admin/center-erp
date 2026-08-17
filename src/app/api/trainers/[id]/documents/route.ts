@@ -5,6 +5,7 @@ import { requirePerm } from "@/lib/permissions";
 import { Trainer, TrainerDocument, TRAINER_DOC_TYPE } from "@/models";
 import { assertTrainerInScope, trainerDocSummary } from "@/lib/rules";
 import { audit } from "@/lib/audit";
+import { removeStoredFile } from "@/lib/storage";
 
 // 2026-08-12 (Manish): "phir uske documents mangaye - Aadhaar, PAN, photo, CV, educational
 // qualification, CIPSA certificate". One row per document so each can be re-uploaded or verified
@@ -43,7 +44,14 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
 
   // Re-uploading a document type replaces the previous one rather than stacking duplicates,
   // which is what actually happens when NSDC bounces a profile and a corrected copy comes back.
+  // -101: same orphan as the candidate side — the superseded row went, its stored object stayed
+  // readable and unreferenced. A corrected copy replacing a bounced one should not leave the
+  // bounced scan in the bucket.
+  const superseded = await TrainerDocument.find({ trainer: id, doc_type: body.doc_type }).select("file_url").lean<any[]>();
   await TrainerDocument.deleteMany({ trainer: id, doc_type: body.doc_type });
+  for (const prev of superseded) {
+    if (prev.file_url && String(prev.file_url) !== String(body.file_url)) await removeStoredFile(String(prev.file_url), user.id);
+  }
   const doc = await TrainerDocument.create({
     trainer: id,
     doc_type: body.doc_type,

@@ -4,6 +4,7 @@ import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError 
 import { requirePerm } from "@/lib/permissions";
 import { Candidate, CandidateDocument, CANDIDATE_DOC_TYPE } from "@/models";
 import { audit } from "@/lib/audit";
+import { removeStoredFile } from "@/lib/storage";
 
 // QA-105 (15/08): the candidate document store — full mirror of the trainer pattern.
 // One row per document; re-uploading a type replaces it; Rule 38 scope comes from the
@@ -42,7 +43,14 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   }
   if (!body.file_url) throw new HttpError(400, "file_url is required — upload the file first.");
   // Re-uploading a type replaces the previous one rather than stacking duplicates.
+  // -101: the replaced row was deleted but its stored OBJECT was left behind — still `ready`,
+  // still readable by anyone with the link, and now referenced by nothing, so it never appeared
+  // in any list a person would think to check. Replace means the old file leaves storage too.
+  const superseded = await CandidateDocument.find({ candidate: id, doc_type: body.doc_type }).select("file_url").lean<any[]>();
   await CandidateDocument.deleteMany({ candidate: id, doc_type: body.doc_type });
+  for (const prev of superseded) {
+    if (prev.file_url && String(prev.file_url) !== String(body.file_url)) await removeStoredFile(String(prev.file_url), user.id);
+  }
   const doc = await CandidateDocument.create({
     candidate: id, doc_type: body.doc_type, file_url: body.file_url,
     original_name: body.original_name, note: body.note, uploaded_by: user.id,

@@ -59,6 +59,7 @@ export const POST = apiHandler(async (_req: NextRequest) => {
     return NextResponse.json({ ok: false, backend: health.backend, ms: Date.now() - started, failed_step: failed, steps, bucket: lastBucketReportCached(), error: msg.slice(0, 300), note: why || `Storage refused the probe at step "${failed}" — see error.`, fix: why || null }, { status: 502 });
   };
   let put: any, back: Buffer, bucketReport: any = null, cors: any = null, session: any = null, sessionPut: any = null;
+  let probeCleanup: { removed: boolean; error?: string } | null = null;
   try {
     if (health.backend === "gcs") {
       // 1 — token: federation + impersonation only
@@ -72,6 +73,15 @@ export const POST = apiHandler(async (_req: NextRequest) => {
     // 3 — write + read-back through the same doors the app uses
     put = await run("write", () => putFile(name, payload, "text/plain", ["_healthcheck"]));
     back = await run("read", () => getFile({ backend: put.backend, drive_file_id: put.drive_file_id }, name));
+    // -101: the probe used to LEAVE this object behind — every health check added another
+    // `_healthcheck/healthcheck-<ISO>.txt` that no StoredFile row described and no app path could
+    // remove, so the only cleanup was the console. The session rung below already deletes after
+    // itself; the write rung now does the same. Non-fatal: the roundtrip has already been proved
+    // by this point, so a failed tidy-up is reported, not thrown.
+    if (put.backend === "gcs" && put.drive_file_id) {
+      probeCleanup = await deleteGcsObject(String(put.drive_file_id)).then(() => ({ removed: true }))
+        .catch((e: any) => ({ removed: false, error: String(e?.message ?? e).slice(0, 200) }));
+    }
     if (health.backend === "gcs") {
       // 4 — a resumable session (what /api/upload/intent mints for the browser)
       session = await run("session", async () => { const sres = await createResumableSession({ name: `session-${name}`, mime: "text/plain", size: payload.length, folderSegments: ["_healthcheck"], origin: null }); return { host: new URL(sres.session_uri).host, key: sres.folder_id, uri: sres.session_uri }; });
@@ -86,6 +96,7 @@ export const POST = apiHandler(async (_req: NextRequest) => {
   const corsFailed = cors?.state === "failed";
   return NextResponse.json({
     ok: roundtrip && !corsFailed,
+    probe_cleanup: probeCleanup,
     backend: put.backend,
     drive_file_id: put.drive_file_id ?? null,
     folder_path: put.folder_path ?? null,

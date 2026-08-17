@@ -675,6 +675,43 @@ ok("cert bulk: certificate_file landed on the result row", /\/api\/files\//.test
   const certRead = await fetch(BASE + String(upPassRow.certificate_file).replace(/^\/erp/, ""), { headers: { cookie } });
   ok("-83: …and it reads back through the proxy", certRead.status === 200 && certRead.headers.get("content-type") === "application/pdf", `${certRead.status}`);
 }
+// ---- -101 (Umesh 17/08, "CRUD ke saare operations chalne chahiye"): the D of the certificate.
+// It could be uploaded and replaced but never REMOVED — a scan attached to the wrong candidate was
+// permanent, and its stored object was unreclaimable (the discard door refuses a referenced file,
+// correctly). Removing the FILE only: status, number and date are what the awarding body said. ----
+{
+  const { MongoClient } = await import("mongodb");
+  const mc = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+  await mc.connect();
+  const sf = mc.db(process.env.MONGODB_DB || "center_erp_ci").collection("storedfiles");
+  const certUrl = String(upPassRow.certificate_file);
+  const certName = certUrl.split("/").pop();
+  const statusBefore = upPassRow.certificate_status;
+  // the discard door must still refuse it — it is attached to a record
+  const discard = await req("DELETE", `/api/files/${certName}`);
+  ok("-101: an attached certificate is still refused by the file-discard door (409) — it leaves through the record", discard.status === 409, String(discard.status));
+  ok("-101: removing a certificate file without a reason is refused (it is audited evidence)", (await req("DELETE", `/api/results/${upPassRow._id}/certificate`)).status === 400);
+  const del = await req("DELETE", `/api/results/${upPassRow._id}/certificate`, { reason: "-101 pin: wrong candidate's scan" });
+  const gone = await fetch(BASE + certUrl.replace(/^\/erp/, ""), { headers: { cookie } });
+  const rowAfter = await sf.findOne({ name: certName });
+  const resAfter = (await req("GET", `/api/batches/${b4._id}/results`)).data.items.find((i) => String(i.result?._id) === String(upPassRow._id)).result;
+  ok("-101: the certificate file is removed — 200, the URL answers 410, and the StoredFile row stays as 'deleted' with who/when",
+    del.status === 200 && gone.status === 410 && rowAfter?.status === "deleted" && !!rowAfter?.deleted_at && !!rowAfter?.deleted_by,
+    JSON.stringify({ d: del.status, g: gone.status, s: rowAfter?.status }));
+  ok("-101: the result row no longer points at a file…", !resAfter.certificate_file, String(resAfter.certificate_file));
+  ok("-101: …but the certificate STATUS, number and date are untouched (Rule 46 owns those, not a file deletion)",
+    resAfter.certificate_status === statusBefore && !!resAfter.certificate_no, JSON.stringify({ st: resAfter.certificate_status, was: statusBefore, no: resAfter.certificate_no }));
+  const aud = await mc.db(process.env.MONGODB_DB || "center_erp_ci").collection("auditlogs").findOne({ field: "certificate_file_removed" }, { sort: { created_at: -1 } });
+  ok("-101: the removal is audited with the old file and the reason", !!aud && /wrong candidate's scan/.test(String(aud.new_value ?? "")) && String(aud.old_value ?? "").includes(certName), JSON.stringify(aud && { o: String(aud.old_value).slice(-40), n: String(aud.new_value).slice(0, 80) }));
+  ok("-101: removing again says there is no file (404), it does not pretend to succeed", (await req("DELETE", `/api/results/${upPassRow._id}/certificate`, { reason: "again" })).status === 404);
+  await mc.close();
+  // restore the fixture: the same CAN id re-uploaded, so the freeze test below is unchanged
+  await certUpload(b4._id, [[`CAN_77${stamp.slice(-4)}1.pdf`, pdf]], 200);
+  const restored = (await req("GET", `/api/batches/${b4._id}/results`)).data.items.find((i) => String(i.result?._id) === String(upPassRow._id)).result;
+  ok("-101: a fresh certificate can be uploaded again after a removal (the slot is genuinely free)", /\/api\/files\//.test(restored.certificate_file ?? ""), restored.certificate_file);
+  upPassRow.certificate_file = restored.certificate_file;
+}
+
 // same CAN id again while file exists + batch still Closing → upsert path allows overwrite
 // pre-completion; the freeze is tested after Completed below.
 
@@ -682,6 +719,14 @@ await req("PUT", `/api/batches/${b4._id}/closure`, { certification_status: "Comp
 await req("PUT", `/api/batches/${b4._id}/closure`, { ready_for_invoice: true }, 200);
 ok("invoice linkage unchanged by per-candidate mode", (await req("GET", `/api/batches/${b4._id}/closure`)).data.invoice?.status === "Ready");
 await req("POST", `/api/batches/${b4._id}/transition`, { target: "Completed" }, 200);
+
+// -101: DEC-6 holds for the new door too — a Completed batch's certificate file is frozen.
+{
+  const frozen = await req("DELETE", `/api/results/${upPassRow._id}/certificate`, { reason: "-101 pin: should be refused" });
+  ok("-101: a Completed batch refuses the certificate-file removal (409, DEC-6 — no admin override)", frozen.status === 409 && /closed|frozen/i.test(String(frozen.data?.error ?? "")), `${frozen.status} ${String(frozen.data?.error ?? "").slice(0, 90)}`);
+  const still = (await req("GET", `/api/batches/${b4._id}/results`)).data.items.find((i) => String(i.result?._id) === String(upPassRow._id)).result;
+  ok("-101: …and the file is still there after the refusal", /\/api\/files\//.test(still.certificate_file ?? ""), still.certificate_file);
+}
 
 // Rule 47: lifecycle splits by result
 const lcPass = (await req("GET", `/api/candidates/${b4Cands[0]._id}`)).data.item;
@@ -1448,6 +1493,24 @@ ok("…with the contact details an approver needs", !!queued && queued.phone ===
     const gone = await fetch(BASE + "/api/files/" + n5, { headers: { cookie } });
     const row5 = await sf.findOne({ name: n5 });
     ok("-97 (lifecycle): deleting the candidate document deletes the stored object too — URL 410, row 'deleted'", rm.status === 200 && gone.status === 410 && row5?.status === "deleted", JSON.stringify({ rm: rm.status, gone: gone.status, s: row5?.status }));
+    // -101: REPLACING a document type used to delete the row and leave its object readable and
+    // unreferenced in the bucket — an orphan nobody could see in any list. Replace now removes it.
+    const rA = await upload("%PDF-1.4 first", "aadhaar-v1.pdf", "application/pdf");
+    const nA = String(rA.data.url).split("/").pop();
+    const attA = await req("POST", `/api/candidates/${cand._id}/documents`, { doc_type: "Aadhaar", file_url: rA.data.url, original_name: "aadhaar-v1.pdf" });
+    const rB = await upload("%PDF-1.4 corrected", "aadhaar-v2.pdf", "application/pdf");
+    const attB = await req("POST", `/api/candidates/${cand._id}/documents`, { doc_type: "Aadhaar", file_url: rB.data.url, original_name: "aadhaar-v2.pdf" });
+    const oldGone = await fetch(BASE + "/api/files/" + nA, { headers: { cookie } });
+    const oldRow = await sf.findOne({ name: nA });
+    const newRead = await fetch(BASE + String(rB.data.url).replace(/^\/erp/, ""), { headers: { cookie } });
+    ok("-101: re-uploading the same doc_type removes the superseded file from storage (410, row 'deleted') and keeps the new one readable",
+      attA.status === 201 && attB.status === 201 && oldGone.status === 410 && oldRow?.status === "deleted" && newRead.status === 200,
+      JSON.stringify({ a: attA.status, b: attB.status, old: oldGone.status, s: oldRow?.status, nw: newRead.status }));
+    const docsNow = (await req("GET", `/api/candidates/${cand._id}/documents`)).data.items ?? [];
+    ok("-101: …and only one Aadhaar row survives the replace", docsNow.filter((d) => d.doc_type === "Aadhaar").length === 1, String(docsNow.filter((d) => d.doc_type === "Aadhaar").length));
+    // clean up the fixture document so the candidate is left as found
+    const bId = attB.data?.item?._id ?? attB.data?._id;
+    if (bId) await req("DELETE", `/api/candidates/${cand._id}/documents/${bId}`);
   } else ok("-97 (lifecycle): candidate available for the attach/delete pin", false, "no candidate in CI");
 
   // "where did it go": Admin list, filterable, console link shape (gcs only), non-admin 403

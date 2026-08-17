@@ -98,12 +98,17 @@ export const DELETE = apiHandler(async (_req: NextRequest, ctx: { params: Promis
   const isAdmin = user.role === "Admin";
   if (!isAdmin && String(rec.uploaded_by ?? "") !== String(user.id)) throw new HttpError(403, "Only the person who uploaded this file (or an Admin) can discard it.");
   const url = new RegExp(`/api/files/${name}$`);
+  // -101: this list was missing three fields a record can point at — `Closure.result_file`, and
+  // `CandidateResult.evidence_file` including the per-attempt copies. A file still shown on a
+  // closure result sheet or an assessment attempt could therefore be discarded through this door,
+  // leaving the record pointing at a 410. Everything a record references leaves through that
+  // record, never here.
   const referenced =
     (await DailyLog.exists({ $or: [{ photos: url }, { videos: url }, { govt_screenshot: url }] })) ||
     (await CandidateDocument.exists({ file_url: url })) ||
     (await TrainerDocument.exists({ file_url: url })) ||
-    (await CandidateResult.exists({ certificate_file: url })) ||
-    (await Closure.exists({ certificate_file: url }));
+    (await CandidateResult.exists({ $or: [{ certificate_file: url }, { evidence_file: url }, { "attempts.evidence_file": url }] })) ||
+    (await Closure.exists({ $or: [{ certificate_file: url }, { result_file: url }] }));
   if (referenced) throw new HttpError(409, "This file is attached to a saved record — remove it through that record, not here.");
   const r = await removeStoredFile(name, user.id);
   if (!r.removed) throw new HttpError(502, `Storage refused to delete the object: ${r.reason ?? "unknown"}`);

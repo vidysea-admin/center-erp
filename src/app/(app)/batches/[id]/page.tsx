@@ -581,6 +581,25 @@ function Roster({ batchId, batch, setError, onChanged }: any) {
     setAttBusy(false);
   }
 
+  // -101 (Umesh 17/08, "CRUD ke saare operations chalne chahiye"): a certificate could be
+  // uploaded and replaced but never REMOVED — a scan attached to the wrong candidate was
+  // permanent. Removing the FILE only; the status, number and date are what the awarding body
+  // said and are changed on the results screen, not here. Frozen batches refuse (DEC-6).
+  const [certBusy, setCertBusy] = useState("");
+  async function removeCertificate(res: any, candName: string) {
+    const reason = window.prompt(`Remove the certificate FILE for ${candName}?
+
+The certificate status (${res.certificate_status ?? "—"}), number and date stay as they are — only the attached file is deleted from storage. Say why:`);
+    if (!reason?.trim()) return;
+    setCertBusy(String(res._id));
+    try {
+      await api(`/api/results/${res._id}/certificate`, { method: "DELETE", json: { reason: reason.trim() } });
+      await load();
+      onChanged?.();
+    } catch (e: any) { setError(e.message); }
+    setCertBusy("");
+  }
+
   const [loaded, setLoaded] = useState(false);
   // QA-043 (checker): a completed batch's roster showed enrollment but never the outcome —
   // result + certificate ride along from the per-candidate rows.
@@ -697,8 +716,19 @@ function Roster({ batchId, batch, setError, onChanged }: any) {
               render: (r: any) => {
                 const res = resultsByCand.get(String(r.candidate?._id));
                 if (!res) return <span className="text-xs text-gray-400">—</span>;
+                const frozen = ["Completed", "Cancelled"].includes(batch.status);
                 return res.certificate_file
-                  ? <a className="text-xs font-medium text-blue-700 hover:underline" href={res.certificate_file} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>{res.certificate_status ?? "View"} ↗</a>
+                  ? <span className="flex items-center gap-2">
+                      <a className="text-xs font-medium text-blue-700 hover:underline" href={res.certificate_file} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>{res.certificate_status ?? "View"} ↗</a>
+                      {!frozen && (
+                        <button type="button" disabled={certBusy === String(res._id)}
+                          title="Delete the attached certificate file (status, number and date stay)"
+                          className="text-[11px] text-red-600 hover:underline disabled:opacity-50"
+                          onClick={(e) => { e.stopPropagation(); removeCertificate(res, r.candidate?.name ?? "this candidate"); }}>
+                          {certBusy === String(res._id) ? "…" : "Delete file"}
+                        </button>
+                      )}
+                    </span>
                   : <span className="text-xs text-gray-500">{res.certificate_status ?? "—"}</span>;
               },
             },
