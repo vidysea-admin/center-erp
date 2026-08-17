@@ -346,6 +346,73 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   await req("POST", `/api/logs/${log._id}/sessions`, { present_member_ids: [mIds[1]], biometric_member_ids: [mIds[1]] }, 201);
 }
 
+// ---- -102 (Manish 17/08): a roster row that should never have existed can be REMOVED ----
+// Rule 25's drop is the honest record of a student who left. It is the wrong answer for a wrongly
+// enrolled row, and until -102 a BatchMember could not be erased at all — which is why Manish's own
+// empty Gurugram batch was carrying two of the maker's test candidates. The door is Admin-only,
+// needs a reason, and refuses the moment the row has a footprint.
+{
+  const rmCand = (await req("POST", "/api/candidates", { name: `Remove Me ${stamp}`, phone: `86000${stamp.slice(0, 5)}`, location: loc._id, program: prog._id }, 201)).data.item;
+  const rmMem = (await req("POST", `/api/batches/${batch._id}/members`, { candidate: rmCand._id }, 201)).data.item;
+  ok("-102: removing a roster row without a reason is refused (400) — it is audited, not silent", (await req("DELETE", `/api/members/${rmMem._id}`)).status === 400);
+  // Footprint guard: mark them present on the fixture day, and the door must refuse.
+  const withRm = [...(await req("GET", `/api/batches/${batch._id}/logs`)).data.items.find((l) => l._id === log._id).present_member_ids.map(String), String(rmMem._id)];
+  await req("PATCH", `/api/logs/${log._id}`, { present_member_ids: withRm }, 200);
+  const blocked = await req("DELETE", `/api/members/${rmMem._id}`, { reason: "-102 pin: should be refused, they have attendance" });
+  ok("-102: a roster row with attendance on record refuses removal (409) and says to drop instead",
+    blocked.status === 409 && /attendance on 1 day/i.test(String(blocked.data?.error ?? "")) && /Rule 25/.test(String(blocked.data?.error ?? "")),
+    `${blocked.status} ${String(blocked.data?.error ?? "").slice(0, 120)}`);
+  // Take the attendance back off, and it becomes removable.
+  await req("PATCH", `/api/logs/${log._id}`, { present_member_ids: withRm.filter((x) => x !== String(rmMem._id)) }, 200);
+  const enrCookie = await loginAs("enroll@vidysea.com", "CiOnly@123");
+  const enrRm = await fetch(BASE + `/api/members/${rmMem._id}`, { method: "DELETE", headers: { "Content-Type": "application/json", cookie: enrCookie }, body: JSON.stringify({ reason: "not my call" }) });
+  const anonRm = await fetch(BASE + `/api/members/${rmMem._id}`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason: "nope" }) });
+  ok("-102: only an Admin may remove a roster row — Enrollment 403, anonymous 401", enrRm.status === 403 && anonRm.status === 401, `${enrRm.status} ${anonRm.status}`);
+  const rosterBeforeRm = (await req("GET", `/api/batches/${batch._id}/members`)).data.items.length;
+  const dayRosterBefore = (await req("GET", `/api/batches/${batch._id}/logs`)).data.items.find((l) => l._id === log._id).roster_count;
+  const gone = await req("DELETE", `/api/members/${rmMem._id}`, { reason: "-102 pin: enrolled by mistake" });
+  const rosterAfterRm = (await req("GET", `/api/batches/${batch._id}/members`)).data.items;
+  ok("-102: a footprint-free roster row is removed (200) and is gone from the roster",
+    gone.status === 200 && rosterAfterRm.length === rosterBeforeRm - 1 && !rosterAfterRm.some((m) => String(m._id) === String(rmMem._id)),
+    `${gone.status} ${rosterBeforeRm}→${rosterAfterRm.length}`);
+  const rmAud = ((await req("GET", `/api/audit/BatchMember/${rmMem._id}`)).data.items ?? []).find((a) => a.field === "removed");
+  ok("-102: the removal is audited with who it was, which batch, and the reason",
+    !!rmAud && /Remove Me/.test(String(rmAud.old_value ?? "")) && /enrolled by mistake/.test(String(rmAud.new_value ?? "")),
+    JSON.stringify(rmAud && { o: rmAud.old_value, n: rmAud.new_value }).slice(0, 180));
+  ok("-102: removing it again is an honest 404, not a fake success", (await req("DELETE", `/api/members/${rmMem._id}`, { reason: "again" })).status === 404);
+  // Rule 21 stamped them "Assigned" on enrolment; with no roster row left they are Unassigned
+  // again, or the planner's available pool (which counts exactly that) loses them for good.
+  const rmCandAfter = (await req("GET", `/api/candidates/${rmCand._id}`)).data.item;
+  ok("-102: with their last roster row gone the candidate is Unassigned again, and it is audited",
+    rmCandAfter?.lifecycle_status === "Unassigned"
+    && ((await req("GET", `/api/audit/Candidate/${rmCand._id}`)).data.items ?? []).some((a) => a.field === "lifecycle_status" && a.new_value === "Unassigned"),
+    String(rmCandAfter?.lifecycle_status));
+  // …and with no batch history left, the candidate record itself is deletable — the pair that
+  // actually clears a test row off a real batch (candidates/[id] refuses while any member row exists).
+  // The day's frozen roster_count (Rule 28) is deliberately NOT rewritten by a removal.
+  const dayAfter = (await req("GET", `/api/batches/${batch._id}/logs`)).data.items.find((l) => l._id === log._id);
+  ok("-102: the day's frozen roster_count is untouched by the removal (Rule 28)", dayAfter.roster_count === dayRosterBefore, `${dayRosterBefore}→${dayAfter.roster_count}`);
+  await req("DELETE", `/api/candidates/${rmCand._id}`, undefined, 200);
+}
+
+// ---- -102: Home answers "where do I log today's attendance?" ----
+// Manish 17/08 [07:09]: four clicks to reach Daily Execution. Rule 33's missing-log queue cannot
+// serve this — it reports the PREVIOUS operating day, so a batch that needs logging TODAY is absent.
+{
+  const home = (await req("GET", "/api/home")).data;
+  const mine = (home.queues?.today_logging ?? []).find((b) => String(b._id) === String(batch._id));
+  ok("-102: Home carries today's logging list, with this batch on it and its roster size",
+    !!mine && mine.code === batch.code && mine.roster_count >= 1, JSON.stringify(mine));
+  ok("-102: …and it knows today's log is already in (the fixture logged today)", mine?.logged_today === true, String(mine?.logged_today));
+  const trCookie = await loginAs("trainer.jpr03@vidysea.com", "CiOnly@123");
+  const trHome = trCookie ? await fetch(BASE + "/api/home", { headers: { cookie: trCookie } }).then((r) => r.json()).catch(() => null) : null;
+  if (trHome) {
+    ok("-102: a Trainer gets the today-logging list too (it is their own batch — QA-096 holds)",
+      Array.isArray(trHome.queues?.today_logging), JSON.stringify(Object.keys(trHome.queues ?? {})));
+    ok("-102: …and still none of the org-wide queues QA-096 trimmed", trHome.queues?.invoices_pending === undefined && trHome.queues?.sheet_changes === undefined);
+  }
+}
+
 // ---- closure ----
 // 2026-08-12 audit F-010 (S0): Rules 43/46 lived only inside the per-candidate branch, and that
 // branch is skipped exactly when nobody has been assessed. A batch with zero results could be
@@ -367,6 +434,13 @@ await req("POST", `/api/batches/${batch._id}/transition`, { target: "Cancelled" 
 await req("POST", `/api/batches/${batch._id}/transition`, { target: "Closing" }, 409);
 await req("PUT", `/api/batches/${batch._id}/closure`, { assessment_status: "Completed", assessment_date: today, appeared: 3, passed: 2 }, 200);
 await req("POST", `/api/batches/${batch._id}/transition`, { target: "Closing" }, 200);
+// -102 (Manish 17/08 [13:04] "batch ka status ho gaya result awaited"): the UI now WORDS this
+// stage as "Result Awaited", but the change is a label only — the stored enum, and therefore every
+// rule, filter, deep link and audit row, still says "Closing". Pinned so a future "tidy-up" that
+// renames the enum has to fail here rather than silently break saved links and history.
+ok("-102: 'Result Awaited' is a label — the API still stores and returns the enum 'Closing'",
+  (await req("GET", `/api/batches/${batch._id}`)).data.item?.status === "Closing",
+  String((await req("GET", `/api/batches/${batch._id}`)).data.item?.status));
 // Rule 35: ready_for_invoice before certification → 409
 await req("PUT", `/api/batches/${batch._id}/closure`, { ready_for_invoice: true }, 409);
 await req("PUT", `/api/batches/${batch._id}/closure`, { certification_status: "Completed", certification_date: today, certificates_issued: 2 }, 200);

@@ -7,7 +7,7 @@ import { api, fmtDate, toInputDate } from "@/lib/client";
 import { trainerSelectGroups } from "@/lib/trainer-select";
 import { slotGuidelineErrors } from "@/lib/slot-rules";
 import { BASE_PATH } from "@/lib/base-path";
-import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthChip, SourceCell, Tabs, inputCls, useCopied } from "@/components/ui";
+import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthChip, SourceCell, Tabs, inputCls, statusLabel, useCopied } from "@/components/ui";
 import { useLocationCtx } from "@/components/shell";
 
 export default function BatchesPage() {
@@ -240,7 +240,9 @@ function BatchesInner() {
           )}
           <FilterPills active={fStatus} onChange={(v) => setFStatus(v === fStatus ? "" : v)}
             options={[{ value: "", label: "All", count: trainerScoped.length },
-              ...BATCH_STATUSES.map((s) => ({ value: s, label: s, count: statusCount(s) }))]} />
+              // -102: filter VALUE stays the stored enum; only the pill's wording is the
+              // client's ("Closing" → "Result Awaited"), so deep links keep working.
+              ...BATCH_STATUSES.map((s) => ({ value: s, label: statusLabel(s), count: statusCount(s) }))]} />
           {/* QA-027 (-71): the spec's blocker states, filterable — computed, never an enum. */}
           {(blockCount("trainer") + blockCount("candidates") + blockCount("infrastructure") + blockCount("other") + noAttendanceCount) > 0 && (
             <FilterPills active={fBlock} onChange={(v) => setFBlock(v === fBlock ? "" : v)}
@@ -267,7 +269,10 @@ function BatchesInner() {
               {
                 // QA-048: after Completed the money chain shows WHERE the batch stands
                 // (derived from Closure+Invoice — the same facts Rule 52 gates closing on).
-                key: "status", label: "Status", sortable: true, sortValue: (r: any) => r.status, mobile: false,
+                // -102 (Manish 17/08 [15:23]: "health-wealth se accha hai ki aap status dikha de,
+                // batch status to hai hi idhar, iske bagal me daal dijiye") — the status is the
+                // column he reads the list by, so it is no longer hidden on a phone.
+                key: "status", label: "Status", sortable: true, sortValue: (r: any) => r.status,
                 filterText: (r: any) => r.settlement_stage ? `${r.status} — ${r.settlement_stage}` : r.status,
                 render: (r: any) => (
                   <span className="flex flex-col gap-0.5">
@@ -278,7 +283,16 @@ function BatchesInner() {
               },
               // A Planning batch's gaps show inline — "backward planning chal rahi hai,
               // requirement incomplete" is visible from the LIST, not just the detail page.
-              { key: "health", label: "Health", render: (r: any) => <HealthChip health={r.health} inline={r.status === "Planning"} /> },
+              // -102 (Manish 17/08 [04:10]: "ye health-wealth hum kyu dikha rahe hai"): on a
+              // RUNNING or finished batch the chip was pure noise — 4 of 5 live batches read Red
+              // only because the daily logs Manish was about to enter were not in yet, and the
+              // batch's real state is the Status column beside it. The chip earns its place while
+              // a batch is still being prepared, where its gap list IS the backward-planning
+              // signal; after that the row says nothing rather than crying red.
+              { key: "health", label: "Readiness", filterText: (r: any) => ["Planning", "Ready"].includes(r.status) ? String(r.health?.score ?? "") : "",
+                render: (r: any) => ["Planning", "Ready"].includes(r.status)
+                  ? <HealthChip health={r.health} inline={r.status === "Planning"} />
+                  : <span className="text-xs text-gray-300" title="Readiness is a preparation check — a running or finished batch is described by its Status.">—</span> },
               { key: "roster", label: "Enrolled / Roster / Target", render: (r: any) => `${r.enrolled_count} / ${r.roster_count} / ${r.target_size}` },
               // -86 (Umesh 15/08): "kis batch ki kitne din ki attendance available hai" — our
               // day-wise logs and the portal import, per row; "none yet" says so in grey.

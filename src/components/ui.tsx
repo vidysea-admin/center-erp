@@ -131,11 +131,25 @@ export function HealthBanner({ health, onDismiss }: { health?: { score: string; 
   );
 }
 
+// -102, Manish 17/08 ([13:04] "batch ka status ho gaya result awaited" · [08:53] "main isko close
+// na karke isko main complete kar pau, kyunki closure wala Tarun ji bol rahe the ki wo sab hum baad
+// me dekhenge"): the stage between a finished batch and a completed one is stored as `Closing`,
+// which reads as the money/closure work that was explicitly deferred. It is not — the gate is
+// assessment (to enter) and certification (to leave), and Completed is NOT Closed. So the word
+// changes, the enum does not: `BATCH_STATUS`, every rule, transition, audit row and test keep
+// saying "Closing", and only the human-facing label reads the client's own term.
+export const STATUS_LABEL: Record<string, string> = { Closing: "Result Awaited" };
+export function statusLabel(value?: string | null): string {
+  return value ? (STATUS_LABEL[value] ?? value) : "";
+}
+
 export function Chip({ value }: { value?: string | null }) {
   if (!value) return <span className="text-gray-400">—</span>;
+  const shown = statusLabel(value);
   return (
-    <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${CHIP_COLORS[value] ?? "bg-gray-100 text-gray-700"}`}>
-      {value}
+    <span title={shown === value ? undefined : `Stored as “${value}” — assessment is done, the result is awaited; certification takes it to Completed.`}
+      className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${CHIP_COLORS[value] ?? "bg-gray-100 text-gray-700"}`}>
+      {shown}
     </span>
   );
 }

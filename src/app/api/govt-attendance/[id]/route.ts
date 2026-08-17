@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, isScoped, HttpError } from "@/lib/authz";
 import { requirePerm, requireView } from "@/lib/permissions";
-import { GovtAttendanceImport, GovtAttendanceRow } from "@/models";
+import { Batch, GovtAttendanceImport, GovtAttendanceRow } from "@/models";
+import { assessmentHoursBar, memberAttendedHours } from "@/lib/rules";
+import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
 
 async function loadInScope(id: string, user: Awaited<ReturnType<typeof requireUser>>) {
@@ -35,7 +37,50 @@ export const GET = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   const rows = await GovtAttendanceRow.find(q)
     .populate("candidate", "name phone").populate("trainer", "name").populate("batch", "code")
     .sort({ sl_no: 1 }).lean<any[]>();
-  return NextResponse.json({ item: imp, rows });
+
+  // -102, Manish 17/08 ([10:35]–[11:51] "wo ek status dala tha na… qualified, qualified — wo gaya
+  // kaha… isme status wala column miss ho gaya… bas ek status chahiye ki ye qualified ho gaye.
+  // Qualify ka rule yahi hai ki 60 plus hours"): right after an import, this grid is where he
+  // stands, and it showed days and hours but never the verdict those hours produce. The verdict
+  // itself already existed on the batch Attendance tab and is NOT re-derived here — the bar comes
+  // from assessmentHoursBar and the answer from memberAttendedHours, the same two functions, so
+  // the two screens can never drift apart (the QA-045 lesson).
+  const defaults = await getDefaults();
+  const batchIds = [...new Set([imp.batch?._id, ...rows.map((r) => r.batch?._id ?? r.batch)].filter(Boolean).map(String))];
+  const batches = batchIds.length
+    ? await Batch.find({ _id: { $in: batchIds } }).populate("program", "hours duration_days scheme").select("program").lean<any[]>()
+    : [];
+  const bars = new Map<string, { required_hours: number; min_pct: number; source: string }>();
+  for (const b of batches) {
+    const bar = await assessmentHoursBar(b.program?.scheme, b.program, defaults.min_attendance_pct ?? 50);
+    bars.set(String(b._id), { required_hours: bar.requiredHours, min_pct: bar.minPct, source: bar.source });
+  }
+  const withVerdict = rows.map((r) => {
+    const bid = String(r.batch?._id ?? r.batch ?? imp.batch?._id ?? "");
+    const bar = bars.get(bid);
+    if (!bar) return { ...r, govt_hours: r.total_hours_minutes != null ? Math.round(r.total_hours_minutes / 60) : null, required_hours: null, qualified: null };
+    const h = memberAttendedHours({
+      internalDays: r.internal_days_present ?? 0,
+      hoursPerDay: null, // QA-085: never assume a session length here
+      govtMinutes: r.total_hours_minutes,
+      requiredHours: bar.required_hours,
+    });
+    // No hour figure on the portal row is UNKNOWN, not "not eligible" — the shared verdict
+    // returns false for both, and saying "not eligible" about a blank would be a lie.
+    return { ...r, govt_hours: h.govt_hours, required_hours: bar.required_hours, qualified: h.govt_hours == null ? null : h.qualified };
+  });
+  const impBar = bars.get(String(imp.batch?._id ?? "")) ?? (bars.size === 1 ? [...bars.values()][0] : null);
+
+  return NextResponse.json({
+    item: imp,
+    rows: withVerdict,
+    required_hours: impBar?.required_hours ?? null,
+    min_attendance_pct: impBar?.min_pct ?? null,
+    min_attendance_source: impBar?.source ?? null,
+    qualified_count: withVerdict.filter((r) => r.qualified === true).length,
+    not_eligible_count: withVerdict.filter((r) => r.qualified === false).length,
+    no_hours_count: withVerdict.filter((r) => r.qualified == null).length,
+  });
 });
 
 // An import is a point-in-time record of what the portal said, so it is deletable (a wrong file,

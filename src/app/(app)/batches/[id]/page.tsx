@@ -301,7 +301,8 @@ function Overview({ data, role, onChanged, setError }: any) {
               </span>
             )}
             {b.status === "Ready" && <Btn kind="ghost" onClick={() => transition("Planning")}>Back to Planning</Btn>}
-            {b.status === "Active" && <Btn onClick={() => transition("Closing")}>Move to Closing</Btn>}
+            {/* -102: the client's words for these two steps. Targets stay the stored enum. */}
+            {b.status === "Active" && <Btn onClick={() => transition("Closing")}>Assessment done → Result Awaited</Btn>}
             {b.status === "Closing" && <Btn onClick={() => transition("Completed")}>Complete Batch</Btn>}
             {/* Rule 52: Completed = training over; Closed = money over (cert + invoice PAID + no dues). */}
             {b.status === "Completed" && (
@@ -915,19 +916,37 @@ function AttendanceTab({ batchId, batch, role, setError }: any) {
   const [gridResult, setGridResult] = useState<any[] | null>(null);
   const operating: number[] = batch?.program?.operating_days ?? [1, 2, 3, 4, 5, 6];
   const loggedDays = new Set<string>((data?.days ?? []).map((d: string) => String(d).slice(0, 10)));
-  const gridDays: string[] = (() => {
-    if (!grid?.from || !grid?.to || grid.from > grid.to) return [];
-    const out: string[] = [];
-    const cur = new Date(grid.from + "T00:00:00Z");
-    const end = new Date(grid.to + "T00:00:00Z");
-    while (cur <= end && out.length < 31) {
+  // -102, Manish 17/08 ([00:55] "mark attendance bulk wala… ye kaise kaam kar raha hai nahi
+  // pata, no open days in this range" on 17→17): the range was empty because the trainer had
+  // ALREADY logged 17/08 — correct behaviour, but the tool opened and then said nothing useful.
+  // The walk now records WHY each day was left out, so the panel can name the reason instead of
+  // reporting an empty result.
+  const walkRange = (from: string, to: string) => {
+    const open: string[] = [];
+    const skipped: { day: string; reason: string }[] = [];
+    if (!from || !to || from > to) return { open, skipped };
+    const cur = new Date(from + "T00:00:00Z");
+    const end = new Date(to + "T00:00:00Z");
+    let guard = 0;
+    while (cur <= end && open.length < 31 && guard++ < 400) {
       const k = cur.toISOString().slice(0, 10);
       const dow = cur.getUTCDay();
-      if (operating.includes(dow) && !loggedDays.has(k) && k <= todayKey) out.push(k);
+      if (k > todayKey) skipped.push({ day: k, reason: "in the future" });
+      else if (!operating.includes(dow)) skipped.push({ day: k, reason: "not an operating day for this programme" });
+      else if (loggedDays.has(k)) skipped.push({ day: k, reason: "already logged" });
+      else open.push(k);
       cur.setUTCDate(cur.getUTCDate() + 1);
     }
-    return out;
-  })();
+    return { open, skipped };
+  };
+  const gridWalk = walkRange(grid?.from ?? "", grid?.to ?? "");
+  const gridDays: string[] = gridWalk.open;
+  // Every operating day this batch has actually run that still has no log — what the bulk tool
+  // exists for. Empty means there is nothing to bulk-mark, and the button says so up front
+  // rather than opening onto a dead range.
+  const openBacklog: string[] = batch?.actual_start
+    ? walkRange(String(batch.actual_start).slice(0, 10), todayKey).open
+    : [];
   const activeMembers = (data?.members ?? []).filter((m: any) => !m.left_on);
   const toggleAbsent = (day: string, memberId: string) => {
     if (!grid) return;
@@ -995,12 +1014,19 @@ function AttendanceTab({ batchId, batch, role, setError }: any) {
         })()}
         <span className="rounded-full bg-green-100 px-2 py-0.5 font-medium text-green-700">{data.qualified_count} qualified for assessments</span>
         <span className="ml-auto flex flex-wrap items-center gap-2">
-          {canMark && batchActive && !grid && (
+          {/* -102: the button knows whether there is anything to mark, and opens ON the backlog
+              (earliest unlogged operating day → today) rather than on a range that may be empty. */}
+          {canMark && batchActive && !grid && (openBacklog.length > 0 ? (
             <button className="rounded-lg border border-blue-600 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50"
-              onClick={() => { setGridResult(null); setGrid({ from: todayKey, to: todayKey, trainer_present: true, absent: {} }); }}>
-              ✎ Mark attendance (bulk)
+              title={`${openBacklog.length} operating day${openBacklog.length === 1 ? "" : "s"} still unlogged, from ${fmtDate(openBacklog[0])}`}
+              onClick={() => { setGridResult(null); setGrid({ from: openBacklog[0], to: todayKey, trainer_present: true, absent: {} }); }}>
+              ✎ Mark attendance (bulk) — {openBacklog.length} day{openBacklog.length === 1 ? "" : "s"} open
             </button>
-          )}
+          ) : (
+            <span className="text-gray-400" title="The bulk tool only creates missing days; changing a day that is already logged is an audited edit, which happens in Daily Execution.">
+              ✓ Every operating day up to today is logged — corrections go through Daily Execution.
+            </span>
+          ))}
           {canMark && !batchActive && (
             <span className="text-gray-400" title="Daily logs are only taken on a running batch (Rule 26)">Start the batch (Overview → Start Batch) to mark day-wise attendance.</span>
           )}
@@ -1019,13 +1045,31 @@ function AttendanceTab({ batchId, batch, role, setError }: any) {
             </label>
             <label className="flex items-center gap-1 pb-1"><input type="checkbox" checked={grid.trainer_present} onChange={(e) => setGrid({ ...grid, trainer_present: e.target.checked })} /> Trainer present</label>
             <span className="pb-1 text-gray-500">{gridDays.length} day{gridDays.length === 1 ? "" : "s"} to mark · everyone starts Present — untick the absentees{role === "Trainer" ? " · as a trainer you may mark only today/yesterday" : ""}</span>
+            {/* -102: the reasons sit WITH the range inputs, so a range that yields nothing
+                explains itself before the user goes looking for the grid. */}
+            {gridWalk.skipped.length > 0 && (
+              <span className="basis-full pb-0.5 text-[11px] text-gray-500">
+                Left out of this range: {["already logged", "not an operating day for this programme", "in the future"]
+                  .map((reason) => {
+                    const days = gridWalk.skipped.filter((s) => s.reason === reason).map((s) => s.day);
+                    if (!days.length) return null;
+                    return `${days.length} ${reason} (${days.slice(0, 4).map((d) => d.slice(8, 10) + "/" + d.slice(5, 7)).join(", ")}${days.length > 4 ? `, +${days.length - 4}` : ""})`;
+                  }).filter(Boolean).join(" · ")}
+              </span>
+            )}
             <span className="ml-auto flex gap-2 pb-0.5">
               <Btn small disabled={gridBusy || !gridDays.length} onClick={saveGrid}>{gridBusy ? "Saving…" : `Save ${gridDays.length} day${gridDays.length === 1 ? "" : "s"}`}</Btn>
               <Btn small kind="ghost" onClick={() => { setGrid(null); setGridResult(null); }}>Close</Btn>
             </span>
           </div>
           {gridDays.length === 0 && (
-            <p className="text-xs text-amber-700">No open days in this range — already-logged days are left out (edit those in Daily Execution), as are non-operating days and future dates.</p>
+            <p className="text-xs text-amber-700">
+              Nothing to create in this range — this tool only <b>adds</b> missing days.{" "}
+              {gridWalk.skipped.some((s) => s.reason === "already logged")
+                ? <>Every operating day here is already logged. To change one, open it in <b>Daily Execution</b> above — pick the date and its ticks come up as recorded (that is an audited edit, Rule 27).</>
+                : <>The dates picked hold no operating day for this programme.</>}
+              {openBacklog.length > 0 && <> The earliest day still unlogged is <b>{fmtDate(openBacklog[0])}</b>.</>}
+            </p>
           )}
           {gridDays.length > 0 && (
             <div className="overflow-x-auto">
@@ -1140,6 +1184,38 @@ function DailyExecution({ batchId, batch, role, setError }: any) {
   ]).catch((e: any) => setError(e.message)).finally(() => setLoaded(true));
   useEffect(() => { load(); setQueued(getQueue(batchId).length); }, [batchId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // -102, Manish 17/08 ([02:13] "agar wo 17 ke date me hi 2:12 koi photo dalna chahta hai… un
+  // logo ko phir se wo check-in yaha karega?" → [02:23] "pehle se hi pre-check aane chahiye"):
+  // the panel always opened blank, so adding a second photo at 2pm meant re-ticking all 45
+  // students — and the day they had already marked lived only behind Edit in History.
+  // Now the panel READS the day it is pointed at: an already-logged date arrives with its
+  // present/biometric ticks, topics and trainer flag in place, and Save updates that day
+  // instead of trying to create a second one. Photos and videos stay empty on purpose — they
+  // APPEND to the day's existing media, they are not re-picked.
+  const dayLog = logs.find((l: any) => String(l.log_date).slice(0, 10) === form.log_date) ?? null;
+  const [seeded, setSeeded] = useState<string>(""); // "<logId>@<date>" already seeded — don't clobber edits
+  useEffect(() => {
+    const stamp = dayLog ? `${dayLog._id}@${form.log_date}` : `none@${form.log_date}`;
+    if (seeded === stamp) return;
+    setSeeded(stamp);
+    if (dayLog) {
+      setForm((f: any) => ({
+        ...f,
+        planned_topic: dayLog.planned_topic ?? "", actual_topic: dayLog.actual_topic ?? "",
+        note: dayLog.note ?? "", trainer_present: dayLog.trainer_present !== false,
+        present: new Set((dayLog.present_member_ids ?? []).map(String)),
+        biometric: new Set((dayLog.biometric_member_ids ?? []).map(String)),
+        photos: [], videos: [],
+      }));
+    } else if (seeded) {
+      // moved off an already-logged day onto a fresh one — start clean rather than carrying
+      // the previous day's ticks over as if they were marked.
+      setForm((f: any) => ({
+        log_date: f.log_date, present: new Set<string>(), biometric: new Set<string>(), photos: [], videos: [],
+      }));
+    }
+  }, [dayLog?._id, form.log_date, logs]); // eslint-disable-line react-hooks/exhaustive-deps
+
   function togglePresent(id: string) {
     const s = new Set<string>(form.present);
     const b = new Set<string>(form.biometric);
@@ -1202,20 +1278,41 @@ function DailyExecution({ batchId, batch, role, setError }: any) {
   async function save() {
     setBusy(true);
     try {
-      await api(`/api/batches/${batchId}/logs`, {
-        method: "POST",
-        json: {
-          log_date: form.log_date,
-          planned_topic: form.planned_topic, actual_topic: form.actual_topic,
-          present_member_ids: [...form.present],
-          biometric_member_ids: [...form.biometric], // Rule 51: subset of present, UI enforces too
-          trainer_present: form.trainer_present !== false, // default true; unticking blocks student marks (portal rule)
-          govt_present: form.govt_present === "" || form.govt_present == null ? null : +form.govt_present,
-          govt_screenshot: form.govt_screenshot,
-          photos: form.photos, videos: form.videos, note: form.note,
-        },
-      });
-      setForm({ log_date: toInputDate(new Date()), present: new Set(), biometric: new Set(), photos: [], videos: [] });
+      if (dayLog) {
+        // -102: the day already exists — this is an UPDATE, through the same Rule 27 door
+        // Edit has always used, so no new server contract appears. Media appends to what the
+        // day already holds; the ticks and topics are the panel's current state.
+        await api(`/api/logs/${dayLog._id}`, {
+          method: "PATCH",
+          json: {
+            planned_topic: form.planned_topic, actual_topic: form.actual_topic,
+            present_member_ids: [...form.present],
+            biometric_member_ids: [...form.biometric],
+            trainer_present: form.trainer_present !== false,
+            note: form.note,
+            photos: [...(dayLog.photos ?? []), ...form.photos],
+            videos: [...(dayLog.videos ?? []), ...form.videos],
+            ...(form.govt_screenshot ? { govt_screenshot: form.govt_screenshot } : {}),
+            ...(form.govt_present === "" || form.govt_present == null ? {} : { govt_present: +form.govt_present }),
+          },
+        });
+        setSeeded(""); // force a re-seed from the freshly saved day
+      } else {
+        await api(`/api/batches/${batchId}/logs`, {
+          method: "POST",
+          json: {
+            log_date: form.log_date,
+            planned_topic: form.planned_topic, actual_topic: form.actual_topic,
+            present_member_ids: [...form.present],
+            biometric_member_ids: [...form.biometric], // Rule 51: subset of present, UI enforces too
+            trainer_present: form.trainer_present !== false, // default true; unticking blocks student marks (portal rule)
+            govt_present: form.govt_present === "" || form.govt_present == null ? null : +form.govt_present,
+            govt_screenshot: form.govt_screenshot,
+            photos: form.photos, videos: form.videos, note: form.note,
+          },
+        });
+        setForm({ log_date: toInputDate(new Date()), present: new Set(), biometric: new Set(), photos: [], videos: [] });
+      }
       load();
     } catch (e: any) { setError(e.message); }
     setBusy(false);
@@ -1271,8 +1368,19 @@ function DailyExecution({ batchId, batch, role, setError }: any) {
           </div>
         </div>
       )}
-      {canMark && <Section title="Today's entry">
+      {canMark && <Section title={dayLog ? `${fmtDate(dayLog.log_date)} — already logged, update it` : "Today's entry"}>
         <div className="space-y-4">
+          {/* -102: the panel says which state it is in, so nobody wonders whether saving will
+              create a second entry for the same day. */}
+          {dayLog && (
+            <p className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-800">
+              This day is already logged — {dayLog.internal_present} of {dayLog.roster_count} present, marked{" "}
+              {(dayLog.sessions ?? []).length || 1}× so far. The ticks below are what is on record; change them, or just add
+              photos/videos and Save. New media is <b>added</b> to the day&apos;s {(dayLog.photos ?? []).length} photo
+              {(dayLog.photos ?? []).length === 1 ? "" : "s"} and {(dayLog.videos ?? []).length} video
+              {(dayLog.videos ?? []).length === 1 ? "" : "s"} — nothing is replaced. Every change is audited (Rule 27).
+            </p>
+          )}
           <div className="grid grid-cols-2 gap-3">
             {/* Rule 53 (CEO 14/08): never a future date; a Trainer gets today or yesterday
                 only. The server enforces the same — this just stops the doomed attempt. */}
@@ -1348,7 +1456,7 @@ function DailyExecution({ batchId, batch, role, setError }: any) {
           </div>
           <Field label="Note"><input className={inputCls} value={form.note ?? ""} onChange={(e) => setForm({ ...form, note: e.target.value })} /></Field>
           <div className="flex items-center gap-3">
-            <Btn onClick={save} disabled={busy}>{busy ? "Saving…" : "Save Daily Log"}</Btn>
+            <Btn onClick={save} disabled={busy}>{busy ? "Saving…" : dayLog ? `Update ${fmtDate(dayLog.log_date)} log` : "Save Daily Log"}</Btn>
             {uploadNote && <span className="text-xs text-gray-500" title="What the server stored (compressed at the storage door)">{uploadNote}</span>}
             <VideoRecorder open={recOpen} onClose={() => setRecOpen(false)} onRecorded={(f) => { setRecOpen(false); uploadFile(f, "videos"); }} />
             {queued > 0 && (
@@ -1694,6 +1802,16 @@ function ClosureTab({ batchId, batch, role, setError, onChanged }: any) {
           <Btn small onClick={derive}>Derive figures from rows</Btn>
         </div>
       )}
+      {/* -102, Manish 17/08 ([08:53] "main isko close na karke isko main complete kar pau, kyunki
+          closure wala Tarun ji bol rahe the ki wo sab hum baad me dekhenge"): this tab is called
+          Closure and holds two unrelated jobs, so it reads as the deferred money work — and the two
+          panels that actually carry a batch to Completed look optional. Say which is which. */}
+      <div className="rounded-lg border border-blue-200 bg-blue-50/60 px-3 py-2 text-xs text-blue-900">
+        <b>Two separate jobs on this tab.</b> <b>Assessment</b> then <b>Certification</b> are what carry the
+        batch to <b>Completed</b> — assessment done moves it to Result Awaited, certification completes it.
+        Nothing about money is needed for that. <b>Invoice and dues</b> below are the later step that ends in{" "}
+        <b>Closed</b> (Rule 52), and a Completed batch can sit there indefinitely.
+      </div>
       {/* Per-candidate marking gets the full width — it is a data-entry grid, not a side panel. */}
       {perCandidate && (
         <CandidateResults batchId={batchId} batch={batch} setError={setError} onChanged={() => { load(); onChanged(); }} />

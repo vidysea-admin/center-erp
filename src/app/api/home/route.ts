@@ -111,8 +111,11 @@ export const GET = apiHandler(async () => {
   // the card showed only LOGGED man-days, and with zero logs entered it read as broken.
   // Expected-so-far (roster × operating days elapsed, Active batches) rides along so the
   // card can say "0 logged of 390 expected — no daily logs entered yet" honestly.
+  // -102 (Manish 17/08): this same list is what the new "log today's attendance" shortcut
+  // needs, so it carries code + centre now instead of a second identical query.
   const activeForExp = await Batch.find({ status: "Active", ...scope })
-    .populate("program", "operating_days").select("actual_start program").lean<any[]>();
+    .populate("program", "operating_days").populate("location", "name code")
+    .select("actual_start program code location").lean<any[]>();
   const expRoster = activeForExp.length ? await BatchMember.aggregate([
     { $match: { batch: { $in: activeForExp.map((b) => b._id) }, left_on: null } },
     { $group: { _id: "$batch", n: { $sum: 1 } } },
@@ -136,6 +139,24 @@ export const GET = apiHandler(async () => {
 
   // Queue 1: missing daily logs (Rule 33)
   const missingLogs = await missingLogQueue(scope);
+
+  // -102, Manish 17/08 ([07:09] "teen click pe main chauthe click pe yaha aa raha hu… daily
+  // execution aur government attendance wala main dashboard me hi daal dunga"): a trainer signs
+  // in and has to hunt for the one thing they came to do. Rule 33's queue above cannot answer
+  // this — it reports the PREVIOUS operating day, so a trainer whose batch needs logging TODAY
+  // sees an empty Home. This block is today: every Active batch in scope, whether its log is in
+  // yet, and the direct door to Daily Execution.
+  const loggedTodayIds = new Set(
+    (await DailyLog.find({ batch: { $in: activeForExp.map((b) => b._id) }, log_date: todayKey }).select("batch").lean<any[]>())
+      .map((l) => String(l.batch)),
+  );
+  const todayLogging = activeForExp.map((b) => ({
+    _id: b._id,
+    code: b.code,
+    location: b.location ? { _id: b.location._id, name: b.location.name } : null,
+    roster_count: expRosterMap.get(String(b._id)) ?? 0,
+    logged_today: loggedTodayIds.has(String(b._id)),
+  })).sort((a, b) => Number(a.logged_today) - Number(b.logged_today) || String(a.code).localeCompare(String(b.code)));
 
   // Queue 2: sheet changes pending review — Admin only since R-E (CEO 14/08: the sheet
   // machinery leaves every other persona's view).
@@ -227,6 +248,9 @@ export const GET = apiHandler(async () => {
   return NextResponse.json({
     kpis,
     queues: {
+      // -102: goes to the lean roles too — these are their OWN batches, so QA-096's rule
+      // ("never ship a figure the role is not shown") is satisfied by construction.
+      today_logging: todayLogging,
       missing_logs: missingLogs,
       attendance_gaps: gaps,
       enrollment_failures: failures,

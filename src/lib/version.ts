@@ -3,14 +3,26 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-101";
+export const RELEASE = "2026.08.14-102";
 export const RELEASE_NOTE =
-  "-101: the D of CRUD for evidence files. A certificate could be uploaded and replaced but " +
-  "never removed, so a scan attached to the wrong candidate was permanent and its stored object " +
-  "could never be reclaimed - DELETE /api/results/<id>/certificate now removes the file (status, " +
-  "number and date stay: Rule 46 owns those), refuses on a Completed batch, and is audited with " +
-  "the reason. Three storage leaks closed with it: re-uploading the same document type used to " +
-  "leave the superseded file readable and unreferenced in the bucket; the storage health probe " +
-  "left a _healthcheck object behind on every run with no way to remove it; and the discard door " +
-  "missed Closure.result_file and CandidateResult.evidence_file, so a file a record still showed " +
-  "could be discarded out from under it.";
+  "-102: the six things that got in Manish's way during the 17/08 walkthrough. A trainer had to " +
+  "hunt four clicks for the one thing they sign in to do, so Home now opens with 'log your " +
+  "today's candidate attendance' per running batch (and the portal-import door for Admin/Ops) - " +
+  "Rule 33's queue could not serve this because it reports the PREVIOUS day. Daily Execution used " +
+  "to open blank on a day that was already logged, so adding a second photo at 2pm meant " +
+  "re-ticking all 45 students: it now reads the day it points at, arrives pre-checked, and Save " +
+  "updates that day through the same audited Rule 27 door while media APPENDS. The bulk grid no " +
+  "longer opens onto a dead range - it starts at the earliest unlogged day, says how many are " +
+  "open, and names the reason each date was left out instead of a bare 'no open days in this " +
+  "range'. The batches list leads with Status on every screen size and shows the readiness chip " +
+  "only while a batch is still being prepared, so a running batch stops crying Red over logs " +
+  "nobody has entered yet. The government-attendance grid regained the QUALIFICATION column - " +
+  "Qualified at or above the hours bar, Not eligible below it, and honestly unanswered when the " +
+  "portal sent no hours - reusing the batch tab's own bar and verdict so the two screens cannot " +
+  "disagree. And an Ambiguous row is finally a door rather than a dead end: it opens onto the " +
+  "portal row as received, the importer's reason for not guessing, and the candidates that " +
+  "collided, so the operator can record the answer they already have as an audited manual match. " +
+  "With them: a roster row enrolled by mistake can be removed (Admin only, reason required, " +
+  "refused outright once it carries a result, attendance or a matched portal row), which also " +
+  "puts the candidate back in the planner's pool; and 'Closing' is worded 'Result Awaited' " +
+  "everywhere while the stored enum stays 'Closing'.";

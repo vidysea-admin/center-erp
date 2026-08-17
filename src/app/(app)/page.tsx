@@ -34,7 +34,7 @@ export default function HomePage() {
   // can resolve after the data does, so leanHome alone guards nothing reliably.
   const q = {
     missing_logs: [], attendance_gaps: [], enrollment_failures: [],
-    registration_failed: [], pending_users: [],
+    registration_failed: [], pending_users: [], today_logging: [],
     ...data.queues,
   };
   // A centre principal/SPOC signs in as a Location-scoped user.
@@ -67,6 +67,35 @@ export default function HomePage() {
           <b>Your account isn't linked to any active centre.</b> Everything below will stay empty
           until an Admin updates your location scope (Admin → Users &amp; Access → your account).
         </div>
+      )}
+
+      {/* -102, Manish 17/08 ([00:25] "usko confused hai ki main aaj ki attendance log karne ke
+          liye, photo daalne ke liye kaha jau?" · [07:23] "log your today's candidate attendance
+          aise karke waha daal dijiye"): the one thing a trainer signs in to do, first on the page,
+          one tap away instead of four. Anyone who marks gets it; whoever imports the portal sheet
+          gets that door beside it. */}
+      {q.today_logging.length > 0 && role !== "Location" && (
+        <Section title="Today">
+          <ul className="divide-y divide-gray-100">
+            {q.today_logging.map((b: any) => (
+              <Row key={b._id} href={`/batches/${b._id}?tab=Daily Execution`}
+                left={<>
+                  <span className="font-medium text-blue-700">Log your today&apos;s candidate attendance</span>
+                  <span className="block text-xs text-gray-500">{b.code}{b.location?.name ? ` · ${b.location.name}` : ""} · {b.roster_count} on roster</span>
+                </>}
+                right={b.logged_today
+                  ? <span className="shrink-0 rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-medium text-green-700">✓ logged today — add photos / update</span>
+                  : <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">not logged yet</span>} />
+            ))}
+            {(role === "Admin" || role === "Operations") && (
+              <Row href="/govt-attendance"
+                left={<>
+                  <span className="font-medium text-blue-700">Upload government portal attendance</span>
+                  <span className="block text-xs text-gray-500">the Skill India export — days, hours and who has qualified</span>
+                </>} />
+            )}
+          </ul>
+        </Section>
       )}
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">

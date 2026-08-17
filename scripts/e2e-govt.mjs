@@ -289,6 +289,117 @@ const again = await upload(admin, { file: csvFile(), confirm: "1", period_label:
 ok("re-import creates a second import rather than rewriting the first", again.status === 201 && again.data._id !== done.data._id);
 ok("the first import is still intact", (await req(admin, "GET", `/api/govt-attendance/${done.data._id}`)).data.rows?.length === 7);
 
+// ---- -102 (Manish 17/08): the import grid carries the QUALIFICATION verdict ----
+// [11:02] "isme ek status wala chahiye… wo gayab ho gaya, qualified wala aa raha tha"
+// [11:53] "qualify ka rule yahi hai ki 60 plus hours, 60 or above" / "60 se niche not eligible"
+// The verdict is NOT re-derived here: the bar comes from assessmentHoursBar and the answer from
+// memberAttendedHours — the same two the batch Attendance tab uses — so the two screens cannot
+// drift. These pins prove that identity rather than the arithmetic.
+{
+  const g = await req(admin, "GET", `/api/govt-attendance/${done.data._id}`);
+  const att = await req(admin, "GET", `/api/batches/${batch._id}/attendance`);
+  ok("-102: the import grid states the hours bar, and it is the SAME number the batch Attendance tab uses",
+    g.data.required_hours > 0 && g.data.required_hours === att.data.required_hours,
+    JSON.stringify({ grid: g.data.required_hours, tab: att.data.required_hours }));
+  ok("-102: the bar says where it came from (scheme master, or Defaults as the honest fallback)",
+    ["scheme", "defaults"].includes(g.data.min_attendance_source), String(g.data.min_attendance_source));
+  ok("-102: every row that CAN be judged is judged as exactly 'portal hours ≥ the bar' — no second formula",
+    (g.data.rows ?? []).filter((r) => r.required_hours != null)
+      .every((r) => r.govt_hours == null ? r.qualified === null : r.qualified === (r.govt_hours >= g.data.required_hours)),
+    JSON.stringify((g.data.rows ?? []).map((r) => [r.name, r.govt_hours, r.required_hours, r.qualified])).slice(0, 340));
+  ok("-102: a row with no hour figure is left UNANSWERED, never called 'not eligible'",
+    (g.data.rows ?? []).filter((r) => r.govt_hours == null).every((r) => r.qualified === null),
+    JSON.stringify((g.data.rows ?? []).filter((r) => r.govt_hours == null).map((r) => [r.name, r.qualified])));
+  // A row nobody has been able to attach to a candidate has no PROGRAMME either, and this import
+  // is centre-wide (no ?batch=), so there is no single bar to judge it against — the same reason
+  // R-D keeps portal figures off an ambiguous student on the batch tab. Unanswered, not "not
+  // eligible": a grey "— no hours"-style cell is honest, a grey "Not eligible" would be a verdict
+  // we have not earned. (Manish's real flow imports from inside a batch, where every row IS judged.)
+  ok("-102: in a centre-wide import an unattached row is judged by NOTHING, and says so rather than guessing",
+    (g.data.rows ?? []).filter((r) => r.match_status !== "Matched" && !r.batch)
+      .every((r) => r.required_hours === null && r.qualified === null),
+    JSON.stringify((g.data.rows ?? []).filter((r) => r.match_status !== "Matched").map((r) => [r.name, r.match_status, r.required_hours, r.qualified])));
+  ok("-102: …while every MATCHED candidate row does carry the bar and a verdict",
+    (g.data.rows ?? []).filter((r) => r.match_status === "Matched" && r.candidate)
+      .every((r) => r.required_hours === g.data.required_hours && r.qualified !== undefined),
+    JSON.stringify((g.data.rows ?? []).filter((r) => r.match_status === "Matched" && r.candidate).map((r) => [r.name, r.required_hours, r.qualified])));
+  const gRows = Object.fromEntries((g.data.rows ?? []).map((r) => [r.name, r]));
+  const aRows = Object.fromEntries((att.data.members ?? []).map((m) => [m.name, m]));
+  ok("-102: Charlie's verdict is identical on the import grid and the batch Attendance tab",
+    gRows[`${NAME} Charlie`]?.govt_hours === aRows[`${NAME} Charlie`]?.govt?.hours
+    && gRows[`${NAME} Charlie`]?.qualified === aRows[`${NAME} Charlie`]?.qualified,
+    JSON.stringify({ grid: [gRows[`${NAME} Charlie`]?.govt_hours, gRows[`${NAME} Charlie`]?.qualified], tab: [aRows[`${NAME} Charlie`]?.govt?.hours, aRows[`${NAME} Charlie`]?.qualified] }));
+  ok("-102: the summary counts add up to the row count",
+    g.data.qualified_count + g.data.not_eligible_count + g.data.no_hours_count === g.data.rows.length,
+    JSON.stringify({ q: g.data.qualified_count, n: g.data.not_eligible_count, h: g.data.no_hours_count, rows: g.data.rows.length }));
+}
+
+// ---- -102: an Ambiguous row can be EXPLAINED and RESOLVED ----
+// [11:34] "ambiguous name pe aisa hona chahiye ki wo click ho to uske baare me pata chal jaye ki
+// kya issue hai" · [11:29] "usko hum manual bhi verify kar hi chuke hai".
+// The importer refusing to guess between the two Twins is correct; what was missing was any way
+// to record the answer the operator already has.
+{
+  const rows = (await req(admin, "GET", `/api/govt-attendance/${done.data._id}?filter=ambiguous`)).data.rows ?? [];
+  ok("-102 fixture: the two same-name rows are still Ambiguous", rows.length === 2, String(rows.length));
+  const row = rows[0];
+  const opts = await req(admin, "GET", `/api/govt-attendance/${done.data._id}/rows/${row._id}/match`);
+  ok("-102: the row explains itself — the importer's own reason comes back with it",
+    opts.status === 200 && /share this name|candidates share/i.test(String(opts.data.reason ?? "")), `${opts.status} ${String(opts.data.reason ?? "").slice(0, 90)}`);
+  ok("-102: …and the candidates that actually collided are offered first, labelled with WHY",
+    opts.data.collisions === 2 && opts.data.options.slice(0, 2).every((o) => o.collides === "same name"),
+    JSON.stringify(opts.data.options.slice(0, 3).map((o) => [o.name, o.collides])));
+  // A candidate on no roster here cannot receive a portal row.
+  const stranger = (await req(admin, "POST", "/api/candidates", { name: `${NAME} Stranger`, phone: "9444" + STAMP, location: loc._id, program: program._id })).data.item;
+  const wrong = await req(admin, "POST", `/api/govt-attendance/${done.data._id}/rows/${row._id}/match`, { candidate: stranger._id });
+  ok("-102: a candidate enrolled nowhere at this centre is refused (400) — a row cannot be pinned on a non-student",
+    wrong.status === 400 && /not enrolled/i.test(String(wrong.data?.error ?? "")), `${wrong.status} ${String(wrong.data?.error ?? "").slice(0, 90)}`);
+  ok("-102: no candidate at all is refused (400)", (await req(admin, "POST", `/api/govt-attendance/${done.data._id}/rows/${row._id}/match`, {})).status === 400);
+  // The real resolution. Which twin this row belongs to is genuinely undecidable from the file —
+  // that is the whole point — so the operator decides. Pick the twin who was marked present on the
+  // fixture day (members[3], via the trainer's marking round above): that way the reconciliation
+  // below has a NON-ZERO number to produce, and cannot pass by defaulting to 0.
+  const pickId = String(members[3].candidate._id);
+  const res = await req(admin, "POST", `/api/govt-attendance/${done.data._id}/rows/${row._id}/match`, { candidate: pickId, reason: "-102 pin: checked the centre register" });
+  ok("-102: naming the candidate resolves the row — Matched, and provenance says Manual",
+    res.status === 200 && res.data.item?.match_status === "Matched" && res.data.item?.match_by === "Manual",
+    `${res.status} ${JSON.stringify(res.data.item && { s: res.data.item.match_status, by: res.data.item.match_by })}`);
+  ok("-102: the note keeps what it WAS, so the trail shows the ambiguity and the human decision",
+    /Resolved by/.test(String(res.data.item?.match_note ?? "")) && /was Ambiguous/.test(String(res.data.item?.match_note ?? "")) && /centre register/.test(String(res.data.item?.match_note ?? "")),
+    String(res.data.item?.match_note ?? "").slice(0, 140));
+  ok("-102: it is reconciled against our own logs exactly as an automatic match is (1 day logged → variance = portal − 1)",
+    res.data.item?.internal_days_present === 1 && res.data.item?.variance_days === (row.total_days_present - 1),
+    JSON.stringify({ internal: res.data.item?.internal_days_present, variance: res.data.item?.variance_days, portal: row.total_days_present }));
+  ok("-102: the import's own summary counts moved with it — one fewer ambiguous, one more matched",
+    res.data.counts?.ambiguous === 1 && res.data.counts?.matched === 5,
+    JSON.stringify(res.data.counts));
+  const impNow = (await req(admin, "GET", `/api/govt-attendance/${done.data._id}`)).data.item;
+  ok("-102: …and the stored counts on the import agree, so the chips cannot lie",
+    impNow.ambiguous_count === 1 && impNow.matched_count === 5, JSON.stringify({ a: impNow.ambiguous_count, m: impNow.matched_count }));
+  const mAud = ((await req(admin, "GET", `/api/audit/GovtAttendanceRow/${row._id}`)).data.items ?? []);
+  ok("-102: the manual match is audited — from what, to whom, by whom, and why",
+    mAud.some((a) => a.field === "match" && /Ambiguous/.test(String(a.old_value)) && /manually by/.test(String(a.new_value)) && /centre register/.test(String(a.new_value))),
+    JSON.stringify(mAud.map((a) => [a.old_value, String(a.new_value).slice(0, 80)])).slice(0, 240));
+  // The row now carries a verdict, like any matched row.
+  const after = ((await req(admin, "GET", `/api/govt-attendance/${done.data._id}`)).data.rows ?? []).find((r) => String(r._id) === String(row._id));
+  ok("-102: the resolved row now gets the qualification verdict too", after?.qualified !== undefined && after?.required_hours > 0,
+    JSON.stringify({ q: after?.qualified, h: after?.govt_hours, bar: after?.required_hours }));
+  // Permission: view-level holders and out-of-scope roles must not resolve.
+  const other = rows[1];
+  const enr = await login("enroll@vidysea.com", "CiOnly@123");
+  if (enr) {
+    const enrTry = await req(enr, "POST", `/api/govt-attendance/${done.data._id}/rows/${other._id}/match`, { candidate: pickId });
+    ok("-102: a role without attendance.govt edit cannot resolve a row (403)", enrTry.status === 403, `got ${enrTry.status}`);
+  }
+  const anonTry = await fetch(`${BASE}/api/govt-attendance/${done.data._id}/rows/${other._id}/match`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ candidate: pickId }),
+  });
+  ok("-102: anonymous cannot resolve a row (401)", anonTry.status === 401, String(anonTry.status));
+  ok("-102: the other ambiguous row is untouched by the refusals",
+    ((await req(admin, "GET", `/api/govt-attendance/${done.data._id}?filter=ambiguous`)).data.rows ?? []).length === 1);
+  ok("-102: the never-enrolled fixture candidate is cleaned up", (await req(admin, "DELETE", `/api/candidates/${stranger._id}`)).status === 200);
+}
+
 // ---------------------------------------------------------------- garbage in
 const junk = await upload(admin, { file: new File([Buffer.from("just,some,csv\n1,2,3\n")], "junk.csv", { type: "text/csv" }) });
 ok("a file with no attendance header is rejected with a readable reason",
