@@ -267,6 +267,23 @@ function Inner() {
                 Setting the portal Candidate ID on those candidates makes the next import match them automatically.
               </p>
             )}
+            {/* -106: a live Bhadohi import carried its hours as decimals and its days-present column
+                under a name we did not know, so it imported "fine" and then showed a whole batch of
+                blanks. Say what this file is missing BEFORE it is committed. */}
+            {!!upload.missing_columns?.length && (
+              <p className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+                This file has no {upload.missing_columns.map((m: string, i: number) => (
+                  <span key={m}>{i > 0 ? (i === upload.missing_columns.length - 1 ? " or " : ", ") : ""}<b>{m}</b></span>
+                ))} column{upload.missing_columns.length > 1 ? "s" : ""} that we recognise, so {upload.missing_columns.length > 1 ? "those columns" : "that column"} will
+                read blank on the grid. The rest still imports. If the portal renamed it, send the file over and the reader can learn the new name.
+              </p>
+            )}
+            {upload.hours_parsed === 0 && upload.row_count > 0 && (
+              <p className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+                <b>No hour figure could be read from any row</b>, so nobody in this file can be judged qualified
+                (qualification is decided on the portal&apos;s hours). Accepted shapes are <code>63:25:43</code> and <code>73.99</code>.
+              </p>
+            )}
             <div className="max-h-60 overflow-y-auto rounded-lg border border-gray-200">
               <table className="w-full text-xs">
                 <thead className="bg-gray-50 text-left text-gray-500"><tr><th className="p-2">Name</th><th className="p-2">Portal ID</th><th className="p-2">Days</th><th className="p-2">Match</th></tr></thead>

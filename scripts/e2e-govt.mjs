@@ -184,6 +184,61 @@ ok("Alpha matched on the portal ID, not the name", byName[`${NAME} Alpha`]?.matc
 ok("Charlie fell back to a name match", byName[`${NAME} Charlie`]?.match_by === "Name", byName[`${NAME} Charlie`]?.match_by);
 ok("hours parsed as a duration, not a clock time (75:50:37 → 4551 min, well past 24h)",
   Math.round(byName[`${NAME} Charlie`]?.total_hours_minutes) === 4551, String(byName[`${NAME} Charlie`]?.total_hours_minutes));
+
+// ---- -106: the portal also ships this column as DECIMAL HOURS, and a file can be missing a column
+// Found by smoking the new -102 qualification column against REAL production imports: the live
+// "Attendance Report 06-08-2026" on Bhadohi SPIT-01 carries "26.6" / "73.99" / "109.94" instead of
+// hh:mm:ss, so all 28 matched rows stored null minutes and the whole batch read "— no hours" —
+// nobody on a live batch could be judged qualified, including students well past the 60-hour bar.
+{
+  const decCsv = csvText.split(String.fromCharCode(10)).map((line, i) => {
+    if (i === 0 || !line.trim()) return line;
+    const cells = line.split(",");
+    // the hours cell is the hh:mm:ss one; rewrite it as decimal hours
+    const at = cells.findIndex((x) => /^\d+:[0-5]\d:[0-5]\d$/.test(x.trim()));
+    if (at >= 0) {
+      const [h, m, s] = cells[at].trim().split(":").map(Number);
+      cells[at] = (h + m / 60 + s / 3600).toFixed(2);
+    }
+    return cells.join(",");
+  }).join(String.fromCharCode(10));
+  const decPre = await upload(admin, { file: new File([Buffer.from(decCsv)], "decimal-hours.csv", { type: "text/csv" }), batch: batch._id });
+  const decRows = Object.fromEntries((decPre.data.preview ?? []).map((r) => [r.name, r]));
+  ok("-106: decimal hours are read too — 75:50:37 written as 75.84 lands on the same ~4551 minutes",
+    Math.abs((decRows[`${NAME} Charlie`]?.total_hours_minutes ?? 0) - 4551) < 2,
+    String(decRows[`${NAME} Charlie`]?.total_hours_minutes));
+  ok("-106: the preview reports how many rows produced an hour figure at all",
+    decPre.data.hours_parsed >= 4, String(decPre.data.hours_parsed));
+  ok("-106: a file whose columns all resolve reports nothing missing",
+    Array.isArray(decPre.data.missing_columns) && decPre.data.missing_columns.length === 0, JSON.stringify(decPre.data.missing_columns));
+
+  // A junk value must NOT become an hour figure just because it is a number-ish string.
+  const junkCsv = csvText.split(String.fromCharCode(10)).map((line, i) => {
+    if (i === 0 || !line.trim()) return line;
+    const cells = line.split(",");
+    const at = cells.findIndex((x) => /^\d+:[0-5]\d:[0-5]\d$/.test(x.trim()));
+    if (at >= 0) cells[at] = "N/A";
+    return cells.join(",");
+  }).join(String.fromCharCode(10));
+  const junkPre = await upload(admin, { file: new File([Buffer.from(junkCsv)], "junk-hours.csv", { type: "text/csv" }), batch: batch._id });
+  ok("-106: an unreadable hours value stays NULL — it never becomes a silent hour count",
+    (junkPre.data.preview ?? []).every((r) => r.total_hours_minutes == null), JSON.stringify((junkPre.data.preview ?? []).map((r) => r.total_hours_minutes)));
+  ok("-106: …and the preview warns that NO row produced an hour figure, so nobody can be judged",
+    junkPre.data.hours_parsed === 0, String(junkPre.data.hours_parsed));
+
+  // A file genuinely missing a column is NAMED, not silently blank.
+  const hdr = csvText.split(String.fromCharCode(10))[0].split(",");
+  const presentAt = hdr.findIndex((x) => /total days present/i.test(x));
+  const noPresent = csvText.split(String.fromCharCode(10))
+    .map((line) => { if (!line.trim()) return line; const cells = line.split(","); cells.splice(presentAt, 1); return cells.join(","); })
+    .join(String.fromCharCode(10));
+  const missPre = await upload(admin, { file: new File([Buffer.from(noPresent)], "no-present-col.csv", { type: "text/csv" }), batch: batch._id });
+  ok("-106: a file with no Total Days Present column still imports, and SAYS which column is missing",
+    missPre.status === 200 && (missPre.data.missing_columns ?? []).includes("Total Days Present"),
+    `${missPre.status} ${JSON.stringify(missPre.data.missing_columns)}`);
+  ok("-106: …and nothing was committed by any of these previews",
+    !((await req(admin, "GET", "/api/govt-attendance")).data.items ?? []).some((i) => /decimal-hours|junk-hours|no-present-col/.test(String(i.file_name ?? ""))));
+}
 ok("Alpha reconciles exactly against our logs (portal 1, ours 1 → 0)", byName[`${NAME} Alpha`]?.variance_days === 0, String(byName[`${NAME} Alpha`]?.variance_days));
 ok("Bravo's +3 day variance is caught (portal 4, our logs 1)", byName[`${NAME} Bravo`]?.variance_days === 3, String(byName[`${NAME} Bravo`]?.variance_days));
 ok("Charlie's +10 is caught — matched by name but never logged present", byName[`${NAME} Charlie`]?.variance_days === 10, String(byName[`${NAME} Charlie`]?.variance_days));

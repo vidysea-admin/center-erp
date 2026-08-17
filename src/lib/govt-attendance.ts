@@ -94,11 +94,30 @@ const toNum = (v: unknown): number | null => {
 
 // "13:19:33" → 799.55 minutes. Portal hour totals routinely exceed 24h, so this is a duration,
 // never a clock time — do not route it through Date.
+//
+// -106: a live production import (Bhadohi SPIT-01, "Attendance Report 06-08-2026") carries the same
+// column as DECIMAL HOURS — "26.6", "73.99", "109.94" — not hh:mm:ss. Only the colon form parsed, so
+// all 28 matched rows stored `null` minutes and every one of them read "— no hours" on the new
+// qualification column: a whole live batch that could not be judged, including students clearly past
+// the 60-hour bar. Found by smoking the -102 column against real production imports rather than
+// fixtures. Both shapes are the same measurement, so both are read here — the one place the whole
+// app converts this figure.
 export function hhmmssToMinutes(v: unknown): number | null {
   const s = String(v ?? "").trim();
+  if (!s) return null;
   const m = /^(\d+):([0-5]?\d)(?::([0-5]?\d))?$/.exec(s);
-  if (!m) return null;
-  return Number(m[1]) * 60 + Number(m[2]) + (m[3] ? Number(m[3]) / 60 : 0);
+  if (m) return Number(m[1]) * 60 + Number(m[2]) + (m[3] ? Number(m[3]) / 60 : 0);
+  // Decimal hours: "73.99" → 4439.4 minutes. Deliberately strict — a bare integer or decimal only,
+  // so a stray date, id or "N/A" still returns null rather than becoming a silent hour figure.
+  const dec = /^(\d{1,5})(?:[.,](\d{1,4}))?$/.exec(s);
+  if (dec) {
+    const hours = Number(`${dec[1]}.${dec[2] ?? 0}`);
+    if (!Number.isFinite(hours)) return null;
+    // A programme is 120 hours; anything past a few thousand is not an hour count.
+    if (hours > 10_000) return null;
+    return hours * 60;
+  }
+  return null;
 }
 
 export function minutesToHhmm(min: number | null | undefined): string {
@@ -118,7 +137,12 @@ export function extractTcId(...sources: string[]): string {
 
 // ---------- parsing ----------
 
-export type ParsedFile = { rows: GovtRow[]; header: string[]; skipped: number; org_name: string; tc_id: string };
+// -106: `missing_columns` names the expected fields this file did NOT carry. Without it, a portal
+// export whose hours or days-present column is named something we do not know imports "successfully"
+// and then shows a whole batch of blanks — which is what a live Bhadohi import was doing. The screen
+// can now say "this file has no Total Days Present column" instead of leaving the operator to guess
+// whether the data or the reader is at fault.
+export type ParsedFile = { rows: GovtRow[]; header: string[]; skipped: number; org_name: string; tc_id: string; missing_columns: string[] };
 
 export function parseGovtAttendance(buf: Buffer, fileName = ""): ParsedFile {
   let grid: string[][];
@@ -165,7 +189,16 @@ export function parseGovtAttendance(buf: Buffer, fileName = ""): ParsedFile {
     });
   }
   const org_name = rows.find((r) => r.org_name)?.org_name ?? "";
-  return { rows, header, skipped, org_name, tc_id: extractTcId(org_name) };
+  // Which expected columns this file simply does not have. Reported, never guessed at: adding
+  // speculative aliases is how a "Total" footer column starts being read as somebody's hours.
+  const LABEL: Record<string, string> = {
+    total_days_present: "Total Days Present", total_working_days: "Total Working Days",
+    total_hours_minutes: "Total Hours Spent", govt_candidate_id: "Candidate ID",
+    candidate_type: "Candidate Type", org_name: "Org Name",
+  };
+  const cols = COLUMNS as Record<string, string[]>;
+  const missing_columns = Object.keys(LABEL).filter((k) => cols[k]?.length && idx[k] === undefined).map((k) => LABEL[k]);
+  return { rows, header, skipped, org_name, tc_id: extractTcId(org_name), missing_columns };
 }
 
 // ---------- matching ----------

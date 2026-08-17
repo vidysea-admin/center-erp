@@ -576,7 +576,9 @@ function SyncSources({ setError }: any) {
             { key: "name", label: "Name", sortable: true },
             { key: "mode", label: "Mode", render: (r: any) => r.mode === "watch" ? <span className="rounded-full border border-purple-200 bg-purple-50 px-2 py-0.5 text-[11px] font-semibold text-purple-700">Watch · {r.interval_minutes ?? 30}m</span> : <span className="text-xs text-gray-500">Mapped</span> },
             { key: "source_url", label: "URL", render: (r: any) => <span className="block max-w-64 truncate text-xs" title={r.source_url}>{r.source_url}</span> },
-            { key: "frequency", label: "Frequency", mobile: false },
+            // QA-168 (second half): a watch source polls on interval_minutes regardless of its stored
+            // frequency — showing "Manual only" here is what misled the QA-166 diagnosis. Say what it does.
+            { key: "frequency", label: "Frequency", mobile: false, render: (r: any) => r.mode === "watch" ? `Every ${r.interval_minutes ?? 30} min (auto)` : (r.frequency ?? "—") },
             { key: "last_synced_at", label: "Last sync", sortable: true, sortValue: (r: any) => r.last_synced_at ? new Date(r.last_synced_at).getTime() : null, render: (r: any) => fmtDT(r.last_synced_at) },
             { key: "last_status", label: "Status", render: (r: any) => <Chip value={r.last_status} /> },
             { key: "_run", label: "", render: (r: any) => <Btn small disabled={running === r._id} onClick={() => run(r._id)}>{running === r._id ? "Syncing…" : "Sync Now"}</Btn> },

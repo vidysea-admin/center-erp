@@ -83,6 +83,10 @@ export const POST = apiHandler(async (req: NextRequest) => {
       skipped: parsed.skipped, org_name: parsed.org_name, tc_id: parsed.tc_id,
       resolved_location: auto ? { _id: auto._id, name: auto.name, external_id: auto.external_id } : null,
       header: parsed.header,
+      // -106: which expected columns this file does not carry, so a blank column on the grid is
+      // explained BEFORE the import is committed rather than looking like missing data.
+      missing_columns: parsed.missing_columns,
+      hours_parsed: matched.filter((m) => m.total_hours_minutes != null).length,
     });
   }
 

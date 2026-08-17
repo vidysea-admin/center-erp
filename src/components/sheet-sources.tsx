@@ -48,7 +48,9 @@ export function SheetSources({ onChanged }: { onChanged?: () => void }) {
       key_columns: String(form.key_columns ?? "").split(",").map((s: string) => s.trim()).filter(Boolean),
       active: form.active !== false,
       // Watch mode reads the whole workbook on a timer, so the daily-schedule field is not used.
-      ...(form.mode === "watch" ? { frequency: "Manual only" } : {}),
+      // QA-168: watch sources used to be stamped frequency "Manual only" while polling every
+      // interval_minutes — a stored label that lied. The scheduler never reads frequency for
+      // watch mode; stop writing it (the UI now shows the real cadence instead).
     };
     try {
       if (form._id) await api(`/api/sync-sources/${form._id}`, { method: "PATCH", json: body });

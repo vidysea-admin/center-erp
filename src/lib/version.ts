@@ -3,8 +3,19 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-105";
+export const RELEASE = "2026.08.14-106";
 export const RELEASE_NOTE =
+  "-106: the portal ships the hours column in TWO shapes and we only read one. Found by smoking "
+  "the new qualification column against REAL production imports instead of fixtures: the live "
+  "Attendance Report 06-08-2026 on Bhadohi SPIT-01 carries hours as decimals (26.6, 73.99, "
+  "109.94), not hh:mm:ss, so all 28 matched rows stored null minutes and the whole batch read "
+  "no hours - nobody on a live batch could be judged qualified, including students well past the "
+  "60-hour bar. Decimal hours are read now, in the one function the whole app converts this "
+  "figure with, and deliberately strictly: anything that is not a duration or a plain number "
+  "still returns null rather than becoming a silent hour count. The same file is also missing a "
+  "days-present column we recognise, so the importer now REPORTS which expected columns a file "
+  "does not carry, and warns before committing when no row produced an hour figure at all - a "
+  "blank column is explained instead of looking like missing data. "
   "-105: two more places the batch status was still printing the raw enum, both found in the "
   "browser rather than by grep: the green running banner on a batch Overview said 'Closing' two "
   "lines under a header chip that said 'Result Awaited', and the batches-list search index only "
