@@ -2033,12 +2033,14 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
   // QA-070 (-70): the marking screen was hours-blind — the CEO's exact ask is knowing WHO
   // qualified while marking results. Same existing attendance API, joined by member_id.
   const [hoursBy, setHoursBy] = useState<Map<string, any>>(new Map());
+  const [attMeta, setAttMeta] = useState<any>(null); // -109: the bar, whether the course is over, and the verdict breakdown
   const load = () => Promise.all([
     api(`/api/batches/${batchId}/results`).then((d) => { setItems(d.items); setSummary(d.summary); }),
     api("/api/master-lists/failure-reasons").then((d) => setReasons(d.items)).catch(() => setReasons([])),
-    api(`/api/batches/${batchId}/attendance`).then((d) =>
-      setHoursBy(new Map((d.members ?? []).map((m: any) => [String(m.member_id), { qualified: m.qualified, attended_hours: m.attended_hours, basis: m.basis, required_hours: d.required_hours }])))
-    ).catch(() => {}),
+    api(`/api/batches/${batchId}/attendance`).then((d) => {
+      setAttMeta({ required_hours: d.required_hours, course_finished: d.course_finished, portal_working_days: d.portal_working_days, verdict_counts: d.verdict_counts ?? {} });
+      setHoursBy(new Map((d.members ?? []).map((m: any) => [String(m.member_id), { qualified: m.qualified, attended_hours: m.attended_hours, basis: m.basis, required_hours: d.required_hours, verdict: m.verdict }])));
+    }).catch(() => {}),
   ]).catch((e: any) => setError(e.message)).finally(() => setLoaded(true));
   useEffect(() => { load(); loadLinkPlan(); }, [batchId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -2119,12 +2121,24 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
         </div>
         <span className="flex items-center gap-1.5">
           {/* QA-070: the qualification verdict RIGHT where results are marked. */}
-          {h && (h.qualified
-            ? <span className="rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-semibold text-green-700" title={`Portal-verified: ${h.attended_hours} of ${h.required_hours} hrs`}>✓ Qualified</span>
-            : <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700"
-                title={h.basis === "estimate" ? "Estimate only — the portal meter decides" : h.basis == null ? "No hours data yet" : undefined}>
-                {h.attended_hours != null ? `${h.basis === "estimate" ? "~" : ""}${h.attended_hours}/${h.required_hours} hrs` : "hrs pending"}
-              </span>)}
+          {/* -109 (Umesh 17/08): this chip used to say only "Qualified" or an hours figure, and the
+              import grid beside it said "Not eligible" for anyone below the bar — including students
+              three days into a fifteen-day course, students whose hours file never parsed, and
+              students with no import at all. A missing-data state was reading as a verdict about a
+              real person, on the screen where certificates get decided. The verdict now comes from
+              the ONE shared function (eligibilityVerdict) with both gates: a student who has not
+              finished enrolling gets no verdict at all, and "Not eligible" waits for the course to
+              be over. */}
+          {h?.verdict && (
+            <span title={h.verdict.detail}
+              className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                h.verdict.state === "qualified" ? "bg-green-100 font-semibold text-green-700"
+                  : h.verdict.state === "in_progress" ? "border border-amber-200 bg-amber-50 text-amber-700"
+                    : h.verdict.state === "not_eligible" ? "border border-red-200 bg-red-50 text-red-700"
+                      : "border border-gray-200 bg-gray-50 text-gray-500"}`}>
+              {h.verdict.state === "qualified" ? "✓ " : ""}{h.verdict.label}
+            </span>
+          )}
           <Chip value={i.result?.result ?? "Pending"} />
         </span>
       </div>
@@ -2262,6 +2276,20 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
             {pending.length > 0 && <> · <span className="text-amber-700">{pending.length} not marked yet — mark the result first</span></>}
             {notPassed.length > 0 && <> · <span className="text-gray-500">{notPassed.length} Fail/Absent — no certificate (Rule 45)</span></>}
           </p>
+          {/* -109: and the hours picture, split honestly. Lumping "no data" in with "did not make
+              the bar" is what made 45 students at Bhadohi read "not eligible" over a parse failure. */}
+          {attMeta?.verdict_counts && (
+            <p className="text-xs text-gray-600">
+              Attendance hours (bar {attMeta.required_hours} hrs
+              {attMeta.portal_working_days ? `, portal shows ${attMeta.portal_working_days} working days` : ""}
+              {attMeta.course_finished ? ", course over" : ", course still running"}):{" "}
+              <span className="text-green-700">{attMeta.verdict_counts.qualified ?? 0} qualified</span>
+              {(attMeta.verdict_counts.in_progress ?? 0) > 0 && <> · <span className="text-amber-700">{attMeta.verdict_counts.in_progress} still short (course running — not a verdict)</span></>}
+              {(attMeta.verdict_counts.no_hours ?? 0) > 0 && <> · <span className="text-gray-500">{attMeta.verdict_counts.no_hours} with <b>no portal hours imported</b></span></>}
+              {(attMeta.verdict_counts.not_eligible ?? 0) > 0 && <> · <span className="text-red-700">{attMeta.verdict_counts.not_eligible} not eligible</span></>}
+              {(attMeta.verdict_counts.not_enrolled ?? 0) > 0 && <> · <span className="text-gray-500">{attMeta.verdict_counts.not_enrolled} not enrolled yet (no verdict until they are)</span></>}
+            </p>
+          )}
 
           {/* 3. This batch's REAL expected filenames, copyable. Built with the same normalisation the
                 matcher uses, so the list can never disagree with what the matcher accepts. */}

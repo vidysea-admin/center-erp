@@ -1,9 +1,10 @@
 import { collectionRoutes } from "@/lib/crud";
-import { BatchMember, Candidate, CandidateResult } from "@/models";
+import { BatchMember, Candidate, CandidateResult, Location, Program } from "@/models";
 import { assertLocationInScope, HttpError } from "@/lib/authz";
 import { emailError, canonicalPhone, phoneError } from "@/lib/validate";
 import { candidateEligibility } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
+import { renderMail, sendMail } from "@/lib/mailer";
 
 export const { GET, POST } = collectionRoutes({
   model: Candidate, entity: "Candidate",
@@ -36,6 +37,37 @@ export const { GET, POST } = collectionRoutes({
     const eErr = emailError(data.email, { optional: true });
     if (eErr) throw new HttpError(400, eErr);
     if (data.location) assertLocationInScope(user, String(data.location));
+  },
+  // -109 (Umesh 17/08): "admin ne new student register kiya, new student ko mail nahi aaya — check
+  // karo." Confirmed and precise: there were NINE places that send mail and none of them was this
+  // one. Every registration mail lived on the PUBLIC paths (self-registration, token link, trainer
+  // apply); a student entered from inside the ERP got nothing, because the moment was never built —
+  // not a broken transport (SES is live and sending).
+  //
+  // Fire-and-forget, exactly like the public path: creating a candidate must never fail on mail.
+  // A candidate with no email is not an error — phone is the required field and most rows are
+  // phone-only — and sendMail already records that honestly as "skipped: no valid recipient
+  // address" in MailLog, so "did it go?" stays answerable per candidate either way.
+  // Umesh also asked for an SMS fallback where there is no email; that needs a provider and its
+  // credentials, so it is raised separately rather than half-built here.
+  async afterWrite(doc, user) {
+    if (!doc?.email) {
+      await sendMail({ to: "", subject: "Your training registration is received", html: "", text: "", entity: "Candidate", entity_id: doc?._id }).catch(() => {});
+      return;
+    }
+    const [loc, prog] = await Promise.all([
+      Location.findById(doc.location).select("name").lean<any>().catch(() => null),
+      Program.findById(doc.program).select("name").lean<any>().catch(() => null),
+    ]);
+    const { html, text } = renderMail({
+      title: "Your training registration is received",
+      lines: [
+        `Hello ${doc.name},`,
+        `You have been registered for ${prog?.name ?? "training"} at ${loc?.name ?? "our training centre"}. The team will contact you about the next steps.`,
+        `Keep this email as your registration confirmation. Registered by ${user.name}.`,
+      ],
+    });
+    sendMail({ to: doc.email, subject: "Your training registration is received", html, text, entity: "Candidate", entity_id: doc._id }).catch(() => {});
   },
   // 2026-08-11: eligibility (age / education / training cooldown) computed on read,
   // never stored — it flips on its own as the cooldown lapses.

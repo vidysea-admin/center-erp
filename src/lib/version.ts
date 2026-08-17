@@ -3,8 +3,29 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-108";
+export const RELEASE = "2026.08.14-109";
 export const RELEASE_NOTE =
+  "-109: two things Umesh caught. (1) 'Not eligible' was being said about students it was not "
+  "true of. Measured on production: BHA-SPIT-02 read it for all 31 students THREE DAYS into a "
+  "fifteen-day course; BHA-SPIT-01 for all 45 purely because that file's decimal hours never "
+  "parsed; CHI-DST-03 for all 45 with no import at all; on DST-01, 20 of 29 simply were not in the "
+  "import. A missing-data state and an unfinished course were both rendering as a negative verdict "
+  "about a real student, on the screen where certificates get decided. His answer shaped the fix: "
+  "the verdict belongs to the candidate JOURNEY - documents, registration, portal registration, "
+  "batch assigned, enrolled - so a student who has not finished enrolling gets no verdict at all. "
+  "One shared eligibilityVerdict now decides, with two gates: the journey gate, and a time gate - "
+  "below the bar while the course RUNS is progress ('42 of 60 hrs so far'), no imported hours is "
+  "'no portal hours yet', and 'Not eligible' waits until the course is actually over. The batch "
+  "Attendance tab, the Closure cards and the portal import grid all read that one function, and "
+  "each screen now reports the split - qualified / still short / no hours / not eligible - instead "
+  "of one lumped bucket. `qualified` keeps its old meaning so nothing else moved. "
+  "(2) A student registered from INSIDE the ERP got no mail. There were nine send sites and none "
+  "of them was POST /api/candidates - every registration mail lived on the public self-registration "
+  "paths, so the moment was simply never built; SES was live and sending all along. It sends now, "
+  "fire-and-forget so registration never fails on mail, and a phone-only student is recorded as a "
+  "skip WITH its reason rather than silently nothing - 'mail gaya ki nahi' is answerable per "
+  "candidate either way. The SMS fallback Umesh asked for needs a provider and its credentials, so "
+  "it is raised for him rather than half-built. "
   "-108: certificate upload. The reason none of Manish's eight files would attach was not the "
   "files - every one was named correctly - but that NOT ONE of the 39 roster candidates carried a "
   "portal ID, and that field is the only key the matcher joins on. So the lookup was empty, every "

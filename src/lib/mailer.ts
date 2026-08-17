@@ -91,7 +91,15 @@ export type MailAttempt = {
 // The one door out. Resolves to the MailLog outcome; never rejects.
 export async function sendMail(m: MailAttempt): Promise<{ status: "sent" | "failed" | "skipped"; reason?: string }> {
   const log = async (status: "sent" | "failed" | "skipped", extra: { reason?: string; message_id?: string } = {}) => {
-    await MailLog.create({ to: m.to, subject: m.log_subject ?? m.subject, status, entity: m.entity, entity_id: m.entity_id, ...extra }).catch(() => {});
+    // -109: `to` is required on MailLog, so a missing address made create() throw and the catch
+    // below swallowed it — the one case where the answer to "did the mail go?" was NOT recorded was
+    // the case where it definitely did not. Found by pinning the phone-only candidate path. A
+    // placeholder keeps the row, and the reason already says what happened.
+    await MailLog.create({
+      to: m.to && String(m.to).trim() ? m.to : "(no address on record)",
+      subject: m.log_subject ?? m.subject ?? "(no subject)",
+      status, entity: m.entity, entity_id: m.entity_id, ...extra,
+    }).catch(() => {});
     return { status, reason: extra.reason };
   };
   try {

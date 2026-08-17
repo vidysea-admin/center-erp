@@ -487,9 +487,13 @@ ok("the first import is still intact", (await req(admin, "GET", `/api/govt-atten
     gRows[`${NAME} Charlie`]?.govt_hours === aRows[`${NAME} Charlie`]?.govt?.hours
     && gRows[`${NAME} Charlie`]?.qualified === aRows[`${NAME} Charlie`]?.qualified,
     JSON.stringify({ grid: [gRows[`${NAME} Charlie`]?.govt_hours, gRows[`${NAME} Charlie`]?.qualified], tab: [aRows[`${NAME} Charlie`]?.govt?.hours, aRows[`${NAME} Charlie`]?.qualified] }));
-  ok("-102: the summary counts add up to the row count",
-    g.data.qualified_count + g.data.not_eligible_count + g.data.no_hours_count === g.data.rows.length,
-    JSON.stringify({ q: g.data.qualified_count, n: g.data.not_eligible_count, h: g.data.no_hours_count, rows: g.data.rows.length }));
+  // -109 split this from three buckets into five: only `not_eligible` is a verdict now, and
+  // "still short while the course runs" and "no hours in this file" are their own honest states.
+  ok("-102/-109: the summary counts add up to the row count across ALL five states",
+    g.data.qualified_count + g.data.in_progress_count + g.data.no_hours_count + g.data.not_eligible_count + g.data.not_enrolled_count === g.data.rows.length,
+    JSON.stringify({ q: g.data.qualified_count, p: g.data.in_progress_count, h: g.data.no_hours_count, n: g.data.not_eligible_count, e: g.data.not_enrolled_count, rows: g.data.rows.length }));
+  ok("-109: while this batch is still Active, nobody in the file is called 'not eligible'",
+    g.data.not_eligible_count === 0, String(g.data.not_eligible_count));
 }
 
 // ---- -102: an Ambiguous row can be EXPLAINED and RESOLVED ----

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, HttpError } from "@/lib/authz";
 import { Batch, BatchMember, DailyLog, GovtAttendanceRow } from "@/models";
-import { assertBatchInScope, assessmentHoursBar, memberAttendedHours, slotHoursPerDay } from "@/lib/rules";
+import { assertBatchInScope, assessmentHoursBar, courseIsFinished, eligibilityVerdict, memberAttendedHours, slotHoursPerDay } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 
 // R-D (CEO 14/08): the batch's own "Attendance" tab — day-wise per student, BOTH meters
@@ -21,7 +21,7 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   if (!batch) throw new HttpError(404, "Batch not found");
 
   const [members, logs, defaults] = await Promise.all([
-    BatchMember.find({ batch: id }).populate("candidate", "name sidh_candidate_id").lean<any[]>(),
+    BatchMember.find({ batch: id }).populate("candidate", "name sidh_candidate_id sidh_status").lean<any[]>(),
     DailyLog.find({ batch: id }).select("log_date present_member_ids").sort({ log_date: 1 }).lean<any[]>(),
     getDefaults(),
   ]);
@@ -38,6 +38,12 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     .select("candidate total_days_present total_working_days total_hours_minutes total_hours_raw createdAt")
     .lean<any[]>();
   const govtByCand = new Map(govtRows.map((r) => [String(r.candidate), r]));
+
+  // -109: is this cohort still teaching? "Not eligible" is a verdict and waits for the course to be
+  // over; while it runs, short hours are progress. The portal's own working-day count is the
+  // cohort-level signal (it is what the file says about how far along the batch is).
+  const portalWorkingDays = Math.max(0, ...govtRows.map((r) => Number(r.total_working_days ?? 0)));
+  const finished = courseIsFinished(batch, portalWorkingDays);
 
   const days = logs.map((l) => l.log_date);
   const rows = members.map((m) => {
@@ -67,6 +73,18 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
       attended_hours: h.attended_hours,
       basis: h.basis,
       qualified: h.qualified,
+      // -109: the verdict, and whether it is honest to give one at all. `qualified` above stays
+      // exactly as it was (portal hours ≥ bar) so every existing caller is untouched; `verdict`
+      // carries the journey gate and the course-still-running gate Umesh asked for.
+      verdict: eligibilityVerdict({
+        enrollmentStatus: m.enrollment_status,
+        sidhStatus: m.candidate?.sidh_status,
+        attendedHours: h.attended_hours,
+        requiredHours,
+        basis: h.basis,
+        courseFinished: finished,
+      }),
+      enrollment_status: m.enrollment_status ?? null,
     };
   });
 
@@ -80,5 +98,13 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     required_hours: requiredHours,
     hours_per_day: hoursPerDay,
     qualified_count: rows.filter((r) => r.qualified && !r.left_on).length,
+    // -109: the honest breakdown, so a screen can say "23 qualified, 12 still short, 10 with no
+    // hours on record, 0 genuinely not eligible" instead of lumping the last three together.
+    course_finished: finished,
+    portal_working_days: portalWorkingDays || null,
+    verdict_counts: ["qualified", "in_progress", "no_hours", "not_eligible", "not_enrolled"].reduce((acc: Record<string, number>, k) => {
+      acc[k] = rows.filter((r) => !r.left_on && r.verdict.state === k).length;
+      return acc;
+    }, {}),
   });
 });

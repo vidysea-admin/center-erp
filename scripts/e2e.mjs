@@ -346,6 +346,86 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   await req("POST", `/api/logs/${log._id}/sessions`, { present_member_ids: [mIds[1]], biometric_member_ids: [mIds[1]] }, 201);
 }
 
+// ---- -109: "not eligible" is a VERDICT, and it waits for both gates ----
+// Umesh 17/08: "jo humne student ki step-by-step journey banayi thi… jab batch assigned ho jayega
+// tab wo enrolled student me convert hoga, aur enrolled student ke liye ye not-eligible wala hoga
+// na. Pehli register karke hi na aa jaye upar." Production was worse than the complaint: BHA-SPIT-02
+// read "not eligible" for all 31 students THREE DAYS into a fifteen-day course; BHA-SPIT-01 for all
+// 45 purely because that file's decimal hours never parsed; CHI-DST-03 for all 45 with no import at
+// all. A missing-data state and an unfinished course were both rendering as a verdict about a real
+// student, on the screen where certificates get decided.
+{
+  const eRoom = (await req("POST", `/api/locations/${loc._id}/rooms`, { name: `Elig Room ${stamp}`, type: "Classroom", capacity: 30 }, 201)).data.item;
+  const eb = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, room: eRoom._id, planned_start: today, target_size: 1 }, 201)).data.item;
+  const ec = (await req("POST", "/api/candidates", { name: `Elig One ${stamp}`, phone: `830${stamp}0`, location: loc._id, program: prog._id }, 201)).data.item;
+  const em = (await req("POST", `/api/batches/${eb._id}/members`, { candidate: ec._id }, 201)).data.item;
+
+  // GATE 1 — the journey. Enrolment is not complete yet, so there is NO verdict to give.
+  const notEnrolled = (await req("GET", `/api/batches/${eb._id}/attendance`)).data.members.find((m) => String(m.member_id) === String(em._id));
+  ok("-109: a candidate who has not finished enrolling gets NO eligibility verdict",
+    notEnrolled.verdict?.state === "not_enrolled" && /not enrolled|registration/i.test(String(notEnrolled.verdict?.detail)),
+    JSON.stringify(notEnrolled.verdict));
+  ok("-109: …and it is NOT called 'not eligible' — that word is a verdict",
+    !/not eligible/i.test(String(notEnrolled.verdict?.label)), String(notEnrolled.verdict?.label));
+
+  await req("PATCH", `/api/members/${em._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+  await req("POST", `/api/batches/${eb._id}/transition`, { target: "Ready" }, 200);
+  await req("POST", `/api/batches/${eb._id}/transition`, { target: "Active" }, 200);
+
+  // GATE 2 — no portal hours on record is MISSING DATA, never a verdict.
+  const noHours = (await req("GET", `/api/batches/${eb._id}/attendance`)).data.members.find((m) => String(m.member_id) === String(em._id));
+  ok("-109: an enrolled student with no portal hours imported reads 'no portal hours yet', not 'not eligible'",
+    noHours.verdict?.state === "no_hours" && !/not eligible/i.test(String(noHours.verdict?.label)),
+    JSON.stringify(noHours.verdict));
+
+  // The batch tab must also report the honest breakdown rather than one lumped bucket.
+  const att = (await req("GET", `/api/batches/${eb._id}/attendance`)).data;
+  ok("-109: the batch reports the breakdown by state, so 'no data' is never counted as a verdict",
+    att.verdict_counts && typeof att.verdict_counts.no_hours === "number" && typeof att.verdict_counts.not_eligible === "number"
+    && att.verdict_counts.no_hours === 1 && att.verdict_counts.not_eligible === 0,
+    JSON.stringify(att.verdict_counts));
+  ok("-109: …and it says whether the course is over, which is what gates the word 'not eligible'",
+    att.course_finished === false, JSON.stringify({ finished: att.course_finished, portal_days: att.portal_working_days }));
+  ok("-109: `qualified` keeps its old meaning for every existing caller (portal hours >= bar)",
+    att.members.every((m) => m.qualified === (m.basis === "portal" && m.govt?.hours != null && m.govt.hours >= att.required_hours)));
+  await req("POST", `/api/batches/${eb._id}/transition`, { target: "Cancelled", reason: "-109 fixture done" }, 200);
+  // The roster row has to leave before the candidate record can (candidates/[id] refuses while any
+  // batch history exists) — the -102 door is exactly for this, and the pair is pinned above.
+  await req("DELETE", `/api/members/${em._id}`, { reason: "-109 fixture teardown" }, 200);
+  await req("DELETE", `/api/candidates/${ec._id}`, undefined, 200);
+}
+
+// ---- -109: a student registered from INSIDE the ERP now gets their confirmation mail ----
+// Umesh 17/08: "admin ne new student register kiya, new student ko mail nahi aaya." There were nine
+// send sites and none of them was POST /api/candidates — every registration mail lived on the
+// PUBLIC paths. The moment was never built; the transport was fine all along.
+{
+  const withMail = (await req("POST", "/api/candidates", { name: `Mail Me ${stamp}`, phone: `831${stamp}0`, email: `mailme.${stamp}@vidysea-test.local`, location: loc._id, program: prog._id }, 201)).data.item;
+  const logs = (await req("GET", "/api/test-email")).data.log ?? [];
+  const mine = logs.find((l) => String(l.entity) === "Candidate" && String(l.entity_id) === String(withMail._id));
+  ok("-109: registering a student WITH an email produces a MailLog row for that candidate",
+    !!mine && /registration is received/i.test(String(mine.subject)), JSON.stringify(mine && { to: mine.to, s: mine.subject, st: mine.status }));
+  // The wall runs with mail suppressed, so the honest outcome here is "skipped" naming the reason —
+  // what matters is that the ATTEMPT is on record per candidate, which is what "mail gaya ki nahi"
+  // actually needs to be answerable.
+  ok("-109: …and the row names its outcome honestly rather than claiming a send",
+    ["sent", "skipped", "failed"].includes(String(mine?.status)), String(mine?.status));
+
+  const noMail = (await req("POST", "/api/candidates", { name: `No Mail ${stamp}`, phone: `832${stamp}0`, location: loc._id, program: prog._id }, 201)).data.item;
+  const logs2 = (await req("GET", "/api/test-email")).data.log ?? [];
+  const skipped = logs2.find((l) => String(l.entity) === "Candidate" && String(l.entity_id) === String(noMail._id));
+  ok("-109: a phone-only student is not an error — the skip is RECORDED with its reason, not silent",
+    !!skipped && skipped.status === "skipped" && /recipient/i.test(String(skipped.reason ?? "")),
+    JSON.stringify(skipped && { st: skipped.status, r: skipped.reason, to: skipped.to }));
+  // MailLog.to is a required field, so an empty address used to make the row fail validation and the
+  // skip went unrecorded — the one case where "did it go?" was unanswerable was the case where it
+  // certainly had not. Found by this pin.
+  ok("-109: …and the row survives a missing address instead of vanishing on schema validation",
+    !!skipped && /no address on record/i.test(String(skipped.to ?? "")), String(skipped?.to));
+  await req("DELETE", `/api/candidates/${withMail._id}`, undefined, 200);
+  await req("DELETE", `/api/candidates/${noMail._id}`, undefined, 200);
+}
+
 // ---- -108: certificates are PREVIEWED and MAPPED, never committed off a filename alone ----
 // Umesh 17/08, on eight certificate files every one of which was refused: the files were correct.
 // Not one of 39 roster candidates carried a portal ID, so the matcher's lookup was EMPTY and every

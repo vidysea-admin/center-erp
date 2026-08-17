@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, isScoped, HttpError } from "@/lib/authz";
 import { requirePerm, requireView } from "@/lib/permissions";
 import { Batch, GovtAttendanceImport, GovtAttendanceRow } from "@/models";
-import { assessmentHoursBar, memberAttendedHours } from "@/lib/rules";
+import { assessmentHoursBar, courseIsFinished, eligibilityVerdict, memberAttendedHours } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
 
@@ -48,8 +48,9 @@ export const GET = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   const defaults = await getDefaults();
   const batchIds = [...new Set([imp.batch?._id, ...rows.map((r) => r.batch?._id ?? r.batch)].filter(Boolean).map(String))];
   const batches = batchIds.length
-    ? await Batch.find({ _id: { $in: batchIds } }).populate("program", "hours duration_days scheme").select("program").lean<any[]>()
+    ? await Batch.find({ _id: { $in: batchIds } }).populate("program", "hours duration_days scheme").select("program status").lean<any[]>()
     : [];
+  const batchById = new Map(batches.map((b) => [String(b._id), b]));
   const bars = new Map<string, { required_hours: number; min_pct: number; source: string }>();
   for (const b of batches) {
     const bar = await assessmentHoursBar(b.program?.scheme, b.program, defaults.min_attendance_pct ?? 50);
@@ -58,7 +59,24 @@ export const GET = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   const withVerdict = rows.map((r) => {
     const bid = String(r.batch?._id ?? r.batch ?? imp.batch?._id ?? "");
     const bar = bars.get(bid);
-    if (!bar) return { ...r, govt_hours: r.total_hours_minutes != null ? Math.round(r.total_hours_minutes / 60) : null, required_hours: null, qualified: null };
+    // No bar means no batch to judge against — an unmatched row, an ambiguous one, or a trainer's.
+    // -109: it still gets a verdict OBJECT, so every row is accounted for in one of the five states
+    // and the summary counts always add up to the row count. Found by the counts pin: four such rows
+    // carried no verdict at all and silently fell out of every bucket.
+    if (!bar) {
+      return {
+        ...r,
+        govt_hours: r.total_hours_minutes != null ? Math.round(r.total_hours_minutes / 60) : null,
+        required_hours: null, qualified: null,
+        verdict: {
+          state: "not_enrolled", qualified: false,
+          label: r.trainer ? "Trainer row" : "Not matched to a student",
+          detail: r.trainer
+            ? "this row is a trainer's attendance, not a candidate's — eligibility does not apply"
+            : `this row is ${String(r.match_status).toLowerCase()}, so there is no enrolled student to judge — resolve the match first`,
+        },
+      };
+    }
     const h = memberAttendedHours({
       internalDays: r.internal_days_present ?? 0,
       hoursPerDay: null, // QA-085: never assume a session length here
@@ -67,7 +85,24 @@ export const GET = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
     });
     // No hour figure on the portal row is UNKNOWN, not "not eligible" — the shared verdict
     // returns false for both, and saying "not eligible" about a blank would be a lie.
-    return { ...r, govt_hours: h.govt_hours, required_hours: bar.required_hours, qualified: h.govt_hours == null ? null : h.qualified };
+    //
+    // -109 (Umesh 17/08): and neither is "below the bar" a verdict while the course is still
+    // running. This grid was calling 31 students at Bhadohi "not eligible" three days into a
+    // fifteen-day programme. Same shared eligibilityVerdict as the batch Attendance tab, so the two
+    // screens cannot say different things about one student. The row's own working-day count is the
+    // cohort signal — it is what this very file says about how far along the batch is.
+    const b = batchById.get(bid);
+    const verdict = eligibilityVerdict({
+      // A portal row exists for this person, so the portal has them on the course; the journey gate
+      // is the batch member's, and an unmatched row has no member to ask.
+      enrollmentStatus: r.match_status === "Matched" && r.batch_member ? "Completed" : null,
+      sidhStatus: "Registered",
+      attendedHours: h.govt_hours,
+      requiredHours: bar.required_hours,
+      basis: h.govt_hours == null ? null : "portal",
+      courseFinished: courseIsFinished(b, r.total_working_days),
+    });
+    return { ...r, govt_hours: h.govt_hours, required_hours: bar.required_hours, qualified: h.govt_hours == null ? null : h.qualified, verdict };
   });
   const impBar = bars.get(String(imp.batch?._id ?? "")) ?? (bars.size === 1 ? [...bars.values()][0] : null);
 
@@ -77,9 +112,12 @@ export const GET = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
     required_hours: impBar?.required_hours ?? null,
     min_attendance_pct: impBar?.min_pct ?? null,
     min_attendance_source: impBar?.source ?? null,
-    qualified_count: withVerdict.filter((r) => r.qualified === true).length,
-    not_eligible_count: withVerdict.filter((r) => r.qualified === false).length,
-    no_hours_count: withVerdict.filter((r) => r.qualified == null).length,
+    qualified_count: withVerdict.filter((r) => r.verdict?.state === "qualified").length,
+    // -109: split what used to be one "not eligible" bucket. Only the LAST of these is a verdict.
+    in_progress_count: withVerdict.filter((r) => r.verdict?.state === "in_progress").length,
+    no_hours_count: withVerdict.filter((r) => r.verdict?.state === "no_hours").length,
+    not_eligible_count: withVerdict.filter((r) => r.verdict?.state === "not_eligible").length,
+    not_enrolled_count: withVerdict.filter((r) => r.verdict?.state === "not_enrolled").length,
   });
 });
 

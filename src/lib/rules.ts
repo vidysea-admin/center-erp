@@ -1896,6 +1896,92 @@ export function memberAttendedHours(opts: {
   };
 }
 
+// ---------- The eligibility VERDICT, and when it is honest to give one (-109) ----------
+// Umesh, 17/08: "jo humne student ke step-by-step journey banayi thi — documents update ho gaye,
+// registration ho gaya, NSDC portal pe registration ho gaya, batch assigned ho gaya… jab batch
+// assigned ho jayega tab wo ENROLLED student me convert hoga, aur enrolled student ke liye ye
+// not-eligible wala hoga na. Pehli register karke hi na aa jaye upar."
+//
+// He is right, and production was worse than the complaint. Measured on 17/08: BHA-SPIT-02 read
+// "not eligible" for all 31 students THREE DAYS into a fifteen-day programme; BHA-SPIT-01 read it
+// for all 45 purely because that file's decimal hours never parsed (-106); CHI-DST-03 read it for
+// all 45 with no import at all; on DST-01, 20 of the 29 had no hours on record whatsoever. So a
+// MISSING-DATA state and an UNFINISHED COURSE were both being rendered as a negative verdict about
+// a real student — on the very screen where certificates get decided.
+//
+// Two gates, therefore, and this is the only place either is decided:
+//   1. the JOURNEY gate (Umesh's answer) — an eligibility verdict belongs to an ENROLLED student.
+//      Before that the honest thing to show is where they are in the journey.
+//   2. the TIME gate — "not eligible" is a verdict, so it waits until the course is actually over.
+//      While it runs, a student below the bar is IN PROGRESS, not rejected.
+export type EligibilityVerdict = {
+  state: "qualified" | "in_progress" | "no_hours" | "not_eligible" | "not_enrolled";
+  label: string;
+  detail: string;
+  qualified: boolean; // kept for every existing caller — true ONLY for a real pass of the bar
+};
+export function eligibilityVerdict(opts: {
+  enrollmentStatus?: string | null;   // BatchMember.enrollment_status — "Completed" = enrolled (Rule 21)
+  sidhStatus?: string | null;         // where the candidate is in portal registration
+  attendedHours: number | null;       // from memberAttendedHours — portal hours, or null
+  requiredHours: number;
+  basis: "portal" | "estimate" | null;
+  courseFinished: boolean;            // batch past teaching, or the portal's own working days complete
+}): EligibilityVerdict {
+  const { enrollmentStatus, sidhStatus, attendedHours, requiredHours, basis, courseFinished } = opts;
+
+  // 1. The journey gate. A candidate who has not finished enrolling has not started earning hours,
+  //    so "eligible / not eligible" is not a question that has been asked of them yet.
+  if (enrollmentStatus !== "Completed") {
+    const where = sidhStatus === "Registration Failed" ? "portal registration failed"
+      : sidhStatus !== "Registered" ? "portal registration pending"
+        : enrollmentStatus === "In Progress" ? "enrolment in progress"
+          : "not enrolled yet";
+    return {
+      state: "not_enrolled", qualified: false,
+      label: "Not enrolled yet",
+      detail: `${where} — attendance hours are counted once the student is enrolled, so there is no eligibility verdict to give yet`,
+    };
+  }
+
+  // 2. Qualified is the one verdict that never needs to wait: the bar has been cleared.
+  //    QA-085 holds — only the PORTAL's hour meter can produce it, never an estimate.
+  if (basis === "portal" && attendedHours != null && attendedHours >= requiredHours) {
+    return { state: "qualified", qualified: true, label: "Qualified", detail: `${attendedHours} of ${requiredHours} hrs on the government portal` };
+  }
+
+  // 3. No hours at all is missing DATA, and saying "not eligible" about it is a lie about a student.
+  if (attendedHours == null || basis !== "portal") {
+    return {
+      state: "no_hours", qualified: false,
+      label: "No portal hours yet",
+      detail: "the government portal export for this student has not been imported (or its hours column could not be read) — nothing is known about their attendance yet",
+    };
+  }
+
+  // 4. Below the bar. While the course runs that is progress, not a verdict.
+  if (!courseFinished) {
+    return {
+      state: "in_progress", qualified: false,
+      label: `${attendedHours} of ${requiredHours} hrs so far`,
+      detail: `still ${Math.max(0, requiredHours - attendedHours)} hrs short, and the course is still running — this is progress, not a verdict`,
+    };
+  }
+  return {
+    state: "not_eligible", qualified: false,
+    label: "Not eligible",
+    detail: `${attendedHours} of ${requiredHours} hrs and the course is over — short by ${Math.max(0, requiredHours - attendedHours)} hrs (Rule 45: no certificate without a Pass, and no assessment without the hours)`,
+  };
+}
+
+// Has this cohort finished teaching? Either the batch has left Active, or the portal's own
+// working-day count has reached the programme's length — whichever says "over" first.
+export function courseIsFinished(batch: any, portalWorkingDays: number | null | undefined): boolean {
+  if (["Closing", "Completed", "Closed", "Cancelled"].includes(String(batch?.status))) return true;
+  const days = Number(batch?.program?.duration_days ?? 0);
+  return !!days && Number(portalWorkingDays ?? 0) >= days;
+}
+
 // Rule T7 - the counters the client tracks per centre x job role, DERIVED rather than stored.
 // The two sheets already disagree with each other (nominated 23 vs 20, certified 18 vs 16),
 // which is what happens when the same number is kept in two places; computing it here makes the

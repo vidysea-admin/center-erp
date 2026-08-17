@@ -184,8 +184,15 @@ function Inner() {
               <b>Qualified</b> = at least <b>{detail.required_hours} hours</b> on the government portal&apos;s own hour meter
               {detail.min_attendance_pct ? ` (${detail.min_attendance_pct}% of the programme)` : ""} —{" "}
               {detail.min_attendance_source === "scheme" ? "from the scheme master" : "from Defaults, until the scheme master carries hours"}.
-              Below it is <b>not eligible</b> for assessment. A row with no hour figure is left unanswered, never called not-eligible.
-              {" "}<span className="text-gray-400">Qualified {detail.qualified_count} · not eligible {detail.not_eligible_count}{detail.no_hours_count ? ` · no hours ${detail.no_hours_count}` : ""}</span>
+              {" "}<b>&ldquo;Not eligible&rdquo; is only said once the course is over</b> — while it runs, a student below the bar is still
+              in progress, and a student whose portal hours have not been imported is simply unknown. Neither is a verdict.
+              <span className="block text-gray-500">
+                <span className="text-green-700">Qualified {detail.qualified_count}</span>
+                {detail.in_progress_count > 0 && <> · <span className="text-amber-700">{detail.in_progress_count} still short (course running)</span></>}
+                {detail.no_hours_count > 0 && <> · {detail.no_hours_count} with no hours in this file</>}
+                {detail.not_eligible_count > 0 && <> · <span className="text-red-700">{detail.not_eligible_count} not eligible</span></>}
+                {detail.not_enrolled_count > 0 && <> · {detail.not_enrolled_count} not matched to an enrolled student</>}
+              </span>
             </p>
           )}
           <DataTable rows={detail.rows} defaultSort={{ key: "name", dir: "asc" }} columns={[
@@ -203,16 +210,24 @@ function Inner() {
             { key: "total_hours_raw", label: "Hours", mobile: false },
             {
               // -102: the verdict those hours produce — the column Manish found missing.
+              // -109 (Umesh 17/08): this column used to be two-way — Qualified, or "Not eligible"
+              // for everyone else. That called 31 Bhadohi students not-eligible three days into a
+              // fifteen-day course, 45 more over a parse failure, and 20 on DST-01 who simply were
+              // not in the import. The verdict comes from the shared eligibilityVerdict now, which
+              // separates "still short, course running" and "no hours imported" from an actual
+              // verdict — and only says "Not eligible" once the course is over.
               key: "qualified", label: "Qualification", sortable: true,
-              sortValue: (r: any) => r.qualified === true ? 2 : r.qualified === false ? 1 : 0,
-              filterText: (r: any) => r.qualified === true ? "Qualified" : r.qualified === false ? "Not eligible" : "no hours",
-              render: (r: any) => r.qualified === true
-                ? <span className="whitespace-nowrap rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-[11px] font-medium text-green-700"
-                    title={`${r.govt_hours} portal hours ≥ ${r.required_hours} required`}>Qualified</span>
-                : r.qualified === false
-                  ? <span className="whitespace-nowrap rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] font-medium text-gray-600"
-                      title={`${r.govt_hours} portal hours, ${r.required_hours} required`}>Not eligible</span>
-                  : <span className="whitespace-nowrap text-[11px] text-gray-400" title="The portal row carries no hour figure, so this cannot be answered yet.">— no hours</span>,
+              sortValue: (r: any) => ({ qualified: 4, in_progress: 3, no_hours: 2, not_enrolled: 1, not_eligible: 0 } as any)[r.verdict?.state] ?? 0,
+              filterText: (r: any) => r.verdict?.label ?? "",
+              render: (r: any) => {
+                const v = r.verdict;
+                if (!v) return <span className="whitespace-nowrap text-[11px] text-gray-400">—</span>;
+                const tone = v.state === "qualified" ? "border-green-200 bg-green-50 text-green-700 font-medium"
+                  : v.state === "in_progress" ? "border-amber-200 bg-amber-50 text-amber-700"
+                    : v.state === "not_eligible" ? "border-red-200 bg-red-50 text-red-700 font-medium"
+                      : "border-gray-200 bg-gray-50 text-gray-500";
+                return <span title={v.detail} className={`whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] ${tone}`}>{v.label}</span>;
+              },
             },
             {
               key: "match_status", label: "Match", sortable: true, render: (r: any) => (
