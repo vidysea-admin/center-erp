@@ -39,7 +39,13 @@ const ROUTE_RULES: { prefix: string; roles?: string[]; perm?: string }[] = [
   { prefix: "/locations", roles: ["Admin", "Operations", "Location", "Enrollment"] },
   { prefix: "/trainers", roles: ["Admin", "Operations", "Location"] },
   { prefix: "/candidates", roles: ["Admin", "Operations", "Location", "Enrollment"] },
-  { prefix: "/govt-attendance", roles: ["Admin", "Operations"], perm: "attendance.govt" },
+  // -107 (Umesh 17/08: "trainer dashboard mai ek aur remaining hai — upload government sheet of
+  // attendance"): Trainer joins the CEILING here, and the permission still decides. It is OFF for
+  // the Trainer role by default, so the three live trainers who only mark daily attendance see
+  // nothing new — but a trainer Umesh grants `attendance.govt` to now actually gets a door.
+  // Before this the grant was DEAD: Anuj Kumar already carried the right and no screen ever
+  // showed it, because every gate read the ROLE while the API read the PERMISSION.
+  { prefix: "/govt-attendance", roles: ["Admin", "Operations", "Trainer"], perm: "attendance.govt" },
   { prefix: "/costs", roles: ["Admin", "Operations"], perm: "costs.manage" },
   { prefix: "/admin", roles: ["Admin"] },
 ];
@@ -79,7 +85,7 @@ const NAV = [
   { href: "/batches", label: "Batches", Icon: IconCap },
   // 2026-08-12: the portal attendance export Manish uploads, reconciled against our daily logs.
   // 2026-08-13 (Umesh): attendance is OFF the principal/SPOC plate entirely — Location removed.
-  { href: "/govt-attendance", label: "Govt Attendance", Icon: IconCap, roles: ["Admin", "Operations"], perm: "attendance.govt" },
+  { href: "/govt-attendance", label: "Govt Attendance", Icon: IconCap, roles: ["Admin", "Operations", "Trainer"], perm: "attendance.govt" },
   { href: "/costs", label: "Costs", Icon: IconWallet, roles: ["Admin", "Operations"], perm: "costs.manage" },
 ] as { href: string; label: string; Icon: any; badge?: string; roles?: string[]; perm?: string }[];
 

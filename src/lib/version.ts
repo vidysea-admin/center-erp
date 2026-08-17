@@ -3,8 +3,18 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-106";
+export const RELEASE = "2026.08.14-107";
 export const RELEASE_NOTE =
+  "-107: the trainer dashboard gets the government-sheet upload - and the reason it was missing "
+  "was a DEAD TOGGLE, not an absent feature. The importer API has always gated on the "
+  "attendance.govt right, but every screen gated on the ROLE, so granting a trainer that right "
+  "changed nothing anywhere: Anuj Kumar carries it on production and never saw a door. All four "
+  "gates now read the right - the sidebar, the batch Attendance tab, the Daily Execution history "
+  "and the Home Today row - and Trainer joins the route ceiling so the grant can actually reach a "
+  "screen. It stays OFF for the Trainer role by default, so the trainers who only mark daily logs "
+  "see nothing new; a trainer Umesh grants it to gets the upload on their own dashboard. Pinned "
+  "both ways: without the right the API refuses (403), with it the importer opens, and revoking "
+  "closes it again. "
   "-106: the portal ships the hours column in TWO shapes and we only read one. Found by smoking "
   "the new qualification column against REAL production imports instead of fixtures: the live "
   "Attendance Report 06-08-2026 on Bhadohi SPIT-01 carries hours as decimals (26.6, 73.99, "

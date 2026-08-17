@@ -8,6 +8,7 @@ import { trainerSelectGroups } from "@/lib/trainer-select";
 import { slotHoursPerDay } from "@/lib/slot-rules";
 import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, HealthBanner, NameCell, Section, Tabs, inputCls, statusLabel } from "@/components/ui";
 import { Activity } from "@/components/activity";
+import { usePerms } from "@/components/shell";
 import { flushQueue, fmtBytes, getLastUploadInfo, getQueue, pickRecorderMime, uploadWithRetry, videoKnobs, type VideoKnobs } from "@/lib/upload";
 import { BASE_PATH } from "@/lib/base-path";
 import { bulkSmsCsv, smsLink, waLink } from "@/lib/messaging";
@@ -911,6 +912,7 @@ function AttendanceTab({ batchId, batch, role, setError }: any) {
   // (POST /logs/bulk → createDailyLogChecked). Admin/Ops/Trainer (batches.daily_log);
   // Trainer's Rule 53 window still applies per day and is reported per day.
   const canMark = role === "Admin" || role === "Operations" || role === "Trainer";
+  const { can, loaded: permsLoaded } = usePerms(); // -107: the portal-sheet door follows the RIGHT
   const batchActive = ["Active", "Closing"].includes(batch?.status);
   const todayKey = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
   const [grid, setGrid] = useState<null | { from: string; to: string; trainer_present: boolean; absent: Record<string, Set<string>> }>(null);
@@ -984,8 +986,11 @@ function AttendanceTab({ batchId, batch, role, setError }: any) {
   // and its only button sat inside Daily Execution, which stays locked until the batch is
   // Active — so on every Planning/Ready batch the one control that does the job was
   // invisible while the tab NAMED Attendance showed a read-only table of zeros. Same link,
-  // same Admin/Operations condition (attendance.govt), here, in every batch status.
-  const canImport = role === "Admin" || role === "Operations";
+  // same condition, here, in every batch status.
+  // -107: that condition was the ROLE while the API has always read the PERMISSION
+  // (`requirePerm(user, "attendance.govt")`), so granting a trainer the right changed nothing on
+  // screen — Anuj Kumar carries it on production and never saw a button. The right decides now.
+  const canImport = !permsLoaded || can("attendance.govt", "edit");
   const importLink = canImport ? (
     <a className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700" href={`${BASE_PATH}/govt-attendance?batch=${batchId}`}>
       ⬆ Upload attendance sheet (bulk)
@@ -1169,6 +1174,9 @@ function AttendanceTab({ batchId, batch, role, setError }: any) {
 
 function DailyExecution({ batchId, batch, role, setError }: any) {
   const canMark = role !== "Location";
+  // -107: the bulk portal-sheet link is gated on the RIGHT, matching the API.
+  const { can: canPerm, loaded: permsReady } = usePerms();
+  const canImportSheet = !permsReady || canPerm("attendance.govt", "edit");
   const [logs, setLogs] = useState<any[]>([]);
   const [members, setMembers] = useState<any[]>([]);
   const [form, setForm] = useState<any>({ log_date: toInputDate(new Date()), present: new Set<string>(), biometric: new Set<string>(), photos: [], videos: [] });
@@ -1475,8 +1483,10 @@ function DailyExecution({ batchId, batch, role, setError }: any) {
           Umesh (13/08): "bulk sheet upload wali functionality show nahi ho rahi" — a text link
           was invisible; it is a real button now. */}
       <Section title="History" actions={
-        // Bulk portal import is Admin/Ops work (attendance.govt) — not the trainer's, not the principal's.
-        (role === "Admin" || role === "Operations") ? (
+        // -107 (Umesh 17/08): the portal-sheet door follows the `attendance.govt` RIGHT, not the
+        // role. Off for the Trainer role by default, so this stays Admin/Ops work unless a specific
+        // trainer is granted it — which Umesh had already done for Anuj without any door appearing.
+        canImportSheet ? (
           <a className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700" href={`${BASE_PATH}/govt-attendance?batch=${batchId}`}>
             ⬆ Upload attendance sheet (bulk)
           </a>

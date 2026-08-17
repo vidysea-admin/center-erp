@@ -574,6 +574,43 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
     ok("QA-153: a trainer's effective rights carry no attendance.govt / costs.manage / sheet.sources (so Govt Attendance, Costs, Sheet Sync do not exist for them)",
       meTr.status === 200 && meTr.data.role === "Trainer" && !meTr.data.levels?.["attendance.govt"] && !meTr.data.levels?.["costs.manage"] && !meTr.data.levels?.["sheet.sources"] && meTr.data.levels?.["batches.daily_log"] === "edit",
       JSON.stringify(meTr.data.levels));
+    // ---- -107 (Umesh 17/08): "trainer dashboard mai ek aur remaining hai — upload government
+    // sheet of attendance." The grant was DEAD: the importer's API has always gated on
+    // `attendance.govt`, but every screen gated on the ROLE, so a trainer granted the right (Anuj
+    // Kumar carries it on production) never got a door. The right decides now — and it stays OFF
+    // for the Trainer role by default, so a trainer who only marks daily logs sees nothing new.
+    {
+      // Default trainer: no right, and the API says so — the door genuinely does not exist.
+      ok("-107: a trainer WITHOUT the right is still refused the portal importer (403), by the API",
+        (await req(trainer, "GET", "/api/govt-attendance")).status === 403);
+      // Grant it to this one trainer, the way Umesh did for Anuj.
+      const target = ((await req(admin, "GET", "/api/users?limit=200")).data.items ?? [])
+        .find((u) => u.email === "trainer.jpr03@vidysea.com");
+      if (target) {
+        const before = target.extra_permissions ?? [];
+        const grant = await req(admin, "PATCH", `/api/users/${target._id}`, { extra_permissions: [...new Set([...before, "attendance.govt"])] });
+        ok("-107: an Admin can grant attendance.govt to one specific trainer", [200, 201].includes(grant.status), `${grant.status} ${JSON.stringify(grant.data).slice(0, 120)}`);
+        const trAgain = await login(target.email, PW);
+        if (trAgain) {
+          const meNow = await req(trAgain, "GET", "/api/permissions/me");
+          ok("-107: …their effective rights now carry attendance.govt at edit level",
+            meNow.data?.levels?.["attendance.govt"] === "edit", JSON.stringify(meNow.data?.levels?.["attendance.govt"]));
+          ok("-107: …and the importer OPENS for them (200, not 403) — the grant is finally live",
+            (await req(trAgain, "GET", "/api/govt-attendance")).status === 200);
+        } else {
+          ok("-107: the granted trainer could be signed in", false, "login failed for " + target.email);
+        }
+        // Revoke and confirm the door closes again — a right must narrow as well as widen.
+        await req(admin, "PATCH", `/api/users/${target._id}`, { extra_permissions: before });
+        const trRevoked = await login(target.email, PW);
+        if (trRevoked) {
+          ok("-107: revoking it closes the door again (403) — the toggle works both ways",
+            (await req(trRevoked, "GET", "/api/govt-attendance")).status === 403);
+        }
+      } else {
+        ok("-107: a trainer account exists to grant the right to", false, "no active Trainer user found");
+      }
+    }
     const meSp = await req(spoc, "GET", "/api/permissions/me");
     ok("QA-153: a SPOC's rights carry no attendance.govt / costs.manage (Umesh 13/08: attendance is off the SPOC plate)",
       meSp.status === 200 && meSp.data.role === "Location" && !meSp.data.levels?.["attendance.govt"] && !meSp.data.levels?.["costs.manage"], JSON.stringify(meSp.data.levels));

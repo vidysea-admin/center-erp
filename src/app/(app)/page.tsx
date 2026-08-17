@@ -5,6 +5,7 @@ import { useSession } from "next-auth/react";
 import { api, fmtDT, fmtDate } from "@/lib/client";
 import { Chip, KPI, Section, Btn, ErrorBanner } from "@/components/ui";
 import { IconPin, IconCap, IconUsers, IconUser, IconAlert } from "@/components/icons";
+import { usePerms } from "@/components/shell";
 
 // Home — Action Center. Every KPI and every queue row is clickable and lands on the
 // screen where the action happens.
@@ -19,6 +20,9 @@ export default function HomePage() {
   // The three-way mapping queue (2026-08-12). Fetched on its own rather than folded into
   // /api/home, because it walks every target and must not slow down the rest of the page.
   const [mapping, setMapping] = useState<any>(null);
+  // -107: the portal-sheet row follows the `attendance.govt` RIGHT, as the API always has.
+  const { can, loaded: permsLoaded } = usePerms();
+  const canImportGovt = permsLoaded ? can("attendance.govt", "edit") : role === "Admin" || role === "Operations";
 
   const load = () => api("/api/home").then(setData).catch((e) => setError(e.message));
   useEffect(() => { load(); }, []);
@@ -87,7 +91,12 @@ export default function HomePage() {
                   ? <span className="shrink-0 rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-medium text-green-700">✓ logged today — add photos / update</span>
                   : <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">not logged yet</span>} />
             ))}
-            {(role === "Admin" || role === "Operations") && (
+            {/* -107 (Umesh 17/08: "trainer dashboard mai ek aur remaining hai — upload government
+                sheet of attendance"): this row followed the ROLE while the API follows the
+                `attendance.govt` RIGHT, so a trainer who had been granted it — Anuj Kumar, on
+                production — still had no way in. The right decides now; it is off for the Trainer
+                role by default, so nothing appears for the trainers who only mark daily logs. */}
+            {canImportGovt && (
               <Row href="/govt-attendance"
                 left={<>
                   <span className="font-medium text-blue-700">Upload government portal attendance</span>
