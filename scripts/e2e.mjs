@@ -802,6 +802,75 @@ await req("POST", `/api/batches/${b4._id}/transition`, { target: "Completed" }, 
   ok("-101: …and the file is still there after the refusal", /\/api\/files\//.test(still.certificate_file ?? ""), still.certificate_file);
 }
 
+// ---- -103: a candidate can be UN-MARKED — the last missing D on the results row ----
+// Found by the -102 cleanup actually running on production: the new member-removal door refused
+// the maker's two test rows because each carried a Pass result, and nothing could remove a
+// CandidateResult — only PATCH it to another value. Two live consequences: a row created on the
+// wrong candidate was permanent, and because `legacy` is decided by "zero CandidateResult rows",
+// one accidental row flipped a batch to per-candidate marking forever and its closure figures then
+// derive from that row. Narrow door, same shape as the -101 certificate one.
+{
+  // target_size 1 — Rule 16's roster_80pct check is against the TARGET, so a 2-seat batch with one
+  // candidate never reaches Ready.
+  const rb = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, room: room._id, planned_start: today, target_size: 1 }, 201)).data.item;
+  const rc = (await req("POST", "/api/candidates", { name: `Unmark Me ${stamp}`, phone: `85000${stamp.slice(0, 5)}`, location: loc._id, program: prog._id }, 201)).data.item;
+  const rm2 = (await req("POST", `/api/batches/${rb._id}/members`, { candidate: rc._id }, 201)).data.item;
+  await req("PATCH", `/api/members/${rm2._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+  await req("POST", `/api/batches/${rb._id}/transition`, { target: "Ready" }, 200);
+  await req("POST", `/api/batches/${rb._id}/transition`, { target: "Active" }, 200);
+  ok("-103 fixture: a batch with no results at all reads as legacy (batch-level figures)",
+    (await req("GET", `/api/batches/${rb._id}/results`)).data.legacy !== false, String((await req("GET", `/api/batches/${rb._id}/results`)).data.legacy));
+  await req("PUT", `/api/batches/${rb._id}/results`, { rows: [{ member: String(rm2._id), result: "Pass", score: 71, max_score: 100, assessed_on: today }] }, 200);
+  const rRow = (await req("GET", `/api/batches/${rb._id}/results`)).data.items.find((i) => String(i.result?.candidate?._id ?? i.result?.candidate) === String(rc._id)).result;
+  ok("-103 fixture: ONE row flips the batch to per-candidate marking (this is why an accidental row mattered)",
+    (await req("GET", `/api/batches/${rb._id}/results`)).data.legacy === false);
+  // The member-removal door (-102) must refuse while that row exists — the guard that found this gap.
+  const blockedByResult = await req("DELETE", `/api/members/${rm2._id}`, { reason: "-103 pin: should be refused, they carry a result" });
+  ok("-102/-103: the member-removal door refuses a row that carries a result (409), naming it",
+    blockedByResult.status === 409 && /assessment\/certification result/i.test(String(blockedByResult.data?.error ?? "")),
+    `${blockedByResult.status} ${String(blockedByResult.data?.error ?? "").slice(0, 110)}`);
+  ok("-103: un-marking without a reason is refused (400) — it destroys the assessment history", (await req("DELETE", `/api/results/${rRow._id}`)).status === 400);
+  // A certificate FILE must leave first, or the object would be orphaned in the bucket.
+  // Rule 46 owns this ladder: Pending → Processing → Generated (a number is required to generate).
+  await req("PATCH", `/api/results/${rRow._id}`, { certificate_status: "Processing" }, 200);
+  await req("PATCH", `/api/results/${rRow._id}`, { certificate_status: "Generated", certificate_no: "CERT-U" + stamp, certificate_date: today }, 200);
+  const certPdf = new Uint8Array([0x25, 0x50, 0x44, 0x46]);
+  const fdU = new FormData();
+  fdU.append("file", new File([certPdf], "unmark-cert.pdf", { type: "application/pdf" }));
+  fdU.append("folder_centre", "_e2e"); fdU.append("folder_kind", "certificates");
+  const upU = await fetch(`${BASE}/api/upload`, { method: "POST", headers: { cookie }, body: fdU }).then((r) => r.json()).catch(() => ({}));
+  if (upU?.url) {
+    await req("PATCH", `/api/results/${rRow._id}`, { certificate_file: upU.url }, 200);
+    const withFile = await req("DELETE", `/api/results/${rRow._id}`, { reason: "-103 pin: should be refused while a file is attached" });
+    ok("-103: un-marking is refused while a certificate FILE is attached (409) — remove the file first, never orphan the object",
+      withFile.status === 409 && /certificate first/i.test(String(withFile.data?.error ?? "")), `${withFile.status} ${String(withFile.data?.error ?? "").slice(0, 110)}`);
+    await req("DELETE", `/api/results/${rRow._id}/certificate`, { reason: "-103 pin: clearing the file so the row can be un-marked" }, 200);
+  }
+  // An ATTESTED closure blocks it — the figures have been reported.
+  await req("PUT", `/api/batches/${rb._id}/closure`, { assessment_status: "Completed", assessment_date: today }, 200);
+  const attested = await req("DELETE", `/api/results/${rRow._id}`, { reason: "-103 pin: should be refused, assessment signed off" });
+  ok("-103: un-marking is refused once assessment/certification has been signed off (409) — reported figures are not rewritten",
+    attested.status === 409 && /signed off/i.test(String(attested.data?.error ?? "")), `${attested.status} ${String(attested.data?.error ?? "").slice(0, 110)}`);
+  await req("PUT", `/api/batches/${rb._id}/closure`, { assessment_status: "Pending" }, 200);
+  // Happy path.
+  const un = await req("DELETE", `/api/results/${rRow._id}`, { reason: "-103 pin: marked against the wrong candidate" });
+  ok("-103: with nothing attested and no file, the row is un-marked (200) and the batch is told it has none left",
+    un.status === 200 && un.data?.rows_left_on_batch === 0 && un.data?.batch_returns_to_legacy === true, JSON.stringify(un.data));
+  ok("-103: the batch genuinely returns to batch-level figures — the flip is reversible now",
+    (await req("GET", `/api/batches/${rb._id}/results`)).data.legacy !== false);
+  const unAud = ((await req("GET", `/api/audit/CandidateResult/${rRow._id}`)).data.items ?? []).find((a) => a.field === "removed");
+  ok("-103: the removal is audited with the WHOLE row (result, score, certificate state, attempt count) and the reason",
+    !!unAud && /Pass/.test(JSON.stringify(unAud.old_value)) && /71/.test(JSON.stringify(unAud.old_value)) && /wrong candidate/.test(String(unAud.new_value)) && /batch-level figures/.test(String(unAud.new_value)),
+    JSON.stringify(unAud && { o: unAud.old_value, n: unAud.new_value }).slice(0, 240));
+  ok("-103: un-marking again is an honest 404", (await req("DELETE", `/api/results/${rRow._id}`, { reason: "again" })).status === 404);
+  // …and now the -102 member door lets go, which is the whole reason this exists.
+  const nowFree = await req("DELETE", `/api/members/${rm2._id}`, { reason: "-103 pin: enrolled by mistake, now un-marked" });
+  ok("-102/-103: with the result gone the roster row can finally be removed — the pair that clears a test row off a real batch",
+    nowFree.status === 200, `${nowFree.status} ${String(nowFree.data?.error ?? "").slice(0, 100)}`);
+  await req("DELETE", `/api/candidates/${rc._id}`, undefined, 200);
+  await req("POST", `/api/batches/${rb._id}/transition`, { target: "Cancelled", reason: "-103 fixture done" }, 200);
+}
+
 // Rule 47: lifecycle splits by result
 const lcPass = (await req("GET", `/api/candidates/${b4Cands[0]._id}`)).data.item;
 const lcFail = (await req("GET", `/api/candidates/${b4Cands[1]._id}`)).data.item;

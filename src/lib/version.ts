@@ -3,8 +3,18 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-102";
+export const RELEASE = "2026.08.14-103";
 export const RELEASE_NOTE =
+  "-103: a candidate can be UN-MARKED. Found by running the -102 cleanup on production: the new " +
+  "member-removal door correctly refused two test roster rows because each carried a Pass result, " +
+  "and nothing could remove a CandidateResult - only PATCH it to another value. A row created on " +
+  "the wrong candidate was permanent, and because `legacy` is decided by 'zero result rows', one " +
+  "accidental row flipped a batch to per-candidate marking forever and its closure figures then " +
+  "derived from it. DELETE /api/results/<id> un-marks: reason required, refused on a Completed or " +
+  "Cancelled batch (DEC-6), refused once assessment or certification has been signed off, refused " +
+  "while a certificate file is attached (remove that first, so no object is orphaned), and audited " +
+  "with the whole row including the attempt count. With the last row gone the batch returns to " +
+  "batch-level figures, and the -102 member door finally lets go. " +
   "-102: the six things that got in Manish's way during the 17/08 walkthrough. A trainer had to " +
   "hunt four clicks for the one thing they sign in to do, so Home now opens with 'log your " +
   "today's candidate attendance' per running batch (and the portal-import door for Admin/Ops) - " +
