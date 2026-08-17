@@ -3,8 +3,14 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-103";
+export const RELEASE = "2026.08.14-104";
 export const RELEASE_NOTE =
+  "-104: found by driving the -102 resolve drawer in a real browser, not by reading code. Two "
+  "same-name candidates carrying no portal ID rendered as two IDENTICAL option rows, so the one "
+  "screen whose entire job is 'pick the right one' gave the operator nothing to pick on - the "
+  "exact case it was built for (Manish's two Sachins). Each option now carries the phone, which "
+  "is unique per candidate, plus the enrolment date and enrollment status, which is how a centre "
+  "register is actually ordered. "
   "-103: a candidate can be UN-MARKED. Found by running the -102 cleanup on production: the new " +
   "member-removal door correctly refused two test roster rows because each carried a Pass result, " +
   "and nothing could remove a CandidateResult - only PATCH it to another value. A row created on " +

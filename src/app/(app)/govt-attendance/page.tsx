@@ -372,11 +372,21 @@ function ResolveDrawer({ importId, row, canEdit, onClose, onResolved, setError }
               {data.options.map((o: any) => (
                 <label key={String(o.candidate)} className={`flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs ${pick === String(o.candidate) ? "bg-blue-50" : "hover:bg-gray-50"}`}>
                   <input type="radio" name="cand" checked={pick === String(o.candidate)} onChange={() => setPick(String(o.candidate))} />
+                  {/* -104: two same-name candidates with no portal ID used to render as two
+                      IDENTICAL rows, which made this screen unusable for the one case it exists
+                      for. The phone separates them (required, one per candidate) and the enrolment
+                      date is how a centre register is ordered — the same things Manish uses to tell
+                      his two Sachins apart. */}
                   <span className="min-w-0 flex-1">
                     <span className="font-medium">{o.name}</span>
                     {o.sidh_candidate_id && <span className="text-gray-500"> · {o.sidh_candidate_id}</span>}
-                    {o.batch && <span className="text-gray-400"> · {o.batch}</span>}
-                    {o.left_on && <span className="text-red-600"> · dropped {fmtDate(o.left_on)}</span>}
+                    {o.phone && <span className="text-gray-500"> · {o.phone}</span>}
+                    <span className="block text-[11px] text-gray-400">
+                      {o.batch ?? "—"}
+                      {o.joined_on ? ` · enrolled ${fmtDate(o.joined_on)}` : ""}
+                      {o.enrollment_status ? ` · ${o.enrollment_status}` : ""}
+                      {o.left_on ? <span className="text-red-600"> · dropped {fmtDate(o.left_on)}</span> : null}
+                    </span>
                   </span>
                   {o.collides && <span className="shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">{o.collides}</span>}
                 </label>

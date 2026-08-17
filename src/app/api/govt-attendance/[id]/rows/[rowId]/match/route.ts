@@ -54,6 +54,13 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
         candidate: c._id, name: c.name, phone: c.phone ?? null,
         sidh_candidate_id: c.sidh_candidate_id ?? null,
         batch: m.batch?.code ?? null, left_on: m.left_on ?? null,
+        // -104: found by driving this drawer in a browser. Two same-name candidates with no portal
+        // ID rendered as two IDENTICAL rows, so the one screen whose whole job is "pick the right
+        // one" gave the operator nothing to pick on. The phone is the field that actually separates
+        // them (it is required and unique per candidate), and the enrolment date is how a centre
+        // register is usually ordered — which is exactly how Manish tells his two Sachins apart.
+        joined_on: m.joined_on ?? null,
+        enrollment_status: m.enrollment_status ?? null,
         collides: sameId ? "same portal ID" : sameName ? "same name" : null,
       };
     })

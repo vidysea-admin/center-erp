@@ -349,6 +349,14 @@ ok("the first import is still intact", (await req(admin, "GET", `/api/govt-atten
   ok("-102: …and the candidates that actually collided are offered first, labelled with WHY",
     opts.data.collisions === 2 && opts.data.options.slice(0, 2).every((o) => o.collides === "same name"),
     JSON.stringify(opts.data.options.slice(0, 3).map((o) => [o.name, o.collides])));
+  // -104, found by driving this drawer in a real browser: the two colliding options rendered
+  // IDENTICALLY (same name, no portal ID, same batch), so the screen whose only job is "pick the
+  // right one" gave the operator nothing to pick on. Each option must carry something that
+  // separates it — the phone is unique per candidate, and the enrolment date orders a register.
+  ok("-104: colliding options are DISTINGUISHABLE — each carries a phone and an enrolment date",
+    opts.data.options.filter((o) => o.collides).every((o) => !!o.phone && !!o.joined_on)
+    && new Set(opts.data.options.filter((o) => o.collides).map((o) => o.phone)).size === opts.data.collisions,
+    JSON.stringify(opts.data.options.filter((o) => o.collides).map((o) => [o.name, o.phone, o.joined_on, o.enrollment_status])));
   // A candidate on no roster here cannot receive a portal row.
   const stranger = (await req(admin, "POST", "/api/candidates", { name: `${NAME} Stranger`, phone: "9444" + STAMP, location: loc._id, program: program._id })).data.item;
   const wrong = await req(admin, "POST", `/api/govt-attendance/${done.data._id}/rows/${row._id}/match`, { candidate: stranger._id });
