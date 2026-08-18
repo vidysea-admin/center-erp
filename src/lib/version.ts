@@ -3,8 +3,24 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-116";
+// KEEP THIS FILE ASCII. -117 first shipped its note with three Devanagari lines quoting Manish;
+// tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
+// importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
+// quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
+export const RELEASE = "2026.08.14-117";
 export const RELEASE_NOTE =
+  "-117: M4-09, the last buildable half of Manish's New Batch complaints. 'yahan pe kuch aata nahi hai, "
+  "abhi bhi assign nahi karta hoon - to maan ke chalo room one hi hoga': the room dropdown was populated and "
+  "nothing was ever chosen, so every batch was created with no room and the readiness check then "
+  "failed on a room that was sitting right there. When the centre has exactly ONE room that suits "
+  "the programme it is now taken automatically and stays editable; with SEVERAL it deliberately "
+  "stays unchosen, because guessing between real rooms is how two batches quietly land in the same "
+  "room on the same days (Rule 13). And 'target size default 45 leke chalo': the number belongs to the "
+  "PROGRAMME - a 45-seat course and a 30-seat course both exist - so the form still reads it from "
+  "there; what changed is the fallback and the new-programme default, both 45 now, plus a line "
+  "under the field naming the programme's own figure when it differs. Programmes already storing 30 "
+  "keep 30 until someone edits them: silently rewriting five live programmes is a data decision, "
+  "not a UI change. "
   "-116: the button where the press actually happens, and four sheet rows I had been treating as "
   "blocked. Umesh, 18/08: 'manish sir mark complete karenge but complete button show hona chahiye "
   "right, and andar wala complete button kaam nahi kar raha na.' Both halves were true. Manish IS "

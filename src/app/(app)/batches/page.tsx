@@ -123,9 +123,17 @@ function BatchesInner() {
   const noAttendanceCount = trainerScoped.filter((b) => noAttendance(b) && ["Ready", "Active", "Closing", "Completed"].includes(b.status)).length;
 
   useEffect(() => {
-    if (form.location) api(`/api/locations/${form.location}/rooms`).then((d) => setRooms(d.items)).catch(() => setRooms([]));
+    if (form.location) api(`/api/locations/${form.location}/rooms`).then((d) => {
+      setRooms(d.items);
+      // -117 (M4-09, Manish 17/08 [03:44] "मान के चलो रूम वन ही होगा"): when the centre has exactly
+      // one room that suits the programme, there is no decision to make — take it, and let the
+      // operator change it. With SEVERAL rooms it stays unchosen on purpose: picking one for them is
+      // how two batches quietly end up in the same room on the same days (Rule 13).
+      const usable = (d.items ?? []).filter((r: any) => !program?.requires_lab || r.type === "Lab");
+      if (usable.length === 1) set("room", usable[0]._id);
+    }).catch(() => setRooms([]));
     else setRooms([]);
-  }, [form.location]);
+  }, [form.location, form.program]);
 
   const program = programs.find((p) => p._id === form.program);
 
@@ -508,8 +516,13 @@ function BatchesInner() {
               {rooms.map((r) => <option key={r._id} value={r._id}>{r.name} ({r.type})</option>)}
             </select>
           </Field>
-          <Field label={`Target size (default ${program?.default_batch_size ?? 30})`}>
-            <input type="number" className={inputCls} value={form.target_size ?? ""} onChange={(e) => set("target_size", +e.target.value)} placeholder={String(program?.default_batch_size ?? 30)} />
+          <Field label={`Target size (default ${program?.default_batch_size ?? 45})`}>
+            <input type="number" className={inputCls} value={form.target_size ?? ""} onChange={(e) => set("target_size", +e.target.value)} placeholder={String(program?.default_batch_size ?? 45)} />
+            {program && program.default_batch_size !== 45 && (
+              <span className="mt-0.5 block text-[11px] text-gray-500">
+                {program.name} is set to {program.default_batch_size} — change it in Admin → Programs if 45 is right for it too.
+              </span>
+            )}
           </Field>
           {earliestStart && !startsTooEarly && (
             <p className="rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-700">

@@ -96,7 +96,7 @@ const ProgramSchema = new Schema({
   // (H-PROGRAMMES); until set, readers derive duration_days × 8 (the full-day session length).
   hours: Number,
   buffer_days: { type: Number, required: true, default: 5 },
-  default_batch_size: { type: Number, required: true, default: 30 },
+  default_batch_size: { type: Number, required: true, default: 45 }, // -117 (M4-09, Manish): 45, not 30 — per PROGRAMME, so existing ones keep their own figure until edited
   requires_lab: { type: Boolean, default: false },
   trainer_skill: { type: String, required: true },
   completion_deadline_days: { type: Number, required: true, default: 90 },

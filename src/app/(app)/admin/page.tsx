@@ -62,7 +62,7 @@ function Programs({ setError }: any) {
 
   function open(p?: any) {
     setEdit(p ?? null);
-    setForm(p ?? { duration_days: 15, buffer_days: 5, default_batch_size: 30, completion_deadline_days: 90, requires_lab: false, active: true });
+    setForm(p ?? { duration_days: 15, buffer_days: 5, default_batch_size: 45, completion_deadline_days: 90, requires_lab: false, active: true }); // -117 (M4-09): 45
     setDrawer(true);
   }
   async function save() {
