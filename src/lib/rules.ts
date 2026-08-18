@@ -1285,7 +1285,8 @@ export async function upsertCandidateResult(batchId: string, memberId: string, p
     throw new HttpError(409, `Rule 45: this candidate already has a certificate (${row.certificate_status}). Reject the certificate before changing the result.`);
   }
 
-  for (const f of ["result", "score", "max_score", "assessed_on", "assessor", "failure_reason", "failure_note", "reassessment_required", "reassessment_date", "evidence_file"]) {
+  for (const f of ["result", "score", "max_score", "assessed_on", "assessor", "failure_reason", "failure_note", "reassessment_required", "reassessment_date", "evidence_file",
+    "mock_appeared", "mock_qualified", "mock_score", "mock_note", "roll_no"]) {
     if (patch[f] !== undefined) (row as any)[f] = patch[f];
   }
   if (nextResult !== "Fail") { row.failure_reason = undefined; row.failure_note = undefined; }

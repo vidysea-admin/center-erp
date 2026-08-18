@@ -42,7 +42,10 @@ export const PUT = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   const body = await req.json();
   if (!Array.isArray(body.rows) || !body.rows.length) throw new HttpError(400, "rows[] is required");
 
-  const allowed = ["member", "result", "score", "max_score", "assessed_on", "assessor", "failure_reason", "failure_note", "reassessment_required", "reassessment_date", "evidence_file"];
+  const allowed = ["member", "result", "score", "max_score", "assessed_on", "assessor", "failure_reason", "failure_note", "reassessment_required", "reassessment_date", "evidence_file",
+    // -120 (M4-14): the mock test and the roll number, per candidate. The -116 lesson applies — a
+    // field the route does not accept is a field that silently drops on save.
+    "mock_appeared", "mock_qualified", "mock_score", "mock_note", "roll_no"];
   const rows = body.rows.map((r: Record<string, unknown>) =>
     Object.fromEntries(Object.entries(r).filter(([k]) => allowed.includes(k))));
 

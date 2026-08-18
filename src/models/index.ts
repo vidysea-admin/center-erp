@@ -574,6 +574,13 @@ const ClosureSchema = new Schema({
   // reversible, and it must not slam the doors a human sign-off rightly slams. These say which.
   assessment_derived: { type: Boolean, default: false },
   assessment_date: Date, appeared: Number, passed: Number, result_file: String,
+  // -120 (M4-14, Manish 17/08 [09:17], typed on screen): the dates his chain asks for and the ERP
+  // never held. Each is optional and independent — recording a mock-test date must never become a new
+  // gate on a batch that never ran one. His mock-test STATUS wording is still owed, so no enum here.
+  mock_test_date: Date,               // "Mock Test/Formulation Test Date"
+  result_expected_date: Date,         // "assessment hone ke baad, result tentative date"
+  certificate_distribution_date: Date, // "certificate distribution date"
+  sidh_uploaded_on: Date,             // "certificate upload on SIDH portal" — when it went up
   // DEC-4 (Umesh, 2026-08-13): dropped-but-passed candidates do NOT count for invoicing.
   // `passed` stays the true pass count (Rule 42 readers unchanged); these two carry the split
   // so the invoice flow bills off billable_passed, never raw passed.
@@ -598,6 +605,21 @@ const CandidateResultSchema = new Schema({
   batch: oid("Batch", true),
   candidate: oid("Candidate", true),
   batch_member: oid("BatchMember", true),
+
+  // -120 (M4-14): the mock test, per candidate. "Who all are APPEARING for the mock test" and "who
+  // all are QUALIFYING — yeh data aayega" are two different lists in his words, so they are two
+  // fields, not one flag: a candidate can appear and not qualify, and that gap is the thing the
+  // centre acts on before the real assessment. Both optional; a batch that never ran a mock test
+  // simply leaves them unset. `mock_note` carries WHY someone did not qualify — the same discipline
+  // Rule 44 already enforces for a Fail, which is M4-17's ask applied to the mock test.
+  mock_appeared: { type: Boolean, default: undefined },
+  mock_qualified: { type: Boolean, default: undefined },
+  mock_score: Number,
+  mock_note: String,
+  // "roll number upar dikhna chahiye" — the number the assessment body issues per candidate, which
+  // the centre quotes on every call about a result. Distinct from certificate_no (Rule 46) and from
+  // sidh_candidate_id (the portal identity).
+  roll_no: String,
 
   // M17 — assessment
   result: { type: String, enum: ASSESSMENT_RESULT, default: "Pending" },

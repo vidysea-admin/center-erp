@@ -1970,6 +1970,14 @@ function ClosureTab({ batchId, batch, role, setError, onChanged }: any) {
       >
         <div className="grid grid-cols-2 gap-3">
           <Field label="Assessment date"><input type="date" className={inputCls} value={toInputDate(form.assessment_date)} onChange={(e) => setForm({ ...form, assessment_date: e.target.value })} /></Field>
+          {/* -120 (M4-14, Manish 17/08 [09:17] — he typed the chain out on screen). These are the dates
+              it asks for that the ERP never held, in his order. Every one is OPTIONAL and gates
+              NOTHING: a batch that never ran a mock test leaves them blank and nothing changes. His
+              mock-test STATUS wording is still owed, so no status is invented here — only the facts he
+              named. What already existed is not rebuilt: the assessment date above, pass/fail counts,
+              the fail reason (Rule 44), the certificate number (Rule 46), the file, and the invoice. */}
+          <Field label="Mock test date"><input type="date" className={inputCls} value={toInputDate(form.mock_test_date)} onChange={(e) => setForm({ ...form, mock_test_date: e.target.value })} /></Field>
+          <Field label="Result expected (tentative)"><input type="date" className={inputCls} value={toInputDate(form.result_expected_date)} onChange={(e) => setForm({ ...form, result_expected_date: e.target.value })} /></Field>
           <div />
           {legacy && !perCandidate && showLegacyEntry ? (
             <>
@@ -2013,6 +2021,9 @@ function ClosureTab({ batchId, batch, role, setError, onChanged }: any) {
       <Section title={`Certification — ${closure?.certification_status ?? "Pending"}`}>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Certification date"><input type="date" className={inputCls} value={toInputDate(form.certification_date)} onChange={(e) => setForm({ ...form, certification_date: e.target.value })} /></Field>
+          {/* -120 (M4-14): the two dates after certification that his chain ends on. */}
+          <Field label="Certificate distribution date"><input type="date" className={inputCls} value={toInputDate(form.certificate_distribution_date)} onChange={(e) => setForm({ ...form, certificate_distribution_date: e.target.value })} /></Field>
+          <Field label="Uploaded to SIDH portal on"><input type="date" className={inputCls} value={toInputDate(form.sidh_uploaded_on)} onChange={(e) => setForm({ ...form, sidh_uploaded_on: e.target.value })} /></Field>
           {legacy && !perCandidate
             ? <Field label="Certificates issued"><input type="number" className={inputCls} value={form.certificates_issued ?? ""} onChange={(e) => setForm({ ...form, certificates_issued: +e.target.value })} /></Field>
             : <Field label="Certificates issued"><div className={inputCls + " bg-gray-50 text-gray-700"}>{closure?.certificates_issued ?? 0} <span className="text-xs text-gray-400">derived</span></div></Field>}
@@ -2303,6 +2314,36 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
           )}
           <Chip value={i.result?.result ?? "Pending"} />
         </span>
+      </div>
+      {/* -120 (M4-14, Manish typed it out): "who all are APPEARING for the mock test" and "who all are
+          QUALIFYING — yeh data aayega" are two different lists in his words, so they are two toggles,
+          not one flag. The gap between them is the thing a centre acts on before the real assessment:
+          someone who appeared and did not qualify needs work, someone who never appeared needs
+          chasing, and those are different jobs. `mock_note` carries WHY — the same discipline Rule 44
+          already enforces for a Fail, which is M4-17's ask applied to the mock test.
+          Nothing here gates anything: a batch that ran no mock test simply leaves it alone. */}
+      <div className="flex flex-wrap items-center gap-1.5 rounded-lg bg-gray-50 px-2 py-1.5 text-xs">
+        <span className="font-medium text-gray-500">Mock test:</span>
+        {[["mock_appeared", "Appeared"], ["mock_qualified", "Qualified"]].map(([f, label]) => {
+          const on = i.result?.[f] === true;
+          return (
+            <button key={f} disabled={closed}
+              onClick={() => mark(i.member, { [f]: !on, ...(f === "mock_appeared" && on ? { mock_qualified: false } : {}) })}
+              className={`rounded-full border px-2 py-0.5 font-medium disabled:opacity-50 ${on ? (f === "mock_qualified" ? "border-green-300 bg-green-50 text-green-700" : "border-blue-200 bg-blue-50 text-blue-700") : "border-gray-200 bg-white text-gray-500"}`}>
+              {on ? "✓ " : ""}{label}
+            </button>
+          );
+        })}
+        {i.result?.mock_appeared === true && i.result?.mock_qualified !== true && (
+          <input placeholder="Why not qualified?" disabled={closed}
+            className="w-44 rounded-lg border border-gray-300 px-2 py-0.5"
+            defaultValue={i.result?.mock_note ?? ""}
+            onBlur={(e) => e.target.value !== String(i.result?.mock_note ?? "") && mark(i.member, { mock_note: e.target.value })} />
+        )}
+        <input placeholder="Roll no" disabled={closed}
+          className="ml-auto w-28 rounded-lg border border-gray-300 px-2 py-0.5"
+          defaultValue={i.result?.roll_no ?? ""}
+          onBlur={(e) => e.target.value !== String(i.result?.roll_no ?? "") && mark(i.member, { roll_no: e.target.value })} />
       </div>
       <ResultButtons i={i} />
       <div className="flex flex-wrap items-center gap-2">

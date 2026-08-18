@@ -7,8 +7,25 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-119";
+export const RELEASE = "2026.08.14-120";
 export const RELEASE_NOTE =
+  "-120: M4-14, the chain Manish did not just describe but TYPED on screen - the data half of it. "
+  "His list: mock test / formulation test date, who all are APPEARING, who all are QUALIFYING, a "
+  "provision for the assessment date, a tentative result date, how many passed and failed, the "
+  "reason for a fail, a certificate distribution date, the certificate number, upload to the SIDH "
+  "portal, and raise the invoice for all passed - plus the roll number near the top. Read it and "
+  "almost every noun is a DATE or a LIST; the only thing still owed is his mock-test STATUS wording. "
+  "So the dates and the lists are built and NO status enum is invented: mock test date, result "
+  "expected (tentative), certificate distribution date and uploaded-to-SIDH date on the closure; "
+  "appeared and qualified as TWO separate per-candidate facts rather than one flag, because the gap "
+  "between them is exactly what a centre acts on before the real assessment; a note carrying WHY "
+  "someone did not qualify, which is M4-17 applied to the mock test; and the roll number per "
+  "candidate, distinct from the certificate number and from the portal id. Everything is optional "
+  "and gates nothing - a batch that never ran a mock test is untouched - and the wall pins both that "
+  "the fields survive a round trip (the -116 lesson: a field a route does not accept looks saved and "
+  "is gone on the next read) and that marking the real result does not wipe them. Already existing "
+  "and deliberately not rebuilt: the assessment date, pass/fail counts, the fail reason (Rule 44), "
+  "the certificate number (Rule 46), the file, and the invoice ladder (Rule 36). "
   "-119: two of Manish's rows that were sitting done-in-diagnosis and not-done-in-code. M4-15, the "
   "assessor name: I established on 18/08 that NO rule requires it - it never blocked closure, the "
   "confusion was a bare 'Assessor name' placeholder reading as mandatory - then wrote 'rides the "

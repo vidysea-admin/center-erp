@@ -35,6 +35,8 @@ export const PUT = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   const body = await req.json();
   const patch: Record<string, unknown> = {};
   for (const f of ["assessment_status", "assessment_date", "appeared", "passed", "result_file", "certification_status", "certification_date", "certificates_issued", "certificate_file", "ready_for_invoice",
+    // -120 (M4-14): the chain's dates. Optional and independent — none of them gates anything.
+    "mock_test_date", "result_expected_date", "certificate_distribution_date", "sidh_uploaded_on",
     // Rule 52 (CEO): the no-dues attestation that gates Completed → Closed.
     "dues_settled", "dues_note"]) {
     if (body[f] !== undefined) patch[f] = body[f];

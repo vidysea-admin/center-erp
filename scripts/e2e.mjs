@@ -740,6 +740,41 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   ok("-113: a clean batch reports nothing to settle",
     (await req("GET", `/api/batches/${d1._id}/complete`, undefined, 200)).data.status === "Completed");
 
+  // ---- -120 (M4-14): the chain's DATA — dates on the closure, mock test + roll number per candidate ----
+  // Manish typed this list on screen. Everything in it is a date or a list; only the mock-test STATUS
+  // wording is still owed, so no status enum exists to pin. What IS pinned is the thing that goes
+  // wrong silently: a field the route does not accept looks saved and is gone on the next read (the
+  // -116 lesson, where the portal fields dropped on edit). And that none of it became a new GATE.
+  {
+    const dates = { mock_test_date: today, result_expected_date: today, certificate_distribution_date: today, sidh_uploaded_on: today };
+    await req("PUT", `/api/batches/${d3._id}/closure`, dates, 200);
+    const cl = (await req("GET", `/api/batches/${d3._id}/closure`)).data.closure;
+    const missing = Object.keys(dates).filter((k) => !cl?.[k]);
+    ok("-120 (M4-14): every date his chain names is stored on the closure and reads back", missing.length === 0, `missing: ${missing.join(", ")}`);
+    // the whole point of "optional and independent": a batch that never ran a mock test is unaffected
+    const clean = (await req("GET", `/api/batches/${d1._id}/closure`)).data.closure;
+    ok("-120 (M4-14): …and a batch that never ran a mock test is untouched by them",
+      !clean?.mock_test_date && !clean?.result_expected_date, JSON.stringify({ m: clean?.mock_test_date, r: clean?.result_expected_date }));
+
+    const m3 = (await req("GET", `/api/batches/${d3._id}/members`)).data.items ?? [];
+    const mem = m3[0];
+    await req("PUT", `/api/batches/${d3._id}/results`, { rows: [{ member: String(mem._id), mock_appeared: true, mock_qualified: false, mock_note: "-120 pin: appeared, did not clear the practical", roll_no: `RN${stamp}` }] }, 200);
+    const row = (await req("GET", `/api/batches/${d3._id}/results`)).data.items.find((i) => String(i.member) === String(mem._id))?.result;
+    ok("-120 (M4-14): appeared and qualified are two separate facts, not one flag",
+      row?.mock_appeared === true && row?.mock_qualified === false, JSON.stringify({ a: row?.mock_appeared, q: row?.mock_qualified }));
+    ok("-120 (M4-14): …the reason someone did not qualify is kept (M4-17 applied to the mock test)",
+      /did not clear/.test(String(row?.mock_note ?? "")), String(row?.mock_note));
+    ok("-120 (M4-14): the roll number is stored per candidate, beside the certificate number",
+      row?.roll_no === `RN${stamp}`, String(row?.roll_no));
+    // and none of it gates the ordinary flow
+    ok("-120 (M4-14): a mock-test record does not block or change the real assessment",
+      (await req("PUT", `/api/batches/${d3._id}/results`, { rows: [{ member: String(mem._id), result: "Pass", score: 71, assessed_on: today }] }, 200)).status === 200);
+    const row2 = (await req("GET", `/api/batches/${d3._id}/results`)).data.items.find((i) => String(i.member) === String(mem._id))?.result;
+    ok("-120 (M4-14): …and marking the real result does not wipe the mock-test facts",
+      row2?.result === "Pass" && row2?.mock_appeared === true && row2?.roll_no === `RN${stamp}`,
+      JSON.stringify({ r: row2?.result, a: row2?.mock_appeared, rn: row2?.roll_no }));
+  }
+
   // ---- -119 (M4-16): a trainer added from inside the ERP gets the welcome mail ----
   // The candidate twin shipped in -109 after Umesh found that NINE mail paths existed and none of
   // them was the one an admin actually uses. Manish asked for the same on Add Trainer. The pin is the
