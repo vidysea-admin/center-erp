@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 export function GET() {
   return NextResponse.json({
     release: RELEASE,
-    // -127 (QA-181): this published RELEASE_NOTE, which for an unknown number of releases was 97
+    // -127 (QA-265): this published RELEASE_NOTE, which for an unknown number of releases was 97
     // characters because the constant's continuation lines carried no `+` and ASI dropped all but
     // the first. Joining them fixed the constant and would have published a 32 KB internal archive
     // - forty releases of commentary quoting Manish and Umesh by name, naming ledger ids and

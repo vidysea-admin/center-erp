@@ -1,14 +1,14 @@
 // Deployed-build marker. Bump RELEASE on every meaningful release so anyone can tell,
 // from outside and without logging in, exactly which build production is running:
 //     curl https://www.vidysea.com/erp/api/public/version
-// GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
+// GIT_COMMIT is optional - set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
 // KEEP THIS FILE ASCII. -117 first shipped its note with three Devanagari lines quoting Manish;
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-127";
-// -127 (QA-181): this file used to be ONE constant whose continuation lines carried no `+`.
+export const RELEASE = "2026.08.14-128";
+// -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
 // unknown number of releases. Joining them made the constant whole (32,613 chars) - and made the
@@ -17,6 +17,41 @@ export const RELEASE = "2026.08.14-127";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-128 (QA-266, Divya 18/08): \"Move... ye move nahi ho raha hai\". Moving a trainer past " +
+  "Shortlisted reported 'Saving...', reverted half a second later, saved nothing and said nothing. " +
+  "NOTHING WAS SWALLOWED: the route answered 409 with a perfectly readable refusal, the page caught " +
+  "it and called setErr - and rendered it in the PAGE-level banner, which the drawer's own " +
+  "fixed inset-0 z-50 scrim paints straight over. A message the user cannot see is the same as no " +
+  "message. And it was never one screen's bug: every drawer in this app piped its failures to a " +
+  "page banner - 32 drawers across 11 files, including tabs and sub-drawers that are handed the " +
+  "page's setError as a prop and so report UP into the thing covering them. Drawer has an error " +
+  "slot now and all 32 pass it, the value travels beside the setter wherever setError was threaded, " +
+  "and a wall pin fails if a drawer is ever added without one. Two more things the same screen was " +
+  "getting wrong. The Move drawer never cleared the previous message before firing, which is why " +
+  "the refusal read as an error that was already there rather than an answer to this click. And it " +
+  "only REPORTED the one refusal it could have PREDICTED: Documents Completed needs a nomination, " +
+  "which the page already knows, so the drawer now says so before the round trip and offers the " +
+  "Set nomination control that fixes it - the control was on the same page all along, behind the " +
+  "drawer's own scrim. QA-272: the refusal Divya photographed read 'Rule T3: say which centre and " +
+  "job role...'. -111 built plain() precisely so nobody reads 'Rule 45' - but every pattern in it, " +
+  "and in all three wall detectors, demanded a DIGIT after the prefix. The trainer pipeline numbers " +
+  "its rules T2..T8, a letter then a digit, so seven refusals sailed through and the wall was blind " +
+  "for the identical reason. Widened to T?, which then exposed two the strippers could never have " +
+  "saved: a message with the code mid-sentence, and one written directly into JSX, where plain() " +
+  "has no reach at all. QA-267: the amber 'this trainer will not appear on the Preparation board' " +
+  "warning is a LIE THE PRODUCT TELLS ABOUT ITSELF. Checked every reader before touching it - the " +
+  "Preparation board, Open Positions, the location role counts and the batch trainer dropdown all " +
+  "key off nominated_for_location + nominated_for_program; the word skills appears in no query, " +
+  "aggregation or filter anywhere in src/lib or src/app/api. The string matching was removed in " +
+  "QA-133/134 on 15/08, deliberately, because an exact match had hidden a certified trainer over a " +
+  "two-word difference - and this warning was never retired. So the transposed job-role string is " +
+  "NOT why those trainers are missing; an unset nomination is, which is the same blank that refuses " +
+  "the Move. The warning says what is true of the field and no more. No picker was built: the " +
+  "job-roles master holds ZERO rows (QA-143), so a picker would offer four options and block every " +
+  "real job role - that is data entry, not a build.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-127 (QA-180): a TRAINER is not a candidate for assessment. Every government attendance export " +
   "carries the centre's own trainers alongside its students - the live Attendance_Till 16th Aug " +
   "file is 37 Trainee rows and one Trainer, Manish himself at 53:48:25 hrs - and the qualification " +
@@ -31,11 +66,8 @@ export const RELEASE_NOTE_CURRENT =
   "has never heard of is still not assessed. Trainers get their own count, so the buckets still add " +
   "up to the row count and the strip stops overstating how many students need chasing. Measured " +
   "before it was written: the old fixture committed an import with NO batch, so it never reproduced " +
-  "the bug at all - the pin had to be moved onto the production shape first. QA-181, found while " +
-  "writing this very note: see the comment above - the note itself was truncated to one line.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "the bug at all - the pin had to be moved onto the production shape first. QA-265, found while " +
+  "writing this very note: see the comment above - the note itself was truncated to one line. " +
   "-126: Shivshakti's 18 Aug round, and it is not about the fields being wrong - he says twice that " +
   "they are right. S18-01: the government block shipped in -116 as a COLLAPSED section, so filling a " +
   "candidate took two passes; it is inline now, same fields, same grid, no lid. S18-03: 'ye dono " +

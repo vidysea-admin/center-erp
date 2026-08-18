@@ -1846,7 +1846,10 @@ export async function transitionTrainer(
   // the note and the audit row say so in as many words.
   if (opts.bypass) {
     if (!TRAINER_PIPELINE.includes(target as any)) throw new HttpError(400, `Unknown status "${target}".`);
-    if (target === "Dropped" && !opts.reason) throw new HttpError(400, "Rule T6 holds even on bypass: dropping needs a reason.");
+    // -128 (QA-272): this read "Rule T6 holds even on bypass: …". The code sits mid-sentence rather
+    // than leading, so plain() cannot lift it out without leaving a hole — the message says the same
+    // thing in the user's words instead. The rule number lives in this comment, where it is useful.
+    if (target === "Dropped" && !opts.reason) throw new HttpError(400, "Dropping a trainer needs a reason - that holds even when the status is set directly.");
     if (target === "Certified") {
       const trId = (opts.payload?.tr_id as string) ?? t.tr_id;
       if (trId) t.tr_id = trId; // recorded when given; NOT demanded — that is the point

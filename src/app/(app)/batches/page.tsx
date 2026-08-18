@@ -394,7 +394,7 @@ function BatchesInner() {
         </>
       )}
 
-      <Drawer open={drawer} onClose={() => setDrawer(false)} title="New Batch">
+      <Drawer error={error} open={drawer} onClose={() => setDrawer(false)} title="New Batch">
         <div className="space-y-3">
           <Field label="Location" required>
             <select className={inputCls} value={form.location ?? ""} onChange={(e) => set("location", e.target.value)}>
@@ -586,7 +586,7 @@ function BatchesInner() {
       </Drawer>
 
       {/* 2026-08-11: backward-plan calculator — printable, shareable, no batch needed */}
-      <Drawer open={planner.open} onClose={() => setPlanner({ open: false })} title="Backward batch plan">
+      <Drawer error={error} open={planner.open} onClose={() => setPlanner({ open: false })} title="Backward batch plan">
         <div className="space-y-4">
           <Field label="Batch start date" required>
             <input type="date" className={inputCls} value={planner.start ?? ""} onChange={(e) => runPlanner(e.target.value)} />
@@ -631,7 +631,7 @@ function BatchesInner() {
       </Drawer>
 
       {/* QA-028: batch bulk import — same contract as the candidate/trainer importers. */}
-      <Drawer open={!!imp} onClose={() => setImp(null)} title="Import batches (Excel)" wide>
+      <Drawer error={error} open={!!imp} onClose={() => setImp(null)} title="Import batches (Excel)" wide>
         {imp && (
           <div className="space-y-3">
             <a href={`${BASE_PATH}/templates/batches-sample.csv`} download className="inline-block text-sm font-medium text-blue-700 hover:underline">⬇ Download sample sheet format</a>

@@ -182,7 +182,14 @@ export function Field({ label, children, required }: { label: string; children: 
 
 export const inputCls = "w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none bg-white";
 
-export function Drawer({ open, onClose, title, children, wide }: { open: boolean; onClose: () => void; title: string; children: ReactNode; wide?: boolean }) {
+// -128 (QA-266, Divya 18/08): "Move… ye move nahi ho raha hai" — the trainer Move reported
+// "Saving…", reverted, and said nothing. Nothing was swallowed: the route answered 409 with a
+// perfectly readable refusal, the page caught it and called setErr — and then rendered it in the
+// page-level banner, which this component's own `fixed inset-0 z-50` scrim paints straight over.
+// A message the user cannot see is the same as no message. Every drawer in this app pipes its
+// failures to a page-level banner, so this was never one screen's bug: it is 31 drawers across 11
+// files. The slot lives here so a fix at one place reaches all of them.
+export function Drawer({ open, onClose, title, children, wide, error }: { open: boolean; onClose: () => void; title: string; children: ReactNode; wide?: boolean; error?: string }) {
   useEffect(() => {
     const h = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", h);
@@ -197,7 +204,10 @@ export function Drawer({ open, onClose, title, children, wide }: { open: boolean
           <h2 className="text-base font-semibold">{title}</h2>
           <button onClick={onClose} className="text-2xl leading-none text-gray-400 hover:text-gray-600">×</button>
         </div>
-        <div className="p-5">{children}</div>
+        <div className="p-5">
+          {error && <div className="mb-3"><ErrorBanner msg={error} /></div>}
+          {children}
+        </div>
       </div>
     </div>
   );

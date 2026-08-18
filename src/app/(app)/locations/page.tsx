@@ -216,7 +216,7 @@ function LocationsInner() {
         ]}
         empty="No locations yet — create the first one."
       />
-      <Drawer open={spocOpen} onClose={() => setSpocOpen(false)} title="SPOC directory" wide>
+      <Drawer error={error} open={spocOpen} onClose={() => setSpocOpen(false)} title="SPOC directory" wide>
         <div className="space-y-3">
           <p className="text-xs text-gray-500">
             One row per person — {spocDir.length} unique SPOC{spocDir.length === 1 ? "" : "s"} across {items.filter((l) => l.spoc_name || l.spoc_phone).length} centres,
@@ -249,7 +249,7 @@ function LocationsInner() {
           ))}
         </div>
       </Drawer>
-      <Drawer open={drawer} onClose={() => setDrawer(false)} title="New Location">
+      <Drawer error={error} open={drawer} onClose={() => setDrawer(false)} title="New Location">
         <div className="space-y-3">
           <Field label="Code" required><input className={inputCls} value={form.code ?? ""} onChange={(e) => set("code", e.target.value)} /></Field>
           <Field label="External ID (sheet key)"><input className={inputCls} value={form.external_id ?? ""} onChange={(e) => set("external_id", e.target.value)} /></Field>

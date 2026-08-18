@@ -88,7 +88,17 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
 
+  // -128 (QA-266): what the button can know without asking the server. Rule T3 refuses
+  // "Documents Completed" unless the nomination names a centre AND a job role, and that is
+  // knowable here — the same idea -111 used to stop the drawer offering illegal EDGES, applied to
+  // preconditions. Saying it up front beats a round trip that ends in a refusal.
+  const needsNomination = !!move && move.target === "Documents Completed"
+    && !(t?.nominated_for_location && t?.nominated_for_program);
+
   async function doMove() {
+    // -128 (QA-266): the previous attempt's message stayed on screen, which is why the refusal
+    // read as "an error that was already there" rather than an answer to this click.
+    setErr("");
     setBusy(true);
     try {
       await api(`/api/trainers/${id}/transition`, {
@@ -267,7 +277,10 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
           }>
             {nom && (
               <div className="mb-3 space-y-2 rounded-lg border border-blue-200 bg-blue-50 p-3">
-                <p className="text-xs text-blue-800">Which centre × job role is this trainer being hired for? (Rule T3 — required before "Documents Completed"; the Preparation board counts trainers by this.)</p>
+                {/* -128 (QA-272): this said "(Rule T3 — required before …)" on screen. plain() guards thrown
+                    messages and rendered banners, never literal JSX, so a code written here reaches the
+                    user whatever the strippers do. Same fact, none of our shorthand. */}
+                <p className="text-xs text-blue-800">Which centre × job role is this trainer being hired for? Required before the trainer can move to Documents Completed — and the Preparation board counts trainers by this pair.</p>
                 <div className="grid grid-cols-2 gap-2">
                   <Field label="Centre" required>
                     <select className={inputCls} value={nom.location} onChange={(e) => setNom({ ...nom, location: e.target.value })}>
@@ -385,7 +398,7 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
       {tab === "Activity" && <Activity entity="Trainer" id={id} />}
 
       {move && (
-        <Drawer open onClose={() => setMove(null)} title={`Move ${t.name}`}>
+        <Drawer open onClose={() => setMove(null)} title={`Move ${t.name}`} error={err}>
           <Field label="Move to" required>
             {/* QA-111 (15/08): only the moves the machine will accept — the server's own
                 edge table rides in on the trainer (allowed_next). No more picking
@@ -418,12 +431,26 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
           <Field label="When did this actually happen? (blank = today)">
             <input type="date" className={inputCls} value={move.date ?? ""} onChange={(e) => setMove({ ...move, date: e.target.value })} />
           </Field>
-          <div className="mt-4"><Btn onClick={doMove} disabled={!move.target || busy}>{busy ? "Saving…" : "Move"}</Btn></div>
+          {/* -128 (QA-266): the refusal Divya hit, said BEFORE the round trip and next to the
+              thing that fixes it. The "Set nomination" control is on this same page, but it sits
+              behind this drawer's own scrim, which is why the refusal read as a dead end. */}
+          {needsNomination && (
+            <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              This trainer has no nomination yet, and Documents Completed needs one: a nomination is
+              always against a specific vacancy, so it has to name a centre and a job role.
+              <button type="button" className="ml-1 font-semibold underline"
+                onClick={() => { setMove(null); setNom({ location: t.nominated_for_location?._id ?? "", program: t.nominated_for_program?._id ?? "" }); }}>
+                Set the nomination first
+              </button>
+              — this drawer will close and take you to it.
+            </div>
+          )}
+          <div className="mt-4"><Btn onClick={doMove} disabled={!move.target || busy || needsNomination}>{busy ? "Saving…" : "Move"}</Btn></div>
         </Drawer>
       )}
 
       {docDrawer && (
-        <Drawer open onClose={() => setDocDrawer(false)} title="Add documents">
+        <Drawer error={err} open onClose={() => setDocDrawer(false)} title="Add documents">
           <Field label="Document type (applies to a single file; multiple files auto-detect from filename)">
             <select className={inputCls} id="dt" defaultValue="Aadhaar">
               {DOC_TYPES.map((d) => <option key={d}>{d}</option>)}

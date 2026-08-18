@@ -12,6 +12,13 @@
 // written into a message tomorrow still never reaches a screen. The source strings were ALSO
 // rewritten (so the raw text is right, not just filtered), and check-user-copy.mjs fails the wall
 // if a new one appears. Comments in code keep their rule numbers — those are ours, and useful.
+// -128 (QA-272): every pattern below demanded `\d+` immediately after the prefix. The trainer
+// pipeline numbers its rules T2..T8 — a LETTER then a digit — so none of them matched, and seven
+// refusals reached the screen with the code intact. Divya photographed one: "Rule T3: say which
+// centre and job role this nomination is for". That is exactly what -111 (QA-227, "rule this, rule
+// that - aisa koi rule hai nahi") existed to stop. The wall was blind for the same reason: the
+// identical `\d+` pattern is copy-pasted into check-user-copy.mjs, e2e.mjs and e2e-lib.mjs. `T?`
+// closes all four at once.
 export function plain(msg: string): string {
   if (!msg) return msg;
   return msg
@@ -19,11 +26,11 @@ export function plain(msg: string): string {
     // QA-239 (checker): the bare `R` alternative used to be in this list and it ate legitimate
     // parentheticals — "Room (R-4) is unavailable" became "Room is unavailable". No message in this
     // codebase writes a rule as "R-4", so the alternative is gone rather than made cleverer.
-    .replace(/\s*\((?:Rules?|DEC|QA)[-\s]?\d+[^)]*\)/g, "")
+    .replace(/\s*\((?:Rules?|DEC|QA)[-\s]?T?\d+[^)]*\)/g, "")
     // leading "Rule 45: " / "DEC-6: " / "QA-142: "
-    .replace(/^\s*(?:Rules?|DEC|QA)[-\s]?\d+\s*[:—-]\s*/i, "")
+    .replace(/^\s*(?:Rules?|DEC|QA)[-\s]?T?\d+\s*[:—-]\s*/i, "")
     // trailing " — Rule 45" / " - DEC-6" / ", Rule 30"
-    .replace(/\s*[—,-]\s*(?:Rules?|DEC|QA)[-\s]?\d+\s*$/g, "")
+    .replace(/\s*[—,-]\s*(?:Rules?|DEC|QA)[-\s]?T?\d+\s*$/g, "")
     // A bare code mid-sentence ("blocked by Rule 27 and Rule 43 today") cannot be removed without
     // leaving a hole in the sentence, and no regex is going to repair English. So it is not removed
     // here — it is FORBIDDEN at the door instead: scripts/check-user-copy.mjs now scans thrown

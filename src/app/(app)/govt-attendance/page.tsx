@@ -263,7 +263,7 @@ function Inner() {
         </Section>
       )}
 
-      <Drawer open={!!upload} onClose={() => setUpload(null)} title="Confirm portal attendance import">
+      <Drawer error={error} open={!!upload} onClose={() => setUpload(null)} title="Confirm portal attendance import">
         {upload && (
           <div className="space-y-3 text-sm">
             <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
@@ -344,7 +344,7 @@ function Inner() {
         )}
       </Drawer>
 
-      <ResolveDrawer importId={open} row={resolve} canEdit={canImport} setError={setError}
+      <ResolveDrawer importId={open} row={resolve} canEdit={canImport} error={error} setError={setError}
         onClose={() => setResolve(null)}
         onResolved={() => {
           setResolve(null);
@@ -363,7 +363,7 @@ function Inner() {
 // own reason for refusing to guess, then the candidates it could be — the colliding ones first,
 // labelled with WHY they collide. Choosing one is a manual match: recorded as Manual, with the
 // operator's reason, and audited.
-function ResolveDrawer({ importId, row, canEdit, onClose, onResolved, setError }: any) {
+function ResolveDrawer({ importId, row, canEdit, onClose, onResolved, error, setError }: any) {
   const [data, setData] = useState<any>(null);
   const [pick, setPick] = useState("");
   const [reason, setReason] = useState("");
@@ -386,7 +386,7 @@ function ResolveDrawer({ importId, row, canEdit, onClose, onResolved, setError }
   }
 
   return (
-    <Drawer open onClose={onClose} title={`${row.match_status} — ${row.name}`} wide>
+    <Drawer open onClose={onClose} title={`${row.match_status} — ${row.name}`} wide error={error}>
       <div className="space-y-4 text-sm">
         <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs">
           <div className="mb-1 font-medium text-gray-600">What the portal sent</div>

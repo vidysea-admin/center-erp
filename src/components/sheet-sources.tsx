@@ -107,7 +107,7 @@ export function SheetSources({ onChanged }: { onChanged?: () => void }) {
         },
       ]} empty="No sheets are being watched yet — add one to start tracking changes." />
 
-      <Drawer open={drawer} onClose={() => setDrawer(false)} title={form._id ? `Edit “${form.name}”` : "Add a sheet to watch"}>
+      <Drawer error={error} open={drawer} onClose={() => setDrawer(false)} title={form._id ? `Edit “${form.name}”` : "Add a sheet to watch"}>
         <div className="space-y-3">
           <Field label="Sheet link" required>
             <input className={inputCls} placeholder="Paste the link from your browser's address bar"

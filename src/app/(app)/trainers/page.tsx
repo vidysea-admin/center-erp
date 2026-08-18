@@ -298,7 +298,7 @@ function TrainersInner() {
                 render: (r: any) => <Chip value={r.status === "Closed" ? "Filled" : r.status} /> },
             ]}
             empty="No open positions — every approved centre × job role has its trainers." />
-          <Drawer open={!!posDetail} onClose={() => setPosDetail(null)}
+          <Drawer error={error} open={!!posDetail} onClose={() => setPosDetail(null)}
             title={posDetail ? `${posDetail.pos.location?.name} · ${posDetail.pos.program?.name} — ${posDetail.label}` : ""}>
             {posDetail && (
               <ul className="space-y-2">
@@ -372,14 +372,24 @@ function TrainersInner() {
             columns={[
               { key: "name", label: "Name", mobile: false, sortable: true, sortValue: (r: any) => r.name, render: (r: any) => <NameCell name={r.name} sub={r.phone} /> },
               {
-                // QA-029: flag rows whose skills name NO recognised job role — the exact rows
-                // that blank the Preparation board when the real cohort loads.
+                // QA-029 shipped this flag in -69, when the skills STRING really did decide whether a
+                // trainer appeared on the Preparation board and in the batch form. QA-133/134 removed that
+                // string matching on 15/08 — deliberately, because an exact match "hid a certified trainer
+                // over a two-word difference" (trainer-select.ts) — and this text was never retired.
+                //
+                // -128 (QA-267): so the flag has been telling people the wrong cause. Checked every reader
+                // before rewriting it: rules.ts:2201 (Preparation board), open-positions/route.ts:55,
+                // locations/route.ts:45 and trainer-select.ts:32 all key off nominated_for_location +
+                // nominated_for_program. `skills` appears in NO query, aggregation or filter anywhere in
+                // src/lib or src/app/api. It is still worth flagging a skill that names no known role —
+                // it is how the job-role master gets tidied — but it must not claim a consequence it
+                // does not have.
                 key: "skills", label: "Skills", render: (r: any) => (
                   <span>
                     {(r.skills ?? []).join(", ")}
                     {roleMismatch(r.skills) && (
                       <span className="ml-1.5 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700"
-                        title="No recognised job role — invisible to the Preparation board and the batch form's role counts">no job role</span>
+                        title="This skill does not match any job role we know. It does not hide the trainer from anything — the Preparation board and the batch form go by the nomination (centre × job role), not by this text.">unknown job role</span>
                     )}
                   </span>
                 ),
@@ -489,7 +499,7 @@ function TrainersInner() {
       {/* F-TRAINER-IMPORT: Manish's stage-wise sheet (qa/templates #3) → upload → map →
           preview → confirm. Unknown stages / centre / job-role names are reported and left
           blank, never guessed. */}
-      <Drawer open={!!imp} onClose={() => setImp(null)} title="Import trainers (Excel)" wide>
+      <Drawer error={error} open={!!imp} onClose={() => setImp(null)} title="Import trainers (Excel)" wide>
         {imp && (
           <div className="space-y-3">
             {/* QA-028: every importer offers its sample sheet. */}
@@ -605,7 +615,7 @@ function TrainersInner() {
           </div>
         )}
       </Drawer>
-      <Drawer open={!!invite} onClose={() => setInvite(null)} title="Quick add trainer — send them the form">
+      <Drawer error={error} open={!!invite} onClose={() => setInvite(null)} title="Quick add trainer — send them the form">
         {invite && (
           <div className="space-y-3">
             <p className="text-xs text-gray-500">
@@ -643,7 +653,7 @@ function TrainersInner() {
         )}
       </Drawer>
 
-      <Drawer open={drawer} onClose={() => setDrawer(false)} title={edit ? `Edit ${edit.name}` : "Add Trainer"}>
+      <Drawer error={error} open={drawer} onClose={() => setDrawer(false)} title={edit ? `Edit ${edit.name}` : "Add Trainer"}>
         <div className="space-y-3">
           <Field label="Name" required><input className={inputCls} value={form.name ?? ""} onChange={(e) => set("name", e.target.value)} /></Field>
           <div className="grid grid-cols-2 gap-3">
@@ -665,10 +675,17 @@ function TrainersInner() {
             <datalist id="job-role-suggestions">
               {knownRoles.map((k) => <option key={k} value={k} />)}
             </datalist>
+            {/* -128 (QA-267): this said "…so this trainer will not appear there", which stopped being
+                true in QA-133/134 on 15/08. Divya's recording shows the warning firing on a transposed
+                job-role string, and the row concluded the typo was hiding eight trainers. It is not:
+                nothing reads this field. What DOES hide a trainer is an unset nomination — the same
+                blank that refuses the Move with "a nomination is always against a specific vacancy".
+                So the warning now says what is actually true of this field, and no more. */}
             {roleMismatch(typeof form.skills === "string" ? form.skills.split(",").map((s: string) => s.trim()).filter(Boolean) : form.skills) && (
               <p className="mt-1 text-xs font-medium text-amber-700">
-                ⚠ None of these match a recognised job role — the Preparation board and the batch
-                form count trainers by job role, so this trainer will not appear there.
+                ⚠ This does not match any job role we know — check the spelling and the word order
+                against the suggestions. It will not hide the trainer from anything: the Preparation
+                board and the batch form go by the nomination, not by this text.
               </p>
             )}
           </Field>
@@ -741,7 +758,7 @@ function TrainersInner() {
       </Drawer>
 
       {/* Backward planning per transcript 10:03–11:17: hiring date → TOT → expected availability */}
-      <Drawer open={!!reqEdit} onClose={() => setReqEdit(null)} title={reqEdit ? `Request — ${reqEdit.location?.name} · ${reqEdit.program?.name}` : ""}>
+      <Drawer error={error} open={!!reqEdit} onClose={() => setReqEdit(null)} title={reqEdit ? `Request — ${reqEdit.location?.name} · ${reqEdit.program?.name}` : ""}>
         <div className="space-y-3">
           <Field label="Status">
             <select className={inputCls} value={reqForm.status ?? "Open"} onChange={(e) => setReq("status", e.target.value)}>

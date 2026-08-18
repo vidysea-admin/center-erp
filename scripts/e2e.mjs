@@ -26,7 +26,7 @@ async function req(method, path, body, expectStatus) {
   if (res.status >= 400 && typeof data?.error === "string" && CODE_RX.test(data.error)) codeLeaks.push(`${method} ${path} → ${data.error.slice(0, 100)}`);
   return { status: res.status, data };
 }
-const CODE_RX = /\b(?:Rules?|DEC|QA)[-\s]?\d+\b/;
+const CODE_RX = /\b(?:Rules?|DEC|QA)[-\s]?T?\d+\b/;
 const codeLeaks = [];
 
 // ---- login ----

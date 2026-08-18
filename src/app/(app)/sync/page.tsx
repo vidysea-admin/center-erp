@@ -106,7 +106,7 @@ export default function SyncInboxPage() {
           },
         ]} empty="Inbox zero — no changes to review." />
 
-      <Drawer open={!!review} onClose={() => setReview(null)} title="Review change" wide>
+      <Drawer error={error} open={!!review} onClose={() => setReview(null)} title="Review change" wide>
         {review && (
           <div className="space-y-4">
             <div className="rounded-lg bg-gray-50 p-4 text-sm">

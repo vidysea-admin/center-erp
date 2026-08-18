@@ -202,6 +202,43 @@ ok("a duplicate trainer phone is refused", dup.status >= 400, `got ${dup.status}
     (sum.data.summary?.required ?? []).length === 7, JSON.stringify(sum.data.summary?.required));
 }
 
+// ---- -128 (QA-266 / QA-272): the nomination gate, and the words it uses ----
+// Divya's recording: Move -> Documents Completed -> "Saving..." -> reverts, nothing saved, no message.
+// The server was answering 409 the whole time; the page rendered the refusal in a banner its own
+// drawer scrim covers. This suite never caught it because EVERY fixture above is created WITH a
+// nomination, so Rule T3 has not once fired in the wall. A trainer with no nomination is the real
+// shape - it is the state a trainer is in for their whole Shortlisted life.
+{
+  const nn = (await req("POST", "/api/trainers", {
+    name: "No Nomination " + stamp, phone: "8" + Date.now().toString().slice(-9), skills: ["nn" + stamp],
+  }, 201)).data.item;
+  const NT = `/api/trainers/${nn._id}/transition`;
+  await req("POST", NT, { target: "Shortlisted" }, 200);
+  for (const d of ["Aadhaar", "PAN", "Photo", "CV", "Educational Qualification"]) {
+    await req("POST", `/api/trainers/${nn._id}/documents`, { doc_type: d, file_url: `/uploads/nn-${d}.pdf`, original_name: `${d}.pdf` }, 201);
+  }
+  const t3 = await req("POST", NT, { target: "Documents Completed" });
+  ok("-128 (QA-266): every document in, but no nomination - the move is REFUSED, not silently dropped",
+    t3.status === 409, `got ${t3.status}`);
+  ok("-128 (QA-266): ...and the refusal says which two things are missing, in words a centre can act on",
+    /centre/i.test(t3.data?.error ?? "") && /job role/i.test(t3.data?.error ?? ""), String(t3.data?.error ?? ""));
+  // -128 (QA-272): -111 built plain() so a user never reads "Rule 45". The trainer pipeline numbers
+  // its rules T2..T8, and \d+ never matched a letter-then-digit, so this exact message reached the
+  // screen with "Rule T3:" on the front. Divya photographed it.
+  ok("-128 (QA-272): ...and it carries NO internal rule code - the T-codes leak past plain() no more",
+    !/\b(?:Rules?|DEC|QA)[-\s]?T?\d+\b/.test(t3.data?.error ?? ""), String(t3.data?.error ?? ""));
+
+  // Setting the nomination is the whole fix, and it must actually clear the gate.
+  await req("PATCH", `/api/trainers/${nn._id}`, { nominated_for_location: loc._id, nominated_for_program: prog._id }, 200);
+  await req("POST", NT, { target: "Documents Completed" }, 200);
+  ok("-128 (QA-266): setting the nomination is what unblocks it - the drawer now says so before the click", true);
+
+  // -128 (QA-272): the same leak on the other refusals this suite already provokes.
+  const noReason = await req("POST", NT, { target: "Dropped" });
+  ok("-128 (QA-272): a refusal for a missing reason carries no rule code either",
+    noReason.status >= 400 && !/\b(?:Rules?|DEC|QA)[-\s]?T?\d+\b/.test(noReason.data?.error ?? ""), String(noReason.data?.error ?? ""));
+}
+
 // ---- terminal state needs a reason ----
 const t2 = (await req("POST", "/api/trainers", { name: "Drop Me " + stamp, phone: "8" + Date.now().toString().slice(-9), skills: ["x" + stamp] }, 201)).data.item;
 await req("POST", `/api/trainers/${t2._id}/transition`, { target: "Dropped" }, 400);

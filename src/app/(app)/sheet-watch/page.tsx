@@ -182,7 +182,7 @@ export default function SheetWatchPage() {
           },
         ]} empty="No workbook changes detected — the client's sheet matches the last snapshot." />
 
-      <Drawer open={!!createDrawer} onClose={() => setCreateDrawer(null)} title="Validate & add location">
+      <Drawer error={error} open={!!createDrawer} onClose={() => setCreateDrawer(null)} title="Validate & add location">
         {createDrawer && (
           <div className="space-y-3">
             <div className="rounded-lg bg-gray-50 p-3 text-xs text-gray-600">

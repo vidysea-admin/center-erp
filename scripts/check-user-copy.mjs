@@ -14,7 +14,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "src");
-const CODE = /\b(?:Rules?|DEC|QA)[-\s]?\d+\b/;
+const CODE = /\b(?:Rules?|DEC|QA)[-\s]?T?\d+\b/;
 const SKIP_FILES = new Set(["lib/version.ts"]);
 
 function* walk(dir) {
@@ -61,19 +61,26 @@ for (const file of walk(root)) {
     // either survives or leaves a hole, and no regex repairs English. So the shape is enforced here
     // rather than guessed there: leading "Rule 45:", a parenthetical "(Rule 45…)", or a trailing
     // "— Rule 45". Anything else fails the wall with the line printed.
-    if (!isTsx && /\b(?:HttpError\(|fail\(|throw\b)/.test(line)) {
-      const safe = /(["`])\s*(?:Rules?|DEC|QA)[-\s]?\d+\s*[:—-]/.test(line)          // leading
-        || /\((?:Rules?|DEC|QA)[-\s]?\d+[^)]*\)/.test(line)                          // parenthetical
-        || /[—,-]\s*(?:Rules?|DEC|QA)[-\s]?\d+\s*(?:\.\s*)?(["`])/.test(line);       // trailing
+    // -128 (QA-272): a throw whose message sits on the NEXT line (`throw new HttpError(409,` then
+    // the backtick on its own line) was judged by the generic literal rule instead of the thrown-message
+    // rule, and reported as a leak even when the shape strips cleanly. Look back one line before
+    // deciding. This makes the pin more accurate, not weaker — the code must still be strippable.
+    const prevLine = idx > 0 ? lines[idx - 1] : "";
+    const thrownHere = /\b(?:HttpError\(|fail\(|throw\b)/.test(line)
+      || (/\b(?:HttpError\(|fail\(|throw\b)/.test(prevLine) && /,\s*$|\(\s*$/.test(prevLine.trim()));
+    if (!isTsx && thrownHere) {
+      const safe = /(["`])\s*(?:Rules?|DEC|QA)[-\s]?T?\d+\s*[:—-]/.test(line)          // leading
+        || /\((?:Rules?|DEC|QA)[-\s]?T?\d+[^)]*\)/.test(line)                          // parenthetical
+        || /[—,-]\s*(?:Rules?|DEC|QA)[-\s]?T?\d+\s*(?:\.\s*)?(["`])/.test(line);       // trailing
       if (safe) return;
       hits.push(`${rel}:${idx + 1}: [thrown message: the code must lead ("Rule 45: …"), sit in brackets, or trail — this shape does not strip cleanly] ${line.trim().slice(0, 120)}`);
       fileHits++;
       return;
     }
     // string / template literals carrying a code
-    const inLiteral = /(["'`])(?:(?!\1)[^\\]|\\.)*?(?:Rules?|DEC|QA)[-\s]?\d+(?:(?!\1)[^\\]|\\.)*?\1/.test(line);
+    const inLiteral = /(["'`])(?:(?!\1)[^\\]|\\.)*?(?:Rules?|DEC|QA)[-\s]?T?\d+(?:(?!\1)[^\\]|\\.)*?\1/.test(line);
     // JSX text: a code between a ">" (or the "}" closing an inline expression) and the next "<"/"{"
-    const inJsx = isTsx && /[>}][^<{]*\b(?:Rules?|DEC|QA)[-\s]?\d+\b[^<{]*/.test(line);
+    const inJsx = isTsx && /[>}][^<{]*\b(?:Rules?|DEC|QA)[-\s]?T?\d+\b[^<{]*/.test(line);
     // JSX text continued on its own line (no tags at all on the line, inside a .tsx file)
     const bareJsx = isTsx && !/[<>{}=;]/.test(line.trim()) && /^\s*[A-Za-z(]/.test(line) && CODE.test(line);
     if (inLiteral || inJsx || bareJsx) { fileHits++; hits.push(`${rel}:${idx + 1}: ${line.trim().slice(0, 140)}`); }
@@ -81,7 +88,7 @@ for (const file of walk(root)) {
   if (fileHits) failed++; else passed++;
 }
 
-// ---- -127 (QA-181): the file this suite deliberately SKIPS was the one that was broken ----
+// ---- -127 (QA-265): the file this suite deliberately SKIPS was the one that was broken ----
 // src/lib/version.ts was one constant whose continuation lines carried no `+`. JavaScript then
 // applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other 329
 // became dead no-op expression statements. tsc was happy, the build was happy, and production
@@ -112,6 +119,58 @@ for (const file of walk(root)) {
   const tag = "-" + rel.split("-").pop();
   if (rel && curNote.includes(tag)) passed++;
   else { failed++; hits.push(`lib/version.ts: the published note does not mention ${tag} — RELEASE was bumped without writing what changed`); }
+
+  // -128: and the archive must NOT ride along. QA-265 split the note in two precisely so the
+  // unauthenticated build marker publishes what THIS build changed rather than forty releases of
+  // internal commentary — and then the very next bump spliced the old note into CURRENT instead of
+  // moving it to the archive, silently republishing it. Prose may REFER to an older release ("-111
+  // built plain() so nobody reads Rule 45"); what must never appear is the archive's own opening.
+  const archive = (src.split("const RELEASE_NOTE_ARCHIVE =")[1] ?? "");
+  const archiveHead = (archive.match(/"([^"]{40,})"/) ?? [])[1] ?? "";
+  if (!archiveHead || !curNote.includes(archiveHead)) passed++;
+  else { failed++; hits.push("lib/version.ts: RELEASE_NOTE_CURRENT contains the start of the archive — the old note was spliced in rather than moved, so the public marker republishes it"); }
+}
+
+// ---- -128 (QA-266): a drawer must be able to show its own failure ----
+// The Drawer is a fixed inset-0 z-50 overlay, so a page-level error banner is painted over by it.
+// Every drawer in this app did exactly that: the refusal was fetched, caught, stored and rendered
+// underneath the modal. Divya read it as "nothing happens". The component has an `error` slot now;
+// this pin is what stops the next drawer being added without one.
+{
+  let missing = 0;
+  const drawerFiles = [];
+  const walkAll = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walkAll(full);
+      else if (/\.tsx$/.test(e.name)) drawerFiles.push(full);
+    }
+  };
+  walkAll(root);
+  for (const full of drawerFiles) {
+    const src = fs.readFileSync(full, "utf-8");
+    if (!src.includes("<Drawer ")) continue;
+    const rel = path.relative(root, full).split(path.sep).join("/");
+    let i = 0;
+    for (;;) {
+      const at = src.indexOf("<Drawer ", i);
+      if (at === -1) break;
+      let j = at + 8, depth = 0, quote = "";
+      for (; j < src.length; j++) {
+        const c = src[j];
+        if (quote) { if (c === quote) quote = ""; continue; }
+        if (c === '"' || c === "'" || c === "`") { quote = c; continue; }
+        if (c === "{") depth++; else if (c === "}") depth--;
+        else if (c === ">" && depth === 0) break;
+      }
+      if (!/\berror=/.test(src.slice(at, j))) {
+        missing++;
+        hits.push(`${rel}:${src.slice(0, at).split(String.fromCharCode(10)).length}: [drawer] this <Drawer> passes no \`error\` prop, so a failure inside it renders in the page banner the drawer covers`);
+      }
+      i = j;
+    }
+  }
+  if (missing) failed++; else passed++;
 }
 
 for (const h of hits) console.log("  ✗ " + h);

@@ -111,21 +111,21 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
         <HealthBanner health={data.health} onDismiss={() => dismiss(`erp_dismiss_health_${id}_${data.health?.score}`)} />
       )}
       <Tabs tabs={tabs} active={tab} onChange={setTab} />
-      {tab === "Overview" && <Overview data={data} role={role} onChanged={load} setError={setError} />}
-      {tab === "Candidates" && <Roster batchId={id} batch={b} setError={setError} onChanged={load} />}
-      {tab === "Enrollment" && <Enrollment batchId={id} setError={setError} />}
-      {tab === "Daily Execution" && <DailyExecution batchId={id} batch={b} role={role} setError={setError} />}
-      {tab === "Attendance" && <AttendanceTab batchId={id} batch={data.item} role={role} setError={setError} />}
-      {tab === "Closure" && <ClosureTab batchId={id} batch={b} role={role} setError={setError} onChanged={load} />}
-      {tab === "Feedback" && <FeedbackTab batchId={id} setError={setError} />}
-      {tab === "Costs" && role === "Admin" && <CostsTab batchId={id} batch={b} setError={setError} />}
+      {tab === "Overview" && <Overview data={data} role={role} onChanged={load} error={error} setError={setError} />}
+      {tab === "Candidates" && <Roster batchId={id} batch={b} error={error} setError={setError} onChanged={load} />}
+      {tab === "Enrollment" && <Enrollment batchId={id} error={error} setError={setError} />}
+      {tab === "Daily Execution" && <DailyExecution batchId={id} batch={b} role={role} error={error} setError={setError} />}
+      {tab === "Attendance" && <AttendanceTab batchId={id} batch={data.item} role={role} error={error} setError={setError} />}
+      {tab === "Closure" && <ClosureTab batchId={id} batch={b} role={role} error={error} setError={setError} onChanged={load} />}
+      {tab === "Feedback" && <FeedbackTab batchId={id} error={error} setError={setError} />}
+      {tab === "Costs" && role === "Admin" && <CostsTab batchId={id} batch={b} error={error} setError={setError} />}
       {tab === "Activity" && <Activity entity="Batch" id={id} />}
     </div>
   );
 }
 
 // ---------- Overview: readiness checklist (Rule 16) + transitions ----------
-function Overview({ data, role, onChanged, setError }: any) {
+function Overview({ data, role, onChanged, error, setError }: any) {
   const b = data.item;
   // -88 (Umesh): once a batch runs, the Overview says so in numbers — running since when,
   // day N of M, our logged days, the portal's working days, who is qualified — instead of a
@@ -435,7 +435,7 @@ function Overview({ data, role, onChanged, setError }: any) {
           </div>
         )}
         {canTransition
-          ? <EditDetails b={b} onChanged={onChanged} setError={setError} />
+          ? <EditDetails b={b} onChanged={onChanged} error={error} setError={setError} />
           : (
             <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
               {[["Trainer", b.trainer?.name ?? "—"], ["Room", b.room?.name ?? "—"],
@@ -511,7 +511,7 @@ function Overview({ data, role, onChanged, setError }: any) {
           </ul>
         </Section>
       )}
-      <Drawer open={confirmCancel} onClose={() => setConfirmCancel(false)} title={`Cancel batch ${b.code}?`}>
+      <Drawer error={error} open={confirmCancel} onClose={() => setConfirmCancel(false)} title={`Cancel batch ${b.code}?`}>
         <div className="space-y-3">
           <p className="text-sm text-gray-600">This is destructive. A batch with daily logs can only be force-closed by Admin, with a reason.</p>
           <Field label="Reason" required><input className={inputCls} value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
@@ -522,7 +522,7 @@ function Overview({ data, role, onChanged, setError }: any) {
   );
 }
 
-function EditDetails({ b, onChanged, setError }: any) {
+function EditDetails({ b, onChanged, error, setError }: any) {
   const [trainers, setTrainers] = useState<any[]>([]);
   const [rooms, setRooms] = useState<any[]>([]);
   const [allLocations, setAllLocations] = useState<any[]>([]);
@@ -660,7 +660,7 @@ function EditDetails({ b, onChanged, setError }: any) {
 }
 
 // ---------- Candidates tab: roster ----------
-function Roster({ batchId, batch, setError, onChanged }: any) {
+function Roster({ batchId, batch, error, setError, onChanged }: any) {
   const [members, setMembers] = useState<any[]>([]);
   const [pool, setPool] = useState<any[]>([]);
   const [showPool, setShowPool] = useState(false);
@@ -839,7 +839,7 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
           ]} empty="No members yet — add from the candidate pool." />
       </Section>
 
-      <Drawer open={showPool} onClose={() => setShowPool(false)} title="Candidate pool (this location)">
+      <Drawer error={error} open={showPool} onClose={() => setShowPool(false)} title="Candidate pool (this location)">
         <div className="space-y-2">
           {pool.map((c) => (
             <div key={c._id} className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm">
@@ -851,7 +851,7 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
         </div>
       </Drawer>
 
-      <Drawer open={!!dropTarget} onClose={() => setDropTarget(null)} title={`Drop ${dropTarget?.candidate?.name}?`}>
+      <Drawer error={error} open={!!dropTarget} onClose={() => setDropTarget(null)} title={`Drop ${dropTarget?.candidate?.name}?`}>
         <div className="space-y-3">
           <Field label="Left on" required><input type="date" className={inputCls} value={dropForm.left_on ?? ""} onChange={(e) => setDropForm({ ...dropForm, left_on: e.target.value })} /></Field>
           <Field label="Drop reason" required>
@@ -914,7 +914,7 @@ function EnrolCard({ m, onUpdate, selected, onSelect }: any) {
   );
 }
 
-function Enrollment({ batchId, setError }: any) {
+function Enrollment({ batchId, error, setError }: any) {
   const [members, setMembers] = useState<any[]>([]);
   const [idx, setIdx] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -998,7 +998,7 @@ function Enrollment({ batchId, setError }: any) {
 // attendance … show them two types: the one they are taking and the government portal's —
 // days AND hours — and once the hours threshold is crossed, mark that child GREEN:
 // qualified for assessments." Visible to every login that can open the batch.
-function AttendanceTab({ batchId, batch, role, setError }: any) {
+function AttendanceTab({ batchId, batch, role, error, setError }: any) {
   const [data, setData] = useState<any>(null);
   const load = () => api(`/api/batches/${batchId}/attendance`).then(setData).catch((e: any) => setError(e.message));
   useEffect(() => { load(); }, [batchId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1263,7 +1263,7 @@ function AttendanceTab({ batchId, batch, role, setError }: any) {
   );
 }
 
-function DailyExecution({ batchId, batch, role, setError }: any) {
+function DailyExecution({ batchId, batch, role, error, setError }: any) {
   const canMark = role !== "Location";
   // -107: the bulk portal-sheet link is gated on the RIGHT, matching the API.
   const { can: canPerm, loaded: permsReady } = usePerms();
@@ -1624,15 +1624,15 @@ function DailyExecution({ batchId, batch, role, setError }: any) {
             ) : null },
           ]} empty="No logs yet." />
       </Section>
-      <LogEditDrawer log={editLog} members={members} onClose={() => setEditLog(null)} onSaved={() => { setEditLog(null); load(); }} setError={setError} />
-      <RoundDrawer log={roundLog} members={members} onClose={() => setRoundLog(null)} onSaved={() => { setRoundLog(null); load(); }} setError={setError} />
+      <LogEditDrawer log={editLog} members={members} onClose={() => setEditLog(null)} onSaved={() => { setEditLog(null); load(); }} error={error} setError={setError} />
+      <RoundDrawer log={roundLog} members={members} onClose={() => setRoundLog(null)} onSaved={() => { setRoundLog(null); load(); }} error={error} setError={setError} />
     </div>
   );
 }
 
 // Karunn 2026-08-13: "din mein do baar, teen baar, jitni baar bhi P-P-P" — a fresh marking
 // round for an existing day. Unions into the day server-side; timestamps kept per round.
-function RoundDrawer({ log, members, onClose, onSaved, setError }: any) {
+function RoundDrawer({ log, members, onClose, onSaved, error, setError }: any) {
   const [present, setPresent] = useState<Set<string>>(new Set());
   const [biometric, setBiometric] = useState<Set<string>>(new Set());
   useEffect(() => { setPresent(new Set()); setBiometric(new Set()); }, [log]);
@@ -1655,7 +1655,7 @@ function RoundDrawer({ log, members, onClose, onSaved, setError }: any) {
     } catch (e: any) { setError(e.message); onClose(); }
   }
   return (
-    <Drawer open onClose={onClose} title={`Marking round — ${fmtDate(log.log_date)}`} wide>
+    <Drawer open onClose={onClose} title={`Marking round — ${fmtDate(log.log_date)}`} wide error={error}>
       <div className="space-y-4">
         <p className="text-xs text-gray-500">
           Round {(log.sessions?.length ?? 0) + 1} of the day, timestamped now. A student present in ANY round counts present for the day —
@@ -1684,7 +1684,7 @@ function RoundDrawer({ log, members, onClose, onSaved, setError }: any) {
 }
 
 // Rule 27: 48h window for enterer, anytime for Ops/Admin — server enforces; UI just offers the form.
-function LogEditDrawer({ log, members, onClose, onSaved, setError }: any) {
+function LogEditDrawer({ log, members, onClose, onSaved, error, setError }: any) {
   const [form, setForm] = useState<any>(null);
   useEffect(() => {
     if (log) setForm({
@@ -1728,7 +1728,7 @@ function LogEditDrawer({ log, members, onClose, onSaved, setError }: any) {
   }
 
   return (
-    <Drawer open onClose={onClose} title={`Edit log — ${fmtDate(log.log_date)}`} wide>
+    <Drawer open onClose={onClose} title={`Edit log — ${fmtDate(log.log_date)}`} wide error={error}>
       <div className="space-y-4">
         <p className="text-xs text-gray-500">Editable for 48h by whoever entered it, anytime by Operations/Admin; every change is audited. Roster count stays at {log.roster_count}.</p>
         <div className="grid grid-cols-2 gap-3">
@@ -1841,7 +1841,7 @@ function ClosureFileSlot({ label, value, onUpload, disabled }: any) {
   );
 }
 
-function ClosureTab({ batchId, batch, role, setError, onChanged }: any) {
+function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
   const [closure, setClosure] = useState<any>(null);
   const [invoice, setInvoice] = useState<any>(null);
   const [form, setForm] = useState<any>({});
@@ -1956,7 +1956,7 @@ function ClosureTab({ batchId, batch, role, setError, onChanged }: any) {
       )}
       {/* Per-candidate marking gets the full width — it is a data-entry grid, not a side panel. */}
       {perCandidate && (
-        <CandidateResults batchId={batchId} batch={batch} setError={setError} onChanged={() => { load(); onChanged(); }} />
+        <CandidateResults batchId={batchId} batch={batch} error={error} setError={setError} onChanged={() => { load(); onChanged(); }} />
       )}
       <div className="grid gap-4 lg:grid-cols-2">
       <Section
@@ -2106,7 +2106,7 @@ function ClosureTab({ batchId, batch, role, setError, onChanged }: any) {
 }
 
 // ---------- Per-candidate assessment & certification (RPL M17/M18) ----------
-function CandidateResults({ batchId, batch, setError, onChanged }: any) {
+function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
   const [items, setItems] = useState<any[]>([]);
   const [summary, setSummary] = useState<any>(null);
   const [reasons, setReasons] = useState<any[]>([]);
@@ -2610,7 +2610,7 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
           plus preview mapping — agar koi wrong auto map hua ya nahi map ho paye toh preview me map
           kar sakte hain, har certificate ke aligned." Every staged file, its proposed candidate,
           changeable — and nothing is written until Attach. */}
-      <Drawer open={!!mapping} onClose={cancelMapping} title="Map each certificate to its candidate" wide>
+      <Drawer open={!!mapping} onClose={cancelMapping} title="Map each certificate to its candidate" wide error={error}>
         {mapping && (() => {
           const byMember = new Map((mapping.candidates ?? []).map((c: any) => [c.member, c]));
           const chosenCount = new Map<string, number>();
@@ -2712,7 +2712,7 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
         })()}
       </Drawer>
 
-      <Drawer open={certDrawer} onClose={() => setCertDrawer(false)} title="Issue certificates" wide>
+      <Drawer error={error} open={certDrawer} onClose={() => setCertDrawer(false)} title="Issue certificates" wide>
         <div className="space-y-3">
           <p className="text-sm text-gray-600">Only candidates who passed appear here — no certificate without a Pass.</p>
           <div className="grid grid-cols-2 gap-3">
@@ -2759,7 +2759,7 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
 
 // ---------- Costs tab ----------
 // ---------- Feedback tab (2026-08-11: "हर बच्चा… feedback दे पाए") ----------
-function FeedbackTab({ batchId, setError }: any) {
+function FeedbackTab({ batchId, error, setError }: any) {
   const [data, setData] = useState<any>(null);
   const [links, setLinks] = useState<any[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -2828,7 +2828,7 @@ function FeedbackTab({ batchId, setError }: any) {
   );
 }
 
-function CostsTab({ batchId, batch, setError }: any) {
+function CostsTab({ batchId, batch, error, setError }: any) {
   const [items, setItems] = useState<any[]>([]);
   const [cats, setCats] = useState<any[]>([]);
   const [form, setForm] = useState<any>({ entry_date: toInputDate(new Date()) });
@@ -2969,9 +2969,8 @@ function VideoRecorder({ open, onClose, onRecorded }: { open: boolean; onClose: 
   const stop = () => { rec?.stop(); setRec(null); };
   if (!open) return null;
   return (
-    <Drawer open={open} onClose={() => { if (rec) stop(); onClose(); }} title="Record video evidence">
+    <Drawer error={err} open={open} onClose={() => { if (rec) stop(); onClose(); }} title="Record video evidence">
       <div className="space-y-3">
-        {err && <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{err}</div>}
         <video ref={videoRef} playsInline muted className="w-full rounded-lg bg-black" />
         <div className="flex flex-wrap items-center gap-3 text-xs">
           {knobs && <span className="text-gray-500">{knobs.video_max_height}p · {knobs.video_bitrate_kbps} kbps ≈ {Math.round(knobs.video_bitrate_kbps * 60 / 8 / 1024 * 10) / 10} MB/min</span>}

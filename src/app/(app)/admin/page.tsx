@@ -35,18 +35,18 @@ export default function AdminPage() {
       <h1 className="text-xl font-semibold">Admin</h1>
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
       <Tabs tabs={TABS} active={tab} onChange={setTab} />
-      {tab === "Programs" && <Programs setError={setError} />}
-      {tab === "Users & Access" && <Users setError={setError} />}
-      {tab === "Permissions" && <Permissions setError={setError} />}
-      {tab === "Sync Source" && <SyncSources setError={setError} />}
-      {tab === "Approvals" && <Approvals setError={setError} />}
-      {tab === "Master Lists" && <MasterLists setError={setError} />}
-      {tab === "Defaults" && <DefaultsTab setError={setError} />}
+      {tab === "Programs" && <Programs error={error} setError={setError} />}
+      {tab === "Users & Access" && <Users error={error} setError={setError} />}
+      {tab === "Permissions" && <Permissions error={error} setError={setError} />}
+      {tab === "Sync Source" && <SyncSources error={error} setError={setError} />}
+      {tab === "Approvals" && <Approvals error={error} setError={setError} />}
+      {tab === "Master Lists" && <MasterLists error={error} setError={setError} />}
+      {tab === "Defaults" && <DefaultsTab error={error} setError={setError} />}
     </div>
   );
 }
 
-function Programs({ setError }: any) {
+function Programs({ error, setError }: any) {
   const [items, setItems] = useState<any[]>([]);
   const [drawer, setDrawer] = useState(false);
   const [edit, setEdit] = useState<any>(null);
@@ -101,7 +101,7 @@ function Programs({ setError }: any) {
           { key: "requires_lab", label: "Lab?", filterText: (r: any) => (r.requires_lab ? "Yes" : "No"), render: (r: any) => (r.requires_lab ? "Yes" : "No") },
           { key: "active", label: "Active", filterText: (r: any) => (r.active ? "Active" : "Closed"), render: (r: any) => <Chip value={r.active ? "Active" : "Closed"} /> },
         ]} empty="No programs — every computed value depends on these." />
-      <Drawer open={drawer} onClose={() => setDrawer(false)} title={edit ? `Edit ${edit.name}` : "Add Program"}>
+      <Drawer error={error} open={drawer} onClose={() => setDrawer(false)} title={edit ? `Edit ${edit.name}` : "Add Program"}>
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <Field label="Code" required><input className={inputCls} value={form.code ?? ""} onChange={(e) => set("code", e.target.value)} /></Field>
@@ -180,7 +180,7 @@ function Programs({ setError }: any) {
   );
 }
 
-function Users({ setError }: any) {
+function Users({ error, setError }: any) {
   const [items, setItems] = useState<any[]>([]);
   const [locations, setLocations] = useState<any[]>([]);
   const [drawer, setDrawer] = useState(false);
@@ -330,7 +330,7 @@ function Users({ setError }: any) {
           },
         ]} empty="No users." />
       {/* QA-137: "what did this person do" — read-only, Admin-only, latest 200 actions. */}
-      <Drawer open={!!act} onClose={() => setAct(null)} title={act ? `Activity — ${act.name}` : ""}>
+      <Drawer error={error} open={!!act} onClose={() => setAct(null)} title={act ? `Activity — ${act.name}` : ""}>
         <p className="mb-2 text-xs text-gray-500">
           {actTotal} recorded action{actTotal === 1 ? "" : "s"} in the audit log{actTotal > 200 ? " (latest 200 shown)" : ""}.
         </p>
@@ -345,7 +345,7 @@ function Users({ setError }: any) {
           </ul>
         )}
       </Drawer>
-      <Drawer open={drawer} onClose={() => setDrawer(false)} title={edit ? `Edit ${edit.name}` : "Add User"}>
+      <Drawer error={error} open={drawer} onClose={() => setDrawer(false)} title={edit ? `Edit ${edit.name}` : "Add User"}>
         <div className="space-y-3">
           <Field label="Name" required><input className={inputCls} value={form.name ?? ""} onChange={(e) => set("name", e.target.value)} /></Field>
           {/* QA-141: a mistyped login email is an account nobody can ever mail or reset. */}
@@ -476,7 +476,7 @@ function RevokedRights({ form, set }: any) {
 
 // Permission matrix (2026-08-11, CEO — AWS-style group toggles): each role is a group;
 // tick which feature-rights it carries. Applies within seconds, no re-login needed.
-function Permissions({ setError }: any) {
+function Permissions({ error, setError }: any) {
   const [catalog, setCatalog] = useState<any[]>([]);
   const [roles, setRoles] = useState<any[]>([]);
   const [saving, setSaving] = useState("");
@@ -553,7 +553,7 @@ function Permissions({ setError }: any) {
   );
 }
 
-function SyncSources({ setError }: any) {
+function SyncSources({ error, setError }: any) {
   const [items, setItems] = useState<any[]>([]);
   const [form, setForm] = useState<any>({ frequency: "Manual only" });
   const [mapping, setMapping] = useState("");
@@ -664,7 +664,7 @@ function SyncSources({ setError }: any) {
 
 // RPL M24 — which actions need a second person, and the queue of requests waiting.
 // Everything ships OFF: with no switch enabled the app behaves exactly as before.
-function Approvals({ setError }: any) {
+function Approvals({ error, setError }: any) {
   const [config, setConfig] = useState<any[]>([]);
   const [items, setItems] = useState<any[]>([]);
   const [status, setStatus] = useState("Pending");
@@ -745,7 +745,7 @@ function Approvals({ setError }: any) {
   );
 }
 
-function MasterLists({ setError }: any) {
+function MasterLists({ error, setError }: any) {
   // QA-118/119 (15/08): job roles and schemes join the editable masters. Schemes carry
   // the hours-and-money facts (Manish's data) that make the assessment threshold honest.
   const [lists, setLists] = useState<any>({ "cost-categories": [], "drop-reasons": [], "job-roles": [], "schemes": [] });
@@ -812,7 +812,7 @@ function SchemeRow({ s, onSave }: { s: any; onSave: (id: string, patch: any) => 
   );
 }
 
-function DefaultsTab({ setError }: any) {
+function DefaultsTab({ error, setError }: any) {
   const [form, setForm] = useState<any>(null);
   useEffect(() => { api("/api/defaults").then((d) => setForm(d.item)).catch((e: any) => setError(e.message)); }, []);
   async function save() {
@@ -983,7 +983,7 @@ function DefaultsTab({ setError }: any) {
               <span className="block text-xs text-gray-500">Off: every send is skipped and recorded as skipped. Sending also stays off until the mail credentials are configured on the server.</span>
             </span>
           </label>
-          <MailPanel setError={setError} />
+          <MailPanel error={error} setError={setError} />
         </div>
       </Section>
     </div>
@@ -1057,7 +1057,7 @@ function FilesPanel({ mb }: { mb: (n: number) => string }) {
   );
 }
 
-function MailPanel({ setError }: any) {
+function MailPanel({ error, setError }: any) {
   const [mail, setMail] = useState<any>(null);
   const [busy, setBusy] = useState(false);
   const [storageCheck, setStorageCheck] = useState<any>(null);

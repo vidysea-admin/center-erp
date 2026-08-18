@@ -514,7 +514,7 @@ function CandidatesInner() {
           },
         ]} empty="No candidates — add or import." />
 
-      <Drawer open={!!dropT} onClose={() => setDropT(null)} title={dropT ? `Drop ${dropT.name}?` : ""}>
+      <Drawer error={error} open={!!dropT} onClose={() => setDropT(null)} title={dropT ? `Drop ${dropT.name}?` : ""}>
         <div className="space-y-3">
           <p className="text-sm text-gray-600">
             Currently at <b>{dropT ? (isFresh(dropT) ? freshJourneyOf(dropT) : journeyOf(dropT)) : ""}</b> — the drop
@@ -547,7 +547,7 @@ function CandidatesInner() {
         </div>
       </Drawer>
 
-      <Drawer open={drawer === "add" || drawer === "edit"} onClose={() => { setDrawer(""); setEditId(""); }}
+      <Drawer error={error} open={drawer === "add" || drawer === "edit"} onClose={() => { setDrawer(""); setEditId(""); }}
         title={drawer === "edit" ? `Edit Candidate — ${form.name || ""}` : "Add Candidate"}>
         <div className="space-y-3">
           <Field label="Name" required><input className={inputCls} value={form.name ?? ""} onChange={(e) => set("name", e.target.value)} /></Field>
@@ -734,7 +734,7 @@ function CandidatesInner() {
         </div>
       </Drawer>
 
-      <Drawer open={drawer === "assign"} onClose={() => setDrawer("")} title={`Assign ${selected.size} candidates to batch`}>
+      <Drawer error={error} open={drawer === "assign"} onClose={() => setDrawer("")} title={`Assign ${selected.size} candidates to batch`}>
         <div className="space-y-2">
           {batches.map((b) => (
             <button key={b._id} onClick={() => bulkAssign(b._id)} className="flex w-full items-center justify-between rounded-lg border px-4 py-3 text-left text-sm hover:bg-blue-50">
@@ -746,7 +746,7 @@ function CandidatesInner() {
         </div>
       </Drawer>
 
-      <Drawer open={drawer === "import"} onClose={() => setDrawer("")} title="Import candidates from Excel" wide>
+      <Drawer error={error} open={drawer === "import"} onClose={() => setDrawer("")} title="Import candidates from Excel" wide>
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <Field label="Location" required>
