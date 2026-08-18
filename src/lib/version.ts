@@ -7,8 +7,20 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-122";
+export const RELEASE = "2026.08.14-123";
 export const RELEASE_NOTE =
+  "-123: QA-157, the half that was still real. Two of the three bypasses that row named are already "
+  "gone - HEIC converts in the browser since -87, and uploadClosureFile went through the shared "
+  "helper - so I swept every upload path instead of assuming: the only one still posting whole files "
+  "was the BULK certificate upload, which is the one Manish actually uses. It built its own FormData "
+  "and sent the files untouched, while the single-candidate path beside it has compressed since day "
+  "one. A scanned certificate is exactly the large image compression exists for, and the storage "
+  "arithmetic on QA-104/QA-145 assumes about 2 MB a photo. It compresses now, still BEST-EFFORT - "
+  "compressImage returns the original on any decode failure, because an upload must not fail - and "
+  "the result is REPORTED rather than silent, which was the other half of the complaint. The file "
+  "NAME is load-bearing and is preserved exactly: the -108 matcher reads CAN_12345 out of it, so a "
+  "compressed blob is re-wrapped under the same name and a changed extension can never break the "
+  "matching the preview depends on. "
   "-122: QA-093 - the number that decides who may sit an assessment is two assumptions stacked on "
   "each other, and only one screen ever said so. Measured on live: NONE of the five programmes "
   "carries QP hours. So DST-01's bar of 60 hours is built as duration_days 15 x 8 hours a day = 120, "

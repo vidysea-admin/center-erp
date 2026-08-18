@@ -9,7 +9,7 @@ import { slotHoursPerDay } from "@/lib/slot-rules";
 import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, HealthBanner, NameCell, Notice, Section, Tabs, inputCls, statusLabel } from "@/components/ui";
 import { Activity } from "@/components/activity";
 import { usePerms } from "@/components/shell";
-import { flushQueue, fmtBytes, getLastUploadInfo, getQueue, pickRecorderMime, uploadWithRetry, videoKnobs, type VideoKnobs } from "@/lib/upload";
+import { compressImage, flushQueue, fmtBytes, getLastUploadInfo, getQueue, pickRecorderMime, uploadWithRetry, videoKnobs, type VideoKnobs } from "@/lib/upload";
 import { BASE_PATH } from "@/lib/base-path";
 import { bulkSmsCsv, smsLink, waLink } from "@/lib/messaging";
 
@@ -2117,6 +2117,7 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
   const [idx, setIdx] = useState(0);
   const [certUpload, setCertUpload] = useState<any>(null); // last confirm report
   const [certOk, setCertOk] = useState(true); // -111: the success half of the report is showing
+  const [compressNote, setCompressNote] = useState<string | null>(null); // -123 (QA-157): say what compression did
   const [linkNote, setLinkNote] = useState<string | null>(null); // -111: link success, auto-hides
   const [uploading, setUploading] = useState(false);
   const closed = ["Completed", "Cancelled"].includes(batch?.status);
@@ -2139,8 +2140,30 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
     setUploading(true);
     setCertUpload(null);
     try {
+      // -123 (QA-157): the single-candidate upload has always gone through uploadWithRetry, which
+      // compresses on the device. THIS path — the bulk one, the one Manish actually uses — built its
+      // own FormData and posted the files whole. A scanned certificate is exactly the large image
+      // compression exists for, and the storage arithmetic on QA-104/QA-145 assumes ~2 MB a photo.
+      // Compression stays BEST-EFFORT (an upload that must not fail): compressImage returns the
+      // original on any decode failure. What changes is that it now runs at all here, and that the
+      // result is reported rather than silent — the other half of QA-157's complaint.
+      // THE FILE NAME IS LOAD-BEARING and is preserved exactly: the matcher reads CAN_12345 out of
+      // it (-108). A compressed blob is re-wrapped in a File under the SAME name, so a renamed
+      // extension can never break the matching the whole preview depends on.
       const fd = new FormData();
-      for (const f of Array.from(list)) fd.append("files", f);
+      let saved = 0, shrunk = 0;
+      for (const f of Array.from(list)) {
+        let out: File = f;
+        if (f.type.startsWith("image/") || /\.(jpe?g|png|webp|gif|bmp|tiff?|hei[cf])$/i.test(f.name)) {
+          try {
+            const blob = await compressImage(f);
+            if (blob.size < f.size) { saved += f.size - blob.size; shrunk++; out = new File([blob], f.name, { type: blob.type || f.type }); }
+          } catch { /* best effort — the original goes up, exactly as before */ }
+        }
+        fd.append("files", out);
+      }
+      if (shrunk > 0) setCompressNote(`${shrunk} image${shrunk === 1 ? "" : "s"} compressed before upload — ${fmtBytes(saved)} saved.`);
+      else setCompressNote(null);
       const res = await fetch(`${BASE_PATH}/api/batches/${batchId}/certificates`, { method: "POST", body: fd });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? `Upload failed (${res.status})`);
@@ -2513,6 +2536,7 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
               <input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" disabled={uploading}
                 onChange={(e) => { uploadCertificates(e.target.files); e.target.value = ""; }} />
             </label>
+            {compressNote && <span className="text-xs text-gray-500">{compressNote}</span>}
             <span className="cursor-help text-xs text-gray-500" title="Every file is shown with the candidate it is going to, and you can change any of them, before anything is saved. A file named CAN_12345.pdf is matched for you. Or upload from a candidate's own card below — no file name needed.">
               Preview first, then save · <span className="font-mono">CAN_12345.pdf</span> matches itself · <span className="underline decoration-dotted">?</span>
             </span>
