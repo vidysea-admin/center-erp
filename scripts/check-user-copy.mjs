@@ -11,6 +11,7 @@
 // Runs with no server and no DB — pure source scan.
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "src");
@@ -207,6 +208,20 @@ for (const file of walk(root)) {
   }
   if (enumVals.some((v) => /CIPSA/i.test(v))) { drift++; hits.push("models/index.ts: TRAINER_DOC_TYPE still carries CIPSA — the credential is CITS"); }
   if (drift) failed++; else passed++;
+}
+
+// ---- -131 (QA-278): the backfill script carries a COPY of hhmmssToMinutes ----
+// It has to: src/lib/govt-attendance.ts imports @/models, so a plain node migration cannot reach it
+// without dragging mongoose and the whole alias graph in — which is why every other migration here
+// uses raw mongo. -129 hit the same wall with the doc-type lists and answered it the same way: the
+// copy is allowed, DRIFTING is not. The script self-tests against a fixed table; the APP's side of
+// that same table is pinned at runtime by e2e-govt.mjs's decimal-hours and junk-hours blocks, so
+// both ends are anchored to one set of expectations. Run it rather than parse it — nothing is eval'd.
+{
+  const r = spawnSync(process.execPath, [path.join(root, "..", "scripts", "reparse-govt-hours.mjs"), "--selftest"], { encoding: "utf-8" });
+  const out = ((r.stdout ?? "") + (r.stderr ?? "")).trim();
+  if (r.status === 0) passed++;
+  else { failed++; hits.push(`scripts/reparse-govt-hours.mjs: its copy of hhmmssToMinutes no longer agrees with the expected table — ${out.split(String.fromCharCode(10))[0]}`); }
 }
 
 for (const h of hits) console.log("  ✗ " + h);

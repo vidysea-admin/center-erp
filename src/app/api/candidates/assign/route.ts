@@ -69,9 +69,23 @@ export const POST = apiHandler(async (req: NextRequest) => {
       await audit({ entity: "BatchMember", entityId: m._id, newValue: "assigned", actor: user.id });
       const c = byId.get(String(cid));
       const elig = c ? candidateEligibility(c, defaults) : null;
+      // -131 (QA-277): `warning` used to carry ONLY the eligibility text, so the roster warning
+      // addMemberChecked returns — "Roster is now 46 of target 45 — enrolment will be capped" — was
+      // computed on every bulk row and thrown away. The single-add door has always surfaced it
+      // (members/route.ts:106). Same question, two doors, one answer: enrol one over target and you
+      // are told, enrol thirty and you were not.
+      //
+      // Both warnings are kept rather than one winning. Over-target and not-eligible are different
+      // facts about the same enrolment and an operator needs both — picking one would trade a silent
+      // bug for a quieter one. This is the FOURTH time this shape has been found (QA-273 on this very
+      // route, QA-274, QA-275), which is why ARCHITECTURE.md section 3 exists.
+      const warnings = [
+        (m as any).warning as string | undefined,
+        elig && !elig.eligible ? `${c!.name}: ${elig.reasons.join("; ")}` : undefined,
+      ].filter(Boolean) as string[];
       results.push({
         candidate: cid, ok: true,
-        ...(elig && !elig.eligible ? { warning: `${c!.name}: ${elig.reasons.join("; ")}` } : {}),
+        ...(warnings.length ? { warning: warnings.join(" · ") } : {}),
       });
     } catch (e) {
       results.push({ candidate: cid, ok: false, error: e instanceof Error ? e.message : String(e) });

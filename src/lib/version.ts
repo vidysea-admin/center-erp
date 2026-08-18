@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-130";
+export const RELEASE = "2026.08.14-131";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,33 @@ export const RELEASE = "2026.08.14-130";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-131, both rows from the checker's retro sweep over the five bypassed releases. QA-277: enrol ONE " +
+  "candidate over a batch's target and you are warned; enrol thirty and you were not. The warning " +
+  "exists and is correct - addMemberChecked computes 'Roster is now 46 of target 45' and returns it " +
+  "on the member - and the single-add door has always surfaced it. The bulk door populated its " +
+  "warning field ONLY from the eligibility check, so the roster warning was computed on every row " +
+  "and thrown away. That is the FOURTH instance of one shape in three days (QA-273 on this very " +
+  "route, QA-274, QA-275): a fix correct on the door the row named and absent from the door beside " +
+  "it. Both warnings are kept rather than one winning - over-target and not-eligible are different " +
+  "facts about the same enrolment and an operator needs both. QA-278: a whole live batch, " +
+  "BHA-ITI-RPLHSL-SPIT-01, reads 'No portal hours yet' for all 45 students - 28 of them because one " +
+  "file's hours were written as decimals and were imported the day BEFORE -106 taught the parser to " +
+  "read that shape. Shivam Yadav has 109.94 hours in the government's own file and the ERP says he " +
+  "has none. The row concluded somebody must fetch the spreadsheet again, because the source file is " +
+  "not retained. IT DOES NOT HAVE TO BE: GovtAttendanceRow stores total_hours_raw - the string " +
+  "exactly as the portal wrote it - beside the parsed minutes, so those 28 rows are not missing " +
+  "their data, they are carrying '26.6' and '73.99' in a column nobody re-read after the parser " +
+  "learned the shape. scripts/reparse-govt-hours.mjs re-derives minutes from the stored raw values, " +
+  "touching only the DERIVED column and never the portal's own record, leaving anything it still " +
+  "cannot read as null and naming those rows (QA-085: a figure we do not understand must stay " +
+  "unknown rather than become a confident zero). It carries a COPY of hhmmssToMinutes, which is " +
+  "unavoidable - the real one imports @/models and no plain migration can reach it - so the copy is " +
+  "guarded rather than hoped about: it self-tests against a fixed table and the wall runs that. " +
+  "Proved by breaking it, twice: the first version of the table never exercised the 10,000-hour " +
+  "sanity guard at all, and the pin stayed green while I broke it.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-130: three doors the earlier sweeps missed, all found by the checker reading the DEPLOYED " +
   "source rather than the diff. QA-273: a walk-in could be enrolled one at a time but not in bulk. " +
   "-124 taught the single-add door that a candidate with NO centre adopts the batch's; the bulk " +
@@ -40,8 +67,6 @@ export const RELEASE_NOTE_CURRENT =
   "words on passing QA-261: 'I checked the door the row named and did not ask whether the product " +
   "had another one.' Every pin here is written on the QUESTION rather than the route.";
 
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
   "-129: the trainer data model, from Divya's 18/08 round. QA-268: the document type read 'CIPSA " +
   "Certificate'. CIPSA is not a credential - the trainer certification is CITS, Craft Instructor " +
   "Training Scheme - and the live row so labelled holds a file named CITS Certificate.pdf, which is " +

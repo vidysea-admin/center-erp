@@ -810,6 +810,25 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
     ok("-130 (QA-273): ...and the bulk path ADOPTS the centre, so the row is not left invisible to it",
       String(bAfter.location?._id ?? bAfter.location) === String(loc._id),
       JSON.stringify({ got: bAfter.location?._id ?? bAfter.location, want: String(loc._id) }));
+    // -131 (QA-277): the FOURTH instance of this shape, on this very route. addMemberChecked
+    // computes "Roster is now N of target M" and returns it on the member; the single-add door has
+    // always surfaced it and the bulk door populated `warning` only from the eligibility check, so
+    // the roster warning was computed on every row and thrown away. bulkBatch has target_size 3.
+    {
+      const overs = [];
+      for (let i = 0; i < 3; i++) {
+        overs.push((await req("POST", "/api/candidates", { name: `Over Target ${i} ${stamp}`, phone: `83${stamp}${i}0`.slice(0, 10), location: loc._id, program: prog._id }, 201)).data.item._id);
+      }
+      const res = await req("POST", "/api/candidates/assign", { batch: bulkBatch._id, candidate_ids: overs }, 200);
+      const warned = (res.data.results ?? []).filter((r2) => /target/i.test(String(r2.warning ?? "")));
+      ok("-131 (QA-277): pushing a roster past target through the BULK door warns, exactly as adding one does",
+        warned.length > 0, JSON.stringify((res.data.results ?? []).map((r2) => r2.warning ?? null)));
+      ok("-131 (QA-277): ...and the warning names the roster and the target, not just 'too many'",
+        /Roster is now \d+ of target \d+/.test(String(warned[0]?.warning ?? "")), String(warned[0]?.warning ?? ""));
+      ok("-131 (QA-277): ...and the top-level warnings array carries it too, so a caller cannot miss it",
+        (res.data.warnings ?? []).some((w) => /target/i.test(String(w))), JSON.stringify(res.data.warnings));
+    }
+
     ok("-130 (QA-273): ...audited, because it changes who can see the record",
       ((await req("GET", `/api/audit/Candidate/${bulkWalkIn._id}`)).data.items ?? []).some((a2) => String(a2.field) === "location"),
       "no audit row for the adoption");
