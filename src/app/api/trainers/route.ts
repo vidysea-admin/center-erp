@@ -107,7 +107,6 @@ export const { GET, POST } = collectionRoutes({
   // trainer. No SMS arm here: that would need its own approved DLT template, and inventing one would
   // be a send that cannot happen.
   async afterWrite(doc, user) {
-    if (!doc?.email) return;
     const centre = doc.home_location
       ? await Location.findById(doc.home_location).select("name").lean<any>().catch(() => null)
       : null;
@@ -120,7 +119,14 @@ export const { GET, POST } = collectionRoutes({
         `Added by ${user.name}. If anything above is wrong, reply to this email and we will correct it.`,
       ],
     });
-    sendMail({ to: doc.email, subject: "You have been added as a trainer", html, text, entity: "Trainer", entity_id: doc._id }).catch(() => {});
+    // -121 (QA-260, checker on live -119): this used to `return` when there was no email, so nothing
+    // was logged — while the -119 note claimed MailLog would record the skip. The claim was the right
+    // behaviour and the code was wrong, so the code moved: sendMail is called either way and records
+    // "skipped: no valid recipient address" itself (mailer.ts:101/108 — the QA-250 fix, which stores a
+    // "(no address on record)" placeholder because MailLog.to is required and an empty one used to
+    // throw inside a swallowed catch). "Did it go?" is now answerable for EVERY trainer, including the
+    // ones it could never have gone to.
+    sendMail({ to: doc.email ?? "", subject: "You have been added as a trainer", html, text, entity: "Trainer", entity_id: doc._id }).catch(() => {});
   },
   populate: [
     { path: "home_location", select: "name code" },

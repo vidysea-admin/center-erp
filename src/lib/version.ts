@@ -7,8 +7,21 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-120";
+export const RELEASE = "2026.08.14-121";
 export const RELEASE_NOTE =
+  "-121: QA-260. The checker FAILED -119 for the right reason: its release note claimed a behaviour "
+  "the code did not have. The note said a trainer with no email would be recorded in MailLog as "
+  "'skipped: no valid recipient address', so 'did it go?' stays answerable per trainer. On live it "
+  "recorded nothing at all - the path returned early before any log. That is QA-250 one screen over: "
+  "-109 found MailLog.to is required, so an empty address threw inside a swallowed catch, and the "
+  "one case where the answer was not recorded was the case where the mail certainly had not gone. "
+  "The fix was described then as covering all nine send sites; the trainer path added in -119 was "
+  "the tenth and did not carry it. THE CLAIM WAS THE RIGHT BEHAVIOUR, so the code moved rather than "
+  "the note: sendMail is now called either way and records the skip itself. My own wall pin passed "
+  "for the wrong reason - it accepted 'no row at all' as success and could never have caught this - "
+  "so it now REQUIRES the row and requires it to name the missing address. The checker also warned "
+  "that /api/test-email caps its log at 20 rows, so any count-based check can never move; the pin "
+  "reads rows, not counts. "
   "-120: M4-14, the chain Manish did not just describe but TYPED on screen - the data half of it. "
   "His list: mock test / formulation test date, who all are APPEARING, who all are QUALIFYING, a "
   "provision for the assessment date, a tentative result date, how many passed and failed, the "

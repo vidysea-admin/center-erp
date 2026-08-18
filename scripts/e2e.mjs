@@ -792,9 +792,17 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
       !!forT && /added as a trainer/i.test(String(forT.subject ?? "")), JSON.stringify({ found: !!forT, subj: forT?.subject }));
     ok("-119 (M4-16): …and it is not claimed as sent when the environment cannot send (honest status)",
       !!forT && ["sent", "skipped", "failed"].includes(String(forT.status)), String(forT?.status));
+    // -121 (QA-260, checker): the pin above passed for the WRONG reason. It accepted "no row at all"
+    // as success, so it could never catch the actual defect — the trainer path returned early and
+    // logged nothing while the release note claimed a skip was recorded. A row MUST exist now, and it
+    // must say why. The checker also warned that /api/test-email caps the log at 20 rows, so a
+    // count-based check can never move; this reads the rows.
     const forB = mine.find((m) => String(m.entity_id) === String(t119b._id));
-    ok("-119 (M4-16): a trainer with NO email is not an error and does not fabricate a send",
-      !forB || String(forB.status) === "skipped", JSON.stringify({ logged: !!forB, status: forB?.status }));
+    ok("-121 (QA-260): a trainer with NO email still gets a MailLog row — 'did it go?' is answerable for every trainer",
+      !!forB, JSON.stringify({ logged: !!forB, rows: mine.length }));
+    ok("-121 (QA-260): …and that row says skipped, naming the missing address rather than claiming a send",
+      forB?.status === "skipped" && /recipient address/i.test(String(forB?.reason ?? forB?.error ?? "")),
+      JSON.stringify({ status: forB?.status, reason: forB?.reason ?? forB?.error }));
   }
 
   // ---- -116 (QA-244, checker): a malformed id is a bad REQUEST, not a server fault ----
