@@ -10,6 +10,14 @@ import { BASE_PATH } from "@/lib/base-path";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthChip, SourceCell, Tabs, inputCls, statusLabel, useCopied } from "@/components/ui";
 import { useLocationCtx } from "@/components/shell";
 
+// -115 (QA-221): a RETIRED programme (active === false) leaves the pickers where something new is
+// created, but never disappears from a record that already points at one — editing such a record must
+// not silently blank the field. Retiring is a decision about what may be started, not about history.
+function offerable(list: any[], selectedId?: unknown) {
+  const keep = String(selectedId ?? "");
+  return (list ?? []).filter((p: any) => p?.active !== false || String(p?._id) === keep);
+}
+
 export default function BatchesPage() {
   return <Suspense><BatchesInner /></Suspense>;
 }
@@ -391,7 +399,7 @@ function BatchesInner() {
               <option value="">Select…</option>
               {/* 2026-08-13 (Manish saw "Drone Service Technician" twice): the same job role
                   exists once per SCHEME — show the scheme so the twins are tellable apart. */}
-              {programs.map((p) => { const t = `${p.name}${p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}`; return <option key={p._id} value={p._id} title={t}>{t}</option>; })}
+              {offerable(programs, form.program).map((p) => { const t = `${p.name}${p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}`; return <option key={p._id} value={p._id} title={t}>{t}</option>; })}
             </select>
           </Field>
           <div className="grid grid-cols-2 gap-3">

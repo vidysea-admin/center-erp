@@ -3,8 +3,25 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-114";
+export const RELEASE = "2026.08.14-115";
 export const RELEASE_NOTE =
+  "-115: three the checker's sweep raised, none of them glamorous. QA-218: /api/public/version has "
+  "been reporting evidence_storage 'drive' on every deploy while production actually runs on GCS "
+  "via Workload Identity Federation - the label was hardcoded to 'configured at all'. That endpoint "
+  "exists to be trusted from outside, so it now names the real backend. QA-223 (Manish M4-08, 'ye "
+  "trainer required - aise click kara to yahan pe koi field hai hi nahi'): the Locations table's "
+  "TRAINER REQUIRED cell landed on a generic Overview with nothing to type into. The field always "
+  "existed on the centre's Capacity and Target tab - but the tab lived in local state, so nothing "
+  "could link INTO it. ?tab= now works on the location page and the cell opens the right tab, "
+  "reading 'set' when the number has never been entered. QA-239, and this is the interesting one: "
+  "the checker probed plain() directly and found three edges - a bare 'DEC-6' or 'QA-142' "
+  "mid-sentence passed through untouched, a bare 'Rule 27' mid-sentence left a hole in the "
+  "sentence, and the R-alternative ate legitimate parentheticals ('Room (R-4)' became 'Room'). Two "
+  "are fixed in the function. The third is fixed in the GUARD instead: no regex is going to repair "
+  "English, so check-user-copy.mjs stopped skipping thrown messages and now fails the wall unless "
+  "the code sits in a shape plain() strips cleanly - leading, bracketed or trailing. Proved by "
+  "planting both bad shapes and watching the suite go red. All 61 existing messages already "
+  "comply. "
   "-114: QA-238, raised by the checker against LIVE -112 and worth saying plainly: every one of "
   "DST-01's eight Issued certificates carries NO certificate NUMBER, and the screen said '8 already "
   "have one' with nothing hinting that not one of them can be invoiced against. The file settles the "

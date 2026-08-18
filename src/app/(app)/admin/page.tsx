@@ -122,6 +122,17 @@ function Programs({ setError }: any) {
             <Field label="Default batch size"><input type="number" className={inputCls} value={form.default_batch_size ?? ""} onChange={(e) => set("default_batch_size", +e.target.value)} /></Field>
             <Field label="Completion deadline days"><input type="number" className={inputCls} value={form.completion_deadline_days ?? ""} onChange={(e) => set("completion_deadline_days", +e.target.value)} /></Field>
           </div>
+          {/* -115 (QA-221 / Manish 17/08 M4-12: "इनएक्टिव करने का मेरे को ऑप्शन दे दीजिए"): the model
+              has carried `active` all along and this table has shown an Active/Closed chip for it —
+              but nothing could ever set it, so a wrong or retired course stayed in every dropdown
+              forever. Retiring is not deleting: batches, candidates and targets point at the
+              programme and history must keep reading. */}
+          <Field label="Status">
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={form.active !== false} onChange={(e) => set("active", e.target.checked)} />
+              <span>{form.active !== false ? "Active — offered when creating batches, candidates and targets" : "Retired — hidden from those pickers; existing batches, candidates and targets keep it"}</span>
+            </label>
+          </Field>
           <Field label="Amount we receive (₹ — Admin-only, masked for every other login)">
             <input type="number" className={inputCls} value={form.contract_amount ?? ""} onChange={(e) => set("contract_amount", e.target.value === "" ? undefined : +e.target.value)} />
           </Field>

@@ -16,16 +16,25 @@ export function plain(msg: string): string {
   if (!msg) return msg;
   return msg
     // "(Rule 45)", "(Rule 45: no certificate…)", "(DEC-6)", "(QA-142 pin)", "(Rules 43/46)"
-    .replace(/\s*\((?:Rules?|DEC|QA|R)[-\s]?\d+[^)]*\)/g, "")
-    // leading "Rule 45: " / "Rule 16: readiness…"
-    .replace(/^\s*(?:Rules?)\s+\d+\s*[:—-]\s*/i, "")
+    // QA-239 (checker): the bare `R` alternative used to be in this list and it ate legitimate
+    // parentheticals — "Room (R-4) is unavailable" became "Room is unavailable". No message in this
+    // codebase writes a rule as "R-4", so the alternative is gone rather than made cleverer.
+    .replace(/\s*\((?:Rules?|DEC|QA)[-\s]?\d+[^)]*\)/g, "")
+    // leading "Rule 45: " / "DEC-6: " / "QA-142: "
+    .replace(/^\s*(?:Rules?|DEC|QA)[-\s]?\d+\s*[:—-]\s*/i, "")
     // trailing " — Rule 45" / " - DEC-6" / ", Rule 30"
     .replace(/\s*[—,-]\s*(?:Rules?|DEC|QA)[-\s]?\d+\s*$/g, "")
-    // inline "…(portal rule)…" is fine; but bare "Rule 27" mid-sentence goes too
-    .replace(/\s*\b(?:Rules?)\s+\d+\b\s*/g, " ")
+    // A bare code mid-sentence ("blocked by Rule 27 and Rule 43 today") cannot be removed without
+    // leaving a hole in the sentence, and no regex is going to repair English. So it is not removed
+    // here — it is FORBIDDEN at the door instead: scripts/check-user-copy.mjs now scans thrown
+    // messages too and fails the wall unless the code sits in one of the shapes above, which strip
+    // cleanly. Both codes are handled the same way, which is the other half of QA-239 (bare DEC-6
+    // and QA-142 used to pass through untouched while Rule 27 was stripped).
+    .replace(/\s*\b(?:Rules?|DEC|QA)[-\s]?\d+\b\s*$/g, "")
     .replace(/\s{2,}/g, " ")
     .replace(/\s+([.,;:!?])/g, "$1")
     .trim()
     // "Rule 45: no certificate…" loses its prefix and would start lowercase — a sentence starts capital.
-    .replace(/^[a-z](?![a-z0-9]*_)/, (c) => c.toUpperCase()); // not a field name like left_on
+    // Sentence case — but never on a field name the message is quoting: left_on, days[], rows[].
+    .replace(/^[a-z](?![a-z0-9]*(?:_|\[\]))/, (c) => c.toUpperCase());
 }

@@ -55,9 +55,21 @@ for (const file of walk(root)) {
   let fileHits = 0;
   lines.forEach((line, idx) => {
     if (!CODE.test(line)) return;
-    // Server-side messages thrown as HttpError / fail() pass through plain() at apiHandler — the
-    // chokepoint covers them, and the wall pins that separately. Everything else must be clean.
-    if (!isTsx && /\b(?:HttpError\(|fail\(|throw\b)/.test(line)) return;
+    // Server-side messages thrown as HttpError / fail() pass through plain() at apiHandler, so they
+    // MAY carry a code — but only in a shape plain() strips cleanly. QA-239 (checker) probed the
+    // function and found the gap: a bare code mid-sentence ("blocked by Rule 27 and Rule 43 today")
+    // either survives or leaves a hole, and no regex repairs English. So the shape is enforced here
+    // rather than guessed there: leading "Rule 45:", a parenthetical "(Rule 45…)", or a trailing
+    // "— Rule 45". Anything else fails the wall with the line printed.
+    if (!isTsx && /\b(?:HttpError\(|fail\(|throw\b)/.test(line)) {
+      const safe = /(["`])\s*(?:Rules?|DEC|QA)[-\s]?\d+\s*[:—-]/.test(line)          // leading
+        || /\((?:Rules?|DEC|QA)[-\s]?\d+[^)]*\)/.test(line)                          // parenthetical
+        || /[—,-]\s*(?:Rules?|DEC|QA)[-\s]?\d+\s*(?:\.\s*)?(["`])/.test(line);       // trailing
+      if (safe) return;
+      hits.push(`${rel}:${idx + 1}: [thrown message: the code must lead ("Rule 45: …"), sit in brackets, or trail — this shape does not strip cleanly] ${line.trim().slice(0, 120)}`);
+      fileHits++;
+      return;
+    }
     // string / template literals carrying a code
     const inLiteral = /(["'`])(?:(?!\1)[^\\]|\\.)*?(?:Rules?|DEC|QA)[-\s]?\d+(?:(?!\1)[^\\]|\\.)*?\1/.test(line);
     // JSX text: a code between a ">" (or the "}" closing an inline expression) and the next "<"/"{"

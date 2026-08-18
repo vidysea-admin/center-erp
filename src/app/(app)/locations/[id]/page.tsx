@@ -1,15 +1,33 @@
 "use client";
-import { use, useEffect, useState } from "react";
+import { Suspense, use, useEffect, useState } from "react";
 import { api, fmtDate } from "@/lib/client";
+import { useSearchParams } from "next/navigation";
 import { BackLink, Btn, Chip, CopyBtn, DataTable, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
 import { Activity } from "@/components/activity";
 import Link from "next/link";
 
+// -115 (QA-221): a RETIRED programme (active === false) leaves the pickers where something new is
+// created, but never disappears from a record that already points at one — editing such a record must
+// not silently blank the field. Retiring is a decision about what may be started, not about history.
+function offerable(list: any[], selectedId?: unknown) {
+  const keep = String(selectedId ?? "");
+  return (list ?? []).filter((p: any) => p?.active !== false || String(p?._id) === keep);
+}
+
 const TABS = ["Overview", "Contacts & Notes", "Capacity & Target", "Trainers & Infra", "Batches", "Activity"];
 
 export default function LocationDetail({ params }: { params: Promise<{ id: string }> }) {
+  return <Suspense><LocationDetailInner params={params} /></Suspense>;
+}
+
+function LocationDetailInner({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const [tab, setTab] = useState("Overview");
+  // QA-223 (Manish 17/08 M4-08): the tab lived in local state, so nothing could link INTO a tab —
+  // which is exactly why the Locations table's "Trainer Required" cell had nowhere useful to send
+  // anyone. ?tab= opens the right one, the same shape the batch page already uses.
+  const sp = useSearchParams();
+  const wanted = sp.get("tab");
+  const [tab, setTab] = useState(wanted && TABS.includes(wanted) ? wanted : "Overview");
   const [loc, setLoc] = useState<any>(null);
   const [error, setError] = useState("");
 
@@ -305,7 +323,7 @@ function Targets({ locationId, setError }: any) {
           <Field label="Program" required>
             <select className={inputCls} value={form.program ?? ""} onChange={(e) => setForm({ ...form, program: e.target.value })}>
               <option value="">Select…</option>
-              {programs.map((p) => <option key={p._id} value={p._id}>{p.name}{p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}</option>)}
+              {offerable(programs, form.program).map((p) => <option key={p._id} value={p._id}>{p.name}{p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}</option>)}
             </select>
           </Field>
           <Field label="Approved target"><input type="number" className={inputCls} value={form.approved_target ?? ""} onChange={(e) => setForm({ ...form, approved_target: +e.target.value })} /></Field>
@@ -474,7 +492,7 @@ function TrainersInfra({ locationId, setError }: any) {
           <Field label="Program" required>
             <select className={inputCls} value={reqForm.program ?? ""} onChange={(e) => setReqForm({ ...reqForm, program: e.target.value })}>
               <option value="">Select…</option>
-              {programs.map((p) => <option key={p._id} value={p._id}>{p.name}{p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}</option>)}
+              {offerable(programs, reqForm.program).map((p) => <option key={p._id} value={p._id}>{p.name}{p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}</option>)}
             </select>
           </Field>
           <Field label="Required by" required><input type="date" className={inputCls} value={reqForm.required_by_date ?? ""} onChange={(e) => setReqForm({ ...reqForm, required_by_date: e.target.value })} /></Field>

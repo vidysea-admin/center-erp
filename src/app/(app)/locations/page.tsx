@@ -1,6 +1,7 @@
 "use client";
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { api } from "@/lib/client";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, SourceCell, inputCls } from "@/components/ui";
 
@@ -153,7 +154,17 @@ function LocationsInner() {
             render: (r: any) => r.loc.tc_password ? rep(r, <span className="font-mono text-xs">{r.loc.tc_password}</span>) : <span className="text-gray-300">—</span>,
           },
           { key: "tc_status", label: "TC Status", filterable: true, filterText: (r: any) => r.jr?.tc_status ?? "", render: (r: any) => r.jr?.tc_status ? <Chip value={r.jr.tc_status} /> : <span className="text-gray-400">—</span> },
-          { key: "trainers_required", label: "Trainer Required", sortable: true, sortValue: (r: any) => r.jr?.trainers_required ?? 0, render: (r: any) => r.jr?.trainers_required ?? "—" },
+          // QA-223 (Manish 17/08 M4-08: "ye trainer required — aise click kara to yahan pe koi field hai
+          // hi nahi"): the number lives on the location's own edit form ("Trainers required"), but this
+          // cell used to land on a generic Overview with nothing to type into. It opens that form now,
+          // and says "set" when the number has never been entered.
+          { key: "trainers_required", label: "Trainer Required", sortable: true, sortValue: (r: any) => r.jr?.trainers_required ?? 0,
+            render: (r: any) => (
+              <Link href={`/locations/${r._id}?tab=${encodeURIComponent("Capacity & Target")}`} onClick={(e: any) => e.stopPropagation()}
+                className="text-blue-700 hover:underline" title="Set how many trainers this centre needs">
+                {r.jr?.trainers_required ?? <span className="text-amber-700">set →</span>}
+              </Link>
+            ) },
           { key: "nom_recv", label: "Nomination Received (sheet)", mobile: false, render: (r: any) => r.jr?.nominations_received_reported ?? "—" },
           { key: "nom_nsdc", label: "Nominated to NSDC (sheet)", mobile: false, render: (r: any) => r.jr?.nominated_nsdc_reported ?? "—" },
           { key: "cert_sheet", label: "Trainer Certified (sheet)", mobile: false, render: (r: any) => r.jr?.trainers_certified_reported ?? "—" },

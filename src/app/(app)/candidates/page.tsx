@@ -12,6 +12,14 @@ import { BASE_PATH } from "@/lib/base-path";
 import { bulkSmsCsv, smsLink, unsendableCount, waLink } from "@/lib/messaging";
 import { uploadWithRetry } from "@/lib/upload";
 
+// -115 (QA-221): a RETIRED programme (active === false) leaves the pickers where something new is
+// created, but never disappears from a record that already points at one — editing such a record must
+// not silently blank the field. Retiring is a decision about what may be started, not about history.
+function offerable(list: any[], selected?: unknown) {
+  const keep = new Set((Array.isArray(selected) ? selected : [selected]).map((x) => String(x ?? "")));
+  return (list ?? []).filter((p: any) => p?.active !== false || keep.has(String(p?._id)));
+}
+
 export default function CandidatesPage() {
   return <Suspense><CandidatesInner /></Suspense>;
 }
@@ -580,7 +588,7 @@ function CandidatesInner() {
           <Field label="Program" required>
             <select className={inputCls} value={form.program ?? ""} onChange={(e) => set("program", e.target.value)}>
               <option value="">Select…</option>
-              {programs.map((p) => { const t = `${p.name}${p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}`; return <option key={p._id} value={p._id} title={t}>{t}</option>; })}
+              {offerable(programs, form.program).map((p) => { const t = `${p.name}${p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}`; return <option key={p._id} value={p._id} title={t}>{t}</option>; })}
             </select>
           </Field>
           <div className="grid grid-cols-2 gap-3">
@@ -603,7 +611,7 @@ function CandidatesInner() {
           <Field label="Interested programs (Ctrl-click for many)">
             <select multiple className={inputCls + " h-28"} value={form.interested_programs ?? []}
               onChange={(e) => set("interested_programs", Array.from(e.target.selectedOptions).map((o) => o.value))}>
-              {programs.map((p) => { const t = `${p.name}${p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}`; return <option key={p._id} value={p._id} title={t}>{t}</option>; })}
+              {offerable(programs, form.interested_programs).map((p) => { const t = `${p.name}${p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}`; return <option key={p._id} value={p._id} title={t}>{t}</option>; })}
             </select>
           </Field>
           <Field label="Interested locations (Ctrl-click for many)">
@@ -621,11 +629,24 @@ function CandidatesInner() {
           {drawer === "edit" && editId && <CandidateDocs candidateId={editId} setError={setError} />}
           {/* 15/08 (Umesh): columns the import didn't recognise, accepted by the operator —
               shown as facts, edited only by re-import. */}
+          {/* -115 (QA-146, measured on live 18/08): the 45 CHI-ITI rows are correct again — name,
+              phone and email all read right — but 45 of them still carry the junk keys the bad header
+              row produced, and "__EMPTY_4" is SheetJS's name for a column whose header cell was blank,
+              not a fact about the student. It was being shown to staff as an "extra column" with a
+              value beside it. A key that is only a spreadsheet artefact is now named as one and the
+              value still shown, so nothing is hidden and nothing is dressed up as data. */}
           {form.custom_fields && Object.keys(form.custom_fields).length > 0 && (
             <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm">
               <div className="mb-1 text-xs font-medium text-gray-500">Extra columns (from import)</div>
               {Object.entries(form.custom_fields).map(([k, v]) => (
-                <div key={k} className="flex justify-between gap-3"><span className="text-gray-500">{k}</span><span className="text-right">{String(v)}</span></div>
+                <div key={k} className="flex justify-between gap-3">
+                  <span className="text-gray-500">
+                    {/^__EMPTY/.test(k)
+                      ? <span title="The spreadsheet column this came from had no header, so the importer had no name for it. It is kept as-is; correct it by re-importing with a fixed header row.">unnamed column {k.replace(/^__EMPTY_?/, "") || "1"}</span>
+                      : k}
+                  </span>
+                  <span className="text-right">{String(v)}</span>
+                </div>
               ))}
             </div>
           )}
@@ -671,7 +692,7 @@ function CandidatesInner() {
             <Field label="Program" required>
               <select className={inputCls} value={importState.program ?? ""} onChange={(e) => setImportState({ ...importState, program: e.target.value })}>
                 <option value="">Select…</option>
-                {programs.map((p) => { const t = `${p.name}${p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}`; return <option key={p._id} value={p._id} title={t}>{t}</option>; })}
+                {offerable(programs).map((p) => { const t = `${p.name}${p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}`; return <option key={p._id} value={p._id} title={t}>{t}</option>; })}
               </select>
             </Field>
           </div>
