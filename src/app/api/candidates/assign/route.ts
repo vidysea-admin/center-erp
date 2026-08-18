@@ -40,7 +40,12 @@ export const POST = apiHandler(async (req: NextRequest) => {
       // wrong row does not abort the other 29.
       const c0 = byId.get(String(cid));
       if (!c0) throw new HttpError(404, "Candidate not found");
-      if (String(c0.location) !== String(batch.location)) {
+      // -130 (QA-273): the leading `c0.location &&` is the -124 walk-in exemption, and this path
+      // never got it. A candidate with no centre stringifies to the literal "undefined", which never
+      // equals the batch id, so every walk-in was refused here — and refused with "belongs to another
+      // centre", naming a centre they do not have. One at a time worked; thirty at a time did not.
+      // Someone who genuinely DOES belong elsewhere is still refused: that rule is Manish's own.
+      if (c0.location && String(c0.location) !== String(batch.location)) {
         throw new HttpError(409, `${c0.name ?? "Candidate"} belongs to another centre — move them to this location first.`);
       }
       if (c0.program && batch.program && String(c0.program) !== String(batch.program)) {
@@ -51,6 +56,15 @@ export const POST = apiHandler(async (req: NextRequest) => {
       // programme on enrolment.
       if (!c0.program && batch.program) {
         await Candidate.updateOne({ _id: cid }, { $set: { program: batch.program } });
+      }
+      // -130 (QA-273): and the other half the single-add door does — a candidate with no centre
+      // ADOPTS this one. Without it a bulk enrolment left the record unscoped even when it worked,
+      // so the student was on the roster and invisible to the very centre running their batch.
+      // Audited by name, because it changes who can see the record from that moment on (Rule 38
+      // scoping keys on exactly this field).
+      if (!c0.location && batch.location) {
+        await Candidate.updateOne({ _id: cid }, { $set: { location: batch.location } });
+        await audit({ entity: "Candidate", entityId: cid, field: "location", oldValue: "", newValue: String(batch.location), actor: user.id });
       }
       await audit({ entity: "BatchMember", entityId: m._id, newValue: "assigned", actor: user.id });
       const c = byId.get(String(cid));

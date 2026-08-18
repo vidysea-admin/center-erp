@@ -4,6 +4,7 @@ import { apiHandler, HttpError } from "@/lib/authz";
 import { rateLimit, clientKey } from "@/lib/rate-limit";
 import { Notification, Program, PublicToken, Trainer } from "@/models";
 import { audit } from "@/lib/audit";
+import { canonicalPhone, emailError, phoneError } from "@/lib/validate";
 import { mailUsersByRole, renderMail, sendMail } from "@/lib/mailer";
 
 // Public trainer application (CEO 13/08: "Add Trainer ke fields as a form uske paas chala
@@ -23,7 +24,10 @@ function applicantFields(body: Record<string, unknown>) {
   const N = (v: unknown) => { const n = Number(v); return Number.isFinite(n) && n >= 0 && n <= 60 ? n : undefined; };
   const skills = S(body.skills).split(/[,;/]+/).map((x) => x.trim()).filter(Boolean);
   return {
-    name: S(body.name), phone: S(body.phone).replace(/\D/g, "").slice(-10), email: S(body.email) || undefined,
+    // -130 (QA-274): this took the LAST TEN DIGITS of whatever was typed, so "99999999999999"
+    // became a valid ten-digit number instead of being refused. -126 taught the candidate door the
+    // shared rule and never reached this one. Keep the raw value here; canonicalPhone judges it below.
+    name: S(body.name), phone: S(body.phone), email: S(body.email) || undefined,
     qualification: S(body.qualification) || undefined,
     industry_experience_years: N(body.industry_experience_years),
     teaching_experience_years: N(body.teaching_experience_years),
@@ -53,9 +57,17 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // Honeypot: bots fill every field; humans never see this one. Fake success, no write.
   if (String(body.website ?? "").trim()) return NextResponse.json({ ok: true }, { status: 201 });
   const f = applicantFields(body);
-  if (!f.name || f.phone.length !== 10) throw new HttpError(400, "Name and a 10-digit phone are required.");
+  // -130 (QA-274): the same two validators every other intake uses, so a public door cannot be
+  // laxer than the staff form behind it — and the applicant reads the same sentence a member of
+  // staff would (the QA-141 canon). This route had its own phone arithmetic AND its own email
+  // regex, the latter with no TLD-length requirement where lib/validate demands two characters.
+  if (!f.name) throw new HttpError(400, "Please enter your name.");
+  const pErr = phoneError(f.phone);
+  if (pErr) throw new HttpError(400, pErr);
+  f.phone = canonicalPhone(f.phone)!;
   // 15/08 (Umesh): email mandatory on self-application too — the mail pipeline is coming.
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(f.email ?? ""))) throw new HttpError(400, "A valid email address is required.");
+  const eErr = emailError(String(f.email ?? ""));
+  if (eErr) throw new HttpError(400, eErr);
   if (!f.skills.length) throw new HttpError(400, "Tell us at least one skill / job role you can teach.");
 
   if (body.token) {

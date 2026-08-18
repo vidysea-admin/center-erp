@@ -532,6 +532,29 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   const found = ((await req(admin, "GET", `/api/candidates?q=${encodeURIComponent("OTP Cand E2E")}`)).data.items ?? []).find((c) => c.email === em);
   ok("QA-116: the row carries the VERIFIED email and the OTP source", !!found && found.source === "Self Registration (OTP)", JSON.stringify(found?.source ?? null));
 
+  // ---- -130 (QA-275): the OTP door is a SECOND public intake, and -126 only fixed the first ----
+  // -126 put the nine Skill India fields on p/register and on both internal routes. p/enrol is the
+  // email/SMS-OTP walk-in link - a different link for the same job - so a student arriving through
+  // it was still chased later for exactly the data those fields exist to stop chasing. The checker's
+  // own note on having passed QA-261: "I checked the door the row named and did not ask whether the
+  // product had another one." This pin is that question, asked permanently.
+  {
+    const r3 = await pj({ action: "request", email: `otp9.${Date.now()}@test.local` });
+    await db.collection("publictokens").updateOne({ token: r3.data.token }, { $set: { otp_hash: nodeCrypto.createHash("sha256").update("424242").digest("hex"), otp_attempts: 0 } });
+    await pj({ action: "verify", token: r3.data.token, code: "424242" });
+    const portal = { salutation: "Mr.", father_name: "Indal Singh", mother_name: "Rani Devi", marital_status: "Single",
+      religion: "Hindu", social_category: "OBC", state: "Uttar Pradesh", district: "Sant Ravidas Nagar", sub_district: "Aurai" };
+    const nm = "OTP Portal Fields " + Date.now().toString().slice(-6);
+    const regP = await pj({ action: "register", token: r3.data.token, name: nm, phone: "96" + Date.now().toString().slice(-8),
+      location: ctxD.locations?.[0]?._id, program: ctxD.programs?.[0]?._id, ...portal });
+    ok("-130 (QA-275): a self-enrolment carrying the government-portal fields is accepted", regP.status === 201, `got ${regP.status}`);
+    const row = ((await req(admin, "GET", `/api/candidates?q=${encodeURIComponent(nm)}`)).data.items ?? []).find((c) => c.name === nm);
+    ok("-130 (QA-275): ...and the candidate exists", !!row, "not found after OTP self-enrolment");
+    const wrong = Object.entries(portal).filter(([k, v]) => String(row?.[k] ?? "") !== v).map(([k]) => k);
+    ok("-130 (QA-275): every portal field STORES and READS BACK through the OTP door too",
+      wrong.length === 0, `missing/wrong: ${wrong.join(", ")}`);
+  }
+
   const r2 = await pj({ action: "request", email: `otp2.${Date.now()}@test.local` });
   await db.collection("publictokens").updateOne({ token: r2.data.token }, { $set: { otp_expires_at: new Date(Date.now() - 1000) } });
   ok("QA-116: an expired code is refused", (await pj({ action: "verify", token: r2.data.token, code: "111111" })).status === 400);

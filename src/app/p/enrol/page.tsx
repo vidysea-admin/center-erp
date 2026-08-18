@@ -147,6 +147,45 @@ export default function EnrolOtpPage() {
                 <option value="">Select…</option>
                 {(ctx.programs ?? []).map((p: any) => <option key={p._id} value={p._id}>{p.name}{p.scheme ? ` (${p.scheme})` : ""}</option>)}
               </select></label>
+            {/* -130 (QA-275): the same nine government-portal fields p/register got in -126. That
+                round put them on the register link and on both internal routes and stopped there —
+                but this is the OTP walk-in link, a different link for the SAME job, so a student
+                arriving through it was still chased later for exactly the data these fields exist to
+                stop chasing. All optional, as they are on the other public form: the person filling
+                this is a student on a phone, and a long required form is a form they abandon. */}
+            <div className="!mt-6 border-t border-gray-200 pt-4">
+              <div className="text-sm font-medium">Government registration details</div>
+              <p className="mt-0.5 text-xs text-gray-500">All optional. Filling these now saves us asking you again when you are registered on the Skill India portal.</p>
+            </div>
+            <label className="block text-sm"><span className="mb-1 block text-gray-600">Salutation</span>
+              <input className={inputCls} list="enrol-salutation" value={form.salutation ?? ""} onChange={(e) => set("salutation", e.target.value)} />
+              <datalist id="enrol-salutation">{["Mr.", "Mrs.", "Ms.", "Dr."].map((o) => <option key={o} value={o} />)}</datalist></label>
+            <label className="block text-sm"><span className="mb-1 block text-gray-600">Father&apos;s name</span>
+              <input className={inputCls} value={form.father_name ?? ""} onChange={(e) => set("father_name", e.target.value)} /></label>
+            <label className="block text-sm"><span className="mb-1 block text-gray-600">Mother&apos;s name</span>
+              <input className={inputCls} value={form.mother_name ?? ""} onChange={(e) => set("mother_name", e.target.value)} /></label>
+            <label className="block text-sm"><span className="mb-1 block text-gray-600">Marital status</span>
+              <select className={inputCls} value={form.marital_status ?? ""} onChange={(e) => set("marital_status", e.target.value)}>
+                <option value="">—</option>
+                {["Single", "Married", "Widowed", "Divorced"].map((o) => <option key={o}>{o}</option>)}
+              </select></label>
+            <label className="block text-sm"><span className="mb-1 block text-gray-600">Religion</span>
+              <select className={inputCls} value={form.religion ?? ""} onChange={(e) => set("religion", e.target.value)}>
+                <option value="">—</option>
+                {["Hindu", "Muslim", "Christian", "Sikh", "Buddhist", "Jain", "Parsi", "Other"].map((o) => <option key={o}>{o}</option>)}
+              </select></label>
+            <label className="block text-sm"><span className="mb-1 block text-gray-600">Category</span>
+              <select className={inputCls} value={form.social_category ?? ""} onChange={(e) => set("social_category", e.target.value)}>
+                <option value="">—</option>
+                {["General", "OBC", "SC", "ST", "EWS"].map((o) => <option key={o}>{o}</option>)}
+              </select></label>
+            <label className="block text-sm"><span className="mb-1 block text-gray-600">State</span>
+              <input className={inputCls} value={form.state ?? ""} onChange={(e) => set("state", e.target.value)} /></label>
+            <label className="block text-sm"><span className="mb-1 block text-gray-600">District</span>
+              <input className={inputCls} value={form.district ?? ""} onChange={(e) => set("district", e.target.value)} /></label>
+            <label className="block text-sm"><span className="mb-1 block text-gray-600">Sub-district</span>
+              <input className={inputCls} value={form.sub_district ?? ""} onChange={(e) => set("sub_district", e.target.value)} /></label>
+
             <button className={btnCls} disabled={busy || !form.name || (ctx.channel !== "sms" && (!form.phone || !!phoneError(form.phone))) || (form.email && !!emailError(form.email)) || !form.location || !form.program} onClick={register}>
               {busy ? "Submitting…" : "Register"}
             </button>

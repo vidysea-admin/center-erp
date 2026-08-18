@@ -147,6 +147,37 @@ ok("[avg] nomination can be cleared again (wrong pick is reversible)", nomCleare
   await pub("/api/public/trainer-apply", { name: "Bot", phone: hpPhone, skills: "x", website: "spam.example" });
   const hpCount = ((await req(admin, "GET", `/api/trainers?q=${hpPhone}&limit=5`, undefined, 200)).data.items ?? []).filter((t) => t.phone === hpPhone).length;
   ok("[worst] honeypot submission writes nothing", hpCount === 0, `count=${hpCount}`);
+
+  // ---- -130 (QA-274): the public trainer door never adopted the shared phone rule ----
+  // The door is rate-limited 5/hour/IP, and this suite already spends that budget on the
+  // applications above — so these probes present as a DIFFERENT client (x-real-ip, which is what
+  // clientKey reads) rather than eating an allowance the other pins depend on. Same route, same
+  // limiter, same validation; just not the same applicant. Ordering alone could not fix this: 5 is
+  // 5 whichever end of the suite you spend it at.
+  const pubAs = (ip, body) => fetch(BASE + "/api/public/trainer-apply", {
+    // x-forwarded-for, not x-real-ip: clientKey checks XFF FIRST and the Next server populates it,
+    // so an x-real-ip we set never gets looked at and every probe buckets with everything else.
+    // Measured, not assumed — x-real-ip returned 429 and XFF returned the 400 this pin is about.
+    method: "POST", headers: { "Content-Type": "application/json", "x-forwarded-for": ip }, body: JSON.stringify(body),
+  });
+  // It built its phone as `replace(/\D/g,"").slice(-10)` — the LAST TEN DIGITS of anything — so a
+  // 14-digit string always became a valid ten-digit number. -126 taught the candidate door to refuse
+  // exactly this value with 400 and never reached here; -130 is that sweep finished. The point is
+  // not one route: an UNAUTHENTICATED door being laxer than the staff form behind it is the shape.
+  {
+    const junk = await pubAs(`203.0.113.${(Date.now() % 200) + 11}`, { name: "TEST-ET Junk " + s, phone: "99999999999999", email: "junk." + s + "@test.local", skills: "Battery Repair" });
+    const junkBody = await junk.json().catch(() => ({}));
+    ok("-130 (QA-274): a 14-digit phone is REFUSED on the public trainer door, not silently truncated",
+      junk.status === 400, `got ${junk.status}`);
+    ok("-130 (QA-274): ...with the same sentence every other intake shows",
+      /10-digit/i.test(String(junkBody.error ?? "")), String(junkBody.error ?? "").slice(0, 90));
+    const badMail = await pubAs(`203.0.113.${(Date.now() % 200) + 12}`, { name: "TEST-ET BadMail " + s, phone: phone("95"), email: "nope@nope.x", skills: "Battery Repair" });
+    ok("-130 (QA-274): ...and the shared EMAIL rule too - the local regex had no TLD-length check",
+      badMail.status === 400, `got ${badMail.status}`);
+  }
+
 }
+
+
 
 finish();

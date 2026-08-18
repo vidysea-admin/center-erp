@@ -154,6 +154,16 @@ export const POST = apiHandler(async (req: NextRequest) => {
       dob: body.dob ? new Date(body.dob) : undefined,
       education: EDUCATION_LEVEL.includes(body.education) ? body.education : undefined,
       last_training_date: body.last_training_date ? new Date(body.last_training_date) : undefined,
+      // -130 (QA-275): the nine Skill India fields. -126 put them on p/register and on both internal
+      // routes and stopped there — and p/enrol is the OTP walk-in link, a different link for the
+      // same job, so a student arriving through it still had to be chased for exactly the data the
+      // fields exist to stop chasing. The checker's own note on passing QA-261: "I checked the door
+      // the row named and did not ask whether the product had another one." Listed explicitly rather
+      // than spread from the body — this is an UNAUTHENTICATED door, and the one thing it must never
+      // do is take whatever it is handed.
+      ...Object.fromEntries((["salutation", "father_name", "mother_name", "marital_status", "religion",
+        "social_category", "state", "district", "sub_district"] as const)
+        .map((f) => [f, String((body as any)[f] ?? "").trim() || undefined])),
       location: t.location ?? body.location,
       program: body.program,
       source: t.purpose === "phone_otp" ? "Self Registration (SMS OTP)" : "Self Registration (OTP)",

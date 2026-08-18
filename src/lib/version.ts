@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-129";
+export const RELEASE = "2026.08.14-130";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,31 @@ export const RELEASE = "2026.08.14-129";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-130: three doors the earlier sweeps missed, all found by the checker reading the DEPLOYED " +
+  "source rather than the diff. QA-273: a walk-in could be enrolled one at a time but not in bulk. " +
+  "-124 taught the single-add door that a candidate with NO centre adopts the batch's; the bulk " +
+  "door was three files away and got neither half. Without the exemption String(undefined) never " +
+  "equalled the batch id, so every walk-in was refused - and refused with 'belongs to another " +
+  "centre', naming a centre the person does not have. Without the adoption even a SUCCESSFUL bulk " +
+  "enrolment left the record unscoped, so the student sat on the roster invisible to the very centre " +
+  "running their batch. Both halves fixed and both pinned, because fixing only the refusal would " +
+  "have shipped the silent one. QA-274: the public trainer application built its phone as the LAST " +
+  "TEN DIGITS of whatever was typed, so '99999999999999' became a valid ten-digit number - the exact " +
+  "value -126 taught the candidate door to refuse with 400. It also carried its own email regex with " +
+  "no TLD-length check. Both now use lib/validate, so an UNAUTHENTICATED door is no longer laxer " +
+  "than the staff form behind it. QA-275: -126 put the nine Skill India fields on p/register and on " +
+  "both internal routes and stopped there. p/enrol - the email/SMS-OTP walk-in link - is a different " +
+  "link for the SAME job, so a student arriving through it was still chased later for exactly the " +
+  "data those fields exist to stop chasing. All nine are on that form and in that route now, " +
+  "explicitly listed rather than spread from the body, because it is an unauthenticated door. " +
+  "THE PATTERN, which is the actual lesson: three times now a fix has been correct on the door the " +
+  "row named and absent from the door beside it. -126 fixed one public intake of three. -124 fixed " +
+  "one roster path of two. Each was verified against the door it named and passed. The checker's own " +
+  "words on passing QA-261: 'I checked the door the row named and did not ask whether the product " +
+  "had another one.' Every pin here is written on the QUESTION rather than the route.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-129: the trainer data model, from Divya's 18/08 round. QA-268: the document type read 'CIPSA " +
   "Certificate'. CIPSA is not a credential - the trainer certification is CITS, Craft Instructor " +
   "Training Scheme - and the live row so labelled holds a file named CITS Certificate.pdf, which is " +
@@ -54,8 +79,6 @@ export const RELEASE_NOTE_CURRENT =
   "and fixing the 'Govt ITI, Dudhi Sonbhadra' spelling are production data writes, prepared for " +
   "Umesh rather than run from here.";
 
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
   "-128 (QA-266, Divya 18/08): \"Move... ye move nahi ho raha hai\". Moving a trainer past " +
   "Shortlisted reported 'Saving...', reverted half a second later, saved nothing and said nothing. " +
   "NOTHING WAS SWALLOWED: the route answered 409 with a perfectly readable refusal, the page caught " +

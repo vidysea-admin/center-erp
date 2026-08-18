@@ -781,6 +781,40 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
       !(await req("GET", `/api/candidates/${c3._id}`)).data.item.address_type);
   }
 
+  // ---- -130 (QA-273): the bulk roster door refused every walk-in ----
+  // -124 taught the single-add door that a candidate with no centre ADOPTS the batch's. The bulk
+  // door was three files away and never got either half: no walk-in exemption, so `String(undefined)`
+  // never matched the batch id and the row was refused with "belongs to another centre" — naming a
+  // centre the person does not have; and no adoption, so even a successful bulk enrolment left the
+  // record unscoped and invisible to the centre running the batch. One at a time worked, thirty at a
+  // time did not. Pinned on BOTH halves, because fixing only the refusal would have shipped the
+  // silent one.
+  {
+    // its own batch on purpose: this block ENROLS someone, and the closure/transition assertions
+    // further down read the shared batch's roster. A pin that moves the state another pin reads is
+    // a pin that will be blamed for the wrong thing.
+    // no room and no trainer: this pin only needs a roster to enrol into, and booking the shared
+    // room again for overlapping dates is refused (correctly) by the double-booking rule.
+    const bulkBatchRes = await req("POST", "/api/batches", { location: loc._id, program: prog._id, planned_start: today, target_size: 3 }, 201);
+    const bulkBatch = bulkBatchRes.data.item;
+    ok("-130 (QA-273): a second batch exists to test the bulk door against", !!bulkBatch?._id, JSON.stringify(bulkBatchRes.data).slice(0, 160));
+    const bulkWalkIn = (await req("POST", "/api/candidates", { name: `Bulk Walk In ${stamp}`, phone: `82${stamp}77`.slice(0, 10), program: prog._id }, 201)).data.item;
+    ok("-130 (QA-273): a walk-in starts with no centre (the -124 shape)", !bulkWalkIn.location, JSON.stringify({ loc: bulkWalkIn.location }));
+    const bulk = await req("POST", "/api/candidates/assign", { batch: bulkBatch._id, candidate_ids: [bulkWalkIn._id] }, 200);
+    const row = (bulk.data.results ?? [])[0];
+    ok("-130 (QA-273): the BULK door accepts them too - it is the same question as adding one",
+      row?.ok === true, JSON.stringify(row));
+    ok("-130 (QA-273): ...and no longer blames a centre the candidate does not have",
+      !/belongs to another centre/i.test(String(row?.error ?? "")), String(row?.error ?? ""));
+    const bAfter = (await req("GET", `/api/candidates/${bulkWalkIn._id}`)).data.item;
+    ok("-130 (QA-273): ...and the bulk path ADOPTS the centre, so the row is not left invisible to it",
+      String(bAfter.location?._id ?? bAfter.location) === String(loc._id),
+      JSON.stringify({ got: bAfter.location?._id ?? bAfter.location, want: String(loc._id) }));
+    ok("-130 (QA-273): ...audited, because it changes who can see the record",
+      ((await req("GET", `/api/audit/Candidate/${bulkWalkIn._id}`)).data.items ?? []).some((a2) => String(a2.field) === "location"),
+      "no audit row for the adoption");
+  }
+
   // ---- -124 (M4-04): a walk-in has no centre until somebody enrols them ----
   // Manish: "ye location nahi hogi, user ka koi bhi location ho sakta hai." Forcing a centre at entry
   // either invents a fact or turns the person away. The centre is decided by the first real event
