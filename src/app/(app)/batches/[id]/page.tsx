@@ -2176,6 +2176,12 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
   // -108: the pre-flight numbers, in the words the panel says them in.
   const certReady = passes.filter((i) => !i.result?.certificate_file);
   const certDone = passes.filter((i) => i.result?.certificate_file);
+  // -114 (QA-238, checker on live -112): every one of DST-01's eight Issued certificates carries NO
+  // certificate NUMBER — the file settles the status, the number comes from the awarding body later —
+  // and the screen said "8 already have one" with nothing hinting that not one of them can be
+  // invoiced against. The number is what downstream invoicing and audits reference, so the count of
+  // missing ones belongs beside the count of present ones.
+  const certNoNumber = certDone.filter((i) => !i.result?.certificate_no);
   const notPassed = active.filter((i) => i.result && ["Fail", "Absent"].includes(i.result.result));
   // The exact file names this batch's matcher would accept, for the candidates who can actually
   // take a certificate. Same normalisation as the server's canOf(), so the list cannot promise a
@@ -2367,6 +2373,7 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
           <p className="text-xs text-gray-600">
             <b className="text-green-700">{certReady.length} can take a certificate now</b> (Pass, none attached yet)
             {certDone.length > 0 && <> · <span className="text-gray-500">{certDone.length} already have one</span></>}
+            {certNoNumber.length > 0 && <> · <span className="cursor-help text-amber-700" title="The certificate file settles the candidate's status; the NUMBER is what invoicing and audits quote. Add it on each candidate's card (or in Issue certificates) when the awarding body sends it.">{certNoNumber.length} without a certificate number</span></>}
             {pending.length > 0 && <> · <span className="text-amber-700">{pending.length} not marked yet — mark the result first</span></>}
             {notPassed.length > 0 && <> · <span className="text-gray-500">{notPassed.length} Fail/Absent — no certificate</span></>}
           </p>

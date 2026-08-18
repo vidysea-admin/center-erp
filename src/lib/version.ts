@@ -3,8 +3,14 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-113";
+export const RELEASE = "2026.08.14-114";
 export const RELEASE_NOTE =
+  "-114: QA-238, raised by the checker against LIVE -112 and worth saying plainly: every one of "
+  "DST-01's eight Issued certificates carries NO certificate NUMBER, and the screen said '8 already "
+  "have one' with nothing hinting that not one of them can be invoiced against. The file settles the "
+  "candidate's STATUS; the number is what invoicing and audits quote, and it arrives later from the "
+  "awarding body. So the count of Issued-without-a-number now sits beside the count of Issued, with "
+  "the sentence explaining where to add it. One derived figure, no rule touched. "
   "-113: the Admin can finish a batch. Umesh, 18/08, after -112 shipped: 'admin ke paas mark "
   "completed ka button aaye, aur wo press kar paye - jaise abhi wala press bhi nahi ho raha na.' "
   "He is right, and -112 could not have fixed it: the buttons refuse until the ROWS allow it - "
