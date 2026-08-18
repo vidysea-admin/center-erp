@@ -253,6 +253,44 @@ ok("committed counts match the preview", done.data.matched_count === 4 && done.d
 const detail = await req(admin, "GET", `/api/govt-attendance/${done.data._id}`);
 ok("all 7 rows persisted", detail.data.rows?.length === 7, `got ${detail.data.rows?.length}`);
 
+// ---- -127 (QA-180): a TRAINER is not a candidate for assessment ----
+// Found while validating QA-172 on live -106: the "Attendance_Till 16th Aug" export carries 38 rows,
+// 37 typed "Trainee" and ONE typed "Trainer" — Manish Kumar himself, 53:48:25 hrs — and every one of
+// the 38 got a verdict. His own row read "Not eligible". That is not a wrong answer, it is a category
+// error: nothing about a trainer's hours makes them eligible or ineligible for a STUDENT assessment,
+// and the not-eligible filter is exactly how Manish builds the list of students to chase.
+//
+// -109 wrote the right answer already — `label: r.trainer ? "Trainer row" : …` — but put it behind
+// `if (!bar)`, and the importer writes `batch: r.batch ?? batchId` onto EVERY row including trainers'.
+// So the trainer always had a bar, always skipped that branch, and always got a student verdict. The
+// pin is on the OUTPUT, not the branch, so it stays true however the code is arranged next.
+//
+// MEASURED, and it changed the pin: the existing committed import above carries NO batch, so every
+// row falls into the bar-less branch and the trainer LOOKS handled. Manish always uploads against a
+// batch. This block therefore commits a BATCH-SCOPED import — the production shape — where the
+// fallback `imp.batch?._id` supplies a bar to a trainer's row and the student verdict follows.
+{
+  // its own file name on purpose: the -108 preview pin proves "a preview wrote nothing" by looking
+  // for govt-attendance-sample.csv against THIS batch, so a second import under that name would
+  // make an unrelated pin fail for an unrelated reason.
+  const scoped = await upload(admin, { file: new File([Buffer.from(csvText)], "trainer-scope.csv", { type: "text/csv" }), batch: batch._id, confirm: "1", period_label: `trainer-scope ${STAMP}` });
+  ok("QA-180: a batch-scoped import commits (this is how the centre actually uploads)", scoped.status === 201, JSON.stringify(scoped.data).slice(0, 160));
+  const sd = await req(admin, "GET", `/api/govt-attendance/${scoped.data._id}`);
+  const t = (sd.data.rows ?? []).find((r) => /Trainer/.test(String(r.name)));
+  ok("QA-180: the export's own Trainer row is still imported and still reconciled", !!t, JSON.stringify((sd.data.rows ?? []).map((r) => r.name)));
+  ok("QA-180: a trainer is never given a student eligibility verdict",
+    t?.verdict?.state === "trainer", JSON.stringify({ state: t?.verdict?.state, label: t?.verdict?.label }));
+  ok("QA-180: …and the verdict says WHY, so nobody has to guess at a blank",
+    /trainer/i.test(String(t?.verdict?.label ?? "")) && /not a candidate|eligibility does not apply/i.test(String(t?.verdict?.detail ?? "")),
+    JSON.stringify({ label: t?.verdict?.label, detail: t?.verdict?.detail }));
+  ok("QA-180: a trainer counts in NEITHER the qualified nor the not-eligible bucket",
+    sd.data.qualified_count + sd.data.in_progress_count + sd.data.no_hours_count
+      + sd.data.not_eligible_count + sd.data.not_enrolled_count + (sd.data.trainer_count ?? 0) === sd.data.rows.length
+      && sd.data.trainer_count === 1,
+    JSON.stringify({ q: sd.data.qualified_count, ip: sd.data.in_progress_count, nh: sd.data.no_hours_count,
+      ne: sd.data.not_eligible_count, nen: sd.data.not_enrolled_count, tr: sd.data.trainer_count, rows: sd.data.rows.length }));
+}
+
 // ---- -88 (Umesh 15/08): attendance on record = the batch runs; a Planning batch that receives
 // matched portal rows becomes Active on its own (actual_start = planned start), audited; the
 // import is never blocked; a second reconcile is a no-op.
@@ -489,9 +527,12 @@ ok("the first import is still intact", (await req(admin, "GET", `/api/govt-atten
     JSON.stringify({ grid: [gRows[`${NAME} Charlie`]?.govt_hours, gRows[`${NAME} Charlie`]?.qualified], tab: [aRows[`${NAME} Charlie`]?.govt?.hours, aRows[`${NAME} Charlie`]?.qualified] }));
   // -109 split this from three buckets into five: only `not_eligible` is a verdict now, and
   // "still short while the course runs" and "no hours in this file" are their own honest states.
-  ok("-102/-109: the summary counts add up to the row count across ALL five states",
-    g.data.qualified_count + g.data.in_progress_count + g.data.no_hours_count + g.data.not_eligible_count + g.data.not_enrolled_count === g.data.rows.length,
-    JSON.stringify({ q: g.data.qualified_count, p: g.data.in_progress_count, h: g.data.no_hours_count, n: g.data.not_eligible_count, e: g.data.not_enrolled_count, rows: g.data.rows.length }));
+  // -127 (QA-180) added a sixth state: a trainer is not on the student ladder at all. The invariant
+  // is unchanged and NOT weakened - every row still lands in exactly one bucket - but the sum now
+  // has to include the bucket that was added, or a trainer would silently unbalance it.
+  ok("-102/-109/-127: the summary counts add up to the row count across ALL SIX states",
+    g.data.qualified_count + g.data.in_progress_count + g.data.no_hours_count + g.data.not_eligible_count + g.data.not_enrolled_count + (g.data.trainer_count ?? 0) === g.data.rows.length,
+    JSON.stringify({ q: g.data.qualified_count, p: g.data.in_progress_count, h: g.data.no_hours_count, n: g.data.not_eligible_count, e: g.data.not_enrolled_count, t: g.data.trainer_count, rows: g.data.rows.length }));
   ok("-109: while this batch is still Active, nobody in the file is called 'not eligible'",
     g.data.not_eligible_count === 0, String(g.data.not_eligible_count));
 }

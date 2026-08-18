@@ -2053,7 +2053,12 @@ export function memberAttendedHours(opts: {
 //   2. the TIME gate — "not eligible" is a verdict, so it waits until the course is actually over.
 //      While it runs, a student below the bar is IN PROGRESS, not rejected.
 export type EligibilityVerdict = {
-  state: "qualified" | "in_progress" | "no_hours" | "not_eligible" | "not_enrolled";
+  // -127 (QA-180): "trainer" is a state, not a verdict. A portal export carries the centre's own
+  // trainers alongside its students, and eligibility is a question that was never asked of them —
+  // so they get their own state rather than being squeezed into a student one. eligibilityVerdict()
+  // itself never RETURNS it (it is only ever called about a student); the govt-attendance grid,
+  // which is the one screen that sees non-student rows, constructs it.
+  state: "qualified" | "in_progress" | "no_hours" | "not_eligible" | "not_enrolled" | "trainer";
   label: string;
   detail: string;
   qualified: boolean; // kept for every existing caller — true ONLY for a real pass of the bar

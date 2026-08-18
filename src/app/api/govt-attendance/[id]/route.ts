@@ -4,6 +4,7 @@ import { apiHandler, requireUser, requireEdit, isScoped, HttpError } from "@/lib
 import { requirePerm, requireView } from "@/lib/permissions";
 import { Batch, GovtAttendanceImport, GovtAttendanceRow } from "@/models";
 import { assessmentHoursBar, courseIsFinished, eligibilityVerdict, memberAttendedHours } from "@/lib/rules";
+import { isTrainerRow } from "@/lib/govt-attendance";
 import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
 
@@ -59,9 +60,40 @@ export const GET = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   const withVerdict = rows.map((r) => {
     const bid = String(r.batch?._id ?? r.batch ?? imp.batch?._id ?? "");
     const bar = bars.get(bid);
-    // No bar means no batch to judge against — an unmatched row, an ambiguous one, or a trainer's.
-    // -109: it still gets a verdict OBJECT, so every row is accounted for in one of the five states
-    // and the summary counts always add up to the row count. Found by the counts pin: four such rows
+
+    // -127 (QA-180), and this gate comes FIRST because that is the whole bug. A portal export
+    // carries the centre's own trainers alongside its students — the live "Attendance_Till 16th Aug"
+    // file is 37 Trainee rows and one Trainer, Manish himself at 53:48:25 hrs — and every row was
+    // being given an assessment verdict. His own row read "Not eligible" on -106 and "Not enrolled
+    // yet" after -109. Both are category errors: nothing about a trainer's hours makes them eligible
+    // or ineligible for a STUDENT assessment, and "not eligible" is exactly the filter Manish uses
+    // to build the list of students to chase, so it hands him his own trainer.
+    //
+    // -109 had already written the right answer — but behind `if (!bar)`, and the importer writes
+    // `batch: r.batch ?? batchId` onto EVERY row including trainers'. A batch-scoped import (which
+    // is how a centre actually uploads) therefore always supplied a bar, always skipped that branch,
+    // and the trainer always got a student verdict. Measured in the wall before this line was
+    // written: the fixture only reproduced it once the import carried a batch.
+    //
+    // The test is the EXPORT's own type column, not whether we matched a trainer record — a trainer
+    // the ERP has never heard of is still not a candidate for assessment.
+    if (isTrainerRow(r)) {
+      return {
+        ...r,
+        govt_hours: r.total_hours_minutes != null ? Math.round(r.total_hours_minutes / 60) : null,
+        required_hours: null, qualified: null,
+        verdict: {
+          state: "trainer", qualified: false,
+          label: "Trainer row",
+          detail: "the portal export types this row as a trainer, not a candidate — a trainer's hours are their own delivery record, so no student eligibility verdict applies",
+        },
+      };
+    }
+    // No bar means no batch to judge against — an unmatched row or an ambiguous one. (Trainers are
+    // gone by here: -127 moved them above this, because the bar-fallback to `imp.batch` meant a
+    // trainer on a batch-scoped import never reached this branch at all.)
+    // -109: it still gets a verdict OBJECT, so every row is accounted for in one of the states and
+    // the summary counts always add up to the row count. Found by the counts pin: four such rows
     // carried no verdict at all and silently fell out of every bucket.
     if (!bar) {
       return {
@@ -70,10 +102,8 @@ export const GET = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
         required_hours: null, qualified: null,
         verdict: {
           state: "not_enrolled", qualified: false,
-          label: r.trainer ? "Trainer row" : "Not matched to a student",
-          detail: r.trainer
-            ? "this row is a trainer's attendance, not a candidate's — eligibility does not apply"
-            : `this row is ${String(r.match_status).toLowerCase()}, so there is no enrolled student to judge — resolve the match first`,
+          label: "Not matched to a student",
+          detail: `this row is ${String(r.match_status).toLowerCase()}, so there is no enrolled student to judge — resolve the match first`,
         },
       };
     }
@@ -118,6 +148,9 @@ export const GET = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
     no_hours_count: withVerdict.filter((r) => r.verdict?.state === "no_hours").length,
     not_eligible_count: withVerdict.filter((r) => r.verdict?.state === "not_eligible").length,
     not_enrolled_count: withVerdict.filter((r) => r.verdict?.state === "not_enrolled").length,
+    // -127 (QA-180): trainers get their own count so the six buckets still add up to the row count
+    // — the -109 invariant — without a trainer hiding inside a student one.
+    trainer_count: withVerdict.filter((r) => r.verdict?.state === "trainer").length,
   });
 });
 

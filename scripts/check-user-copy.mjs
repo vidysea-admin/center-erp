@@ -81,6 +81,39 @@ for (const file of walk(root)) {
   if (fileHits) failed++; else passed++;
 }
 
+// ---- -127 (QA-181): the file this suite deliberately SKIPS was the one that was broken ----
+// src/lib/version.ts was one constant whose continuation lines carried no `+`. JavaScript then
+// applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other 329
+// became dead no-op expression statements. tsc was happy, the build was happy, and production
+// published a 97-character release note for an unknown number of releases. Nothing in the wall
+// could see it, because a truncated string is still a valid string.
+//
+// This is a source-shape trap, not a copy problem, so it lives in the source-scan suite: two string
+// literals on consecutive lines with no operator between them are always a mistake, in ANY file.
+{
+  let asiHits = 0;
+  for (const rel of ["lib/version.ts"]) {
+    const lines = fs.readFileSync(path.join(root, rel), "utf-8").split(String.fromCharCode(10)).map((l) => l.replace(String.fromCharCode(13), ""));
+    for (let i = 1; i < lines.length; i++) {
+      const cur = lines[i].trim(), prev = lines[i - 1].trim();
+      if (!cur.startsWith('"') || !prev.startsWith('"')) continue;
+      if (/(?:\+|,|\(|\[)$/.test(prev)) continue;   // legitimately continued
+      if (/;$/.test(prev)) continue;                 // previous statement genuinely ended
+      asiHits++;
+      hits.push(`${rel}:${i + 1}: [ASI trap] this string literal follows another with no operator, so everything from here is a dead no-op statement — join them with " +"`);
+    }
+  }
+  if (asiHits) failed++; else passed++;
+
+  // and the published marker must actually describe THIS build, which is the symptom a reader sees
+  const src = fs.readFileSync(path.join(root, "lib/version.ts"), "utf-8");
+  const rel = (src.match(/export const RELEASE = "([^"]+)"/) ?? [])[1] ?? "";
+  const curNote = (src.split("export const RELEASE_NOTE_CURRENT =")[1] ?? "").split("const RELEASE_NOTE_ARCHIVE")[0];
+  const tag = "-" + rel.split("-").pop();
+  if (rel && curNote.includes(tag)) passed++;
+  else { failed++; hits.push(`lib/version.ts: the published note does not mention ${tag} — RELEASE was bumped without writing what changed`); }
+}
+
 for (const h of hits) console.log("  ✗ " + h);
 if (hits.length) console.log(`\n${hits.length} user-facing string(s) still carry a Rule/DEC/QA code — rewrite as "what happened + what to do".`);
 console.log(`\ncheck-user-copy: ${passed} passed, ${failed} failed`);

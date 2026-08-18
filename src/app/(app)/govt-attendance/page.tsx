@@ -191,6 +191,10 @@ function Inner() {
                 {detail.no_hours_count > 0 && <> · {detail.no_hours_count} with no hours in this file</>}
                 {detail.not_eligible_count > 0 && <> · <span className="text-red-700">{detail.not_eligible_count} not eligible</span></>}
                 {detail.not_enrolled_count > 0 && <> · {detail.not_enrolled_count} not matched to an enrolled student</>}
+                {/* -127 (QA-180): the export carries the centre's own trainers. They were being
+                    counted inside a student bucket, so this strip quietly overstated how many
+                    students still needed chasing. Said out loud now, and excluded from the rest. */}
+                {detail.trainer_count > 0 && <> · {detail.trainer_count} trainer{detail.trainer_count > 1 ? "s" : ""} (not assessed)</>}
               </span>
             </p>
           )}
@@ -216,7 +220,9 @@ function Inner() {
               // separates "still short, course running" and "no hours imported" from an actual
               // verdict — and only says "Not eligible" once the course is over.
               key: "qualified", label: "Qualification", sortable: true,
-              sortValue: (r: any) => ({ qualified: 4, in_progress: 3, no_hours: 2, not_enrolled: 1, not_eligible: 0 } as any)[r.verdict?.state] ?? 0,
+              // -127 (QA-180): a trainer sorts ABOVE every student state rather than falling to 0
+              // beside "not eligible" — the column is a student ladder and a trainer is not on it.
+              sortValue: (r: any) => ({ trainer: 5, qualified: 4, in_progress: 3, no_hours: 2, not_enrolled: 1, not_eligible: 0 } as any)[r.verdict?.state] ?? 0,
               filterText: (r: any) => r.verdict?.label ?? "",
               render: (r: any) => {
                 const v = r.verdict;

@@ -225,6 +225,19 @@ export type MatchedRow = GovtRow & {
  * location — never the whole database, because trainee names repeat across centres (this very
  * sample carries two "Sachin Kumar" rows).
  */
+/**
+ * -127 (QA-180): is this portal row one of the centre's own TRAINERS rather than a student?
+ *
+ * The export types its own rows — "Candidate Type" reads Trainee or Trainer — and the matcher just
+ * below has always keyed off that. It is exported now because the qualification grid needs the
+ * identical test: that screen used to infer "trainer" from whether the ERP had MATCHED a trainer
+ * record, which is a different question and quietly wrong for a trainer the ERP has never heard of.
+ * The export's own word is the answer, matched or not — one test, two callers (the QA-045 lesson).
+ */
+export function isTrainerRow(r: { candidate_type?: string | null; designation?: string | null }): boolean {
+  return /trainer/i.test(String(r?.candidate_type ?? "")) || /trainer/i.test(String(r?.designation ?? ""));
+}
+
 export async function matchGovtRows(
   rows: GovtRow[],
   scope: { batchId?: string | null; locationId?: unknown },
@@ -267,7 +280,7 @@ export async function matchGovtRows(
   for (const r of rows) {
     const gid = r.govt_candidate_id.trim().toUpperCase();
     const nk = nameKey(r.name);
-    const isTrainer = /trainer/i.test(r.candidate_type) || /trainer/i.test(r.designation);
+    const isTrainer = isTrainerRow(r);
 
     if (isTrainer) {
       const t = (gid && trainerByGovtId.get(gid)) || (trainerByName.get(nk)?.length === 1 ? trainerByName.get(nk)![0] : null);
