@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, HttpError } from "@/lib/authz";
 import { rateLimit, clientKey } from "@/lib/rate-limit";
+import { canonicalPhone, emailError, phoneError } from "@/lib/validate";
 import { Candidate, EDUCATION_LEVEL, Program, PublicToken } from "@/models";
 import { findDuplicateCandidates } from "@/lib/duplicates";
 import { renderMail, sendMail } from "@/lib/mailer";
@@ -44,12 +45,19 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   if (body.website) throw new HttpError(400, "Invalid submission."); // honeypot — bots fill every field
 
   const name = String(body.name ?? "").trim();
-  const phone = String(body.phone ?? "").replace(/\D/g, "");
-  if (!name || phone.length < 10) throw new HttpError(400, "Name and a 10-digit phone number are required.");
+  if (!name) throw new HttpError(400, "Please enter your name.");
+  // -126 (S18-04): this route used to re-implement both checks — `phone.length >= 10` and its own
+  // email regex — while every other path in the product uses lib/validate. That is how "9999999999999"
+  // got in through the public door and was refused everywhere else. Same rule everywhere now, and the
+  // candidate reads the same sentence the staff form shows (QA-141's canon).
+  const pErr = phoneError(body.phone);
+  if (pErr) throw new HttpError(400, pErr);
+  const phone = canonicalPhone(body.phone)!;
   // 15/08 (Umesh): phone AND email both mandatory on self-registration — the email
   // pipeline is coming, and everything should reach people properly by mail.
   const email = String(body.email ?? "").trim().toLowerCase();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, "A valid email address is required.");
+  const eErr = emailError(email);
+  if (eErr) throw new HttpError(400, eErr);
   const program = body.program && !t.program ? body.program : (t.program?._id ?? body.program);
   if (!program) throw new HttpError(400, "Please choose a program.");
 
@@ -61,6 +69,14 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     dob: body.dob ? new Date(body.dob) : undefined,
     education: EDUCATION_LEVEL.includes(body.education) ? body.education : undefined,
     last_training_date: body.last_training_date ? new Date(body.last_training_date) : undefined,
+    // -126 (S18-02, Shivshakti): the government-portal fields the internal form has carried since
+    // -116. They were never added here, so a candidate who self-registered still had to be chased for
+    // exactly the data we built the fields to stop chasing. All optional — a blank one simply is not
+    // written. Listed explicitly rather than spread from the body: this is an UNAUTHENTICATED door,
+    // and the one thing it must never do is take whatever it is handed.
+    ...Object.fromEntries((["salutation", "father_name", "mother_name", "marital_status", "religion",
+      "social_category", "state", "district", "sub_district"] as const)
+      .map((f) => [f, String(body[f] ?? "").trim() || undefined])),
     location: t.location._id,
     program,
     source: "Self Registration",

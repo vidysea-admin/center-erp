@@ -153,7 +153,7 @@ function CandidatesInner() {
       // -116 (SS-01): the government-portal fields ride the edit form too, or opening a record and
       // saving it would silently drop everything typed into that section.
       ...Object.fromEntries(["salutation", "father_name", "mother_name", "marital_status", "religion",
-        "social_category", "state", "district", "sub_district", "address_type", "differently_abled"]
+        "social_category", "state", "district", "sub_district"]
         .map((f) => [f, r[f] ?? ""])),
       interested_programs: (r.interested_programs ?? []).map((x: any) => x?._id ?? x),
       interested_locations: (r.interested_locations ?? []).map((x: any) => x?._id ?? x),
@@ -651,13 +651,20 @@ function CandidatesInner() {
               said: salutation, urban/rural, and the differently-abled flag. Our candidates have to be
               registered there anyway, so this is data somebody types either way; asking here means
               typing it once instead of chasing it at registration time.
-              Collapsed by default, every field optional — no existing record becomes invalid and no
-              import breaks. The portal's "Education & Employment" section was never expanded on
-              screen, so its fields are unknown and are NOT guessed at (recorded in the ledger). */}
-          <details className="rounded-lg border border-gray-200 bg-gray-50/60 px-3 py-2">
-            <summary className="cursor-pointer text-sm font-medium text-gray-700">Government portal details (Skill India registration)</summary>
-            <p className="mt-1 text-xs text-gray-500">Everything the Skilling Program Application asks for. All optional here — filling it now saves re-collecting it at registration.</p>
-            <div className="mt-2 grid gap-3 md:grid-cols-3">
+              -126 (S18-01, Shivshakti 18/08 15:56): he was explicit that the FIELDS are right and the
+              placement was not — "ye jo aapne alag se banaya hua hai… options sahi hain, lekin isko
+              yahan add kar dijiye". Walled off in a collapsed block it took two passes to fill a
+              candidate, so the block is inline now: same fields, same grid, no lid.
+              -126 (S18-03): "ye dono option hata do" — Address type and Differently abled are GONE.
+              Worth remembering why they existed: they were never in his spoken list of eight. He named
+              eight; I read three more off the portal screenshot and added them. His spoken request
+              stands, my inference did not. Salutation is not in the removal and stays.
+              Every field optional — no existing record becomes invalid and no import breaks. The
+              portal's "Education & Employment" section was never expanded on screen, so its fields
+              stay unknown rather than guessed at. */}
+          <div className="text-sm font-medium text-gray-700">Government portal details (Skill India registration)</div>
+          <p className="-mt-2 text-xs text-gray-500">Everything the Skilling Program Application asks for. All optional here — filling it now saves re-collecting it at registration.</p>
+          <div className="grid gap-3 md:grid-cols-3">
               <Field label="Salutation">
                 <input className={inputCls} list="cand-salutation" value={form.salutation ?? ""} onChange={(e) => set("salutation", e.target.value)} />
                 <datalist id="cand-salutation">{["Mr.", "Mrs.", "Ms.", "Dr."].map((o) => <option key={o} value={o} />)}</datalist>
@@ -678,17 +685,8 @@ function CandidatesInner() {
               </Field>
               <Field label="State"><input className={inputCls} value={form.state ?? ""} onChange={(e) => set("state", e.target.value)} /></Field>
               <Field label="District"><input className={inputCls} value={form.district ?? ""} onChange={(e) => set("district", e.target.value)} /></Field>
-              <Field label="Sub-district"><input className={inputCls} value={form.sub_district ?? ""} onChange={(e) => set("sub_district", e.target.value)} /></Field>
-              <Field label="Address type">
-                <input className={inputCls} list="cand-addrtype" value={form.address_type ?? ""} onChange={(e) => set("address_type", e.target.value)} />
-                <datalist id="cand-addrtype">{["Urban", "Rural"].map((o) => <option key={o} value={o} />)}</datalist>
-              </Field>
-              <Field label="Differently abled">
-                <input className={inputCls} list="cand-pwd" value={form.differently_abled ?? ""} onChange={(e) => set("differently_abled", e.target.value)} placeholder="No" />
-                <datalist id="cand-pwd">{["No", "Visual", "Hearing", "Locomotor", "Intellectual", "Other"].map((o) => <option key={o} value={o} />)}</datalist>
-              </Field>
-            </div>
-          </details>
+            <Field label="Sub-district"><input className={inputCls} value={form.sub_district ?? ""} onChange={(e) => set("sub_district", e.target.value)} /></Field>
+          </div>
           {/* 15/08 (Umesh): no candidate fee in this programme — the fee inputs left the
               drawer. Schema + Rule 54 toggle stay dormant for a future paid scheme. */}
           {/* QA-105 (15/08): the candidate document store — multi-pick, type guessed from

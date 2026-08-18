@@ -14,7 +14,10 @@ export const { GET, PATCH } = itemRoutes({
     // -116 (SS-01): the government-portal fields must be EDITABLE, not just creatable. The wall caught
     // this: adding them to the collection route alone let them be typed once and then silently dropped
     // on every later save — the worst shape a field can have, because nothing on screen says so.
-    "salutation", "father_name", "mother_name", "marital_status", "religion", "social_category", "state", "district", "sub_district", "address_type", "differently_abled"],
+    "salutation", "father_name", "mother_name", "marital_status", "religion", "social_category", "state", "district", "sub_district",
+    // -126 (S18-03): address_type and differently_abled removed — they were never in his spoken list
+    // of eight, and he asked for them back out.
+  ],
   readRoles: ["Admin", "Operations", "Location", "Enrollment"], // QA-060/095: not the Trainer's lens
   writeRoles: ["Admin", "Operations", "Location", "Enrollment"],
   permission: "candidates.manage", // 2026-08-11 togglable right (writeRoles = fallback only)

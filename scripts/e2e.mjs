@@ -740,6 +740,47 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   ok("-113: a clean batch reports nothing to settle",
     (await req("GET", `/api/batches/${d1._id}/complete`, undefined, 200)).data.status === "Completed");
 
+  // ---- -126 (S18-02 / S18-03 / S18-04): the PUBLIC self-registration door ----
+  // Shivshakti, 18/08: "jab hum self register ki link bhejte hain toh wo saare column yahan bhi show
+  // hone chahiye." SS-01 landed on the internal form and both internal routes and never touched this
+  // page, so a candidate who self-registered still had to be chased for the data the fields exist to
+  // stop chasing. The pins are on the two things that fail SILENTLY: a field the route does not accept
+  // looks saved and is gone on the next read (-116's lesson), and a REMOVED field that is only hidden
+  // on screen is not removed at all.
+  {
+    const tok = (await req("POST", "/api/public-tokens", { purpose: "register", location: loc._id, program: prog._id }, 201)).data.item;
+    const portal = { salutation: "Mr.", father_name: "Indal Singh", mother_name: "Rani Devi", marital_status: "Single",
+      religion: "Hindu", social_category: "OBC", state: "Uttar Pradesh", district: "Sant Ravidas Nagar", sub_district: "Aurai" };
+    const reg = await fetch(`${BASE}/api/public/register/${tok.token}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: `Self Reg ${stamp}`, phone: `79${stamp}55`.slice(0, 10), email: `selfreg.${stamp}@example.invalid`, ...portal }),
+    });
+    ok("-126 (S18-02): a self-registration carrying the government-portal fields is accepted", reg.status === 201 || reg.status === 200, String(reg.status));
+    const mine = ((await req("GET", `/api/candidates?limit=2000`)).data.items ?? []).find((c2) => c2.name === `Self Reg ${stamp}`);
+    ok("-126 (S18-02): …and the candidate exists", !!mine, "not found after self-registration");
+    const wrong = Object.entries(portal).filter(([k, v]) => String(mine?.[k] ?? "") !== v).map(([k]) => k);
+    ok("-126 (S18-02): every portal field STORES and READS BACK through the public door", wrong.length === 0, `missing/wrong: ${wrong.join(", ")}`);
+
+    // -126 (S18-04): the public door used to run its own phone rule (length >= 10) while the rest of
+    // the product used canonicalPhone — so junk got in here that was refused everywhere else.
+    const bad = await fetch(`${BASE}/api/public/register/${tok.token}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: `Bad Phone ${stamp}`, phone: "99999999999999", email: `bad.${stamp}@example.invalid` }),
+    });
+    const badBody = await bad.json().catch(() => ({}));
+    ok("-126 (S18-04): the public door now refuses a bad phone with the SAME rule as the rest of the product",
+      bad.status === 400 && /10-digit/i.test(String(badBody?.error ?? "")), `${bad.status} ${String(badBody?.error ?? "").slice(0, 70)}`);
+
+    // -126 (S18-03): removed means removed, not hidden. Both internal doors must ignore them.
+    const c3 = (await req("POST", "/api/candidates", { name: `No Extras ${stamp}`, phone: `79${stamp}66`.slice(0, 10), location: loc._id, program: prog._id, address_type: "Rural", differently_abled: "Other" }, 201)).data.item;
+    const back3 = (await req("GET", `/api/candidates/${c3._id}`)).data.item;
+    ok("-126 (S18-03): the two removed fields are REJECTED on create, not quietly stored",
+      !back3.address_type && !back3.differently_abled, JSON.stringify({ a: back3.address_type, d: back3.differently_abled }));
+    await req("PATCH", `/api/candidates/${c3._id}`, { address_type: "Urban" }, 200);
+    ok("-126 (S18-03): …and on edit too — the whitelist is the door, not the form",
+      !(await req("GET", `/api/candidates/${c3._id}`)).data.item.address_type);
+  }
+
   // ---- -124 (M4-04): a walk-in has no centre until somebody enrols them ----
   // Manish: "ye location nahi hogi, user ka koi bhi location ho sakta hai." Forcing a centre at entry
   // either invents a fact or turns the person away. The centre is decided by the first real event
@@ -860,17 +901,20 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   // Eleven optional fields; the pin is that they STORE and COME BACK, because a field that silently
   // drops on save is worse than one that was never offered.
   {
+    // -126 (S18-03): address_type and differently_abled were REMOVED from this list on purpose —
+    // Shivshakti asked for them out, and they were never in his spoken eight. Their absence is now
+    // pinned separately, in the -126 block, because "removed" has to mean the door rejects them.
     const sidh = { salutation: "Mr.", father_name: "Indal Singh", mother_name: "Rani Devi", marital_status: "Single",
       religion: "Hindu", social_category: "OBC", state: "Uttar Pradesh", district: "Sant Ravidas Nagar",
-      sub_district: "Aurai", address_type: "Rural", differently_abled: "No" };
+      sub_district: "Aurai" };
     const c116 = (await req("POST", "/api/candidates", { name: `SIDH Fields ${stamp}`, phone: `83${stamp}11`.slice(0, 10), location: loc._id, program: prog._id, ...sidh }, 201)).data.item;
     const back = (await req("GET", `/api/candidates/${c116._id}`)).data.item;
     const missing = Object.entries(sidh).filter(([k, v]) => back[k] !== v).map(([k]) => k);
     ok("-116 (SS-01): every government-portal field the sheet names stores and reads back", missing.length === 0, `missing/wrong: ${missing.join(", ")}`);
     // …and they are editable afterwards, which is how a centre fills them in later.
-    await req("PATCH", `/api/candidates/${c116._id}`, { district: "Bhadohi", differently_abled: "Hearing" }, 200);
+    await req("PATCH", `/api/candidates/${c116._id}`, { district: "Bhadohi", religion: "Muslim" }, 200);
     const back2 = (await req("GET", `/api/candidates/${c116._id}`)).data.item;
-    ok("-116 (SS-01): …and they can be corrected later", back2.district === "Bhadohi" && back2.differently_abled === "Hearing", JSON.stringify({ d: back2.district, p: back2.differently_abled }));
+    ok("-116 (SS-01): …and they can be corrected later", back2.district === "Bhadohi" && back2.religion === "Muslim", JSON.stringify({ d: back2.district, r: back2.religion }));
   }
 }
 

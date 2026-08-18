@@ -358,8 +358,12 @@ const CandidateSchema = new Schema({
   state: String,
   district: String,
   sub_district: String,
-  address_type: String,               // Urban / Rural — seen on screen, never spoken
-  differently_abled: String,          // No / the disability type — seen on screen, never spoken
+  // -126 (S18-03): these two left the FORM and both route whitelists — Shivshakti asked for them out,
+  // and they were never in his spoken list of eight (I inferred them from the portal screenshot). The
+  // COLUMNS stay: measured on live before removing, 0 of 206 candidates carry any portal field, so
+  // nothing is lost by keeping them — and dropping a column is the one change that cannot be undone.
+  address_type: String,               // no longer written by any route
+  differently_abled: String,          // no longer written by any route
   id_reference: String, // government ID reference (NOT the Aadhaar number itself)
   // -124 (M4-04): OPTIONAL. A walk-in belongs to no centre until somebody enrols them, and forcing a
   // centre at entry either invents a fact or turns the person away. The centre is set by the first

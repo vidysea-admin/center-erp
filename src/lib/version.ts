@@ -7,8 +7,25 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-125";
+export const RELEASE = "2026.08.14-126";
 export const RELEASE_NOTE =
+  "-126: Shivshakti's 18 Aug round, and it is not about the fields being wrong - he says twice that "
+  "they are right. S18-01: the government block shipped in -116 as a COLLAPSED section, so filling a "
+  "candidate took two passes; it is inline now, same fields, same grid, no lid. S18-03: 'ye dono "
+  "option hata do' - Address type and Differently abled are gone from the form and from BOTH "
+  "candidate route whitelists. Worth remembering why they existed: he named EIGHT fields out loud "
+  "and I read three more off the portal screenshot and added them; his spoken request stands, my "
+  "inference did not. The model columns stay - measured first, 0 of 206 candidates carry any portal "
+  "field, and dropping a column is the one change that cannot be undone. S18-02: the self-registration "
+  "link form never got any of this. SS-01 landed on the internal form and the two internal routes and "
+  "never touched the public page, so a candidate who self-registered still had to be chased for "
+  "exactly the data those fields exist to stop chasing. All nine are on it now, all optional - the "
+  "person filling it is a student on a phone from a WhatsApp link, and a long required form is a form "
+  "they abandon. S18-04 turned out to be the SAME fix: that page was the one intake path still "
+  "validating with native `required`, which is why a missed Program produced the browser's own bubble "
+  "in the browser's words. It now uses lib/validate like every other path and says what is missing "
+  "itself - which also ended a real divergence, since the route behind it re-implemented phone "
+  "validation as length >= 10 while the rest of the product used canonicalPhone. "
   "-125: VM-03, and the measurement changed what the fix should be. The video pass flagged the "
   "trainers HOME LOCATION column as inconsistent - full centre records beside bare town names like "
   "Banda and Basti - and the row asked for a data audit. Measured on live first: 22 trainers, 4 "
