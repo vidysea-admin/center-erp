@@ -2,7 +2,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { api, fmtDate, toInputDate } from "@/lib/client";
+import { api, fmtDate, toInputDate, offerable } from "@/lib/client";
 import { Btn, Chip, DataTable, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
 
 function CostsInner() {
@@ -94,7 +94,7 @@ function CostsInner() {
               <Field label="Location">
                 <select className={inputCls} value={form.location ?? ""} onChange={(e) => setForm({ ...form, location: e.target.value })}>
                   <option value="">—</option>
-                  {locations.map((l) => <option key={l._id} value={l._id}>{l.name}</option>)}
+                  {offerable(locations, form.location).map((l: any) => <option key={l._id} value={l._id}>{l.name}</option>)}
                 </select>
               </Field>
               <Field label="Trainer (retainer/TOT)">

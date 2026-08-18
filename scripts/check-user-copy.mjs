@@ -129,6 +129,17 @@ for (const file of walk(root)) {
   const archiveHead = (archive.match(/"([^"]{40,})"/) ?? [])[1] ?? "";
   if (!archiveHead || !curNote.includes(archiveHead)) passed++;
   else { failed++; hits.push("lib/version.ts: RELEASE_NOTE_CURRENT contains the start of the archive — the old note was spliced in rather than moved, so the public marker republishes it"); }
+
+  // -129: and the sharper version of the same test, because the one above missed it. Splicing the
+  // PREVIOUS note into CURRENT leaves the archive's own opening untouched, so "does CURRENT contain
+  // the archive head" answers no while the marker still publishes two releases. I did exactly that
+  // on the -128 bump AND again on the -129 bump. The previous release's own opening marker is the
+  // thing that must not be there — mechanical, and it does not care how the text was moved.
+  const n = parseInt((rel.split("-").pop() ?? "0"), 10);
+  const prevTag = n > 1 ? `"-${n - 1} ` : "";           // how every block opens: `"-128 (QA-...`
+  const prevTagAlt = n > 1 ? `"-${n - 1}:` : "";         // older blocks open `"-126: ...`
+  if (!n || (!curNote.includes(prevTag) && !curNote.includes(prevTagAlt))) passed++;
+  else { failed++; hits.push(`lib/version.ts: RELEASE_NOTE_CURRENT still opens a -${n - 1} block — the previous note was left in CURRENT instead of moved to the archive, so the public marker publishes two releases`); }
 }
 
 // ---- -128 (QA-266): a drawer must be able to show its own failure ----
@@ -171,6 +182,31 @@ for (const file of walk(root)) {
     }
   }
   if (missing) failed++; else passed++;
+}
+
+// ---- -129 (QA-268): the doc-type list is written out three times ----
+// TRAINER_DOC_TYPE lives in models/index.ts, which pulls mongoose, so the two client pages cannot
+// import it - they carry hand-copies. That is exactly how "CIPSA Certificate" survived in three
+// places at once. The copies are allowed; drifting from the enum is not.
+{
+  const modelSrc = fs.readFileSync(path.join(root, "models/index.ts"), "utf-8");
+  const enumBlock = (modelSrc.split("export const TRAINER_DOC_TYPE = [")[1] ?? "").split("] as const;")[0];
+  const enumVals = [...enumBlock.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  const copies = [
+    ["app/(app)/trainers/[id]/page.tsx", "const DOC_TYPES = ["],
+    ["app/(app)/admin/page.tsx", "Extra mandatory trainer documents"],
+  ];
+  let drift = 0;
+  for (const [rel, marker] of copies) {
+    const src = fs.readFileSync(path.join(root, rel), "utf-8");
+    const after = src.slice(src.indexOf(marker));
+    const block = after.slice(0, after.indexOf("]") + 1);
+    const vals = [...block.matchAll(/"([^"]+)"/g)].map((m) => m[1]).filter((v) => enumVals.includes(v) || /Certificate|Experience|Aadhaar|PAN|Photo|CV|Qualification|Other/.test(v));
+    const strays = vals.filter((v) => !enumVals.includes(v));
+    if (strays.length) { drift++; hits.push(`${rel}: doc-type list has ${JSON.stringify(strays)} which is not in TRAINER_DOC_TYPE — the copy has drifted from the enum`); }
+  }
+  if (enumVals.some((v) => /CIPSA/i.test(v))) { drift++; hits.push("models/index.ts: TRAINER_DOC_TYPE still carries CIPSA — the credential is CITS"); }
+  if (drift) failed++; else passed++;
 }
 
 for (const h of hits) console.log("  ✗ " + h);

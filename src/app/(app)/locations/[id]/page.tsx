@@ -1,6 +1,6 @@
 "use client";
 import { Suspense, use, useEffect, useState } from "react";
-import { api, fmtDate } from "@/lib/client";
+import { api, fmtDate, offerable } from "@/lib/client";
 import { useSearchParams } from "next/navigation";
 import { BackLink, Btn, Chip, CopyBtn, DataTable, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
 import { Activity } from "@/components/activity";
@@ -9,10 +9,7 @@ import Link from "next/link";
 // -115 (QA-221): a RETIRED programme (active === false) leaves the pickers where something new is
 // created, but never disappears from a record that already points at one — editing such a record must
 // not silently blank the field. Retiring is a decision about what may be started, not about history.
-function offerable(list: any[], selectedId?: unknown) {
-  const keep = String(selectedId ?? "");
-  return (list ?? []).filter((p: any) => p?.active !== false || String(p?._id) === keep);
-}
+
 
 const TABS = ["Overview", "Contacts & Notes", "Capacity & Target", "Trainers & Infra", "Batches", "Activity"];
 

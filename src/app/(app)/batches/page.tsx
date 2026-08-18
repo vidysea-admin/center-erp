@@ -3,7 +3,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
-import { api, fmtDate, toInputDate } from "@/lib/client";
+import { api, fmtDate, toInputDate, offerable } from "@/lib/client";
 import { trainerSelectGroups } from "@/lib/trainer-select";
 import { slotGuidelineErrors } from "@/lib/slot-rules";
 import { BASE_PATH } from "@/lib/base-path";
@@ -13,10 +13,7 @@ import { useLocationCtx } from "@/components/shell";
 // -115 (QA-221): a RETIRED programme (active === false) leaves the pickers where something new is
 // created, but never disappears from a record that already points at one — editing such a record must
 // not silently blank the field. Retiring is a decision about what may be started, not about history.
-function offerable(list: any[], selectedId?: unknown) {
-  const keep = String(selectedId ?? "");
-  return (list ?? []).filter((p: any) => p?.active !== false || String(p?._id) === keep);
-}
+
 
 export default function BatchesPage() {
   return <Suspense><BatchesInner /></Suspense>;
@@ -399,7 +396,7 @@ function BatchesInner() {
           <Field label="Location" required>
             <select className={inputCls} value={form.location ?? ""} onChange={(e) => set("location", e.target.value)}>
               <option value="">Select…</option>
-              {locations.map((l) => <option key={l._id} value={l._id} title={`${l.name} (${l.approval_status})`}>{l.name} ({l.approval_status})</option>)}
+              {offerable(locations, form.location).map((l) => <option key={l._id} value={l._id} title={`${l.name} (${l.approval_status})`}>{l.name} ({l.approval_status})</option>)}
             </select>
           </Field>
           <Field label="Program" required>

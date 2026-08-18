@@ -2,7 +2,7 @@
 import { use, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
-import { api, fmtDate, pipelineLabel } from "@/lib/client";
+import { api, fmtDate, pipelineLabel, offerable } from "@/lib/client";
 import { BackLink, Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
 import { Activity } from "@/components/activity";
 import { uploadWithRetry } from "@/lib/upload";
@@ -22,8 +22,11 @@ const JOURNEY = [
   "TOT Payment Done", "TOT Scheduled", "TOT In Progress", "Certified",
 ];
 
+// -129 (QA-268): kept as a literal rather than imported, because @/models pulls mongoose and this
+// is a client component. A wall pin now asserts this list and admin/page.tsx's copy both match
+// TRAINER_DOC_TYPE exactly — the drift is guarded instead of hoped about.
 const DOC_TYPES = ["Aadhaar", "PAN", "Photo", "CV", "Educational Qualification",
-  "CIPSA Certificate", "Industry Experience", "Teaching Experience", "Other"];
+  "CITS Certificate", "Industry Experience", "Teaching Experience", "Other"];
 
 const fmt = (d?: string | null) => (d ? fmtDate(d) : "—");
 
@@ -285,7 +288,7 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
                   <Field label="Centre" required>
                     <select className={inputCls} value={nom.location} onChange={(e) => setNom({ ...nom, location: e.target.value })}>
                       <option value="">—</option>
-                      {locations.map((l: any) => <option key={l._id} value={l._id}>{l.name}</option>)}
+                      {offerable(locations, nom.location).map((l: any) => <option key={l._id} value={l._id}>{l.name}</option>)}
                     </select>
                   </Field>
                   <Field label="Job role" required>

@@ -188,7 +188,7 @@ invalid recipient) and **always** write a MailLog row. Bounces: SNS → `public/
 
 Ranked by how likely a change lands on one copy and not the others.
 
-### 3.1 Two roster-add paths that already disagree — **live defect, QA-272**
+### 3.1 Two roster-add paths that already disagree — **live defect, QA-273**
 | Copy | Where | Walk-in (no centre) |
 |---|---|---|
 | Single add | `api/batches/[id]/members/route.ts:87` | `if (cand.location && …)` — **exempt**, and it *sets* the centre + audits it (:99) |
@@ -196,11 +196,11 @@ Ranked by how likely a change lands on one copy and not the others.
 **SoT:** extract the join-eligibility + adoption block into `rules.ts` beside `addMemberChecked` (:400)
 and have both routes call it.
 
-### 3.2 The two public intake doors — **live gap, QA-274**
+### 3.2 The two public intake doors — **live gap, QA-275**
 `public/register/[token]` writes the 9 government fields; `public/enrol-otp` (:150) writes **none**.
 S18-02/QA-261 fixed one door. **SoT:** one shared `publicCandidatePayload()` both routes call.
 
-### 3.3 `public/trainer-apply` never adopted `lib/validate` — **live hole, QA-273**
+### 3.3 `public/trainer-apply` never adopted `lib/validate` — **live hole, QA-274**
 `:26` `S(body.phone).replace(/\D/g,"").slice(-10)` + `:56` `length !== 10` + `:58` its own email regex.
 `99999999999999` → last ten → passes. This is exactly what -126 fixed on `p/register`, whose comment
 says *"every other path in the product uses lib/validate."* It did not. **SoT:** `validate.ts`.

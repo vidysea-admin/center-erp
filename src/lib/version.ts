@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-128";
+export const RELEASE = "2026.08.14-129";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,45 @@ export const RELEASE = "2026.08.14-128";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-129: the trainer data model, from Divya's 18/08 round. QA-268: the document type read 'CIPSA " +
+  "Certificate'. CIPSA is not a credential - the trainer certification is CITS, Craft Instructor " +
+  "Training Scheme - and the live row so labelled holds a file named CITS Certificate.pdf, which is " +
+  "the product being corrected by the person using it. Renamed at the source, not papered over with " +
+  "a label map, because this value is STORED: a display layer would leave the wrong string in the " +
+  "database and in every export. That makes it a MIGRATION, and the second collection is the " +
+  "expensive one: a Program whose mandatory_trainer_docs still said 'CIPSA Certificate' would demand " +
+  "a document type the UI can no longer offer, and Rule T2 would refuse Documents Completed for that " +
+  "programme's trainers FOREVER - a permanent stall out of a rename. scripts/migrate-cits-doctype.mjs " +
+  "moves both collections, names the programmes that would have stalled and the files it touches, " +
+  "refuses rather than merges if any trainer somehow holds both names, and is idempotent. QA-270: " +
+  "'Home location' offered CENTRES, so it could not hold what its own name promises - and the centre " +
+  "a trainer works at was already recorded, just below, as 'Can train at'. -125 had fixed only the " +
+  "list COLUMN, making 'Basti - no centre here' readable without touching the control that produced " +
+  "it. It is a town now, and an EVOLVING one per Umesh: the options are the home towns already " +
+  "recorded, so typing a new one offers it to the next person and the master builds itself. No new " +
+  "collection and no new endpoint - the page already fetches every trainer. What it deliberately " +
+  "does NOT do is rewrite the 4 trainers whose home is still a centre reference: blank keeps what is " +
+  "there, typing replaces it, and quietly converting somebody's record on an unrelated save is data " +
+  "loss with a nice name. QA-269: the tabs read 'Certified 0' while trainers showed a green " +
+  "Certified chip. Both were right - the tab is a TODAY-state (certified AND on no live batch), the " +
+  "chip is the stored stage - but one word meaning two numbers on one screen is a contradiction to " +
+  "anyone scanning it, and 'Certified 0' is the figure a manager quotes out loud. The LABEL now says " +
+  "what the tab counts ('Free to assign'); the VALUE is untouched because it rides in the URL and " +
+  "saved links must keep working, the same split -102 used for Closing/'Result Awaited'. QA-271: the " +
+  "centre picker carried a selectable placeholder, 'yet to be identify'. Location was the ONE master " +
+  "with no way to retire a row - Program, Room, Trainer, Scheme and JobRole all carry an active flag " +
+  "and their pickers honour it, but the offerable() helper had only ever been handed programmes. " +
+  "Location has the flag now, on BOTH routes (a field the item route does not accept looks saved and " +
+  "is gone on the next read - the -116 lesson), and nine CREATION pickers filter through it while " +
+  "the two list FILTERS and the centre switcher deliberately do not: you must still be able to look " +
+  "at a retired centre's history and keep working on batches that live there. offerable() itself " +
+  "existed three times, copy-pasted, each copy handed only programmes and one of them quietly " +
+  "array-aware; there is one now, in lib/client, taking a scalar or an array. Retiring the junk row " +
+  "and fixing the 'Govt ITI, Dudhi Sonbhadra' spelling are production data writes, prepared for " +
+  "Umesh rather than run from here.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-128 (QA-266, Divya 18/08): \"Move... ye move nahi ho raha hai\". Moving a trainer past " +
   "Shortlisted reported 'Saving...', reverted half a second later, saved nothing and said nothing. " +
   "NOTHING WAS SWALLOWED: the route answered 409 with a perfectly readable refusal, the page caught " +
@@ -50,8 +89,6 @@ export const RELEASE_NOTE_CURRENT =
   "job-roles master holds ZERO rows (QA-143), so a picker would offer four options and block every " +
   "real job role - that is data entry, not a build.";
 
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
   "-127 (QA-180): a TRAINER is not a candidate for assessment. Every government attendance export " +
   "carries the centre's own trainers alongside its students - the live Attendance_Till 16th Aug " +
   "file is 37 Trainee rows and one Trainer, Manish himself at 53:48:25 hrs - and the qualification " +

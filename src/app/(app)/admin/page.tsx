@@ -1,6 +1,6 @@
 "use client";
 import { Fragment, useEffect, useState } from "react";
-import { api, fmtDT, fmtDate } from "@/lib/client";
+import { api, fmtDT, fmtDate, offerable } from "@/lib/client";
 import { emailError } from "@/lib/validate";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
 
@@ -160,7 +160,8 @@ function Programs({ error, setError }: any) {
               to that floor for trainers nominated to this job role. */}
           <Field label="Extra mandatory trainer documents (on top of the standard five)">
             <div className="grid gap-1.5 md:grid-cols-2">
-              {["CIPSA Certificate", "Industry Experience", "Teaching Experience", "Other"].map((d) => (
+              {/* -129 (QA-268): CIPSA -> CITS. Pinned against TRAINER_DOC_TYPE in the wall. */}
+              {["CITS Certificate", "Industry Experience", "Teaching Experience", "Other"].map((d) => (
                 <label key={d} className="flex items-center gap-2 text-xs">
                   <input type="checkbox" checked={(form.mandatory_trainer_docs ?? []).includes(d)}
                     onChange={() => {
@@ -366,7 +367,7 @@ function Users({ error, setError }: any) {
             <Field label="Which centres this account can see">
               <select multiple className={inputCls + " h-32"} value={form.location_scope ?? []}
                 onChange={(e) => set("location_scope", [...e.target.selectedOptions].map((o) => o.value))}>
-                {locations.map((l) => <option key={l._id} value={l._id} title={l.name}>{l.name}</option>)}
+                {offerable(locations, form.location_scope).map((l: any) => <option key={l._id} value={l._id} title={l.name}>{l.name}</option>)}
               </select>
               {/* 2026-08-12: an approved Trainer/Location user with no scope signs in to a
                   completely empty app and cannot tell why. Say so at the moment of approval. */}

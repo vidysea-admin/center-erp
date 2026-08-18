@@ -39,9 +39,18 @@ export const TRAINER_PIPELINE = [
 
 // The documents Manish listed by name, plus the two experience certificates that are mandatory
 // for TVP eligibility on some job roles.
+// -129 (QA-268, Divya 18/08: "instead of CIPSA certificate, we should mention CITS certificate").
+// CIPSA is not a credential; the trainer certification is CITS — Craft Instructor Training Scheme —
+// and the live row labelled "CIPSA Certificate" holds a file named CITS Certificate.pdf, which is
+// the product being corrected by the person using it. Renamed at the source rather than papered
+// over with a label map: this value is STORED, so a display layer would leave the wrong string in
+// the database and in every export. scripts/migrate-cits-doctype.mjs moves the two collections that
+// hold it — and the second one matters more than it looks: a Program whose mandatory_trainer_docs
+// still says "CIPSA Certificate" would demand a document type the UI can no longer offer, and Rule
+// T2 would refuse Documents Completed for that programme's trainers forever.
 export const TRAINER_DOC_TYPE = [
   "Aadhaar", "PAN", "Photo", "CV", "Educational Qualification",
-  "CIPSA Certificate", "Industry Experience", "Teaching Experience", "Other",
+  "CITS Certificate", "Industry Experience", "Teaching Experience", "Other",
 ] as const;
 
 // The government schemes actually running, from the client's RPL workbook (2026-08-12).
@@ -149,6 +158,15 @@ const LocationSchema = new Schema({
   cluster_head_phone: String,
   approval_status: { type: String, enum: APPROVAL_STATUS, required: true, default: "Pending" },
   operational_status: { type: String, enum: OPERATIONAL_STATUS, required: true, default: "Not Started" },
+  // -129 (QA-271, Divya 18/08): the centre picker carries a selectable placeholder, "yet to be
+  // identify". Location was the ONE master with no way to retire a row — Program, Room, Trainer,
+  // Scheme and JobRole all carry this flag and every one of their pickers honours it, but the
+  // `offerable()` helper (copied into three pages) had only ever been handed `programs`. Same
+  // meaning here as there, in the words the Admin screen already uses: Active is offered when
+  // something new is created; Retired is hidden from those pickers while every batch, candidate,
+  // trainer and target already pointing at it keeps working. Retiring is a decision about what may
+  // be STARTED, not about history — which is exactly why a junk row gets retired and not deleted.
+  active: { type: Boolean, default: true },
   status_reason: String,
   status_changed_on: Date,
   spoc_name: String, spoc_phone: String, spoc_user: oid("User"),

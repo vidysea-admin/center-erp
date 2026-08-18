@@ -3,7 +3,7 @@ import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { api, fmtDate, pipelineLabel, toInputDate } from "@/lib/client";
+import { api, fmtDate, pipelineLabel, toInputDate, offerable } from "@/lib/client";
 import { emailError, phoneError } from "@/lib/validate";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, ShareLinkPanel, SourceCell, Tabs, inputCls } from "@/components/ui";
 import { BASE_PATH } from "@/lib/base-path";
@@ -19,6 +19,20 @@ import { BASE_PATH } from "@/lib/base-path";
 // never from the stored status field — that field said "Assigned 11" while no batch pointed
 // at those trainers, and said "Certified 6" were assigned when the real number was different.
 const TAG_ORDER = ["Certified", "Under preparation", "Assigned", "Unavailable", "Rejected/Dropped"] as const;
+// -129 (QA-269, Divya 18/08): the tabs read "Certified 0" while trainers showed a green Certified
+// chip in the PIPELINE column. Both are right and neither is a bug: this tab is a TODAY-state
+// (certified AND on no live batch), the chip is the stored pipeline stage. But one word meaning two
+// numbers on one screen is a contradiction to anyone scanning it, and "Certified 0" is the figure a
+// manager would quote out loud. So the LABEL says what the tab counts. The VALUE is untouched
+// because it rides in the URL (?tag=Certified) and saved links must keep working — the same split
+// -102 used for Closing/"Result Awaited".
+const TAG_LABEL: Record<string, string> = {
+  "Certified": "Free to assign",
+  "Under preparation": "Under preparation",
+  "Assigned": "Assigned",
+  "Unavailable": "Unavailable",
+  "Rejected/Dropped": "Rejected/Dropped",
+};
 function availabilityTag(t: any): (typeof TAG_ORDER)[number] {
   const p = t.pipeline_status ?? "Fresh Lead";
   if (p === "NSDC Rejected" || p === "Dropped") return "Rejected/Dropped";
@@ -106,6 +120,16 @@ function TrainersInner() {
   // skills, case-insensitive). Warn — never block (house rule): the Preparation board and
   // the batch dropdown both key on roles, so an unrecognised-only trainer is invisible there.
   const knownRoles = [...new Set([...jobRoles.map((j: any) => j.name), ...programSkills])];
+  // -129 (QA-270, Umesh's call): "ek baar wo location aa gayi, toh dropdown mein dikhne lag jaaye
+  // sabhi ko … master list khud banti jayegi." So the home-town options ARE the home towns already
+  // recorded — type one and the next person is offered it. No new collection and no new endpoint:
+  // this page already fetches every trainer, so the values are in hand. Two honest limits: the list
+  // is only as wide as what this user is scoped to see, and a ?status= preset in the URL narrows the
+  // fetch — neither matters much, because the control is type-OR-pick and a new town is always
+  // allowed. That is the whole point of an evolving list.
+  const knownHomeTowns = [...new Set(
+    (items ?? []).map((t: any) => String(t.home_location_other ?? "").trim()).filter(Boolean),
+  )].sort((a, b) => a.localeCompare(b));
   const roleMismatch = (skills?: string[]) =>
     knownRoles.length > 0 && (skills ?? []).length > 0 &&
     !(skills ?? []).some((s) => knownRoles.some((k) => String(k).trim().toLowerCase() === String(s).trim().toLowerCase()));
@@ -158,7 +182,9 @@ function TrainersInner() {
     setEdit(t);
     setForm({
       ...t,
-      home_location: t.home_location?._id ?? (t.home_location_other ? "__other__" : ""),
+      // -129 (QA-270): the control is a town field now, so it opens on the town. A trainer whose
+      // home is still recorded as a centre opens BLANK, with a line under the field saying so —
+      // blank keeps it, typing replaces it.
       home_location_other: t.home_location_other ?? "",
       skills: t.skills ?? [], capable_locations: (t.capable_locations ?? []).map((l: any) => l?._id ?? l),
     });
@@ -175,9 +201,12 @@ function TrainersInner() {
       const json = {
         ...form,
         skills: typeof form.skills === "string" ? form.skills.split(",").map((s: string) => s.trim()).filter(Boolean) : form.skills,
-        // "Others" (2026-08-13): home is free text when it is not one of our centres.
-        home_location: form.home_location && form.home_location !== "__other__" ? form.home_location : null,
-        home_location_other: form.home_location === "__other__" ? (form.home_location_other || null) : null,
+        // -129 (QA-270): home is a TOWN now. The old centre reference is not rewritten behind
+        // anyone's back — 4 of 22 trainers hold one, and quietly converting somebody's record on an
+        // unrelated save is not a migration, it is data loss with a nice name. Blank keeps whatever
+        // is there; typing a town replaces it and clears the centre link, which is a human's act.
+        home_location: form.home_location_other?.trim() ? null : (edit?.home_location?._id ?? undefined),
+        home_location_other: form.home_location_other?.trim().replace(/\s+/g, " ") || (edit?.home_location?._id ? null : undefined),
         compensation_type: form.compensation_type || undefined,
       };
       if (edit) await api(`/api/trainers/${edit._id}`, { method: "PATCH", json });
@@ -351,11 +380,11 @@ function TrainersInner() {
           <FilterPills active={tag} onChange={(v) => setTag(v === tag ? "" : v)}
             options={[{ value: "", label: "All", count: items.length },
               ...TAG_ORDER.map((t) => ({
-                value: t, label: t, count: tagCounts.get(t) ?? 0,
+                value: t, label: TAG_LABEL[t] ?? t, count: tagCounts.get(t) ?? 0,
                 // These are mutually exclusive TODAY-states, not a funnel — "Available 0
                 // while Assigned 6" simply means every certified trainer is on a batch.
                 title: {
-                  "Certified": "Certified and not on any live batch — can take a class tomorrow",
+                  "Certified": "Certified and on no live batch — free to take a class tomorrow. The green 'Certified' chip in the PIPELINE column is a different question: it is the stage they reached, whether or not they are busy.",
                   "Under preparation": "Still in the hiring/TOT pipeline — not certified yet (may already be pencilled into a batch)",
                   "Assigned": "Certified and named on a live batch (Planning/Ready/Active/Closing)",
                   "Unavailable": "Certified but marked unavailable",
@@ -689,16 +718,24 @@ function TrainersInner() {
               </p>
             )}
           </Field>
-          <Field label="Home location">
-            <select className={inputCls} value={form.home_location ?? ""} onChange={(e) => set("home_location", e.target.value)}>
-              <option value="">—</option>
-              {locations.map((l) => <option key={l._id} value={l._id} title={l.name}>{l.name}</option>)}
-              {/* 2026-08-13 (Manish): a trainer's home town is usually not one of our centres */}
-              <option value="__other__">Other…</option>
-            </select>
-            {form.home_location === "__other__" && (
-              <input className={inputCls + " mt-1.5"} placeholder="Type the trainer's home town/city"
-                value={form.home_location_other ?? ""} onChange={(e) => set("home_location_other", e.target.value)} />
+          {/* -129 (QA-270, Divya 18/08): "home location mein hum wo wala location select nahi kar
+              sakte jahan ke liye person nominate hua hai … ya phir yahan pe wo location aana chahiye
+              jahan ka wo person hai." The field offered CENTRES, so it could not hold what its own
+              name promises. The centre a trainer works at is already "Can train at", just below.
+              -125 (VM-03) only fixed the LIST COLUMN — it made "Basti · no centre here" readable
+              without touching the control that produced it. This is that control. It is a town now,
+              picked from what has been typed before or typed fresh. */}
+          <Field label="Home location (the town or district the trainer is from)">
+            <input className={inputCls} list="home-town-options" placeholder="Pick one, or type a new town"
+              value={form.home_location_other ?? ""} onChange={(e) => set("home_location_other", e.target.value)} />
+            <datalist id="home-town-options">
+              {knownHomeTowns.map((h) => <option key={h} value={h} />)}
+            </datalist>
+            {edit?.home_location?.name && !form.home_location_other && (
+              <p className="mt-1 text-xs text-gray-500">
+                Currently recorded as the centre <b>{edit.home_location.name}</b>. Leave this blank to
+                keep it as it is; type a town to replace it.
+              </p>
             )}
           </Field>
           {/* 2026-08-13 parity: qualification/experience/source were sheet-only (display-only in
@@ -725,7 +762,7 @@ function TrainersInner() {
           <Field label="Can train at (2026-08-11: one, two or ten locations)">
             <select multiple className={inputCls + " h-28"} value={form.capable_locations ?? []}
               onChange={(e) => set("capable_locations", Array.from(e.target.selectedOptions).map((o) => o.value))}>
-              {locations.map((l) => <option key={l._id} value={l._id} title={l.name}>{l.name}</option>)}
+              {offerable(locations, form.capable_locations).map((l: any) => <option key={l._id} value={l._id} title={l.name}>{l.name}</option>)}
             </select>
           </Field>
           <div className="grid grid-cols-2 gap-3">

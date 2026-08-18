@@ -5,7 +5,7 @@
 **READ `ARCHITECTURE.md` (repo root) BEFORE changing anything.** It maps 189 files / ~30,000 lines,
 and its section 3 is the list of every concept that exists in MORE THAN ONE place. This codebase's
 bug history is overwhelmingly *"the second copy did not get the fix"* — three live defects were found
-by that section alone on the day it was written (QA-272, QA-273, QA-274).
+by that section alone on the day it was written (QA-273, QA-274, QA-275).
 
 - **Name the exact file + function you will modify (cite `file:line`) and edit it IN PLACE.**
 - **Do NOT create a new file or a duplicate function to add or fix behaviour** unless Umesh explicitly

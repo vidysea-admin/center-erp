@@ -259,4 +259,33 @@ ok("[best] each row names its blockers + next action + trainer/candidate counts"
   !!prepRow && Array.isArray(prepRow.blockers) && typeof prepRow.next_action === "string" && prepRow.trainers && prepRow.candidates,
   JSON.stringify({ blockers: prepRow?.blockers?.length, na: prepRow?.next_action }).slice(0, 120));
 
+// ---- -129 (QA-271): a centre can be RETIRED, which is not the same as deleted ----
+// Divya found a selectable placeholder, "yet to be identify", in the live centre picker. Location
+// was the only master with no `active` flag - Program, Room, Trainer, Scheme and JobRole all have
+// one. Retiring is a decision about what may be STARTED: the row leaves the creation pickers and
+// every batch, candidate and target already pointing at it keeps resolving. Deleting it would
+// orphan them, which is exactly why -126 retired a programme rather than deleting it.
+{
+  const junk = (await req(admin, "POST", "/api/locations", {
+    code: "JUNK" + Date.now().toString().slice(-6), name: "yet to be identify",
+    state: "UP", district: "Unknown", approval_status: "Pending",
+  }, 201)).data.item;
+  ok("-129 (QA-271): a new centre is live by default", junk.active !== false, String(junk.active));
+
+  const retired = await req(admin, "PATCH", `/api/locations/${junk._id}`, { active: false }, 200);
+  ok("-129 (QA-271): a centre can be retired through the app's own audited door", retired.data.item?.active === false, String(retired.data.item?.active));
+
+  // the -116 lesson: a field the ITEM route does not accept looks saved and is gone on the next read
+  const back = (await req(admin, "GET", `/api/locations/${junk._id}`, undefined, 200)).data.item;
+  ok("-129 (QA-271): ...and it READS BACK retired - both doors accept the field, not just one", back.active === false, String(back.active));
+
+  const listed = ((await req(admin, "GET", "/api/locations?limit=2000", undefined, 200)).data.items ?? []).find((l) => String(l._id) === String(junk._id));
+  ok("-129 (QA-271): a retired centre is still RETURNED by the API - history keeps working, only the creation pickers hide it",
+    !!listed && listed.active === false, JSON.stringify(listed && { name: listed.name, active: listed.active }));
+
+  await req(admin, "PATCH", `/api/locations/${junk._id}`, { active: true }, 200);
+  ok("-129 (QA-271): and it is reversible, which is the whole reason this is a retire and not a delete",
+    (await req(admin, "GET", `/api/locations/${junk._id}`, undefined, 200)).data.item.active === true);
+}
+
 finish();

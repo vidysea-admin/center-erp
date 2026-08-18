@@ -72,6 +72,25 @@ export function sourceLink(source?: string | null): { tab: string; url: string }
 // to drift from the data (the QA-045 bug class). The helper survives as a null-guard only.
 export const pipelineLabel = (s?: string | null) => s ?? "—";
 
+/**
+ * Which rows of a master may be OFFERED when something new is created.
+ *
+ * Retiring is a decision about what may be STARTED, not about history — so a retired row leaves the
+ * creation pickers while every record already pointing at one keeps working, and the row currently
+ * selected is always kept so editing an old record never blanks its own field.
+ *
+ * -129 (QA-271): this existed three times, copy-pasted into batches/page.tsx, candidates/page.tsx
+ * and locations/[id]/page.tsx, and in all three it was only ever handed `programs`. Location was
+ * the one master with no `active` flag at all, which is how a placeholder centre called "yet to be
+ * identify" stayed selectable. One copy now, so the next master to need it does not make a fourth.
+ */
+export function offerable<T extends { _id?: unknown; active?: boolean }>(list: T[], selected?: unknown): T[] {
+  // `selected` may be one id or several — candidates/ feeds this multi-selects (interested_locations,
+  // interested_programs), the rest single selects. Taking both is why there is one of these now.
+  const keep = new Set((Array.isArray(selected) ? selected : [selected]).map((x) => String(x ?? "")));
+  return (list ?? []).filter((p) => p?.active !== false || keep.has(String(p?._id)));
+}
+
 export function toInputDate(d?: string | Date | null): string {
   if (!d) return "";
   const x = new Date(d);

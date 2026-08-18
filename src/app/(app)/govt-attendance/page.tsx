@@ -6,7 +6,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { api, fmtDT, fmtDate } from "@/lib/client";
+import { api, fmtDT, fmtDate, offerable } from "@/lib/client";
 import { BASE_PATH } from "@/lib/base-path";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, inputCls } from "@/components/ui";
 import { useLocationCtx, usePerms } from "@/components/shell";
@@ -110,7 +110,7 @@ function Inner() {
           <a href={`${BASE_PATH}/templates/govt-attendance-sample.csv`} download className="text-xs font-medium text-blue-700 hover:underline">⬇ sample format</a>
           <select className={inputCls + " max-w-56 text-xs"} value={manualLoc} onChange={(e) => setManualLoc(e.target.value)} title="Used when the file's TC ID matches no centre">
             <option value="">Centre: auto-detect from file</option>
-            {locations.map((l: any) => <option key={l._id} value={l._id}>{l.name}</option>)}
+            {offerable(locations, manualLoc).map((l: any) => <option key={l._id} value={l._id}>{l.name}</option>)}
           </select>
           <label>
             <input type="file" accept=".csv,.xlsx,.xls" className="hidden" disabled={busy}

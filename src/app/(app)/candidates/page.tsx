@@ -3,7 +3,7 @@ import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { api } from "@/lib/client";
+import { api, offerable } from "@/lib/client";
 import { emailError, phoneError } from "@/lib/validate";
 import { FRESH_TAGS, JOURNEY_TAGS, isFreshCandidate, freshJourneyOf as sharedFreshJourneyOf, journeyOf as sharedJourneyOf } from "@/lib/candidate-journey";
 import { Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, ShareLinkPanel, SourceCell, copyText, inputCls , Tabs} from "@/components/ui";
@@ -15,10 +15,7 @@ import { uploadWithRetry } from "@/lib/upload";
 // -115 (QA-221): a RETIRED programme (active === false) leaves the pickers where something new is
 // created, but never disappears from a record that already points at one — editing such a record must
 // not silently blank the field. Retiring is a decision about what may be started, not about history.
-function offerable(list: any[], selected?: unknown) {
-  const keep = new Set((Array.isArray(selected) ? selected : [selected]).map((x) => String(x ?? "")));
-  return (list ?? []).filter((p: any) => p?.active !== false || keep.has(String(p?._id)));
-}
+
 
 export default function CandidatesPage() {
   return <Suspense><CandidatesInner /></Suspense>;
@@ -591,7 +588,7 @@ function CandidatesInner() {
           <Field label="Location">
             <select className={inputCls} value={form.location ?? ""} onChange={(e) => set("location", e.target.value)}>
               <option value="">Not tied to a centre yet (walk-in)</option>
-              {locations.map((l) => <option key={l._id} value={l._id} title={l.name}>{l.name}</option>)}
+              {offerable(locations, form.location).map((l) => <option key={l._id} value={l._id} title={l.name}>{l.name}</option>)}
             </select>
             {!form.location && (
               <span className="mt-0.5 block text-[11px] text-gray-500">They get their centre when they are enrolled on a batch. Until then only Admin and Operations can see them.</span>
@@ -629,7 +626,7 @@ function CandidatesInner() {
           <Field label="Interested locations (Ctrl-click for many)">
             <select multiple className={inputCls + " h-28"} value={form.interested_locations ?? []}
               onChange={(e) => set("interested_locations", Array.from(e.target.selectedOptions).map((o) => o.value))}>
-              {locations.map((l) => <option key={l._id} value={l._id} title={l.name}>{l.name}</option>)}
+              {offerable(locations, form.interested_locations).map((l) => <option key={l._id} value={l._id} title={l.name}>{l.name}</option>)}
             </select>
           </Field>
           {/* -116 (M4-06, Manish 17/08 [02:21] "इसको अगर ड्रॉप डाउन कर सकते हो, सोर्स को — तो ड्रॉप
@@ -752,7 +749,7 @@ function CandidatesInner() {
             <Field label="Location" required>
               <select className={inputCls} value={importState.location ?? ""} onChange={(e) => setImportState({ ...importState, location: e.target.value })}>
                 <option value="">Select…</option>
-                {locations.map((l) => <option key={l._id} value={l._id} title={l.name}>{l.name}</option>)}
+                {offerable(locations, importState.location).map((l) => <option key={l._id} value={l._id} title={l.name}>{l.name}</option>)}
               </select>
             </Field>
             <Field label="Program" required>

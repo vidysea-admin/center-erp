@@ -8,7 +8,8 @@ import { audit } from "@/lib/audit";
 import { removeStoredFile } from "@/lib/storage";
 
 // 2026-08-12 (Manish): "phir uske documents mangaye - Aadhaar, PAN, photo, CV, educational
-// qualification, CIPSA certificate". One row per document so each can be re-uploaded or verified
+// qualification, CIPSA certificate" — his words; -129 (QA-268) corrected the stored value to CITS
+// Certificate, which is the real credential. One row per document so each can be re-uploaded or verified
 // independently, and so the audit trail is per-document rather than one opaque blob.
 
 // GET — every document on file, plus what is still missing for a nomination.

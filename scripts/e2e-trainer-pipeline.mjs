@@ -319,5 +319,32 @@ ok("a dropped trainer can be re-opened if they come back", reopened.data.item.pi
   ok("bypass without the right → 403", deniedRes.status === 403, `got ${deniedRes.status}`);
 }
 
+// ---- -129 (QA-268): the document type is CITS, and CIPSA is gone from the door ----
+// The label IS the stored value here - there is no display layer for TRAINER_DOC_TYPE - so the
+// rename has to hold at the API or the old string lives on in the database and in every export.
+{
+  const dt = (await req("POST", "/api/trainers", {
+    name: "Doc Type " + stamp, phone: "5" + Date.now().toString().slice(-9), skills: ["dt" + stamp],
+  }, 201)).data.item;
+  const DD = `/api/trainers/${dt._id}/documents`;
+  const good = await req("POST", DD, { doc_type: "CITS Certificate", file_url: "/uploads/cits.pdf", original_name: "CITS Certificate.pdf" }, 201);
+  ok("-129 (QA-268): 'CITS Certificate' is an accepted document type", good.status === 201, JSON.stringify(good.data).slice(0, 120));
+  const bad = await req("POST", DD, { doc_type: "CIPSA Certificate", file_url: "/uploads/x.pdf" });
+  ok("-129 (QA-268): the old 'CIPSA Certificate' is REFUSED at the door - the rename is real, not cosmetic",
+    bad.status === 400, `got ${bad.status}`);
+  ok("-129 (QA-268): ...and the refusal lists the types that ARE allowed, with CITS among them",
+    /CITS Certificate/.test(bad.data?.error ?? "") && !/CIPSA/.test(bad.data?.error ?? ""), String(bad.data?.error ?? "").slice(0, 140));
+
+  // ---- -129 (QA-270): home location is a TOWN, and typing one must not be lost ----
+  // Divya: the field offered CENTRES, so it could not hold what its name promises. -125 fixed only
+  // the list column. The store-and-read-back is the -116 lesson: a field the route does not accept
+  // looks saved and is gone on the next read.
+  await req("PATCH", `/api/trainers/${dt._id}`, { home_location_other: "Sant Ravidas Nagar" }, 200);
+  const back = (await req("GET", `/api/trainers/${dt._id}`, undefined, 200)).data.item;
+  ok("-129 (QA-270): a home TOWN stores and reads back, with no centre invented for it",
+    back.home_location_other === "Sant Ravidas Nagar" && !back.home_location,
+    JSON.stringify({ town: back.home_location_other, centre: back.home_location }));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

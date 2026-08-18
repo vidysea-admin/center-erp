@@ -19,7 +19,10 @@ export function maskLocationSecrets(items: any[], isAdmin: boolean) {
 
 export const { GET, POST } = collectionRoutes({
   model: Location, entity: "Location", scopeField: "_id",
-  fields: ["code", "external_id", "institution_id", "name", "city", "state", "address", "approval_status", "operational_status", "status_reason", "status_changed_on", "spoc_name", "spoc_phone", "spoc_user", "principal_name", "principal_phone", "principal_user", "contacts", "district", "tc_id", "tc_password", "tc_status", "operating_partner", "cluster_head_name", "cluster_head_phone"],
+  // -129 (QA-271): "active" joins the whitelist so a centre can be retired through the same
+  // audited door as everything else. A field the model has and the route does not is the -116
+  // lesson — it looks saved and is gone on the next read.
+  fields: ["code", "external_id", "institution_id", "name", "city", "state", "address", "approval_status", "operational_status", "status_reason", "status_changed_on", "spoc_name", "spoc_phone", "spoc_user", "principal_name", "principal_phone", "principal_user", "contacts", "district", "tc_id", "tc_password", "tc_status", "operating_partner", "cluster_head_name", "cluster_head_phone", "active"],
   searchFields: ["code", "name", "city", "external_id", "institution_id", "tc_id", "district"],
   // QA-095: the CEO shut the Trainer's locations door — the API answers 403 now, not with
   // the centre's commercials. Batch/home surfaces carry the centre NAME on their own.
