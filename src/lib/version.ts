@@ -7,8 +7,20 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-124";
+export const RELEASE = "2026.08.14-125";
 export const RELEASE_NOTE =
+  "-125: VM-03, and the measurement changed what the fix should be. The video pass flagged the "
+  "trainers HOME LOCATION column as inconsistent - full centre records beside bare town names like "
+  "Banda and Basti - and the row asked for a data audit. Measured on live first: 22 trainers, 4 "
+  "linked to a real centre, 18 carrying free text - and those 18 are DISTRICTS (Ballia, Ghazipur, "
+  "Basti, Azamgarh, Begusarai...), sixteen of which name places where we have NO centre at all. That "
+  "is not dirty data. It is home_location_other doing exactly the job it exists for, and the column "
+  "was rendering two different KINDS of fact identically, which is what made it look wrong. So the "
+  "column now names the kind: a linked centre reads plainly, a district reads in muted text with "
+  "'no centre here' beside it and an explanation on hover. No data is rewritten - auditing honest "
+  "data into a shape it does not have is how real information gets destroyed. Two of the eighteen DO "
+  "name a place where a centre exists, and those are now visibly the odd ones out, which is the only "
+  "part a human should act on. "
   "-124: M4-04, the last buildable row on Umesh's sheet. Manish: 'ye location nahi hogi, user ka koi "
   "bhi location ho sakta hai - yahan pe ye location mat dikhao.' Forcing a centre when a walk-in is "
   "entered either invents a fact or turns the person away. I had been calling this its own unit "

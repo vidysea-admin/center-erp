@@ -384,7 +384,20 @@ function TrainersInner() {
                   </span>
                 ),
               },
-              { key: "home_location", label: "Home location", sortable: true, sortValue: (r: any) => r.home_location?.name ?? r.home_location_other ?? null, render: (r: any) => r.home_location?.name ?? r.home_location_other ?? "—", mobile: false },
+              // -125 (VM-03): the video pass flagged this column as "inconsistent — full centre records
+              // beside bare town names". Measured on live before changing anything: 22 trainers, 4 linked
+              // to a real centre, 18 carrying free text — and those 18 are DISTRICTS (Ballia, Ghazipur,
+              // Basti, Azamgarh…), 16 of which name places where we have no centre at all. So this is not
+              // dirty data: it is the field doing its job, and the column was simply rendering two
+              // different KINDS of fact identically. Name the kind instead of "auditing" honest data.
+              { key: "home_location", label: "Home location", sortable: true,
+                sortValue: (r: any) => r.home_location?.name ?? r.home_location_other ?? null,
+                filterText: (r: any) => r.home_location?.name ?? (r.home_location_other ? `${r.home_location_other} (no centre)` : ""),
+                render: (r: any) => r.home_location?.name
+                  ? <span>{r.home_location.name}</span>
+                  : r.home_location_other
+                    ? <span className="text-gray-500" title="A district or town they are from — we have no centre recorded there, so this is free text rather than a link to a centre.">{r.home_location_other} <span className="text-gray-400">· no centre here</span></span>
+                    : <span className="text-gray-400">—</span>, mobile: false },
               {
                 // 2026-08-12: three states now, not two — a rejected profile and a dropped applicant
                 // are not "in progress", and showing them amber hides the ones needing action.
