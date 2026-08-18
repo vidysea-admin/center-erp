@@ -7,8 +7,19 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-117";
+export const RELEASE = "2026.08.14-118";
 export const RELEASE_NOTE =
+  "-118: the measurement that corrected -117. -117 pre-assigned the room when a centre had exactly "
+  "one; then I measured production and of 21 centres ZERO have exactly one room and EIGHTEEN have "
+  "none at all - so that rule fires for nobody today. Manish's complaint was mostly not about "
+  "nothing being pre-selected: for most centres the dropdown is EMPTY, which is the same thing "
+  "QA-147 found on the batch page (CHI-ITI simply had no rooms). An empty dropdown that reads "
+  "'- assign later -' looks like a choice is being offered. It is not. The New Batch form now says "
+  "the centre has no rooms, disables the control, explains that readiness cannot pass without one, "
+  "and links to the centre's Trainers and Infra tab where a room takes a name and a type - the same "
+  "way out the batch page has offered since QA-147, which the form it starts from had never caught "
+  "up with. With several rooms it says how many and warns that two batches in one room on the same "
+  "days is refused on save. The -117 pre-assignment stays: it is right the day a centre has one room. "
   "-117: M4-09, the last buildable half of Manish's New Batch complaints. 'yahan pe kuch aata nahi hai, "
   "abhi bhi assign nahi karta hoon - to maan ke chalo room one hi hoga': the room dropdown was populated and "
   "nothing was ever chosen, so every batch was created with no room and the readiness check then "

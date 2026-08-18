@@ -510,11 +510,31 @@ function BatchesInner() {
               {skillOptions.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
           </Field>
+          {/* -118 (M4-09, and the measurement that corrected me). -117 pre-assigned the room when a
+              centre had exactly ONE — then I measured production: of 21 centres, ZERO have exactly one
+              room and EIGHTEEN have none at all. So Manish's "यहां पे कुछ आता नहीं है" was mostly not
+              about nothing being pre-selected; for most centres the dropdown is EMPTY, which is the
+              same thing QA-147 found on the batch page ("room assign karne ka kahin koi option hi nahi
+              aa raha" — CHI-ITI simply had no rooms). An empty dropdown that says "— assign later —"
+              looks like a choice being offered. It is not. Say so, and give the way out — the batch
+              page has had exactly this since QA-147; the form it starts from had not caught up. */}
           <Field label={`Room${program?.requires_lab ? " (program requires a Lab)" : ""}`}>
-            <select className={inputCls} value={form.room ?? ""} onChange={(e) => set("room", e.target.value)}>
-              <option value="">— assign later —</option>
+            <select className={inputCls} value={form.room ?? ""} onChange={(e) => set("room", e.target.value)}
+              disabled={!!form.location && rooms.length === 0}>
+              <option value="">{form.location && rooms.length === 0 ? "— this centre has no rooms —" : "— assign later —"}</option>
               {rooms.map((r) => <option key={r._id} value={r._id}>{r.name} ({r.type})</option>)}
             </select>
+            {form.location && rooms.length === 0 && (
+              <span className="mt-0.5 block text-[11px] text-amber-700">
+                No rooms recorded at this centre, so a batch created now cannot pass its readiness check.
+                Add one on the centre&apos;s <Link className="underline" href={`/locations/${form.location}?tab=${encodeURIComponent("Trainers & Infra")}`}>Trainers &amp; Infra</Link> tab — it takes a name and a type.
+              </span>
+            )}
+            {form.location && rooms.length > 1 && (
+              <span className="mt-0.5 block text-[11px] text-gray-500">
+                {rooms.length} rooms here — pick one. Two batches in the same room on the same days is refused on save.
+              </span>
+            )}
           </Field>
           <Field label={`Target size (default ${program?.default_batch_size ?? 45})`}>
             <input type="number" className={inputCls} value={form.target_size ?? ""} onChange={(e) => set("target_size", +e.target.value)} placeholder={String(program?.default_batch_size ?? 45)} />
