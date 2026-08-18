@@ -1855,6 +1855,31 @@ function ClosureTab({ batchId, batch, role, setError, onChanged }: any) {
   // per-candidate rows exist.
   const [showLegacyEntry, setShowLegacyEntry] = useState(false);
 
+  // -116 (Umesh 18/08: "manish sir mark complete karenge but complete button show hona chahiye…
+  // andar wala complete button kaam nahi kar raha na"). Two separate things were wrong, and this is
+  // the second: the Admin door shipped in -113 sits on the OVERVIEW tab, while the button Manish
+  // actually presses is the one inside THIS tab — and that one refused with an error banner far
+  // above where he was looking, so from his seat it did nothing at all. These panels now know their
+  // own rule (the QA-004 pattern: a button that cannot fire says so instead of bouncing), and the
+  // Admin door is offered right here, where the press happens.
+  const [blockers, setBlockers] = useState<any>(null);
+  const [adminBusy, setAdminBusy] = useState(false);
+  const isAdmin = role === "Admin";
+  const loadBlockers = () => api(`/api/batches/${batchId}/complete`).then(setBlockers).catch(() => setBlockers(null));
+  useEffect(() => { loadBlockers(); }, [batchId, batch?.status]);
+  async function completeAsAdmin() {
+    const why = window.prompt(
+      `Complete this batch now?\n\n${(blockers?.unmarked?.length ?? 0)} student(s) with no result will be recorded ABSENT.\n`
+      + `${(blockers?.unsettled?.length ?? 0)} passed candidate(s) with no certificate will be recorded NOT ISSUED.\n\n`
+      + "Every row is audited with your reason. Completing freezes the results and figures (an Admin can reopen it).\n\nReason:");
+    if (!why || !why.trim()) return;
+    setAdminBusy(true);
+    try {
+      await api(`/api/batches/${batchId}/complete`, { method: "POST", json: { reason: why.trim() } });
+      load(); onChanged(); loadBlockers();
+    } catch (e: any) { setError(e.message); }
+    finally { setAdminBusy(false); }
+  }
   const load = () => api(`/api/batches/${batchId}/closure`).then((d) => {
     setClosure(d.closure); setInvoice(d.invoice);
     setForm(d.closure ?? {}); setInvForm(d.invoice ?? {});
@@ -1915,6 +1940,20 @@ function ClosureTab({ batchId, batch, role, setError, onChanged }: any) {
         <span className="cursor-help rounded-full border border-blue-300 px-1.5 text-[10px] font-bold text-blue-700"
           title="Assessment done moves the batch to Result Awaited; certification done marks it Completed. Nothing about money is needed for that. Invoice and dues are the later step that ends in Closed — a Completed batch can sit there indefinitely.">?</span>
       </div>
+      {/* -116: the door Umesh asked for, ON THIS TAB. It is only offered when the ordinary buttons
+          CANNOT fire — when they can, the honest path is to press them. */}
+      {isAdmin && !closed && blockers && blockers.can_complete_cleanly === false && ["Active", "Closing"].includes(batch?.status) && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          <span>
+            <b>This batch cannot be completed the ordinary way yet.</b>{" "}
+            {(blockers.unmarked?.length ?? 0) > 0 && <>{blockers.unmarked.length} student(s) have no result</>}
+            {(blockers.unmarked?.length ?? 0) > 0 && (blockers.unsettled?.length ?? 0) > 0 && " · "}
+            {(blockers.unsettled?.length ?? 0) > 0 && <>{blockers.unsettled.length} passed candidate(s) have no certificate</>}
+            . As Admin you can finish it anyway — the missing rows are recorded Absent / Not Issued, audited with your reason.
+          </span>
+          <Btn small onClick={completeAsAdmin} disabled={adminBusy}>{adminBusy ? "Completing…" : "Mark Completed (Admin)"}</Btn>
+        </div>
+      )}
       {/* Per-candidate marking gets the full width — it is a data-entry grid, not a side panel. */}
       {perCandidate && (
         <CandidateResults batchId={batchId} batch={batch} setError={setError} onChanged={() => { load(); onChanged(); }} />
@@ -1957,7 +1996,17 @@ function ClosureTab({ batchId, batch, role, setError, onChanged }: any) {
         )}
         <div className="mt-3 flex gap-2">
           <Btn small kind="ghost" onClick={() => saveClosure({ assessment_date: form.assessment_date, ...(legacy && !perCandidate && showLegacyEntry ? { appeared: form.appeared, passed: form.passed } : {}) })}>Save</Btn>
-          <Btn small onClick={() => saveClosure({ assessment_status: "Completed", assessment_date: form.assessment_date ?? new Date(), ...(legacy && !perCandidate && showLegacyEntry ? { appeared: form.appeared, passed: form.passed } : {}) })} disabled={closure?.assessment_status === "Completed"}>Mark Completed</Btn>
+          <span className="inline-flex flex-col gap-0.5">
+            <Btn small
+              onClick={() => saveClosure({ assessment_status: "Completed", assessment_date: form.assessment_date ?? new Date(), ...(legacy && !perCandidate && showLegacyEntry ? { appeared: form.appeared, passed: form.passed } : {}) })}
+              disabled={closure?.assessment_status === "Completed" || (blockers?.unmarked?.length ?? 0) > 0}>Mark Completed</Btn>
+            {closure?.assessment_status !== "Completed" && (blockers?.unmarked?.length ?? 0) > 0 && (
+              <span className="text-[10px] font-medium text-amber-700"
+                title={(blockers.unmarked ?? []).map((u: any) => u.name).filter(Boolean).join(", ")}>
+                {blockers.unmarked.length} student(s) have no result yet — mark them and this turns on by itself
+              </span>
+            )}
+          </span>
         </div>
         <ClosureFileSlot label="Result sheet" value={closure?.result_file} disabled={closed} onUpload={(e: any) => uploadClosureFile(e, "result_file")} />
       </Section>
@@ -1973,7 +2022,20 @@ function ClosureTab({ batchId, batch, role, setError, onChanged }: any) {
         )}
         <div className="mt-3 flex gap-2">
           <Btn small kind="ghost" onClick={() => saveClosure({ certification_date: form.certification_date, ...(legacy ? { certificates_issued: form.certificates_issued } : {}) })}>Save</Btn>
-          <Btn small onClick={() => saveClosure({ certification_status: "Completed", certification_date: form.certification_date ?? new Date(), ...(legacy ? { certificates_issued: form.certificates_issued } : {}) })} disabled={closure?.certification_status === "Completed"}>Mark Completed</Btn>
+          <span className="inline-flex flex-col gap-0.5">
+            <Btn small
+              onClick={() => saveClosure({ certification_status: "Completed", certification_date: form.certification_date ?? new Date(), ...(legacy ? { certificates_issued: form.certificates_issued } : {}) })}
+              disabled={closure?.certification_status === "Completed" || (blockers?.unsettled?.length ?? 0) > 0 || closure?.assessment_status !== "Completed"}>Mark Completed</Btn>
+            {closure?.certification_status !== "Completed" && (blockers?.unsettled?.length ?? 0) > 0 && (
+              <span className="text-[10px] font-medium text-amber-700"
+                title={(blockers.unsettled ?? []).map((u: any) => u.name).filter(Boolean).join(", ")}>
+                {blockers.unsettled.length} passed candidate(s) have no certificate yet
+              </span>
+            )}
+            {closure?.certification_status !== "Completed" && (blockers?.unsettled?.length ?? 0) === 0 && closure?.assessment_status !== "Completed" && (
+              <span className="text-[10px] font-medium text-gray-500">assessment goes first</span>
+            )}
+          </span>
         </div>
         <ClosureFileSlot label="Certificate bundle" value={closure?.certificate_file} disabled={closed} onUpload={(e: any) => uploadClosureFile(e, "certificate_file")} />
       </Section>

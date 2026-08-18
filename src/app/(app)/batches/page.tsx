@@ -412,6 +412,21 @@ function BatchesInner() {
           </div>
           {/* 2026-08-11: time slots — a trainer runs up to 4 parallel batches with the day divided */}
           <div className="grid grid-cols-2 gap-3">
+            {/* -116 (M4-10, Manish 17/08 [03:54] "टाइम स्लॉट भी डिफाइंड है, टाइम स्लॉट हम चेंज कर सकते
+                हैं"): presets that FILL these inputs and leave them editable, exactly as he said. Only
+                the three slots Umesh's sheet marks reliable are offered — the transcripts disagree on a
+                fourth (9:30-4:30 vs 9:30-9:30 vs a duplicate), and a wrong preset would be typed into
+                every batch. The fourth is one line to add once he confirms it. */}
+            <div className="md:col-span-2">
+              <span className="mr-2 text-xs text-gray-500">Usual slots:</span>
+              {[["09:00", "18:00"], ["09:00", "17:00"], ["09:30", "17:30"]].map(([a, b2]) => (
+                <button key={a + b2} type="button" onClick={() => { set("slot_start", a); set("slot_end", b2); }}
+                  className="mr-1.5 rounded-full border border-gray-200 px-2 py-0.5 text-xs hover:bg-gray-50">
+                  {a}–{b2}
+                </button>
+              ))}
+              <span className="text-[11px] text-gray-400">or type your own below</span>
+            </div>
             <Field label="Time slot start (optional)"><input type="time" className={inputCls} value={form.slot_start ?? ""} onChange={(e) => set("slot_start", e.target.value)} /></Field>
             <Field label="Time slot end"><input type="time" className={inputCls} value={form.slot_end ?? ""} onChange={(e) => set("slot_end", e.target.value)} /></Field>
           </div>

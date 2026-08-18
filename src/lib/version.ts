@@ -3,8 +3,26 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-115";
+export const RELEASE = "2026.08.14-116";
 export const RELEASE_NOTE =
+  "-116: the button where the press actually happens, and four sheet rows I had been treating as "
+  "blocked. Umesh, 18/08: 'manish sir mark complete karenge but complete button show hona chahiye "
+  "right, and andar wala complete button kaam nahi kar raha na.' Both halves were true. Manish IS "
+  "an Admin, so -113's door was visible to him - but it sits on the OVERVIEW tab, while the button "
+  "he presses is inside the CLOSURE tab, and that one refused with an error banner far above where "
+  "he was looking. From his seat it did nothing at all. So: the two Closure buttons now know their "
+  "own rule instead of bouncing off it (disabled, naming the count and who is blocking them - the "
+  "pattern QA-004 established), and the Admin door is offered ON THAT TAB, only when the ordinary "
+  "buttons cannot fire. Then four rows from Umesh's issue sheet I had been holding for "
+  "confirmation, built to exactly what the sheet itself states: M4-06 Source becomes a list "
+  "(Mobiliser, Campaign, Referral, Franchisee, Walk-in, Government portal) that still accepts "
+  "anything typed, because the sheet flags the wording as unreliable and a closed enum would freeze "
+  "a guess into the data model; M4-10 time slots get preset buttons that FILL the inputs and leave "
+  "them editable ('time slot hum change kar sakte hain'), offering only the three slots the sheet "
+  "marks reliable; SS-01 adds all eleven government-portal fields Shivshakti showed - the eight he "
+  "named plus the three the video pass read off the portal screen - optional, collapsed, and pinned "
+  "to store and read back. The portal's Education and Employment section was never opened on "
+  "screen, so its fields stay unknown rather than invented. "
   "-115: three the checker's sweep raised, none of them glamorous. QA-218: /api/public/version has "
   "been reporting evidence_storage 'drive' on every deploy while production actually runs on GCS "
   "via Workload Identity Federation - the label was hardcoded to 'configured at all'. That endpoint "

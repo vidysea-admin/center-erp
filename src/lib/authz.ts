@@ -116,6 +116,17 @@ export function apiHandler<T extends unknown[]>(fn: (...args: T) => Promise<Resp
           { status: 409 },
         );
       }
+      // QA-244 (checker) — the same argument as ValidationError below, for the id itself. A route that
+      // is handed "<objectId>:0" (a grid's composite row key), a truncated paste or a stray path
+      // segment used to hit Mongoose, come back as a CastError, and be reported as "Something went
+      // wrong on our side. Please try again." Nothing had gone wrong on our side and retrying could
+      // never help. This sits in apiHandler rather than in crud.ts alone because half the detail
+      // routes here are hand-written (batches, closure, results) and a guard only the CRUD routes
+      // inherit is a guard with holes — which is exactly what the wall caught on the first cut.
+      // The submitted value is NOT echoed: that is what made the original leak dangerous.
+      if (e instanceof Error && e.name === "CastError" && (e as unknown as { kind?: string }).kind === "ObjectId") {
+        return NextResponse.json({ error: "Not found — that is not a valid id." }, { status: 404 });
+      }
       // A ValidationError is the CALLER's mistake, not ours, so it must not be masked as a 500.
       // The S2-15 masking below swept it up with genuine server faults, and the result actively
       // misled: sending an out-of-enum operational_status answered "Something went wrong on our

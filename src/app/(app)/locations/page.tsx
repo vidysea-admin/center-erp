@@ -160,7 +160,7 @@ function LocationsInner() {
           // and says "set" when the number has never been entered.
           { key: "trainers_required", label: "Trainer Required", sortable: true, sortValue: (r: any) => r.jr?.trainers_required ?? 0,
             render: (r: any) => (
-              <Link href={`/locations/${r._id}?tab=${encodeURIComponent("Capacity & Target")}`} onClick={(e: any) => e.stopPropagation()}
+              <Link href={`/locations/${r.loc._id}?tab=${encodeURIComponent("Capacity & Target")}`} onClick={(e: any) => e.stopPropagation()}
                 className="text-blue-700 hover:underline" title="Set how many trainers this centre needs">
                 {r.jr?.trainers_required ?? <span className="text-amber-700">set →</span>}
               </Link>

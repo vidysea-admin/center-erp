@@ -10,7 +10,11 @@ import { emailError, canonicalPhone, phoneError } from "@/lib/validate";
 
 export const { GET, PATCH } = itemRoutes({
   model: Candidate, entity: "Candidate",
-  fields: ["name", "phone", "alt_phone", "email", "gender", "dob", "id_reference", "location", "program", "source", "education", "last_training_date", "interested_programs", "interested_locations", "sidh_status", "sidh_link_sent_at", "sidh_registered_on", "sidh_candidate_id", "sidh_failure_reason", "fee_amount", "fee_paid_on", "fee_reference"],
+  fields: ["name", "phone", "alt_phone", "email", "gender", "dob", "id_reference", "location", "program", "source", "education", "last_training_date", "interested_programs", "interested_locations", "sidh_status", "sidh_link_sent_at", "sidh_registered_on", "sidh_candidate_id", "sidh_failure_reason", "fee_amount", "fee_paid_on", "fee_reference",
+    // -116 (SS-01): the government-portal fields must be EDITABLE, not just creatable. The wall caught
+    // this: adding them to the collection route alone let them be typed once and then silently dropped
+    // on every later save — the worst shape a field can have, because nothing on screen says so.
+    "salutation", "father_name", "mother_name", "marital_status", "religion", "social_category", "state", "district", "sub_district", "address_type", "differently_abled"],
   readRoles: ["Admin", "Operations", "Location", "Enrollment"], // QA-060/095: not the Trainer's lens
   writeRoles: ["Admin", "Operations", "Location", "Enrollment"],
   permission: "candidates.manage", // 2026-08-11 togglable right (writeRoles = fallback only)

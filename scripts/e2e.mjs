@@ -739,6 +739,44 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   // A batch with nothing outstanding needs no settling at all — the door just completes it.
   ok("-113: a clean batch reports nothing to settle",
     (await req("GET", `/api/batches/${d1._id}/complete`, undefined, 200)).data.status === "Completed");
+
+  // ---- -116 (QA-244, checker): a malformed id is a bad REQUEST, not a server fault ----
+  // The locations grid flattens centre × job role and keys each row "<locationId>:<index>". -115 put
+  // that composite key straight into a link, so the page 500'd with "Something went wrong on our
+  // side." Nothing had gone wrong on our side. The link now uses the real id, and the route no longer
+  // dresses an unparseable id as a server fault — checked on three entities, because the guard lives
+  // in crud.ts and every detail route inherits it.
+  {
+    const composite = `${loc._id}:0`;
+    ok("-116 (QA-244): a composite grid key is a 404 with a plain message, never a 500",
+      (await req("GET", `/api/locations/${composite}`)).status === 404);
+    const r244 = await req("GET", `/api/locations/${composite}`);
+    ok("-116 (QA-244): …and it says WHY, naming the id rather than blaming the server",
+      /not a valid id/i.test(String(r244.data?.error ?? "")) && !/our side/i.test(String(r244.data?.error ?? ""))
+      && !String(r244.data?.error ?? "").includes(String(loc._id)), String(r244.data?.error ?? "").slice(0, 90));
+    ok("-116 (QA-244): the same guard covers other entities (batches, candidates)",
+      (await req("GET", `/api/batches/${batch._id}:0`)).status === 404 && (await req("GET", "/api/candidates/not-an-id")).status === 404);
+    ok("-116 (QA-244): a VALID id still resolves — the guard did not become a wall",
+      (await req("GET", `/api/locations/${loc._id}`)).status === 200);
+  }
+
+  // ---- -116: the government-portal fields (SS-01) survive a round trip ----
+  // Shivshakti filled our form beside the Skill India application to show what we did not ask for.
+  // Eleven optional fields; the pin is that they STORE and COME BACK, because a field that silently
+  // drops on save is worse than one that was never offered.
+  {
+    const sidh = { salutation: "Mr.", father_name: "Indal Singh", mother_name: "Rani Devi", marital_status: "Single",
+      religion: "Hindu", social_category: "OBC", state: "Uttar Pradesh", district: "Sant Ravidas Nagar",
+      sub_district: "Aurai", address_type: "Rural", differently_abled: "No" };
+    const c116 = (await req("POST", "/api/candidates", { name: `SIDH Fields ${stamp}`, phone: `83${stamp}11`.slice(0, 10), location: loc._id, program: prog._id, ...sidh }, 201)).data.item;
+    const back = (await req("GET", `/api/candidates/${c116._id}`)).data.item;
+    const missing = Object.entries(sidh).filter(([k, v]) => back[k] !== v).map(([k]) => k);
+    ok("-116 (SS-01): every government-portal field the sheet names stores and reads back", missing.length === 0, `missing/wrong: ${missing.join(", ")}`);
+    // …and they are editable afterwards, which is how a centre fills them in later.
+    await req("PATCH", `/api/candidates/${c116._id}`, { district: "Bhadohi", differently_abled: "Hearing" }, 200);
+    const back2 = (await req("GET", `/api/candidates/${c116._id}`)).data.item;
+    ok("-116 (SS-01): …and they can be corrected later", back2.district === "Bhadohi" && back2.differently_abled === "Hearing", JSON.stringify({ d: back2.district, p: back2.differently_abled }));
+  }
 }
 
 // ---- -102 (Manish 17/08): a roster row that should never have existed can be REMOVED ----

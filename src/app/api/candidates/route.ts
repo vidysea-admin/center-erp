@@ -9,7 +9,9 @@ import { sendSms } from "@/lib/sms";
 
 export const { GET, POST } = collectionRoutes({
   model: Candidate, entity: "Candidate",
-  fields: ["name", "phone", "alt_phone", "email", "gender", "dob", "id_reference", "location", "program", "source", "lifecycle_status", "education", "last_training_date", "interested_programs", "interested_locations", "sidh_status", "sidh_link_sent_at", "sidh_registered_on", "sidh_candidate_id", "sidh_failure_reason", "fee_amount", "fee_paid_on", "fee_reference"],
+  fields: ["name", "phone", "alt_phone", "email", "gender", "dob", "id_reference", "location", "program", "source", "lifecycle_status", "education", "last_training_date", "interested_programs", "interested_locations", "sidh_status", "sidh_link_sent_at", "sidh_registered_on", "sidh_candidate_id", "sidh_failure_reason", "fee_amount", "fee_paid_on", "fee_reference",
+    // -116 (SS-01): the government portal's own fields, so the data is typed once rather than chased.
+    "salutation", "father_name", "mother_name", "marital_status", "religion", "social_category", "state", "district", "sub_district", "address_type", "differently_abled"],
   // 2026-08-13 (Umesh: "search should allow all the columns"): the global shell search
   // rides this too — alt numbers, mobiliser/campaign and the portal CAN_ id all findable.
   searchFields: ["name", "phone", "alt_phone", "source", "sidh_candidate_id"],

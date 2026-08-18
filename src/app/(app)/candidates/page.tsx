@@ -150,6 +150,11 @@ function CandidatesInner() {
       education: r.education ?? "", source: r.source ?? "",
       last_training_date: r.last_training_date ? String(r.last_training_date).slice(0, 10) : "",
       sidh_candidate_id: r.sidh_candidate_id ?? "",
+      // -116 (SS-01): the government-portal fields ride the edit form too, or opening a record and
+      // saving it would silently drop everything typed into that section.
+      ...Object.fromEntries(["salutation", "father_name", "mother_name", "marital_status", "religion",
+        "social_category", "state", "district", "sub_district", "address_type", "differently_abled"]
+        .map((f) => [f, r[f] ?? ""])),
       interested_programs: (r.interested_programs ?? []).map((x: any) => x?._id ?? x),
       interested_locations: (r.interested_locations ?? []).map((x: any) => x?._id ?? x),
     });
@@ -620,7 +625,63 @@ function CandidatesInner() {
               {locations.map((l) => <option key={l._id} value={l._id} title={l.name}>{l.name}</option>)}
             </select>
           </Field>
-          <Field label="Source (mobiliser / campaign)"><input className={inputCls} value={form.source ?? ""} onChange={(e) => set("source", e.target.value)} /></Field>
+          {/* -116 (M4-06, Manish 17/08 [02:21] "इसको अगर ड्रॉप डाउन कर सकते हो, सोर्स को — तो ड्रॉप
+              डाउन कर दो। रेफरल और कैंपेन"): a list, not a hard enum. Umesh's own issue sheet flags the
+              wording as unreliable — three transcripts give "referral", "franchiser" and "mobiliser" —
+              so a closed enum would freeze a guess into the data model. A datalist offers exactly what
+              he named, still accepts anything typed, and loses nothing already stored. It becomes a
+              closed list the day Manish confirms the wording. */}
+          <Field label="Source (mobiliser / campaign)">
+            <input className={inputCls} list="candidate-source-options" value={form.source ?? ""} onChange={(e) => set("source", e.target.value)} placeholder="Pick one, or type another" />
+            <datalist id="candidate-source-options">
+              {["Mobiliser", "Campaign", "Referral", "Franchisee", "Walk-in", "Government portal"].map((o) => <option key={o} value={o} />)}
+            </datalist>
+          </Field>
+          {/* -116 (SS-01, Shivshakti 17/08 13:00): he filled THIS form, then opened the government's
+              "Skilling Program Application" beside it to show what we do not ask for. He named eight
+              out loud — religion, category, state, district, sub-district, father's name, mother's
+              name, marital status — and three more are visible on that portal screen which he never
+              said: salutation, urban/rural, and the differently-abled flag. Our candidates have to be
+              registered there anyway, so this is data somebody types either way; asking here means
+              typing it once instead of chasing it at registration time.
+              Collapsed by default, every field optional — no existing record becomes invalid and no
+              import breaks. The portal's "Education & Employment" section was never expanded on
+              screen, so its fields are unknown and are NOT guessed at (recorded in the ledger). */}
+          <details className="rounded-lg border border-gray-200 bg-gray-50/60 px-3 py-2">
+            <summary className="cursor-pointer text-sm font-medium text-gray-700">Government portal details (Skill India registration)</summary>
+            <p className="mt-1 text-xs text-gray-500">Everything the Skilling Program Application asks for. All optional here — filling it now saves re-collecting it at registration.</p>
+            <div className="mt-2 grid gap-3 md:grid-cols-3">
+              <Field label="Salutation">
+                <input className={inputCls} list="cand-salutation" value={form.salutation ?? ""} onChange={(e) => set("salutation", e.target.value)} />
+                <datalist id="cand-salutation">{["Mr.", "Mrs.", "Ms.", "Dr."].map((o) => <option key={o} value={o} />)}</datalist>
+              </Field>
+              <Field label="Father&apos;s name"><input className={inputCls} value={form.father_name ?? ""} onChange={(e) => set("father_name", e.target.value)} /></Field>
+              <Field label="Mother&apos;s name"><input className={inputCls} value={form.mother_name ?? ""} onChange={(e) => set("mother_name", e.target.value)} /></Field>
+              <Field label="Marital status">
+                <input className={inputCls} list="cand-marital" value={form.marital_status ?? ""} onChange={(e) => set("marital_status", e.target.value)} />
+                <datalist id="cand-marital">{["Single", "Married", "Widowed", "Divorced"].map((o) => <option key={o} value={o} />)}</datalist>
+              </Field>
+              <Field label="Religion">
+                <input className={inputCls} list="cand-religion" value={form.religion ?? ""} onChange={(e) => set("religion", e.target.value)} />
+                <datalist id="cand-religion">{["Hindu", "Muslim", "Christian", "Sikh", "Buddhist", "Jain", "Parsi", "Other"].map((o) => <option key={o} value={o} />)}</datalist>
+              </Field>
+              <Field label="Category">
+                <input className={inputCls} list="cand-category" value={form.social_category ?? ""} onChange={(e) => set("social_category", e.target.value)} />
+                <datalist id="cand-category">{["General", "OBC", "SC", "ST", "EWS"].map((o) => <option key={o} value={o} />)}</datalist>
+              </Field>
+              <Field label="State"><input className={inputCls} value={form.state ?? ""} onChange={(e) => set("state", e.target.value)} /></Field>
+              <Field label="District"><input className={inputCls} value={form.district ?? ""} onChange={(e) => set("district", e.target.value)} /></Field>
+              <Field label="Sub-district"><input className={inputCls} value={form.sub_district ?? ""} onChange={(e) => set("sub_district", e.target.value)} /></Field>
+              <Field label="Address type">
+                <input className={inputCls} list="cand-addrtype" value={form.address_type ?? ""} onChange={(e) => set("address_type", e.target.value)} />
+                <datalist id="cand-addrtype">{["Urban", "Rural"].map((o) => <option key={o} value={o} />)}</datalist>
+              </Field>
+              <Field label="Differently abled">
+                <input className={inputCls} list="cand-pwd" value={form.differently_abled ?? ""} onChange={(e) => set("differently_abled", e.target.value)} placeholder="No" />
+                <datalist id="cand-pwd">{["No", "Visual", "Hearing", "Locomotor", "Intellectual", "Other"].map((o) => <option key={o} value={o} />)}</datalist>
+              </Field>
+            </div>
+          </details>
           {/* 15/08 (Umesh): no candidate fee in this programme — the fee inputs left the
               drawer. Schema + Rule 54 toggle stay dormant for a future paid scheme. */}
           {/* QA-105 (15/08): the candidate document store — multi-pick, type guessed from

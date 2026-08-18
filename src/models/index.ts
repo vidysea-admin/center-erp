@@ -347,6 +347,19 @@ const CandidateSchema = new Schema({
   phone: { type: String, required: true },
   alt_phone: String, gender: String,
   dob: Date,            // RPL M8: name+DOB is the second duplicate-match key
+  // -116 (SS-01, Shivshakti 17/08 13:00, filling our form beside the government's): every field the
+  // Skill India "Skilling Program Application" asks for that we did not hold. Optional by design.
+  salutation: String,                 // seen on the portal, never spoken — its validation error names nothing
+  father_name: String,
+  mother_name: String,
+  marital_status: String,             // Single / Married / Other — free text until Manish fixes the list
+  religion: String,
+  social_category: String,            // General / OBC / SC / ST — "category" on the portal
+  state: String,
+  district: String,
+  sub_district: String,
+  address_type: String,               // Urban / Rural — seen on screen, never spoken
+  differently_abled: String,          // No / the disability type — seen on screen, never spoken
   id_reference: String, // government ID reference (NOT the Aadhaar number itself)
   location: oid("Location", true),
   program: oid("Program", true),

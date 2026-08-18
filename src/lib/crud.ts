@@ -6,6 +6,14 @@ import { requirePerm } from "@/lib/permissions";
 import type { SessionUser } from "@/auth";
 import { audit, auditDiff } from "@/lib/audit";
 
+// QA-244: a 24-hex ObjectId or nothing. A composite grid key ("<id>:0"), a truncated paste or a stray
+// path segment is a bad REQUEST, not a server fault, and it must not read as one to whoever hit it.
+function assertId(id: string, entity: string) {
+  if (!/^[0-9a-fA-F]{24}$/.test(String(id ?? ""))) {
+    throw new HttpError(404, `${entity} not found — that is not a valid id.`);
+  }
+}
+
 type Role = SessionUser["role"];
 
 export type CrudConfig = {
@@ -147,6 +155,10 @@ export function itemRoutes(cfg: CrudConfig) {
     if (cfg.readPermission) await requirePerm(user, cfg.readPermission);
     else if (cfg.readRoles) requireRole(user, ...cfg.readRoles);
     const { id } = await ctx.params;
+    // QA-244 (checker): a malformed id used to reach Mongoose and come back as a CastError, which the
+    // handler reported as "Something went wrong on our side." Nothing went wrong on our side — the id
+    // was never valid. One check here covers every entity's detail route.
+    assertId(id, cfg.entity);
     let query = cfg.model.findById(id);
     for (const p of cfg.populate ?? []) query = query.populate(p.path, p.select);
     let item = await query.lean<any>();
@@ -169,6 +181,7 @@ export function itemRoutes(cfg: CrudConfig) {
     const user = await requireUser();
     await checkWrite(user, cfg);
     const { id } = await ctx.params;
+    assertId(id, cfg.entity);
     const existing = await cfg.model.findById(id);
     if (!existing) throw new HttpError(404, cfg.entity + " not found");
     if (cfg.scopeField !== null && isScoped(user)) {
