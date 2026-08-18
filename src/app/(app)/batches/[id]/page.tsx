@@ -146,6 +146,32 @@ function Overview({ data, role, onChanged, setError }: any) {
   const r = data.readiness;
   const [reason, setReason] = useState("");
   const [confirmCancel, setConfirmCancel] = useState(false);
+  // -113 (Umesh 18/08: "admin ke paas mark completed ka button aaye, aur wo press kar paye"). The
+  // ordinary buttons refuse until the ROWS allow it — Rule 43 wants every student marked, Rule 46
+  // every pass settled — and on a batch that finished months ago nobody can satisfy that by hand.
+  // The Admin door settles the outstanding rows the honest way (no result = Absent, no certificate =
+  // Not Issued), under one typed reason, audited per row. This panel says exactly what it will do
+  // BEFORE it is pressed; nothing here is silent.
+  const [completePlan, setCompletePlan] = useState<any>(null);
+  const [completeOpen, setCompleteOpen] = useState(false);
+  const [completeReason, setCompleteReason] = useState("");
+  const [completing, setCompleting] = useState(false);
+  const isAdmin = role === "Admin";
+  useEffect(() => {
+    if (!isAdmin || !["Active", "Closing"].includes(b.status)) { setCompletePlan(null); return; }
+    api(`/api/batches/${b._id}/complete`).then(setCompletePlan).catch(() => setCompletePlan(null));
+  }, [b._id, b.status, isAdmin]);
+  async function completeAsAdmin() {
+    if (!completeReason.trim()) { setError("Say why this batch is being completed — it is recorded against every row it settles."); return; }
+    setCompleting(true);
+    try {
+      const res = await api(`/api/batches/${b._id}/complete`, { method: "POST", json: { reason: completeReason.trim() } });
+      setCompleteOpen(false); setCompleteReason("");
+      onChanged();
+      if (res?.settled) setError("");
+    } catch (e: any) { setError(e.message); }
+    finally { setCompleting(false); }
+  }
   // QA-004 (checker): "Close Batch" was an enabled primary button on batches that provably
   // cannot close — the click just bounced off Rule 52. The button now knows the rule too.
   const [money, setMoney] = useState<any>(null);
@@ -319,6 +345,12 @@ function Overview({ data, role, onChanged, setError }: any) {
             {b.status === "Ready" && <Btn kind="ghost" onClick={() => transition("Planning")}>Back to Planning</Btn>}
             {/* -102: the client's words for these two steps. Targets stay the stored enum. */}
             {b.status === "Active" && <Btn onClick={() => transition("Closing")}>Assessment done → Result Awaited</Btn>}
+            {/* -113: the Admin's own door, on Active as well as Result Awaited. It is offered whether
+                or not the rules are already satisfied — when they are, it simply completes; when they
+                are not, the panel below says what it will settle first. */}
+            {isAdmin && ["Active", "Closing"].includes(b.status) && (
+              <Btn kind={b.status === "Closing" ? "ghost" : "primary"} onClick={() => setCompleteOpen((v) => !v)}>Mark Completed (Admin)</Btn>
+            )}
             {/* -112 (QA-219 / Manish M4-01 "status aayega certification done"): when every result is
                 final and every pass has its certificate, the two closure halves derive themselves and
                 the batch walks to Result Awaited on its own. The one press left is the freeze, and it
@@ -332,6 +364,14 @@ function Overview({ data, role, onChanged, setError }: any) {
                     : "Waiting on certificates — each passed candidate needs one attached (or marked Not Issued)."}
                 </span>
               </span>
+            )}
+            {/* -113: completing is one press now, so it needs an undo. Admin only, reason required,
+                audited — and never offered on a CLOSED batch, which is a settlement, not a record. */}
+            {isAdmin && b.status === "Completed" && (
+              <Btn kind="ghost" onClick={() => {
+                const why = window.prompt("Reopen this completed batch? Results and certificates become editable again. Reason:");
+                if (why && why.trim()) transition("Closing", { reason: why.trim() });
+              }}>Reopen (Admin)</Btn>
             )}
             {/* Rule 52: Completed = training over; Closed = money over (cert + invoice PAID + no dues). */}
             {b.status === "Completed" && (
@@ -348,6 +388,35 @@ function Overview({ data, role, onChanged, setError }: any) {
           <p className="mt-4 text-xs text-gray-400">Batch status is moved by Operations/Admin.</p>
         )}
       </Section>
+      )}
+      {completeOpen && isAdmin && ["Active", "Closing"].includes(b.status) && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm">
+          <div className="font-semibold text-amber-900">Complete this batch now</div>
+          {completePlan?.can_complete_cleanly ? (
+            <p className="mt-1 text-amber-800">Every student is marked and every certificate is settled — this just completes the batch.</p>
+          ) : (
+            <div className="mt-1 space-y-1 text-amber-800">
+              <p>This batch still has rows nobody finished. Completing now records them the honest way:</p>
+              <ul className="ml-4 list-disc">
+                {(completePlan?.unmarked?.length ?? 0) > 0 && (
+                  <li><b>{completePlan.unmarked.length} student(s) with no result → Absent</b>
+                    <span className="text-amber-700"> ({completePlan.unmarked.slice(0, 4).map((u: any) => u.name).filter(Boolean).join(", ")}{completePlan.unmarked.length > 4 ? ` +${completePlan.unmarked.length - 4}` : ""})</span></li>
+                )}
+                {(completePlan?.unsettled?.length ?? 0) > 0 && (
+                  <li><b>{completePlan.unsettled.length} passed candidate(s) with no certificate → Not Issued</b>
+                    <span className="text-amber-700"> ({completePlan.unsettled.slice(0, 4).map((u: any) => u.name).filter(Boolean).join(", ")})</span></li>
+                )}
+              </ul>
+              <p className="text-xs">Every one of those rows is audited with your reason. If a student really passed, mark them first — this is the door for a batch that is over, not a shortcut through data entry.</p>
+            </div>
+          )}
+          <p className="mt-2 text-xs text-amber-800">Completing freezes the results and figures. You can reopen it later (Admin, with a reason).</p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <input className={inputCls + " max-w-md"} placeholder="Reason (recorded on every row this settles)" value={completeReason} onChange={(e) => setCompleteReason(e.target.value)} />
+            <Btn onClick={completeAsAdmin} disabled={completing || !completeReason.trim()}>{completing ? "Completing…" : "Complete batch"}</Btn>
+            <Btn kind="ghost" onClick={() => setCompleteOpen(false)}>Cancel</Btn>
+          </div>
+        </div>
       )}
       {/* QA-055 (checker): a SPOC saw the full editable Details card with a Save button the
           server refuses (403). Editors get the form; everyone else gets the same facts

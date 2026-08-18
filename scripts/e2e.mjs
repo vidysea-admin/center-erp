@@ -682,6 +682,63 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   ok("-112: marking the LAST student derives assessment + certification in the same tick (the 26-unmarked case on DST-01)",
     c3b?.assessment_status === "Completed" && c3b?.certification_status === "Completed" && (await statusOf(d3._id)) === "Active",
     JSON.stringify({ a: c3b?.assessment_status, c: c3b?.certification_status, s: await statusOf(d3._id) }));
+
+  // ---- -113 (Umesh 18/08): the ADMIN door — a button that is there, and that actually presses ----
+  // Manish's batch is over in the real world and unfinished in the ERP: students nobody marked, a
+  // pass with no certificate. Rules 43/46 hold it Active, correctly, and no amount of pressing the
+  // ordinary buttons moves it. The Admin door settles those rows the honest way (no result = Absent,
+  // no certificate = Not Issued), audited under one typed reason, and only then completes.
+  const { b: d4, mems: m4 } = await mkBatch(3, 4);
+  await req("PUT", `/api/batches/${d4._id}/results`, { rows: [{ member: String(m4[0]._id), result: "Pass", score: 70, max_score: 100, assessed_on: today }] }, 200);
+  const r4 = (await rowsOf(d4._id)).find((i) => String(i.member) === String(m4[0]._id));
+  await req("PATCH", `/api/results/${r4.result._id}`, { certificate_file: await upload(`d113-${stamp}.pdf`) }, 200);
+  // one Pass with a certificate, TWO students never marked → exactly DST-01's shape
+  const plan = (await req("GET", `/api/batches/${d4._id}/complete`, undefined, 200)).data;
+  ok("-113: the door SAYS what it will settle before anything is pressed",
+    plan.can_complete_cleanly === false && plan.unmarked?.length === 2 && plan.unsettled?.length === 0,
+    JSON.stringify({ clean: plan.can_complete_cleanly, u: plan.unmarked?.length, s: plan.unsettled?.length }));
+  ok("-113: the ordinary press is still refused while students are unmarked — the rule did not move",
+    (await req("POST", `/api/batches/${d4._id}/transition`, { target: "Closing" })).status === 409);
+  ok("-113: no reason, no completion (400) — it is recorded on every row it settles",
+    (await req("POST", `/api/batches/${d4._id}/complete`, {})).status === 400);
+  {
+    const enrCookie = await loginAs("enroll@vidysea.com", "CiOnly@123");
+    const notAdmin = await fetch(BASE + `/api/batches/${d4._id}/complete`, { method: "POST", headers: { "Content-Type": "application/json", cookie: enrCookie }, body: JSON.stringify({ reason: "not my call" }) });
+    const anon = await fetch(BASE + `/api/batches/${d4._id}/complete`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason: "nope" }) });
+    ok("-113: ADMIN only — Enrollment 403, anonymous 401", notAdmin.status === 403 && anon.status === 401, `${notAdmin.status} ${anon.status}`);
+  }
+  const doneRes = (await req("POST", `/api/batches/${d4._id}/complete`, { reason: "-113 pin: batch finished on site months ago" }, 200)).data;
+  ok("-113: THE ASK — the Admin press completes the batch", (await statusOf(d4._id)) === "Completed", await statusOf(d4._id));
+  ok("-113: …and reports exactly what it settled", doneRes.settled?.absent === 2 && doneRes.settled?.not_issued === 0, JSON.stringify(doneRes.settled));
+  {
+    const rows4 = await rowsOf(d4._id);
+    const absent = rows4.filter((i) => i.result?.result === "Absent").length;
+    ok("-113: the unmarked students are recorded ABSENT — a real state, not a blank", absent === 2, String(absent));
+    const cl4 = await closureOf(d4._id);
+    ok("-113: the closure signs off from those rows, and the figures are the rows' own",
+      cl4?.assessment_status === "Completed" && cl4?.certification_status === "Completed" && cl4?.passed === 1 && cl4?.certificates_issued === 1,
+      JSON.stringify({ a: cl4?.assessment_status, c: cl4?.certification_status, p: cl4?.passed, ci: cl4?.certificates_issued }));
+  }
+  ok("-113: DEC-6 still holds after the Admin door — the completed batch is frozen",
+    (await req("PUT", `/api/batches/${d4._id}/closure`, { appeared: 1 })).status === 409);
+  // …and because one press can now finish a batch, one press can put it back.
+  ok("-113: reopening needs a reason (409 without one)",
+    (await req("POST", `/api/batches/${d4._id}/transition`, { target: "Closing" })).status === 409);
+  {
+    const enrCookie = await loginAs("ops@vidysea.com", "CiOnly@123");
+    const notAdmin = await fetch(BASE + `/api/batches/${d4._id}/transition`, { method: "POST", headers: { "Content-Type": "application/json", cookie: enrCookie }, body: JSON.stringify({ target: "Closing", reason: "ops trying to reopen" }) });
+    ok("-113: reopening is ADMIN only — Operations is refused", notAdmin.status === 409 || notAdmin.status === 403, String(notAdmin.status));
+  }
+  ok("-113: an Admin CAN reopen with a reason, and the batch is editable again",
+    (await req("POST", `/api/batches/${d4._id}/transition`, { target: "Closing", reason: "-113 pin: a result was wrong" }, 200)).status === 200
+    && (await statusOf(d4._id)) === "Closing");
+  ok("-113: …and the end date came off with it, so attendance is not refused for days after a date that no longer applies",
+    !(await req("GET", `/api/batches/${d4._id}`)).data.item.actual_end);
+  ok("-113: after reopening, a result can be corrected again (DEC-6's freeze is lifted, not bypassed)",
+    (await req("PUT", `/api/batches/${d4._id}/results`, { rows: [{ member: String(m4[1]._id), result: "Fail", failure_reason: "-113 pin: corrected after reopen", assessed_on: today }] }, 200)).status === 200);
+  // A batch with nothing outstanding needs no settling at all — the door just completes it.
+  ok("-113: a clean batch reports nothing to settle",
+    (await req("GET", `/api/batches/${d1._id}/complete`, undefined, 200)).data.status === "Completed");
 }
 
 // ---- -102 (Manish 17/08): a roster row that should never have existed can be REMOVED ----

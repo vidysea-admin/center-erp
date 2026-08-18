@@ -689,6 +689,20 @@ export async function transitionBatch(batchId: string, target: string, opts: { i
       if (closure?.assessment_status !== "Completed") fail("Rule 18: assessment must be Completed before Closing.");
       break;
     }
+    // -113 (Umesh, 18/08): the Admin gets a working "Mark Completed" button, so the Admin also gets
+    // the way BACK. DEC-6 froze a Completed batch with no override at all, which was right while
+    // completion was a deliberate end-of-life act — but a button that settles outstanding rows and
+    // completes in one press needs an undo, or one mis-click is permanent. Admin only, reason
+    // required, fully audited; the money side (invoice, dues) is untouched by the reopen, and a
+    // CLOSED batch stays final because that is a settlement, not a training record.
+    case "Completed->Closing": {
+      if (!opts.isAdmin) fail("Only an Admin can reopen a completed batch.");
+      if (!opts.reason) fail("Reopening a completed batch needs a reason — it is audited.");
+      // Completing stamped an end date on the batch; reopening takes it off again, or Rule 32 goes on
+      // refusing attendance for every day after an end that no longer applies.
+      batch.set("actual_end", undefined);
+      break;
+    }
     case "Closing->Completed": {
       const closure = await Closure.findOne({ batch: batchId }).lean<any>();
       if (closure?.certification_status !== "Completed") fail("Rule 18: certification must be Completed before batch completes.");
@@ -1051,6 +1065,10 @@ export async function batchUsesPerCandidateResults(batchId: string): Promise<boo
 // Rule 42: aggregates are derived from the rows and written through to Closure, so every
 // existing reader (invoice flow, dashboards) keeps working unchanged.
 export async function recomputeClosureAggregates(batchId: string, actorId?: string) {
+  // -113: settle BEFORE summarising. Measured on live DST-01 minutes after -112 shipped: eight rows
+  // read Issued while the closure still said "certificates_issued 0", because the summary was taken
+  // from the rows as they were before the settle ran. One write stale is still wrong on screen.
+  await settleCertificatesFromFiles(batchId, actorId);
   const rows = await CandidateResult.find({ batch: batchId }).lean<any[]>();
   const summary = await summarizeBatchResults(batchId, rows);
   if (!rows.length) return { ...summary, legacy: true };
@@ -1077,6 +1095,35 @@ export async function recomputeClosureAggregates(batchId: string, actorId?: stri
   return { ...summary, legacy: false };
 }
 
+// THE RULE IS UNIFORM, NOT JUST FORWARD-LOOKING (-112): "a certificate file on a Pass row IS the
+// certificate" has to hold for rows that already carry one, or DST-01's eight files — attached under
+// -108, before this rule existed — would sit Pending forever and Manish would stay blocked by
+// history. Live batches only, so a frozen one is never rewritten, and every settle is audited by name.
+// PENDING ONLY — never Processing/Generated/Rejected/Not Issued. Those are states a human chose: a
+// certificate the awarding body REJECTED must not be re-issued by a background rule just because the
+// old file is still on the row. Pending + a file = nobody ever decided, and the file is the decision.
+export async function settleCertificatesFromFiles(batchId: string, actorId?: string) {
+  try {
+    const batch = await Batch.findById(batchId).select("status").lean<any>();
+    if (!batch || !["Active", "Closing"].includes(batch.status)) return 0;
+    const stale = await CandidateResult.find({
+      batch: batchId, result: "Pass",
+      certificate_file: { $nin: [null, ""] },
+      certificate_status: "Pending",
+    }).populate("candidate", "name");
+    for (const row of stale) {
+      row.certificate_status = "Issued";
+      if (!row.certificate_date) row.certificate_date = new Date();
+      await row.save();
+      await audit({ entity: "CandidateResult", entityId: row._id, field: "certificate_status", oldValue: "Pending", newValue: `Issued — the attached certificate file is the evidence (${row.candidate?.name ?? "candidate"})`, actor: actorId ?? null, actorType: "SYSTEM" });
+    }
+    return stale.length;
+  } catch (e) {
+    console.error(`[settleCertificatesFromFiles] batch ${batchId}: ${e instanceof Error ? e.message : String(e)}`);
+    return 0;
+  }
+}
+
 // -112 (QA-219, Manish 17/08 M4-03/M4-07: "jaise hi batch completed mode me aata hai to completed kar
 // dijiye… mark complete karne se kuch ho nahi raha"): the two closure halves and the batch status
 // used to be three separate hand ticks, each refusing until the one before it was ticked — the
@@ -1094,27 +1141,6 @@ export async function deriveCompletion(batchId: string, actorId?: string) {
     if (!batch || !["Active", "Closing"].includes(batch.status)) return;
     const closure = await Closure.findOne({ batch: batchId });
     if (!closure) return;
-    // THE RULE IS UNIFORM, NOT JUST FORWARD-LOOKING: "a certificate file on a Pass row IS the
-    // certificate" has to hold for rows that already carry one, or DST-01's eight files — attached
-    // under -108, before this rule existed — would sit Pending forever and Manish would stay blocked
-    // by history. Settling happens here, on a live (Active/Closing) batch only, so a frozen batch is
-    // never rewritten, and every settle is audited by name.
-    // PENDING ONLY — never Processing/Generated/Rejected/Not Issued. Those are states a human chose:
-    // a certificate the awarding body REJECTED must not be re-issued by a background rule just
-    // because the old file is still on the row. Pending + a file = nobody ever decided, and the file
-    // is the decision.
-    const stale = await CandidateResult.find({
-      batch: batchId, result: "Pass",
-      certificate_file: { $nin: [null, ""] },
-      certificate_status: "Pending",
-    }).populate("candidate", "name");
-    for (const row of stale) {
-      const was = row.certificate_status;
-      row.certificate_status = "Issued";
-      if (!row.certificate_date) row.certificate_date = new Date();
-      await row.save();
-      await audit({ entity: "CandidateResult", entityId: row._id, field: "certificate_status", oldValue: was, newValue: `Issued — the attached certificate file is the evidence (${row.candidate?.name ?? "candidate"})`, actor: actorId ?? null, actorType: "SYSTEM" });
-    }
     let changed = false;
     const a = await assessmentCompleteness(batchId);
     if (closure.assessment_status !== "Completed") {

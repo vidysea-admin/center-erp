@@ -3,8 +3,28 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-112";
+export const RELEASE = "2026.08.14-113";
 export const RELEASE_NOTE =
+  "-113: the Admin can finish a batch. Umesh, 18/08, after -112 shipped: 'admin ke paas mark "
+  "completed ka button aaye, aur wo press kar paye - jaise abhi wala press bhi nahi ho raha na.' "
+  "He is right, and -112 could not have fixed it: the buttons refuse until the ROWS allow it - "
+  "Rule 43 wants every student marked, Rule 46 wants every pass settled - and on DST-01 that is "
+  "26 students nobody marked and one pass with no certificate. Real missing facts, and the rules "
+  "are right to hold. But a batch that ended on site months ago has to be closable. So the Admin "
+  "gets the door this codebase already uses for exactly this problem (Rule 19: force-close by an "
+  "Admin, with a reason): it writes the HONEST default for each outstanding row - no result means "
+  "ABSENT, a pass with no certificate means NOT ISSUED - every row audited by name under one "
+  "typed reason, and only then completes. No rule is weakened and no figure is invented; the "
+  "screen lists exactly what it will settle, with the names, BEFORE it is pressed. Because one "
+  "press can now finish a batch, one press can also put it back: an Admin REOPEN door "
+  "(Completed to Result Awaited, reason required, audited) that also clears the end date, so "
+  "attendance is not refused for days after an end that no longer applies. DEC-6 is not "
+  "weakened - the freeze still holds against everyone and everything else; it is now liftable by "
+  "the one role that could always force a close. Also fixed, found by measuring live DST-01 "
+  "minutes after -112 deployed: the closure summarised the rows BEFORE settling them, so eight "
+  "certificates read Issued while the closure still said 'certificates issued: 0 derived' - the "
+  "settle now runs first. On DST-01, -112 already took the certification blocking list from 9 to "
+  "1. "
   "-112: the batch that would not complete, and the trainer link -111 dropped. TWO THINGS. (1) A "
   "REGRESSION I shipped in -111: the Log-today attendance strip on Home was nested inside an "
   "Admin-only block, so the TRAINER - the person it exists for - had no path to today's log at "
