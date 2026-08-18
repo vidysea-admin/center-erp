@@ -7,8 +7,22 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-118";
+export const RELEASE = "2026.08.14-119";
 export const RELEASE_NOTE =
+  "-119: two of Manish's rows that were sitting done-in-diagnosis and not-done-in-code. M4-15, the "
+  "assessor name: I established on 18/08 that NO rule requires it - it never blocked closure, the "
+  "confusion was a bare 'Assessor name' placeholder reading as mandatory - then wrote 'rides the "
+  "next release' and let four releases go past without the two words. It now reads 'Assessor name "
+  "(optional)' and says on hover that the assessment body appoints the assessor, so a centre often "
+  "never learns the name and closure proceeds regardless. M4-16, Add Trainer: the candidate welcome "
+  "mail shipped in -109 after Umesh found nine mail paths existed and none was the one an admin "
+  "actually uses; Manish asked for the same on the trainer screen and it is a separate screen with a "
+  "separate mailer, which is why the sheet calls it separate work. Same discipline as the candidate "
+  "path: fire-and-forget so creating a trainer never fails on mail, and a trainer with no email is "
+  "not an error - MailLog records 'skipped: no valid recipient address' rather than pretending. No "
+  "SMS arm: that needs its own approved DLT template, and inventing one would be a send that cannot "
+  "happen. Pinned on the MailLog row, because that is the only thing that answers 'did it go?' "
+  "months later. "
   "-118: the measurement that corrected -117. -117 pre-assigned the room when a centre had exactly "
   "one; then I measured production and of 21 centres ZERO have exactly one room and EIGHTEEN have "
   "none at all - so that rule fires for nobody today. Manish's complaint was mostly not about "

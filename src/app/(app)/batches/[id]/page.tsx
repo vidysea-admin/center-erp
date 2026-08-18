@@ -2379,7 +2379,7 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
             <input type="date" className={inputCls + " max-w-40"} value={bulk.assessed_on} onChange={(e) => setBulk({ ...bulk, assessed_on: e.target.value })} />
           </Field>
           <Field label="Assessor">
-            <input className={inputCls + " max-w-44"} value={bulk.assessor} onChange={(e) => setBulk({ ...bulk, assessor: e.target.value })} placeholder="Assessor name" />
+            <input className={inputCls + " max-w-44"} value={bulk.assessor} onChange={(e) => setBulk({ ...bulk, assessor: e.target.value })} placeholder="Assessor name (optional)" title="The assessment body appoints the assessor, so a centre often never learns the name. Nothing here needs it — leave it blank and closure still proceeds." />
           </Field>
           <Btn small kind="ghost" onClick={() => bulkApply(pending.map((i) => ({ member: i.member, result: "Pass", assessed_on: bulk.assessed_on, assessor: bulk.assessor || undefined })))} disabled={!pending.length}>
             Mark {pending.length} pending as Pass

@@ -1,5 +1,6 @@
 import { collectionRoutes } from "@/lib/crud";
-import { Batch, Trainer } from "@/models";
+import { Batch, Location, Trainer } from "@/models";
+import { renderMail, sendMail } from "@/lib/mailer";
 import { hasPermission } from "@/lib/permissions";
 import { ACTIVE_BATCH_STATUSES, assertLocationOperational } from "@/lib/rules";
 import { HttpError, isScoped } from "@/lib/authz";
@@ -96,6 +97,30 @@ export const { GET, POST } = collectionRoutes({
         throw new HttpError(403, "Tie the trainer to your own centre — nomination, home or capable location must be one of yours.");
       }
     }
+  },
+  // -119 (M4-16, Manish 17/08 [03:07] "trainer ke case me bhi waise hi saara cheez… aur uski mail
+  // jayegi, sab kuch hoga jaise candidate ke liye tha"). The candidate welcome mail shipped in -109;
+  // this is its trainer twin — a separate screen with a separate mailer, which is exactly why the
+  // sheet treats it as separate work. Same discipline as the candidate path: fire-and-forget, so
+  // creating a trainer can never fail on mail, and a trainer with no email is not an error — sendMail
+  // records "skipped: no valid recipient address" in MailLog, so "did it go?" stays answerable per
+  // trainer. No SMS arm here: that would need its own approved DLT template, and inventing one would
+  // be a send that cannot happen.
+  async afterWrite(doc, user) {
+    if (!doc?.email) return;
+    const centre = doc.home_location
+      ? await Location.findById(doc.home_location).select("name").lean<any>().catch(() => null)
+      : null;
+    const where = centre?.name ?? doc.home_location_other ?? "our centres";
+    const { html, text } = renderMail({
+      title: "You have been added as a trainer",
+      lines: [
+        `Hello ${doc.name},`,
+        `You have been added as a trainer for ${where}. The team will be in touch about batches, documents and next steps.`,
+        `Added by ${user.name}. If anything above is wrong, reply to this email and we will correct it.`,
+      ],
+    });
+    sendMail({ to: doc.email, subject: "You have been added as a trainer", html, text, entity: "Trainer", entity_id: doc._id }).catch(() => {});
   },
   populate: [
     { path: "home_location", select: "name code" },

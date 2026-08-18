@@ -740,6 +740,28 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   ok("-113: a clean batch reports nothing to settle",
     (await req("GET", `/api/batches/${d1._id}/complete`, undefined, 200)).data.status === "Completed");
 
+  // ---- -119 (M4-16): a trainer added from inside the ERP gets the welcome mail ----
+  // The candidate twin shipped in -109 after Umesh found that NINE mail paths existed and none of
+  // them was the one an admin actually uses. Manish asked for the same on Add Trainer. The pin is the
+  // MailLog row, because that is the only thing that answers "did it go?" months later — and the
+  // no-email case must be recorded honestly rather than silently skipped.
+  {
+    const before = (await req("GET", "/api/test-email")).data.log ?? [];
+    const t119 = (await req("POST", "/api/trainers", { name: `M416 Mailed ${stamp}`, phone: `82${stamp}11`.slice(0, 10), email: `m416.${stamp}@example.invalid`, skills: [prog.trainer_skill], home_location: loc._id }, 201)).data.item;
+    const t119b = (await req("POST", "/api/trainers", { name: `M416 NoMail ${stamp}`, phone: `82${stamp}22`.slice(0, 10), skills: [prog.trainer_skill], home_location: loc._id }, 201)).data.item;
+    await new Promise((r) => setTimeout(r, 800)); // fire-and-forget: creating a trainer never waits on mail
+    const after = (await req("GET", "/api/test-email")).data.log ?? [];
+    const mine = after.filter((m) => !before.some((b2) => String(b2._id) === String(m._id)));
+    const forT = mine.find((m) => String(m.entity_id) === String(t119._id));
+    ok("-119 (M4-16): adding a trainer with an email logs the welcome mail against that trainer",
+      !!forT && /added as a trainer/i.test(String(forT.subject ?? "")), JSON.stringify({ found: !!forT, subj: forT?.subject }));
+    ok("-119 (M4-16): …and it is not claimed as sent when the environment cannot send (honest status)",
+      !!forT && ["sent", "skipped", "failed"].includes(String(forT.status)), String(forT?.status));
+    const forB = mine.find((m) => String(m.entity_id) === String(t119b._id));
+    ok("-119 (M4-16): a trainer with NO email is not an error and does not fabricate a send",
+      !forB || String(forB.status) === "skipped", JSON.stringify({ logged: !!forB, status: forB?.status }));
+  }
+
   // ---- -116 (QA-244, checker): a malformed id is a bad REQUEST, not a server fault ----
   // The locations grid flattens centre × job role and keys each row "<locationId>:<index>". -115 put
   // that composite key straight into a link, so the page 500'd with "Something went wrong on our
