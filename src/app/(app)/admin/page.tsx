@@ -88,6 +88,16 @@ function Programs({ setError }: any) {
           { key: "buffer_days", label: "Buffer (d)" },
           { key: "completion_deadline_days", label: "Deadline (d)" },
           { key: "trainer_skill", label: "Trainer skill", sortable: true },
+          // QA-093: the assessment bar is derived from this. Empty is not neutral — it silently
+          // becomes duration_days × 8, and then × the Defaults percentage. Say so where it is fixable.
+          { key: "hours", label: "QP hours", sortable: true,
+            filterText: (r: any) => (r.hours ? String(r.hours) : "not set"),
+            render: (r: any) => r.hours
+              ? <span className="tabular-nums">{r.hours}</span>
+              : <span className="cursor-help text-amber-700"
+                  title={`Not set, so the assessment bar is being derived: ${r.duration_days ?? 15} days × 8 hours = ${(r.duration_days ?? 15) * 8} hours, then the Defaults attendance percentage. Neither number comes from the scheme — enter the QP hours here and the bar becomes the real one.`}>
+                  not set → assuming {(r.duration_days ?? 15) * 8}h
+                </span> },
           { key: "requires_lab", label: "Lab?", filterText: (r: any) => (r.requires_lab ? "Yes" : "No"), render: (r: any) => (r.requires_lab ? "Yes" : "No") },
           { key: "active", label: "Active", filterText: (r: any) => (r.active ? "Active" : "Closed"), render: (r: any) => <Chip value={r.active ? "Active" : "Closed"} /> },
         ]} empty="No programs — every computed value depends on these." />
@@ -103,7 +113,10 @@ function Programs({ setError }: any) {
           </Field>
           {/* R-H (CEO [02:56-03:14]): the scheme/job-role master carries its own basic data —
               scheme, QP training hours (drives the assessment-qualification threshold), and
-              the amount we receive, which the API shows to Admin alone. */}
+              the amount we receive, which the API shows to Admin alone.
+              QA-093: while `hours` is blank the threshold is derived from duration × 8 AND the
+              Defaults percentage, so neither half of it comes from the scheme. That sentence belongs
+              on screen, not in this comment — see the note under the input below. */}
           <div className="grid grid-cols-2 gap-3">
             <Field label="Scheme">
               <select className={inputCls} value={form.scheme ?? ""} onChange={(e) => set("scheme", e.target.value || undefined)}>
@@ -113,7 +126,12 @@ function Programs({ setError }: any) {
             </Field>
             <Field label="QP training hours">
               <input type="number" className={inputCls} value={form.hours ?? ""} onChange={(e) => set("hours", e.target.value === "" ? undefined : +e.target.value)} />
-              <span className="mt-0.5 block text-[11px] text-gray-400">Drives "qualified for assessments" (min-attendance % × these hours). Blank = duration × 8.</span>
+              <span className={`mt-0.5 block text-[11px] ${form.hours ? "text-gray-400" : "text-amber-700"}`}>
+                Drives &ldquo;qualified for assessments&rdquo; (min-attendance % × these hours).
+                {form.hours
+                  ? " This programme carries its own figure, so the bar is the scheme's."
+                  : ` Blank, so the bar is being ASSUMED: ${(form.duration_days ?? 15)} days × 8 hours = ${(form.duration_days ?? 15) * 8}, then the Defaults percentage. Neither half comes from the scheme.`}
+              </span>
             </Field>
           </div>
           <div className="grid grid-cols-2 gap-3">

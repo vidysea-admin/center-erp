@@ -7,8 +7,20 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-121";
+export const RELEASE = "2026.08.14-122";
 export const RELEASE_NOTE =
+  "-122: QA-093 - the number that decides who may sit an assessment is two assumptions stacked on "
+  "each other, and only one screen ever said so. Measured on live: NONE of the five programmes "
+  "carries QP hours. So DST-01's bar of 60 hours is built as duration_days 15 x 8 hours a day = 120, "
+  "then x 50 percent from Defaults. Neither number came from the scheme. The govt-attendance screen "
+  "has disclosed this since -102 to the person READING a verdict; what was missing was telling the "
+  "person who can FIX it, on the screen where the field lives. Admin > Programs now carries a QP "
+  "hours column that reads 'not set -> assuming Nh' in amber with the full derivation on hover, and "
+  "the note under the input says which of the two states you are in. NO HOURS ARE INVENTED - "
+  "inventing them is precisely the failure this row is about; the fix is to make the assumption "
+  "visible to the one person who can replace it with the scheme's real figure. Caught while writing "
+  "it: my first attempt put that sentence inside a JSX COMMENT, where no user would ever see it - "
+  "the static copy check passes comments, so nothing would have failed. "
   "-121: QA-260. The checker FAILED -119 for the right reason: its release note claimed a behaviour "
   "the code did not have. The note said a trainer with no email would be recorded in MailLog as "
   "'skipped: no valid recipient address', so 'did it go?' stays answerable per trainer. On live it "
