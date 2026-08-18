@@ -245,7 +245,20 @@ function Overview({ data, role, onChanged, setError }: any) {
         </div>
       )}
       {/* QA-150: the header counts the checks that gate Mark Ready and nothing else; the
-          enrollment line below the divider gates START (Rule 17 side) and is labelled so. */}
+          enrollment line below the divider gates START (Rule 17 side) and is labelled so.
+          -112 (QA-219 / Manish 17/08 M4-07 "batches me ye readiness ka koi abhi sense nahi hai"):
+          readiness is a PREPARATION check. Once the batch is running or finished it has nothing
+          left to say, so it collapses into a <details> the way the batches list already renders a
+          dash there — still reachable for anyone auditing why it started, never occupying the
+          screen of a batch that is past it. */}
+      {running ? (
+        <details className="rounded-xl border border-gray-200/80 bg-white px-4 py-2 text-sm">
+          <summary className="cursor-pointer text-sm font-semibold text-gray-500">Readiness checklist ({CHECKS.filter(([, , v]) => v).length}/{CHECKS.length}) — preparation record, this batch has started</summary>
+          <ul className="mt-2 space-y-1 text-xs text-gray-500">
+            {CHECKS.map(([k, label, ok]) => <li key={k}>{ok ? "✓" : "○"} {label}</li>)}
+          </ul>
+        </details>
+      ) : (
       <Section title={`Readiness checklist (${CHECKS.filter(([, , v]) => v).length}/${CHECKS.length})`}>
         {beganAlready && (
           <p className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
@@ -306,7 +319,20 @@ function Overview({ data, role, onChanged, setError }: any) {
             {b.status === "Ready" && <Btn kind="ghost" onClick={() => transition("Planning")}>Back to Planning</Btn>}
             {/* -102: the client's words for these two steps. Targets stay the stored enum. */}
             {b.status === "Active" && <Btn onClick={() => transition("Closing")}>Assessment done → Result Awaited</Btn>}
-            {b.status === "Closing" && <Btn onClick={() => transition("Completed")}>Complete Batch</Btn>}
+            {/* -112 (QA-219 / Manish M4-01 "status aayega certification done"): when every result is
+                final and every pass has its certificate, the two closure halves derive themselves and
+                the batch walks to Result Awaited on its own. The one press left is the freeze, and it
+                says so — it used to bounce off Rule 18 with nothing on screen explaining why. */}
+            {b.status === "Closing" && (
+              <span className="inline-flex flex-col gap-0.5">
+                <Btn onClick={() => transition("Completed")}>{money?.closure?.certification_status === "Completed" ? "Certification done → Complete Batch" : "Complete Batch"}</Btn>
+                <span className="text-[10px] font-medium text-gray-500">
+                  {money?.closure?.certification_status === "Completed"
+                    ? "Every certificate is settled. Completing freezes the results and figures."
+                    : "Waiting on certificates — each passed candidate needs one attached (or marked Not Issued)."}
+                </span>
+              </span>
+            )}
             {/* Rule 52: Completed = training over; Closed = money over (cert + invoice PAID + no dues). */}
             {b.status === "Completed" && (
               <span title={closeBlockers.length ? `Still needed before the batch can close: ${closeBlockers.join("; ")}` : "All dues settled — the batch can close"} className="inline-flex flex-col gap-0.5">
@@ -322,6 +348,7 @@ function Overview({ data, role, onChanged, setError }: any) {
           <p className="mt-4 text-xs text-gray-400">Batch status is moved by Operations/Admin.</p>
         )}
       </Section>
+      )}
       {/* QA-055 (checker): a SPOC saw the full editable Details card with a Save button the
           server refuses (403). Editors get the form; everyone else gets the same facts
           read-only — no button that only exists to bounce. */}

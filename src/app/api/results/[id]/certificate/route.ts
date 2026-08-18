@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, CandidateResult } from "@/models";
-import { assertResultInScope } from "@/lib/rules";
+import { assertResultInScope, recomputeClosureAggregates } from "@/lib/rules";
 import { removeStoredFile } from "@/lib/storage";
 import { audit } from "@/lib/audit";
 
@@ -46,10 +46,23 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
   const r = await removeStoredFile(was, user.id);
   if (!r.removed) throw new HttpError(502, `Storage refused to delete the certificate object: ${r.reason ?? "unknown"}`);
   row.set("certificate_file", undefined);
+  // -112 (QA-219): the paragraph above stays true for a certificate the awarding body really issued
+  // — its NUMBER and date do not stop being true because the scan was wrong. But -112 made the FILE
+  // itself the evidence that sets "Issued", so a row whose Issued came from the file alone (no
+  // number) would be left claiming an issued certificate that no longer exists — and Rule 45 would
+  // then refuse to correct the result. When the file was the only evidence, taking it away puts the
+  // row back to Pending, audited.
+  if (row.certificate_status === "Issued" && !row.certificate_no) {
+    row.certificate_status = "Pending";
+    row.set("certificate_date", undefined);
+    await audit({ entity: "CandidateResult", entityId: row._id, field: "certificate_status", oldValue: "Issued", newValue: "Pending — the attached file was the only evidence and it was removed", actor: user.id, actorType: "USER" });
+  }
   await row.save({ validateModifiedOnly: true });
   await audit({
     entity: "CandidateResult", entityId: row._id, field: "certificate_file_removed",
     oldValue: was, newValue: `removed by ${user.name} (${r.backend}) — ${reason}`, actor: user.id,
   });
+  // -112: the evidence just changed, so a certification sign-off DERIVED from it has to be restated.
+  await recomputeClosureAggregates(String(row.batch), user.id);
   return NextResponse.json({ ok: true, backend: r.backend, certificate_status: row.certificate_status });
 });

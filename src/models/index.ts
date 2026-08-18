@@ -556,12 +556,17 @@ GovtAttendanceRowSchema.index({ candidate: 1, createdAt: -1 });
 const ClosureSchema = new Schema({
   batch: { ...oid("Batch", true), unique: true },
   assessment_status: { type: String, enum: PENDING_DONE, default: "Pending" },
+  // -112 (QA-219): "Completed" can now be DERIVED from the per-candidate rows. A derived sign-off
+  // is a restatement of the rows, not a human attesting reported figures — so it must be
+  // reversible, and it must not slam the doors a human sign-off rightly slams. These say which.
+  assessment_derived: { type: Boolean, default: false },
   assessment_date: Date, appeared: Number, passed: Number, result_file: String,
   // DEC-4 (Umesh, 2026-08-13): dropped-but-passed candidates do NOT count for invoicing.
   // `passed` stays the true pass count (Rule 42 readers unchanged); these two carry the split
   // so the invoice flow bills off billable_passed, never raw passed.
   dropped_passed: Number, billable_passed: Number,
   certification_status: { type: String, enum: PENDING_DONE, default: "Pending" },
+  certification_derived: { type: Boolean, default: false },
   certification_date: Date, certificates_issued: Number, certificate_file: String,
   ready_for_invoice: { type: Boolean, default: false },
   marked_ready_by: oid("User"), marked_ready_at: Date,

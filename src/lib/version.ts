@@ -3,8 +3,33 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-111";
+export const RELEASE = "2026.08.14-112";
 export const RELEASE_NOTE =
+  "-112: the batch that would not complete, and the trainer link -111 dropped. TWO THINGS. (1) A "
+  "REGRESSION I shipped in -111: the Log-today attendance strip on Home was nested inside an "
+  "Admin-only block, so the TRAINER - the person it exists for - had no path to today's log at "
+  "all. The strip now stands on its own; a new wall suite (check-home-structure) pins its "
+  "position, and it fails on the -111 file, which is what the -111 wall could not do because the "
+  "old pin asserted API JSON rather than the rendered page. (2) QA-219 / Manish 17/08 (M4-01, "
+  "M4-03, M4-07, VM-01, VM-02): AVP-GURU-RPLAVP-DST-01 carried 9 passes and 8 certificate files "
+  "and still read Active with Mark Completed doing nothing. Nothing was broken - attaching a "
+  "FILE never advanced Rule 46's status ladder, and the two closure halves plus the batch "
+  "transition were three separate hand presses that each refused until the one before it was "
+  "ticked. Now the file IS the certificate (a Pending row with a file settles to Issued, "
+  "including rows attached before this release), every roster row final derives assessment "
+  "Completed, and every pass settled derives certification Completed. Derivation states FACTS "
+  "about the rows and never moves the batch: the batch ladder is one-way (no Closing to Active) "
+  "and Completed is the DEC-6 freeze with no admin override, so a derived transition could not "
+  "be walked back the way a derived sign-off can - un-mark a student and the sign-off returns to "
+  "Pending by itself. Both buttons stay human and now succeed on the FIRST click instead of "
+  "bouncing off Rule 18, and the Complete button says it will freeze the figures. A human tick "
+  "still owns the status from then on, and a human sign-off still blocks un-marking - only the "
+  "derived one does not, because nothing was reported. Three guards came out of the wall rather "
+  "than review: a REJECTED certificate is never revived by the settle (Pending only); removing a "
+  "file that was the only evidence puts the row back to Pending so the result can still be "
+  "corrected; and with a certificate attached the result can no longer be flipped out from "
+  "under it (Rule 45 always said so - it just never fired while the status stayed Pending). "
+  "The readiness checklist collapses once a batch is running (M4-07). "
   "-111: what the user actually sees - five things Umesh named on 18/08 after using the ERP, all "
   "measured on production in a real browser before a line changed. (1) 'Rule this, rule that - "
   "aisa koi rule hai nahi.' Our ledger names (Rule 45, DEC-6, QA-142) were on 28 screen strings "

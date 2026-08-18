@@ -640,6 +640,10 @@ export async function transitionBatch(batchId: string, target: string, opts: { i
   const batch = await Batch.findById(batchId);
   if (!batch) throw new HttpError(404, "Batch not found");
   const from = batch.status;
+  // -112 (QA-219): completion can now DERIVE from the rows (deriveCompletion), so a hand press of
+  // "Mark Completed" may arrive after the batch already got there. Same status = already done,
+  // not a refusal.
+  if (from === target && ["Closing", "Completed"].includes(target)) return batch;
 
   const fail = (msg: string) => { throw new HttpError(409, msg); };
 
@@ -1069,7 +1073,95 @@ export async function recomputeClosureAggregates(batchId: string, actorId?: stri
   await auditDiff("Closure", closure._id, before,
     { appeared: summary.appeared, passed: summary.passed, certificates_issued: summary.certificates_issued, billable_passed: summary.billable_passed },
     actorId ?? null, "SYSTEM");
+  await deriveCompletion(batchId, actorId);
   return { ...summary, legacy: false };
+}
+
+// -112 (QA-219, Manish 17/08 M4-03/M4-07: "jaise hi batch completed mode me aata hai to completed kar
+// dijiye… mark complete karne se kuch ho nahi raha"): the two closure halves and the batch status
+// used to be three separate hand ticks, each refusing until the one before it was ticked — the
+// order was right and the door was invisible. Now they DERIVE from the per-candidate rows, through
+// the very same gates (Rules 43/46/18), after every save:
+//   every roster member has a final result       → assessment_status  = Completed
+//   every Pass is Issued or Not Issued           → certification_status = Completed
+//   both Completed                                → the batch walks Active→Closing→Completed itself
+// A batch with no per-candidate rows (legacy, batch-level figures) is untouched — its ticks stay
+// hand-driven. Nothing here can throw into the caller: a derived step that fails is logged and
+// left for the hand path, never a 500 on a certificate upload.
+export async function deriveCompletion(batchId: string, actorId?: string) {
+  try {
+    const batch = await Batch.findById(batchId).select("status").lean<any>();
+    if (!batch || !["Active", "Closing"].includes(batch.status)) return;
+    const closure = await Closure.findOne({ batch: batchId });
+    if (!closure) return;
+    // THE RULE IS UNIFORM, NOT JUST FORWARD-LOOKING: "a certificate file on a Pass row IS the
+    // certificate" has to hold for rows that already carry one, or DST-01's eight files — attached
+    // under -108, before this rule existed — would sit Pending forever and Manish would stay blocked
+    // by history. Settling happens here, on a live (Active/Closing) batch only, so a frozen batch is
+    // never rewritten, and every settle is audited by name.
+    // PENDING ONLY — never Processing/Generated/Rejected/Not Issued. Those are states a human chose:
+    // a certificate the awarding body REJECTED must not be re-issued by a background rule just
+    // because the old file is still on the row. Pending + a file = nobody ever decided, and the file
+    // is the decision.
+    const stale = await CandidateResult.find({
+      batch: batchId, result: "Pass",
+      certificate_file: { $nin: [null, ""] },
+      certificate_status: "Pending",
+    }).populate("candidate", "name");
+    for (const row of stale) {
+      const was = row.certificate_status;
+      row.certificate_status = "Issued";
+      if (!row.certificate_date) row.certificate_date = new Date();
+      await row.save();
+      await audit({ entity: "CandidateResult", entityId: row._id, field: "certificate_status", oldValue: was, newValue: `Issued — the attached certificate file is the evidence (${row.candidate?.name ?? "candidate"})`, actor: actorId ?? null, actorType: "SYSTEM" });
+    }
+    let changed = false;
+    const a = await assessmentCompleteness(batchId);
+    if (closure.assessment_status !== "Completed") {
+      if (!a.legacy && a.total > 0 && a.complete) {
+        closure.assessment_status = "Completed";
+        closure.assessment_derived = true;
+        if (!closure.assessment_date) closure.assessment_date = new Date();
+        changed = true;
+        await audit({ entity: "Closure", entityId: closure._id, field: "assessment_status", oldValue: "Pending", newValue: "Completed — derived: every roster member has a final result", actor: actorId ?? null, actorType: "SYSTEM" });
+      }
+    } else if (closure.assessment_derived && !a.legacy && !a.complete) {
+      // Derivation is a statement about the rows, so it follows the rows BOTH ways: un-mark a
+      // student and the derived sign-off goes back to Pending rather than standing as a claim
+      // nobody made. A HUMAN sign-off is never touched here.
+      closure.assessment_status = "Pending";
+      closure.assessment_derived = false;
+      changed = true;
+      await audit({ entity: "Closure", entityId: closure._id, field: "assessment_status", oldValue: "Completed", newValue: "Pending — the derived sign-off no longer holds: a roster member has no final result", actor: actorId ?? null, actorType: "SYSTEM" });
+    }
+    const c = await certificationCompleteness(batchId);
+    if (closure.assessment_status === "Completed" && closure.certification_status !== "Completed") {
+      if (!c.legacy && c.pass_count > 0 && c.complete) {
+        closure.certification_status = "Completed";
+        closure.certification_derived = true;
+        if (!closure.certification_date) closure.certification_date = new Date();
+        changed = true;
+        await audit({ entity: "Closure", entityId: closure._id, field: "certification_status", oldValue: "Pending", newValue: `Completed — derived: all ${c.pass_count} passes settled (${c.issued} issued)`, actor: actorId ?? null, actorType: "SYSTEM" });
+      }
+    } else if (closure.certification_derived && !c.legacy && (!c.complete || closure.assessment_status !== "Completed")) {
+      closure.certification_status = "Pending";
+      closure.certification_derived = false;
+      changed = true;
+      await audit({ entity: "Closure", entityId: closure._id, field: "certification_status", oldValue: "Completed", newValue: "Pending — the derived sign-off no longer holds: a passed candidate has no settled certificate", actor: actorId ?? null, actorType: "SYSTEM" });
+    }
+    if (changed) await closure.save();
+    // WHERE DERIVATION STOPS, AND WHY — both learned from the wall, not from review.
+    // It derives FACTS ABOUT THE ROWS (assessment/certification sign-off) and never moves the batch
+    // itself, because the batch's own status ladder is ONE-WAY: there is no Closing→Active and
+    // Completed is the DEC-6 freeze (results, certificates and figures locked, no admin override —
+    // Umesh, 13/08). A derived sign-off has to be reversible (un-mark a student and it walks back);
+    // a derived TRANSITION could not be. So the two buttons stay human — and they now succeed on the
+    // first click instead of bouncing off Rule 18, which was Manish's actual complaint ("mark
+    // complete karne se kuch ho nahi raha"). Making the transition automatic needs a reopen door
+    // first: that is a change to a recorded decision, so it is Umesh's call, not the maker's.
+  } catch (e) {
+    console.error(`[deriveCompletion] batch ${batchId}: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 // Rule 43: no indefinite Pending — every roster member needs a final result.
@@ -1220,6 +1312,18 @@ export async function upsertCandidateCertificate(resultId: string, patch: Record
   for (const f of ["certificate_status", "certificate_no", "certificate_date", "certificate_file", "certificate_rejection_reason"]) {
     if (patch[f] !== undefined) (row as any)[f] = patch[f];
   }
+  // -112 (QA-219, Manish 17/08 M4-01/M4-03: "certificate generate ho gaya hai… mark complete karne se
+  // kuch ho nahi raha"): the certificate FILE is the certificate. Attaching one to a Pass row used
+  // to leave certificate_status at Pending — a hand-driven ladder nobody knew to walk — so DST-01
+  // sat at Active with 8 certificates on it and Mark Completed refused. The -108 late-arrival path
+  // already created its rows as Issued; this makes the ordinary attach behave the same. The date
+  // defaults to today; the number stays optional here (typed later if the portal gives one) — the
+  // Rule 46 number/date checks guard the HAND transitions, not the evidence path.
+  if (typeof patch.certificate_file === "string" && patch.certificate_file && !patch.certificate_status
+      && row.certificate_status === "Pending") {
+    row.certificate_status = "Issued";
+    if (!row.certificate_date) row.certificate_date = new Date();
+  }
   // Never store "" — the partial unique index would then collide across every blank row.
   if (!row.certificate_no) row.set("certificate_no", undefined);
   await row.save();
@@ -1290,7 +1394,11 @@ export async function upsertClosureChecked(batchId: string, patch: Record<string
   // naturally AFTER completion (that is their whole purpose); the training facts stay locked.
   const POST_COMPLETION_WRITABLE = new Set(["ready_for_invoice", "dues_settled", "dues_note", "dues_marked_by", "dues_marked_at"]);
   if (["Completed", "Cancelled"].includes(batch.status)) {
-    const blocked = Object.keys(patch).filter((k) => patch[k] !== undefined && !POST_COMPLETION_WRITABLE.has(k));
+    // -112 (QA-219): a hand tick that merely re-states what derivation already wrote
+    // (assessment/certification Completed) is a no-op, not a rewrite of a frozen batch.
+    const current = await Closure.findOne({ batch: batchId }).select("assessment_status certification_status").lean<any>();
+    const blocked = Object.keys(patch).filter((k) => patch[k] !== undefined && !POST_COMPLETION_WRITABLE.has(k)
+      && !(["assessment_status", "certification_status"].includes(k) && patch[k] === current?.[k]));
     if (blocked.length) {
       throw new HttpError(409, `The batch is closed — ${blocked.join(", ")} can no longer change (2026-08-13 decision: a Completed batch stays locked; only invoice-readiness and the dues attestation may still be marked).`);
     }
@@ -1367,6 +1475,9 @@ export async function upsertClosureChecked(batchId: string, patch: Record<string
     }
   }
 
+  // -112: a human writing the status takes ownership of it — derivation stops managing it.
+  if (patch.assessment_status !== undefined) (closure as any).assessment_derived = false;
+  if (patch.certification_status !== undefined) (closure as any).certification_derived = false;
   const settingReady = patch.ready_for_invoice === true && !closure.ready_for_invoice;
   const certStatus = (patch.certification_status as string) ?? closure.certification_status;
   if (settingReady && certStatus !== "Completed") {

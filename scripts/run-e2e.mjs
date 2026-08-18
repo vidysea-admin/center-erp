@@ -11,6 +11,8 @@ const dir = path.dirname(fileURLToPath(import.meta.url));
 const SUITES = [
   // -111: static source scan — no user-facing string may carry a Rule/DEC/QA code. No server needed.
   "check-user-copy.mjs",
+  // -112: structural pin — the trainer's daily-log strip must not be nested inside an Admin-only block.
+  "check-home-structure.mjs",
   // The original eight (audit era)
   "e2e.mjs",
   "e2e-roles.mjs",

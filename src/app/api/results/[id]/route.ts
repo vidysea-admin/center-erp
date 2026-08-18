@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, CandidateResult, Closure } from "@/models";
-import { assertResultInScope, upsertCandidateCertificate, upsertCandidateResult } from "@/lib/rules";
+import { assertResultInScope, recomputeClosureAggregates, upsertCandidateCertificate, upsertCandidateResult } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
 const ASSESSMENT_FIELDS = ["result", "score", "max_score", "assessed_on", "assessor", "failure_reason", "failure_note", "reassessment_required", "reassessment_date", "evidence_file"];
@@ -78,8 +78,13 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
   if (row.certificate_file) {
     throw new HttpError(409, "This row still points at a certificate file. Remove the certificate first (that step is audited on its own), then un-mark the candidate — otherwise the stored file would be left unreachable in the bucket.");
   }
-  const closure = await Closure.findOne({ batch: row.batch }).select("assessment_status certification_status").lean<any>();
-  if (closure && (closure.assessment_status === "Completed" || closure.certification_status === "Completed")) {
+  const closure = await Closure.findOne({ batch: row.batch }).select("assessment_status certification_status assessment_derived certification_derived").lean<any>();
+  // -112 (QA-219): sign-off can now DERIVE from the rows. A derived one must not slam this door —
+  // nothing was reported, and removing the row simply un-derives it (deriveCompletion walks it back
+  // in the same request). A HUMAN attestation still blocks, which is what this guard was written for.
+  const humanSignoff = (closure?.assessment_status === "Completed" && !closure?.assessment_derived)
+    || (closure?.certification_status === "Completed" && !closure?.certification_derived);
+  if (closure && humanSignoff) {
     throw new HttpError(409, `Assessment or certification has already been signed off for ${batch?.code ?? "this batch"}, so the figures have been reported — a candidate's row cannot be pulled out from under them. Correct the row with an edit instead.`);
   }
 
@@ -96,5 +101,8 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
     newValue: `un-marked — ${String(reason).trim()}${left === 0 ? " (last row on the batch: it returns to batch-level figures)" : ""}`,
     actor: user.id, actorType: "USER",
   });
+  // -112: the rows just changed, so anything DERIVED from them has to be restated — otherwise a
+  // sign-off derived a moment ago keeps standing after the row it was derived from is gone.
+  if (left > 0) await recomputeClosureAggregates(String(row.batch), user.id);
   return NextResponse.json({ ok: true, rows_left_on_batch: left, batch_returns_to_legacy: left === 0 });
 });

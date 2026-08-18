@@ -501,16 +501,21 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
     const check1 = (await req("GET", `/api/batches/${cb._id}/results`)).data.items.find((i) => String(i.member) === String(cm[0]._id)).result;
     ok("-108: …and PATCH /api/results/<id> attaches it to that one candidate — the per-candidate door",
       attached1.status === 200 && check1.certificate_file === up.url, JSON.stringify({ st: attached1.status, f: check1.certificate_file }));
-    ok("-108: the per-candidate door still obeys Rule 45 — a non-Pass candidate is refused (409)", await (async () => {
-      await req("PUT", `/api/batches/${cb._id}/results`, { rows: [{ member: String(cm[1]._id), result: "Absent", assessed_on: today }] }, 200);
-      const row1 = (await req("GET", `/api/batches/${cb._id}/results`)).data.items.find((i) => String(i.member) === String(cm[1]._id)).result;
-      const refused = await req("PATCH", `/api/results/${row1._id}`, { certificate_file: up.url });
-      await req("PUT", `/api/batches/${cb._id}/results`, { rows: [{ member: String(cm[1]._id), result: "Pass", score: 70, assessed_on: today }] }, 200);
-      return refused.status === 409 && /no certificate without a Pass/i.test(String(refused.data?.error ?? ""));
-    })());
+    // -112 (QA-219): attaching a file now SETTLES the certificate (Issued), and Rule 45 has always
+    // pinned the result at Pass while a certificate is in flight — so the remove door runs first and
+    // the refusal test uses the now-file-free row. Both original assertions survive, plus one new.
+    ok("-112: with a certificate attached, the result can no longer be flipped out from under it",
+      (await req("PUT", `/api/batches/${cb._id}/results`, { rows: [{ member: String(cm[0]._id), result: "Absent", assessed_on: today }] })).status === 400);
     // …and the -101 remove door still takes it off again, which is what the card offers beside it.
     ok("-108: the -101 removal door still works on a per-candidate upload",
       (await req("DELETE", `/api/results/${row0._id}/certificate`, { reason: "-108 pin: per-candidate upload cleanup" })).status === 200);
+    ok("-108: the per-candidate door still obeys Rule 45 — a non-Pass candidate is refused (409)", await (async () => {
+      await req("PUT", `/api/batches/${cb._id}/results`, { rows: [{ member: String(cm[0]._id), result: "Absent", assessed_on: today }] }, 200);
+      const row1 = (await req("GET", `/api/batches/${cb._id}/results`)).data.items.find((i) => String(i.member) === String(cm[0]._id)).result;
+      const refused = await req("PATCH", `/api/results/${row1._id}`, { certificate_file: up.url });
+      await req("PUT", `/api/batches/${cb._id}/results`, { rows: [{ member: String(cm[0]._id), result: "Pass", score: 70, assessed_on: today }] }, 200);
+      return refused.status === 409 && /no certificate without a Pass/i.test(String(refused.data?.error ?? ""));
+    })());
   }
 
   // (c) Rule 45 still refuses on confirm, and says what to do.
@@ -543,7 +548,140 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   ok("-108: a new preview discards the abandoned files from the last one", s2.discarded_stale >= 1, String(s2.discarded_stale));
   ok("-108: …and the abandoned file is genuinely gone (410)", (await req("GET", s1.staged[0].url.replace(/^\/erp/, ""))).status === 410);
   await certConfirm(cb._id, [], []).catch(() => null);
+  // -112: this fixture ends with every roster row final and every pass carrying its certificate, so
+  // BOTH closure halves are signed off without anyone ticking them — the -108 upload flow and the
+  // QA-219 chain meeting on the same batch. The batch itself stays where the human left it.
+  {
+    const st = (await req("GET", `/api/batches/${cb._id}`)).data.item.status;
+    const cl = (await req("GET", `/api/batches/${cb._id}/closure`)).data.closure;
+    // Assessment derives (every row is final). Certification does NOT, and that is the honest
+    // answer: this fixture's surviving pass ends with its certificate discarded, so Rule 46 still
+    // has one unsettled pass — exactly the shape DST-01 is in with its 9th pass.
+    ok("-112: the -108 upload flow ends with assessment signed off by derivation, batch untouched",
+      st === "Active" && cl?.assessment_status === "Completed",
+      JSON.stringify({ st, a: cl?.assessment_status, c: cl?.certification_status }));
+    ok("-112: …and certification does NOT derive while one pass has no settled certificate",
+      cl?.certification_status !== "Completed", String(cl?.certification_status));
+  }
   await req("POST", `/api/batches/${cb._id}/transition`, { target: "Cancelled", reason: "-108 fixture done" }, 200);
+}
+
+// ---- -112 (QA-219 · Manish 17/08 M4-01/M4-03/M4-07): completion DERIVES from the rows ----
+// What he saw on AVP-GURU-RPLAVP-DST-01: 9 Passes, 8 certificate FILES attached by the -108 upload,
+// and the batch still reading Active / "Assessment done → Result Awaited", with Mark Completed
+// refusing. Nothing was broken — certificate_status stayed Pending because attaching a file never
+// walked Rule 46's ladder, and the two closure ticks plus the batch transition were three separate
+// hand presses. Now: a file on a Pass row IS the certificate (→ Issued), every roster row final →
+// assessment Completed, every Pass settled → certification Completed, both → the batch completes
+// itself. Same gates (Rules 43/46/18); only the trigger changed.
+{
+  // Rule 13 books a room for the whole date range and Rule 10 does the same for a trainer, so each
+  // fixture batch gets its own of both — three batches sharing one room is a room conflict, rightly.
+  const mkBatch = async (size, tag) => {
+    const room = (await req("POST", `/api/locations/${loc._id}/rooms`, { name: `D112-${tag}-${stamp}`, type: "Classroom" }, 201)).data.item;
+    const tr = (await req("POST", "/api/trainers", { name: `TEST-D112${tag} ${stamp}`, phone: `85${tag}${stamp}9`.slice(0, 10), skills: [prog.trainer_skill] }, 201)).data.item;
+    const b = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: tr._id, room: room._id, planned_start: today, target_size: size }, 201)).data.item;
+    const mems = [];
+    for (let i = 0; i < size; i++) {
+      const c = (await req("POST", "/api/candidates", { name: `D112 ${tag}${i} ${stamp}`, phone: `84${tag}${i}${stamp}`.slice(0, 10), location: loc._id, program: prog._id }, 201)).data.item;
+      const m = (await req("POST", `/api/batches/${b._id}/members`, { candidate: c._id }, 201)).data.item;
+      await req("PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+      mems.push(m);
+    }
+    await req("POST", `/api/batches/${b._id}/transition`, { target: "Ready" }, 200);
+    await req("POST", `/api/batches/${b._id}/transition`, { target: "Active" }, 200);
+    return { b, mems };
+  };
+  const upload = async (name) => {
+    const fd = new FormData();
+    fd.append("file", new File([new Uint8Array([37, 80, 68, 70, 45, 49, 46, 52, 10])], name, { type: "application/pdf" }));
+    fd.append("folder_centre", "_e2e"); fd.append("folder_kind", "certificates");
+    return (await fetch(`${BASE}/api/upload`, { method: "POST", headers: { cookie }, body: fd }).then((r) => r.json())).url;
+  };
+  const closureOf = async (id) => (await req("GET", `/api/batches/${id}/closure`)).data.closure;
+  const statusOf = async (id) => (await req("GET", `/api/batches/${id}`)).data.item.status;
+  const rowsOf = async (id) => (await req("GET", `/api/batches/${id}/results`)).data.items;
+
+  // (a) the happy chain: two Passes, two certificate files → Completed with no hand tick at all.
+  const { b: d1, mems: m1 } = await mkBatch(2, 1);
+  await req("PUT", `/api/batches/${d1._id}/results`, { rows: m1.map((m) => ({ member: String(m._id), result: "Pass", score: 70, max_score: 100, assessed_on: today })) }, 200);
+  const afterMarks = await closureOf(d1._id);
+  ok("-112: every roster row final → assessment Completed derives itself (no hand tick)",
+    afterMarks?.assessment_status === "Completed", JSON.stringify({ a: afterMarks?.assessment_status, c: afterMarks?.certification_status }));
+  ok("-112: …but certification does NOT derive while the certificates are still Pending",
+    afterMarks?.certification_status !== "Completed" && (await statusOf(d1._id)) !== "Completed", JSON.stringify({ c: afterMarks?.certification_status, s: await statusOf(d1._id) }));
+  const r1 = await rowsOf(d1._id);
+  for (const i of r1) await req("PATCH", `/api/results/${i.result._id}`, { certificate_file: await upload(`d112-${i.member}.pdf`) }, 200);
+  const r1b = await rowsOf(d1._id);
+  ok("-112: a certificate FILE on a Pass row IS the certificate — status Issued, dated, without walking the ladder by hand",
+    r1b.every((i) => i.result?.certificate_status === "Issued" && !!i.result?.certificate_date && !!i.result?.certificate_file),
+    JSON.stringify(r1b.map((i) => [i.result?.certificate_status, !!i.result?.certificate_date])));
+  const c1 = await closureOf(d1._id);
+  ok("-112: every Pass settled → certification Completed derives itself", c1?.certification_status === "Completed", String(c1?.certification_status));
+  ok("-112: the derived figures are real, not blank", (c1?.passed ?? 0) === 2 && (c1?.certificates_issued ?? 0) === 2, JSON.stringify({ p: c1?.passed, ci: c1?.certificates_issued }));
+  // WHERE IT STOPS: derivation states FACTS about the rows and never moves the batch — the batch
+  // ladder is one-way (no Closing→Active) and Completed is the DEC-6 freeze, so a derived transition
+  // could not be walked back the way a derived sign-off can.
+  ok("-112: derivation never moves the batch itself — it is still exactly where the human left it",
+    (await statusOf(d1._id)) === "Active", await statusOf(d1._id));
+  // THE COMPLAINT ITSELF: both presses used to bounce off Rule 18 because nobody had ticked the
+  // closure halves. Now each works on the first click.
+  ok("-112: Manish's complaint — 'Assessment done → Result Awaited' now works on the first click",
+    (await req("POST", `/api/batches/${d1._id}/transition`, { target: "Closing" })).status === 200 && (await statusOf(d1._id)) === "Closing");
+  ok("-112: …and so does Complete Batch, the press that used to do nothing",
+    (await req("POST", `/api/batches/${d1._id}/transition`, { target: "Completed" })).status === 200 && (await statusOf(d1._id)) === "Completed");
+  ok("-112: pressing it again is a no-op (200), not a refusal in the operator's face",
+    (await req("POST", `/api/batches/${d1._id}/transition`, { target: "Completed" })).status === 200);
+  ok("-112: re-stating a derived closure value on a frozen batch is a no-op too",
+    (await req("PUT", `/api/batches/${d1._id}/closure`, { certification_status: "Completed" })).status === 200);
+  // DEC-6 still holds: a Completed batch's training facts stay frozen.
+  ok("-112: DEC-6 unbroken — a real change to a frozen batch is still refused (409)",
+    (await req("PUT", `/api/batches/${d1._id}/closure`, { appeared: 1 })).status === 409);
+
+  // (b) a Fail needs no certificate — the batch still completes on the Passes alone.
+  const { b: d2, mems: m2 } = await mkBatch(2, 2);
+  await req("PUT", `/api/batches/${d2._id}/results`, { rows: [
+    { member: String(m2[0]._id), result: "Pass", score: 70, max_score: 100, assessed_on: today },
+    { member: String(m2[1]._id), result: "Fail", failure_reason: "Below cut-off", assessed_on: today },
+  ] }, 200);
+  const r2 = (await rowsOf(d2._id)).find((i) => String(i.member) === String(m2[0]._id));
+  await req("PATCH", `/api/results/${r2.result._id}`, { certificate_file: await upload(`d112b-${stamp}.pdf`) }, 200);
+  ok("-112: a Fail blocks nothing — certification settles on the PASSES alone",
+    (await closureOf(d2._id))?.certification_status === "Completed" && (await statusOf(d2._id)) === "Active", await statusOf(d2._id));
+  // A DERIVED sign-off is the rows talking about themselves, so it follows them BOTH ways: take the
+  // certificate off and certification un-derives; un-mark the student and assessment does too. This
+  // is why the un-mark door stays open (a human attestation still closes it).
+  {
+    const r2b = (await rowsOf(d2._id)).find((i) => String(i.member) === String(m2[0]._id));
+    await req("DELETE", `/api/results/${r2b.result._id}/certificate`, { reason: "-112 pin: the derived sign-off must walk back" }, 200);
+    const back = await closureOf(d2._id);
+    ok("-112: removing the certificate walks the DERIVED certification sign-off back to Pending",
+      back?.certification_status === "Pending", JSON.stringify({ c: back?.certification_status, a: back?.assessment_status }));
+    ok("-112: …and the row itself is honest again — Pending, no file, so the result can still be corrected",
+      (await rowsOf(d2._id)).find((i) => String(i.member) === String(m2[0]._id))?.result?.certificate_status === "Pending");
+    const unmark = await req("DELETE", `/api/results/${r2b.result._id}`, { reason: "-112 pin: un-marking is not blocked by a derived sign-off" });
+    ok("-112: a DERIVED assessment sign-off does not block un-marking (nothing was reported)", unmark.status === 200, `${unmark.status} ${String(unmark.data?.error ?? "").slice(0, 90)}`);
+    const back2 = await closureOf(d2._id);
+    ok("-112: …and the derived assessment sign-off walks back too", back2?.assessment_status === "Pending", String(back2?.assessment_status));
+  }
+
+  // (c) the guard that matters: one unmarked candidate and nothing derives at all.
+  const { b: d3, mems: m3 } = await mkBatch(2, 3);
+  await req("PUT", `/api/batches/${d3._id}/results`, { rows: [{ member: String(m3[0]._id), result: "Pass", score: 70, max_score: 100, assessed_on: today }] }, 200);
+  const r3 = (await rowsOf(d3._id)).find((i) => String(i.member) === String(m3[0]._id));
+  await req("PATCH", `/api/results/${r3.result._id}`, { certificate_file: await upload(`d112c-${stamp}.pdf`) }, 200);
+  const c3 = await closureOf(d3._id);
+  ok("-112: one candidate still unmarked → NOTHING derives (Rule 43 is the gate, not a suggestion)",
+    c3?.assessment_status !== "Completed" && c3?.certification_status !== "Completed" && (await statusOf(d3._id)) === "Active",
+    JSON.stringify({ a: c3?.assessment_status, c: c3?.certification_status, s: await statusOf(d3._id) }));
+  ok("-112: …and the hand press is still refused while that student is unmarked — the gate did not move",
+    (await req("POST", `/api/batches/${d3._id}/transition`, { target: "Closing" })).status === 409);
+  // Marking the last student is all it takes — the same tick then derives both halves.
+  await req("PUT", `/api/batches/${d3._id}/results`, { rows: [{ member: String(m3[1]._id), result: "Absent", assessed_on: today }] }, 200);
+  const c3b = await closureOf(d3._id);
+  ok("-112: marking the LAST student derives assessment + certification in the same tick (the 26-unmarked case on DST-01)",
+    c3b?.assessment_status === "Completed" && c3b?.certification_status === "Completed" && (await statusOf(d3._id)) === "Active",
+    JSON.stringify({ a: c3b?.assessment_status, c: c3b?.certification_status, s: await statusOf(d3._id) }));
 }
 
 // ---- -102 (Manish 17/08): a roster row that should never have existed can be REMOVED ----

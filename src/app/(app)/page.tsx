@@ -123,12 +123,13 @@ export default function HomePage() {
           <KPI label="Pending Follow-ups" value={data.kpis.pending_followups} tone="red" icon={<IconAlert size={19} />} href="/sync" />
         )}
       </div>
-      {!leanHome && (data.kpis.trainers_by_role ?? []).length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
       {/* -111 (Umesh 18/08): the trainer's daily shortcut used to be a full Section ABOVE the KPI
           cards (-102 put it there) — measured on production it pushed the cards below the fold on
           a laptop screen. It is a compact strip UNDER the cards now: one line per running batch,
-          the verb once in the label. Same links, same data (-102 QA-174), a quarter of the height. */}
+          the verb once in the label. Same links, same data (-102 QA-174), a quarter of the height.
+          Cycle 2 (checker, QA-176 reopened): the first cut nested this strip INSIDE the Admin-only
+          trainers-by-role block, so the Trainer — the person it exists for — lost it. It sits on its
+          own now; its only gates are running-batches-today and not-a-Location login. */}
       {q.today_logging.length > 0 && role !== "Location" && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-blue-100 bg-blue-50/60 px-3 py-2 text-xs">
           <span className="font-semibold text-blue-900">Log today&apos;s attendance:</span>
@@ -145,6 +146,8 @@ export default function HomePage() {
         </div>
       )}
 
+      {!leanHome && (data.kpis.trainers_by_role ?? []).length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
           <span className="font-medium text-gray-600">Certified trainers by job role:</span>
           {data.kpis.trainers_by_role.map((r: any) => (
             <Link key={r.program} href={`/trainers?tag=Ready%20to%20Train`} className="rounded-full border border-gray-200 px-2.5 py-0.5 hover:bg-gray-50">
