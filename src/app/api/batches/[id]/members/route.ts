@@ -80,7 +80,11 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // 2026-08-13 (Manish walkthrough — other centres' candidates on the pool): membership
   // requires the batch's own centre and job role. assertLocationInScope is a no-op for
   // Admin/Operations, so equality is checked explicitly for everyone.
-  if (String(cand.location) !== String(batch.location)) {
+  // -124 (M4-04): a candidate with NO centre is not "at another centre" — they are unplaced, which is
+  // exactly what a walk-in is. Enrolling them here is the event that decides it (adopted below, the
+  // same way a programme-less candidate adopts the batch's programme). Someone who DOES belong to
+  // another centre is still refused: that rule is Manish's own, from the 13/08 walkthrough.
+  if (cand.location && String(cand.location) !== String(batch.location)) {
     throw new HttpError(409, `${cand.name ?? "Candidate"} belongs to another centre — move them to this location first.`);
   }
   if (cand.program && batch.program && String(cand.program) !== String(batch.program)) {
@@ -90,6 +94,13 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // Import convention: program-less candidates inherit the batch's programme on enrolment.
   if (!cand.program && batch.program) {
     await Candidate.updateOne({ _id: body.candidate }, { $set: { program: batch.program } });
+  }
+  // -124 (M4-04): and a candidate with no centre adopts this one. Audited by name, because it changes
+  // who can see the record from that moment on (Rule 38 scoping keys on exactly this field).
+  if (!cand.location && batch.location) {
+    await Candidate.updateOne({ _id: body.candidate }, { $set: { location: batch.location } });
+    await audit({ entity: "Candidate", entityId: body.candidate, field: "location",
+      oldValue: "(none — walk-in)", newValue: `set to this batch's centre on enrolment (${batch.code ?? id})`, actor: user.id });
   }
   await audit({ entity: "BatchMember", entityId: m._id, newValue: "assigned", actor: user.id });
   return NextResponse.json({ item: m, warning: (m as any).warning }, { status: 201 });

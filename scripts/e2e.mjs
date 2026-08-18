@@ -740,6 +740,36 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   ok("-113: a clean batch reports nothing to settle",
     (await req("GET", `/api/batches/${d1._id}/complete`, undefined, 200)).data.status === "Completed");
 
+  // ---- -124 (M4-04): a walk-in has no centre until somebody enrols them ----
+  // Manish: "ye location nahi hogi, user ka koi bhi location ho sakta hai." Forcing a centre at entry
+  // either invents a fact or turns the person away. The centre is decided by the first real event
+  // instead. Everything here is about who can SEE the row, because Rule 38 scoping keys on this field.
+  {
+    const walkIn = (await req("POST", "/api/candidates", { name: `Walk In ${stamp}`, phone: `81${stamp}44`.slice(0, 10), program: prog._id }, 201)).data.item;
+    ok("-124 (M4-04): a candidate can be entered with NO centre", !walkIn.location, JSON.stringify({ loc: walkIn.location }));
+    // …but only by someone who can see every centre. QA-125's reasoning: a scoped user would create a
+    // person their own list can never show them.
+    {
+      const spocCookie = await loginAs("spoc.jpr03@vidysea.com", "CiOnly@123");
+      const refused = await fetch(BASE + "/api/candidates", { method: "POST", headers: { "Content-Type": "application/json", cookie: spocCookie }, body: JSON.stringify({ name: `Scoped WalkIn ${stamp}`, phone: `81${stamp}45`.slice(0, 10), program: prog._id }) });
+      ok("-124 (M4-04): a SCOPED user still has to name their own centre (400, not a hidden row)", refused.status === 400, String(refused.status));
+    }
+    // enrolment is the event that decides the centre — the same shape as the programme inheritance
+    // that has always sat one line below it
+    const addRes = await req("POST", `/api/batches/${batch._id}/members`, { candidate: walkIn._id }, 201);
+    const after = (await req("GET", `/api/candidates/${walkIn._id}`)).data.item;
+    ok("-124 (M4-04): enrolling a walk-in ADOPTS the batch's centre", String(after.location?._id ?? after.location) === String(loc._id), JSON.stringify({ got: after.location?._id ?? after.location, want: String(loc._id) }));
+    ok("-124 (M4-04): …and the adoption is audited, because it changes who can see the record",
+      ((await req("GET", `/api/audit/Candidate/${walkIn._id}`)).data.items ?? []).some((a2) => /walk-in|enrolment/i.test(String(a2.new_value ?? ""))),
+      "no audit row naming the adoption");
+    // and a candidate who DOES belong elsewhere is still refused — that rule is Manish's own
+    const otherLoc = (await req("POST", "/api/locations", { code: "OC" + stamp, name: `Other Centre ${stamp}`, approval_status: "Approved", operational_status: "Active", city: "Kota" }, 201)).data.item;
+    const other = (await req("POST", "/api/candidates", { name: `Other Centre Cand ${stamp}`, phone: `81${stamp}46`.slice(0, 10), location: otherLoc._id, program: prog._id }, 201)).data.item;
+    const blocked = await req("POST", `/api/batches/${batch._id}/members`, { candidate: other._id });
+    ok("-124 (M4-04): a candidate who belongs to ANOTHER centre is still refused (409) — only 'unplaced' is new",
+      blocked.status === 409 && /another centre/i.test(String(blocked.data?.error ?? "")), `${blocked.status} ${String(blocked.data?.error ?? "").slice(0, 70)}`);
+  }
+
   // ---- -120 (M4-14): the chain's DATA — dates on the closure, mock test + roll number per candidate ----
   // Manish typed this list on screen. Everything in it is a date or a list; only the mock-test STATUS
   // wording is still owed, so no status enum exists to pin. What IS pinned is the thing that goes

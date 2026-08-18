@@ -361,7 +361,11 @@ const CandidateSchema = new Schema({
   address_type: String,               // Urban / Rural — seen on screen, never spoken
   differently_abled: String,          // No / the disability type — seen on screen, never spoken
   id_reference: String, // government ID reference (NOT the Aadhaar number itself)
-  location: oid("Location", true),
+  // -124 (M4-04): OPTIONAL. A walk-in belongs to no centre until somebody enrols them, and forcing a
+  // centre at entry either invents a fact or turns the person away. The centre is set by the first
+  // real event instead — see members/route.ts, where a location-less candidate adopts the batch's
+  // centre exactly as a programme-less one already adopts its programme.
+  location: oid("Location"),
   program: oid("Program", true),
   source: String,
   education: { type: String, enum: [...EDUCATION_LEVEL, null], default: null },

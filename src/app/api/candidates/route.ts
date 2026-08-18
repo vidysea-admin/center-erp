@@ -1,6 +1,6 @@
 import { collectionRoutes } from "@/lib/crud";
 import { BatchMember, Candidate, CandidateResult, Location, Program } from "@/models";
-import { assertLocationInScope, HttpError } from "@/lib/authz";
+import { assertLocationInScope, HttpError, isScoped } from "@/lib/authz";
 import { emailError, canonicalPhone, phoneError } from "@/lib/validate";
 import { candidateEligibility } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
@@ -40,6 +40,12 @@ export const { GET, POST } = collectionRoutes({
     const eErr = emailError(data.email, { optional: true });
     if (eErr) throw new HttpError(400, eErr);
     if (data.location) assertLocationInScope(user, String(data.location));
+    // -124 (M4-04): the centre is optional now — but only for someone who can see every centre.
+    // QA-125's reasoning holds: a scoped user creating an unplaced row would create a person their
+    // own list can never show them, and Rule 38 scoping keys on exactly this field.
+    if (!data.location && isScoped(user)) {
+      throw new HttpError(400, "Choose the centre this candidate belongs to. (A candidate can be entered without one, but only by Admin or Operations — they get their centre when they are enrolled on a batch.)");
+    }
   },
   // -109 (Umesh 17/08): "admin ne new student register kiya, new student ko mail nahi aaya — check
   // karo." Confirmed and precise: there were NINE places that send mail and none of them was this

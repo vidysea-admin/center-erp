@@ -584,11 +584,18 @@ function CandidatesInner() {
             </Field>
             <Field label="Date of birth"><input type="date" className={inputCls} value={form.dob ?? ""} onChange={(e) => set("dob", e.target.value)} /></Field>
           </div>
-          <Field label="Location" required>
+          {/* -124 (M4-04, Manish 17/08 [01:50] "ye location nahi hogi, user ka koi bhi location ho
+              sakta hai"): a walk-in belongs to no centre yet. The field stays — most entries DO know
+              their centre and picking it here saves a step — but it is no longer required, and the
+              blank option says what blank means rather than looking like an unfinished form. */}
+          <Field label="Location">
             <select className={inputCls} value={form.location ?? ""} onChange={(e) => set("location", e.target.value)}>
-              <option value="">Select…</option>
+              <option value="">Not tied to a centre yet (walk-in)</option>
               {locations.map((l) => <option key={l._id} value={l._id} title={l.name}>{l.name}</option>)}
             </select>
+            {!form.location && (
+              <span className="mt-0.5 block text-[11px] text-gray-500">They get their centre when they are enrolled on a batch. Until then only Admin and Operations can see them.</span>
+            )}
           </Field>
           <Field label="Program" required>
             <select className={inputCls} value={form.program ?? ""} onChange={(e) => set("program", e.target.value)}>
@@ -713,7 +720,7 @@ function CandidatesInner() {
           )}
           {/* Edit mode: location/program may legitimately be blank on a sheet-imported row — the
               save must not be held hostage to fields the user is not correcting. */}
-          <Btn onClick={saveCandidate} disabled={savingC || (drawer === "add" ? (!form.name || !form.phone || !form.location || !form.program) : (!form.name || !form.phone))
+          <Btn onClick={saveCandidate} disabled={savingC || (drawer === "add" ? (!form.name || !form.phone || !form.program) : (!form.name || !form.phone))
             || !!phoneError(form.phone) || !!phoneError(form.alt_phone, { optional: true }) || !!emailError(form.email, { optional: true })}>
             {drawer === "edit" ? "Save changes" : "Add"}
           </Btn>

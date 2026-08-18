@@ -7,8 +7,22 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-123";
+export const RELEASE = "2026.08.14-124";
 export const RELEASE_NOTE =
+  "-124: M4-04, the last buildable row on Umesh's sheet. Manish: 'ye location nahi hogi, user ka koi "
+  "bhi location ho sakta hai - yahan pe ye location mat dikhao.' Forcing a centre when a walk-in is "
+  "entered either invents a fact or turns the person away. I had been calling this its own unit "
+  "because it touches Rule 38 scoping, and it does - so the centre is not removed, it is DECIDED BY "
+  "THE FIRST REAL EVENT. There was already a precedent one line away: a programme-less candidate "
+  "adopts the batch's programme when enrolled. A location-less one now adopts its centre the same "
+  "way, audited by name because that is the moment the record becomes visible to that centre's "
+  "staff. Three things deliberately unchanged: a candidate who belongs to ANOTHER centre is still "
+  "refused (Manish's own rule from 13/08); a SCOPED user must still name their own centre, because "
+  "QA-125's reasoning holds - they would otherwise create a person their own list can never show "
+  "them; and unplaced candidates are invisible to scoped users until adoption, which is what "
+  "belonging to no centre means. The form keeps the field, since most entries do know the centre, "
+  "but the blank option now reads 'Not tied to a centre yet (walk-in)' rather than looking like an "
+  "unfinished form. "
   "-123: QA-157, the half that was still real. Two of the three bypasses that row named are already "
   "gone - HEIC converts in the browser since -87, and uploadClosureFile went through the shared "
   "helper - so I swept every upload path instead of assuming: the only one still posting whole files "
