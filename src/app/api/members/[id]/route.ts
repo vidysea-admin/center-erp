@@ -50,7 +50,7 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
   await assertMemberInScope(user, id); // Rule 38
   const { reason } = await req.json().catch(() => ({}));
   if (!reason || !String(reason).trim()) {
-    throw new HttpError(400, "A reason is required — removing a roster row is audited, not silent. (To record a student who left, drop them instead: Rule 25.)");
+    throw new HttpError(400, "A reason is required — removing a roster row is audited, not silent. (To record a student who left, drop them instead.)");
   }
 
   const m = await BatchMember.findById(id).populate("candidate", "name").populate("batch", "code").lean<any>();
@@ -67,7 +67,7 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
     blockers.push("a matched government-portal attendance row");
   }
   if (blockers.length) {
-    throw new HttpError(409, `${who} cannot be removed from ${where} — this roster row already carries ${blockers.join(", ")}. Removing it would rewrite figures that have been reported. Drop them instead (Rule 25), which keeps the history.`);
+    throw new HttpError(409, `${who} cannot be removed from ${where} — this roster row already carries ${blockers.join(", ")}. Removing it would rewrite figures that have been reported. Drop them instead, which keeps the history.`);
   }
 
   await BatchMember.deleteOne({ _id: m._id });

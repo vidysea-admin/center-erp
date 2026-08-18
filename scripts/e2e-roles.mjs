@@ -1190,7 +1190,7 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
     const twoAgo = new Date(Date.now() - 2 * 86_400_000).toISOString().slice(0, 10);
     const old = await req(trainer, "POST", `/api/batches/${tb._id}/logs`, { log_date: twoAgo, present_member_ids: [] });
     ok("Rule 53: a trainer cannot backdate beyond yesterday",
-      old.status === 403 && /Rule 53/.test(old.data?.error ?? ""), `got ${old.status} ${old.data?.error ?? ""}`);
+      old.status === 403 && /only today or yesterday/.test(old.data?.error ?? ""), `got ${old.status} ${old.data?.error ?? ""}`);
     const fut = new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10);
     const future = await req(admin, "POST", `/api/batches/${tb._id}/logs`, { log_date: fut, present_member_ids: [] });
     ok("Rule 53: a future date is refused for everyone",

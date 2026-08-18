@@ -6,7 +6,7 @@ import { useSession } from "next-auth/react";
 import { api, fmtDate, toInputDate } from "@/lib/client";
 import { trainerSelectGroups } from "@/lib/trainer-select";
 import { slotHoursPerDay } from "@/lib/slot-rules";
-import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, HealthBanner, NameCell, Section, Tabs, inputCls, statusLabel } from "@/components/ui";
+import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, HealthBanner, NameCell, Notice, Section, Tabs, inputCls, statusLabel } from "@/components/ui";
 import { Activity } from "@/components/activity";
 import { usePerms } from "@/components/shell";
 import { flushQueue, fmtBytes, getLastUploadInfo, getQueue, pickRecorderMime, uploadWithRetry, videoKnobs, type VideoKnobs } from "@/lib/upload";
@@ -62,7 +62,7 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
         <h1 className="text-xl font-semibold">{b.code}</h1>
         <Chip value={b.status} />
         {data.settlement_stage && (
-          <span className="rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-700" title="Where this batch stands on the money chain (Rule 52)">
+          <span className="rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-700" title="Where this batch stands on the money chain">
             {data.settlement_stage}
           </span>
         )}
@@ -309,7 +309,7 @@ function Overview({ data, role, onChanged, setError }: any) {
             {b.status === "Closing" && <Btn onClick={() => transition("Completed")}>Complete Batch</Btn>}
             {/* Rule 52: Completed = training over; Closed = money over (cert + invoice PAID + no dues). */}
             {b.status === "Completed" && (
-              <span title={closeBlockers.length ? `Rule 52 — still needed: ${closeBlockers.join("; ")}` : "All dues settled — the batch can close"} className="inline-flex flex-col gap-0.5">
+              <span title={closeBlockers.length ? `Still needed before the batch can close: ${closeBlockers.join("; ")}` : "All dues settled — the batch can close"} className="inline-flex flex-col gap-0.5">
                 <Btn onClick={() => transition("Closed")} disabled={money !== null && closeBlockers.length > 0}>Close Batch (no dues)</Btn>
                 {money !== null && closeBlockers.length > 0 && (
                   <span className="text-[10px] font-medium text-amber-700">needs: {closeBlockers.join(" · ")}</span>
@@ -417,7 +417,7 @@ function Overview({ data, role, onChanged, setError }: any) {
       )}
       <Drawer open={confirmCancel} onClose={() => setConfirmCancel(false)} title={`Cancel batch ${b.code}?`}>
         <div className="space-y-3">
-          <p className="text-sm text-gray-600">This is destructive. Rule 19: a batch with daily logs can only be force-closed by Admin. Provide a reason.</p>
+          <p className="text-sm text-gray-600">This is destructive. A batch with daily logs can only be force-closed by Admin, with a reason.</p>
           <Field label="Reason" required><input className={inputCls} value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
           <Btn kind="danger" onClick={() => transition("Cancelled")} disabled={!reason}>Confirm Cancel</Btn>
         </div>
@@ -1008,7 +1008,7 @@ function AttendanceTab({ batchId, batch, role, setError }: any) {
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="rounded-full bg-gray-100 px-2 py-0.5">Programme: {data.program_hours} hrs</span>
-        <span className="rounded-full bg-gray-100 px-2 py-0.5" title={`${data.min_attendance_pct}% of programme hours`}>Needed for assessment: {data.required_hours} hrs</span>
+        <span className="cursor-help rounded-full bg-gray-100 px-2 py-0.5" title={`${data.min_attendance_pct}% of programme hours. Hours come from the government portal once an import is matched; until then they are estimated from our daily logs × the batch slot. The portal meter is what the assessor settles against.`}>Needed for assessment: {data.required_hours} hrs</span>
         {/* QA-159 (-86, checker): "0 days logged" next to 13 portal working days read as a lie —
             two meters, named apart: OUR day-wise logs vs the PORTAL's cumulative import. */}
         <span className="rounded-full bg-gray-100 px-2 py-0.5" title="Day-wise logs marked in this system (Daily Execution / bulk grid)">Our logs: {data.days_held} day{data.days_held === 1 ? "" : "s"}</span>
@@ -1035,7 +1035,7 @@ function AttendanceTab({ batchId, batch, role, setError }: any) {
             </span>
           ))}
           {canMark && !batchActive && (
-            <span className="text-gray-400" title="Daily logs are only taken on a running batch (Rule 26)">Start the batch (Overview → Start Batch) to mark day-wise attendance.</span>
+            <span className="text-gray-400" title="Daily logs are only taken on a running batch">Start the batch (Overview → Start Batch) to mark day-wise attendance.</span>
           )}
           {!canMark && <span className="text-gray-400">Day-wise marking is done by the trainer / Operations.</span>}
           {importLink}
@@ -1073,7 +1073,7 @@ function AttendanceTab({ batchId, batch, role, setError }: any) {
             <p className="text-xs text-amber-700">
               Nothing to create in this range — this tool only <b>adds</b> missing days.{" "}
               {gridWalk.skipped.some((s) => s.reason === "already logged")
-                ? <>Every operating day here is already logged. To change one, open it in <b>Daily Execution</b> above — pick the date and its ticks come up as recorded (that is an audited edit, Rule 27).</>
+                ? <>Every operating day here is already logged. To change one, open it in <b>Daily Execution</b> above — pick the date and its ticks come up as recorded (the edit is audited).</>
                 : <>The dates picked hold no operating day for this programme.</>}
               {openBacklog.length > 0 && <> The earliest day still unlogged is <b>{fmtDate(openBacklog[0])}</b>.</>}
             </p>
@@ -1163,11 +1163,6 @@ function AttendanceTab({ batchId, batch, role, setError }: any) {
             ),
           },
         ]} empty="No students on the roster." />
-      <p className="text-[11px] text-gray-500">
-        Hours come from the government portal when a matched import exists; until then they are
-        estimated from our daily logs × the batch slot. The portal meter is what the assessor
-        settles against.
-      </p>
     </div>
   );
 }
@@ -1388,7 +1383,7 @@ function DailyExecution({ batchId, batch, role, setError }: any) {
               {(dayLog.sessions ?? []).length || 1}× so far. The ticks below are what is on record; change them, or just add
               photos/videos and Save. New media is <b>added</b> to the day&apos;s {(dayLog.photos ?? []).length} photo
               {(dayLog.photos ?? []).length === 1 ? "" : "s"} and {(dayLog.videos ?? []).length} video
-              {(dayLog.videos ?? []).length === 1 ? "" : "s"} — nothing is replaced. Every change is audited (Rule 27).
+              {(dayLog.videos ?? []).length === 1 ? "" : "s"} — nothing is replaced. Every change is audited.
             </p>
           )}
           <div className="grid grid-cols-2 gap-3">
@@ -1639,7 +1634,7 @@ function LogEditDrawer({ log, members, onClose, onSaved, setError }: any) {
   return (
     <Drawer open onClose={onClose} title={`Edit log — ${fmtDate(log.log_date)}`} wide>
       <div className="space-y-4">
-        <p className="text-xs text-gray-500">Edits allowed 48h by the person who entered it, anytime by Operations/Admin. Every change is audited (Rule 27). Roster count stays frozen at {log.roster_count} (Rule 28).</p>
+        <p className="text-xs text-gray-500">Editable for 48h by whoever entered it, anytime by Operations/Admin; every change is audited. Roster count stays at {log.roster_count}.</p>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Planned topic"><input className={inputCls} value={form.planned_topic} onChange={(e) => setForm({ ...form, planned_topic: e.target.value })} /></Field>
           <Field label="Actual topic"><input className={inputCls} value={form.actual_topic} onChange={(e) => setForm({ ...form, actual_topic: e.target.value })} /></Field>
@@ -1818,11 +1813,11 @@ function ClosureTab({ batchId, batch, role, setError, onChanged }: any) {
           closure wala Tarun ji bol rahe the ki wo sab hum baad me dekhenge"): this tab is called
           Closure and holds two unrelated jobs, so it reads as the deferred money work — and the two
           panels that actually carry a batch to Completed look optional. Say which is which. */}
-      <div className="rounded-lg border border-blue-200 bg-blue-50/60 px-3 py-2 text-xs text-blue-900">
-        <b>Two separate jobs on this tab.</b> <b>Assessment</b> then <b>Certification</b> are what carry the
-        batch to <b>Completed</b> — assessment done moves it to Result Awaited, certification completes it.
-        Nothing about money is needed for that. <b>Invoice and dues</b> below are the later step that ends in{" "}
-        <b>Closed</b> (Rule 52), and a Completed batch can sit there indefinitely.
+      {/* -111: one line; the explanation rides on the "?" (Umesh: "bahut zyada text heavy"). */}
+      <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50/60 px-3 py-1.5 text-xs text-blue-900">
+        <span><b>Assessment → Certification</b> completes the batch. <b>Invoice → dues</b> closes it — later, no hurry.</span>
+        <span className="cursor-help rounded-full border border-blue-300 px-1.5 text-[10px] font-bold text-blue-700"
+          title="Assessment done moves the batch to Result Awaited; certification done marks it Completed. Nothing about money is needed for that. Invoice and dues are the later step that ends in Closed — a Completed batch can sit there indefinitely.">?</span>
       </div>
       {/* Per-candidate marking gets the full width — it is a data-entry grid, not a side panel. */}
       {perCandidate && (
@@ -1878,7 +1873,7 @@ function ClosureTab({ batchId, batch, role, setError, onChanged }: any) {
             : <Field label="Certificates issued"><div className={inputCls + " bg-gray-50 text-gray-700"}>{closure?.certificates_issued ?? 0} <span className="text-xs text-gray-400">derived</span></div></Field>}
         </div>
         {!legacy && summary && summary.passed > summary.certificates_issued && (
-          <p className="mt-2 text-xs text-amber-700">{summary.passed - summary.certificates_issued} passed candidate(s) still need an issued certificate (Rule 46).</p>
+          <p className="mt-2 text-xs text-amber-700">{summary.passed - summary.certificates_issued} passed candidate(s) still need an issued certificate.</p>
         )}
         <div className="mt-3 flex gap-2">
           <Btn small kind="ghost" onClick={() => saveClosure({ certification_date: form.certification_date, ...(legacy ? { certificates_issued: form.certificates_issued } : {}) })}>Save</Btn>
@@ -1930,7 +1925,7 @@ function ClosureTab({ batchId, batch, role, setError, onChanged }: any) {
               value={closure?.dues_note ?? ""} onChange={(e) => saveClosure({ dues_note: e.target.value })} />
             <p className="mt-2 text-xs text-gray-500">
               Batch closes from the Overview tab once certification is Completed, the invoice is
-              PAID, and this attestation is ticked (Rule 52).
+              PAID, and this attestation is ticked.
             </p>
           </div>
         </div>
@@ -1952,6 +1947,8 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
   const [certForm, setCertForm] = useState<any>({});
   const [idx, setIdx] = useState(0);
   const [certUpload, setCertUpload] = useState<any>(null); // last confirm report
+  const [certOk, setCertOk] = useState(true); // -111: the success half of the report is showing
+  const [linkNote, setLinkNote] = useState<string | null>(null); // -111: link success, auto-hides
   const [uploading, setUploading] = useState(false);
   const closed = ["Completed", "Cancelled"].includes(batch?.status);
   // -108: bulk upload is preview-first — the staged files and their proposed mapping, editable
@@ -1997,7 +1994,7 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
     setUploading(true);
     try {
       const data = await api(`/api/batches/${batchId}/certificates`, { method: "POST", json: { confirm: true, pairs, discard } });
-      setCertUpload(data);
+      setCertUpload(data); setCertOk(true);
       setMapping(null);
       await load(); onChanged(); loadLinkPlan();
     } catch (e: any) { setError(e.message); }
@@ -2022,6 +2019,7 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
       const res = await api(`/api/batches/${batchId}/link-portal-ids`, { method: "POST" });
       setCertUpload(null);
       await load(); await loadLinkPlan();
+      if (res.linked) setLinkNote(`${res.linked} portal ID${res.linked === 1 ? "" : "s"} linked from the government imports — those certificates will now match by file name.`);
       if (!res.linked) setError(res.conflicts?.length
         ? `Nothing linked — ${res.conflicts.length} candidate(s) have conflicting portal IDs, left untouched. Fix them on the candidate record.`
         : "Nothing to link — the portal attendance imported so far names no new IDs for this roster.");
@@ -2064,7 +2062,7 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
   // (uploadWithRetry: compression, 3 retries, offline queue) and then the existing certificate
   // field patch — no new server contract, and no file-name matching to get wrong.
   async function uploadOneCertificate(i: any, file: File) {
-    if (!i.result?._id) { setError("Mark this candidate's result first — a certificate attaches to a result (Rule 45)."); return; }
+    if (!i.result?._id) { setError("Mark this candidate's result first — a certificate attaches to a result."); return; }
     setCertBusy(String(i.result._id));
     try {
       const url = await uploadWithRetry(file, "closure", {
@@ -2165,7 +2163,7 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
       <div className="flex flex-wrap items-center gap-2 border-t border-gray-100 pt-2 text-xs">
         {i.result?.result !== "Pass" ? (
           <span className="text-gray-400">
-            {i.result?.result ? `${i.result.result} — no certificate (Rule 45)` : "Certificate: mark Pass first (Rule 45)"}
+            {i.result?.result ? `${i.result.result} — no certificate` : "Mark the result Pass first — then the certificate can be attached"}
           </span>
         ) : (
           <>
@@ -2176,7 +2174,7 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
                 {!closed && (
                   <button className="text-red-600 hover:underline"
                     onClick={async () => {
-                      const reason = window.prompt(`Remove ${i.candidate?.name}'s certificate file? The number and status stay (Rule 46 owns those). Reason:`);
+                      const reason = window.prompt(`Remove ${i.candidate?.name}'s certificate file? The certificate number and status stay. Reason:`);
                       if (reason === null) return;
                       try { await api(`/api/results/${i.result._id}/certificate`, { method: "DELETE", json: { reason } }); await load(); onChanged(); }
                       catch (e: any) { setError(e.message); }
@@ -2207,7 +2205,7 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
       {pending.length > 0 && (
         <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
           Still pending: {pending.map((p) => p.candidate?.name).slice(0, 6).join(", ")}
-          {pending.length > 6 ? ` +${pending.length - 6} more` : ""} — assessment cannot be marked Completed until every candidate has a final result (Rule 43).
+          {pending.length > 6 ? ` +${pending.length - 6} more` : ""} — assessment cannot be marked Completed until every candidate has a final result.
         </div>
       )}
 
@@ -2274,7 +2272,7 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
             <b className="text-green-700">{certReady.length} can take a certificate now</b> (Pass, none attached yet)
             {certDone.length > 0 && <> · <span className="text-gray-500">{certDone.length} already have one</span></>}
             {pending.length > 0 && <> · <span className="text-amber-700">{pending.length} not marked yet — mark the result first</span></>}
-            {notPassed.length > 0 && <> · <span className="text-gray-500">{notPassed.length} Fail/Absent — no certificate (Rule 45)</span></>}
+            {notPassed.length > 0 && <> · <span className="text-gray-500">{notPassed.length} Fail/Absent — no certificate</span></>}
           </p>
           {/* -109: and the hours picture, split honestly. Lumping "no data" in with "did not make
               the bar" is what made 45 students at Bhadohi read "not eligible" over a parse failure. */}
@@ -2284,10 +2282,10 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
               {attMeta.portal_working_days ? `, portal shows ${attMeta.portal_working_days} working days` : ""}
               {attMeta.course_finished ? ", course over" : ", course still running"}):{" "}
               <span className="text-green-700">{attMeta.verdict_counts.qualified ?? 0} qualified</span>
-              {(attMeta.verdict_counts.in_progress ?? 0) > 0 && <> · <span className="text-amber-700">{attMeta.verdict_counts.in_progress} still short (course running — not a verdict)</span></>}
+              {(attMeta.verdict_counts.in_progress ?? 0) > 0 && <> · <span className="text-amber-700">{attMeta.verdict_counts.in_progress} still short (course running)</span></>}
               {(attMeta.verdict_counts.no_hours ?? 0) > 0 && <> · <span className="text-gray-500">{attMeta.verdict_counts.no_hours} with <b>no portal hours imported</b></span></>}
               {(attMeta.verdict_counts.not_eligible ?? 0) > 0 && <> · <span className="text-red-700">{attMeta.verdict_counts.not_eligible} not eligible</span></>}
-              {(attMeta.verdict_counts.not_enrolled ?? 0) > 0 && <> · <span className="text-gray-500">{attMeta.verdict_counts.not_enrolled} not enrolled yet (no verdict until they are)</span></>}
+              {(attMeta.verdict_counts.not_enrolled ?? 0) > 0 && <> · <span className="text-gray-500">{attMeta.verdict_counts.not_enrolled} not enrolled yet</span></>}
             </p>
           )}
 
@@ -2309,26 +2307,38 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
               <input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" disabled={uploading}
                 onChange={(e) => { uploadCertificates(e.target.files); e.target.value = ""; }} />
             </label>
-            <span className="text-xs text-gray-500">
-              You will see every file with the candidate it is going to, and can change any of them, <b>before</b> anything is saved.
-              A file named <span className="font-mono">CAN_12345.pdf</span> is matched for you. Or upload from a candidate&apos;s own card below — no file name needed.
+            <span className="cursor-help text-xs text-gray-500" title="Every file is shown with the candidate it is going to, and you can change any of them, before anything is saved. A file named CAN_12345.pdf is matched for you. Or upload from a candidate's own card below — no file name needed.">
+              Preview first, then save · <span className="font-mono">CAN_12345.pdf</span> matches itself · <span className="underline decoration-dotted">?</span>
             </span>
           </div>
 
-          {certUpload && (
-            <div className="space-y-1 border-t border-gray-100 pt-2 text-xs">
-              <p className="font-medium text-gray-700">
-                {certUpload.summary?.attached ?? 0} attached
-                {certUpload.summary?.refused ? ` · ${certUpload.summary.refused} refused` : ""}
-                {certUpload.summary?.discarded ? ` · ${certUpload.summary.discarded} discarded` : ""}
-                {certUpload.linked != null ? ` · ${certUpload.linked} portal IDs linked` : ""}
-              </p>
-              {(certUpload.attached ?? []).map((m: any, i: number) => (
-                <p key={`a${i}`} className="text-green-700">✓ {m.original} → {m.candidate}</p>
-              ))}
-              {(certUpload.refused ?? []).map((u: any, i: number) => (
-                <p key={`r${i}`} className="text-amber-700">✗ {u.reason}</p>
-              ))}
+          {linkNote && <Notice kind="success" onDismiss={() => setLinkNote(null)}>{linkNote}</Notice>}
+          {/* -111 (Umesh 18/08, "certificate upload ke baad notification aata hai aur wahin reh jaata
+              hai"): the report is two notices now. What WORKED is a success notice — × to dismiss, and
+              it leaves by itself in ~15s. What was REFUSED stays until dismissed, because a refusal
+              is something to act on, not to glance at. */}
+          {certUpload && (certOk || (certUpload.refused ?? []).length > 0) && (
+            <div className="space-y-2 border-t border-gray-100 pt-2 text-xs">
+              {certOk && (
+                <Notice kind={(certUpload.summary?.attached ?? 0) > 0 ? "success" : "info"} onDismiss={() => setCertOk(false)}>
+                  <p className="font-medium">
+                    {certUpload.summary?.attached ?? 0} attached
+                    {certUpload.summary?.discarded ? ` · ${certUpload.summary.discarded} discarded` : ""}
+                    {certUpload.linked != null ? ` · ${certUpload.linked} portal IDs linked` : ""}
+                  </p>
+                  {(certUpload.attached ?? []).map((m: any, i: number) => (
+                    <p key={`a${i}`}>✓ {m.original} → {m.candidate}</p>
+                  ))}
+                </Notice>
+              )}
+              {(certUpload.refused ?? []).length > 0 && (
+                <Notice kind="error" onDismiss={() => setCertUpload((c: any) => c && { ...c, refused: [] })}>
+                  <p className="font-medium">{certUpload.refused.length} refused — fix and upload again</p>
+                  {certUpload.refused.map((u: any, i: number) => (
+                    <p key={`r${i}`}>✗ {u.reason}</p>
+                  ))}
+                </Notice>
+              )}
             </div>
           )}
         </div>
@@ -2387,7 +2397,7 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
             if (c.result !== "Pass") {
               return {
                 tone: "border-amber-300 bg-amber-50", bad: true,
-                msg: c.result ? `${c.name}: result is ${c.result} — a certificate needs a Pass (Rule 45)` : `${c.name}: result not marked yet — mark Pass and this will attach (Rule 45)`,
+                msg: c.result ? `${c.name}: result is ${c.result} — a certificate needs a Pass` : `${c.name}: result not marked yet — mark Pass and this will attach`,
                 markPass: !c.result || c.result === "Pending" ? m : null,
               };
             }
@@ -2474,7 +2484,7 @@ function CandidateResults({ batchId, batch, setError, onChanged }: any) {
 
       <Drawer open={certDrawer} onClose={() => setCertDrawer(false)} title="Issue certificates" wide>
         <div className="space-y-3">
-          <p className="text-sm text-gray-600">Only candidates who passed appear here — no certificate without a Pass (Rule 45).</p>
+          <p className="text-sm text-gray-600">Only candidates who passed appear here — no certificate without a Pass.</p>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Certificate date"><input type="date" className={inputCls} value={certForm.certificate_date ?? ""} onChange={(e) => setCertForm({ ...certForm, certificate_date: e.target.value })} /></Field>
             <Field label="Number prefix (auto-fill)">

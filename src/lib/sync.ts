@@ -188,8 +188,13 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
       }
       if (incoming === stored) continue;
       // Rule 1: only differing mapped fields become SheetChange rows.
-      // Avoid duplicate Open change for same location+field+new_value.
-      const dup = await SheetChange.findOne({ sync_source: src._id, location: loc?._id ?? null, field_name: field, new_value: incoming, status: "Open" });
+      // -111 (Umesh 18/08: "user ne jin pe action le liya, wo wapas nahi aane chahiye"): the
+      // duplicate check used to look at OPEN rows only. The moment a user Actioned or Ignored a
+      // change, the same standing difference stopped counting as a duplicate — and the next tick
+      // recreated it. A decision the user has already made is a decision, not a fresh diff, so a
+      // matching row in ANY status suppresses re-creation. It only comes back if the sheet
+      // actually changes to a NEW value.
+      const dup = await SheetChange.findOne({ sync_source: src._id, location: loc?._id ?? null, field_name: field, new_value: incoming, status: { $in: ["Open", "Actioned", "Ignored"] } });
       if (dup) continue;
       await SheetChange.create({
         sync_source: src._id,
@@ -265,7 +270,7 @@ export async function applySheetChange(changeId: string, action: string, note: s
       const raw = String(change.new_value ?? "").trim().replace(/,/g, "");
       if (!/^\d+$/.test(raw)) {
         throw new HttpError(400,
-          `Rule 4: "${change.new_value ?? ""}" is not a whole number, so the approved target was not changed. Correct the sheet cell, or set the target by hand on the location.`);
+          `"${change.new_value ?? ""}" is not a whole number, so the approved target was not changed. Correct the sheet cell, or set the target by hand on the location.`);
       }
       const value = Number(raw);
       await LocationTarget.findOneAndUpdate(
@@ -396,7 +401,9 @@ export async function settleChangeIfDone(changeId: unknown) {
 }
 
 // Rule 9: bulk ignore
-export async function bulkIgnore(changeIds: string[], actorId: string) {
+// -111: `note` rides along so an archive is self-describing on the row ("pre-wipe baseline, archived
+// 18/08 — start from zero") rather than a mystery Ignore.
+export async function bulkIgnore(changeIds: string[], actorId: string, note?: string) {
   // 2026-08-12 audit (sync S1-8): this closed out every selected change unconditionally, so a
   // change that had already been Applied and was sitting Open only because its follow-ups were
   // still Pending (Rule 7's whole purpose) could be swept away through the Ignore door — and
@@ -412,12 +419,12 @@ export async function bulkIgnore(changeIds: string[], actorId: string) {
     await SheetChange.updateMany(
       // Only a change nobody has acted on yet becomes a plain "No action" ignore.
       { _id: { $in: ignorable }, status: "Open", action_taken: null },
-      { $set: { status: "Ignored", action_taken: "No action", actor: actorId, actioned_at: new Date() } },
+      { $set: { status: "Ignored", action_taken: "No action", actor: actorId, actioned_at: new Date(), ...(note ? { note } : {}) } },
     );
     // An already-applied change keeps the action it recorded; it is simply settled.
     await SheetChange.updateMany(
       { _id: { $in: ignorable }, status: "Open", action_taken: { $ne: null } },
-      { $set: { status: "Ignored", actor: actorId, actioned_at: new Date() } },
+      { $set: { status: "Ignored", actor: actorId, actioned_at: new Date(), ...(note ? { note } : {}) } },
     );
   }
   return { ignored: ignorable.length, skipped: blocked.size };

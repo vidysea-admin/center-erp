@@ -416,7 +416,7 @@ function TrainersInfra({ locationId, setError }: any) {
         </Section>
       )}
 
-      <Section title="Rooms (identity matters for conflicts — Rule 13)">
+      <Section title="Rooms (each room is booked per batch — name them so clashes are visible)">
         {/* 2026-08-13 parity: the PATCH route existed with zero UI callers — a mistyped room
             name or a room taken out of service could only be fixed in Mongo, while rooms are a
             hard readiness blocker. Row click edits in place. */}

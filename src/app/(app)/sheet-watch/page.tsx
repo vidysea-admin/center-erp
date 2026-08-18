@@ -26,6 +26,11 @@ export default function SheetWatchPage() {
   const [status, setStatus] = useState("New");
   const [tab, setTab] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [openCounts, setOpenCounts] = useState<{ watch?: number; sync?: number }>({});
+  useEffect(() => {
+    api("/api/workbook-changes?count=1").then((d) => setOpenCounts((c) => ({ ...c, watch: d.count ?? 0 }))).catch(() => {});
+    api("/api/sheet-changes?count=1").then((d) => setOpenCounts((c) => ({ ...c, sync: d.count ?? 0 }))).catch(() => {});
+  }, []);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -115,9 +120,11 @@ export default function SheetWatchPage() {
       </div>
       {/* 2026-08-14 (Umesh): one sheet = one section. Watch (cell history) and Inbox
           (apply-able field suggestions) are two views of the SAME workbook now. */}
+      {/* -111: the sidebar badge sums BOTH inboxes; here each tab carries its own open count so a
+          stale pile in one can never hide behind the total again (38 = 1 + 37, measured 18/08). */}
       <RouteTabs active="/sheet-watch" tabs={[
-        { href: "/sheet-watch", label: "Sheet Watch (cell changes)" },
-        { href: "/sync", label: "Sync Inbox (apply suggestions)" },
+        { href: "/sheet-watch", label: "Sheet Watch (cell changes)", count: openCounts.watch },
+        { href: "/sync", label: "Sync Inbox (apply suggestions)", count: openCounts.sync },
       ]} />
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
       {/* 2026-08-12: any sheet can be added here — the feature is no longer one hard-coded URL. */}

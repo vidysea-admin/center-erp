@@ -334,7 +334,7 @@ function Users({ setError }: any) {
             <RolePresetSummary role={form.role} />
           </Field>
           {["Location", "Trainer"].includes(form.role) && (
-            <Field label="Location scope (Rule 38 — server-enforced)">
+            <Field label="Which centres this account can see">
               <select multiple className={inputCls + " h-32"} value={form.location_scope ?? []}
                 onChange={(e) => set("location_scope", [...e.target.selectedOptions].map((o) => o.value))}>
                 {locations.map((l) => <option key={l._id} value={l._id} title={l.name}>{l.name}</option>)}
@@ -348,7 +348,7 @@ function Users({ setError }: any) {
               )}
             </Field>
           )}
-          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!form.can_edit} onChange={(e) => set("can_edit", e.target.checked)} /> Can edit (off = view only, Rule 39)</label>
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!form.can_edit} onChange={(e) => set("can_edit", e.target.checked)} /> Can edit (off = view only)</label>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.active ?? true} onChange={(e) => set("active", e.target.checked)} /> Active</label>
           {/* 2026-08-11 (CEO): "किसी को special देने तो admin दे पाएगा" */}
           {edit && <SpecialGrants form={form} set={set} />}
@@ -568,7 +568,7 @@ function SyncSources({ setError }: any) {
 
   return (
     <div className="space-y-4">
-      <Section title="Sync sources (external sheets — Rules 1–2)">
+      <Section title="Sync sources (external sheets)">
         {result && <p className="mb-2 rounded bg-blue-50 px-3 py-2 text-sm text-blue-700">{result}</p>}
         <DataTable rows={items} onRowClick={open}
           cardTitle={(r: any) => r.name}
@@ -933,7 +933,7 @@ function DefaultsTab({ setError }: any) {
             <input type="checkbox" className="mt-1" checked={form.fee_required_for_enrollment === true}
               onChange={(e) => setForm({ ...form, fee_required_for_enrollment: e.target.checked })} />
             <span>
-              <span className="font-medium">Enrollment requires the fee to be paid (Rule 54)</span>
+              <span className="font-medium">Enrollment requires the fee to be paid</span>
               <span className="block text-xs text-gray-500">On: enrollment cannot complete until a fee payment is recorded on the candidate. Off (default): the fee fields are informational.</span>
             </span>
           </label>

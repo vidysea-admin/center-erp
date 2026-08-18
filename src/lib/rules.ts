@@ -305,7 +305,7 @@ export async function assertTrainerAvailableForBatch(
     const hours = [slot, ...sameDaySlotted].reduce((sum, b) => sum + (slotHoursPerDay(b) ?? 0), 0);
     if (hours > maxDailyHours) {
       throw new HttpError(409,
-        `Rule 10: Trainer ${trainer.name} would teach ${hours}h on overlapping days (${sameDaySlotted.map((b) => `${b.code} ${b.slot_start}–${b.slot_end}`).join(", ")} + this batch ${slot.slot_start}–${slot.slot_end}); max daily hours = ${maxDailyHours}.`);
+        `Trainer ${trainer.name} would teach ${hours}h on overlapping days (${sameDaySlotted.map((b) => `${b.code} ${b.slot_start}–${b.slot_end}`).join(", ")} + this batch ${slot.slot_start}–${slot.slot_end}); max daily hours = ${maxDailyHours}.`);
     }
   }
   // 2026-08-12 audit F-001: Admin → Defaults shows a "Max concurrent batches" field, but Rule 10
@@ -317,7 +317,7 @@ export async function assertTrainerAvailableForBatch(
   if (overlapping.length + 1 > cap) {
     const c = overlapping[0];
     throw new HttpError(409,
-      `Rule 10: Trainer ${trainer.name} already assigned to batch ${c.code} at ${c.location?.name ?? "?"} (${new Date(batchRange(c)[0]).toDateString()} – ${new Date(batchRange(c)[1]).toDateString()}); max concurrent = ${cap}.`);
+      `Trainer ${trainer.name} already assigned to batch ${c.code} at ${c.location?.name ?? "?"} (${new Date(batchRange(c)[0]).toDateString()} – ${new Date(batchRange(c)[1]).toDateString()}); max concurrent = ${cap}.`);
   }
 }
 
@@ -776,8 +776,8 @@ export async function validateDailyLog(batchId: string, log_date: Date, payload:
       const who = m?.candidate?.name ?? "That candidate";
       const when = D.toLocaleDateString("en-IN");
       throw new HttpError(400, m?.left_on
-        ? `Rule 29: ${who} left this batch on ${new Date(m.left_on).toLocaleDateString("en-IN")}, so they were not on the roster on ${when}. Untick them to save.`
-        : `Rule 29: ${who} was not on this batch's roster on ${when}.`);
+        ? `${who} left this batch on ${new Date(m.left_on).toLocaleDateString("en-IN")}, so they were not on the roster on ${when}. Untick them to save.`
+        : `${who} was not on this batch's roster on ${when}.`);
     }
   }
   // Rule 51 (Karunn 2026-08-13): "biometric done & present" and "not done & present" are both
@@ -1145,7 +1145,7 @@ export async function upsertCandidateResult(batchId: string, memberId: string, p
   const closureNow = await Closure.findOne({ batch: batchId }).select("assessment_status").lean<any>();
   if (closureNow?.assessment_status === "Completed" && !(await batchUsesPerCandidateResults(batchId))) {
     throw new HttpError(409,
-      "Rule 42: assessment was already completed with batch-level figures. Reopen the assessment before marking candidates individually, so the totals are rebuilt from the roster rather than overwritten.");
+      "Assessment was already completed with batch-level figures. Reopen the assessment before marking candidates individually, so the totals are rebuilt from the roster rather than overwritten.");
   }
   const member = await BatchMember.findById(memberId).select("batch candidate").lean<any>();
   if (!member) throw new HttpError(404, "Batch member not found");
@@ -1970,7 +1970,7 @@ export function eligibilityVerdict(opts: {
   return {
     state: "not_eligible", qualified: false,
     label: "Not eligible",
-    detail: `${attendedHours} of ${requiredHours} hrs and the course is over — short by ${Math.max(0, requiredHours - attendedHours)} hrs (Rule 45: no certificate without a Pass, and no assessment without the hours)`,
+    detail: `${attendedHours} of ${requiredHours} hrs and the course is over — short by ${Math.max(0, requiredHours - attendedHours)} hrs (no certificate without a Pass, and no assessment without the hours)`,
   };
 }
 

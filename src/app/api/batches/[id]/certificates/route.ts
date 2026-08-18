@@ -171,12 +171,12 @@ function verdictFor(member: any, batch: any, resultByCandidate: Map<string, any>
   if (!row) {
     return batch.status === "Completed"
       ? { ok: true, blocker: null, note: `${name} has no result row — the certificate itself will record the Pass (late arrival)` }
-      : { ok: false, blocker: `${name}: result not marked yet — mark Pass first, then the certificate attaches (Rule 45)`, fixable: "mark_pass" };
+      : { ok: false, blocker: `${name}: result not marked yet — mark Pass first, then the certificate attaches`, fixable: "mark_pass" };
   }
-  if (row.result !== "Pass") return { ok: false, blocker: `${name}: result is ${row.result} — a certificate needs a Pass (Rule 45)` };
+  if (row.result !== "Pass") return { ok: false, blocker: `${name}: result is ${row.result} — a certificate needs a Pass` };
   if (row.certificate_file) {
     return batch.status === "Completed"
-      ? { ok: false, blocker: `${name}: already has a certificate and the batch is Completed — frozen (DEC-6)` }
+      ? { ok: false, blocker: `${name}: already has a certificate and the batch is Completed — frozen` }
       : { ok: true, blocker: null, note: `${name} already has a certificate — this will replace it, and the old file is removed` };
   }
   return { ok: true, blocker: null };
@@ -224,10 +224,10 @@ async function attachPairs(opts: {
     // result Pass (Rule 45 satisfied by the certificate itself), the file, status Issued.
     // Anything already recorded stays frozen (DEC-6) - this creates, never rewrites.
     const lateCreate = !row && batch.status === "Completed";
-    if (!row && !lateCreate) { refuse(`${candName}: result not marked yet - mark Pass first, then the certificate attaches (Rule 45)`, candName); continue; }
-    if (row && row.result !== "Pass") { refuse(`${candName}: result is ${row.result} - a certificate needs a Pass (Rule 45)`, candName); continue; }
+    if (!row && !lateCreate) { refuse(`${candName}: result not marked yet — mark Pass first, then the certificate attaches`, candName); continue; }
+    if (row && row.result !== "Pass") { refuse(`${candName}: result is ${row.result} — a certificate needs a Pass`, candName); continue; }
     if (batch.status === "Completed" && row?.certificate_file) {
-      refuse(`${candName}: already has a certificate file and the batch is Completed - frozen (DEC-6)`, candName);
+      refuse(`${candName}: already has a certificate file and the batch is Completed — frozen, it cannot be replaced`, candName);
       continue;
     }
 
@@ -249,7 +249,7 @@ async function attachPairs(opts: {
         // upsertCandidateCertificate, whose Completed-freeze stays intact for everything else.
         const doc = await CandidateResult.findById(row._id);
         if (!doc) { refuse(`${candName}: result row vanished`, candName); continue; }
-        if (doc.certificate_file) { refuse(`${candName}: certificate file arrived meanwhile - frozen (DEC-6)`, candName); continue; }
+        if (doc.certificate_file) { refuse(`${candName}: a certificate file arrived meanwhile — frozen, it cannot be replaced`, candName); continue; }
         doc.certificate_file = url;
         await doc.save();
         resultId = String(doc._id);

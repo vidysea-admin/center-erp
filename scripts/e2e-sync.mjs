@@ -516,6 +516,26 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
     await req("POST", `/api/sheet-changes/${openTm._id}/revert`, {}, 200);
     const afterRevert = (await req("GET", `/api/candidates/${openTm.entity}`)).data.item;
     ok("Revert restores the previous value exactly", afterRevert?.name === nBinod, afterRevert?.name);
+
+    // -111 (Umesh 18/08, "user acknowledge kar raha hai … phir se saare sync wapas kar deta hai"):
+    // the row is Ignored now, the entity holds the OLD value, and the sheet STILL says "Binod
+    // Singh". Move an unrelated cell on the same tab so the tab is re-ingested — before -111 the
+    // dedupe looked at Open rows only, so the very same change was created again right here.
+    candTab[2][0] = nAsha + " Devi";
+    await req("PATCH", `/api/sync-sources/${srcTm._id}`, { source_url: wbDataUrl({ "Reg July": candTab, "Trainer_Master": trTab }) }, 200);
+    await req("POST", `/api/sync-sources/${srcTm._id}/run`, undefined, 200);
+    const allBinod = ((await req("GET", "/api/sheet-changes?status=all")).data.items ?? [])
+      .filter((c) => c.entity_type === "Candidate" && c.field_name === "name" && c.new_value === nBinod + " Singh");
+    ok("-111: a change the user already decided on (Ignored) is NOT recreated by the next tick — one row, still Ignored",
+      allBinod.length === 1 && allBinod[0].status === "Ignored", JSON.stringify(allBinod.map((c) => c.status)));
+    const ashaOpen = ((await req("GET", "/api/sheet-changes?status=Open")).data.items ?? [])
+      .find((c) => c.entity_type === "Candidate" && c.field_name === "name" && c.new_value === nAsha + " Devi");
+    ok("-111: …while a genuinely NEW cell change on that tab still becomes a review item", !!ashaOpen, "Asha Devi change not queued");
+    // Same tick again with the same sheet: still nothing new for either.
+    await req("POST", `/api/sync-sources/${srcTm._id}/run`, undefined, 200);
+    const afterTick = ((await req("GET", "/api/sheet-changes?status=all")).data.items ?? [])
+      .filter((c) => c.entity_type === "Candidate" && c.field_name === "name" && [nBinod + " Singh", nAsha + " Devi"].includes(c.new_value));
+    ok("-111: a second identical tick adds no rows (2 total: 1 Ignored + 1 Open)", afterTick.length === 2, JSON.stringify(afterTick.map((c) => [c.new_value, c.status])));
   }
 
   // A second mapping on the SAME source, different tab, different entity — trainers.

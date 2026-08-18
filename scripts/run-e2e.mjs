@@ -9,6 +9,8 @@ import path from "node:path";
 const dir = path.dirname(fileURLToPath(import.meta.url));
 
 const SUITES = [
+  // -111: static source scan — no user-facing string may carry a Rule/DEC/QA code. No server needed.
+  "check-user-copy.mjs",
   // The original eight (audit era)
   "e2e.mjs",
   "e2e-roles.mjs",

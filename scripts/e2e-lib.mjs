@@ -38,10 +38,15 @@ export async function req(cookie, method, path, body, expect) {
   let data = {};
   try { data = await res.json(); } catch {}
   if (expect !== undefined) ok(`${method} ${path} → ${expect}`, res.status === expect, `(got ${res.status}: ${JSON.stringify(data).slice(0, 150)})`);
+  // -111: every error any suite sees is scanned for a ledger code; finish() asserts none leaked.
+  if (res.status >= 400 && typeof data?.error === "string" && CODE_RX.test(data.error)) codeLeaks.push(`${method} ${path} → ${data.error.slice(0, 100)}`);
   return { status: res.status, data };
 }
+const CODE_RX = /\b(?:Rules?|DEC|QA)[-\s]?\d+\b/;
+const codeLeaks = [];
 
 export function finish() {
+  ok(`-111: no API error in this run carries a Rule/DEC/QA code (${codeLeaks.length} leak(s))`, codeLeaks.length === 0, codeLeaks.slice(0, 5).join(" | "));
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 }

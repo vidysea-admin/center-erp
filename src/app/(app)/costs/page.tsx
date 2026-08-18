@@ -120,7 +120,7 @@ function CostsInner() {
             <p className="mt-2 text-xs text-gray-500">
               {postOnly
                 ? "Your entry goes to the Admin for approval; the ledger is written only on approval."
-                : "Rule 37: at least one of location / batch / trainer. Batch-level costs are added from the batch's Costs tab."}
+                : "Pick at least one of location / batch / trainer. Batch-level costs are added from the batch's Costs tab."}
             </p>
           </Section>
           {postOnly ? (
@@ -179,7 +179,7 @@ function CostsInner() {
               { key: "raised_on", label: "Raised", sortable: true, sortValue: (r: any) => r.raised_on ? new Date(r.raised_on).getTime() : null, render: (r: any) => fmtDate(r.raised_on) },
               { key: "paid_on", label: "Paid", sortable: true, sortValue: (r: any) => r.paid_on ? new Date(r.paid_on).getTime() : null, render: (r: any) => fmtDate(r.paid_on) },
             ]} empty="No invoices yet — mark a batch Ready for Invoice from its Closure tab." />
-          <p className="mt-2 text-xs text-gray-500">Raise/mark paid from the batch's Closure tab (Rule 36 enforced there).</p>
+          <p className="mt-2 text-xs text-gray-500">Raise/mark paid from the batch's Closure tab.</p>
         </Section>
       )}
     </div>

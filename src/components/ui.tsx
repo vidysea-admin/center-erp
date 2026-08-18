@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { IconTrendDown, IconTrendUp } from "@/components/icons";
 import { sourceLink } from "@/lib/client";
+import { plain } from "@/lib/user-copy";
 
 // 2026-08-14 (Umesh): "jahan bhi table se andar jaate hain, back button hi nahi hai" —
 // every drill-down header carries this. Browser-back when there is history (keeps scroll
@@ -706,14 +707,53 @@ export function SourceCell({ source, fallback = "Entered in ERP" }: { source?: s
   );
 }
 
-export function ErrorBanner({ msg, onDismiss }: { msg: string; onDismiss?: () => void }) {
-  if (!msg) return null;
+// -111 (Umesh 18/08): "notification aata hai aur wahin reh jaata hai — 10-15 second me hat jaye, ya
+// user ke paas cut karne ka option ho." Both. A notice that TELLS you something (success/info) has
+// a × and leaves on its own after ~15s, with a thin bar so it is visibly leaving and hover pauses it.
+// A notice that STOPS you (error) has the × and never auto-hides — you have to read it. Until now
+// there was no such component at all: successes were inline blocks that stayed until reload, and
+// errors were ErrorBanner, which now renders through this.
+export function Notice({ kind = "info", children, onDismiss, autoHideMs }: {
+  kind?: "success" | "info" | "error"; children: ReactNode; onDismiss?: () => void; autoHideMs?: number;
+}) {
+  const hide = autoHideMs ?? (kind === "error" ? 0 : 15_000);
+  const [paused, setPaused] = useState(false);
+  const [left, setLeft] = useState(hide);
+  useEffect(() => {
+    if (!hide || !onDismiss) return;
+    if (paused) return;
+    const started = Date.now();
+    const from = left;
+    const t = setInterval(() => {
+      const remain = from - (Date.now() - started);
+      if (remain <= 0) { clearInterval(t); onDismiss(); } else setLeft(remain);
+    }, 100);
+    return () => clearInterval(t);
+  }, [paused, hide]); // eslint-disable-line react-hooks/exhaustive-deps
+  const tone = kind === "error" ? "border-red-200 bg-red-50 text-red-700"
+    : kind === "success" ? "border-green-200 bg-green-50 text-green-800"
+      : "border-blue-200 bg-blue-50 text-blue-900";
+  const bar = kind === "success" ? "bg-green-400" : "bg-blue-400";
   return (
-    <div className="mb-3 flex items-start justify-between rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">
-      <span>{msg}</span>
-      {onDismiss && <button onClick={onDismiss} className="ml-3 font-bold">×</button>}
+    <div role={kind === "error" ? "alert" : "status"}
+      onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)}
+      className={`relative mb-3 overflow-hidden rounded-lg border px-4 py-2.5 text-sm ${tone}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">{children}</div>
+        {onDismiss && <button onClick={onDismiss} aria-label="Dismiss" className="ml-1 shrink-0 font-bold leading-none opacity-70 hover:opacity-100">×</button>}
+      </div>
+      {!!hide && onDismiss && (
+        <div className={`absolute bottom-0 left-0 h-0.5 ${bar} opacity-60`} style={{ width: `${Math.max(0, (left / hide) * 100)}%`, transition: "width 100ms linear" }} />
+      )}
     </div>
   );
+}
+
+// Errors keep their old name and behaviour (never auto-hide); the ledger codes are stripped at this
+// door too (-111), the client twin of apiHandler's plain().
+export function ErrorBanner({ msg, onDismiss }: { msg: string; onDismiss?: () => void }) {
+  if (!msg) return null;
+  return <Notice kind="error" onDismiss={onDismiss}>{plain(msg)}</Notice>;
 }
 
 const KPI_TONES: Record<string, string> = {
@@ -773,7 +813,11 @@ export function NameCell({ name, sub }: { name?: string; sub?: string }) {
   );
 }
 
-export function Section({ title, children, actions, titleHref }: { title: string; children: ReactNode; actions?: ReactNode; titleHref?: string }) {
+// -111 (Umesh 18/08): "wo scrollable wala part bahut zyada space leta tha, infinite — instead of
+// a limited card ka space jisme scroller laga ho." `maxRows` caps the body at roughly that many
+// rows and scrolls INSIDE the card; the count already lives in the title, and `titleHref` doubles
+// as the "View all →" link so nothing is lost. Opt-in, so every other Section is untouched.
+export function Section({ title, children, actions, titleHref, maxRows }: { title: string; children: ReactNode; actions?: ReactNode; titleHref?: string; maxRows?: number }) {
   return (
     <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(16,24,40,.04)]">
       {/* QA-120: flex-wrap — a Section whose actions carry two buttons (Closure's marking
@@ -785,9 +829,12 @@ export function Section({ title, children, actions, titleHref }: { title: string
         ) : (
           <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
         )}
-        {actions}
+        <span className="flex items-center gap-2">
+          {actions}
+          {maxRows && titleHref && <Link href={titleHref} className="text-xs font-medium text-blue-700 hover:underline">View all →</Link>}
+        </span>
       </div>
-      <div className="p-4">{children}</div>
+      <div className={maxRows ? "overflow-y-auto p-4" : "p-4"} style={maxRows ? { maxHeight: `${maxRows * 3.1 + 2}rem` } : undefined}>{children}</div>
     </div>
   );
 }

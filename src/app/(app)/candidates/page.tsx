@@ -505,7 +505,7 @@ function CandidatesInner() {
         <div className="space-y-3">
           <p className="text-sm text-gray-600">
             Currently at <b>{dropT ? (isFresh(dropT) ? freshJourneyOf(dropT) : journeyOf(dropT)) : ""}</b> — the drop
-            is recorded at this stage, with your reason. {dropT?.active_batch ? "They are on a batch roster; the roster drop happens too (results already recorded stay, Rule 42)." : ""}
+            is recorded at this stage, with your reason. {dropT?.active_batch ? "They are on a batch roster; the roster drop happens too (results already recorded stay)." : ""}
           </p>
           <Field label="Reason" required>
             {dropReasons.length > 0 && (

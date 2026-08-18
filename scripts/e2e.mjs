@@ -21,8 +21,13 @@ async function req(method, path, body, expectStatus) {
   if (expectStatus !== undefined) {
     ok(`${method} ${path} → ${expectStatus}`, res.status === expectStatus, `(got ${res.status}: ${JSON.stringify(data).slice(0, 120)})`);
   }
+  // -111: every error the wall ever sees is scanned for a ledger code — the pin covers every
+  // refusal path the suite exercises, not five hand-picked ones. Asserted once at the end.
+  if (res.status >= 400 && typeof data?.error === "string" && CODE_RX.test(data.error)) codeLeaks.push(`${method} ${path} → ${data.error.slice(0, 100)}`);
   return { status: res.status, data };
 }
+const CODE_RX = /\b(?:Rules?|DEC|QA)[-\s]?\d+\b/;
+const codeLeaks = [];
 
 // ---- login ----
 const csrfRes = await fetch(BASE + "/api/auth/csrf");
@@ -282,8 +287,8 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   const byDay = Object.fromEntries((bulk.results ?? []).map((r) => [r.log_date, r]));
   ok("-82: bulk creates the open days (2) and answers per day", bulk.created === 2 && byDay[dayN(-4)]?.status === "created" && byDay[dayN(-2)]?.status === "created", JSON.stringify(bulk.results));
   ok("-82: an already-logged day is reported 'exists', not duplicated", byDay[dayN(-3)]?.status === "exists", JSON.stringify(byDay[dayN(-3)]));
-  ok("-82: a day before the real start fails Rule 32 for that day only", byDay[dayN(-6)]?.status === "error" && /Rule 32/.test(byDay[dayN(-6)]?.message ?? ""), JSON.stringify(byDay[dayN(-6)]));
-  ok("-82: a future day fails Rule 53 for that day only", byDay[dayN(1)]?.status === "error" && /Rule 53/.test(byDay[dayN(1)]?.message ?? ""), JSON.stringify(byDay[dayN(1)]));
+  ok("-82: a day before the real start fails Rule 32 for that day only", byDay[dayN(-6)]?.status === "error" && /before batch actual start/.test(byDay[dayN(-6)]?.message ?? ""), JSON.stringify(byDay[dayN(-6)]));
+  ok("-82: a future day fails Rule 53 for that day only", byDay[dayN(1)]?.status === "error" && /future date/.test(byDay[dayN(1)]?.message ?? ""), JSON.stringify(byDay[dayN(1)]));
   const bdAtt = (await req("GET", `/api/batches/${bdBatch._id}/attendance`)).data;
   ok("-82: the Attendance tab now counts 3 days held, member present on 2 of them", bdAtt.days_held === 3 && bdAtt.members.find((m) => m.member_id === String(bdMem._id))?.internal_days === 2, JSON.stringify({ held: bdAtt.days_held, m: bdAtt.members.map((m) => [m.name, m.internal_days]) }));
   const again = (await req("POST", `/api/batches/${bdBatch._id}/logs/bulk`, { days: [{ log_date: dayN(-4), present_member_ids: [], trainer_present: true }] }, 200)).data;
@@ -501,7 +506,7 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
       const row1 = (await req("GET", `/api/batches/${cb._id}/results`)).data.items.find((i) => String(i.member) === String(cm[1]._id)).result;
       const refused = await req("PATCH", `/api/results/${row1._id}`, { certificate_file: up.url });
       await req("PUT", `/api/batches/${cb._id}/results`, { rows: [{ member: String(cm[1]._id), result: "Pass", score: 70, assessed_on: today }] }, 200);
-      return refused.status === 409 && /Rule 45/.test(String(refused.data?.error ?? ""));
+      return refused.status === 409 && /no certificate without a Pass/i.test(String(refused.data?.error ?? ""));
     })());
     // …and the -101 remove door still takes it off again, which is what the card offers beside it.
     ok("-108: the -101 removal door still works on a per-candidate upload",
@@ -513,10 +518,10 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   await req("PUT", `/api/batches/${cb._id}/results`, { rows: [{ member: String(cm[1]._id), result: "Absent", assessed_on: today }] }, 200);
   const pre2 = await certPreview(cb._id, [[`CAN_882${stamp}.pdf`, pdf2]], 200);
   ok("-108: the PREVIEW already names the Rule 45 blocker, before anything is written",
-    pre2.staged?.[0]?.ok === false && /Rule 45/.test(String(pre2.staged?.[0]?.blocker)), JSON.stringify(pre2.staged?.[0]?.blocker));
+    pre2.staged?.[0]?.ok === false && /needs a Pass|mark Pass first/.test(String(pre2.staged?.[0]?.blocker)), JSON.stringify(pre2.staged?.[0]?.blocker));
   const refused = await certConfirm(cb._id, [{ url: pre2.staged[0].url, member: String(cm[1]._id) }]);
   ok("-108: and confirming it anyway is still refused (Rule 45 is enforced on the write, not just shown)",
-    refused.summary?.attached === 0 && /Rule 45/.test(String(refused.refused?.[0]?.reason)), JSON.stringify(refused.refused?.[0]?.reason));
+    refused.summary?.attached === 0 && /needs a Pass|mark Pass first/.test(String(refused.refused?.[0]?.reason)), JSON.stringify(refused.refused?.[0]?.reason));
 
   // (d) An unmapped file is discarded, not abandoned in the bucket.
   const pre3 = await certPreview(cb._id, [["no-id-at-all.pdf", pdf2]], 200);
@@ -555,7 +560,7 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   await req("PATCH", `/api/logs/${log._id}`, { present_member_ids: withRm }, 200);
   const blocked = await req("DELETE", `/api/members/${rmMem._id}`, { reason: "-102 pin: should be refused, they have attendance" });
   ok("-102: a roster row with attendance on record refuses removal (409) and says to drop instead",
-    blocked.status === 409 && /attendance on 1 day/i.test(String(blocked.data?.error ?? "")) && /Rule 25/.test(String(blocked.data?.error ?? "")),
+    blocked.status === 409 && /attendance on 1 day/i.test(String(blocked.data?.error ?? "")) && /drop them instead/i.test(String(blocked.data?.error ?? "")),
     `${blocked.status} ${String(blocked.data?.error ?? "").slice(0, 120)}`);
   // Take the attendance back off, and it becomes removable.
   await req("PATCH", `/api/logs/${log._id}`, { present_member_ids: withRm.filter((x) => x !== String(rmMem._id)) }, 200);
@@ -741,7 +746,7 @@ ok("R-J: per-position numbering keeps the centre × course prefix",
   await req("PUT", "/api/defaults", { fee_required_for_enrollment: true }, 200);
   const blocked = await req("PATCH", `/api/members/${mem5._id}`, { reg_done: true, kyc_done: true, accept_done: true });
   ok("Rule 54: toggle ON — enrollment refuses without a fee on record",
-    blocked.status === 409 && /Rule 54/.test(blocked.data?.error ?? ""), `got ${blocked.status} ${blocked.data?.error ?? ""}`);
+    blocked.status === 409 && /no fee payment on record/.test(blocked.data?.error ?? ""), `got ${blocked.status} ${blocked.data?.error ?? ""}`);
   await req("PATCH", `/api/candidates/${cand5._id}`, { fee_amount: 500, fee_paid_on: today, fee_reference: "UPI-" + stamp }, 200);
   const okNow = await req("PATCH", `/api/members/${mem5._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
   ok("Rule 54: fee recorded → enrollment completes", okNow.data.item.enrollment_status === "Completed", okNow.data.item.enrollment_status);
@@ -951,7 +956,7 @@ ok("cert bulk: the 3 unplaceable files each carry a reason",
   up1.summary?.unmatched === 3 && up1.unmatched?.every((u) => u.reason?.length > 5),
   JSON.stringify(up1.unmatched));
 ok("cert bulk: Rule 45 names the Fail refusal",
-  up1.unmatched?.some((u) => /Rule 45/.test(u.reason)), JSON.stringify(up1.unmatched));
+  up1.unmatched?.some((u) => /needs a Pass/.test(u.reason)), JSON.stringify(up1.unmatched));
 const afterUp = (await req("GET", `/api/batches/${b4._id}/results`)).data.items;
 const upPassRow = afterUp.find((i) => i.result?.result === "Pass").result;
 ok("cert bulk: certificate_file landed on the result row", /\/api\/files\//.test(upPassRow.certificate_file ?? ""), upPassRow.certificate_file);
@@ -1107,7 +1112,7 @@ ok("candidate result history available", candHistory.items?.length >= 1 && candH
 // Rewriting an existing certificate file after completion is refused by name.
 const upFrozen = await certUpload(b4._id, [[`CAN_77${stamp.slice(-4)}1.pdf`, pdf]], 200);
 ok("cert bulk: Completed + existing file → frozen (DEC-6)",
-  upFrozen.summary?.matched === 0 && /DEC-6/.test(upFrozen.unmatched?.[0]?.reason ?? ""), JSON.stringify(upFrozen.unmatched));
+  upFrozen.summary?.matched === 0 && /frozen/.test(upFrozen.unmatched?.[0]?.reason ?? ""), JSON.stringify(upFrozen.unmatched));
 
 // But FILLING an absent file on a Completed batch is the CEO's own flow (the Gurgaon
 // case: batch long done, certificates arrive later as a folder) — allowed, once.
@@ -1140,7 +1145,7 @@ const r5after = (await req("GET", `/api/batches/${b5._id}/results`)).data.items.
 ok("cert bulk: late certificate visible on the result row", /\/api\/files\//.test(r5after.certificate_file ?? ""), r5after.certificate_file);
 const upLate2 = await certUpload(b5._id, [[`CAN_88${stamp.slice(-4)}.pdf`, pdf]], 200);
 ok("cert bulk: second late upload refused — the fill is once (DEC-6)",
-  upLate2.summary?.matched === 0 && /DEC-6/.test(upLate2.unmatched?.[0]?.reason ?? ""), JSON.stringify(upLate2.unmatched));
+  upLate2.summary?.matched === 0 && /frozen/.test(upLate2.unmatched?.[0]?.reason ?? ""), JSON.stringify(upLate2.unmatched));
 
 // ---- Late-ARRIVAL results (2026-08-14, Manish's Gurugram batch-1 certificates): a batch
 // completed legacy-style — batch-level closure figures, ZERO per-candidate rows — and
@@ -1174,7 +1179,7 @@ ok("late-arrival: batch-level closure figures NOT clobbered by the late row (Rul
   cl6?.appeared === 2 && cl6?.passed === 1 && cl6?.certificates_issued === 1, JSON.stringify({ appeared: cl6?.appeared, passed: cl6?.passed, ci: cl6?.certificates_issued }));
 const upNew2 = await certUpload(b6._id, [[`CAN_99${stamp.slice(-4)}.pdf`, pdf]], 200);
 ok("late-arrival: re-upload for the same candidate refused — frozen after the fill (DEC-6)",
-  upNew2.summary?.matched === 0 && /DEC-6/.test(upNew2.unmatched?.[0]?.reason ?? ""), JSON.stringify(upNew2.unmatched));
+  upNew2.summary?.matched === 0 && /frozen/.test(upNew2.unmatched?.[0]?.reason ?? ""), JSON.stringify(upNew2.unmatched));
 // QA-042 (checker): the SECOND tranche of certificates must not recompute the protected
 // batch-level figures. The old guard tested "were there rows before this request", which is
 // false once tranche one has landed — so tranche two silently rewrote closure.
@@ -2020,6 +2025,10 @@ ok("version endpoint is public and names the release", verRes.status === 200 && 
 ok("QA-099: X-Frame-Options DENY", verRes.headers.get("x-frame-options") === "DENY", String(verRes.headers.get("x-frame-options")));
 ok("QA-099: nosniff", verRes.headers.get("x-content-type-options") === "nosniff");
 ok("QA-099: HSTS present", /max-age=\d+/.test(verRes.headers.get("strict-transport-security") ?? ""), String(verRes.headers.get("strict-transport-security")));
+
+// -111 (Umesh 18/08, "rule this, rule that — user ko direct rule dikha deta hai"): not one API
+// refusal in this whole run carried a Rule/DEC/QA code — plain() at apiHandler is the door.
+ok(`-111: no API error in this run carries a Rule/DEC/QA code (${codeLeaks.length} leak(s))`, codeLeaks.length === 0, codeLeaks.slice(0, 5).join(" | "));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

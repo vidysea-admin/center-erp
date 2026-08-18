@@ -1,5 +1,6 @@
 import { auth, SessionUser } from "@/auth";
 import { NextResponse } from "next/server";
+import { plain } from "@/lib/user-copy";
 
 export class HttpError extends Error {
   status: number;
@@ -101,7 +102,10 @@ export function apiHandler<T extends unknown[]>(fn: (...args: T) => Promise<Resp
       return await fn(...args);
     } catch (e: unknown) {
       if (e instanceof HttpError) {
-        return NextResponse.json({ error: e.message }, { status: e.status });
+        // -111: every error a user can read passes through plain() — the ledger codes ("Rule 45",
+        // "DEC-6") stay in code and audit, never on a screen. Chokepoint, so a message written
+        // tomorrow with a code in it is still clean at the door.
+        return NextResponse.json({ error: plain(e.message) }, { status: e.status });
       }
       const msg = e instanceof Error ? e.message : "Internal error";
       // Mongo duplicate key → readable 409 naming the field, without leaking the raw driver text.

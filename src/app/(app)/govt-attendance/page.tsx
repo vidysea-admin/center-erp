@@ -184,8 +184,7 @@ function Inner() {
               <b>Qualified</b> = at least <b>{detail.required_hours} hours</b> on the government portal&apos;s own hour meter
               {detail.min_attendance_pct ? ` (${detail.min_attendance_pct}% of the programme)` : ""} —{" "}
               {detail.min_attendance_source === "scheme" ? "from the scheme master" : "from Defaults, until the scheme master carries hours"}.
-              {" "}<b>&ldquo;Not eligible&rdquo; is only said once the course is over</b> — while it runs, a student below the bar is still
-              in progress, and a student whose portal hours have not been imported is simply unknown. Neither is a verdict.
+              {" "}<span className="cursor-help underline decoration-dotted" title="While the course runs, a student below the bar is still in progress; a student whose portal hours are not imported yet is unknown. Neither is a verdict — &ldquo;not eligible&rdquo; is only said once the course is over.">&ldquo;Not eligible&rdquo; is only said once the course is over.</span>
               <span className="block text-gray-500">
                 <span className="text-green-700">Qualified {detail.qualified_count}</span>
                 {detail.in_progress_count > 0 && <> · <span className="text-amber-700">{detail.in_progress_count} still short (course running)</span></>}

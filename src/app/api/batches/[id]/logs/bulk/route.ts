@@ -4,6 +4,7 @@ import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { assertBatchInScope, createDailyLogChecked } from "@/lib/rules";
 import { audit } from "@/lib/audit";
+import { plain } from "@/lib/user-copy";
 
 // -82 (Umesh, 15/08): "batch ke andar Attendance tab se bhi us batch ki attendance fill karne
 // ka option, that too bulk." The Attendance tab's grid posts many days in one call. Each day
@@ -30,7 +31,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
       results.push({ log_date, status: "created", id: doc._id });
     } catch (e: any) {
       const msg = e?.message ?? String(e);
-      results.push({ log_date, status: /Rule 27/.test(msg) ? "exists" : "error", message: msg });
+      results.push({ log_date, status: /Rule 27/.test(msg) ? "exists" : "error", message: plain(msg) });
     }
   }
   const created = results.filter((r) => r.status === "created").length;

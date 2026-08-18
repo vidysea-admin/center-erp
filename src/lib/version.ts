@@ -3,8 +3,29 @@
 //     curl https://www.vidysea.com/erp/api/public/version
 // GIT_COMMIT is optional — set it at build time (docker build --build-arg / env) to also
 // surface the exact commit.
-export const RELEASE = "2026.08.14-110";
+export const RELEASE = "2026.08.14-111";
 export const RELEASE_NOTE =
+  "-111: what the user actually sees - five things Umesh named on 18/08 after using the ERP, all "
+  "measured on production in a real browser before a line changed. (1) 'Rule this, rule that - "
+  "aisa koi rule hai nahi.' Our ledger names (Rule 45, DEC-6, QA-142) were on 28 screen strings "
+  "and 52 API refusals. They are gone from every screen: plain() in lib/user-copy strips them at "
+  "the two chokepoints (apiHandler for every server error, ErrorBanner for the client), the source "
+  "strings were rewritten to what-happened-plus-what-to-do, and a static wall check "
+  "(scripts/check-user-copy.mjs) plus a passive scan of every 4xx the wall sees keep it that way. "
+  "The rules themselves are untouched; only the words. (2) Text-heavy: the Closure two-job banner "
+  "is one line with a ?, the attendance note rides on the bar chip, the certificate hint is eight "
+  "words. (3) The Home page had my own -102 Today section ABOVE the KPI cards, pushing them below "
+  "the fold, and nothing below had a height cap (2,041px, three screens). Cards are first again; "
+  "Today is a compact strip under them; every queue is a five-row box with its own scroll and a "
+  "View all link (Section maxRows, one place). (4) Sync: the watch cadence goes to once a day; a "
+  "REAL bug fixed - all three SheetChange/WorkbookChange creation sites deduped against OPEN rows "
+  "only, so a change the user had Ignored or Actioned was recreated by the next tick (the "
+  "'acknowledge kiya, wapas aa gaya'); a decision already taken now suppresses re-creation. The 37 "
+  "Open rows from the 14/08 first-sync are archived (Ignored, with a note), not deleted; the Sheet "
+  "Sync tabs each show their own open count so a stale pile can never hide behind the badge total. "
+  "(5) The certificate-upload report stayed on screen forever; there was no notice component at "
+  "all. Notice: cross always, success/info leave by themselves in 15s (progress bar, hover pauses), "
+  "errors never auto-hide. Used for the certificate report (refused lines stay) and portal-ID link. "
   "-110: SMS. EnableX carries SMS (and later WhatsApp); email stays on SES - Umesh's scope. The "
   "portal was explored end to end before a line was written: the credential in the repo's parent "
   "was a portal LOGIN, not an API key; the account holds SMS project VIDYSEA_SMS_ENABLE_X, sender "

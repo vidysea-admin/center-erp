@@ -22,6 +22,11 @@ export default function SyncInboxPage() {
   const [review, setReview] = useState<any>(null);
   const [action, setAction] = useState("");
   const [note, setNote] = useState("");
+  const [openCounts, setOpenCounts] = useState<{ watch?: number; sync?: number }>({});
+  useEffect(() => {
+    api("/api/workbook-changes?count=1").then((d) => setOpenCounts((c) => ({ ...c, watch: d.count ?? 0 }))).catch(() => {});
+    api("/api/sheet-changes?count=1").then((d) => setOpenCounts((c) => ({ ...c, sync: d.count ?? 0 }))).catch(() => {});
+  }, []);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
   const [loading, setLoading] = useState(true);
@@ -43,7 +48,7 @@ export default function SyncInboxPage() {
   async function apply() {
     try {
       const res = await api(`/api/sheet-changes/${review._id}/apply`, { method: "POST", json: { action, note } });
-      setInfo(res.followUps > 0 ? `Applied. ${res.followUps} follow-up actions generated — change stays open until they are resolved (Rule 7).` : "Applied & acknowledged.");
+      setInfo(res.followUps > 0 ? `Applied. ${res.followUps} follow-up actions generated — the change stays open until they are resolved.` : "Applied & acknowledged.");
       setReview(null); setAction(""); setNote(""); load();
     } catch (e: any) { setError(e.message); }
   }
@@ -60,9 +65,11 @@ export default function SyncInboxPage() {
         </select>
       </div>
       {/* 2026-08-14 (Umesh): one nav entry "Sheet Sync" — this page is its second tab. */}
+      {/* -111: the sidebar badge sums BOTH inboxes; here each tab carries its own open count so a
+          stale pile in one can never hide behind the total again (38 = 1 + 37, measured 18/08). */}
       <RouteTabs active="/sync" tabs={[
-        { href: "/sheet-watch", label: "Sheet Watch (cell changes)" },
-        { href: "/sync", label: "Sync Inbox (apply suggestions)" },
+        { href: "/sheet-watch", label: "Sheet Watch (cell changes)", count: openCounts.watch },
+        { href: "/sync", label: "Sync Inbox (apply suggestions)", count: openCounts.sync },
       ]} />
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
       {info && <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-2.5 text-sm text-green-700">{info} <button className="ml-2 font-bold" onClick={() => setInfo("")}>×</button></div>}
@@ -109,7 +116,7 @@ export default function SyncInboxPage() {
             </div>
             {review.impact_snapshot && review.impact_snapshot.active_batches !== undefined && (
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm">
-                <div className="mb-1 font-medium text-amber-800">Impact at detection time (Rule 3)</div>
+                <div className="mb-1 font-medium text-amber-800">Impact at detection time</div>
                 <ul className="grid grid-cols-2 gap-1 text-amber-900">
                   <li>Active batches: <b>{review.impact_snapshot.active_batches}</b></li>
                   <li>Assigned trainers: <b>{review.impact_snapshot.assigned_trainers}</b></li>
@@ -128,7 +135,7 @@ export default function SyncInboxPage() {
               <input className={inputCls} value={note} onChange={(e) => setNote(e.target.value)} />
             </Field>
             {["Stop location", "Close location"].includes(action) && (
-              <p className="text-xs text-amber-700">This will generate follow-up actions (stop batches, release trainers, cancel requests, return candidates). Nothing is cascaded silently — each follow-up needs an owner to resolve it (Rule 8).</p>
+              <p className="text-xs text-amber-700">This will generate follow-up actions (stop batches, release trainers, cancel requests, return candidates). Nothing is cascaded silently — each follow-up needs an owner to resolve it.</p>
             )}
             <Btn onClick={apply} disabled={!action}>Apply & Acknowledge</Btn>
           </div>

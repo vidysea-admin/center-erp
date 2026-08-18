@@ -32,7 +32,10 @@ const SOURCES = [
     url: CLIENT_WORKBOOK_URL,
     // Row identity: one row per Institution × Job role. S.N. renumbers on insert — never the key.
     key_columns: ["Institution Name", "Job role"],
-    set: { interval_minutes: 5, frequency: "Manual only" }, // 2026-08-13, Umesh: "make it 5 minute sync"
+    // -111 (Umesh 18/08): "har 5 minute me ho raha hai, usko 24 hours me ek baar karna hai" — supersedes
+    // his own 13/08 "make it 5 minute sync". Once a day is the cadence the client edits at; a re-run
+    // of this script must never put it back to 5.
+    set: { interval_minutes: 1440, frequency: "Manual only" },
   },
   {
     // The mapped twin of the same workbook: reads the location master and files each changed

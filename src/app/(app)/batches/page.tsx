@@ -516,7 +516,7 @@ function BatchesInner() {
               Centre, trainer and candidates are all in place for this job role.
             </p>
           )}
-          <p className="text-xs text-gray-500">Planned end auto-computes: start + duration + buffer (Rule 15). Trainer/room conflicts are hard-blocked on save (Rules 10, 13).</p>
+          <p className="text-xs text-gray-500">Planned end = start + duration + buffer. A trainer or room already booked for these dates blocks the save.</p>
           {/* 2026-08-13 (Umesh): "2 buttons — create batch AND create plan" — the backward plan
               ("itti date tak ye sab ho jana chahiye") straight from the same form, shareable. */}
           <div className="flex gap-2">

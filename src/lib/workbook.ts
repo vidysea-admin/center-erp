@@ -457,15 +457,21 @@ function summarizeRow(row: SnapRow): string {
   return parts.join(", ").slice(0, 500);
 }
 
-// Skip when an identical unreviewed change already exists — the poller re-runs every
-// interval and a standing difference must raise once, not once per tick.
+// Skip when an identical change already exists — the poller re-runs every interval and a
+// standing difference must raise once, not once per tick.
+// -111 (Umesh 18/08: "user acknowledge kar raha hai, thodi der baad restart hota hai to phir se
+// saare wapas aa jaate hain"): this used to check New/Seen only, so the moment a change was
+// ACCEPTED it stopped counting as a duplicate and the same diff was recreated on the next tick —
+// exactly the "acknowledge karke wapas aa gaya" he saw. A decision the user has made is a
+// decision, not a fresh diff: a matching row in ANY status suppresses re-creation. It only comes
+// back if the cell actually changes to a NEW value (different new_value = different row).
 async function recordChange(
   sourceId: unknown, tab: string, rowKey: string, column: string | null,
   oldValue: string, newValue: string, type: "Added" | "Removed" | "Modified",
 ): Promise<number> {
   const dup = await WorkbookChange.findOne({
     sync_source: sourceId, tab, row_key: rowKey, column, new_value: newValue,
-    change_type: type, status: { $in: ["New", "Seen"] },
+    change_type: type, status: { $in: ["New", "Seen", "Accepted"] },
   }).select("_id").lean();
   if (dup) return 0;
   await WorkbookChange.create({

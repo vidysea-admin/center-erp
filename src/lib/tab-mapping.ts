@@ -253,8 +253,13 @@ async function ingestRows(src: any, tm: any, rows: ParsedRow[], ctx: ParseContex
       const oldV = existing[field];
       if (sameValue(spec, oldV, value)) continue;
       const newDisplay = row.display[field] ?? displayOf(spec, value, ctx);
-      const dup = await SheetChange.findOne({ sync_source: src._id, entity: existing._id, field_name: field, new_value: newDisplay, status: "Open" }).lean();
-      if (dup) { changes++; continue; } // already awaiting review
+      // -111 (Umesh 18/08: "user ne jin pe action le liya, wo wapas nahi aane chahiye"): this is
+      // the path production's watch source drives, and the duplicate check looked at OPEN rows
+      // only — so a change the user had Ignored came back the next time ANY cell on that tab
+      // moved (the whole tab is re-ingested). A decision already taken is a decision, not a fresh
+      // diff: a matching row in any status suppresses re-creation; a NEW sheet value is a new row.
+      const dup = await SheetChange.findOne({ sync_source: src._id, entity: existing._id, field_name: field, new_value: newDisplay, status: { $in: ["Open", "Actioned", "Ignored"] } }).lean();
+      if (dup) { changes++; continue; } // already reviewed or awaiting review
       const scopeLocation = entity === "Location" ? existing._id
         : entity === "Candidate" ? (row.data.location ?? existing.location)
         : (existing.home_location ?? undefined);

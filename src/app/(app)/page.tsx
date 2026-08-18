@@ -73,40 +73,6 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* -102, Manish 17/08 ([00:25] "usko confused hai ki main aaj ki attendance log karne ke
-          liye, photo daalne ke liye kaha jau?" · [07:23] "log your today's candidate attendance
-          aise karke waha daal dijiye"): the one thing a trainer signs in to do, first on the page,
-          one tap away instead of four. Anyone who marks gets it; whoever imports the portal sheet
-          gets that door beside it. */}
-      {q.today_logging.length > 0 && role !== "Location" && (
-        <Section title="Today">
-          <ul className="divide-y divide-gray-100">
-            {q.today_logging.map((b: any) => (
-              <Row key={b._id} href={`/batches/${b._id}?tab=Daily Execution`}
-                left={<>
-                  <span className="font-medium text-blue-700">Log your today&apos;s candidate attendance</span>
-                  <span className="block text-xs text-gray-500">{b.code}{b.location?.name ? ` · ${b.location.name}` : ""} · {b.roster_count} on roster</span>
-                </>}
-                right={b.logged_today
-                  ? <span className="shrink-0 rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-medium text-green-700">✓ logged today — add photos / update</span>
-                  : <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">not logged yet</span>} />
-            ))}
-            {/* -107 (Umesh 17/08: "trainer dashboard mai ek aur remaining hai — upload government
-                sheet of attendance"): this row followed the ROLE while the API follows the
-                `attendance.govt` RIGHT, so a trainer who had been granted it — Anuj Kumar, on
-                production — still had no way in. The right decides now; it is off for the Trainer
-                role by default, so nothing appears for the trainers who only mark daily logs. */}
-            {canImportGovt && (
-              <Row href="/govt-attendance"
-                left={<>
-                  <span className="font-medium text-blue-700">Upload government portal attendance</span>
-                  <span className="block text-xs text-gray-500">the Skill India export — days, hours and who has qualified</span>
-                </>} />
-            )}
-          </ul>
-        </Section>
-      )}
-
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
         {/* 2026-08-13 (Manish, role-wise cards): Admin/Operations get the project picture —
             ongoing + completed batches, active trainers job-role-wise, total attendance,
@@ -159,6 +125,26 @@ export default function HomePage() {
       </div>
       {!leanHome && (data.kpis.trainers_by_role ?? []).length > 0 && (
         <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
+      {/* -111 (Umesh 18/08): the trainer's daily shortcut used to be a full Section ABOVE the KPI
+          cards (-102 put it there) — measured on production it pushed the cards below the fold on
+          a laptop screen. It is a compact strip UNDER the cards now: one line per running batch,
+          the verb once in the label. Same links, same data (-102 QA-174), a quarter of the height. */}
+      {q.today_logging.length > 0 && role !== "Location" && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-blue-100 bg-blue-50/60 px-3 py-2 text-xs">
+          <span className="font-semibold text-blue-900">Log today&apos;s attendance:</span>
+          {q.today_logging.map((b: any) => (
+            <Link key={b._id} href={`/batches/${b._id}?tab=Daily Execution`}
+              title={`${b.location?.name ?? ""} · ${b.roster_count} on roster`}
+              className={`rounded-full border px-2.5 py-0.5 font-medium hover:underline ${b.logged_today ? "border-green-200 bg-green-50 text-green-800" : "border-amber-200 bg-amber-50 text-amber-800"}`}>
+              {b.logged_today ? "✓ " : ""}{b.code}
+            </Link>
+          ))}
+          {canImportGovt && (
+            <Link href="/govt-attendance" className="ml-auto font-medium text-blue-700 hover:underline">Upload government attendance →</Link>
+          )}
+        </div>
+      )}
+
           <span className="font-medium text-gray-600">Certified trainers by job role:</span>
           {data.kpis.trainers_by_role.map((r: any) => (
             <Link key={r.program} href={`/trainers?tag=Ready%20to%20Train`} className="rounded-full border border-gray-200 px-2.5 py-0.5 hover:bg-gray-50">
@@ -172,6 +158,7 @@ export default function HomePage() {
           ho jaata hai." This queue answers exactly that, and names the one thing still missing. */}
       {!leanHome && mapping && mapping.total > 0 && (
         <Section
+          maxRows={5}
           title={`Centres Ready to Start (${mapping.ready_count} of ${mapping.total})`}
           titleHref="/batches?tab=Preparation"
           actions={<Link href="/batches?tab=Preparation"><Btn kind="ghost" small>Preparation board</Btn></Link>}
@@ -202,7 +189,7 @@ export default function HomePage() {
       )}
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Section title={`Missing Daily Logs (${q.missing_logs.length})`} titleHref="/batches?status=Active" actions={<Link href="/batches?status=Active"><Btn kind="ghost" small>All batches</Btn></Link>}>
+        <Section maxRows={5} title={`Missing Daily Logs (${q.missing_logs.length})`} titleHref="/batches?status=Active" actions={<Link href="/batches?status=Active"><Btn kind="ghost" small>All batches</Btn></Link>}>
           {q.missing_logs.length === 0 ? <p className="text-sm text-gray-400">All logs entered. 🎉</p> : (
             <ul className="divide-y divide-gray-100 text-sm">
               {q.missing_logs.map((m: any) => (
@@ -217,7 +204,7 @@ export default function HomePage() {
         </Section>
 
         {q.sheet_changes && (
-        <Section title={`Sheet Changes Pending Review (${q.sheet_changes.length})`} titleHref="/sync" actions={<Link href="/sync"><Btn kind="ghost" small>Sync Inbox</Btn></Link>}>
+        <Section maxRows={5} title={`Sheet Changes Pending Review (${q.sheet_changes.length})`} titleHref="/sync" actions={<Link href="/sync"><Btn kind="ghost" small>Sync Inbox</Btn></Link>}>
           {q.sheet_changes.length === 0 ? <p className="text-sm text-gray-400">No open changes.</p> : (
             <ul className="divide-y divide-gray-100 text-sm">
               {q.sheet_changes.slice(0, 6).map((c: any) => (
@@ -231,7 +218,7 @@ export default function HomePage() {
         </Section>
         )}
 
-        <Section title={`Government Attendance Gap (${q.attendance_gaps.length})`} titleHref="/batches?status=Active">
+        <Section maxRows={5} title={`Government Attendance Gap (${q.attendance_gaps.length})`} titleHref="/batches?status=Active">
           {q.attendance_gaps.length === 0 ? <p className="text-sm text-gray-400">No gaps above {data.thresholds.amber} points.</p> : (
             <ul className="divide-y divide-gray-100 text-sm">
               {q.attendance_gaps.map((l: any) => (
@@ -246,7 +233,7 @@ export default function HomePage() {
 
         {/* GD-81: the portal said no. These are worked for registration, not planned into batches. */}
         {(q.registration_failed ?? []).length > 0 && (
-          <Section title={`Registration Failed on SIDH (${q.registration_failed.length})`} titleHref="/candidates">
+          <Section maxRows={5} title={`Registration Failed on SIDH (${q.registration_failed.length})`} titleHref="/candidates">
             <ul className="divide-y divide-gray-100 text-sm">
               {q.registration_failed.map((c: any) => (
                 <Row key={c._id} href="/candidates"
@@ -258,7 +245,7 @@ export default function HomePage() {
           </Section>
         )}
 
-        <Section title={`Enrollment Failures (${q.enrollment_failures.length})`} titleHref="/batches">
+        <Section maxRows={5} title={`Enrollment Failures (${q.enrollment_failures.length})`} titleHref="/batches">
           {q.enrollment_failures.length === 0 ? <p className="text-sm text-gray-400">No open failures.</p> : (
             <ul className="divide-y divide-gray-100 text-sm">
               {q.enrollment_failures.map((f: any) => (
@@ -272,7 +259,7 @@ export default function HomePage() {
         </Section>
 
         {q.follow_ups && (
-        <Section title={`Follow-up Actions (${q.follow_ups.length})`} titleHref="/sync">
+        <Section maxRows={5} title={`Follow-up Actions (${q.follow_ups.length})`} titleHref="/sync">
           {q.follow_ups.length === 0 ? <p className="text-sm text-gray-400">Nothing pending.</p> : (
             <ul className="divide-y divide-gray-100 text-sm">
               {q.follow_ups.map((f: any) => (
@@ -289,7 +276,7 @@ export default function HomePage() {
         )}
 
         {q.invoices_pending && (
-        <Section title={`Invoices Pending (${q.invoices_pending.length})`} titleHref="/costs?tab=Invoices" actions={<Link href="/costs?tab=Invoices"><Btn kind="ghost" small>Invoices</Btn></Link>}>
+        <Section maxRows={5} title={`Invoices Pending (${q.invoices_pending.length})`} titleHref="/costs?tab=Invoices" actions={<Link href="/costs?tab=Invoices"><Btn kind="ghost" small>Invoices</Btn></Link>}>
           {q.invoices_pending.length === 0 ? <p className="text-sm text-gray-400">No invoices waiting.</p> : (
             <ul className="divide-y divide-gray-100 text-sm">
               {q.invoices_pending.map((i: any) => (
@@ -307,7 +294,7 @@ export default function HomePage() {
             opening Admin → Users, so the one person who can act never saw them. Contact
             details are shown inline — approving is a decision about a person. */}
         {(q.pending_users?.length ?? 0) > 0 && (
-          <Section title={`Signups Awaiting Your Approval (${q.pending_users.length})`} titleHref="/admin?tab=Users"
+          <Section maxRows={5} title={`Signups Awaiting Your Approval (${q.pending_users.length})`} titleHref="/admin?tab=Users"
             actions={<Link href="/admin?tab=Users"><Btn kind="ghost" small>Review all</Btn></Link>}>
             <ul className="divide-y divide-gray-100 text-sm">
               {q.pending_users.map((u: any) => (
