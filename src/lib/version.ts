@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-144";
+export const RELEASE = "2026.08.14-145";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,26 @@ export const RELEASE = "2026.08.14-144";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-145 closes a live scope leak, and the way it hid is the point. Every scoped role's Home tile " +
+  "counted the whole country's own-log attendance while every portal figure beside it was " +
+  "correctly narrowed. Measured across three roles on -138: the Gurugram SPOC saw portal roster " +
+  "1043 not 1447 and 2 batches not 4, all correct - and then our_present 35 / our_roster 180, " +
+  "byte-identical to the Admin's. Their own two batches are both portal-covered, so the honest " +
+  "figure for them is zero; the 180 they were shown belongs to another centre entirely. The cause " +
+  "was not logic. The aggregate read { ...batchScope, batch: { $nin: [...] } }, and batchScope IS " +
+  "{ batch: { $in: scopedBatchIds } } - so the object literal set the same key twice and its own " +
+  "copy won, deleting the scope filter. Rule 38 and LANDMINE L4 both defeated by JavaScript rather " +
+  "than by reasoning, which is exactly why it survived review: the line reads correctly. The tell " +
+  "was twelve lines above it, where the neighbouring aggregate avoids the identical collision with " +
+  "an explicit conditional. Both conditions are now built into one batch object that no sibling key " +
+  "can overwrite. Pinned twice, because one of them would not have caught it: a source scan that " +
+  "reads what each scope object actually defines and refuses any colliding sibling key anywhere in " +
+  "the codebase, and an end-to-end check that compares a scoped role against the Admin at the same " +
+  "instant - a leak makes those two halves identical while the portal half stays narrowed, which is " +
+  "the fingerprint that was on screen. ";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-144, and the row it fixes was created by -143. The checker's adversarial pass on that release " +
   "found that matchGovtRows reads r.govt_candidate_id.trim() unguarded, and -143 is exactly what " +
   "made it matter: the function used to be fed only rows fresh off the parser, where the field is " +
@@ -31,10 +51,7 @@ export const RELEASE_NOTE_CURRENT =
   "and reused at all four sites, rather than patching the single line that was reported and leaving " +
   "the inconsistency for the next reader. Pinned on the shape that IS reachable and is one step " +
   "short of it: a portal export carrying no Candidate ID COLUMN at all, which the header detector " +
-  "accepts, whose rows then carry an empty id and are re-matched on every read of the detail. ";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "accepts, whose rows then carry an empty id and are re-matched on every read of the detail. " +
   "-143, and both rows it closes are the same defect wearing two faces: a value worked out at " +
   "IMPORT time and stored answers the question as it stood on the day of the import, and keeps " +
   "answering it that way forever. QA-300, reopened as PARTIAL by the checker: -142 changed the " +

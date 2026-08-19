@@ -132,7 +132,20 @@ export const GET = apiHandler(async () => {
   // our own logs, EXCLUDING any batch the portal already answers for
   const [attOurs] = portalBatches.size
     ? await DailyLog.aggregate([
-      { $match: { ...batchScope, batch: { $nin: [...portalBatches].map((x) => new Types.ObjectId(x)) } } },
+      // -145 (QA-302): this read `{ ...batchScope, batch: { $nin: [...] } }`. batchScope IS
+      // `{ batch: { $in: scopedBatchIds } }`, so the literal set `batch` TWICE and its own key won
+      // -- the $in vanished and every scoped role's "our logs" half silently counted the whole
+      // country. Measured on live -138: the Gurugram SPOC was shown our_present 35 / our_roster 180,
+      // byte-identical to the Admin's, while every portal figure beside it was correctly narrowed.
+      // Their own two batches are both portal-covered, so their honest figure is 0; the 180 they
+      // were shown belongs to Chitrakoot. Rule 38 and LANDMINE L4 both say a scope filter must
+      // survive to the query -- here it was dropped by JS, not by logic, which is why it looked
+      // right in review.
+      //
+      // The tell was 12 lines up: the aggregate at :123 avoids the identical collision with an
+      // explicit `("batch" in batchScope)` conditional. So both conditions are now built into ONE
+      // `batch` object that cannot be overwritten by a sibling key.
+      { $match: { batch: { ...(batchScope.batch ?? {}), $nin: [...portalBatches].map((x) => new Types.ObjectId(x)) } } },
       { $group: { _id: null, present: { $sum: "$internal_present" }, roster: { $sum: "$roster_count" } } },
     ])
     : [{ present: attAll?.present ?? 0, roster: attAll?.roster ?? 0 }];

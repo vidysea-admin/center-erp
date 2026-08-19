@@ -145,6 +145,34 @@ await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Canc
     k.attendance.portal_batches === 0 || k.attendance.roster <= (k.attendance.our_roster + k.attendance.portal_roster),
     JSON.stringify({ batches: k.attendance.portal_batches, roster: k.attendance.roster }));
 
+  // ---- -145 (QA-302): the scope must survive INTO the 'our logs' half, not just the portal half ----
+  // Measured on live -138 across three roles: every portal figure was correctly narrowed for the
+  // Gurugram SPOC (roster 1043 not 1447, 2 batches not 4) while our_present/our_roster came back
+  // 35/180 -- byte-identical to the Admin's. Cause was one duplicated object key dropping the $in,
+  // so the leak was invisible in review and invisible in any test that only checked the totals.
+  // These compare a SCOPED role against the ADMIN on the same instant, which is the only shape
+  // that can catch it: a leak makes the two halves equal, and scoping makes them differ or zero.
+  {
+    const spoc = await login("spoc.jpr03@vidysea.com", "CiOnly@123");
+    if (!spoc) ok("-145 (QA-302): scoped SPOC login available", false, "no session");
+    else {
+      const sk = (await req(spoc, "GET", "/api/home", undefined, 200)).data.kpis;
+      ok("-145 (QA-302): a scoped role's OUR-LOGS half is never larger than the whole org's",
+        (sk.attendance?.our_roster ?? 0) <= (k.attendance?.our_roster ?? 0)
+        && (sk.attendance?.our_present ?? 0) <= (k.attendance?.our_present ?? 0),
+        JSON.stringify({ spoc: [sk.attendance?.our_present, sk.attendance?.our_roster], admin: [k.attendance?.our_present, k.attendance?.our_roster] }));
+      // The decisive one. If the $in is dropped the two are IDENTICAL while every portal figure
+      // beside them is narrowed -- that combination is the fingerprint of the bug, and it is what
+      // was actually on screen. A scoped role either has fewer own-log days than the org, or the
+      // org has none to begin with.
+      ok("-145 (QA-302): ...and it does not silently equal the org-wide figure while the portal half is narrowed",
+        (k.attendance?.our_roster ?? 0) === 0
+        || (sk.attendance?.portal_roster ?? 0) === (k.attendance?.portal_roster ?? 0)
+        || (sk.attendance?.our_roster ?? 0) !== (k.attendance?.our_roster ?? 0),
+        JSON.stringify({ spoc_our: sk.attendance?.our_roster, admin_our: k.attendance?.our_roster, spoc_portal: sk.attendance?.portal_roster, admin_portal: k.attendance?.portal_roster }));
+    }
+  }
+
   // G-08: the two dead tiles are replaced by counts that must agree with the trainers list.
   ok("-138 (G-08): Home carries the two counts Umesh asked for",
     typeof k.trainers_nominated_total === "number" && typeof k.trainers_certified_free === "number",

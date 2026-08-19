@@ -317,6 +317,54 @@ for (const file of walk(root)) {
   }
 }
 
+// -145 (QA-302): A SCOPE FILTER MUST NOT BE OVERWRITABLE BY A SIBLING KEY.
+// { ...batchScope, batch: { $nin: [...] } } sets 'batch' twice and the object literal's own key
+// wins, so the scope silently disappears -- Rule 38 and LANDMINE L4 both defeated by JS, not by
+// logic, which is why it survives review. It cost a live scope leak: every scoped role was shown
+// the whole country's "our logs" attendance while every figure beside it was correctly narrowed.
+// This is the general form, not a patch on the one site: for every '...<x>Scope' spread, read what
+// that scope object actually defines in the same file and refuse any sibling key that collides.
+{
+  const files = [];
+  (function walk(d) {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const f = path.join(d, e.name);
+      if (e.isDirectory()) walk(f);
+      else if (/\.tsx?$/.test(e.name)) files.push(f);
+    }
+  })(root);
+  let collisions = 0;
+  for (const f of files) {
+    const src = fs.readFileSync(f, "utf-8");
+    for (const line of src.split(/\r?\n/).entries()) {
+      const [i, l] = line;
+      // a scanner that flags PROSE is a scanner people switch off - this pin's own
+      // explanatory comment quotes the bad pattern verbatim and tripped it.
+      const t = l.trim();
+      if (t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")) continue;
+      const m = /\.\.\.(\w*[Ss]cope)\b/.exec(l);
+      if (!m) continue;
+      const scopeName = m[1];
+      // what does that scope object define? read its const in the same file
+      const def = new RegExp("const\\s+" + scopeName + "\\s*=[^;]*", "s").exec(src);
+      if (!def) continue;
+      const owned = new Set([...def[0].matchAll(/\{\s*([a-z_][a-zA-Z_]*)\s*:/g)].map((x) => x[1]));
+      const after = l.slice(m.index + m[0].length);
+      for (const k of [...after.matchAll(/([a-z_][a-zA-Z_]*)\s*:/g)].map((x) => x[1])) {
+        if (!owned.has(k)) continue;
+        collisions++;
+        hits.push(
+          path.relative(root, f).replace(/\\/g, "/") + ":" + (i + 1) +
+          ": the literal key '" + k + "' sits beside '..." + scopeName + "', which also defines '" + k +
+          "'. The literal wins and the scope is silently dropped. Merge both conditions into one '" +
+          k + "' object instead."
+        );
+      }
+    }
+  }
+  if (collisions) failed++; else passed++;
+}
+
 for (const h of hits) console.log("  ✗ " + h);
 if (hits.length) console.log(`\n${hits.length} user-facing string(s) still carry a Rule/DEC/QA code — rewrite as "what happened + what to do".`);
 console.log(`\ncheck-user-copy: ${passed} passed, ${failed} failed`);
