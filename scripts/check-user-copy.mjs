@@ -402,6 +402,39 @@ for (const file of walk(root)) {
   if (ctrl.length) { failed++; for (const c of ctrl) hits.push(c); } else passed++;
 }
 
+// -152 (QA-367): THE GATE HAS ONE PATTERN AND TWO READERS. qa/hooks/mc-sessionstart.ps1 and
+// qa/tools/unmanifested-releases.mjs each used to carry their own copy; QA-342 tightened one, and
+// the tool then reported 9 documented gaps where the hook reported 10 - with the string silencing
+// -133 in the tool being a sentence in a manifest DOCUMENTING the QA-327 fix. Both read
+// qa/tools/gate-patterns.json now, and neither may re-inline a release pattern. Same lesson as
+// ARCHITECTURE.md section 3, applied to the machinery instead of the app.
+{
+  const gateFiles = [
+    path.join(root, "..", "..", "qa", "hooks", "mc-sessionstart.ps1"),
+    path.join(root, "..", "..", "qa", "tools", "unmanifested-releases.mjs"),
+  ];
+  const shared = path.join(root, "..", "..", "qa", "tools", "gate-patterns.json");
+  if (!fs.existsSync(shared)) {
+    // the root repo is not always present beside a checkout; only enforce when it is
+    if (gateFiles.some((f) => fs.existsSync(f))) { failed++; hits.push("qa/tools/gate-patterns.json is missing while the gate readers exist - they will drift again."); }
+    else passed++;
+  } else {
+    const inlined = [];
+    for (const f of gateFiles) {
+      if (!fs.existsSync(f)) continue;
+      const src = fs.readFileSync(f, "utf-8");
+      if (!/gate-patterns\.json/.test(src)) { inlined.push(path.basename(f) + " does not read gate-patterns.json at all"); continue; }
+      // a release-shaped literal anywhere OTHER than the fallback line is a second copy
+      for (const [n, line] of src.split(/\r?\n/).entries()) {
+        if (/\\d\{4\}\\\.\\d\{2\}/.test(line) && !/else \{/.test(line) && !/^\s*(#|\/\/)/.test(line)) {
+          inlined.push(path.basename(f) + ":" + (n + 1) + " re-inlines a release pattern instead of reading the shared one");
+        }
+      }
+    }
+    if (inlined.length) { failed++; for (const x of inlined) hits.push(x); } else passed++;
+  }
+}
+
 for (const h of hits) console.log("  ✗ " + h);
 // -149 (QA-324): this file started as one check and now carries several - the ASI trap, the
 // drawer ceiling, the scope-collision scan. Every finding was summarised as "user-facing
