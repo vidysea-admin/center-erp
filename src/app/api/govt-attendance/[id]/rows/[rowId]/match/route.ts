@@ -146,6 +146,34 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   await GovtAttendanceImport.updateOne({ _id: id },
     { $set: { matched_count: matched, unmatched_count: unmatched, ambiguous_count: ambiguous, variance_count: variance } });
 
+  // -137 (G-02): the resolve used to write the ROW and stop, which left a deadlock in place.
+  // matchGovtRows tries the portal ID first and falls back to name; the ID branch can only see
+  // candidates that already carry sidh_candidate_id, and every automatic writer of that field
+  // refuses to act on an ambiguous match — correctly, because an identity field must never be
+  // written off a guess. So two same-name candidates with no portal ID could never self-heal: the
+  // same file re-imported went Ambiguous again, every time, forever.
+  //
+  // A HUMAN choosing is not a guess, and that is the whole difference. This is the one place in the
+  // product where the ambiguity is resolved by a person who looked at both rows, so it is the one
+  // place allowed to stamp the ID. Guarded exactly as the importer's own write-back is
+  // (api/govt-attendance/route.ts:136-139): only when the row carries an ID, and NEVER over one the
+  // candidate already has — a stored government ID is identity data and is not ours to overwrite.
+  const stampId = String(row.govt_candidate_id ?? "").trim();
+  const candId = member.candidate?._id ?? member.candidate;
+  if (stampId && candId) {
+    const res = await Candidate.updateOne(
+      { _id: candId, $or: [{ sidh_candidate_id: null }, { sidh_candidate_id: "" }, { sidh_candidate_id: { $exists: false } }] },
+      { $set: { sidh_candidate_id: stampId } },
+    );
+    if (res.modifiedCount) {
+      await audit({
+        entity: "Candidate", entityId: candId, field: "sidh_candidate_id",
+        oldValue: "", newValue: stampId,
+        actor: user.id, actorType: "USER",
+      });
+    }
+  }
+
   await audit({
     entity: "GovtAttendanceRow", entityId: row._id, field: "match",
     oldValue: `${was.status}${was.by ? ` by ${was.by}` : ""}`,

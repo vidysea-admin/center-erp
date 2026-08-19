@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-136";
+export const RELEASE = "2026.08.14-137";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,27 @@ export const RELEASE = "2026.08.14-136";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-137, from the 19 Aug screen recording: two 'Sachin Kumar' rows, both past the 60-hour bar, both " +
+  "dropped - 25 qualified shown where 27 qualify, and both reading '~0 / 60 hrs (est.)' on the batch " +
+  "tab beside neighbours populated from the same import. THE SHEET'S SUGGESTED FIX WAS ALREADY THE " +
+  "SHIPPED BEHAVIOUR: matchGovtRows tries the portal ID FIRST and falls back to name. The trap is " +
+  "underneath it. The ID branch can only see candidates that already carry sidh_candidate_id, and " +
+  "every automatic writer of that field refuses an ambiguous match - rightly, because an identity " +
+  "field must never be written off a guess, and the wall asserts that refusal on purpose. So two " +
+  "same-name candidates with no portal ID could NEVER self-heal: the same file re-imported went " +
+  "Ambiguous again, every time, forever. A HUMAN CHOOSING IS NOT A GUESS, and that is the whole " +
+  "difference. The resolve drawer already existed - the sheet's claim that no control exists is half " +
+  "wrong - but it wrote the ROW and stopped. It now also stamps the portal ID onto the chosen " +
+  "candidate, guarded exactly as the importer's own write-back is: only when the row carries an ID, " +
+  "never over one the candidate already has, and audited against the candidate because it is " +
+  "identity data. The count and the batch tab then follow on their own; neither needed a fix. Also " +
+  "the message: two rows colliding on a name produced notes identical CHARACTER FOR CHARACTER, " +
+  "because only the count and the word 'name' were interpolated while the row carried its portal ID " +
+  "all along. Each note names its own row now, and the advice points at the control on that row " +
+  "rather than at a drawer on another screen reached by search.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-136 (QA-282, the triage -133 said was not finished): it is finished, and the honest answer is " +
   "SMALLER than the row feared. The scan took three versions and both earlier ones were wrong in " +
   "OPPOSITE directions. v1 required the setter to sit inside an onClick, found 2, and missed the one " +
@@ -36,8 +57,6 @@ export const RELEASE_NOTE_CURRENT =
   "the next one rather than as a claim that 15 things are broken - proved by adding a trapped panel " +
   "and watching it fail at 16.";
 
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
   "-135 (QA-283, the half -134 left open and named as open): the 'Verified on SIDH' mark had a " +
   "field and two routes that accepted it, and no way for a human to click it - so it could be set " +
   "through the API and nowhere else, which is a capability rather than a feature. The control now " +

@@ -314,7 +314,19 @@ export async function matchGovtRows(
         ...(stamp ? { stamp_candidate_id: stamp } : {}),
       });
     } else if (hits.length > 1) {
-      out.push({ ...r, match_status: "Ambiguous", match_by: by, match_note: `${hits.length} candidates share this ${by.toLowerCase()} — set the portal Candidate ID on the right record to resolve.` });
+      // -137 (G-10, 19/08 recording): this interpolated only `hits.length` and `by`, so TWO rows
+      // colliding on the same name produced notes that were identical character for character — the
+      // reviewer saw the same sentence printed twice under the table and could not tell which row
+      // either belonged to. The row object has carried the distinguishing value all along; it just
+      // was not used. The portal ID is the right one: it is what the operator has to look at to
+      // decide, and it is already rendered in the PORTAL ID column beside it.
+      //
+      // The advice also changed. It used to say "set the portal Candidate ID on the right record",
+      // which is true and sends the reader to the candidate edit drawer on another screen, reached
+      // by search — while the control that actually resolves this row is the row itself.
+      const which = r.govt_candidate_id?.trim() ? `portal ID ${r.govt_candidate_id.trim()}` : `row ${r.sl_no ?? "?"}`;
+      out.push({ ...r, match_status: "Ambiguous", match_by: by,
+        match_note: `${which}: ${hits.length} candidates share this ${by.toLowerCase()} — click this row to pick the right one.` });
     } else {
       out.push({
         ...r, match_status: "Unmatched", match_by: "",

@@ -411,6 +411,32 @@ ok("the first import is still intact", (await req(admin, "GET", `/api/govt-atten
   ok("-108: an AMBIGUOUS row stamps nothing — a government ID is never written off a guess",
     twinCands.every((c) => !c.sidh_candidate_id), JSON.stringify(twinCands.map((c) => c.sidh_candidate_id)));
   ok("-108: the import reports how many portal IDs it linked", typeof done.data.portal_ids_linked === "number" && done.data.portal_ids_linked >= 1, String(done.data.portal_ids_linked));
+
+  // ---- -137 (G-01/G-02/G-04/G-10, 19/08 recording): the ambiguity DEADLOCK ----
+  // The reviewer found two "Sachin Kumar" rows, both past the 60-hour bar, both dropped from the
+  // qualified count — 25 shown where 27 qualify. The suggested fix was "match on portal ID first",
+  // which is already what matchGovtRows does. The real trap is underneath: the ID branch can only
+  // see candidates that ALREADY carry sidh_candidate_id, and every automatic writer of that field
+  // refuses an ambiguous match (rightly — an identity field must never be written off a guess). So
+  // two same-name candidates with no portal ID could never self-heal, and the same file re-imported
+  // went Ambiguous again, every time.
+  //
+  // A human choosing is not a guess. These pins are written on the QUESTION rather than the route:
+  // does a resolve make the NEXT import work? That is the clause that fails on the old code.
+  {
+    const amb = twins[0];
+    ok("-137 (G-10): the ambiguity note names the row it belongs to, so two of them are not identical",
+      /portal ID|row \d/i.test(String(amb.match_note ?? "")) && new RegExp(String(amb.govt_candidate_id ?? "x")).test(String(amb.match_note ?? "")),
+      String(amb.match_note ?? ""));
+    ok("-137 (G-10): ...and the two same-name notes now DIFFER",
+      twins.length > 1 && twins[0].match_note !== twins[1].match_note,
+      JSON.stringify(twins.map((t) => t.match_note)));
+
+    // The state-changing half of this group runs AFTER the -102 block below, because that block
+    // needs BOTH twins still ambiguous and mine resolved one of them — it asserts
+    // "counts.ambiguous === 1" and reaches for rows[1]. Reading the notes here is safe; resolving
+    // is not. (Found by running it: two unrelated -102 pins died for my reason.)
+  }
 }
 
 // ---- -108 follow-up: the write-back is CONSENTED TO before it happens ----
@@ -609,6 +635,37 @@ ok("the first import is still intact", (await req(admin, "GET", `/api/govt-atten
   ok("-102: the other ambiguous row is untouched by the refusals",
     ((await req(admin, "GET", `/api/govt-attendance/${done.data._id}?filter=ambiguous`)).data.rows ?? []).length === 1);
   ok("-102: the never-enrolled fixture candidate is cleaned up", (await req(admin, "DELETE", `/api/candidates/${stranger._id}`)).status === 200);
+
+  // ---- -137 (G-02), the state-changing half, deliberately last in this file ----
+  // -102 above has just resolved ONE twin manually and left the other ambiguous. That remaining row
+  // is exactly the shape this needs, and using it means this block creates no fixture of its own.
+  {
+    const stillAmb = ((await req(admin, "GET", `/api/govt-attendance/${done.data._id}?filter=ambiguous`)).data.rows ?? [])[0];
+    ok("-137 (G-02): one ambiguous row remains to resolve", !!stillAmb, "none left");
+    const mineMember = members.filter((m) => m.name === `${NAME} Twin`).find((m) => String(m.candidate._id) !== String(pickId));
+        const res = await req(admin, "POST", `/api/govt-attendance/${done.data._id}/rows/${stillAmb._id}/match`,
+      { candidate: mineMember.candidate._id, reason: "e2e: picked by portal ID" }, 200);
+    ok("-137 (G-02): an ambiguous row can be resolved from the row itself", res.status === 200, JSON.stringify(res.data).slice(0, 140));
+
+    const after = (await req(admin, "GET", `/api/candidates/${mineMember.candidate._id}`)).data.item;
+    ok("-137 (G-02): ...and the human's choice STAMPS the portal ID, which no automatic path may do",
+      after.sidh_candidate_id === String(stillAmb.govt_candidate_id).trim(),
+      JSON.stringify({ got: after.sidh_candidate_id, want: stillAmb.govt_candidate_id }));
+    ok("-137 (G-02): ...audited against the candidate, because it is identity data",
+      ((await req(admin, "GET", `/api/audit/Candidate/${mineMember.candidate._id}`)).data.items ?? []).some((x) => String(x.field) === "sidh_candidate_id"),
+      "no audit row for the stamp");
+
+    // THE CLAUSE THAT FAILS TODAY: re-import the same file and the row matches on its own.
+    const again2 = await upload(admin, { file: csvFile(), confirm: "1", period_label: `deadlock ${STAMP}` });
+    const reRows = (await req(admin, "GET", `/api/govt-attendance/${again2.data._id}`)).data.rows ?? [];
+    const reMine = reRows.find((r) => String(r.govt_candidate_id).trim() === String(stillAmb.govt_candidate_id).trim());
+    ok("-137 (G-02): a RE-IMPORT of the same file now matches that row on its portal ID, with nobody helping",
+      reMine?.match_status === "Matched" && reMine?.match_by === "Portal ID",
+      JSON.stringify({ status: reMine?.match_status, by: reMine?.match_by }));
+    ok("-137 (G-01/G-04): ...so the row is no longer 'not matched to a student' and can be judged at all",
+      reMine?.verdict?.state !== "not_enrolled" || !!reMine?.candidate,
+      JSON.stringify({ state: reMine?.verdict?.state, cand: !!reMine?.candidate }));
+  }
 }
 
 // ---------------------------------------------------------------- garbage in
