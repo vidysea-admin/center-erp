@@ -28,6 +28,13 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   await requireView(user, "attendance.govt");
   const { id, rowId } = await ctx.params;
   const { imp, row } = await loadRow(id, rowId, user);
+  // -150 (QA-339): -148 stopped the WRITE from stamping a student onto a trainer's attendance row
+  // and left this READ open, so the drawer still opened and offered four candidates on a row the
+  // product had just said is not a student. Refusing at the write and inviting at the read is the
+  // worse of the two states: it wastes an operator's decision and then rejects it.
+  if (row.trainer || isTrainerRow(row)) {
+    throw new HttpError(400, "That row is a trainer's attendance, not a candidate's - a trainer's hours are their own delivery record, so there is no student to pick.");
+  }
 
   const nameKey = (s: unknown) => String(s ?? "").toLowerCase()
     .replace(/\b(mr|mrs|ms|md|shri|smt|kumari)\.?\s+/g, " ").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();

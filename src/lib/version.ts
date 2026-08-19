@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-149";
+export const RELEASE = "2026.08.14-150";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,24 @@ export const RELEASE = "2026.08.14-149";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-150 carries a live scope defect that has been silently wrong for scoped centres, found by a " +
+  "checker while it was testing something else. The Home trainer union matches a scoped user's " +
+  "centres four ways - nomination, capability, home centre, and the batches they run - and three of " +
+  "those four have never matched anything. requireUser hands the session its location_scope as " +
+  "STRINGS, and Mongoose does no schema casting inside an aggregation pipeline, so comparing them to " +
+  "stored ObjectIds silently found nothing; only the arm whose ids come back from Batch.distinct " +
+  "survived, because those are real ObjectIds. Measured end to end: a Certified trainer whose " +
+  "capable_locations IS the centre matched 1 with ObjectIds and 0 with strings, and Home returned " +
+  "zero active trainers for that centre while the trainer existed. So a scoped centre has been " +
+  "under-counting its own certified trainers. Same family as the scope leak two releases ago, except " +
+  "the filter was not dropped - it was present, and matched nothing. QA-339: -148 stopped the WRITE " +
+  "that stamped a student onto a trainer's attendance row and left the READ open, so the picker still " +
+  "opened and offered four candidates on a row the product had just refused. Refusing at the write " +
+  "while inviting at the read is the worse of the two states, because it spends an operator's " +
+  "decision and then rejects it. Both doors refuse now. ";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-149 is three residuals from the last two verdicts, and the smallest one is the most interesting. " +
   "QA-334: the portal matcher loaded trainers with Trainer.find(scope.locationId ? {} : {}) - a " +
   "ternary whose two branches are the SAME empty filter, so it has always searched every trainer in " +
@@ -34,10 +52,7 @@ export const RELEASE_NOTE_CURRENT =
   "guard had been silent for every real commit this project has ever made, because its condition " +
   "required the words git and commit to be adjacent while every commit here is written git -C " +
   "<dir> commit. A gate that looks installed and never fires is the failure mode the whole " +
-  "arrangement exists to prevent. ";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "arrangement exists to prevent. " +
   "-148 closes a defect -146 created, and the wording was only the invitation. -146 widened the " +
   "read-time note to every unresolved import row and never constructed the case where that row is a " +
   "TRAINER. A portal export carries a centre's own trainers alongside its students, so a trainer the " +

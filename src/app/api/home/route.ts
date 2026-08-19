@@ -61,11 +61,24 @@ export const GET = apiHandler(async () => {
   const scopedBatchTrainers = isScoped(user)
     ? await Batch.find({ ...scope, trainer: { $ne: null } }).distinct("trainer")
     : [];
+  // -150 (QA-347, found by the checker while testing -147): this union has been INERT for scoped
+  // users. requireUser() hands back `location_scope: (fresh.location_scope || []).map(String)`
+  // (authz.ts:58) - STRINGS - and Mongoose does no schema casting inside an aggregation pipeline, so
+  // `capable_locations: { $in: ['6a85...'] }` never matched an ObjectId. Only the `_id` arm survived,
+  // because those ids come back from Batch.distinct() as real ObjectIds. Measured end to end: a
+  // Certified trainer whose capable_locations IS the SPOC's centre matched 1 with ObjectIds and 0
+  // with strings, and /api/home returned trainers_active_total 0 for that SPOC while the trainer
+  // existed. So a scoped centre has been under-counting its own certified trainers - the same
+  // family as QA-302, except the filter was not dropped, it silently matched nothing.
+  const scopeIds = (user.location_scope ?? []).flatMap((x) => {
+    const str = String(x);
+    return Types.ObjectId.isValid(str) ? [new Types.ObjectId(str)] : [];
+  });
   const trainerScope = isScoped(user)
     ? { $or: [
-        { nominated_for_location: { $in: (user.location_scope ?? []) } },
-        { capable_locations: { $in: (user.location_scope ?? []) } },
-        { home_location: { $in: (user.location_scope ?? []) } },
+        { nominated_for_location: { $in: scopeIds } },
+        { capable_locations: { $in: scopeIds } },
+        { home_location: { $in: scopeIds } },
         { _id: { $in: scopedBatchTrainers } },
       ] }
     : {};

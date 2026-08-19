@@ -895,6 +895,14 @@ ok("the first import is still intact", (await req(admin, "GET", `/api/govt-atten
   ok("-148 (QA-332): ...it says what the row actually is instead",
     /types this row as a TRAINER/.test(String(after?.match_note)), JSON.stringify({ note: after?.match_note }));
 
+  // -150 (QA-339): -148 guarded the WRITE and left the READ open, so the drawer still opened and
+  // offered four candidates on a row the product had just said is not a student. Refusing at the
+  // write while inviting at the read is the worse of the two states.
+  const picker = await req(admin, "GET", `/api/govt-attendance/${timp.data._id}/rows/${after._id}/match`);
+  ok("-150 (QA-339): the candidate PICKER refuses to open on a trainer row, not just the write",
+    picker.status === 400 && /trainer/i.test(String(picker.data.error ?? "")),
+    `${picker.status} ${String(picker.data.error ?? "").slice(0, 90)}`);
+
   // The half that matters more than the wording: the door itself must refuse.
   const bad = await req(admin, "POST", `/api/govt-attendance/${timp.data._id}/rows/${after._id}/match`,
     { candidate: c.data.item?._id, reason: "e2e: must be refused" });
