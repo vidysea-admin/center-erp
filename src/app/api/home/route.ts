@@ -108,29 +108,6 @@ export const GET = apiHandler(async () => {
       today_roster: { $sum: { $cond: [{ $eq: ["$log_date", todayKey] }, "$roster_count", 0] } },
     } },
   ]);
-  // QA-012 (checker): "0 of 0 student-days" while the batch page computed 390 expected —
-  // the card showed only LOGGED man-days, and with zero logs entered it read as broken.
-  // Expected-so-far (roster × operating days elapsed, Active batches) rides along so the
-  // card can say "0 logged of 390 expected — no daily logs entered yet" honestly.
-  // -102 (Manish 17/08): this same list is what the new "log today's attendance" shortcut
-  // needs, so it carries code + centre now instead of a second identical query.
-  const activeForExp = await Batch.find({ status: "Active", ...scope })
-    .populate("program", "operating_days").populate("location", "name code")
-    .select("actual_start program code location").lean<any[]>();
-  const expRoster = activeForExp.length ? await BatchMember.aggregate([
-    { $match: { batch: { $in: activeForExp.map((b) => b._id) }, left_on: null } },
-    { $group: { _id: "$batch", n: { $sum: 1 } } },
-  ]) : [];
-  const expRosterMap = new Map(expRoster.map((r) => [String(r._id), r.n]));
-  let expectedDays = 0;
-  const todayD = dayStart(new Date());
-  for (const b of activeForExp) {
-    if (!b.actual_start) continue;
-    const operating: number[] = b.program?.operating_days?.length ? b.program.operating_days : [1, 2, 3, 4, 5, 6];
-    let d = dayStart(b.actual_start); let days = 0; let guard = 0;
-    while (d <= todayD && guard++ < 366) { if (operating.includes(d.getDay())) days++; d = addDays(d, 1); }
-    expectedDays += days * (expRosterMap.get(String(b._id)) ?? 0);
-  }
   // -138 (G-07, 19/08 recording): the tile read "Total Attendance 12%" from 16 of 135 logged
   // student-days at a centre whose batch page says "Our logs: 0 days" and which had just imported
   // 38 students across 17 portal working days. Umesh's own account of why: these cohorts ran BEFORE
@@ -159,8 +136,42 @@ export const GET = apiHandler(async () => {
       { $group: { _id: null, present: { $sum: "$internal_present" }, roster: { $sum: "$roster_count" } } },
     ])
     : [{ present: attAll?.present ?? 0, roster: attAll?.roster ?? 0 }];
+  // QA-012 (checker): "0 of 0 student-days" while the batch page computed 390 expected —
+  // the card showed only LOGGED man-days, and with zero logs entered it read as broken.
+  // Expected-so-far (roster × operating days elapsed, Active batches) rides along so the
+  // card can say "0 logged of 390 expected — no daily logs entered yet" honestly.
+  // -102 (Manish 17/08): this same list is what the new "log today's attendance" shortcut
+  // needs, so it carries code + centre now instead of a second identical query.
+  const activeForExp = await Batch.find({ status: "Active", ...scope })
+    .populate("program", "operating_days").populate("location", "name code")
+    .select("actual_start program code location").lean<any[]>();
+  const expRoster = activeForExp.length ? await BatchMember.aggregate([
+    { $match: { batch: { $in: activeForExp.map((b) => b._id) }, left_on: null } },
+    { $group: { _id: "$batch", n: { $sum: 1 } } },
+  ]) : [];
+  const expRosterMap = new Map(expRoster.map((r) => [String(r._id), r.n]));
+  let expectedDays = 0;
+  const todayD = dayStart(new Date());
+  for (const b of activeForExp) {
+    if (!b.actual_start) continue;
+    // -139 (QA-292, second half): skip the batches the PORTAL answers for — their student-days are
+    // already counted from the export's own working-day figure, and counting them here too would put
+    // the same days in the denominator twice.
+    if (portalBatches.has(String(b._id))) continue;
+    const operating: number[] = b.program?.operating_days?.length ? b.program.operating_days : [1, 2, 3, 4, 5, 6];
+    let d = dayStart(b.actual_start); let days = 0; let guard = 0;
+    while (d <= todayD && guard++ < 366) { if (operating.includes(d.getDay())) days++; d = addDays(d, 1); }
+    expectedDays += days * (expRosterMap.get(String(b._id)) ?? 0);
+  }
   const present = (attOurs?.present ?? 0) + portalPresent;
-  const roster = (attOurs?.roster ?? 0) + portalRoster;
+  // -139 (QA-292, second half): the denominator used to be `roster_count` summed over DAILY LOGS —
+  // only the days somebody happened to log. That is why it read 180 while 247 students are enrolled:
+  // a batch nobody logged contributed nothing to the BOTTOM of the fraction, so a centre that
+  // recorded nothing scored the same as one with perfect attendance. "Total Attendance" has to
+  // divide by the days that SHOULD have happened, and expectedDays is exactly that — it was already
+  // in this response, unused. Where nothing is expected yet, the logged roster is the honest floor.
+  const ourRoster = Math.max(attOurs?.roster ?? 0, expectedDays);
+  const roster = ourRoster + portalRoster;
   // -138 (G-08): nominated = has been put forward for a centre x job role at all; certified-free
   // = Certified AND not named on a live batch. ACTIVE_BATCH_STATUSES is the same list the batch
   // dropdown and the trainers list use, so 'busy' means the same thing in all three places.
@@ -182,7 +193,7 @@ export const GET = apiHandler(async () => {
     expected_so_far: expectedDays,
     // named separately so the tile can SAY what it counted rather than leaving it to be inferred
     portal_present: portalPresent, portal_roster: portalRoster, portal_batches: portalBatches.size,
-    our_present: attOurs?.present ?? 0, our_roster: attOurs?.roster ?? 0,
+    our_present: attOurs?.present ?? 0, our_roster: ourRoster,
   };
 
   // Queue 1: missing daily logs (Rule 33)

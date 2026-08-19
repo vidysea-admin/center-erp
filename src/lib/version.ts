@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-138";
+export const RELEASE = "2026.08.14-139";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,17 @@ export const RELEASE = "2026.08.14-138";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-139 (QA-292, the half -138 left open): the attendance DENOMINATOR. -138 fixed where the " +
+  "numerator comes from - the portal, not only our own logs - and the checker's row was sharper than " +
+  "the sheet on the other half: roster read 180 while 247 students are enrolled, and the right " +
+  "figure was already in the same response, unused. THE CAUSE: roster was roster_count summed over " +
+  "DAILY LOGS - only the days somebody happened to log. A batch nobody logged contributed nothing to " +
+  "the BOTTOM of the fraction, so a centre that recorded nothing scored the same as one with perfect " +
+  "attendance; the metric rewarded not writing anything down. 'Total Attendance' has to divide by " +
+  "the days that SHOULD have happened, which is expectedDays - computed a few lines above and thrown " +
+  "away. Portal-answered batches are excluded from it, because their student-days are already " +
+  "counted from the export's own working-day figure and would otherwise sit in the denominator " +
+  "twice. The subtitle now reports the same denominator the headline divides by, which it did not. " +
   "-138, the Home dashboard from the 19 Aug recording. G-07: the tile read 'Total Attendance 12%' " +
   "from 16 of 135 LOGGED student-days, at a centre whose batch page says 'Our logs: 0 days' and " +
   "which had just imported 38 students across 17 portal working days. Umesh's own account of why: " +
@@ -35,10 +46,7 @@ export const RELEASE_NOTE_CURRENT =
   "(-129's availabilityTag: Certified and on no live batch), and a pin asserts the two screens " +
   "agree, because this is a number a manager quotes out loud. The breakdown rides in the subtitle, " +
   "which is what he asked for. G-11: the Ongoing and Completed tiles used each other's HEADLINE as " +
-  "their own subtitle, so the pair carried one fact in four places; each has a real breakdown now.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "their own subtitle, so the pair carried one fact in four places; each has a real breakdown now. " +
   "-137, from the 19 Aug screen recording: two 'Sachin Kumar' rows, both past the 60-hour bar, both " +
   "dropped - 25 qualified shown where 27 qualify, and both reading '~0 / 60 hrs (est.)' on the batch " +
   "tab beside neighbours populated from the same import. THE SHEET'S SUGGESTED FIX WAS ALREADY THE " +
@@ -58,6 +66,8 @@ const RELEASE_NOTE_ARCHIVE =
   "all along. Each note names its own row now, and the advice points at the control on that row " +
   "rather than at a drawer on another screen reached by search.";
 
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-136 (QA-282, the triage -133 said was not finished): it is finished, and the honest answer is " +
   "SMALLER than the row feared. The scan took three versions and both earlier ones were wrong in " +
   "OPPOSITE directions. v1 required the setter to sit inside an onClick, found 2, and missed the one " +
