@@ -30,6 +30,19 @@ export const GET = apiHandler(async (req: NextRequest) => {
     .populate("location", "name external_id").populate("batch", "code")
     .populate("imported_by", "name")
     .sort({ imported_at: -1 }).limit(100).lean<any[]>();
+  // -143 (QA-300, checker's PARTIAL on -142): the Variance column on THIS list is the surface an
+  // operator meets first and every time - not the upload preview, which is seen once while
+  // committing. It printed a bold amber count for imports whose every row reads "OUR DAYS 0 / 0".
+  // Derived here rather than stored: have_local_logs is a question about the rows, and storing it
+  // on the import is what silently failed before (it is not on the schema, so create() dropped it).
+  const withLogs = items.length
+    ? await GovtAttendanceRow.aggregate([
+        { $match: { import: { $in: items.map((i) => i._id) }, internal_days_present: { $gt: 0 } } },
+        { $group: { _id: "$import" } },
+      ])
+    : [];
+  const haveLogs = new Set(withLogs.map((r) => String(r._id)));
+  for (const it of items) it.have_local_logs = haveLogs.has(String(it._id));
   return NextResponse.json({ items });
 });
 
@@ -81,6 +94,9 @@ export const POST = apiHandler(async (req: NextRequest) => {
     // figure copied across with a + sign. Nothing is being compared. The count stays (a caller may
     // want it), but the screens now know whether there was anything on our side at all, so an
     // orange warning does not send somebody looking for a discrepancy that cannot exist.
+    // -143: this one is for the PREVIEW only, which has no stored rows to ask yet. It is NOT a
+    // schema field, so create() below drops it - which is correct now that both other surfaces
+    // derive it from the rows at read time instead of hoping it was stored (QA-300).
     have_local_logs: matched.some((r) => (r.internal_days_present ?? 0) > 0),
   };
 

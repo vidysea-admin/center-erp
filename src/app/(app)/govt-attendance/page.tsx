@@ -144,10 +144,20 @@ function Inner() {
               </button>
             ) },
             {
+              // -143 (QA-300, checker's PARTIAL on -142): -142 changed the wording the row quoted -
+              // the upload preview, seen once while committing. THIS is the column an operator meets
+              // first and every time, and it was still a bold amber number for imports where every
+              // row reads "OUR DAYS 0 / 0". Amber is a claim that our logs and the portal disagree;
+              // with no logs of ours there is nothing to disagree with, so it is not a discrepancy
+              // and it is not coloured like one. The count is still reachable - it is a real count
+              // of rows the portal has and we do not - it just no longer poses as an alarm.
               key: "variance_count", label: "Variance", sortable: true, render: (r: any) =>
-                r.variance_count
-                  ? <button className="font-semibold text-amber-700 hover:underline" onClick={(e) => { e.stopPropagation(); setFilter("variance"); setOpen(r._id); }}>{r.variance_count}</button>
-                  : <span className="text-gray-400">none</span>,
+                !r.variance_count
+                  ? <span className="text-gray-400">none</span>
+                  : r.have_local_logs
+                    ? <button className="font-semibold text-amber-700 hover:underline" onClick={(e) => { e.stopPropagation(); setFilter("variance"); setOpen(r._id); }}>{r.variance_count}</button>
+                    : <button className="text-gray-500 hover:underline" title="No attendance of our own has been logged for this period, so there is nothing to compare the portal against. These are the rows the portal counted days for."
+                        onClick={(e) => { e.stopPropagation(); setFilter("variance"); setOpen(r._id); }}>nothing to compare</button>,
             },
             { key: "imported_at", label: "Imported", mobile: false, sortable: true, sortValue: (r: any) => r.imported_at ? new Date(r.imported_at).getTime() : null, render: (r: any) => `${fmtDT(r.imported_at)} · ${r.imported_by?.name ?? "—"}` },
           ]} empty="No portal attendance imported yet — upload the export Manish downloads from the portal." />
@@ -182,7 +192,12 @@ function Inner() {
               ["matched", `Matched ${detail.item.matched_count}`],
               ["ambiguous", `Ambiguous ${detail.item.ambiguous_count}`],
               ["unmatched", `Unmatched ${detail.item.unmatched_count}`],
-              ["variance", `Differ from our logs ${detail.item.variance_count}`]].map(([v, label]) => (
+              // -143 (QA-300): the third surface. Grey, so it never looked like an alarm - but it
+              // named a comparison that was not made. It stays clickable (QA-023: every count on
+              // this summary is its own filter) and now says which question it actually answers.
+              ["variance", detail.item.have_local_logs
+                ? `Differ from our logs ${detail.item.variance_count}`
+                : `Days on the portal, none of ours ${detail.item.variance_count}`]].map(([v, label]) => (
               <button key={v} onClick={() => setFilter(filter === v ? "" : (v as string))}
                 className={`rounded-full border px-3 py-1 font-medium ${filter === v ? "border-blue-300 bg-blue-50 text-blue-700" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>
                 {label}

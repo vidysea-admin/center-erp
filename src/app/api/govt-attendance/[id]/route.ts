@@ -4,7 +4,7 @@ import { apiHandler, requireUser, requireEdit, isScoped, HttpError } from "@/lib
 import { requirePerm, requireView } from "@/lib/permissions";
 import { Batch, GovtAttendanceImport, GovtAttendanceRow } from "@/models";
 import { assessmentHoursBar, courseIsFinished, eligibilityVerdict, memberAttendedHours } from "@/lib/rules";
-import { isTrainerRow } from "@/lib/govt-attendance";
+import { isTrainerRow, matchGovtRows } from "@/lib/govt-attendance";
 import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
 
@@ -57,7 +57,41 @@ export const GET = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
     const bar = await assessmentHoursBar(b.program?.scheme, b.program, defaults.min_attendance_pct ?? 50);
     bars.set(String(b._id), { required_hours: bar.requiredHours, min_pct: bar.minPct, source: bar.source });
   }
-  const withVerdict = rows.map((r) => {
+  // -143 (QA-298, checker REOPENED at -141): -137 rewrote the ambiguity note so two colliding
+  // rows could be told apart, and the new wording IS in govt-attendance.ts - but match_note is
+  // written by matchGovtRows at IMPORT time and persisted on the row, so it reaches future imports
+  // only. The two live Sachin Kumar rows that produced the complaint still read, character for
+  // character, "2 candidates share this name - set the portal Candidate ID on the right record to
+  // resolve." - the old sentence, still identical, still pointing at another screen.
+  //
+  // Re-derived here by calling the SAME matchGovtRows the importer calls, never a second copy of
+  // the matching rules (ARCHITECTURE.md section 3 - this codebase's bug history is "the second copy
+  // did not get the fix"). Only rows still stored as Ambiguous are re-derived, only the NOTE is
+  // taken from the result, and the stored match_status is never overwritten: a row a human resolved
+  // through the drawer stays resolved.
+  const ambiguous = rows.filter((r) => r.match_status === "Ambiguous");
+  const freshNote = new Map<string, string>();
+  if (ambiguous.length) {
+    const redone = await matchGovtRows(ambiguous as any, {
+      batchId: imp.batch?._id ? String(imp.batch._id) : null,
+      locationId: imp.location?._id ? String(imp.location._id) : null,
+    });
+    ambiguous.forEach((r, i) => {
+      const d = redone[i];
+      if (!d) return;
+      // Still colliding -> the current sentence, which names the portal ID and points at this row.
+      // No longer colliding -> the stored sentence is now factually wrong (it claims candidates
+      // share a name that they no longer do, usually because -137's write-back stamped the ID when
+      // its twin was resolved). Say what is true instead of leaving a stale count on screen.
+      const which = r.govt_candidate_id?.trim() ? `portal ID ${r.govt_candidate_id.trim()}` : `row ${r.sl_no ?? "?"}`;
+      freshNote.set(String(r._id), d.match_status === "Ambiguous" && d.match_note
+        ? d.match_note
+        : `${which}: the name clash that held this row up is gone - click this row to pick the candidate.`);
+    });
+  }
+
+  const withVerdict = rows.map((r0) => {
+    const r = freshNote.has(String(r0._id)) ? { ...r0, match_note: freshNote.get(String(r0._id)) } : r0;
     const bid = String(r.batch?._id ?? r.batch ?? imp.batch?._id ?? "");
     const bar = bars.get(bid);
 
@@ -136,8 +170,13 @@ export const GET = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   });
   const impBar = bars.get(String(imp.batch?._id ?? "")) ?? (bars.size === 1 ? [...bars.values()][0] : null);
 
+  // -143 (QA-300): derived over the WHOLE import, not over `rows` - rows is filtered, so
+  // "matched" or "ambiguous" would answer a question nobody asked and the chip would flip with the
+  // filter. Same read-time derivation as the list, same reason.
+  const haveLocalLogs = (await GovtAttendanceRow.countDocuments({ import: id, internal_days_present: { $gt: 0 } })) > 0;
+
   return NextResponse.json({
-    item: imp,
+    item: { ...imp, have_local_logs: haveLocalLogs },
     rows: withVerdict,
     required_hours: impBar?.required_hours ?? null,
     min_attendance_pct: impBar?.min_pct ?? null,

@@ -672,31 +672,114 @@ ok("the first import is still intact", (await req(admin, "GET", `/api/govt-atten
     const stillAmb = ((await req(admin, "GET", `/api/govt-attendance/${done.data._id}?filter=ambiguous`)).data.rows ?? [])[0];
     ok("-137 (G-02): one ambiguous row remains to resolve", !!stillAmb, "none left");
     const mineMember = members.filter((m) => m.name === `${NAME} Twin`).find((m) => String(m.candidate._id) !== String(pickId));
-        const res = await req(admin, "POST", `/api/govt-attendance/${done.data._id}/rows/${stillAmb._id}/match`,
-      { candidate: mineMember.candidate._id, reason: "e2e: picked by portal ID" }, 200);
-    ok("-137 (G-02): an ambiguous row can be resolved from the row itself", res.status === 200, JSON.stringify(res.data).slice(0, 140));
-
-    const after = (await req(admin, "GET", `/api/candidates/${mineMember.candidate._id}`)).data.item;
-    ok("-137 (G-02): ...and the human's choice STAMPS the portal ID, which no automatic path may do",
-      after.sidh_candidate_id === String(stillAmb.govt_candidate_id).trim(),
-      JSON.stringify({ got: after.sidh_candidate_id, want: stillAmb.govt_candidate_id }));
-    ok("-137 (G-02): ...audited against the candidate, because it is identity data",
-      ((await req(admin, "GET", `/api/audit/Candidate/${mineMember.candidate._id}`)).data.items ?? []).some((x) => String(x.field) === "sidh_candidate_id"),
-      "no audit row for the stamp");
-
-    // THE CLAUSE THAT FAILS TODAY: re-import the same file and the row matches on its own.
-    const again2 = await upload(admin, { file: csvFile(), confirm: "1", period_label: `deadlock ${STAMP}` });
-    const reRows = (await req(admin, "GET", `/api/govt-attendance/${again2.data._id}`)).data.rows ?? [];
-    const reMine = reRows.find((r) => String(r.govt_candidate_id).trim() === String(stillAmb.govt_candidate_id).trim());
-    ok("-137 (G-02): a RE-IMPORT of the same file now matches that row on its portal ID, with nobody helping",
-      reMine?.match_status === "Matched" && reMine?.match_by === "Portal ID",
-      JSON.stringify({ status: reMine?.match_status, by: reMine?.match_by }));
-    ok("-137 (G-01/G-04): ...so the row is no longer 'not matched to a student' and can be judged at all",
-      reMine?.verdict?.state !== "not_enrolled" || !!reMine?.candidate,
-      JSON.stringify({ state: reMine?.verdict?.state, cand: !!reMine?.candidate }));
+        const res = await req(admin, "POST", `/api/govt-attendance/${done.data._id}/rows/${stillAmb._id}/match`,
+
+      { candidate: mineMember.candidate._id, reason: "e2e: picked by portal ID" }, 200);
+
+    ok("-137 (G-02): an ambiguous row can be resolved from the row itself", res.status === 200, JSON.stringify(res.data).slice(0, 140));
+
+
+
+    const after = (await req(admin, "GET", `/api/candidates/${mineMember.candidate._id}`)).data.item;
+
+    ok("-137 (G-02): ...and the human's choice STAMPS the portal ID, which no automatic path may do",
+
+      after.sidh_candidate_id === String(stillAmb.govt_candidate_id).trim(),
+
+      JSON.stringify({ got: after.sidh_candidate_id, want: stillAmb.govt_candidate_id }));
+
+    ok("-137 (G-02): ...audited against the candidate, because it is identity data",
+
+      ((await req(admin, "GET", `/api/audit/Candidate/${mineMember.candidate._id}`)).data.items ?? []).some((x) => String(x.field) === "sidh_candidate_id"),
+
+      "no audit row for the stamp");
+
+
+
+    // THE CLAUSE THAT FAILS TODAY: re-import the same file and the row matches on its own.
+
+    const again2 = await upload(admin, { file: csvFile(), confirm: "1", period_label: `deadlock ${STAMP}` });
+
+    const reRows = (await req(admin, "GET", `/api/govt-attendance/${again2.data._id}`)).data.rows ?? [];
+
+    const reMine = reRows.find((r) => String(r.govt_candidate_id).trim() === String(stillAmb.govt_candidate_id).trim());
+
+    ok("-137 (G-02): a RE-IMPORT of the same file now matches that row on its portal ID, with nobody helping",
+
+      reMine?.match_status === "Matched" && reMine?.match_by === "Portal ID",
+
+      JSON.stringify({ status: reMine?.match_status, by: reMine?.match_by }));
+
+    ok("-137 (G-01/G-04): ...so the row is no longer 'not matched to a student' and can be judged at all",
+
+      reMine?.verdict?.state !== "not_enrolled" || !!reMine?.candidate,
+
+      JSON.stringify({ state: reMine?.verdict?.state, cand: !!reMine?.candidate }));
+
   }
 }
 
+// ---- -143 (QA-300 + QA-298): both of these are the SAME defect ----
+// A value computed at IMPORT time and persisted answers the question as it was on the day of the
+// import, and keeps answering it that way forever. Two rows reopened on that shape in one week.
+{
+  // QA-300 (checker's PARTIAL on -142). have_local_logs was computed into `counts` and handed to
+  // the upload PREVIEW - but it is not a field on GovtAttendanceImportSchema, so create() drops it
+  // in strict mode. NO import has ever stored it. The list and the detail read undefined forever,
+  // and -142's grey branch was right on those two surfaces only by accident, because undefined is
+  // falsy and the live imports happen to have no logs. This pin is TRUE, so nothing stored can
+  // satisfy it: the only way to pass is to derive it from the rows.
+  const listed = ((await req(admin, "GET", "/api/govt-attendance")).data.items ?? []).find((x) => String(x._id) === String(done.data._id));
+  ok("-143 (QA-300): the imports LIST says whether we have any attendance of our own - and here it is TRUE, which nothing stores",
+    listed?.have_local_logs === true, JSON.stringify({ got: listed?.have_local_logs }));
+
+  // The mistake this one exists to catch: deriving it from the rows the detail route just
+  // FETCHED. Those are filtered, so an ambiguous-only view holds no local logs at all and the
+  // chip would answer differently depending on which chip you had clicked.
+  const dAll = (await req(admin, "GET", `/api/govt-attendance/${done.data._id}`)).data.item;
+  const dAmb = (await req(admin, "GET", `/api/govt-attendance/${done.data._id}?filter=ambiguous`)).data.item;
+  ok("-143 (QA-300): ...the detail answers it for the whole import, so the filter cannot change the answer",
+    dAll?.have_local_logs === true && dAmb?.have_local_logs === true,
+    JSON.stringify({ all: dAll?.have_local_logs, ambiguous: dAmb?.have_local_logs }));
+
+  // QA-298 (checker REOPENED at -141): -137 rewrote the ambiguity note so two colliding rows could
+  // be told apart, and that wording IS in govt-attendance.ts - but match_note is written at import
+  // time and persisted, so it reaches future imports only. Both live Sachin Kumar rows still read
+  // the old sentence, character for character identical, pointing at a screen that is not the one
+  // with the fix on it. Proved by changing the world AFTER the import: two same-name candidates
+  // make the row ambiguous, and a third must make the note say three. A stored note says two.
+  const mkEcho = async (n) => {
+    const c = (await req(admin, "POST", "/api/candidates", {
+      name: `${NAME} Echo`, phone: `9${STAMP.slice(1)}9${String(n).padStart(3, "0")}`, location: loc._id, program: program._id,
+    }));
+    if (!c.data.item?._id) { ok(`-143 (QA-298) fixture: Echo candidate ${n} created`, false, JSON.stringify(c.data).slice(0, 140)); return null; }
+    await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: c.data.item._id, joined_on: localDate(Date.now() - 20 * 86400_000) });
+    return c.data.item;
+  };
+  await mkEcho(1); await mkEcho(2);
+  // One row, no portal ID on purpose - that is what forces the match down to the name and makes
+  // this the exact shape Manish's two Sachin Kumar rows are.
+  const echoCsv = [csvText.split(/\r?\n/)[0], `1,TESTORG Gurugram -${TC},99000001,${NAME} Echo,,Trainee,Trainee,11,3,3,0,21:00:00,0,07:00:00,`].join("\n");
+  const echoImp = await upload(admin, {
+    file: new File([Buffer.from(echoCsv)], "echo.csv", { type: "text/csv" }),
+    confirm: "1", period_label: `echo ${STAMP}`,
+  });
+  const echoRow0 = ((await req(admin, "GET", `/api/govt-attendance/${echoImp.data._id}`)).data.rows ?? [])[0];
+  ok("-143 (QA-298) fixture: a row with no portal ID and two same-name candidates is Ambiguous",
+    echoRow0?.match_status === "Ambiguous" && /2 candidates share/.test(String(echoRow0?.match_note)),
+    JSON.stringify({ status: echoRow0?.match_status, note: echoRow0?.match_note }));
+
+  await mkEcho(3);
+  const echoRow1 = ((await req(admin, "GET", `/api/govt-attendance/${echoImp.data._id}`)).data.rows ?? [])[0];
+  ok("-143 (QA-298): THE CLAUSE THAT FAILS TODAY - the note is re-derived on read, so it counts THREE now",
+    /3 candidates share/.test(String(echoRow1?.match_note)),
+    JSON.stringify({ note: echoRow1?.match_note }));
+  ok("-143 (QA-298): ...and it still names the row it belongs to and points at the control that resolves it",
+    /^row 1:/.test(String(echoRow1?.match_note)) && /click this row/.test(String(echoRow1?.match_note)),
+    JSON.stringify({ note: echoRow1?.match_note }));
+  ok("-143 (QA-298): ...and re-deriving the NOTE never rewrites the stored match_status",
+    echoRow1?.match_status === "Ambiguous", String(echoRow1?.match_status));
+}
 // ---------------------------------------------------------------- garbage in
 const junk = await upload(admin, { file: new File([Buffer.from("just,some,csv\n1,2,3\n")], "junk.csv", { type: "text/csv" }) });
 ok("a file with no attendance header is rejected with a readable reason",

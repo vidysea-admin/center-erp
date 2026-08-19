@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-142";
+export const RELEASE = "2026.08.14-143";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,30 @@ export const RELEASE = "2026.08.14-142";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-143, and both rows it closes are the same defect wearing two faces: a value worked out at " +
+  "IMPORT time and stored answers the question as it stood on the day of the import, and keeps " +
+  "answering it that way forever. QA-300, reopened as PARTIAL by the checker: -142 changed the " +
+  "wording on the upload preview, which an operator sees once while committing a file. The same " +
+  "number prints in two more places - the Variance column on the imports list, which is the " +
+  "surface met first and every time and was still a bold amber count, and the detail filter chip, " +
+  "which named a comparison that was never made. Neither could be fixed the same way, and the " +
+  "reason is the interesting part: have_local_logs is not a field on the import schema, so " +
+  "create() dropped it in strict mode and NO import has ever stored it. Both surfaces read " +
+  "undefined forever, not only the ones that predate -142, and the grey branch was right on them " +
+  "by accident. It is now derived from the rows at read time, on the list and on the detail, and " +
+  "on the detail it is derived over the WHOLE import rather than the filtered rows, so the answer " +
+  "cannot change with the chip you clicked. QA-298, reopened by the checker: -137 rewrote the " +
+  "ambiguity note so two colliding rows could be told apart, and that wording really is in the " +
+  "matcher - but match_note is written at import time and persisted on the row, so it reaches " +
+  "FUTURE imports only. The two live rows that raised the complaint still read the old sentence, " +
+  "character for character identical, pointing at a screen other than the one that resolves them. " +
+  "The note is now re-derived on read by calling the same matcher the importer calls, never a " +
+  "second copy of the rules, and only the note is taken from it - a row a human resolved through " +
+  "the drawer stays resolved. Pinned by changing the world after the import: a third same-name " +
+  "candidate must make the note say three, which a stored sentence cannot do. ";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-142, the last two rows of the 19 Aug recording, and the first of them turned out not to be a " +
   "bug. QA-297: the File line read 'Gurugram Batch 2 - final attendance.csv' while the Period label " +
   "beneath it read 'Guguram Batch 2 - Final Attendance' - a letter short and Title Cased, which is " +
@@ -34,10 +58,7 @@ export const RELEASE_NOTE_CURRENT =
   "column was the portal's own figure copied across with a plus sign. An alarming number that cannot " +
   "mean what it says is worse than no number, because it sends somebody looking for a discrepancy " +
   "that does not exist. The importer now reports whether there is any attendance of ours at all, and " +
-  "the screen says 'no attendance of our own to compare against yet' instead. ";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "the screen says 'no attendance of our own to compare against yet' instead. " +
   "-141, the Locations screen from the 19 Aug recording, in the order the rows themselves demand. " +
   "QA-295 FIRST, because it decides what QA-294 may sum: the summary line said '55 job-role rows' " +
   "twelve seconds above a table footer reading 'Showing 1-25 of 57', no filter touched between. BOTH " +
