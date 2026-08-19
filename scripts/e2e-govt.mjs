@@ -846,6 +846,65 @@ ok("the first import is still intact", (await req(admin, "GET", `/api/govt-atten
   ok("-146 (QA-313): ...but a READ never decides the match - the stored status is still Unmatched",
     after?.match_status === "Unmatched", String(after?.match_status));
 }
+// ---- -148 (QA-332): a TRAINER row must never be offered a student ----
+// -146 widened the read-time note to every unresolved row and did not construct the case where
+// that row is a TRAINER. The portal export carries the centre's own trainers alongside its
+// students, so the new sentence -- 'this person IS in the ERP now - click this row to link
+// them' -- appeared on a trainer, whose only linking control is the CANDIDATE picker. The
+// checker then measured the rest of it: the API accepted the link and stamped a student onto a
+// trainer's attendance row.
+//
+// The existing guard tested `row.trainer`, which is set only when the importer MATCHED a trainer
+// record -- so it missed exactly the row that needed it, a trainer the ERP has never heard of.
+// -127 already settled which test is right for this question: the EXPORT's own type column.
+{
+  const trainerCsv = [
+    csvText.split(/\r?\n/)[0],
+    `1,TESTORG Gurugram -${TC},99000004,${NAME} Ghost Trainer,,Trainer,Trainer,11,9,63:00:00,0,07:00:00,`,
+  ].join("\n");
+  const timp = await upload(admin, {
+    file: new File([Buffer.from(trainerCsv)], "ghost-trainer.csv", { type: "text/csv" }),
+    confirm: "1", period_label: `ghost trainer ${STAMP}`,
+  });
+  const trow = ((await req(admin, "GET", `/api/govt-attendance/${timp.data._id}`)).data.rows ?? [])[0];
+  ok("-148 (QA-332) fixture: a trainer the ERP has never heard of imports as an unmatched TRAINER row",
+    trow?.match_status === "Unmatched" && !trow?.trainer,
+    JSON.stringify({ status: trow?.match_status, trainer: trow?.trainer, type: trow?.candidate_type }));
+
+  // Now add the TRAINER record with that exact name. That is what moves the re-derivation from
+  // Unmatched to Matched for a trainer row -- an enrolled candidate never does, because the trainer
+  // branch of matchGovtRows looks at trainers. Getting this wrong first is how I learned the
+  // difference: with a candidate the row simply stays Unmatched and the defect never appears.
+  const t = await req(admin, "POST", "/api/trainers", {
+    name: `${NAME} Ghost Trainer`, phone: `9${STAMP.slice(1)}7${String(1).padStart(3, "0")}`,
+    skills: ["GhostSkill" + STAMP],
+  });
+  ok("-148 (QA-332) fixture: the trainer record now exists, so the row re-derives to Matched",
+    !!t.data.item?._id, JSON.stringify(t.data).slice(0, 140));
+  // and a candidate of the same name, which is what an operator would be offered
+  const c = await req(admin, "POST", "/api/candidates", {
+    name: `${NAME} Ghost Trainer`, phone: `9${STAMP.slice(1)}7${String(2).padStart(3, "0")}`,
+    location: loc._id, program: program._id,
+  });
+  if (c.data.item?._id) await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: c.data.item._id, joined_on: localDate(Date.now() - 20 * 86400_000) });
+
+  const after = ((await req(admin, "GET", `/api/govt-attendance/${timp.data._id}`)).data.rows ?? [])[0];
+  ok("-148 (QA-332): THE CLAUSE THAT FAILS TODAY - a trainer row is never told to link a student",
+    !/click this row to link them/.test(String(after?.match_note)),
+    JSON.stringify({ note: after?.match_note }));
+  ok("-148 (QA-332): ...it says what the row actually is instead",
+    /types this row as a TRAINER/.test(String(after?.match_note)), JSON.stringify({ note: after?.match_note }));
+
+  // The half that matters more than the wording: the door itself must refuse.
+  const bad = await req(admin, "POST", `/api/govt-attendance/${timp.data._id}/rows/${after._id}/match`,
+    { candidate: c.data.item?._id, reason: "e2e: must be refused" });
+  ok("-148 (QA-332): ...and the API REFUSES to stamp a student onto a trainer's attendance row",
+    bad.status === 400 && /trainer/i.test(String(bad.data.error ?? "")), `${bad.status} ${String(bad.data.error ?? "").slice(0, 90)}`);
+  const untouched = ((await req(admin, "GET", `/api/govt-attendance/${timp.data._id}`)).data.rows ?? [])[0];
+  ok("-148 (QA-332): ...and the refusal left the row exactly as it was",
+    untouched?.match_status === "Unmatched" && !untouched?.candidate,
+    JSON.stringify({ status: untouched?.match_status, candidate: untouched?.candidate }));
+}
 // ---------------------------------------------------------------- garbage in
 const junk = await upload(admin, { file: new File([Buffer.from("just,some,csv\n1,2,3\n")], "junk.csv", { type: "text/csv" }) });
 ok("a file with no attendance header is rejected with a readable reason",

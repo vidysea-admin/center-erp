@@ -4,6 +4,7 @@ import { apiHandler, requireUser, requireEdit, isScoped, HttpError } from "@/lib
 import { requirePerm, requireView } from "@/lib/permissions";
 import { Batch, BatchMember, Candidate, DailyLog, GovtAttendanceImport, GovtAttendanceRow } from "@/models";
 import { audit } from "@/lib/audit";
+import { isTrainerRow } from "@/lib/govt-attendance";
 
 async function loadRow(id: string, rowId: string, user: Awaited<ReturnType<typeof requireUser>>) {
   const imp = await GovtAttendanceImport.findById(id).populate("location", "name").lean<any>();
@@ -99,7 +100,14 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   const { id, rowId } = await ctx.params;
 
   const { imp, row } = await loadRow(id, rowId, user);
-  if (row.trainer) throw new HttpError(400, "That row is a trainer's attendance, not a candidate's.");
+  // -148 (QA-332): `row.trainer` is only set when the importer MATCHED a trainer record, so this
+  // guard missed the exact row that needed it - a trainer the ERP has never heard of, which stores
+  // as Unmatched with no trainer set, and which -146 then invited an operator to link. The portal's
+  // own type column is the test (-127 settled this for the assessment verdict; it is the same
+  // question). Checked BEFORE the body is read, so a bad call cannot half-run.
+  if (row.trainer || isTrainerRow(row)) {
+    throw new HttpError(400, "That row is a trainer's attendance, not a candidate's - a trainer's hours are their own delivery record, so there is no student to link it to.");
+  }
 
   const { candidate, reason } = await req.json().catch(() => ({}));
   if (!candidate) throw new HttpError(400, "Pick the candidate this portal row belongs to.");

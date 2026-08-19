@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-147";
+export const RELEASE = "2026.08.14-148";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,24 @@ export const RELEASE = "2026.08.14-147";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-148 closes a defect -146 created, and the wording was only the invitation. -146 widened the " +
+  "read-time note to every unresolved import row and never constructed the case where that row is a " +
+  "TRAINER. A portal export carries a centre's own trainers alongside its students, so a trainer the " +
+  "ERP had never heard of - stored Unmatched - started reading 'this person IS in the ERP now, click " +
+  "this row to link them' the moment anyone enrolled a candidate of the same name. The only control " +
+  "that sentence can point at is the CANDIDATE picker. The checker then measured the rest: the API " +
+  "ACCEPTED the link and stamped a student onto a trainer's attendance row. The existing refusal " +
+  "tested row.trainer, which is set only when the importer already MATCHED a trainer record - so it " +
+  "guarded every row except the one that needed it. -127 had already settled which test is right for " +
+  "this exact question, for the assessment verdict: the EXPORT's own type column, because a trainer " +
+  "the ERP has never heard of is still not a candidate. Both halves now use it. The row says what it " +
+  "actually is, and the door refuses the write with a reason, before the body is read, so a bad call " +
+  "cannot half-run. Pinned end to end: import an unknown trainer, enrol a candidate sharing the name, " +
+  "require the note NOT to offer a link, require the API to answer 400, and require the row to be " +
+  "byte-unchanged afterwards. ";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-147 exists because the checker FAILED -145 and was right to. That release fixed a live scope " +
   "leak correctly, and claimed both of its pins had been verified by breaking the source and " +
   "watching them fail. That was true of the source scan and FALSE of the end-to-end pin, which I " +
@@ -37,10 +55,7 @@ export const RELEASE_NOTE_CURRENT =
   "QA-302's own bug MIRRORED, a key declared before a spread and silently replaced by it, so the " +
   "source scan now reads both sides of a spread instead of only what follows it. QA-322: the -145 " +
   "manifest said exactly two scope-spread sites exist; there are eighteen, and two was the count of " +
-  "something else. Corrected rather than argued. ";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "something else. Corrected rather than argued. " +
   "-146 closes the branch -143 deliberately left open, and it was the more embarrassing of the two. " +
   "An import row the ERP could not match keeps the sentence 'No candidate named X in this centre', " +
   "written onto it at import time - so once somebody actually enrols X, the screen goes on denying " +

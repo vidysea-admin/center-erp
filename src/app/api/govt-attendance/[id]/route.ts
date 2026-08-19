@@ -98,9 +98,16 @@ export const GET = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
       // The world moved. Say what is true now, and point at the control that resolves it - which is
       // the row itself, not the candidate screen the old sentences sent people to.
       if (d.match_status === "Matched") {
-        freshNote.set(String(r._id), r.match_status === "Ambiguous"
-          ? `${which}: the name clash that held this row up is gone - click this row to confirm the candidate.`
-          : `${which}: this person IS in the ERP now - click this row to link them.`);
+        // -148 (QA-332, checker FAIL on -146): this sentence was printed on TRAINER rows too, and
+        // the only control it can point at is the CANDIDATE picker - so it invited an operator to
+        // stamp a student onto a trainer's attendance row, and the API accepted it. -127 settled
+        // the test to use here: the EXPORT's own type column, not whether we happened to match a
+        // trainer record. A trainer the ERP has never heard of is still not a candidate.
+        freshNote.set(String(r._id), isTrainerRow(r)
+          ? `${which}: the portal types this row as a TRAINER, so it is not matched to a student - a trainer's hours are their own delivery record.`
+          : r.match_status === "Ambiguous"
+            ? `${which}: the name clash that held this row up is gone - click this row to confirm the candidate.`
+            : `${which}: this person IS in the ERP now - click this row to link them.`);
       } else if (d.match_note) {
         freshNote.set(String(r._id), d.match_note);
       }
