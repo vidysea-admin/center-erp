@@ -737,9 +737,18 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
           <Btn small onClick={() => setShowPool(true)}>Add from pool</Btn>
         </div>
       }>
+        {/* -133 (QA-282, Umesh 19/08): "platform me aisi bahut sari jagah hai" — and this is the
+            one he named. The panel opened on a click and `setAttLinks(null)` did not exist anywhere
+            in the file, so there was no close button because nothing could clear the state. He asked
+            for the same thing on 15/08 and it was fixed for HealthBanner and ShareLinkPanel; four
+            days later the panels beside them still had no way out. Sixth instance of one shape. */}
         {attLinks && (
           <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm">
-            <div className="mb-2 font-medium text-blue-800">One attendance link per candidate — student sees their own days, hours and exam eligibility:</div>
+            <div className="mb-2 flex items-start justify-between gap-2">
+              <div className="font-medium text-blue-800">One attendance link per candidate — student sees their own days, hours and exam eligibility:</div>
+              <button onClick={() => setAttLinks(null)} aria-label="Close" title="Close"
+                className="-mt-1 shrink-0 text-xl leading-none text-blue-400 hover:text-blue-700">×</button>
+            </div>
             <ul className="max-h-56 space-y-1 overflow-y-auto text-xs">
               {attLinks.map((t: any) => {
                 const name = t.batch_member?.candidate?.name ?? "?";
@@ -2782,10 +2791,16 @@ function FeedbackTab({ batchId, error, setError }: any) {
     <div className="space-y-4">
       <Section title={`Feedback${data?.count ? ` — ${data.count} response${data.count === 1 ? "" : "s"}, average ${data.average}★` : ""}`}
         actions={<Btn small kind="ghost" disabled={busy} onClick={generateLinks}>Get feedback links</Btn>}>
+        {/* -133 (QA-282): same shape as the attendance panel above — opened by "Get feedback
+            links", and setLinks(null) existed nowhere. */}
         {links && (
           <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm">
             {/* 2026-08-12 (Manish): SMS alongside WhatsApp — rural candidates are not reliably on WhatsApp. */}
-            <div className="mb-2 font-medium text-blue-800">One link per candidate — send on WhatsApp or SMS:</div>
+            <div className="mb-2 flex items-start justify-between gap-2">
+              <div className="font-medium text-blue-800">One link per candidate — send on WhatsApp or SMS:</div>
+              <button onClick={() => setLinks(null)} aria-label="Close" title="Close"
+                className="-mt-1 shrink-0 text-xl leading-none text-blue-400 hover:text-blue-700">×</button>
+            </div>
             <ul className="max-h-56 space-y-1 overflow-y-auto text-xs">
               {links.map((t: any) => {
                 const name = t.batch_member?.candidate?.name ?? "?";

@@ -43,6 +43,21 @@ function resolveStage(raw: string): string | null {
 const TEXT_FIELDS = ["name", "phone", "email", "qualification", "source", "tr_id", "home_location_other", "pipeline_note"];
 const NUM_FIELDS = ["industry_experience_years", "teaching_experience_years", "day_rate"];
 
+// -133 (QA-286): one sentence per wrong VALUE, carrying how many rows it hit and who they were.
+// The count is what tells an operator this was a column rather than a typo — the case this exists
+// for is eight rows written in the same second — and the names are what let them go and fix it.
+// Capped at six names so one bad column cannot itself become the wall of text it is reporting.
+function renderSkillWarnings(m: Map<string, { skill: string; near?: string; names: string[] }>): string[] {
+  return [...m.values()].map(({ skill, near, names }) => {
+    const n = names.length;
+    const who = names.slice(0, 6).join(", ") + (n > 6 ? `, +${n - 6} more` : "");
+    const head = n === 1 ? `${who}: skill` : `${n} rows (${who}): skill`;
+    return near
+      ? `${head} "${skill}" is the same words as the existing job role "${near}" in a different order — imported as typed; fix them to "${near}" so both spellings do not exist`
+      : `${head} "${skill}" matches no job role we know — imported as typed; add it to the job-roles master or correct the spelling`;
+  });
+}
+
 export const POST = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
@@ -111,7 +126,9 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const stageUnmatched: string[] = [];
   const centreUnmatched: string[] = [];
   const roleUnmatched: string[] = [];
-  const skillWarn: string[] = []; // -132 (QA-281): job-role values that named no known role
+  // -133 (QA-286): keyed on the (skill, near-match) pair, because that is what repeats — the names
+  // are collected as a list and rendered at the end, so one wrong column produces ONE sentence.
+  const skillWarn = new Map<string, { skill: string; near?: string; names: string[] }>();
   const warnings: string[] = [];
 
   const trainers = rows
@@ -138,10 +155,19 @@ export const POST = apiHandler(async (req: NextRequest) => {
           if (knownRoles.length) {
             for (const sk of list) {
               if (knownLower.has(sk.toLowerCase())) continue;
+              // -133 (QA-286): -132 pushed a whole SENTENCE per row with the trainer's name baked
+              // into it, then deduped with new Set() — and every row has a different name, so every
+              // string was unique and the Set collapsed nothing. The dedup was real code that could
+              // never fire, and the -132 manifest claimed it worked. One wrong spreadsheet column
+              // therefore still produced one paragraph per row: eight for the incident this was
+              // raised about, capped at 25. Group by the (skill, near) PAIR — which is the thing that
+              // is actually repeated — and carry the names alongside rather than inside.
               const near = roleByWords.get(wordKey(sk));
-              skillWarn.push(near
-                ? `${t.name ?? r[nameCol] ?? "(no name)"}: skill "${sk}" is the same words as the existing job role "${near}" in a different order — imported as typed; fix it to "${near}" so both spellings do not exist`
-                : `${t.name ?? r[nameCol] ?? "(no name)"}: skill "${sk}" matches no job role we know — imported as typed; add it to the job-roles master or correct the spelling`);
+              const key = `${sk.toLowerCase()}|${near ?? ""}`;
+              const who = String(t.name ?? r[nameCol] ?? "(no name)");
+              const hit = skillWarn.get(key);
+              if (hit) hit.names.push(who);
+              else skillWarn.set(key, { skill: sk, near, names: [who] });
             }
           }
         }
@@ -234,7 +260,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
     // -132 (QA-281): the job-role warnings ride in the same list the operator already reads, rather
     // than a new field a caller has to know about. Deduped — one wrong spreadsheet column produces the
     // same sentence on every row it touched, and eight copies of it is noise, not information.
-    warnings: [...warnings, ...new Set(skillWarn)].slice(0, 25),
+    warnings: [...warnings, ...renderSkillWarnings(skillWarn)].slice(0, 25),
     phone_invalid: phoneInvalid.slice(0, 25), phone_invalid_count: phoneInvalid.length,
     unknown_columns: unknownCols,
     // QA-110: say the quiet part — which columns are about to be DROPPED vs stored.

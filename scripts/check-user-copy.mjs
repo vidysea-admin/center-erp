@@ -224,6 +224,54 @@ for (const file of walk(root)) {
   else { failed++; hits.push(`scripts/reparse-govt-hours.mjs: its copy of hhmmssToMinutes no longer agrees with the expected table — ${out.split(String.fromCharCode(10))[0]}`); }
 }
 
+// ---- -133 (QA-282): a surface a person opens must have a way to close ----
+// Umesh, 19/08: "platform me aisi bahut sari jagah hai, toh woh sab main kaise bataata rahoon?" — he
+// is right that enumerating them is not his job. He raised the same thing on 15/08 and it was fixed
+// for HealthBanner and ShareLinkPanel; four days later the panels BESIDE them still had no way out.
+// Sixth instance of the shape this project keeps paying for.
+//
+// The test is narrow on purpose: state that GATES a rendered surface, is SET truthy somewhere, and
+// is NEVER set to a falsy value anywhere in its file. Not "conditionally rendered" — layout is
+// conditional everywhere and that is fine. WHERE the setter is called does not matter; my first
+// version required it inside an onClick and therefore missed `attLinks`, the one example he actually
+// gave, which is filled inside an async handler. A scan that misses the reported case proves nothing.
+//
+// THE NUMBER IS A CEILING, NOT A PASS. 19 remain and each needs reading before it is called a defect
+// or ordinary layout — that triage IS the work and it is not finished. What this pin does is stop the
+// count going UP while it happens.
+{
+  const CEILING = 19;
+  const openable = [];
+  const walkTsx = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walkTsx(full);
+      else if (/\.tsx$/.test(e.name)) {
+        const src = fs.readFileSync(full, "utf-8");
+        const rel = path.relative(root, full).split(path.sep).join("/");
+        for (const m of src.matchAll(/const \[(\w+), (set\w+)\] = useState/g)) {
+          const get = m[1], set = m[2];
+          const gates = new RegExp("\\{\\s*" + get + "\\s*&&").test(src)
+            || new RegExp("\\{" + get + " \\?").test(src)
+            || new RegExp("open=\\{!!\\s*" + get + "\\}").test(src)
+            || new RegExp("open=\\{" + get + "\\}").test(src);
+          if (!gates) continue;
+          const calls = [...src.matchAll(new RegExp(set + "\\(([^)]*)", "g"))].map((x) => x[1].trim());
+          const truthy = calls.some((a) => a && !/^(null|false|undefined|""|''|\[\]|\{\})$/.test(a));
+          const clears = calls.some((a) => /^(null|false|undefined|""|''|\[\])$/.test(a) || /=>\s*!/.test(a) || /^!/.test(a));
+          if (truthy && !clears) openable.push(rel + " · " + get);
+        }
+      }
+    }
+  };
+  walkTsx(root);
+  if (openable.length <= CEILING) passed++;
+  else {
+    failed++;
+    hits.push(`a new surface was added that opens on a click and nothing can close: ${openable.length} now, ceiling ${CEILING}. Give it a way out, or lower the ceiling if you closed some: ${openable.slice(0, 6).join(" | ")}`);
+  }
+}
+
 for (const h of hits) console.log("  ✗ " + h);
 if (hits.length) console.log(`\n${hits.length} user-facing string(s) still carry a Rule/DEC/QA code — rewrite as "what happened + what to do".`);
 console.log(`\ncheck-user-copy: ${passed} passed, ${failed} failed`);

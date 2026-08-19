@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-132";
+export const RELEASE = "2026.08.14-133";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,30 @@ export const RELEASE = "2026.08.14-132";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-133. QA-286 first, because it is mine: -132's importer warning pushed a whole SENTENCE per row " +
+  "with the trainer's NAME baked into it and then deduped with new Set() - and every row has a " +
+  "different name, so every string was unique and the Set collapsed nothing. The dedup was real code " +
+  "that could never fire, and the -132 manifest claimed it worked. One wrong spreadsheet column still " +
+  "produced one paragraph per row: eight for the incident it was raised about, capped at 25. It now " +
+  "groups by the (skill, near-match) PAIR - the thing that actually repeats - and carries the count " +
+  "and the names alongside: '8 rows (A, B, C ...): skill X is the same words as Y'. The count is what " +
+  "tells an operator this was a COLUMN rather than a typo. QA-282, Umesh 19/08: 'platform me aisi " +
+  "bahut sari jagah hai, toh woh sab main kaise bataata rahoon?' - he is right that enumerating them " +
+  "is not his job. His own example was exact: the attendance-links panel opened on a click and " +
+  "setAttLinks(null) did not exist ANYWHERE in the file, so there was no close button because nothing " +
+  "could clear the state. He asked for this on 15/08 and it was fixed for HealthBanner and " +
+  "ShareLinkPanel; four days later the panels BESIDE them still had no way out - the sixth instance " +
+  "of the shape this project keeps paying for. Three closed here: the attendance links, the feedback " +
+  "links, and the created-login panel, which is the one that matters most because it shows a " +
+  "TEMPORARY PASSWORD once and sat on screen until the operator navigated away. NINETEEN REMAIN and " +
+  "the release does not pretend otherwise - each needs reading before it is called a defect or " +
+  "ordinary layout, and that triage is the work. What ships is a CEILING pin so the count cannot go " +
+  "up while it happens. The scan itself had to be corrected first: my first version required the " +
+  "setter to sit inside an onClick and therefore missed attLinks, the one example he actually gave, " +
+  "which is filled inside an async handler. A scan that misses the reported case proves nothing.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-132 (QA-281): the trainer importer stored the skills column verbatim while THREE columns beside " +
   "it in the same for-loop each resolved against real records and reported what did not match - " +
   "pipeline_status through resolveStage, and both nomination fields through name lookups that push " +
@@ -36,8 +60,6 @@ export const RELEASE_NOTE_CURRENT =
   "version that stops a second spelling being created. Warnings are deduped: one wrong column " +
   "produces the same sentence on every row it touched, and eight copies is noise.";
 
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
   "-131, both rows from the checker's retro sweep over the five bypassed releases. QA-277: enrol ONE " +
   "candidate over a batch's target and you are warned; enrol thirty and you were not. The warning " +
   "exists and is correct - addMemberChecked computes 'Roster is now 46 of target 45' and returns it " +

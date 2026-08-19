@@ -176,9 +176,17 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
           ? <span className="rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-[11px] font-semibold text-green-700" title="This trainer has a linked login — their batches show under 'My batches'">Login linked ✓</span>
           : canCreateLogin && <Btn small kind="ghost" disabled={busy} onClick={createLogin}>{busy ? "…" : "Create login"}</Btn>}
       </div>
+      {/* -133 (QA-282): this one carries a TEMPORARY PASSWORD, shown once. Not being able to
+          dismiss it meant it sat on screen — over whoever's shoulder — until the operator navigated
+          away. Of the panels in this sweep it is the one where "no way to close" is a security
+          nuisance rather than only an annoyance. */}
       {loginRes && (
         <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-sm">
-          <div className="font-semibold text-green-800">{loginRes.item?.created ? "Login created" : "Existing login linked"} — {loginRes.item?.email}</div>
+          <div className="flex items-start justify-between gap-2">
+            <div className="font-semibold text-green-800">{loginRes.item?.created ? "Login created" : "Existing login linked"} — {loginRes.item?.email}</div>
+            <button onClick={() => setLoginRes(null)} aria-label="Close" title="Close"
+              className="-mt-1 shrink-0 text-xl leading-none text-green-500 hover:text-green-800">×</button>
+          </div>
           {loginRes.temporary_password && (
             <div className="mt-1 text-green-800">Temporary password (shown once — share it with the trainer yourself, it is never mailed): <code className="rounded bg-white px-1.5 py-0.5 font-mono">{loginRes.temporary_password}</code></div>
           )}
