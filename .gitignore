@@ -50,3 +50,8 @@ backups/
 
 # SEC-01 (2026-08-15): ad-hoc probe/smoke scripts carry live credentials - never in git.
 scratch-*
+
+# Checker/maker scratch probes — these are written into the repo root by verification
+# subagents mid-run and were swept into 2026.08.14-146 by a `git add -A`. They are working
+# notes, never product code.
+zz-*
