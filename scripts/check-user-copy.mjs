@@ -349,8 +349,12 @@ for (const file of walk(root)) {
       const def = new RegExp("const\\s+" + scopeName + "\\s*=[^;]*", "s").exec(src);
       if (!def) continue;
       const owned = new Set([...def[0].matchAll(/\{\s*([a-z_][a-zA-Z_]*)\s*:/g)].map((x) => x[1]));
+      // QA-323 taught this the mirror case: a key declared BEFORE the spread is overwritten BY it,
+      // and looking only at what follows the spread misses exactly half the class. Both sides now.
+      const before = l.slice(0, m.index);
       const after = l.slice(m.index + m[0].length);
-      for (const k of [...after.matchAll(/([a-z_][a-zA-Z_]*)\s*:/g)].map((x) => x[1])) {
+      const keys = [...before.matchAll(/([a-z_][a-zA-Z_]*)\s*:/g), ...after.matchAll(/([a-z_][a-zA-Z_]*)\s*:/g)].map((x) => x[1]);
+      for (const k of keys) {
         if (!owned.has(k)) continue;
         collisions++;
         hits.push(

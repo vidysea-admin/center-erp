@@ -190,9 +190,28 @@ export const GET = apiHandler(async () => {
   // dropdown and the trainers list use, so 'busy' means the same thing in all three places.
   const liveTrainerIds = await Batch.distinct("trainer", { status: { $in: ACTIVE_BATCH_STATUSES }, ...scope });
   const liveSet = new Set(liveTrainerIds.filter(Boolean).map(String));
+  // -147 (QA-323, raised by the checker on the -145 FAIL): these two queries carried NO scope at
+  // all. They are safe today only because the lean role list withholds these four KPIs from scoped
+  // users - i.e. the protection lives in a different file, on a different mechanism, and a future
+  // edit that surfaces one of these numbers to a SPOC would silently ship the whole country's
+  // figure. QA-302 was exactly that class and cost a live leak, so the scope is applied here rather
+  // than relied upon elsewhere. A trainer belongs to a centre through nominated_for_location, which
+  // is the same field the nomination KPI already filters on.
+  //
+  // Written as ONE value per key rather than a spread beside a literal: the first draft of this fix
+  // was `{ nominated_for_location: { $ne: null }, ...trainerLocScope }`, which is QA-302's own bug
+  // mirrored - the spread silently replaces the key declared before it. It happened to be harmless
+  // ($in implies non-null) and that is exactly why it is worth not writing.
+  const scopedLocs = isScoped(user) && Array.isArray(user.location_scope) ? user.location_scope : null;
   const [trainersNominated, certifiedDocs] = await Promise.all([
-    Trainer.countDocuments({ active: { $ne: false }, nominated_for_program: { $ne: null }, nominated_for_location: { $ne: null } }),
-    Trainer.find({ active: { $ne: false }, pipeline_status: "Certified" }).select("_id").lean<any[]>(),
+    Trainer.countDocuments({
+      active: { $ne: false }, nominated_for_program: { $ne: null },
+      nominated_for_location: scopedLocs ? { $in: scopedLocs } : { $ne: null },
+    }),
+    Trainer.find({
+      active: { $ne: false }, pipeline_status: "Certified",
+      ...(scopedLocs ? { nominated_for_location: { $in: scopedLocs } } : {}),
+    }).select("_id").lean<any[]>(),
   ]);
   const trainersCertified = certifiedDocs.length;
   const trainersCertifiedFree = certifiedDocs.filter((t) => !liveSet.has(String(t._id))).length;

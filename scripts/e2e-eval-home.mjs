@@ -1,7 +1,7 @@
 // Eval: Dashboard/Home — CONTENT correctness, not just Rule-38 scoping (which e2e-roles owns).
 // Before 2026-08-13 the Home surface had ~8 assertions, all "does it leak", none "is it right".
 // Scenarios are tagged [best] happy path · [avg] partial data · [worst] wrong/edge input.
-import { ok, req, adminLogin, login, finish, stamp, phone, today } from "./e2e-lib.mjs";
+import { ok, req, adminLogin, login, finish, stamp, phone, today, BASE } from "./e2e-lib.mjs";
 
 const admin = await adminLogin();
 const s = stamp("EH");
@@ -145,31 +145,66 @@ await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Canc
     k.attendance.portal_batches === 0 || k.attendance.roster <= (k.attendance.our_roster + k.attendance.portal_roster),
     JSON.stringify({ batches: k.attendance.portal_batches, roster: k.attendance.roster }));
 
-  // ---- -145 (QA-302): the scope must survive INTO the 'our logs' half, not just the portal half ----
-  // Measured on live -138 across three roles: every portal figure was correctly narrowed for the
-  // Gurugram SPOC (roster 1043 not 1447, 2 batches not 4) while our_present/our_roster came back
-  // 35/180 -- byte-identical to the Admin's. Cause was one duplicated object key dropping the $in,
-  // so the leak was invisible in review and invisible in any test that only checked the totals.
-  // These compare a SCOPED role against the ADMIN on the same instant, which is the only shape
-  // that can catch it: a leak makes the two halves equal, and scoping makes them differ or zero.
+  // ---- -147 (QA-321): the -145 pin was VACUOUS, and the checker proved it by running it ----
+  // That pin compared a scoped role against the Admin and passed on the pre-fix source, because
+  // of the one thing it never arranged: the buggy aggregate only runs `if (portalBatches.size)`,
+  // and in the seeded dataset every role has portal_batches 0, so the guarded branch was never
+  // entered at all. It also compared our_roster, which is Math.max-clamped, and carried a
+  // disjunct (spoc.portal_roster === admin.portal_roster) that is TRUE precisely in the scenario
+  // it was meant to catch. Three ways to be green about nothing.
+  //
+  // So this builds the state the bug needs instead of hoping for it: the scoped user's OWN batch
+  // is made portal-covered, which is what forces the `$nin` line to execute for them.
+  //
+  // MEASURED BOTH WAYS ON A REAL BUILD before this was written - which is the step -145 skipped:
+  //   pre-fix : SPOC our_present 26, ADMIN 24   <- a scoped user reading MORE than the whole org
+  //   post-fix: SPOC our_present  0, ADMIN 24
+  // Pre-fix the SPOC excludes only THEIR portal batch from an unscoped query, so they collect
+  // every other centre's logs and overshoot the organisation itself. That is impossible with a
+  // scope applied, and it is the sharpest possible fingerprint.
   {
     const spoc = await login("spoc.jpr03@vidysea.com", "CiOnly@123");
-    if (!spoc) ok("-145 (QA-302): scoped SPOC login available", false, "no session");
+    if (!spoc) ok("-147 (QA-302/QA-321): scoped SPOC login available", false, "no session");
     else {
-      const sk = (await req(spoc, "GET", "/api/home", undefined, 200)).data.kpis;
-      ok("-145 (QA-302): a scoped role's OUR-LOGS half is never larger than the whole org's",
-        (sk.attendance?.our_roster ?? 0) <= (k.attendance?.our_roster ?? 0)
-        && (sk.attendance?.our_present ?? 0) <= (k.attendance?.our_present ?? 0),
-        JSON.stringify({ spoc: [sk.attendance?.our_present, sk.attendance?.our_roster], admin: [k.attendance?.our_present, k.attendance?.our_roster] }));
-      // The decisive one. If the $in is dropped the two are IDENTICAL while every portal figure
-      // beside them is narrowed -- that combination is the fingerprint of the bug, and it is what
-      // was actually on screen. A scoped role either has fewer own-log days than the org, or the
-      // org has none to begin with.
-      ok("-145 (QA-302): ...and it does not silently equal the org-wide figure while the portal half is narrowed",
-        (k.attendance?.our_roster ?? 0) === 0
-        || (sk.attendance?.portal_roster ?? 0) === (k.attendance?.portal_roster ?? 0)
-        || (sk.attendance?.our_roster ?? 0) !== (k.attendance?.our_roster ?? 0),
-        JSON.stringify({ spoc_our: sk.attendance?.our_roster, admin_our: k.attendance?.our_roster, spoc_portal: sk.attendance?.portal_roster, admin_portal: k.attendance?.portal_roster }));
+      const own = ((await req(spoc, "GET", "/api/batches?limit=100")).data.items ?? []);
+      const active = own.find((b) => b.status === "Active");
+      ok("-147 (QA-321) fixture: the scoped role has an Active batch to cover", !!active, JSON.stringify(own.map((b) => b.status)));
+      if (active) {
+        const members = ((await req(admin, "GET", `/api/batches/${active._id}/members`)).data.items ?? []);
+        // A portal import over their own batch. It must MATCH, because the portal aggregate counts
+        // only match_status Matched - an unmatched import would leave portal_batches at 0 and put
+        // the pin straight back to being vacuous.
+        const header = " Sl No, Org Name, Attendance Id, Name, Candidate ID, Candidate Type, User's Designation, Total Working days, Total Days Present, Total Days Came After 00:00:00, Total Days Going Before 00:00:00, Total Hours Spent, Not Closed, Average Per Day,";
+        const csv = [header, ...members.slice(0, 8).map((m, i) =>
+          `${i + 1},SCOPEPROBE -TCSCOPE,${910000 + i},${m.candidate?.name},,Trainee,Trainee,10,7,7,0,49:00:00,0,07:00:00,`)].join("\n");
+        const fd = new FormData();
+        fd.append("file", new File([Buffer.from(csv)], "scope-probe.csv", { type: "text/csv" }));
+        fd.append("batch", String(active._id));
+        fd.append("confirm", "1");
+        fd.append("period_label", `scope probe ${s}`);
+        const up = await fetch(BASE + "/api/govt-attendance", { method: "POST", headers: { cookie: admin }, body: fd });
+        const upBody = await up.json().catch(() => ({}));
+        ok("-147 (QA-321) fixture: their own batch is now portal-covered, so the guarded aggregate actually runs",
+          up.status === 201 && (upBody.matched_count ?? 0) > 0, `${up.status} matched=${upBody.matched_count}/${upBody.row_count}`);
+
+        const ak = (await req(admin, "GET", "/api/home", undefined, 200)).data.kpis.attendance;
+        const sk = (await req(spoc, "GET", "/api/home", undefined, 200)).data.kpis.attendance;
+        ok("-147 (QA-321) fixture: the scoped role now has a portal-covered batch",
+          (sk.portal_batches ?? 0) > 0, JSON.stringify({ portal_batches: sk.portal_batches }));
+
+        // THE CLAUSE THAT FAILS ON THE PRE-FIX SOURCE (26, measured). Their only batch carrying
+        // logs is the one the portal now answers for, so their own-log figure has exactly one
+        // honest value. This asserts on our_present, not the Math.max-clamped our_roster.
+        ok("-147 (QA-321): with every logged batch of theirs portal-covered, a scoped role's OWN-LOG figure is 0",
+          (sk.our_present ?? -1) === 0,
+          JSON.stringify({ spoc_our_present: sk.our_present, admin_our_present: ak.our_present }));
+
+        // The general invariant, and the one that survives a different dataset: a scoped role can
+        // never read MORE own-log attendance than the whole organisation. Pre-fix: 26 > 24.
+        ok("-147 (QA-321): ...and a scoped role can never out-count the whole organisation",
+          (sk.our_present ?? 0) <= (ak.our_present ?? 0),
+          JSON.stringify({ spoc: sk.our_present, admin: ak.our_present }));
+      }
     }
   }
 

@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-146";
+export const RELEASE = "2026.08.14-147";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,30 @@ export const RELEASE = "2026.08.14-146";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-147 exists because the checker FAILED -145 and was right to. That release fixed a live scope " +
+  "leak correctly, and claimed both of its pins had been verified by breaking the source and " +
+  "watching them fail. That was true of the source scan and FALSE of the end-to-end pin, which I " +
+  "asserted rather than ran - in a manifest whose own text says a pin nobody has seen fail is a " +
+  "comment. The checker ran it and it passed on the broken code. It was vacuous three ways over: it " +
+  "compared our_roster, which is clamped by a Math.max; it carried a disjunct that is true precisely " +
+  "in the scenario it was meant to catch; and above all the buggy aggregate only executes when the " +
+  "user has a portal-covered batch, which no seeded role had - so the guarded branch was never " +
+  "entered at all. The new pin BUILDS that state instead of hoping for it: it makes the scoped " +
+  "user's own batch portal-covered, then asserts their own-log figure is zero, because their only " +
+  "batch carrying logs is now the one the portal answers for. Measured both ways on real builds " +
+  "before it was written - pre-fix the scoped role reads 26 against the organisation's 24, which is " +
+  "a scoped user out-counting the whole company and is impossible with a scope applied; post-fix it " +
+  "reads 0. QA-323, also from that verdict: two trainer KPIs on the same screen carried no scope at " +
+  "all and were safe only because a role list in another file withholds them from scoped users - " +
+  "protection living somewhere else, on a different mechanism, one edit away from shipping the " +
+  "country's figure to a centre. They carry the scope themselves now. Writing that fix reproduced " +
+  "QA-302's own bug MIRRORED, a key declared before a spread and silently replaced by it, so the " +
+  "source scan now reads both sides of a spread instead of only what follows it. QA-322: the -145 " +
+  "manifest said exactly two scope-spread sites exist; there are eighteen, and two was the count of " +
+  "something else. Corrected rather than argued. ";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-146 closes the branch -143 deliberately left open, and it was the more embarrassing of the two. " +
   "An import row the ERP could not match keeps the sentence 'No candidate named X in this centre', " +
   "written onto it at import time - so once somebody actually enrols X, the screen goes on denying " +
@@ -43,10 +67,7 @@ export const RELEASE_NOTE_CURRENT =
   "a regular expression over the source was standing in for the compiler. The signature is now " +
   "Partial<GovtRow>[], MatchedRow widens with it, the cast at the call site is gone, and re-introducing " +
   "the bare read is now a COMPILE error rather than a green build - which guards every field and every " +
-  "method, not the five a scan remembered to look for. ";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "method, not the five a scan remembered to look for. " +
   "-145 closes a live scope leak, and the way it hid is the point. Every scoped role's Home tile " +
   "counted the whole country's own-log attendance while every portal figure beside it was " +
   "correctly narrowed. Measured across three roles on -138: the Gurugram SPOC saw portal roster " +
