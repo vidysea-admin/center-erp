@@ -56,5 +56,21 @@ for (const r of results) {
   if (r.crashed || r.failed > 0 || r.exit !== 0) bad++;
   console.log(`${state.padEnd(8)} ${r.suite.padEnd(32)} ${r.passed} passed, ${r.failed} failed${r.crashed ? " (no final count — crashed?)" : ""}`);
 }
-console.log(`\nTOTAL: ${totalPass} passed, ${totalFail} failed across ${results.length} suites`);
+// -153 (QA-354): a CRASHED suite reports `passed: 0, failed: 0`, so it adds nothing to either
+// total and the TOTAL line read "0 failed" while suites were dying. The per-suite rows do say
+// CRASHED - but the TOTAL line is the one that gets QUOTED, into manifests, commit messages and
+// release notes, and it is the line that has to refuse to look clean. Measured today: a run in
+// which 15 of 17 suites crashed still printed a totals line reading 0 failed.
+const crashedSuites = results.filter((r) => r.crashed);
+const quietFailures = results.filter((r) => !r.crashed && r.failed === 0 && r.exit !== 0);
+let totalLine = `\nTOTAL: ${totalPass} passed, ${totalFail} failed across ${results.length} suites`;
+if (crashedSuites.length) {
+  totalLine += `\n!! ${crashedSuites.length} SUITE(S) CRASHED and contributed NO counts, so the numbers above are NOT a pass: ` +
+    crashedSuites.map((r) => r.suite).join(", ");
+}
+if (quietFailures.length) {
+  totalLine += `\n!! ${quietFailures.length} suite(s) reported no failures but exited non-zero: ` +
+    quietFailures.map((r) => `${r.suite} (exit ${r.exit})`).join(", ");
+}
+console.log(totalLine);
 process.exit(bad ? 1 : 0);
