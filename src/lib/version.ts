@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-150";
+export const RELEASE = "2026.08.14-151";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,28 @@ export const RELEASE = "2026.08.14-150";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-151 fixes a bug I put into product code and could not see, and it took a checker's " +
+  "control-character sweep to find it. field-catalog.ts carried a literal NUL byte inside a fallback " +
+  "- an escape written into the file as the raw byte it names, the fourth instance of that in one " +
+  "session and the first outside a test harness. Two consequences, and the second is the ugly one. " +
+  "The header normaliser strips it, so the guard was provably identical to falling back to an empty " +
+  "string - and a role check of the form 'role includes empty string' is ALWAYS TRUE, so a programme " +
+  "carrying no code would have matched EVERY job role and won the fuzzy pass. Latent only because " +
+  "the code field is required today. And the byte made the whole file BINARY to git grep and " +
+  "ripgrep, so the thing that broke it is the same thing that hid it from every search that might " +
+  "have found it. An absent code now matches nothing, and a scan refuses any control character " +
+  "anywhere in src or scripts - proved by putting a NUL back and watching it fail. QA-350: the " +
+  "reason -149 gave for leaving trainer matching global was wrong, and the checker was right to " +
+  "refuse that closure while accepting the diff - a trainer has FOUR possible links to a centre, not " +
+  "one, which the Home scope union has always known. The search stays global as an OPEN question " +
+  "rather than a settled one, because narrowing it is a behaviour change to live matching and -150 " +
+  "just showed three of those four arms were themselves inert. QA-351 and QA-352, outside the app: " +
+  "the commit guard could HANG on an unclosed stdin - and a hook that hangs blocks every command in " +
+  "the session, which is worse than the silence it replaced - and it fired on ordinary git reads " +
+  "because it matched the words rather than the subcommand. Both fixed and all three cases proved. ";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-150 carries a live scope defect that has been silently wrong for scoped centres, found by a " +
   "checker while it was testing something else. The Home trainer union matches a scoped user's " +
   "centres four ways - nomination, capability, home centre, and the batches they run - and three of " +
@@ -31,10 +53,7 @@ export const RELEASE_NOTE_CURRENT =
   "that stamped a student onto a trainer's attendance row and left the READ open, so the picker still " +
   "opened and offered four candidates on a row the product had just refused. Refusing at the write " +
   "while inviting at the read is the worse of the two states, because it spends an operator's " +
-  "decision and then rejects it. Both doors refuse now. ";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "decision and then rejects it. Both doors refuse now. " +
   "-149 is three residuals from the last two verdicts, and the smallest one is the most interesting. " +
   "QA-334: the portal matcher loaded trainers with Trainer.find(scope.locationId ? {} : {}) - a " +
   "ternary whose two branches are the SAME empty filter, so it has always searched every trainer in " +

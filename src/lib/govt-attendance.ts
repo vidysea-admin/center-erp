@@ -281,13 +281,23 @@ export async function matchGovtRows(
 
   // -149 (QA-334): this read `Trainer.find(scope.locationId ? {} : {})` - a ternary whose two
   // branches are the SAME empty filter, so it has always loaded every trainer in the database while
-  // LOOKING like it narrowed to the import's centre. That is the QA-302 shape again: a filter that
-  // pretends. The pretence is removed rather than implemented, and the reason is measured, not
-  // assumed: a trainer's only link to a centre is nominated_for_location, and QA-280 counted 22 of
-  // 23 live trainers with NO nomination at all. Scoping on it would match almost nobody and would
-  // break the trainer rows that match correctly today. So the search is global ON PURPOSE, and the
-  // narrowing that matters is elsewhere - a trainer row is never given a student (QA-332), and the
-  // portal ID is preferred over the name whenever the file carries one.
+  // LOOKING like it narrowed to the import's centre. The pretence is removed; the search is global.
+  //
+  // -151 (QA-350): THE REASON -149 GAVE FOR LEAVING IT GLOBAL WAS WRONG, and the checker was right
+  // to refuse the closure while accepting the diff. It claimed a trainer's only centre link is
+  // nominated_for_location. TrainerSchema carries THREE (home_location, capable_locations,
+  // nominated_for_location) and Batch.trainer is a fourth - which home/route.ts has always known,
+  // since its own scope union has exactly those four arms. QA-280's "22 of 23" measured a narrower
+  // predicate than the one quoted, and on a restored backup 12 of 12 trainers carry a centre link
+  // through home_location while 0 of 12 carry a nomination. So "scoping would match almost nobody"
+  // is false.
+  //
+  // The search stays global, but as an OPEN QUESTION rather than a settled one. Narrowing it means
+  // reusing that same four-arm union - which is a behaviour change to matching, on live imports,
+  // and -150 has just shown that three of those four arms were themselves inert until today. That
+  // is a measured unit of its own, not a comment rewrite. What is true and load-bearing now: a
+  // trainer row is never given a student (QA-332), and the portal ID beats the name whenever the
+  // file carries one.
   const trainers = await Trainer.find({}).select("_id name govt_candidate_id").lean<any[]>();
   const trainerByName = new Map<string, any[]>();
   const trainerByGovtId = new Map<string, any>();

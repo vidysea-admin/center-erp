@@ -369,6 +369,39 @@ for (const file of walk(root)) {
   if (collisions) failed++; else passed++;
 }
 
+// -151 (QA-349): NO CONTROL CHARACTERS IN SOURCE. This class has now bitten four times in one
+// session - a backslash escape written into a file as the raw byte it names. Three were inert
+// checks that reported green; the fourth was PRODUCT CODE, a NUL in field-catalog.ts that made a
+// '??' guard a no-op AND made the file binary to git grep - so the byte that broke it also hid it.
+// Cheap to detect, invisible to review, and it silently disables whatever it lands in.
+{
+  const ctrl = [];
+  const walkAll = (d) => {
+    if (!fs.existsSync(d)) return;
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const f = path.join(d, e.name);
+      if (e.isDirectory()) { if (!/node_modules|[.]next|[.]git/.test(f)) walkAll(f); }
+      else if (/[.](ts|tsx|mjs|js)$/.test(e.name)) {
+        const buf = fs.readFileSync(f);
+        for (let k = 0; k < buf.length; k++) {
+          const c = buf[k];
+          if (c <= 8 || c === 11 || c === 12) {
+            const line = buf.slice(0, k).toString("utf8").split(/\r?\n/).length;
+            ctrl.push(f.replace(/\\/g, "/") + ":" + line + ": a control character (byte 0x" +
+              c.toString(16).padStart(2, "0") + ") is in the SOURCE. It is almost certainly an escape " +
+              "written as the raw byte it names; it disables whatever expression it sits in, and it " +
+              "makes this file binary to grep.");
+            break;
+          }
+        }
+      }
+    }
+  };
+  walkAll(root);
+  walkAll("scripts");
+  if (ctrl.length) { failed++; for (const c of ctrl) hits.push(c); } else passed++;
+}
+
 for (const h of hits) console.log("  ✗ " + h);
 // -149 (QA-324): this file started as one check and now carries several - the ASI trap, the
 // drawer ceiling, the scope-collision scan. Every finding was summarised as "user-facing
