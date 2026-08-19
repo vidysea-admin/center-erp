@@ -278,7 +278,18 @@ export async function matchGovtRows(
 
   const out: MatchedRow[] = [];
   for (const r of rows) {
-    const gid = r.govt_candidate_id.trim().toUpperCase();
+    // -144 (QA-314, raised by the checker against -143). This read was unguarded, and -143 is
+    // what made that matter: this function used to be fed only rows fresh off the parser, where
+    // `at(r, "govt_candidate_id")` always produces a string. -143 started calling it from the
+    // import DETAIL route with PERSISTED documents, and a stored row without the key throws here
+    // -- taking out the whole import view with a 500, not just one row's note.
+    //
+    // The tell was already in this function: the same expression was guarded 46 lines down, and
+    // both writers in the match route use String(... ?? ""). So the value is derived ONCE, guarded,
+    // and reused -- rather than patching the one line that was reported, which would have left the
+    // same inconsistency for the next reader to trip over.
+    const rawGid = String(r.govt_candidate_id ?? "").trim();
+    const gid = rawGid.toUpperCase();
     const nk = nameKey(r.name);
     const isTrainer = isTrainerRow(r);
 
@@ -307,7 +318,7 @@ export async function matchGovtRows(
       // Only the UNAMBIGUOUS branch stamps (the `hits.length > 1` path below never does), and the
       // caller refuses to overwrite an id that already exists — a government ID is identity data.
       const cand = hits[0].candidate;
-      const stamp = gid && !cand?.sidh_candidate_id ? r.govt_candidate_id.trim() : undefined;
+      const stamp = gid && !cand?.sidh_candidate_id ? rawGid : undefined;
       out.push({
         ...r, candidate: cand?._id ?? hits[0].candidate, batch: hits[0].batch, batch_member: hits[0]._id,
         match_status: "Matched", match_by: by,
@@ -324,13 +335,13 @@ export async function matchGovtRows(
       // The advice also changed. It used to say "set the portal Candidate ID on the right record",
       // which is true and sends the reader to the candidate edit drawer on another screen, reached
       // by search — while the control that actually resolves this row is the row itself.
-      const which = r.govt_candidate_id?.trim() ? `portal ID ${r.govt_candidate_id.trim()}` : `row ${r.sl_no ?? "?"}`;
+      const which = rawGid ? `portal ID ${rawGid}` : `row ${r.sl_no ?? "?"}`;
       out.push({ ...r, match_status: "Ambiguous", match_by: by,
         match_note: `${which}: ${hits.length} candidates share this ${by.toLowerCase()} — click this row to pick the right one.` });
     } else {
       out.push({
         ...r, match_status: "Unmatched", match_by: "",
-        match_note: gid ? `No candidate carries portal ID ${r.govt_candidate_id}.` : `No candidate named "${r.name}" in this ${scope.batchId ? "batch" : "centre"}.`,
+        match_note: gid ? `No candidate carries portal ID ${rawGid}.` : `No candidate named "${r.name}" in this ${scope.batchId ? "batch" : "centre"}.`,
       });
     }
   }

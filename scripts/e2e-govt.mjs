@@ -779,6 +779,34 @@ ok("the first import is still intact", (await req(admin, "GET", `/api/govt-atten
     JSON.stringify({ note: echoRow1?.match_note }));
   ok("-143 (QA-298): ...and re-deriving the NOTE never rewrites the stored match_status",
     echoRow1?.match_status === "Ambiguous", String(echoRow1?.match_status));
+
+  // ---- -144 (QA-314, raised by the checker against -143) ----
+  // The checker proved a stored row with NO govt_candidate_id key 500s the WHOLE import detail,
+  // and stated the honest limit: no shipped path produces such a document. That limit holds - the
+  // parser's at() returns "" for a missing column, never undefined - so the guard is defence in
+  // depth and this pin does NOT claim otherwise. What IS reachable is the shape one step short of
+  // it: a portal export with no Candidate ID COLUMN AT ALL. findHeaderRow accepts that file
+  // (hasName && (hasPresent || hasId)), every row then carries an empty id, and after -143 those
+  // rows are fed back through matchGovtRows on every read of the detail.
+  {
+    const noIdCsv = [
+      " Sl No, Org Name, Attendance Id, Name, Candidate Type, User's Designation, Total Working days, Total Days Present, Total Hours Spent",
+      `1,TESTORG Gurugram -${TC},99000002,${NAME} Echo,Trainee,Trainee,11,4,28:00:00`,
+    ].join("\n");
+    const noIdImp = await upload(admin, {
+      file: new File([Buffer.from(noIdCsv)], "no-candidate-id-column.csv", { type: "text/csv" }),
+      confirm: "1", period_label: `no id column ${STAMP}`,
+    });
+    ok("-144 (QA-314): a portal export with no Candidate ID column is still accepted",
+      noIdImp.status === 201, JSON.stringify(noIdImp.data).slice(0, 160));
+    const detail = await req(admin, "GET", `/api/govt-attendance/${noIdImp.data._id}`);
+    ok("-144 (QA-314): ...and reading its detail does not 500 — every row is re-matched on read now",
+      detail.status === 200, `got ${detail.status}`);
+    const r0 = (detail.data.rows ?? [])[0];
+    ok("-144 (QA-314): ...the ambiguous note falls back to the ROW NUMBER when there is no portal ID",
+      r0?.match_status === "Ambiguous" && /^row 1:/.test(String(r0?.match_note)),
+      JSON.stringify({ status: r0?.match_status, note: r0?.match_note }));
+  }
 }
 // ---------------------------------------------------------------- garbage in
 const junk = await upload(admin, { file: new File([Buffer.from("just,some,csv\n1,2,3\n")], "junk.csv", { type: "text/csv" }) });

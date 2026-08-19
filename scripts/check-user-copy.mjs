@@ -297,6 +297,26 @@ for (const file of walk(root)) {
   }
 }
 
+// -144 (QA-314): matchGovtRows must never read a row field bare. -143 widened who feeds that
+// function -- it used to see only rows fresh off the parser, where every field is a string, and
+// now the import DETAIL route feeds it PERSISTED documents on every read. A missing key then
+// throws inside the loop that builds the whole response, so the cost is a 500 on the entire
+// import view rather than one row's note. The wall cannot pin this: it drives the HTTP API on
+// purpose, and no HTTP path produces such a document (the parser's column reader returns "" for a
+// missing column, never undefined). A source scan can, and it fails on the pre-fix file.
+{
+  const f = path.join(root, "lib/govt-attendance.ts");
+  const src = fs.readFileSync(f, "utf-8");
+  const body = src.slice(src.indexOf("export async function matchGovtRows"));
+  // a bare `r.<field>.` or `r.<field>?.` chained call -- guarded forms go through String(... ?? "")
+  const bare = [...body.matchAll(/(?<!String\()\br\.([a-z_]+)\??\.(trim|toUpperCase|toLowerCase|replace|split)\(/g)];
+  if (!bare.length) passed++;
+  else {
+    failed++;
+    hits.push(`lib/govt-attendance.ts: matchGovtRows reads ${bare.map((m) => "r." + m[1]).join(", ")} bare. Since -143 this function is fed STORED documents as well as parsed rows, and a missing key throws for the whole import detail, not one row. Derive it once via String(r.<field> ?? "") and reuse.`);
+  }
+}
+
 for (const h of hits) console.log("  ✗ " + h);
 if (hits.length) console.log(`\n${hits.length} user-facing string(s) still carry a Rule/DEC/QA code — rewrite as "what happened + what to do".`);
 console.log(`\ncheck-user-copy: ${passed} passed, ${failed} failed`);

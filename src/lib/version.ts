@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-143";
+export const RELEASE = "2026.08.14-144";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,24 @@ export const RELEASE = "2026.08.14-143";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-144, and the row it fixes was created by -143. The checker's adversarial pass on that release " +
+  "found that matchGovtRows reads r.govt_candidate_id.trim() unguarded, and -143 is exactly what " +
+  "made it matter: the function used to be fed only rows fresh off the parser, where the field is " +
+  "always a string, and -143 began calling it from the import DETAIL route with PERSISTED " +
+  "documents. A stored row without that key throws, and it throws in a loop that builds the whole " +
+  "response - so the cost is a 500 on the entire import view, not one row's note. The checker was " +
+  "careful to state the limit and the limit holds: no shipped path produces such a document, " +
+  "because the parser's column reader returns an empty string for a missing column and never " +
+  "undefined. So the guard is defence in depth. What earns the fix is that the tell was already " +
+  "inside the same function - the identical expression was guarded 46 lines further down, and both " +
+  "writers in the match route use String(... ?? \"\"). The value is therefore derived ONCE, guarded, " +
+  "and reused at all four sites, rather than patching the single line that was reported and leaving " +
+  "the inconsistency for the next reader. Pinned on the shape that IS reachable and is one step " +
+  "short of it: a portal export carrying no Candidate ID COLUMN at all, which the header detector " +
+  "accepts, whose rows then carry an empty id and are re-matched on every read of the detail. ";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-143, and both rows it closes are the same defect wearing two faces: a value worked out at " +
   "IMPORT time and stored answers the question as it stood on the day of the import, and keeps " +
   "answering it that way forever. QA-300, reopened as PARTIAL by the checker: -142 changed the " +
@@ -37,10 +55,7 @@ export const RELEASE_NOTE_CURRENT =
   "The note is now re-derived on read by calling the same matcher the importer calls, never a " +
   "second copy of the rules, and only the note is taken from it - a row a human resolved through " +
   "the drawer stays resolved. Pinned by changing the world after the import: a third same-name " +
-  "candidate must make the note say three, which a stored sentence cannot do. ";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "candidate must make the note say three, which a stored sentence cannot do. " +
   "-142, the last two rows of the 19 Aug recording, and the first of them turned out not to be a " +
   "bug. QA-297: the File line read 'Gurugram Batch 2 - final attendance.csv' while the Period label " +
   "beneath it read 'Guguram Batch 2 - Final Attendance' - a letter short and Title Cased, which is " +
