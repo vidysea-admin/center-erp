@@ -47,6 +47,14 @@ function stripComments(src) {
 
 let passed = 0, failed = 0;
 const hits = [];
+// -153 (QA-372): the structural/copy split used to be a REGEX over the rendered message, so every
+// new structural check had to REMEMBER to enrol in it - and -151's control-character scan and
+// -152's gate-pattern scan both forgot. The result: a maker who had just written a NUL into
+// product code was told to "rewrite as what happened + what to do". That regressed QA-324, which
+// had been Validated three releases earlier. Classification now happens where the finding is
+// RAISED, not where it is printed, so a new check cannot silently be misfiled as copy drift.
+const structuralIdx = new Set();
+const pushStructural = (msg) => { structuralIdx.add(hits.length); hits.push(msg); };
 for (const file of walk(root)) {
   const rel = path.relative(root, file).replace(/\\/g, "/");
   if (SKIP_FILES.has(rel)) continue;
@@ -108,7 +116,7 @@ for (const file of walk(root)) {
       if (/(?:\+|,|\(|\[)$/.test(prev)) continue;   // legitimately continued
       if (/;$/.test(prev)) continue;                 // previous statement genuinely ended
       asiHits++;
-      hits.push(`${rel}:${i + 1}: [ASI trap] this string literal follows another with no operator, so everything from here is a dead no-op statement — join them with " +"`);
+      pushStructural(`${rel}:${i + 1}: [ASI trap] this string literal follows another with no operator, so everything from here is a dead no-op statement — join them with " +"`);
     }
   }
   if (asiHits) failed++; else passed++;
@@ -293,7 +301,7 @@ for (const file of walk(root)) {
   if (openable.length <= CEILING) passed++;
   else {
     failed++;
-    hits.push(`a surface was added that opens and nothing can close: ${openable.length} now, ceiling ${CEILING}. Give it a way out, or lower the ceiling if you closed some: ${openable.slice(0, 6).join(" | ")}`);
+    pushStructural(`a surface was added that opens and nothing can close: ${openable.length} now, ceiling ${CEILING}. Give it a way out, or lower the ceiling if you closed some: ${openable.slice(0, 6).join(" | ")}`);
   }
 }
 
@@ -399,7 +407,7 @@ for (const file of walk(root)) {
   };
   walkAll(root);
   walkAll("scripts");
-  if (ctrl.length) { failed++; for (const c of ctrl) hits.push(c); } else passed++;
+  if (ctrl.length) { failed++; for (const c of ctrl) pushStructural(c); } else passed++;
 }
 
 // -152 (QA-367): THE GATE HAS ONE PATTERN AND TWO READERS. qa/hooks/mc-sessionstart.ps1 and
@@ -416,7 +424,7 @@ for (const file of walk(root)) {
   const shared = path.join(root, "..", "..", "qa", "tools", "gate-patterns.json");
   if (!fs.existsSync(shared)) {
     // the root repo is not always present beside a checkout; only enforce when it is
-    if (gateFiles.some((f) => fs.existsSync(f))) { failed++; hits.push("qa/tools/gate-patterns.json is missing while the gate readers exist - they will drift again."); }
+    if (gateFiles.some((f) => fs.existsSync(f))) { failed++; pushStructural("qa/tools/gate-patterns.json is missing while the gate readers exist - they will drift again."); }
     else passed++;
   } else {
     const inlined = [];
@@ -431,7 +439,7 @@ for (const file of walk(root)) {
         }
       }
     }
-    if (inlined.length) { failed++; for (const x of inlined) hits.push(x); } else passed++;
+    if (inlined.length) { failed++; for (const x of inlined) pushStructural(x); } else passed++;
   }
 }
 
@@ -442,8 +450,7 @@ for (const h of hits) console.log("  ✗ " + h);
 // the suggested fix was to rewrite a sentence. A summary that misnames what it found sends the
 // reader to the wrong place, which is the same defect this file exists to catch.
 {
-  const structuralRe = /sits beside|reads r\.|\[ASI trap\]|opens and nothing can close/;
-  const copyHits = hits.filter((h) => !structuralRe.test(h));
+  const copyHits = hits.filter((h, n) => !structuralIdx.has(n));
   const structural = hits.length - copyHits.length;
   // no escape sequences in these template literals on purpose: the last two attempts at this file
   // wrote a backspace byte and then a real newline into the source (-144, and this line).
