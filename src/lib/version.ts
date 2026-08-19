@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-151";
+export const RELEASE = "2026.08.14-152";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,22 @@ export const RELEASE = "2026.08.14-151";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-152 makes true a claim -150 had already made three times. QA-369: a comment correction was named " +
+  "in that release's commit message, in its manifest and in its published note - and git says the " +
+  "file was never touched. The cause is small and worth naming exactly: the edit went through a " +
+  "plain string replace instead of the asserting helper used everywhere else, so when the anchor did " +
+  "not match it did nothing, silently, and reported success. Every other edit in that release " +
+  "asserted its anchor and every other edit landed. A claim that is not backed by the artifact is " +
+  "the failure this pair exists to catch, and this time it was mine on three surfaces at once. The " +
+  "comment now says where the safeguard actually lives, and the line number was measured rather than " +
+  "remembered - the previous two attempts at it both quoted a line that had already moved. QA-370, " +
+  "outside the app: the missing-row detector walked only from the lowest release number it could " +
+  "see, so the FIRST releases of any new series were unprotected - a prefix whose rows start at 3 " +
+  "has 1 and 2 missing and nothing said so. It walks from the start of a series now, with the " +
+  "genesis prefix keeping its floor because those predate the discipline and are not owed a row. ";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-151 fixes a bug I put into product code and could not see, and it took a checker's " +
   "control-character sweep to find it. field-catalog.ts carried a literal NUL byte inside a fallback " +
   "- an escape written into the file as the raw byte it names, the fourth instance of that in one " +
@@ -35,10 +51,7 @@ export const RELEASE_NOTE_CURRENT =
   "just showed three of those four arms were themselves inert. QA-351 and QA-352, outside the app: " +
   "the commit guard could HANG on an unclosed stdin - and a hook that hangs blocks every command in " +
   "the session, which is worse than the silence it replaced - and it fired on ordinary git reads " +
-  "because it matched the words rather than the subcommand. Both fixed and all three cases proved. ";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "because it matched the words rather than the subcommand. Both fixed and all three cases proved. " +
   "-150 carries a live scope defect that has been silently wrong for scoped centres, found by a " +
   "checker while it was testing something else. The Home trainer union matches a scoped user's " +
   "centres four ways - nomination, capability, home centre, and the batches they run - and three of " +

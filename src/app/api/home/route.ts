@@ -205,7 +205,7 @@ export const GET = apiHandler(async () => {
   const liveSet = new Set(liveTrainerIds.filter(Boolean).map(String));
   // -147 (QA-323, raised by the checker on the -145 FAIL): these two queries carried NO scope at
   // all. They are safe today only because the lean role list withholds these four KPIs from scoped
-  // users - i.e. the protection lives in a different file, on a different mechanism, and a future
+  // users - i.e. the protection lives 130 lines below at :344, on a different mechanism, and a future
   // edit that surfaces one of these numbers to a SPOC would silently ship the whole country's
   // figure. QA-302 was exactly that class and cost a live leak, so the scope is applied here rather
   // than relied upon elsewhere. A trainer belongs to a centre through nominated_for_location, which
