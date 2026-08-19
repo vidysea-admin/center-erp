@@ -79,18 +79,24 @@ export default function HomePage() {
             approved centre×job-role (the sheet's "31", not the 10 centres). A principal gets
             the three that are theirs; everything is already location-scoped server-side.
             Umesh's "ek ke baad do count" stays: every card carries its paired figure. */}
+        {/* -138 (G-11): these two used each other's HEADLINE as their own subtitle — "Ongoing 6 /
+            0 completed" beside "Completed 0 / 6 ongoing". Between them the pair carried one fact in
+            four places. Every other tile uses the subtitle for a real breakdown; these now do too. */}
         <KPI label="Ongoing Batches" value={data.kpis.active_batches} tone="violet" icon={<IconCap size={19} />} href="/batches?status=Active"
-          sub={`${data.kpis.completed_batches ?? 0} completed`} />
+          sub={data.kpis.attendance?.portal_batches ? `${data.kpis.attendance.portal_batches} with portal attendance imported` : "no portal attendance imported yet"} />
         <KPI label="Completed Batches" value={data.kpis.completed_batches ?? 0} tone="green" icon={<IconCap size={19} />} href="/batches?status=Completed"
-          sub={`${data.kpis.active_batches} ongoing`} />
+          sub={`${data.kpis.enrolled_students ?? 0} students enrolled overall`} />
         {/* QA-012: with zero logs the card used to read "0 of 0" — expected-so-far now rides
             along, so an empty log book says so instead of looking broken. */}
         <KPI label="Total Attendance" tone="blue" icon={<IconUsers size={19} />} href="/govt-attendance"
           value={data.kpis.attendance?.pct != null ? `${data.kpis.attendance.pct}%` : "—"}
           sub={data.kpis.attendance?.roster
-            ? `${data.kpis.attendance.today_roster ? `today ${data.kpis.attendance.today_present}/${data.kpis.attendance.today_roster} · ` : ""}${data.kpis.attendance.present} of ${data.kpis.attendance.roster} logged student-days`
+            ? `${data.kpis.attendance.present} of ${data.kpis.attendance.roster} student-days${
+                data.kpis.attendance.portal_roster
+                  ? ` · ${data.kpis.attendance.portal_present}/${data.kpis.attendance.portal_roster} from the government portal${data.kpis.attendance.our_roster ? ` · ${data.kpis.attendance.our_present}/${data.kpis.attendance.our_roster} from our own logs` : ""}`
+                  : " — all from our own logs"}`
             : data.kpis.attendance?.expected_so_far
-              ? `no daily logs yet — ${data.kpis.attendance.expected_so_far} student-days expected so far`
+              ? `nothing recorded yet — ${data.kpis.attendance.expected_so_far} student-days expected so far`
               : "no active batches logging yet"} />
 
         {/* QA-002: this total and the Open Positions board count different universes —
@@ -115,12 +121,20 @@ export default function HomePage() {
           <KPI label="Enrolled Students" value={data.kpis.enrolled_students} tone="green" icon={<IconUsers size={19} />} href="/candidates?lifecycle_status=Enrolled"
             sub={`of ${data.kpis.pool_candidates ?? 0} in the pool`} />
         )}
+        {/* -138 (G-08, Umesh 19/08): "Open Trainer Requests 0 / 0 fulfilled" and "Pending
+            Follow-ups 0" both read zero and neither was in use. He asked for them to go and for the
+            space to carry the two numbers he actually needs. This is a REMOVAL, not a hide — the
+            tiles are gone rather than conditioned, because a hidden tile is dead code that reads as
+            a feature. The KPI fields behind them stay on the payload; other callers may use them.
+            The counts carry their breakdown in the subtitle, which is what he asked for: "count toh
+            exact chahiye… kitne available hain, kitna kuch hai, wo sab description me hoga." */}
         {!leanHome && (
-          <KPI label="Open Trainer Requests" value={data.kpis.open_trainer_requests} tone="amber" icon={<IconUser size={19} />} href="/trainers?tab=Requests"
-            sub={`${data.kpis.fulfilled_trainer_requests ?? 0} fulfilled`} />
+          <KPI label="Trainers Nominated" value={data.kpis.trainers_nominated_total ?? 0} tone="amber" icon={<IconUser size={19} />} href="/trainers"
+            sub={`put forward for a centre × job role`} />
         )}
         {!leanHome && (
-          <KPI label="Pending Follow-ups" value={data.kpis.pending_followups} tone="red" icon={<IconAlert size={19} />} href="/sync" />
+          <KPI label="Certified & Free to Start" value={data.kpis.trainers_certified_free ?? 0} tone="green" icon={<IconUser size={19} />} href="/trainers?tag=Certified"
+            sub={`${data.kpis.trainers_certified_total ?? 0} certified · ${data.kpis.trainers_certified_busy ?? 0} already on a live batch`} />
         )}
       </div>
       {/* -111 (Umesh 18/08): the trainer's daily shortcut used to be a full Section ABOVE the KPI

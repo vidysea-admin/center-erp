@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, locationFilter, isScoped } from "@/lib/authz";
-import { Batch, BatchMember, Candidate, DailyLog, FollowUpAction, Invoice, Location, LocationTarget, Program, SheetChange, Trainer, TrainerRequest, User } from "@/models";
-import { addDays, dayStart, istToday, missingLogQueue } from "@/lib/rules";
+import { Batch, BatchMember, Candidate, DailyLog, FollowUpAction, GovtAttendanceRow, Invoice, Location, LocationTarget, Program, SheetChange, Trainer, TrainerRequest, User } from "@/models";
+import { Types } from "mongoose";
+import { ACTIVE_BATCH_STATUSES, addDays, dayStart, istToday, missingLogQueue } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 
 // Home Action Center: the three real conditions by name (§5) + operational queues.
@@ -130,11 +131,58 @@ export const GET = apiHandler(async () => {
     while (d <= todayD && guard++ < 366) { if (operating.includes(d.getDay())) days++; d = addDays(d, 1); }
     expectedDays += days * (expRosterMap.get(String(b._id)) ?? 0);
   }
+  // -138 (G-07, 19/08 recording): the tile read "Total Attendance 12%" from 16 of 135 logged
+  // student-days at a centre whose batch page says "Our logs: 0 days" and which had just imported
+  // 38 students across 17 portal working days. Umesh's own account of why: these cohorts ran BEFORE
+  // this ERP existed, so their attendance was only ever put on the government portal — "attendance
+  // same hi hai, bas hum chah rahe hain ki ab hamare system me bhi data aane lage."
+  //
+  // THE TWO ARE NOT ADDED, and that is the whole design decision. They describe the SAME days: a
+  // trainer either marks here or marks on the portal, and for the old cohorts it was the portal.
+  // Summing them would double-count every day a diligent centre recorded twice. So per batch we take
+  // the PORTAL figure where an import exists and our own logs where it does not — the same "two
+  // meters, one truth" split the batch Attendance tab already shows.
+  const portalByBatch = await GovtAttendanceRow.aggregate([
+    { $match: { match_status: "Matched", ...(("batch" in batchScope) ? batchScope : { batch: { $ne: null } }) } },
+    { $sort: { createdAt: -1 } },
+    // newest import per candidate wins — a re-import supersedes rather than doubles (checked in -131)
+    { $group: { _id: { b: "$batch", c: "$candidate" }, days: { $first: "$total_days_present" }, working: { $first: "$total_working_days" } } },
+    { $group: { _id: "$_id.b", present: { $sum: "$days" }, roster: { $sum: "$working" } } },
+  ]);
+  const portalBatches = new Set(portalByBatch.map((p) => String(p._id)));
+  const portalPresent = portalByBatch.reduce((s, p) => s + (p.present ?? 0), 0);
+  const portalRoster = portalByBatch.reduce((s, p) => s + (p.roster ?? 0), 0);
+  // our own logs, EXCLUDING any batch the portal already answers for
+  const [attOurs] = portalBatches.size
+    ? await DailyLog.aggregate([
+      { $match: { ...batchScope, batch: { $nin: [...portalBatches].map((x) => new Types.ObjectId(x)) } } },
+      { $group: { _id: null, present: { $sum: "$internal_present" }, roster: { $sum: "$roster_count" } } },
+    ])
+    : [{ present: attAll?.present ?? 0, roster: attAll?.roster ?? 0 }];
+  const present = (attOurs?.present ?? 0) + portalPresent;
+  const roster = (attOurs?.roster ?? 0) + portalRoster;
+  // -138 (G-08): nominated = has been put forward for a centre x job role at all; certified-free
+  // = Certified AND not named on a live batch. ACTIVE_BATCH_STATUSES is the same list the batch
+  // dropdown and the trainers list use, so 'busy' means the same thing in all three places.
+  const liveTrainerIds = await Batch.distinct("trainer", { status: { $in: ACTIVE_BATCH_STATUSES }, ...scope });
+  const liveSet = new Set(liveTrainerIds.filter(Boolean).map(String));
+  const [trainersNominated, certifiedDocs] = await Promise.all([
+    Trainer.countDocuments({ active: { $ne: false }, nominated_for_program: { $ne: null }, nominated_for_location: { $ne: null } }),
+    Trainer.find({ active: { $ne: false }, pipeline_status: "Certified" }).select("_id").lean<any[]>(),
+  ]);
+  const trainersCertified = certifiedDocs.length;
+  const trainersCertifiedFree = certifiedDocs.filter((t) => !liveSet.has(String(t._id))).length;
+
   const attendance = {
-    present: attAll?.present ?? 0, roster: attAll?.roster ?? 0,
-    pct: attAll?.roster ? Math.round((100 * attAll.present) / attAll.roster) : null,
+    present, roster,
+    pct: roster ? Math.round((100 * present) / roster) : null,
+    // "today" stays OUR logs only — the portal export is cumulative and carries no per-day figure,
+    // so there is no honest way to ask it what happened today.
     today_present: attAll?.today_present ?? 0, today_roster: attAll?.today_roster ?? 0,
     expected_so_far: expectedDays,
+    // named separately so the tile can SAY what it counted rather than leaving it to be inferred
+    portal_present: portalPresent, portal_roster: portalRoster, portal_batches: portalBatches.size,
+    our_present: attOurs?.present ?? 0, our_roster: attOurs?.roster ?? 0,
   };
 
   // Queue 1: missing daily logs (Rule 33)
@@ -228,6 +276,19 @@ export const GET = apiHandler(async () => {
       approved_locations: approvedLocations, pending_locations: pendingLocations,
       approved_targets: approvedTargets, targets_total: targetsTotal,
       open_trainer_requests: openRequests, fulfilled_trainer_requests: fulfilledRequests,
+      // -138 (G-08, Umesh 19/08): the two tiles these replace both read 0 and were not in use.
+      // He asked for the numbers he actually needs — how many trainers have been nominated to
+      // date, and how many are certified and free to start — and was explicit that the count
+      // must be exact with the breakdown alongside: "count toh exact chahiye… kitne available
+      // hain, kitna kuch hai, wo sab description me hoga."
+      //
+      // 'Free to start' is derived EXACTLY as the trainers list derives it (-129's availabilityTag:
+      // pipeline_status Certified AND on no live batch), so the tile and that screen cannot
+      // disagree about a number a manager will quote out loud.
+      trainers_nominated_total: trainersNominated,
+      trainers_certified_total: trainersCertified,
+      trainers_certified_free: trainersCertifiedFree,
+      trainers_certified_busy: trainersCertified - trainersCertifiedFree,
       pending_followups: followUps.length,
       trainers_by_role: trainersByRole,
       trainers_active_total: trainersByRole.reduce((s, r) => s + r.count, 0),

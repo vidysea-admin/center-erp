@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-137";
+export const RELEASE = "2026.08.14-138";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,28 @@ export const RELEASE = "2026.08.14-137";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-138, the Home dashboard from the 19 Aug recording. G-07: the tile read 'Total Attendance 12%' " +
+  "from 16 of 135 LOGGED student-days, at a centre whose batch page says 'Our logs: 0 days' and " +
+  "which had just imported 38 students across 17 portal working days. Umesh's own account of why: " +
+  "those cohorts ran BEFORE this ERP existed, so their attendance only ever went to the government " +
+  "portal - 'attendance same hi hai, bas hum chah rahe hain ki ab hamare system me bhi data aane " +
+  "lage.' THE TWO ARE NOT ADDED, and that is the design decision rather than an oversight: they " +
+  "describe the SAME days, so summing them would double-count every day a diligent centre recorded " +
+  "twice. Per batch the portal answers where an import exists and our own logs answer where it does " +
+  "not - the same 'two meters, one truth' split the batch tab already shows. 'Today' stays our logs " +
+  "only, because the portal export is cumulative and carries no per-day figure, so there is no " +
+  "honest way to ask it what happened today. And the tile now SAYS what it counted instead of " +
+  "leaving it to be inferred. G-08: 'Open Trainer Requests 0 / 0 fulfilled' and 'Pending Follow-ups " +
+  "0' both read zero and neither was in use. Removed, not hidden - a hidden tile is dead code that " +
+  "reads as a feature - and replaced with the two counts he asked for: trainers nominated to date, " +
+  "and certified AND free to start. 'Free' is derived exactly as the trainers list derives it " +
+  "(-129's availabilityTag: Certified and on no live batch), and a pin asserts the two screens " +
+  "agree, because this is a number a manager quotes out loud. The breakdown rides in the subtitle, " +
+  "which is what he asked for. G-11: the Ongoing and Completed tiles used each other's HEADLINE as " +
+  "their own subtitle, so the pair carried one fact in four places; each has a real breakdown now.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-137, from the 19 Aug screen recording: two 'Sachin Kumar' rows, both past the 60-hour bar, both " +
   "dropped - 25 qualified shown where 27 qualify, and both reading '~0 / 60 hrs (est.)' on the batch " +
   "tab beside neighbours populated from the same import. THE SHEET'S SUGGESTED FIX WAS ALREADY THE " +
@@ -36,8 +58,6 @@ export const RELEASE_NOTE_CURRENT =
   "all along. Each note names its own row now, and the advice points at the control on that row " +
   "rather than at a drawer on another screen reached by search.";
 
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
   "-136 (QA-282, the triage -133 said was not finished): it is finished, and the honest answer is " +
   "SMALLER than the row feared. The scan took three versions and both earlier ones were wrong in " +
   "OPPOSITE directions. v1 required the setter to sit inside an onClick, found 2, and missed the one " +

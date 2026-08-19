@@ -125,4 +125,38 @@ ok("[worst] …attendance pct is null (not NaN/0) when nothing has been logged",
 // cleanup: close down the fixture batch so later suites' KPI deltas start clean
 await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Cancelled", reason: "eval fixture teardown" });
 
+// ---- -138 (G-07 / G-08 / G-11, 19 Aug recording): what the Home tiles count ----
+// G-07: the tile read 'Total Attendance 12%' from 16 of 135 LOGGED student-days, at a centre whose
+// batch page says 'Our logs: 0 days' and which had just imported 38 students across 17 portal
+// working days. Umesh: those cohorts ran before this ERP existed, so their attendance only ever
+// went to the government portal — 'attendance same hi hai'. The two are therefore NOT ADDED: they
+// describe the same days, and summing them would double-count every day a centre recorded twice.
+// Per batch, the portal answers where an import exists and our own logs answer where it does not.
+{
+  const k = (await req(admin, "GET", "/api/home", undefined, 200)).data.kpis;
+  ok("-138 (G-07): the attendance figure names its two sources instead of silently meaning one",
+    k.attendance && "portal_present" in k.attendance && "our_present" in k.attendance,
+    JSON.stringify(Object.keys(k.attendance ?? {})));
+  ok("-138 (G-07): the totals are the two parts added, so the tile cannot disagree with its own subtitle",
+    (k.attendance.our_present + k.attendance.portal_present) === k.attendance.present
+    && (k.attendance.our_roster + k.attendance.portal_roster) === k.attendance.roster,
+    JSON.stringify(k.attendance));
+  ok("-138 (G-07): a batch answered by the portal is NOT also counted from our logs — no double count",
+    k.attendance.portal_batches === 0 || k.attendance.roster <= (k.attendance.our_roster + k.attendance.portal_roster),
+    JSON.stringify({ batches: k.attendance.portal_batches, roster: k.attendance.roster }));
+
+  // G-08: the two dead tiles are replaced by counts that must agree with the trainers list.
+  ok("-138 (G-08): Home carries the two counts Umesh asked for",
+    typeof k.trainers_nominated_total === "number" && typeof k.trainers_certified_free === "number",
+    JSON.stringify({ nom: k.trainers_nominated_total, free: k.trainers_certified_free }));
+  ok("-138 (G-08): ...and the breakdown adds up — certified = free + already on a live batch",
+    (k.trainers_certified_free + k.trainers_certified_busy) === k.trainers_certified_total,
+    JSON.stringify({ free: k.trainers_certified_free, busy: k.trainers_certified_busy, total: k.trainers_certified_total }));
+  // the number a manager quotes must be the SAME number the trainers screen shows
+  const trs = (await req(admin, "GET", "/api/trainers?limit=2000", undefined, 200)).data.items ?? [];
+  const freeOnList = trs.filter((t) => t.pipeline_status === "Certified" && (t.live_batches?.length ?? 0) === 0 && t.active !== false).length;
+  ok("-138 (G-08): the Home count and the trainers list agree on 'certified and free'",
+    k.trainers_certified_free === freeOnList, JSON.stringify({ home: k.trainers_certified_free, list: freeOnList }));
+}
+
 finish();
