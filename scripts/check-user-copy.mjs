@@ -137,7 +137,9 @@ for (const file of walk(root)) {
   // on the -128 bump AND again on the -129 bump. The previous release's own opening marker is the
   // thing that must not be there — mechanical, and it does not care how the text was moved.
   const n = parseInt((rel.split("-").pop() ?? "0"), 10);
-  const prevTag = n > 1 ? `"-${n - 1} ` : "";           // how every block opens: `"-128 (QA-...`
+  const prevTag = n > 1 ? `"-${n - 1}` : "";  // -139: ANY separator. The -138 block opened `"-138,`
+  // and slipped past both `"-138 ` and `"-138:` — the pin's THIRD hole, found the same way as the
+  // first two: by reading the endpoint after a deploy rather than trusting the pin.           // how every block opens: `"-128 (QA-...`
   const prevTagAlt = n > 1 ? `"-${n - 1}:` : "";         // older blocks open `"-126: ...`
   if (!n || (!curNote.includes(prevTag) && !curNote.includes(prevTagAlt))) passed++;
   else { failed++; hits.push(`lib/version.ts: RELEASE_NOTE_CURRENT still opens a -${n - 1} block — the previous note was left in CURRENT instead of moved to the archive, so the public marker publishes two releases`); }

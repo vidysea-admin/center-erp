@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-139";
+export const RELEASE = "2026.08.14-140";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,23 @@ export const RELEASE = "2026.08.14-139";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-140: the release note itself, for the third time, and this one is worth writing down. QA-265 " +
+  "split the note in two so the UNAUTHENTICATED build marker publishes what THIS build changed " +
+  "rather than the whole archive. I have now spliced the previous note into CURRENT on three " +
+  "separate bumps. -128 and -129 were caught by reading the endpoint; the pin written after them " +
+  "looked only for the archive's own opening and missed both. -139's pin looked for the previous " +
+  "release's block but matched `\"-138 ` and `\"-138:` - and the block opened `\"-138,`. So the " +
+  "marker published 4,512 characters covering three releases while a green pin said it was fine. " +
+  "The pattern is the same one this project keeps paying for: a guard written to catch the exact " +
+  "shape of the last mistake, which the next one steps around. The separator is now ANY character, " +
+  "and I proved it by re-introducing the splice and watching the wall fail. Also -139's own subject, " +
+  "restated because the note that shipped it was buried in the pile: the attendance denominator was " +
+  "roster_count summed over DAILY LOGS, so a batch nobody logged contributed nothing to the bottom " +
+  "of the fraction and a centre that recorded nothing scored the same as one with perfect " +
+  "attendance. It divides by the days that should have happened now. ";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-139 (QA-292, the half -138 left open): the attendance DENOMINATOR. -138 fixed where the " +
   "numerator comes from - the portal, not only our own logs - and the checker's row was sharper than " +
   "the sheet on the other half: roster read 180 while 247 students are enrolled, and the right " +
@@ -27,7 +44,8 @@ export const RELEASE_NOTE_CURRENT =
   "the days that SHOULD have happened, which is expectedDays - computed a few lines above and thrown " +
   "away. Portal-answered batches are excluded from it, because their student-days are already " +
   "counted from the export's own working-day figure and would otherwise sit in the denominator " +
-  "twice. The subtitle now reports the same denominator the headline divides by, which it did not. " +
+  "twice. The subtitle now reports the same denominator the headline divides by, which it did not. ";
+
   "-138, the Home dashboard from the 19 Aug recording. G-07: the tile read 'Total Attendance 12%' " +
   "from 16 of 135 LOGGED student-days, at a centre whose batch page says 'Our logs: 0 days' and " +
   "which had just imported 38 students across 17 portal working days. Umesh's own account of why: " +
@@ -66,8 +84,6 @@ export const RELEASE_NOTE_CURRENT =
   "all along. Each note names its own row now, and the advice points at the control on that row " +
   "rather than at a drawer on another screen reached by search.";
 
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
   "-136 (QA-282, the triage -133 said was not finished): it is finished, and the honest answer is " +
   "SMALLER than the row feared. The scan took three versions and both earlier ones were wrong in " +
   "OPPOSITE directions. v1 required the setter to sit inside an onClick, found 2, and missed the one " +
