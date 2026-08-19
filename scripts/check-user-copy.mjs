@@ -52,9 +52,15 @@ const hits = [];
 // -152's gate-pattern scan both forgot. The result: a maker who had just written a NUL into
 // product code was told to "rewrite as what happened + what to do". That regressed QA-324, which
 // had been Validated three releases earlier. Classification now happens where the finding is
-// RAISED, not where it is printed, so a new check cannot silently be misfiled as copy drift.
+// RAISED, not where it is printed. QA-377: the FIRST version of that claimed a new check "cannot
+// silently be misfiled" while converting only 5 of 16 raise sites - so the two checks the old
+// regex happened to classify correctly were now misfiled instead. The misfiling ROTATED. What
+// actually enforces it is the reconciliation at the bottom of this file: every hit must be in one
+// register or the other, and check-user-copy FAILS ITSELF if any is in neither.
 const structuralIdx = new Set();
 const pushStructural = (msg) => { structuralIdx.add(hits.length); hits.push(msg); };
+const copyIdx = new Set();
+const pushCopy = (msg) => { copyIdx.add(hits.length); hits.push(msg); };
 for (const file of walk(root)) {
   const rel = path.relative(root, file).replace(/\\/g, "/");
   if (SKIP_FILES.has(rel)) continue;
@@ -82,7 +88,7 @@ for (const file of walk(root)) {
         || /\((?:Rules?|DEC|QA)[-\s]?T?\d+[^)]*\)/.test(line)                          // parenthetical
         || /[—,-]\s*(?:Rules?|DEC|QA)[-\s]?T?\d+\s*(?:\.\s*)?(["`])/.test(line);       // trailing
       if (safe) return;
-      hits.push(`${rel}:${idx + 1}: [thrown message: the code must lead ("Rule 45: …"), sit in brackets, or trail — this shape does not strip cleanly] ${line.trim().slice(0, 120)}`);
+      pushCopy(`${rel}:${idx + 1}: [thrown message: the code must lead ("Rule 45: …"), sit in brackets, or trail — this shape does not strip cleanly] ${line.trim().slice(0, 120)}`);
       fileHits++;
       return;
     }
@@ -92,7 +98,7 @@ for (const file of walk(root)) {
     const inJsx = isTsx && /[>}][^<{]*\b(?:Rules?|DEC|QA)[-\s]?T?\d+\b[^<{]*/.test(line);
     // JSX text continued on its own line (no tags at all on the line, inside a .tsx file)
     const bareJsx = isTsx && !/[<>{}=;]/.test(line.trim()) && /^\s*[A-Za-z(]/.test(line) && CODE.test(line);
-    if (inLiteral || inJsx || bareJsx) { fileHits++; hits.push(`${rel}:${idx + 1}: ${line.trim().slice(0, 140)}`); }
+    if (inLiteral || inJsx || bareJsx) { fileHits++; pushCopy(`${rel}:${idx + 1}: ${line.trim().slice(0, 140)}`); }
   });
   if (fileHits) failed++; else passed++;
 }
@@ -127,7 +133,7 @@ for (const file of walk(root)) {
   const curNote = (src.split("export const RELEASE_NOTE_CURRENT =")[1] ?? "").split("const RELEASE_NOTE_ARCHIVE")[0];
   const tag = "-" + rel.split("-").pop();
   if (rel && curNote.includes(tag)) passed++;
-  else { failed++; hits.push(`lib/version.ts: the published note does not mention ${tag} — RELEASE was bumped without writing what changed`); }
+  else { failed++; pushStructural(`lib/version.ts: the published note does not mention ${tag} — RELEASE was bumped without writing what changed`); }
 
   // -128: and the archive must NOT ride along. QA-265 split the note in two precisely so the
   // unauthenticated build marker publishes what THIS build changed rather than forty releases of
@@ -137,7 +143,7 @@ for (const file of walk(root)) {
   const archive = (src.split("const RELEASE_NOTE_ARCHIVE =")[1] ?? "");
   const archiveHead = (archive.match(/"([^"]{40,})"/) ?? [])[1] ?? "";
   if (!archiveHead || !curNote.includes(archiveHead)) passed++;
-  else { failed++; hits.push("lib/version.ts: RELEASE_NOTE_CURRENT contains the start of the archive — the old note was spliced in rather than moved, so the public marker republishes it"); }
+  else { failed++; pushStructural("lib/version.ts: RELEASE_NOTE_CURRENT contains the start of the archive — the old note was spliced in rather than moved, so the public marker republishes it"); }
 
   // -129: and the sharper version of the same test, because the one above missed it. Splicing the
   // PREVIOUS note into CURRENT leaves the archive's own opening untouched, so "does CURRENT contain
@@ -150,7 +156,7 @@ for (const file of walk(root)) {
   // first two: by reading the endpoint after a deploy rather than trusting the pin.           // how every block opens: `"-128 (QA-...`
   const prevTagAlt = n > 1 ? `"-${n - 1}:` : "";         // older blocks open `"-126: ...`
   if (!n || (!curNote.includes(prevTag) && !curNote.includes(prevTagAlt))) passed++;
-  else { failed++; hits.push(`lib/version.ts: RELEASE_NOTE_CURRENT still opens a -${n - 1} block — the previous note was left in CURRENT instead of moved to the archive, so the public marker publishes two releases`); }
+  else { failed++; pushStructural(`lib/version.ts: RELEASE_NOTE_CURRENT still opens a -${n - 1} block — the previous note was left in CURRENT instead of moved to the archive, so the public marker publishes two releases`); }
 }
 
 // ---- -128 (QA-266): a drawer must be able to show its own failure ----
@@ -187,7 +193,7 @@ for (const file of walk(root)) {
       }
       if (!/\berror=/.test(src.slice(at, j))) {
         missing++;
-        hits.push(`${rel}:${src.slice(0, at).split(String.fromCharCode(10)).length}: [drawer] this <Drawer> passes no \`error\` prop, so a failure inside it renders in the page banner the drawer covers`);
+        pushStructural(`${rel}:${src.slice(0, at).split(String.fromCharCode(10)).length}: [drawer] this <Drawer> passes no \`error\` prop, so a failure inside it renders in the page banner the drawer covers`);
       }
       i = j;
     }
@@ -214,9 +220,9 @@ for (const file of walk(root)) {
     const block = after.slice(0, after.indexOf("]") + 1);
     const vals = [...block.matchAll(/"([^"]+)"/g)].map((m) => m[1]).filter((v) => enumVals.includes(v) || /Certificate|Experience|Aadhaar|PAN|Photo|CV|Qualification|Other/.test(v));
     const strays = vals.filter((v) => !enumVals.includes(v));
-    if (strays.length) { drift++; hits.push(`${rel}: doc-type list has ${JSON.stringify(strays)} which is not in TRAINER_DOC_TYPE — the copy has drifted from the enum`); }
+    if (strays.length) { drift++; pushStructural(`${rel}: doc-type list has ${JSON.stringify(strays)} which is not in TRAINER_DOC_TYPE — the copy has drifted from the enum`); }
   }
-  if (enumVals.some((v) => /CIPSA/i.test(v))) { drift++; hits.push("models/index.ts: TRAINER_DOC_TYPE still carries CIPSA — the credential is CITS"); }
+  if (enumVals.some((v) => /CIPSA/i.test(v))) { drift++; pushStructural("models/index.ts: TRAINER_DOC_TYPE still carries CIPSA — the credential is CITS"); }
   if (drift) failed++; else passed++;
 }
 
@@ -231,7 +237,7 @@ for (const file of walk(root)) {
   const r = spawnSync(process.execPath, [path.join(root, "..", "scripts", "reparse-govt-hours.mjs"), "--selftest"], { encoding: "utf-8" });
   const out = ((r.stdout ?? "") + (r.stderr ?? "")).trim();
   if (r.status === 0) passed++;
-  else { failed++; hits.push(`scripts/reparse-govt-hours.mjs: its copy of hhmmssToMinutes no longer agrees with the expected table — ${out.split(String.fromCharCode(10))[0]}`); }
+  else { failed++; pushStructural(`scripts/reparse-govt-hours.mjs: its copy of hhmmssToMinutes no longer agrees with the expected table — ${out.split(String.fromCharCode(10))[0]}`); }
 }
 
 // ---- -136 (QA-282): a surface a person opens must have a way to close ----
@@ -321,7 +327,7 @@ for (const file of walk(root)) {
   if (!bare.length) passed++;
   else {
     failed++;
-    hits.push(`lib/govt-attendance.ts: matchGovtRows reads ${bare.map((m) => "r." + m[1]).join(", ")} bare. Since -143 this function is fed STORED documents as well as parsed rows, and a missing key throws for the whole import detail, not one row. Derive it once via String(r.<field> ?? "") and reuse.`);
+    pushStructural(`lib/govt-attendance.ts: matchGovtRows reads ${bare.map((m) => "r." + m[1]).join(", ")} bare. Since -143 this function is fed STORED documents as well as parsed rows, and a missing key throws for the whole import detail, not one row. Derive it once via String(r.<field> ?? "") and reuse.`);
   }
 }
 
@@ -365,7 +371,7 @@ for (const file of walk(root)) {
       for (const k of keys) {
         if (!owned.has(k)) continue;
         collisions++;
-        hits.push(
+        pushStructural(
           path.relative(root, f).replace(/\\/g, "/") + ":" + (i + 1) +
           ": the literal key '" + k + "' sits beside '..." + scopeName + "', which also defines '" + k +
           "'. The literal wins and the scope is silently dropped. Merge both conditions into one '" +
@@ -450,7 +456,19 @@ for (const h of hits) console.log("  ✗ " + h);
 // the suggested fix was to rewrite a sentence. A summary that misnames what it found sends the
 // reader to the wrong place, which is the same defect this file exists to catch.
 {
-  const copyHits = hits.filter((h, n) => !structuralIdx.has(n));
+  // QA-377: the registers must ACCOUNT FOR EVERY HIT. A raise site that forgets to classify is
+  // exactly how this check misfiled twice; now it cannot be forgotten silently, because an
+  // unclassified finding fails this file rather than being quietly summarised as copy drift.
+  const unclassified = hits.map((_, n) => n).filter((n) => !structuralIdx.has(n) && !copyIdx.has(n));
+  if (unclassified.length) {
+    failed++;
+    for (const n of unclassified) {
+      structuralIdx.add(n);
+      hits.push('check-user-copy.mjs: finding #' + n + ' was raised through a bare hits.push and is in neither register - classify it with pushStructural() or pushCopy() (QA-377).');
+      structuralIdx.add(hits.length - 1);
+    }
+  }
+  const copyHits = hits.filter((h, n) => copyIdx.has(n));
   const structural = hits.length - copyHits.length;
   // no escape sequences in these template literals on purpose: the last two attempts at this file
   // wrote a backspace byte and then a real newline into the source (-144, and this line).
