@@ -370,6 +370,20 @@ for (const file of walk(root)) {
 }
 
 for (const h of hits) console.log("  ✗ " + h);
-if (hits.length) console.log(`\n${hits.length} user-facing string(s) still carry a Rule/DEC/QA code — rewrite as "what happened + what to do".`);
+// -149 (QA-324): this file started as one check and now carries several - the ASI trap, the
+// drawer ceiling, the scope-collision scan. Every finding was summarised as "user-facing
+// string(s) still carry a Rule/DEC/QA code", so a scope leak was reported as a copy problem and
+// the suggested fix was to rewrite a sentence. A summary that misnames what it found sends the
+// reader to the wrong place, which is the same defect this file exists to catch.
+{
+  const structuralRe = /sits beside|reads r\.|\[ASI trap\]|opens and nothing can close/;
+  const copyHits = hits.filter((h) => !structuralRe.test(h));
+  const structural = hits.length - copyHits.length;
+  // no escape sequences in these template literals on purpose: the last two attempts at this file
+  // wrote a backspace byte and then a real newline into the source (-144, and this line).
+  if (hits.length) console.log("");
+  if (copyHits.length) console.log(copyHits.length + ' user-facing string(s) still carry a Rule/DEC/QA code - rewrite as "what happened + what to do".');
+  if (structural) console.log(structural + ' structural finding(s) above are NOT copy problems - read the line, not this summary.');
+}
 console.log(`\ncheck-user-copy: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

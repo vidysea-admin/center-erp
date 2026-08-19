@@ -279,7 +279,16 @@ export async function matchGovtRows(
     if (nk) byName.set(nk, [...(byName.get(nk) ?? []), m]);
   }
 
-  const trainers = await Trainer.find(scope.locationId ? {} : {}).select("_id name govt_candidate_id").lean<any[]>();
+  // -149 (QA-334): this read `Trainer.find(scope.locationId ? {} : {})` - a ternary whose two
+  // branches are the SAME empty filter, so it has always loaded every trainer in the database while
+  // LOOKING like it narrowed to the import's centre. That is the QA-302 shape again: a filter that
+  // pretends. The pretence is removed rather than implemented, and the reason is measured, not
+  // assumed: a trainer's only link to a centre is nominated_for_location, and QA-280 counted 22 of
+  // 23 live trainers with NO nomination at all. Scoping on it would match almost nobody and would
+  // break the trainer rows that match correctly today. So the search is global ON PURPOSE, and the
+  // narrowing that matters is elsewhere - a trainer row is never given a student (QA-332), and the
+  // portal ID is preferred over the name whenever the file carries one.
+  const trainers = await Trainer.find({}).select("_id name govt_candidate_id").lean<any[]>();
   const trainerByName = new Map<string, any[]>();
   const trainerByGovtId = new Map<string, any>();
   for (const t of trainers) {

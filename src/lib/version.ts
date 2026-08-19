@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-148";
+export const RELEASE = "2026.08.14-149";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,27 @@ export const RELEASE = "2026.08.14-148";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-149 is three residuals from the last two verdicts, and the smallest one is the most interesting. " +
+  "QA-334: the portal matcher loaded trainers with Trainer.find(scope.locationId ? {} : {}) - a " +
+  "ternary whose two branches are the SAME empty filter, so it has always searched every trainer in " +
+  "the database while LOOKING like it narrowed to the import's centre. That is QA-302's shape again, " +
+  "a filter that pretends. It is removed rather than implemented, and the reason is measured rather " +
+  "than assumed: a trainer's only link to a centre is nominated_for_location, and QA-280 counted 22 " +
+  "of 23 live trainers carrying no nomination at all, so scoping on it would match almost nobody and " +
+  "would break the trainer rows that match correctly today. The search is global on purpose now, and " +
+  "says so. QA-324: this build's own copy scanner had grown from one check to several, and every " +
+  "finding was still being summarised as 'user-facing string(s) still carry a Rule/DEC/QA code' - so " +
+  "a scope leak was announced as a copy problem and the suggested fix was to rewrite a sentence. It " +
+  "names what it actually found now. QA-326, outside the app: the commit guard read the manifests and " +
+  "never looked at the working tree, which is why nothing objected when a release commit swept three " +
+  "checker scratch files to production. It inspects the tree now - and fixing it uncovered that the " +
+  "guard had been silent for every real commit this project has ever made, because its condition " +
+  "required the words git and commit to be adjacent while every commit here is written git -C " +
+  "<dir> commit. A gate that looks installed and never fires is the failure mode the whole " +
+  "arrangement exists to prevent. ";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-148 closes a defect -146 created, and the wording was only the invitation. -146 widened the " +
   "read-time note to every unresolved import row and never constructed the case where that row is a " +
   "TRAINER. A portal export carries a centre's own trainers alongside its students, so a trainer the " +
@@ -31,10 +52,7 @@ export const RELEASE_NOTE_CURRENT =
   "actually is, and the door refuses the write with a reason, before the body is read, so a bad call " +
   "cannot half-run. Pinned end to end: import an unknown trainer, enrol a candidate sharing the name, " +
   "require the note NOT to offer a link, require the API to answer 400, and require the row to be " +
-  "byte-unchanged afterwards. ";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "byte-unchanged afterwards. " +
   "-147 exists because the checker FAILED -145 and was right to. That release fixed a live scope " +
   "leak correctly, and claimed both of its pins had been verified by breaking the source and " +
   "watching them fail. That was true of the source scan and FALSE of the end-to-end pin, which I " +
