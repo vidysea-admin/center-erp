@@ -204,12 +204,17 @@ export function parseGovtAttendance(buf: Buffer, fileName = ""): ParsedFile {
 // ---------- matching ----------
 
 // Names arrive with portal-side spacing/case noise and the odd honorific.
-const nameKey = (s: string) =>
+// takes `string | undefined` because it already guards for it -- the signature was the only thing
+// pretending otherwise (-146, QA-316).
+const nameKey = (s: string | undefined) =>
   String(s ?? "").toLowerCase().replace(/\b(mr|mrs|ms|md|shri|smt|kumari)\.?\s+/g, " ")
     .replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
 
 export type MatchStatus = "Matched" | "Ambiguous" | "Unmatched";
-export type MatchedRow = GovtRow & {
+// -146 (QA-316): `GovtRow &` here, while matchGovtRows now honestly accepts Partial<GovtRow>[],
+// would have made the compiler reject its own function's output. A matched row carries whatever the
+// row it came from carried -- a parsed row has every field, a persisted document may not.
+export type MatchedRow = Partial<GovtRow> & {
   candidate?: unknown; trainer?: unknown; batch?: unknown; batch_member?: unknown;
   match_status: MatchStatus; match_by: string; match_note?: string;
   internal_days_present?: number | null; variance_days?: number | null;
@@ -238,8 +243,15 @@ export function isTrainerRow(r: { candidate_type?: string | null; designation?: 
   return /trainer/i.test(String(r?.candidate_type ?? "")) || /trainer/i.test(String(r?.designation ?? ""));
 }
 
+// -146 (QA-316, raised by the checker against -144): this said `GovtRow[]`, where every field is
+// required and every string is a string. Since -143 the import DETAIL route feeds it `.lean()`
+// documents through an `as any`, so the type was describing a caller that no longer exists -- and
+// `tsc --noEmit` exited 0, under strict, on the exact bare read that 500s the whole import view.
+// A type that lies is worse than no type: it is why a regex over the source was standing in for the
+// compiler. `Partial<GovtRow>[]` is the honest signature, and it makes tsc the guard for every
+// field and every method rather than for the one field somebody remembered to scan for.
 export async function matchGovtRows(
-  rows: GovtRow[],
+  rows: Partial<GovtRow>[],
   scope: { batchId?: string | null; locationId?: unknown },
 ): Promise<MatchedRow[]> {
   const memberFilter: Record<string, unknown> = scope.batchId ? { batch: scope.batchId } : {};

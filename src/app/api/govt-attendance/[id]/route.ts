@@ -69,24 +69,41 @@ export const GET = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   // did not get the fix"). Only rows still stored as Ambiguous are re-derived, only the NOTE is
   // taken from the result, and the stored match_status is never overwritten: a row a human resolved
   // through the drawer stays resolved.
-  const ambiguous = rows.filter((r) => r.match_status === "Ambiguous");
+  // -146 (QA-313) widens this from Ambiguous to EVERY unresolved row, which is what -143 should
+  // have done and deliberately did not, to keep that unit checkable. The Unmatched sentence is the
+  // same defect one branch over, and it is the more embarrassing one: "No candidate named X in this
+  // centre" goes on being printed after somebody has actually enrolled X, so the screen denies the
+  // existence of a student who is sitting in the roster - until the file is re-imported.
+  //
+  // Re-derived by calling the SAME matchGovtRows the importer calls, never a second copy of the
+  // matching rules (ARCHITECTURE.md section 3 - this codebase's bug history is "the second copy did
+  // not get the fix"). Only the NOTE is taken from the result. The stored match_status is NEVER
+  // overwritten: a row a human resolved through the drawer stays resolved, and a row the importer
+  // could not match stays unresolved until somebody decides - a read must not decide for them.
+  const unresolved = rows.filter((r) => r.match_status !== "Matched");
   const freshNote = new Map<string, string>();
-  if (ambiguous.length) {
-    const redone = await matchGovtRows(ambiguous as any, {
+  if (unresolved.length) {
+    const redone = await matchGovtRows(unresolved, {
       batchId: imp.batch?._id ? String(imp.batch._id) : null,
       locationId: imp.location?._id ? String(imp.location._id) : null,
     });
-    ambiguous.forEach((r, i) => {
+    unresolved.forEach((r, i) => {
       const d = redone[i];
       if (!d) return;
-      // Still colliding -> the current sentence, which names the portal ID and points at this row.
-      // No longer colliding -> the stored sentence is now factually wrong (it claims candidates
-      // share a name that they no longer do, usually because -137's write-back stamped the ID when
-      // its twin was resolved). Say what is true instead of leaving a stale count on screen.
-      const which = r.govt_candidate_id?.trim() ? `portal ID ${r.govt_candidate_id.trim()}` : `row ${r.sl_no ?? "?"}`;
-      freshNote.set(String(r._id), d.match_status === "Ambiguous" && d.match_note
-        ? d.match_note
-        : `${which}: the name clash that held this row up is gone - click this row to pick the candidate.`);
+      const rawGid = String(r.govt_candidate_id ?? "").trim();
+      const which = rawGid ? `portal ID ${rawGid}` : `row ${r.sl_no ?? "?"}`;
+      // Nothing has changed since the import: re-issue the note, which now carries live counts and
+      // the current wording rather than whatever sentence was frozen onto the row on import day.
+      if (d.match_status === r.match_status && d.match_note) { freshNote.set(String(r._id), d.match_note); return; }
+      // The world moved. Say what is true now, and point at the control that resolves it - which is
+      // the row itself, not the candidate screen the old sentences sent people to.
+      if (d.match_status === "Matched") {
+        freshNote.set(String(r._id), r.match_status === "Ambiguous"
+          ? `${which}: the name clash that held this row up is gone - click this row to confirm the candidate.`
+          : `${which}: this person IS in the ERP now - click this row to link them.`);
+      } else if (d.match_note) {
+        freshNote.set(String(r._id), d.match_note);
+      }
     });
   }
 

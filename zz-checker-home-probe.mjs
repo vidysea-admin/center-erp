@@ -1,0 +1,12 @@
+import { req, adminLogin, login } from "./scripts/e2e-lib.mjs";
+const admin = await adminLogin();
+const spoc = await login("spoc.jpr03@vidysea.com", "CiOnly@123");
+const a = (await req(admin, "GET", "/api/home", undefined, 200)).data.kpis.attendance;
+const s = spoc ? (await req(spoc, "GET", "/api/home", undefined, 200)).data.kpis.attendance : null;
+console.log("ADMIN attendance:", JSON.stringify(a));
+console.log("SPOC  attendance:", JSON.stringify(s));
+console.log("");
+console.log("SPOC portal_batches =", s?.portal_batches, s?.portal_batches === 0 ? "  <-- BUGGY BRANCH NOT EXECUTED (else-branch taken)" : "  <-- buggy branch WOULD execute");
+console.log("our_roster  admin=", a?.our_roster, " spoc=", s?.our_roster, a?.our_roster === s?.our_roster ? " IDENTICAL" : " differ");
+console.log("our_present admin=", a?.our_present, " spoc=", s?.our_present, a?.our_present === s?.our_present ? " IDENTICAL" : " differ");
+process.exit(0);

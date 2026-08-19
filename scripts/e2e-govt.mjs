@@ -808,6 +808,44 @@ ok("the first import is still intact", (await req(admin, "GET", `/api/govt-atten
       JSON.stringify({ status: r0?.match_status, note: r0?.match_note }));
   }
 }
+// ---- -146 (QA-313): the Unmatched sentence must stop denying a student who now exists ----
+// The sibling of QA-298, one branch over, and the more embarrassing of the two: 'No candidate
+// named X in this centre' goes on printing after somebody has actually enrolled X. -143 fixed
+// only the Ambiguous branch and said so rather than widening the unit mid-flight; this closes it.
+// The pin changes the world AFTER the import, which is the only way to tell a re-derived note
+// from a stored one - and it is exactly what a centre does: import first, enrol the missing
+// student second.
+{
+  const newcomerCsv = [
+    csvText.split(/\r?\n/)[0],
+    `1,TESTORG Gurugram -${TC},99000003,${NAME} Newcomer,,Trainee,Trainee,11,6,42:00:00,0,07:00:00,`,
+  ].join("\n");
+  const imp = await upload(admin, {
+    file: new File([Buffer.from(newcomerCsv)], "newcomer.csv", { type: "text/csv" }),
+    confirm: "1", period_label: `newcomer ${STAMP}`,
+  });
+  const before = ((await req(admin, "GET", `/api/govt-attendance/${imp.data._id}`)).data.rows ?? [])[0];
+  ok("-146 (QA-313) fixture: a name the ERP has never seen is Unmatched, and the note says so",
+    before?.match_status === "Unmatched" && /No candidate named/.test(String(before?.match_note)),
+    JSON.stringify({ status: before?.match_status, note: before?.match_note }));
+
+  // the centre now enrols the student the portal already knew about
+  const c = await req(admin, "POST", "/api/candidates", {
+    name: `${NAME} Newcomer`, phone: `9${STAMP.slice(1)}8${String(1).padStart(3, "0")}`,
+    location: loc._id, program: program._id,
+  });
+  ok("-146 (QA-313) fixture: the missing student is created", !!c.data.item?._id, JSON.stringify(c.data).slice(0, 140));
+  await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: c.data.item._id, joined_on: localDate(Date.now() - 20 * 86400_000) });
+
+  const after = ((await req(admin, "GET", `/api/govt-attendance/${imp.data._id}`)).data.rows ?? [])[0];
+  ok("-146 (QA-313): THE CLAUSE THAT FAILS TODAY - the row stops saying the student does not exist",
+    !/No candidate named/.test(String(after?.match_note)), JSON.stringify({ note: after?.match_note }));
+  ok("-146 (QA-313): ...and it says they ARE here now, pointing at the control that links them",
+    /IS in the ERP now/.test(String(after?.match_note)) && /click this row/.test(String(after?.match_note)),
+    JSON.stringify({ note: after?.match_note }));
+  ok("-146 (QA-313): ...but a READ never decides the match - the stored status is still Unmatched",
+    after?.match_status === "Unmatched", String(after?.match_status));
+}
 // ---------------------------------------------------------------- garbage in
 const junk = await upload(admin, { file: new File([Buffer.from("just,some,csv\n1,2,3\n")], "junk.csv", { type: "text/csv" }) });
 ok("a file with no attendance header is rejected with a readable reason",

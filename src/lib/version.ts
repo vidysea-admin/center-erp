@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-145";
+export const RELEASE = "2026.08.14-146";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,36 @@ export const RELEASE = "2026.08.14-145";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-146 closes the branch -143 deliberately left open, and it was the more embarrassing of the two. " +
+  "An import row the ERP could not match keeps the sentence 'No candidate named X in this centre', " +
+  "written onto it at import time - so once somebody actually enrols X, the screen goes on denying " +
+  "the existence of a student who is sitting in the roster, until the file is imported again. That " +
+  "is the exact order a centre works in: import the portal file first, enrol the missing student " +
+  "second. -143 fixed only the Ambiguous branch and said so in its own notes rather than widening " +
+  "the unit mid-flight; this widens the re-derivation to every unresolved row. It calls the same " +
+  "matcher the importer calls rather than a second copy of the rules, and it takes only the NOTE: " +
+  "the stored match status is never overwritten, because a read must not decide a match that a " +
+  "human has not made. Where nothing has changed the note is simply re-issued with live counts and " +
+  "current wording; where the world has moved the row now says what is true - that the person is in " +
+  "the ERP now - and points at the control that links them, which is the row itself rather than the " +
+  "candidate screen the older sentences sent people to. Pinned by importing a name nobody has, " +
+  "confirming the row denies the student, enrolling that student, and requiring the same row to " +
+  "stop denying them while staying unresolved. " +
+  "Two more rows fold in here because the checker raised them against -144 while this same file was " +
+  "open. QA-315: the fix for -144 stopped at the library boundary - the route added by -143 kept its " +
+  "own weaker copy of the same expression, so the guard held inside the matcher and not twelve lines " +
+  "up the stack. It is derived the same way on both sides now. QA-316 is the better finding and it " +
+  "replaces a workaround with the real thing: matchGovtRows declared GovtRow[], where every field is " +
+  "required and every string is a string, while the detail route has been feeding it lean documents " +
+  "through an `as any` since -143 - so the type described a caller that no longer existed, and tsc " +
+  "exited 0, under strict, on the exact bare read that takes the whole import view down. That is why " +
+  "a regular expression over the source was standing in for the compiler. The signature is now " +
+  "Partial<GovtRow>[], MatchedRow widens with it, the cast at the call site is gone, and re-introducing " +
+  "the bare read is now a COMPILE error rather than a green build - which guards every field and every " +
+  "method, not the five a scan remembered to look for. ";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-145 closes a live scope leak, and the way it hid is the point. Every scoped role's Home tile " +
   "counted the whole country's own-log attendance while every portal figure beside it was " +
   "correctly narrowed. Measured across three roles on -138: the Gurugram SPOC saw portal roster " +
@@ -33,10 +63,7 @@ export const RELEASE_NOTE_CURRENT =
   "reads what each scope object actually defines and refuses any colliding sibling key anywhere in " +
   "the codebase, and an end-to-end check that compares a scoped role against the Admin at the same " +
   "instant - a leak makes those two halves identical while the portal half stays narrowed, which is " +
-  "the fingerprint that was on screen. ";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "the fingerprint that was on screen. " +
   "-144, and the row it fixes was created by -143. The checker's adversarial pass on that release " +
   "found that matchGovtRows reads r.govt_candidate_id.trim() unguarded, and -143 is exactly what " +
   "made it matter: the function used to be fed only rows fresh off the parser, where the field is " +
