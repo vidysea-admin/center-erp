@@ -115,4 +115,33 @@ ok("[best] ?program=null never returns a programme-carrying candidate", !noProg.
 const notCert = await req(admin, "GET", "/api/candidates?lifecycle_status=Not%20Certified&limit=2000");
 ok("[avg] Failed filter is accepted and type-clean", notCert.status === 200 && (notCert.data.items ?? []).every((c) => c.lifecycle_status === "Failed"), `got ${notCert.status}, ${notCert.data.items?.length} rows`);
 
+// ---- -135 (QA-283): the SIDH documents mark, and who is allowed to say who gave it ----
+// Umesh, 19/08: "ab document dobara mark nahi kar payenge, SIDH portal pe sab kar liya." For a
+// cohort that ran before this ERP existed the paperwork cannot be re-marked here, so the only
+// honest route is a person asserting it. The security property is the point of these pins: the
+// caller may assert the FACT, never the provenance. A mark whose 'who' the client can write is a
+// field, not evidence.
+{
+  const c = (await req(admin, "POST", "/api/candidates", { name: "EC SIDH " + s, phone: phone("73"), location: loc._id, program: prog._id }, 201)).data.item;
+  const fresh = (await req(admin, "GET", `/api/candidates/${c._id}`, undefined, 200)).data.item;
+  ok("-135 (QA-283): a candidate starts with no SIDH-documents mark", !fresh.sidh_docs_verified, String(fresh.sidh_docs_verified));
+
+  // the forgery attempt: the client tries to name somebody else as the person who confirmed it
+  await req(admin, "PATCH", `/api/candidates/${c._id}`, { sidh_docs_verified: true, sidh_docs_verified_by: "000000000000000000000000", sidh_docs_verified_on: "1999-01-01" }, 200);
+  const marked = (await req(admin, "GET", `/api/candidates/${c._id}`, undefined, 200)).data.item;
+  ok("-135 (QA-283): the mark is stored", marked.sidh_docs_verified === true, String(marked.sidh_docs_verified));
+  ok("-135 (QA-283): ...and the SERVER stamped who confirmed it — the client's own value is ignored",
+    !!marked.sidh_docs_verified_by && String(marked.sidh_docs_verified_by?._id ?? marked.sidh_docs_verified_by) !== "000000000000000000000000",
+    JSON.stringify(marked.sidh_docs_verified_by));
+  ok("-135 (QA-283): ...and stamped WHEN, not the date the client sent",
+    !!marked.sidh_docs_verified_on && new Date(marked.sidh_docs_verified_on).getFullYear() > 2020, String(marked.sidh_docs_verified_on));
+
+  // undo must not leave a stale signature behind
+  await req(admin, "PATCH", `/api/candidates/${c._id}`, { sidh_docs_verified: false }, 200);
+  const cleared = (await req(admin, "GET", `/api/candidates/${c._id}`, undefined, 200)).data.item;
+  ok("-135 (QA-283): clearing the mark clears WHO and WHEN too — an un-marked record keeps no signature",
+    !cleared.sidh_docs_verified && !cleared.sidh_docs_verified_by && !cleared.sidh_docs_verified_on,
+    JSON.stringify({ v: cleared.sidh_docs_verified, by: cleared.sidh_docs_verified_by, on: cleared.sidh_docs_verified_on }));
+}
+
 finish();

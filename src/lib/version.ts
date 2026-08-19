@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-134";
+export const RELEASE = "2026.08.14-135";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,22 @@ export const RELEASE = "2026.08.14-134";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-135 (QA-283, the half -134 left open and named as open): the 'Verified on SIDH' mark had a " +
+  "field and two routes that accepted it, and no way for a human to click it - so it could be set " +
+  "through the API and nowhere else, which is a capability rather than a feature. The control now " +
+  "sits beside the SIDH actions that already exist, offered only on a candidate who HAS an open " +
+  "eligibility question, and it asks for confirmation first because this is somebody asserting a " +
+  "fact about a real student's paperwork. THE PART THAT MATTERS IS WHO GETS TO SAY WHO: the caller " +
+  "may assert the FACT and never the provenance. sidh_docs_verified_by and _on are deliberately NOT " +
+  "on either route's field whitelist, so a client cannot send them; the server stamps both from the " +
+  "session inside beforeUpdate, which runs after pick() and before the assign, so they survive. A " +
+  "mark whose 'who' the client can write is a field, not evidence. Clearing the mark clears the " +
+  "signature too - an un-marked record must not keep a stale one. Pinned by attempting the forgery: " +
+  "the test PATCHes a made-up user id and a 1999 date alongside the flag and asserts BOTH are " +
+  "ignored.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-134, both rows decided by Umesh rather than by me. QA-283: a student whose training is RUNNING " +
   "was still labelled 'Unverified - Education not recorded'. Eligibility is a question asked BEFORE " +
   "somebody joins - is this person allowed on a batch - and once they are ON one the enrolment has " +
@@ -37,8 +53,6 @@ export const RELEASE_NOTE_CURRENT =
   "days, who is qualified - and carries the four actions Umesh named: attendance, daily log, roster, " +
   "certificates. They move between tabs that already exist; nothing is duplicated.";
 
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
   "-133. QA-286 first, because it is mine: -132's importer warning pushed a whole SENTENCE per row " +
   "with the trainer's NAME baked into it and then deduped with new Set() - and every row has a " +
   "different name, so every string was unique and the Set collapsed nothing. The dedup was real code " +

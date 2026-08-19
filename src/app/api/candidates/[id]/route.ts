@@ -25,7 +25,17 @@ export const { GET, PATCH } = itemRoutes({
   writeRoles: ["Admin", "Operations", "Location", "Enrollment"],
   permission: "candidates.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
   // QA-141 (Umesh): edits are as strict as creates — fixed-up numbers land as the bare 10.
-  beforeUpdate(_id, body) {
+  beforeUpdate(_id, body, _existing, user) {
+    // -135 (QA-283): the caller may say "these documents were done on SIDH". It does NOT get to say
+    // WHO confirmed it or WHEN — the server stamps both from the session, because a mark whose
+    // provenance the client can write is not evidence, it is a field. Clearing it clears them too,
+    // so an un-marked record never keeps a stale signature.
+    if (body.sidh_docs_verified !== undefined) {
+      const on = body.sidh_docs_verified === true || body.sidh_docs_verified === "true";
+      body.sidh_docs_verified = on;
+      body.sidh_docs_verified_by = on ? user.id : null;
+      body.sidh_docs_verified_on = on ? new Date() : null;
+    }
     if (body.phone !== undefined) {
       const pErr = phoneError(body.phone);
       if (pErr) throw new HttpError(400, pErr);

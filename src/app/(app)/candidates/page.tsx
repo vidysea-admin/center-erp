@@ -210,6 +210,19 @@ function CandidatesInner() {
     } catch (e: any) { setError(e.message); }
   }
 
+  // -135 (QA-283, Umesh 19/08): "ab document dobara mark nahi kar payenge, SIDH portal pe sab kar
+  // liya." For a cohort that ran before this ERP existed there is no way to re-mark the documents
+  // here, so the only honest route is a person saying so. Confirm before writing, because this is
+  // somebody asserting a fact about a real student's paperwork — and the server, not this call,
+  // records who said it and when.
+  async function markSidhDocsVerified(c: any, on: boolean) {
+    if (on && !window.confirm(`Confirm that ${c.name}'s documents were completed on the Skill India portal?\n\nThis is your word, not something the system worked out — it will be recorded against your name.`)) return;
+    try {
+      await api(`/api/candidates/${c._id}`, { method: "PATCH", json: { sidh_docs_verified: on } });
+      load();
+    } catch (e: any) { setError(e.message); }
+  }
+
   // GD-81: a refused registration goes into its own queue WITH the why — "registration ho hi
   // nahi paya, to main time kyun waste karun… doosri queue mein dalunga".
   async function markSidhFailed(c: any) {
@@ -485,6 +498,15 @@ function CandidatesInner() {
                 <Chip value={r.sidh_status ?? "Not Registered"} />
                 {r.sidh_status === "Registration Failed" && r.sidh_failure_reason && (
                   <span className="text-[11px] text-red-600" title={r.sidh_failure_reason}>({r.sidh_failure_reason.slice(0, 24)}{r.sidh_failure_reason.length > 24 ? "…" : ""})</span>
+                )}
+                {/* -135 (QA-283): the mark, where the other SIDH actions already are. Offered on a
+                    candidate who has an open eligibility question and nothing else to answer it. */}
+                {r.eligibility?.eligible && r.eligibility?.unknown?.length > 0 && (
+                  r.sidh_docs_verified
+                    ? <button className="text-[11px] font-medium text-gray-500 hover:underline" title="Undo — this removes your confirmation and the record of who gave it"
+                        onClick={(e) => { e.stopPropagation(); markSidhDocsVerified(r, false); }}>undo SIDH ✓</button>
+                    : <button className="text-[11px] font-medium text-green-700 hover:underline" title="Their documents were completed on the Skill India portal and cannot be re-marked here"
+                        onClick={(e) => { e.stopPropagation(); markSidhDocsVerified(r, true); }}>docs on SIDH ✓</button>
                 )}
                 {r.sidh_status !== "Registered" && (
                   <>
