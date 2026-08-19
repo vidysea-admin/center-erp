@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-135";
+export const RELEASE = "2026.08.14-136";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,27 @@ export const RELEASE = "2026.08.14-135";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-136 (QA-282, the triage -133 said was not finished): it is finished, and the honest answer is " +
+  "SMALLER than the row feared. The scan took three versions and both earlier ones were wrong in " +
+  "OPPOSITE directions. v1 required the setter to sit inside an onClick, found 2, and missed the one " +
+  "example Umesh actually gave - attLinks is filled inside an async handler. v2 fixed that and then " +
+  "over-reported, because it read a setter's argument with a regex that stops at the first ')': " +
+  "setShowSources((s) => !s) came back as '(s', so three working toggles and an accordion looked " +
+  "trapped. v3 balances the parentheses, and the count fell 19 -> 15 with nothing changed but the " +
+  "measuring. A scan that misses the reported case proves nothing; one that invents four proves less " +
+  "than nothing, because it turns a real complaint into noise. THE REMAINING 15 WERE READ, NOT " +
+  "GUESSED, and none is a trapped panel: filter values on selects that go back to '' (fLoc x2, " +
+  "sheet-watch source), a bare <a> (driveRoot), a ring className (selected), spans of text " +
+  "(uploadNote, knobs, shortfallMsg), a value loaded from data rather than opened (invoice), a mode " +
+  "flag read in an actions prop (legacy), form state and wizard steps (p/enrol, p/register, the tab " +
+  "wizard) - and perCandidate, which is a DELIBERATE one-way switch: you do not un-start " +
+  "per-candidate marking and go back to the legacy count. So of the 22 the corrected scan would have " +
+  "flagged, THREE were real, and all three shipped in -133. The ceiling pin stays as a guard against " +
+  "the next one rather than as a claim that 15 things are broken - proved by adding a trapped panel " +
+  "and watching it fail at 16.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-135 (QA-283, the half -134 left open and named as open): the 'Verified on SIDH' mark had a " +
   "field and two routes that accepted it, and no way for a human to click it - so it could be set " +
   "through the API and nowhere else, which is a capability rather than a feature. The control now " +
@@ -31,8 +52,6 @@ export const RELEASE_NOTE_CURRENT =
   "the test PATCHes a made-up user id and a 1999 date alongside the flag and asserts BOTH are " +
   "ignored.";
 
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
   "-134, both rows decided by Umesh rather than by me. QA-283: a student whose training is RUNNING " +
   "was still labelled 'Unverified - Education not recorded'. Eligibility is a question asked BEFORE " +
   "somebody joins - is this person allowed on a batch - and once they are ON one the enrolment has " +

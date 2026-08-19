@@ -224,43 +224,66 @@ for (const file of walk(root)) {
   else { failed++; hits.push(`scripts/reparse-govt-hours.mjs: its copy of hhmmssToMinutes no longer agrees with the expected table — ${out.split(String.fromCharCode(10))[0]}`); }
 }
 
-// ---- -133 (QA-282): a surface a person opens must have a way to close ----
-// Umesh, 19/08: "platform me aisi bahut sari jagah hai, toh woh sab main kaise bataata rahoon?" — he
-// is right that enumerating them is not his job. He raised the same thing on 15/08 and it was fixed
-// for HealthBanner and ShareLinkPanel; four days later the panels BESIDE them still had no way out.
-// Sixth instance of the shape this project keeps paying for.
+// ---- -136 (QA-282): a surface a person opens must have a way to close ----
+// Umesh, 19/08: "platform me aisi bahut sari jagah hai, toh woh sab main kaise bataata rahoon?"
+// He raised the same thing on 15/08; it was fixed for HealthBanner and ShareLinkPanel and the
+// panels BESIDE them still had no way out four days later.
 //
-// The test is narrow on purpose: state that GATES a rendered surface, is SET truthy somewhere, and
-// is NEVER set to a falsy value anywhere in its file. Not "conditionally rendered" — layout is
-// conditional everywhere and that is fine. WHERE the setter is called does not matter; my first
-// version required it inside an onClick and therefore missed `attLinks`, the one example he actually
-// gave, which is filled inside an async handler. A scan that misses the reported case proves nothing.
+// THE SCAN TOOK THREE VERSIONS AND BOTH EARLIER ONES WERE WRONG IN OPPOSITE DIRECTIONS.
+// v1 required the setter to sit inside an onClick, found 2, and missed `attLinks` — the single
+// example he actually gave, which is filled inside an async handler. v2 fixed that and then
+// OVER-reported: it read a setter's argument with `set\w+\(([^)]*)`, which stops at the first
+// ')', so `setShowSources((s) => !s)` came back as '(s' and three working toggles plus an
+// accordion looked trapped. v3 balances the parentheses. A scan that misses the reported case
+// proves nothing; one that invents four proves less than nothing, because it turns a real
+// complaint into noise.
 //
-// THE NUMBER IS A CEILING, NOT A PASS. 19 remain and each needs reading before it is called a defect
-// or ordinary layout — that triage IS the work and it is not finished. What this pin does is stop the
-// count going UP while it happens.
+// THE TRIAGE IS DONE and the remaining 15 are NOT defects — each was read, not guessed:
+//   fLoc x2, sheet-watch `source`  — filter values on a <select> that can be set back to ''
+//   driveRoot                      — a bare <a> link, not a panel
+//   selected                       — a ring/highlight className
+//   uploadNote, knobs, shortfallMsg — <span>s of text beside a control
+//   invoice                        — loaded from data (setInvoice(d.invoice)), not click-opened
+//   legacy                         — a mode flag read in an `actions=` prop
+//   perCandidate                   — a DELIBERATE one-way switch: you do not un-start
+//                                    per-candidate marking and go back to the legacy count
+//   p/enrol email+phone, p/register submitted, wizard `src` — form state and wizard steps
+//
+// So of the 22 v3 would have flagged, THREE were real and all three are fixed. The ceiling stays
+// as a guard against the next one, not as a claim that 15 things are broken.
 {
-  const CEILING = 19;
+  const CEILING = 15;
+  const argOf = (src, i) => {
+    let depth = 0, out = "";
+    for (; i < src.length; i++) {
+      const c = src[i];
+      if (c === "(") { depth++; if (depth === 1) continue; }
+      else if (c === ")") { depth--; if (depth === 0) break; }
+      out += c;
+    }
+    return out.trim();
+  };
   const openable = [];
   const walkTsx = (dir) => {
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, e.name);
-      if (e.isDirectory()) walkTsx(full);
-      else if (/\.tsx$/.test(e.name)) {
-        const src = fs.readFileSync(full, "utf-8");
-        const rel = path.relative(root, full).split(path.sep).join("/");
-        for (const m of src.matchAll(/const \[(\w+), (set\w+)\] = useState/g)) {
-          const get = m[1], set = m[2];
-          const gates = new RegExp("\\{\\s*" + get + "\\s*&&").test(src)
-            || new RegExp("\\{" + get + " \\?").test(src)
-            || new RegExp("open=\\{!!\\s*" + get + "\\}").test(src)
-            || new RegExp("open=\\{" + get + "\\}").test(src);
-          if (!gates) continue;
-          const calls = [...src.matchAll(new RegExp(set + "\\(([^)]*)", "g"))].map((x) => x[1].trim());
-          const truthy = calls.some((a) => a && !/^(null|false|undefined|""|''|\[\]|\{\})$/.test(a));
-          const clears = calls.some((a) => /^(null|false|undefined|""|''|\[\])$/.test(a) || /=>\s*!/.test(a) || /^!/.test(a));
-          if (truthy && !clears) openable.push(rel + " · " + get);
-        }
+      if (e.isDirectory()) { walkTsx(full); continue; }
+      if (!/\.tsx$/.test(e.name)) continue;
+      const src = fs.readFileSync(full, "utf-8");
+      const rel = path.relative(root, full).split(path.sep).join("/");
+      for (const m of src.matchAll(/const \[(\w+), (set\w+)\] = useState/g)) {
+        const get = m[1], set = m[2];
+        const gates = new RegExp("\\{\\s*" + get + "\\s*&&").test(src)
+          || new RegExp("\\{" + get + " \\?").test(src)
+          || new RegExp("open=\\{!!\\s*" + get + "\\}").test(src)
+          || new RegExp("open=\\{" + get + "\\}").test(src);
+        if (!gates) continue;
+        const args = [];
+        for (const c of src.matchAll(new RegExp(set + "\\(", "g"))) args.push(argOf(src, c.index + set.length));
+        const truthy = args.some((a) => a && !/^(null|false|undefined|""|''|\[\]|\{\})$/.test(a));
+        const clears = args.some((a) => /^(null|false|undefined|""|''|\[\])$/.test(a)
+          || /=>\s*!/.test(a) || /^!/.test(a) || /\?\s*null\s*:/.test(a) || /:\s*null\s*$/.test(a));
+        if (truthy && !clears) openable.push(rel + " · " + get);
       }
     }
   };
@@ -268,7 +291,7 @@ for (const file of walk(root)) {
   if (openable.length <= CEILING) passed++;
   else {
     failed++;
-    hits.push(`a new surface was added that opens on a click and nothing can close: ${openable.length} now, ceiling ${CEILING}. Give it a way out, or lower the ceiling if you closed some: ${openable.slice(0, 6).join(" | ")}`);
+    hits.push(`a surface was added that opens and nothing can close: ${openable.length} now, ceiling ${CEILING}. Give it a way out, or lower the ceiling if you closed some: ${openable.slice(0, 6).join(" | ")}`);
   }
 }
 
