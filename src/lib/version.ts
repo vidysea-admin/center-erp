@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-141";
+export const RELEASE = "2026.08.14-142";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,27 @@ export const RELEASE = "2026.08.14-141";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-142, the last two rows of the 19 Aug recording, and the first of them turned out not to be a " +
+  "bug. QA-297: the File line read 'Gurugram Batch 2 - final attendance.csv' while the Period label " +
+  "beneath it read 'Guguram Batch 2 - Final Attendance' - a letter short and Title Cased, which is " +
+  "what pointed at derivation. The row said plainly that the recording could not prove whether the " +
+  "label was auto-filled or typed, and asked before spending an hour. MEASURED: it is TYPED. The " +
+  "drawer's only writer is the operator's own input and the server falls back to the filename only " +
+  "when it is left blank. So the misspelling was somebody's mistype, not a derivation bug - and what " +
+  "was actually missing is any way to correct it, which is what Umesh asked for. The IMPORT stays " +
+  "uneditable, because it is a point-in-time record of what the portal said; the NAME is ours, it is " +
+  "how one import is told from the next in a list that already holds several, and it is now " +
+  "renameable by anyone who can import, audited old-value-to-new. Pinned that nothing ELSE about the " +
+  "import is reachable through that door. QA-300: '35 differ from our logs' printed in orange at a " +
+  "centre whose batch header says 'Our logs: 0 days' and whose every candidate row reads 'OUR DAYS " +
+  "0 / 0'. Technically true, practically meaningless - nothing was being compared, and the variance " +
+  "column was the portal's own figure copied across with a plus sign. An alarming number that cannot " +
+  "mean what it says is worse than no number, because it sends somebody looking for a discrepancy " +
+  "that does not exist. The importer now reports whether there is any attendance of ours at all, and " +
+  "the screen says 'no attendance of our own to compare against yet' instead. ";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-141, the Locations screen from the 19 Aug recording, in the order the rows themselves demand. " +
   "QA-295 FIRST, because it decides what QA-294 may sum: the summary line said '55 job-role rows' " +
   "twelve seconds above a table footer reading 'Showing 1-25 of 57', no filter touched between. BOTH " +
@@ -30,8 +51,6 @@ export const RELEASE_NOTE_CURRENT =
   "than none; filter or switch tab and it recomputes. The placeholder rows contribute nothing, which " +
   "is the QA-295 distinction turned into arithmetic - and it is why that row had to land first. ";
 
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
   "-140: the release note itself, for the third time, and this one is worth writing down. QA-265 " +
   "split the note in two so the UNAUTHENTICATED build marker publishes what THIS build changed " +
   "rather than the whole archive. I have now spliced the previous note into CURRENT on three " +

@@ -363,7 +363,36 @@ ok("all 7 rows persisted", detail.data.rows?.length === 7, `got ${detail.data.ro
   }
 }
 ok("period label stored", detail.data.item?.period_label === `test ${STAMP}`);
-const varOnly = await req(admin, "GET", `/api/govt-attendance/${done.data._id}?filter=variance`);
+
+// ---- -142 (QA-297 / QA-300, 19 Aug recording) ----
+// QA-297: the File line read 'Gurugram Batch 2 - final attendance.csv' and the Period label under
+// it read 'Guguram Batch 2 - Final Attendance' — a letter short and Title Cased. MEASURED FIRST,
+// because the row could not tell whether the label was derived or typed and that decided whether
+// there was a bug at all: it is TYPED (the drawer's only writer is the operator's input; the
+// server falls back to the filename only when it is left blank). So the misspelling was a human
+// mistype, not a derivation bug — and what was actually missing is any way to correct it. The
+// IMPORT stays uneditable, because it records what the portal said; the NAME is ours.
+{
+  const renamed = await req(admin, "PATCH", `/api/govt-attendance/${done.data._id}`, { period_label: `Gurugram fixed ${STAMP}` }, 200);
+  ok("-142 (QA-297): an import's own NAME can be corrected — the mistype has a way out",
+    renamed.data.item?.period_label === `Gurugram fixed ${STAMP}`, JSON.stringify(renamed.data.item?.period_label));
+  ok("-142 (QA-297): ...and it is audited, old value to new",
+    ((await req(admin, "GET", `/api/audit/GovtAttendanceImport/${done.data._id}`)).data.items ?? [])
+      .some((a) => a.field === "period_label" && /Gurugram fixed/.test(String(a.new_value))),
+    "no audit row for the rename");
+  ok("-142 (QA-297): a blank name is refused — an import with no name cannot be told from the next one",
+    (await req(admin, "PATCH", `/api/govt-attendance/${done.data._id}`, { period_label: "   " })).status === 400);
+  // the rest of the import is NOT reachable through that door
+  await req(admin, "PATCH", `/api/govt-attendance/${done.data._id}`, { period_label: `Gurugram fixed ${STAMP}`, row_count: 999, matched_count: 999 }, 200);
+  const untouched = (await req(admin, "GET", `/api/govt-attendance/${done.data._id}`)).data.item;
+  ok("-142 (QA-297): ...and nothing else about the import is editable through it — it records what the portal said",
+    untouched.row_count !== 999 && untouched.matched_count !== 999,
+    JSON.stringify({ rows: untouched.row_count, matched: untouched.matched_count }));
+
+  // QA-300: '35 differ from our logs' at a centre whose every candidate reads 'OUR DAYS 0 / 0'.
+  ok("-142 (QA-300): the preview says whether there is any attendance of OURS to compare against",
+    typeof done.data.have_local_logs === "boolean", JSON.stringify({ have: done.data.have_local_logs, variance: done.data.variance_count }));
+}const varOnly = await req(admin, "GET", `/api/govt-attendance/${done.data._id}?filter=variance`);
 ok("variance filter returns only rows that actually differ",
   varOnly.data.rows?.length > 0 && varOnly.data.rows.every((r) => r.variance_days !== 0 && r.variance_days !== null),
   JSON.stringify(varOnly.data.rows?.map((r) => r.variance_days)));

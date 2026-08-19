@@ -160,6 +160,19 @@ function Inner() {
           actions={
             <span className="flex gap-2">
               <Btn small kind="ghost" onClick={() => setOpen(null)}>← All imports</Btn>
+                {canImport ? (
+                  /* -142 (QA-297): the label is TYPED, not derived — measured before building this, because
+                     the row could not tell and the answer decided whether there was a bug at all. There is
+                     not: "Guguram" was somebody's mistype. What was missing is any way to correct it. The
+                     import stays uneditable (it records what the portal said); the NAME is ours. */
+                  <button className="text-xs font-medium text-blue-700 hover:underline"
+                    onClick={async () => {
+                      const next = window.prompt("Rename this import — this is our own name for it, not anything the portal sent.", detail.item.period_label || detail.item.file_name);
+                      if (next == null || !next.trim() || next.trim() === detail.item.period_label) return;
+                      try { await api(`/api/govt-attendance/${detail.item._id}`, { method: "PATCH", json: { period_label: next.trim() } }); load(); setOpen(detail.item._id); }
+                      catch (e: any) { setError(e.message); }
+                    }}>rename</button>
+                ) : null}
               <Btn small kind="danger" onClick={() => remove(open)}>Delete</Btn>
             </span>
           }>
@@ -276,7 +289,14 @@ function Inner() {
                 <span className="text-green-700">{upload.matched_count} matched</span>
                 {!!upload.ambiguous_count && <span className="text-amber-700">{upload.ambiguous_count} ambiguous</span>}
                 {!!upload.unmatched_count && <span className="text-red-700">{upload.unmatched_count} unmatched</span>}
-                {!!upload.variance_count && <span className="text-amber-700">{upload.variance_count} differ from our logs</span>}
+                {/* -142 (QA-300): "35 differ from our logs" in orange, at a centre whose batch says
+                    "Our logs: 0 days" and whose every candidate reads "OUR DAYS 0 / 0". True, and
+                    meaningless — nothing was being compared, and the variance column was the portal's
+                    own figure copied across with a + sign. An alarming number that cannot mean what it
+                    says is worse than no number: it sends somebody looking for a discrepancy. */}
+                {!!upload.variance_count && (upload.have_local_logs
+                  ? <span className="text-amber-700">{upload.variance_count} differ from our logs</span>
+                  : <span className="text-gray-500">no attendance of our own to compare against yet</span>)}
               </div>
             </div>
             <Field label="Period label"><input className={inputCls} placeholder="e.g. till 11 Aug"

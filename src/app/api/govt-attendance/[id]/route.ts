@@ -156,6 +156,36 @@ export const GET = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
 
 // An import is a point-in-time record of what the portal said, so it is deletable (a wrong file,
 // a wrong centre) but never editable — correcting it means importing the corrected export.
+// -142 (QA-297, Umesh 19/08: "kya ye edit karne ka bhi option rahata hai admin ho agar kisi ke
+// paas, ki mistype ko voh thik kar saken?"). MEASURED FIRST, because the sheet could not tell:
+// period_label is TYPED, not derived — the drawer's only writer is the operator's own input, and
+// the server falls back to the filename only when it is left blank. So "Guguram" for "Gurugram" was
+// a human mistype and not a derivation bug, which is what the row's own "Confirm first" asked.
+//
+// The import itself stays UNEDITABLE — it is a point-in-time record of what the portal said, and
+// that rule is why this is a carve-out rather than a general PATCH. The LABEL is different in kind:
+// it is OUR name for the import, not portal data, and it is how imports are told apart in a list
+// that already holds several. One field, audited, nothing else reachable.
+export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
+  await dbConnect();
+  const user = await requireUser();
+  requireEdit(user);
+  await requirePerm(user, "attendance.govt");
+  const { id } = await ctx.params;
+  const imp = await loadInScope(id, user);
+  const body = await req.json().catch(() => ({}));
+  const label = String(body.period_label ?? "").trim();
+  if (!label) throw new HttpError(400, "Give the import a name — it is how this one is told apart from the others.");
+  if (label === imp.period_label) return NextResponse.json({ item: imp });
+  const was = imp.period_label;
+  await GovtAttendanceImport.updateOne({ _id: id }, { $set: { period_label: label } });
+  await audit({
+    entity: "GovtAttendanceImport", entityId: id, field: "period_label",
+    oldValue: was ?? "", newValue: label, actor: user.id, actorType: "USER",
+  });
+  return NextResponse.json({ item: { ...imp, period_label: label } });
+});
+
 export const DELETE = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   await dbConnect();
   const user = await requireUser();

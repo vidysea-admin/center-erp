@@ -75,6 +75,13 @@ export const POST = apiHandler(async (req: NextRequest) => {
     ambiguous_count: matched.filter((r) => r.match_status === "Ambiguous").length,
     unmatched_count: matched.filter((r) => r.match_status === "Unmatched").length,
     variance_count: matched.filter((r) => (r.variance_days ?? 0) !== 0).length,
+    // -142 (QA-300, 19/08 recording): "35 differ from our logs" is technically true and practically
+    // meaningless when the ERP holds NO logs to differ from — the batch header says "Our logs: 0
+    // days", every candidate reads "OUR DAYS 0 / 0", and the variance column is the portal's own
+    // figure copied across with a + sign. Nothing is being compared. The count stays (a caller may
+    // want it), but the screens now know whether there was anything on our side at all, so an
+    // orange warning does not send somebody looking for a discrepancy that cannot exist.
+    have_local_logs: matched.some((r) => (r.internal_days_present ?? 0) > 0),
   };
 
   if (!confirm) {
