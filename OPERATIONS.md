@@ -80,6 +80,34 @@ can no longer move the route. **Do not remove that pin.** And keep the env value
 `AUTH_URL` is still required in production (without it Auth.js builds URLs from the instance's
 private address, which no browser can reach). It just must not contain a path.
 
+### L5 · Deploy with `git push origin HEAD:master` — never `git push origin master` (2026-08-19)
+
+Work happens on a feature branch that TRACKS `origin/master`. In `d:/erp/center-erp-audit` today
+`HEAD` is `feat/cert-bulk-upload`, exactly level with `origin/master` — while the **local `master`
+ref has not been updated in a week** and sits 208 commits behind:
+
+    $ git rev-parse --abbrev-ref HEAD      -> feat/cert-bulk-upload
+    $ git log --oneline -1 origin/master   -> 7fe3632  (2026.08.14-142)
+    $ git log --oneline -1 master          -> 1f0a256  (7 days old)
+
+`git push origin master` pushes that stale local ref. It is not refused — it is a fast-forward
+failure at worst and a **force-shaped rollback of production by a week** if anyone resolves it the
+usual way. Nothing in the repo warns about this, while CLAUDE.md tells every session "master push
+= production deploy", so the obvious command is the wrong one.
+
+**Always:**
+
+    git push origin HEAD:master
+
+**Before pushing, confirm you are level with production, not with a stale ref:**
+
+    git rev-list --left-right --count HEAD...origin/master     # expect "<n>	0"
+
+The `0` on the right is the check that matters: anything else means `origin/master` has commits
+you do not have, and pushing would drop them.
+
+Found by the maker-checker sweep on 2026-08-19 (QA-312) and confirmed live while deploying -143.
+
 ### L2 · `AUTH_SECRET` must be identical everywhere (deploy hazard)
 
 If a deploy sets a different `AUTH_SECRET` than the one already in the server `.env`, **every
