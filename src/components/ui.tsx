@@ -256,7 +256,12 @@ export function FilterPills({ options, active, onChange }: {
 // drag-to-resize columns — built HERE so every call site gets them ("jha jha table aayegi").
 // 2026-08-13 (Umesh): per-table column picker — "jo column select nahi kiya vo na dikhe,
 // only selected visible ho". Same build-once placement, so all 28 tables get it for free.
-export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClick, empty, cardTitle, pageSize = 25, defaultSort, searchable, initialSearch, resizable = true, loading, storageKey }: {
+// -141 (QA-294, Umesh 19/08: "sabke niche ek total chahiye, ye jahan-jahan numbers wale columns
+// hain"): a totals strip under the grid. It is handed the FILTERED set, not the visible page — the
+// whole point of a total is that it covers what you are looking at, and "Showing 1–25 of 57" means
+// the page is a window, not the answer. Filter or switch tab and it recomputes, because `view` is
+// what the table itself is filtering by.
+export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClick, empty, cardTitle, pageSize = 25, defaultSort, searchable, initialSearch, resizable = true, loading, storageKey, totals }: {
   columns: {
     key: string; label: string; render?: (row: T) => ReactNode; mobile?: boolean;
     sortable?: boolean; sortValue?: (row: T) => string | number | null | undefined;
@@ -283,6 +288,9 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
   resizable?: boolean;
   loading?: boolean;      // true while the page's fetch is in flight — skeleton, not "empty"
   storageKey?: string;    // stable identity for the saved column choice (falls back to colSig)
+  // -141 (QA-294): given the FILTERED rows, not the page. Returns whatever the caller wants to
+  // sum — it is a strip, not a schema, because which columns are numeric is the page's business.
+  totals?: (rows: T[]) => ReactNode;
 }) {
   type Col = (typeof columns)[0];
   const [page, setPage] = useState(1);
@@ -554,6 +562,9 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
         onClick={() => { setFilters((f) => ({ ...f, [openFilter.key]: [] })); setOpenFilter(null); }}>Clear</button>
     </div>
   );
+  const totalsStrip = totals ? (
+    <div className="border-t bg-gray-50/70 px-3 py-2 text-xs">{totals(view)}</div>
+  ) : null;
   const pager = pages > 1 && (
     <div className="flex items-center justify-between border-t bg-white px-3 py-2 text-xs text-gray-500">
       <span>Showing {(cur - 1) * pageSize + 1}–{Math.min(cur * pageSize, view.length)} of {view.length}</span>
@@ -618,6 +629,7 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
             </tbody>
           </table>
         </div>
+        {totalsStrip}
         {pager}
       </div>
       <div className="space-y-2 md:hidden">
@@ -640,6 +652,7 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
             </div>
           </div>
         ))}
+        {totalsStrip}
         {pager}
       </div>
       {filterPop}

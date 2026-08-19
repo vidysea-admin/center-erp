@@ -95,10 +95,19 @@ function LocationsInner() {
         ]} />
       {items.length > 0 && (
         <p className="text-xs text-gray-500">
+          {/* -141 (QA-295): this line said "55 job-role rows" twelve seconds above a table footer
+              reading "Showing 1–25 of 57", with no filter touched between. BOTH ARE RIGHT and they
+              count different things — flatRows renders `(l.job_roles?.length ? l.job_roles : [null])`,
+              so a centre with NO job role still contributes one table row. 57 = 55 real rows + 2
+              centres carrying none. The arithmetic was never wrong; calling both of them "rows" was.
+              It matters more than a wording nit because the totals strip below sums the table. */}
           Sheet arithmetic:{" "}
-          <span className="font-semibold text-gray-900">{items.reduce((s, l) => s + (l.job_roles?.length ?? 0), 0)}</span> job-role rows ·{" "}
+          <span className="font-semibold text-gray-900">{items.reduce((s, l) => s + (l.job_roles?.length ?? 0), 0)}</span> centre × job-role pairs ·{" "}
           <span className="font-semibold text-green-700">{items.reduce((s, l) => s + (l.approved_job_roles ?? 0), 0)} approved rows</span> ·{" "}
           {items.length} centres ({items.filter((l) => l.approval_status === "Approved").length} with ≥1 approved row)
+          {items.filter((l) => !(l.job_roles?.length)).length > 0 && (
+            <> · <span className="text-amber-700">{items.filter((l) => !(l.job_roles?.length)).length} centre(s) carry no job role yet</span> — they appear in the table as a row with nothing to count</>
+          )}
         </p>
       )}
       {/* 2026-08-13 (Umesh): "iss [OneDrive] sheet ke exact column and data chahiye iss
@@ -114,6 +123,30 @@ function LocationsInner() {
         onRowClick={(r: any) => router.push(`/locations/${r.loc._id}`)}
         cardTitle={(r: any) => <>{r.loc.name} <span className="text-xs text-gray-400">· {r.jr?.program ?? "no targets"}</span></>}
         defaultSort={{ key: "name", dir: "asc" }}
+        totals={(rowsIn: any[]) => {
+          // -141 (QA-294): "sabke niche ek total chahiye, ye jahan-jahan numbers wale columns hain."
+          // Over the FILTERED set, so it follows the tab and any funnel rather than the visible 25.
+          // The placeholder rows for centres with no job role contribute nothing - r.jr is undefined
+          // there, which is exactly the QA-295 distinction turned into arithmetic.
+          const withJr = rowsIn.filter((r) => r.jr);
+          const sum = (f: (jr: any) => unknown) => withJr.reduce((a, r) => a + (Number(f(r.jr)) || 0), 0);
+          const cells: [string, number][] = [
+            ["Total target", sum((jr) => jr.approved_target)],
+            ["Trainer required", sum((jr) => jr.trainers_required)],
+            ["Nomination received (sheet)", sum((jr) => jr.nominations_received_reported)],
+            ["Nominated to NSDC (sheet)", sum((jr) => jr.nominated_nsdc_reported)],
+            ["Trainer certified (sheet)", sum((jr) => jr.trainers_certified_reported)],
+            ["Trainers (ours, live)", sum((jr) => jr.trainers_ours)],
+          ];
+          return (
+            <span className="flex flex-wrap items-center gap-x-4 gap-y-1 tabular-nums">
+              <span className="font-semibold text-gray-700">Totals ({withJr.length} centre × job-role pair{withJr.length === 1 ? "" : "s"}{rowsIn.length !== withJr.length ? `, ${rowsIn.length - withJr.length} centre(s) with none` : ""}):</span>
+              {cells.map(([label, v]) => (
+                <span key={label} className="text-gray-600">{label} <b className="text-gray-900">{v}</b></span>
+              ))}
+            </span>
+          );
+        }}
         columns={[
           { key: "spoc_name", label: "SPOC Name", sortable: true, sortValue: (r: any) => r.loc.spoc_name, filterText: (r: any) => r.loc.spoc_name, render: (r: any) => rep(r, r.loc.spoc_name) },
           {

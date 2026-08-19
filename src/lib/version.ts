@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-140";
+export const RELEASE = "2026.08.14-141";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,21 @@ export const RELEASE = "2026.08.14-140";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-141, the Locations screen from the 19 Aug recording, in the order the rows themselves demand. " +
+  "QA-295 FIRST, because it decides what QA-294 may sum: the summary line said '55 job-role rows' " +
+  "twelve seconds above a table footer reading 'Showing 1-25 of 57', no filter touched between. BOTH " +
+  "NUMBERS ARE RIGHT and they count different things - flatRows renders (l.job_roles?.length ? " +
+  "l.job_roles : [null]), so a centre with NO job role still contributes one table row. 57 = 55 real " +
+  "pairs + 2 centres carrying none. The arithmetic was never wrong; calling both of them 'rows' was. " +
+  "They are named apart now, and the count of centres with no job role is stated rather than left to " +
+  "be inferred from a gap. QA-294: 'sabke niche ek total chahiye, ye jahan-jahan numbers wale " +
+  "columns hain' - a totals strip under the grid, over EVERY numeric column. It is handed the " +
+  "FILTERED set rather than the visible page, because a total that covers 25 of 57 rows is worse " +
+  "than none; filter or switch tab and it recomputes. The placeholder rows contribute nothing, which " +
+  "is the QA-295 distinction turned into arithmetic - and it is why that row had to land first. ";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-140: the release note itself, for the third time, and this one is worth writing down. QA-265 " +
   "split the note in two so the UNAUTHENTICATED build marker publishes what THIS build changed " +
   "rather than the whole archive. I have now spliced the previous note into CURRENT on three " +
@@ -32,8 +47,6 @@ export const RELEASE_NOTE_CURRENT =
   "of the fraction and a centre that recorded nothing scored the same as one with perfect " +
   "attendance. It divides by the days that should have happened now. ";
 
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
   "-139 (QA-292, the half -138 left open): the attendance DENOMINATOR. -138 fixed where the " +
   "numerator comes from - the portal, not only our own logs - and the checker's row was sharper than " +
   "the sheet on the other half: roster read 180 while 247 students are enrolled, and the right " +
