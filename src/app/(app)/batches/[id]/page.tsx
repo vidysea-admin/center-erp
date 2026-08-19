@@ -111,7 +111,7 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
         <HealthBanner health={data.health} onDismiss={() => dismiss(`erp_dismiss_health_${id}_${data.health?.score}`)} />
       )}
       <Tabs tabs={tabs} active={tab} onChange={setTab} />
-      {tab === "Overview" && <Overview data={data} role={role} onChanged={load} error={error} setError={setError} />}
+      {tab === "Overview" && <Overview data={data} role={role} onChanged={load} error={error} setError={setError} onGo={setTab} />}
       {tab === "Candidates" && <Roster batchId={id} batch={b} error={error} setError={setError} onChanged={load} />}
       {tab === "Enrollment" && <Enrollment batchId={id} error={error} setError={setError} />}
       {tab === "Daily Execution" && <DailyExecution batchId={id} batch={b} role={role} error={error} setError={setError} />}
@@ -125,7 +125,9 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
 }
 
 // ---------- Overview: readiness checklist (Rule 16) + transitions ----------
-function Overview({ data, role, onChanged, error, setError }: any) {
+// -134 (QA-284): onGo is the page's own setTab — the quick actions move between tabs that already
+// exist rather than duplicating any screen.
+function Overview({ data, role, onChanged, error, setError, onGo }: any) {
   const b = data.item;
   // -88 (Umesh): once a batch runs, the Overview says so in numbers — running since when,
   // day N of M, our logged days, the portal's working days, who is qualified — instead of a
@@ -278,12 +280,37 @@ function Overview({ data, role, onChanged, error, setError }: any) {
           dash there — still reachable for anyone auditing why it started, never occupying the
           screen of a batch that is past it. */}
       {running ? (
+        <>
+        {/* -134 (QA-284, Umesh 19/08): -112 was right to collapse the readiness checklist once a
+            batch starts — it is a preparation record and has nothing left to say. But NOTHING took
+            its place, so half the Overview of a running batch was empty white space, on the screen
+            whose whole job is to answer "what is happening with this batch". The collapse was the
+            fix; the hole was the cost of it, and nobody looked at the screen afterwards. What goes
+            here is what this component already computes and was not showing. */}
+        <Section title="Right now">
+          <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+            <div><div className="text-xs text-gray-500">On the roster</div><div className="text-lg font-semibold">{data.readiness?.roster_count ?? 0}<span className="text-sm font-normal text-gray-500"> of {b.target_size ?? "—"}</span></div></div>
+            <div><div className="text-xs text-gray-500">Days we logged</div><div className="text-lg font-semibold">{att ? att.days_held : "—"}</div></div>
+            <div><div className="text-xs text-gray-500">Portal working days</div><div className="text-lg font-semibold">{att ? (portalDays || <span className="text-sm font-normal text-gray-500">not imported</span>) : "—"}</div></div>
+            <div><div className="text-xs text-gray-500">Qualified for assessment</div><div className="text-lg font-semibold text-green-700">{att ? att.qualified_count : "—"}</div></div>
+          </div>
+          {/* Umesh's own list, 19/08: "mark attendance, daily attendance" plus the two he named
+              when asked — roster and certificates. Every one already had a door; the point is that
+              they were all a tab-click away from the screen a person opens precisely to do one. */}
+          <div className="mt-4 flex flex-wrap gap-2 border-t border-gray-100 pt-3">
+            <Btn small onClick={() => onGo("Attendance")}>Attendance</Btn>
+            <Btn small kind="ghost" onClick={() => onGo("Daily Execution")}>Daily log</Btn>
+            <Btn small kind="ghost" onClick={() => onGo("Candidates")}>Roster</Btn>
+            <Btn small kind="ghost" onClick={() => onGo("Closure")}>Certificates</Btn>
+          </div>
+        </Section>
         <details className="rounded-xl border border-gray-200/80 bg-white px-4 py-2 text-sm">
           <summary className="cursor-pointer text-sm font-semibold text-gray-500">Readiness checklist ({CHECKS.filter(([, , v]) => v).length}/{CHECKS.length}) — preparation record, this batch has started</summary>
           <ul className="mt-2 space-y-1 text-xs text-gray-500">
             {CHECKS.map(([k, label, ok]) => <li key={k}>{ok ? "✓" : "○"} {label}</li>)}
           </ul>
         </details>
+        </>
       ) : (
       <Section title={`Readiness checklist (${CHECKS.filter(([, , v]) => v).length}/${CHECKS.length})`}>
         {beganAlready && (

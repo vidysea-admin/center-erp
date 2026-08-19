@@ -395,6 +395,16 @@ const CandidateSchema = new Schema({
   interested_programs: [{ type: Schema.Types.ObjectId, ref: "Program" }],
   interested_locations: [{ type: Schema.Types.ObjectId, ref: "Location" }],
   sidh_status: { type: String, enum: SIDH_STATUS, default: "Not Registered" },
+  // -134 (QA-283, Umesh 19/08): "ab document dobara mark nahi kar payenge, SIDH portal pe sab kar
+  // liya." For cohorts that ran before this ERP existed, the documents were completed on the
+  // government portal and CANNOT be re-marked here — so an "Unverified" chip on them is not merely
+  // irrelevant, it is unfixable by design. This is the mark that clears them, and it is set by a
+  // PERSON. Nothing derives it: "the batch is running, so the documents must exist" is an inference,
+  // and QA-085 is the rule that says a thing we do not know must stay unknown rather than become a
+  // confident yes. Who and when are recorded because that is what makes it evidence rather than a flag.
+  sidh_docs_verified: { type: Boolean, default: false },
+  sidh_docs_verified_by: oid("User"),
+  sidh_docs_verified_on: Date,
   sidh_link_sent_at: Date,
   sidh_registered_on: Date,
   sidh_failure_reason: String, // why the portal refused — the queue is useless without the why

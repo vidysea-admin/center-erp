@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-133";
+export const RELEASE = "2026.08.14-134";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,28 @@ export const RELEASE = "2026.08.14-133";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-134, both rows decided by Umesh rather than by me. QA-283: a student whose training is RUNNING " +
+  "was still labelled 'Unverified - Education not recorded'. Eligibility is a question asked BEFORE " +
+  "somebody joins - is this person allowed on a batch - and once they are ON one the enrolment has " +
+  "answered it, so the chip was noise on every row of a live cohort. It stops at enrolment now. " +
+  "'Not eligible' is NOT hidden: that is a live problem whenever it appears. The harder half is the " +
+  "one Umesh named: for cohorts that ran before this ERP existed the documents were completed on the " +
+  "government portal and CANNOT be re-marked here, so the label was not merely irrelevant, it was " +
+  "unfixable by design. There is now a 'Verified on SIDH' mark that a PERSON sets, recorded with who " +
+  "and when. Nothing derives it - 'the batch is running, so the documents must exist' is an " +
+  "inference, and QA-085 is the rule that a thing we do not know stays unknown rather than becoming " +
+  "a confident yes. On BOTH candidate doors, because a field the item route does not accept looks " +
+  "saved and is gone on the next read. QA-284: -112 was right to collapse the readiness checklist " +
+  "once a batch starts - it is a preparation record with nothing left to say - but NOTHING took its " +
+  "place, so half the Overview of a running batch was empty white space on the screen whose whole " +
+  "job is to answer 'what is happening with this batch'. The collapse was the fix; the hole was the " +
+  "cost of it, and nobody looked at the screen afterwards. It now shows what the page already " +
+  "computed and was not displaying - roster against target, days we logged, the portal's working " +
+  "days, who is qualified - and carries the four actions Umesh named: attendance, daily log, roster, " +
+  "certificates. They move between tabs that already exist; nothing is duplicated.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-133. QA-286 first, because it is mine: -132's importer warning pushed a whole SENTENCE per row " +
   "with the trainer's NAME baked into it and then deduped with new Set() - and every row has a " +
   "different name, so every string was unique and the Set collapsed nothing. The dedup was real code " +
@@ -39,8 +61,6 @@ export const RELEASE_NOTE_CURRENT =
   "setter to sit inside an onClick and therefore missed attLinks, the one example he actually gave, " +
   "which is filled inside an async handler. A scan that misses the reported case proves nothing.";
 
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
   "-132 (QA-281): the trainer importer stored the skills column verbatim while THREE columns beside " +
   "it in the same for-loop each resolved against real records and reported what did not match - " +
   "pipeline_status through resolveStage, and both nomination fields through name lookups that push " +

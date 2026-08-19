@@ -14,6 +14,9 @@ export const { GET, POST } = collectionRoutes({
     "salutation", "father_name", "mother_name", "marital_status", "religion", "social_category", "state", "district", "sub_district",
     // -126 (S18-03): address_type and differently_abled removed — they were never in his spoken list
     // of eight, and he asked for them back out.
+    // -134 (QA-283): the human-applied "documents were done on SIDH" mark. On BOTH doors — a field
+    // the item route does not accept looks saved and is gone on the next read (the -116 lesson).
+    "sidh_docs_verified",
   ],
   // 2026-08-13 (Umesh: "search should allow all the columns"): the global shell search
   // rides this too — alt numbers, mobiliser/campaign and the portal CAN_ id all findable.

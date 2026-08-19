@@ -458,13 +458,26 @@ function CandidatesInner() {
           {
             key: "eligibility", label: "Eligible",
             filterText: (r: any) => r.eligibility ? (r.eligibility.eligible ? (r.eligibility.unknown?.length ? "Unverified" : "Eligible") : "Not eligible") : "",
-            render: (r: any) => r.eligibility ? (
-              r.eligibility.eligible
-                ? (r.eligibility.unknown?.length
-                  ? <span className="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] text-gray-500" title={r.eligibility.unknown.join("; ")}>Unverified</span>
-                  : <span className="rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-[11px] font-semibold text-green-700">Eligible</span>)
-                : <span className="rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] font-semibold text-red-700" title={r.eligibility.reasons.join("; ")}>Not eligible</span>
-            ) : null,
+            // -134 (QA-283, Umesh 19/08): "jinke training ongoing hai, wahan par unverified likha
+            // hai … lekin agar training ongoing hai toh iska bhi toh kuch relevance hai?" Eligibility
+            // is a question asked BEFORE somebody joins — is this person allowed on a batch. Once
+            // they are ON one, the question has been answered by the enrolment itself, and a chip
+            // asking it again is noise on every row of a running cohort. So it stops once they are
+            // enrolled. "Not eligible" is NOT hidden: that is a live problem whenever it appears.
+            render: (r: any) => {
+              if (!r.eligibility) return null;
+              if (!r.eligibility.eligible) {
+                return <span className="rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] font-semibold text-red-700" title={r.eligibility.reasons.join("; ")}>Not eligible</span>;
+              }
+              const enrolled = r.lifecycle_status && r.lifecycle_status !== "Unassigned";
+              if (r.sidh_docs_verified) {
+                return <span className="rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-[11px] font-semibold text-green-700" title="Documents were completed on the Skill India portal and confirmed here by a person — they cannot be re-marked in this system.">Verified on SIDH</span>;
+              }
+              if (r.eligibility.unknown?.length && !enrolled) {
+                return <span className="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] text-gray-500" title={r.eligibility.unknown.join("; ")}>Unverified</span>;
+              }
+              return <span className="rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-[11px] font-semibold text-green-700">Eligible</span>;
+            },
           },
           {
             key: "sidh_status", label: "SIDH", render: (r: any) => (

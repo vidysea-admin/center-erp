@@ -17,6 +17,9 @@ export const { GET, PATCH } = itemRoutes({
     "salutation", "father_name", "mother_name", "marital_status", "religion", "social_category", "state", "district", "sub_district",
     // -126 (S18-03): address_type and differently_abled removed — they were never in his spoken list
     // of eight, and he asked for them back out.
+    // -134 (QA-283): the human-applied "documents were done on SIDH" mark. On BOTH doors — a field
+    // the item route does not accept looks saved and is gone on the next read (the -116 lesson).
+    "sidh_docs_verified",
   ],
   readRoles: ["Admin", "Operations", "Location", "Enrollment"], // QA-060/095: not the Trainer's lens
   writeRoles: ["Admin", "Operations", "Location", "Enrollment"],
