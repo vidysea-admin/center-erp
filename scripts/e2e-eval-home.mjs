@@ -156,12 +156,22 @@ await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Canc
   // So this builds the state the bug needs instead of hoping for it: the scoped user's OWN batch
   // is made portal-covered, which is what forces the `$nin` line to execute for them.
   //
-  // MEASURED BOTH WAYS ON A REAL BUILD before this was written - which is the step -145 skipped:
-  //   pre-fix : SPOC our_present 26, ADMIN 24   <- a scoped user reading MORE than the whole org
-  //   post-fix: SPOC our_present  0, ADMIN 24
-  // Pre-fix the SPOC excludes only THEIR portal batch from an unscoped query, so they collect
-  // every other centre's logs and overshoot the organisation itself. That is impossible with a
-  // scope applied, and it is the sharpest possible fingerprint.
+  // MEASURED BOTH WAYS ON A REAL BUILD before this was written - which is the step -145 skipped.
+  // -152 (QA-366): and the signature DEPENDS ON HOW THE SUITE IS RUN, which the first version of
+  // this comment did not say:
+  //
+  //   full wall (e2e-govt has already created portal coverage elsewhere):
+  //     pre-fix  SPOC our_present 26, ADMIN 24  <- a scoped user reading MORE than the whole org
+  //     post-fix SPOC our_present  0, ADMIN 24  -> BOTH assertions below fail pre-fix
+  //   this suite alone:
+  //     pre-fix  SPOC 17, ADMIN 17             -> only the FIRST assertion fails; the second passes
+  //
+  // So the second assertion is NOT "the one that survives a different dataset" - that was backwards.
+  // It is the general invariant and it is the one that goes vacuous when this suite runs alone. The
+  // first assertion (own-log figure must be 0) fails in BOTH modes, which is why protection never
+  // depends on run order. Left order-dependent on purpose: making the second self-sufficient means
+  // rebuilding portal coverage at a second centre, which duplicates fixture machinery e2e-govt
+  // already owns - the ARCHITECTURE.md section 3 class.
   {
     const spoc = await login("spoc.jpr03@vidysea.com", "CiOnly@123");
     if (!spoc) ok("-147 (QA-302/QA-321): scoped SPOC login available", false, "no session");
@@ -199,8 +209,10 @@ await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Canc
           (sk.our_present ?? -1) === 0,
           JSON.stringify({ spoc_our_present: sk.our_present, admin_our_present: ak.our_present }));
 
-        // The general invariant, and the one that survives a different dataset: a scoped role can
-        // never read MORE own-log attendance than the whole organisation. Pre-fix: 26 > 24.
+        // The general invariant: a scoped role can never read MORE own-log attendance than the
+        // whole organisation. Pre-fix in the FULL WALL: 26 > 24. Running this suite alone it reads
+        // 17 = 17 and passes on broken code - see the header. That is why it is the companion, not
+        // the proof.
         ok("-147 (QA-321): ...and a scoped role can never out-count the whole organisation",
           (sk.our_present ?? 0) <= (ak.our_present ?? 0),
           JSON.stringify({ spoc: sk.our_present, admin: ak.our_present }));
