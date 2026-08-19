@@ -399,11 +399,18 @@ console.log("\n--- FL8: the day holds two slotted batches per trainer, never thr
 console.log("\n--- FL9: trainer import — stages by display name, nominations by centre/role name ---");
 {
   const rows = [
-    { "Name": `FL Tr A ${stamp}`, "Phone": "9822200001", "Stage": "TOT Payment Done", "Centre": loc.name, "Role": prog.name, "TR": "" },
-    { "Name": `FL Tr B ${stamp}`, "Phone": "9822200002", "Stage": "Random Stage", "Centre": "No Such Centre", "Role": "", "TR": "" },
-    { "Name": `FL Tr C ${stamp}`, "Phone": "9822200001", "Stage": "", "Centre": "", "Role": "", "TR": "" }, // same phone as A
-    { "Name": `FL Tr D ${stamp}`, "Phone": "9822200004", "Stage": "Certified", "Centre": "", "Role": "", "TR": "" }, // Certified without TR ID
+    { "Name": `FL Tr A ${stamp}`, "Phone": "9822200001", "Stage": "TOT Payment Done", "Centre": loc.name, "Role": prog.name, "TR": "", "Skill": "" },
+    { "Name": `FL Tr B ${stamp}`, "Phone": "9822200002", "Stage": "Random Stage", "Centre": "No Such Centre", "Role": "", "TR": "", "Skill": "" },
+    { "Name": `FL Tr C ${stamp}`, "Phone": "9822200001", "Stage": "", "Centre": "", "Role": "", "TR": "", "Skill": "" }, // same phone as A
+    { "Name": `FL Tr D ${stamp}`, "Phone": "9822200004", "Stage": "Certified", "Centre": "", "Role": "", "TR": "", "Skill": "" }, // Certified without TR ID
+    // -132 (QA-281): the EXACT string that landed on eight live trainers at 2026-08-17T08:04 — the
+    // same words as a real job role in a different order. One spreadsheet column, read verbatim.
+    { "Name": `FL Tr E ${stamp}`, "Phone": `77${stamp}05`.slice(0, 10), "Stage": "", "Centre": "", "Role": "", "TR": "", "Skill": `Battery Repair System Technician ${stamp}` },
+    { "Name": `FL Tr F ${stamp}`, "Phone": `77${stamp}06`.slice(0, 10), "Stage": "", "Centre": "", "Role": "", "TR": "", "Skill": "Totally Made Up Role" },
   ];
+  // -132 (QA-281): the near-match only means something if the correct spelling is a role we KNOW, so
+  // put it in the job-roles master first. Stamped, so a warm DB does not collide with itself.
+  await req(admin, "POST", "/api/master-lists/job-roles", { name: `Battery System Repair Technician ${stamp}` }, 201);
   const ws = XLSX.utils.json_to_sheet(rows);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
@@ -413,18 +420,42 @@ console.log("\n--- FL9: trainer import — stages by display name, nominations b
   const step1 = await multipart(admin, "/api/trainers/import", { file }, 200);
   ok("FL9: step 1 returns the columns", (step1.data.columns ?? []).includes("Stage"), JSON.stringify(step1.data.columns));
 
-  const mapping = JSON.stringify({ "Name": "name", "Phone": "phone", "Stage": "pipeline_status", "Centre": "nominated_for_location", "Role": "nominated_for_program", "TR": "tr_id" });
+  const mapping = JSON.stringify({ "Name": "name", "Phone": "phone", "Stage": "pipeline_status", "Centre": "nominated_for_location", "Role": "nominated_for_program", "TR": "tr_id", "Skill": "skills" });
   const prev = await multipart(admin, "/api/trainers/import", { file, mapping }, 200);
   ok("FL9: the display label resolved, the junk stage is reported not guessed",
     (prev.data.stage_unmatched ?? []).includes("Random Stage") && !(prev.data.stage_unmatched ?? []).includes("TOT Payment Done"),
     JSON.stringify(prev.data.stage_unmatched));
   ok("FL9: the unknown centre is reported", (prev.data.centre_unmatched ?? []).includes("No Such Centre"), JSON.stringify(prev.data.centre_unmatched));
   ok("FL9: the in-file phone duplicate is flagged and excluded (phone is unique)",
-    (prev.data.duplicates ?? []).some((d) => /same number as row/.test(d)) && prev.data.importable === 3, JSON.stringify({ dupes: prev.data.duplicates, importable: prev.data.importable }));
+    (prev.data.duplicates ?? []).some((d) => /same number as row/.test(d)) && prev.data.importable === 5, JSON.stringify({ dupes: prev.data.duplicates, importable: prev.data.importable }));
   ok("FL9: Certified without a TR ID is warned by name", (prev.data.warnings ?? []).some((w) => /no TR ID/.test(w)), JSON.stringify(prev.data.warnings));
 
+  // ---- -132 (QA-281): the skills column is checked like its three neighbours ----
+  // It used to be stored verbatim while pipeline_status, nominated_for_location and
+  // nominated_for_program — in the SAME loop — each resolved against real records and reported what
+  // did not match. That asymmetry is how one wrong string reached eight trainers in one second.
+  // It still WARNS rather than blocks (-69's decision, reaffirmed in -128), but a warning that NAMES
+  // the near match is what stops a second spelling being created.
+  {
+    const w = prev.data.warnings ?? [];
+    const transposed = w.find((x) => /Battery Repair System Technician/.test(String(x)));
+    ok("-132 (QA-281): a job-role value that matches no known role is WARNED at import time",
+      !!transposed, JSON.stringify(w));
+    ok("-132 (QA-281): ...and the warning NAMES the existing role it is a re-ordering of, so the person can pick it",
+      /same words as the existing job role/.test(String(transposed ?? "")) && new RegExp(`Battery System Repair Technician ${stamp}`).test(String(transposed ?? "")),
+      String(transposed ?? ""));
+    ok("-132 (QA-281): a genuinely unknown role is reported too, but WITHOUT inventing a correction",
+      w.some((x) => /Totally Made Up Role/.test(String(x)) && /matches no job role we know/.test(String(x))),
+      JSON.stringify(w.filter((x) => /Made Up/.test(String(x)))));
+    ok("-132 (QA-281): warning, never blocking — the rows are still importable",
+      (prev.data.importable ?? 0) >= 3, String(prev.data.importable));
+  }
+
   const done = await multipart(admin, "/api/trainers/import", { file, mapping, confirm: "1" }, 201);
-  ok("FL9: confirm imports the 3 unique rows, never the phone dupe", done.data.imported === 3, String(done.data.imported));
+  // -132 (QA-281): 5, not 3 — the fixture gained the two job-role rows this release is about. The
+  // assertion still says exactly what it always said (every unique row lands, the phone duplicate
+  // never does); only the size of the fixture changed.
+  ok("FL9: confirm imports the 5 unique rows, never the phone dupe", done.data.imported === 5, String(done.data.imported));
   const trA = (await req(admin, "GET", `/api/trainers?q=9822200001`)).data.items.find((t) => t.name === `FL Tr A ${stamp}`);
   ok("FL9: 'Payment Done' (legacy sheet value) landed as 'TOT Payment Done'", trA?.pipeline_status === "TOT Payment Done", trA?.pipeline_status);
   ok("FL9: the centre name resolved to a real nomination", (trA?.nominated_for_location?.name ?? "") === loc.name, JSON.stringify(trA?.nominated_for_location));

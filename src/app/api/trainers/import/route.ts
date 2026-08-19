@@ -3,7 +3,7 @@ import * as XLSX from "xlsx";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError, isScoped } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
-import { Location, Program, Trainer, TRAINER_PIPELINE } from "@/models";
+import { JobRole, Location, Program, Trainer, TRAINER_PIPELINE } from "@/models";
 import { audit } from "@/lib/audit";
 import { normalizePhone } from "@/lib/duplicates";
 import { canonicalPhone } from "@/lib/validate";
@@ -75,10 +75,26 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const acceptUnknown = form.get("accept_unknown") === "1";
 
   // Name → id resolution for nominations, case-insensitive, exact. Ambiguity is unmatched.
-  const [locs, progs] = await Promise.all([
+  const [locs, progs, jobRoles] = await Promise.all([
     Location.find({}).select("name code operational_status").lean<any[]>(),
-    Program.find({}).select("name code").lean<any[]>(),
+    Program.find({}).select("name code trainer_skill").lean<any[]>(),
+    JobRole.find({ active: { $ne: false } }).select("name").lean<any[]>(),
   ]);
+  // -132 (QA-281): the recognised job-role set, built exactly the way the trainer form builds it —
+  // the JobRole master UNION the programmes' trainer_skill values (trainers/page.tsx:101-111). One
+  // definition of "a role we know", so the importer and the form cannot disagree about it.
+  const knownRoles = [...new Set([
+    ...jobRoles.map((j) => String(j.name ?? "").trim()),
+    ...progs.map((p) => String(p.trainer_skill ?? "").trim()),
+  ].filter(Boolean))];
+  // Word-set key: "Battery Repair System Technician" and "Battery System Repair Technician" have the
+  // SAME words in a different order, which is precisely the failure that put one wrong string on eight
+  // trainers in one second. Sorting the words finds that; a spelling mistake still will not match, and
+  // should not — inventing a correction is worse than naming what we do not recognise.
+  const wordKey = (v: string) => String(v).toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter(Boolean).sort().join(" ");
+  const roleByWords = new Map<string, string>();
+  for (const k of knownRoles) roleByWords.set(wordKey(k), k);
+  const knownLower = new Set(knownRoles.map((k) => k.toLowerCase()));
   const locByName = new Map<string, any[]>();
   for (const l of locs) {
     const k = String(l.name).trim().toLowerCase();
@@ -95,6 +111,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const stageUnmatched: string[] = [];
   const centreUnmatched: string[] = [];
   const roleUnmatched: string[] = [];
+  const skillWarn: string[] = []; // -132 (QA-281): job-role values that named no known role
   const warnings: string[] = [];
 
   const trainers = rows
@@ -104,7 +121,30 @@ export const POST = apiHandler(async (req: NextRequest) => {
         const raw = String(r[col] ?? "").trim();
         if (TEXT_FIELDS.includes(field) && raw) t[field] = raw;
         if (NUM_FIELDS.includes(field) && raw && !isNaN(Number(raw))) t[field] = Number(raw);
-        if (field === "skills" && raw) t.skills = raw.split(",").map((s) => s.trim()).filter(Boolean);
+        if (field === "skills" && raw) {
+          // -132 (QA-281): this stored the column verbatim while the three fields BELOW it in this
+          // same loop each resolved against real records and reported what did not match. That is how
+          // "Battery Repair System Technician" was written onto eight trainers at 2026-08-17T08:04 —
+          // one spreadsheet column, read once, never checked, against a master where the correct
+          // spelling already existed on exactly one trainer.
+          //
+          // It WARNS and never blocks: -69 chose that deliberately and -128 reaffirmed it (a picker
+          // over a master holding zero rows would refuse every real job role). But a warning that
+          // names the near match is a different thing from a warning that says "unrecognised" — it
+          // tells the person the row they meant already exists, which is the only way a second
+          // spelling stops being created.
+          const list = raw.split(",").map((x) => x.trim()).filter(Boolean);
+          t.skills = list;
+          if (knownRoles.length) {
+            for (const sk of list) {
+              if (knownLower.has(sk.toLowerCase())) continue;
+              const near = roleByWords.get(wordKey(sk));
+              skillWarn.push(near
+                ? `${t.name ?? r[nameCol] ?? "(no name)"}: skill "${sk}" is the same words as the existing job role "${near}" in a different order — imported as typed; fix it to "${near}" so both spellings do not exist`
+                : `${t.name ?? r[nameCol] ?? "(no name)"}: skill "${sk}" matches no job role we know — imported as typed; add it to the job-roles master or correct the spelling`);
+            }
+          }
+        }
         if (field === "pipeline_status" && raw) {
           const st = resolveStage(raw);
           if (st) t.pipeline_status = st;
@@ -191,7 +231,10 @@ export const POST = apiHandler(async (req: NextRequest) => {
     stage_unmatched: [...new Set(stageUnmatched)].slice(0, 25),
     centre_unmatched: [...new Set(centreUnmatched)].slice(0, 25),
     role_unmatched: [...new Set(roleUnmatched)].slice(0, 25),
-    warnings: warnings.slice(0, 25),
+    // -132 (QA-281): the job-role warnings ride in the same list the operator already reads, rather
+    // than a new field a caller has to know about. Deduped — one wrong spreadsheet column produces the
+    // same sentence on every row it touched, and eight copies of it is noise, not information.
+    warnings: [...warnings, ...new Set(skillWarn)].slice(0, 25),
     phone_invalid: phoneInvalid.slice(0, 25), phone_invalid_count: phoneInvalid.length,
     unknown_columns: unknownCols,
     // QA-110: say the quiet part — which columns are about to be DROPPED vs stored.

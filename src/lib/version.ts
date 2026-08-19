@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-131";
+export const RELEASE = "2026.08.14-132";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,27 @@ export const RELEASE = "2026.08.14-131";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-132 (QA-281): the trainer importer stored the skills column verbatim while THREE columns beside " +
+  "it in the same for-loop each resolved against real records and reported what did not match - " +
+  "pipeline_status through resolveStage, and both nomination fields through name lookups that push " +
+  "onto stage_unmatched / centre_unmatched / role_unmatched. Only the job role was written without a " +
+  "word said. That asymmetry has a measured cost: all eight trainers carrying 'Battery Repair System " +
+  "Technician' were created at the SAME TIMESTAMP, 2026-08-17T08:04, so nobody typed them past a " +
+  "suggestion box - one spreadsheet column was read once into nine Battery rows, eight one way and " +
+  "one the other, and the correct spelling ended up on exactly ONE trainer. The importer now resolves " +
+  "the column against the same recognised set the trainer form uses (the JobRole master UNION the " +
+  "programmes' trainer_skill), and when a value does not match it NAMES THE NEAR MATCH: 'the same " +
+  "words as the existing job role X in a different order'. Sorting the words is what catches a " +
+  "re-ordering; a genuine misspelling still does not match and is reported as unknown WITHOUT " +
+  "inventing a correction, because guessing at somebody's data is worse than saying we do not " +
+  "recognise it. It warns and never blocks - that was -69's decision and -128 reaffirmed it, since a " +
+  "picker over a master holding zero rows would refuse every real job role - but a warning that names " +
+  "the row you meant is a different thing from one that says 'unrecognised', and it is the only " +
+  "version that stops a second spelling being created. Warnings are deduped: one wrong column " +
+  "produces the same sentence on every row it touched, and eight copies is noise.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-131, both rows from the checker's retro sweep over the five bypassed releases. QA-277: enrol ONE " +
   "candidate over a batch's target and you are warned; enrol thirty and you were not. The warning " +
   "exists and is correct - addMemberChecked computes 'Roster is now 46 of target 45' and returns it " +
@@ -42,8 +63,6 @@ export const RELEASE_NOTE_CURRENT =
   "Proved by breaking it, twice: the first version of the table never exercised the 10,000-hour " +
   "sanity guard at all, and the pin stayed green while I broke it.";
 
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
   "-130: three doors the earlier sweeps missed, all found by the checker reading the DEPLOYED " +
   "source rather than the diff. QA-273: a walk-in could be enrolled one at a time but not in bulk. " +
   "-124 taught the single-add door that a candidate with NO centre adopts the batch's; the bulk " +
