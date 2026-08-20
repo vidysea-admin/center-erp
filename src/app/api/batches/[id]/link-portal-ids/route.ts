@@ -4,6 +4,7 @@ import { apiHandler, requireUser, requireEdit } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { BatchMember, Candidate, GovtAttendanceRow } from "@/models";
 import { assertBatchInScope } from "@/lib/rules";
+import { normalizeCan } from "@/lib/govt-attendance";
 import { audit } from "@/lib/audit";
 
 // -108: link this batch's roster to the portal IDs the ERP ALREADY holds.
@@ -27,10 +28,9 @@ import { audit } from "@/lib/audit";
 // overwritten, and a candidate whose matched rows disagree about the id is reported as a conflict
 // and left alone rather than resolved by luck.
 
-const canOf = (s: unknown) => {
-  const m = /CAN[\s_-]*(\d+)/i.exec(String(s ?? ""));
-  return m ? "CAN" + m[1] : null;
-};
+// -155: the local copy became the shared normalizeCan in lib/govt-attendance - the health screen
+// and the ID-re-match need the identical test, and near-identical regexes are how doors drift.
+const canOf = normalizeCan;
 
 async function plan(batchId: string) {
   const members = await BatchMember.find({ batch: batchId })

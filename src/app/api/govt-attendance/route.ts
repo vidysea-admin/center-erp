@@ -6,7 +6,7 @@ import { Candidate, GovtAttendanceImport, GovtAttendanceRow, Notification } from
 import { activateFromEvidence } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 import {
-  parseGovtAttendance, matchGovtRows, reconcileAgainstLogs, resolveLocationFromFile,
+  parseGovtAttendance, matchGovtRows, reconcileAgainstLogs, resolveLocationFromFile, shiftSignature,
 } from "@/lib/govt-attendance";
 
 // Government portal attendance (2026-08-12). The boss's ask was that Manish uploads the portal
@@ -84,9 +84,12 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // - either alone must not trip this. Together - days-present empty on ~every row while
   // working-days VARIES per student, where a real export carries one batch-level figure - they
   // are the signature of columns that have slipped.
-  const dpEmpty = parsed.rows.filter((r) => r.total_days_present == null).length;
-  const wdDistinct = [...new Set(parsed.rows.map((r) => r.total_working_days).filter((v) => v != null))];
-  const columnShiftSuspected = dpEmpty >= Math.ceil(parsed.rows.length * 0.9) && wdDistinct.length > 2;
+  // -155: the signature moved to lib (shiftSignature) so the health screen and the ID-re-match
+  // read the SAME test instead of growing near-copies - the drift that cost 55 portal IDs.
+  const sig = shiftSignature(parsed.rows);
+  const dpEmpty = sig.days_present_empty;
+  const wdDistinct = sig.distinct_working_days;
+  const columnShiftSuspected = sig.suspected;
   const acceptShift = form.get("accept_column_shift") === "1";
 
   // The portal stamps the TC code into "Org Name", so the centre is usually self-evident; the

@@ -8,6 +8,7 @@ import {
 import { audit, auditDiff } from "@/lib/audit";
 import { currentStageOf } from "@/lib/candidate-journey";
 import { getDefaults } from "@/lib/defaults";
+import { normalizeCan } from "@/lib/govt-attendance";
 import { HttpError, isScoped } from "@/lib/authz";
 import type { SessionUser } from "@/auth";
 
@@ -1437,6 +1438,7 @@ export async function upsertClosureChecked(batchId: string, patch: Record<string
   let closure = await Closure.findOne({ batch: batchId });
   if (!closure) closure = new Closure({ batch: batchId });
 
+
   const perCandidate = await batchUsesPerCandidateResults(batchId);
   if (perCandidate) {
     // Rule 42: once rows exist the aggregates are derived. Silently drop hand-typed values
@@ -1448,6 +1450,30 @@ export async function upsertClosureChecked(batchId: string, patch: Record<string
       const c = await assessmentCompleteness(batchId);
       if (!c.complete) {
         throw new HttpError(409, `Rule 43: ${c.total - c.final} candidate(s) still have no final result — ${c.pending.map((p) => p.name).filter(Boolean).slice(0, 5).join(", ")}`);
+      }
+    }
+    // -155 (Umesh, 20/08): "ye bas unke paas mandatory hoga na jo already enrolled hai" - the
+    // portal Candidate ID becomes mandatory exactly where it is indispensable: the government
+    // issues no certificate without the CAN. Enrolment stays open (a candidate legitimately
+    // exists here before the portal registers them).
+    //
+    // PER-CANDIDATE MODE ONLY, and the first draft learned why the hard way: it sat above both
+    // modes and broke the product's own seed script, which records a LEGACY batch-level closure
+    // (hand-typed appeared/passed from paper records). A pre-portal paper batch cannot be asked
+    // for portal IDs that never existed - demanding them would make legacy entry impossible, not
+    // safer. This is a deliberate narrowing of the F-010 rule-in-one-branch lesson: the gate's
+    // subject is the GOVERNMENT WORKFLOW, and only per-candidate batches are in it.
+    // Placed AHEAD of Rule 46 so the operator hears the actionable message first.
+    // TRANSITION only: -112 established that re-stating a value derivation already wrote is a
+    // no-op on a frozen batch, and the wall caught this gate breaking that - a re-statement of
+    // certification Completed must not suddenly demand IDs the record was closed without.
+    if (patch.certification_status === "Completed" && closure.certification_status !== "Completed") {
+      const enrolledMembers = await BatchMember.find({ batch: batchId, left_on: null, enrollment_status: "Completed" })
+        .populate("candidate", "name sidh_candidate_id").lean<any[]>();
+      const noCan = enrolledMembers.filter((m) => m.candidate && !normalizeCan(m.candidate.sidh_candidate_id));
+      if (noCan.length) {
+        throw new HttpError(409,
+          `${noCan.length} enrolled student(s) have no portal Candidate ID, and the government issues no certificate without one: ${noCan.map((m) => m.candidate?.name).filter(Boolean).slice(0, 5).join(", ")}${noCan.length > 5 ? "…" : ""}. Fix it from Candidates → Portal ID health (a misfiled or unattached ID may already be in the system), or set the ID on each candidate's card.`);
       }
     }
     // Rules 45/46

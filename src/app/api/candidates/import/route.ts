@@ -3,11 +3,29 @@ import * as XLSX from "xlsx";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
-import { Candidate, EDUCATION_LEVEL, Location, Program } from "@/models";
+import { Candidate, EDUCATION_LEVEL, Location, Program, SIDH_STATUS } from "@/models";
 import { parseSheetDate } from "@/lib/rules";
+import { CANDIDATE_IMPORT_FIELDS } from "@/lib/field-catalog";
 import { audit } from "@/lib/audit";
 import { findDuplicateCandidates, normalizePhone } from "@/lib/duplicates";
 import { canonicalPhone } from "@/lib/validate";
+
+// -154 (QA-424, REQ-385): the SET of importable fields comes from the catalog; the HANDLING stays
+// deliberate. Deriving behaviour from a type would have quietly changed how existing fields are
+// coerced (gender is "enum" in the catalog and has always been written as free text here), so the
+// two are kept apart: the catalog decides WHAT may be mapped, these sets decide HOW, and any field
+// the catalog offers that no branch handles is REPORTED rather than dropped (QA-426).
+const TEXT_IMPORT_FIELDS = new Set(
+  CANDIDATE_IMPORT_FIELDS.filter((f) => f.type === "text" || f.type === "phone" || f.type === "enum")
+    .map((f) => f.key)
+    .filter((k) => k !== "education" && k !== "sidh_status"), // these two are coerced against their enum below
+);
+const HANDLED_IMPORT_FIELDS = new Set<string>([
+  ...TEXT_IMPORT_FIELDS,
+  "dob", "last_training_date",          // parsed by parseSheetDate
+  "education", "sidh_status",           // coerced against their enum
+  "interested_programs", "interested_locations", // resolved by name
+]);
 
 // Excel import: upload → map → preview → confirm (screen spec).
 // POST multipart: file, location, program, mapping (JSON {excelCol: name|phone|alt_phone|gender|source}), confirm ("1" to write)
@@ -53,9 +71,26 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // a spelling we don't recognise stays null and is REPORTED, never guessed.
   // Interest fields (comma-separated centre / job-role NAMES) resolve the same way.
   const eduUnmatched: string[] = [];
+  const sidhStatusUnmatched: string[] = [];
   const interestUnmatched: string[] = [];
   // QA-097: a date the parser cannot read is REPORTED against its row, never dropped.
   const dateUnparseable: string[] = [];
+  // -154 (QA-415 / QA-426, REQ-379): a mapped field this writer cannot handle used to be dropped in
+  // silence - not written, and not captured into custom_fields either, because a KNOWN field never
+  // reaches the unknown-column path. sidh_candidate_id was the live instance: the operator could
+  // fill the column correctly and lose it without a word, which is the worst of the three outcomes
+  // because it looks like success.
+  const unhandledFields: string[] = [];
+  // -154 (Umesh: "blank ko accept hi kyun kar raha hai, it should ask"). Requiring a value would be
+  // wrong - sidh_status defaults to "Not Registered" because a candidate exists in the ERP BEFORE
+  // the government portal registers them, so a fresh roster legitimately carries no portal ID at
+  // all; demanding one would block every normal import. But he is right about the other half: if
+  // the operator MAPPED a column and the cells are blank, that is worth saying out loud. It is the
+  // shape of a mis-aligned column, a stale sheet, or a partial file - which is exactly how 55
+  // portal IDs went missing. So: never blocked, always reported, per mapped column, for EVERY
+  // field rather than a special case for the one that hurt (a column mapped to phone that comes
+  // back 100% blank is the same defect wearing a different name).
+  const blankByField: Record<string, number> = {};
   const needsInterest = Object.values(mapping).some((f) => ["interested_programs", "interested_locations"].includes(f));
   const progByName = new Map<string, any>();
   const locByName = new Map<string, any>();
@@ -82,7 +117,19 @@ export const POST = apiHandler(async (req: NextRequest) => {
     .map((r, rowIdx) => {
       const c: Record<string, unknown> = { location, program, lifecycle_status: "Unassigned", created_by: user.id };
       for (const [col, field] of Object.entries(mapping)) {
-        if (["name", "phone", "alt_phone", "email", "gender", "source", "id_reference"].includes(field)) c[field] = String(r[col] ?? "").trim();
+        // -154 (QA-415, S1 QA-414): sidh_candidate_id joins the plain-text fields. It is the field
+        // the government attendance matcher AND the certificate matcher join on, and this door -
+        // which is how rosters actually arrive - was the one door that would not write it.
+        if (TEXT_IMPORT_FIELDS.has(field)) {
+          // -154 (QA-417): an EMPTY cell must not become an empty STRING. The new unique index on
+          // sidh_candidate_id is partial on $type: "string", and "" is a string - so two rows with
+          // a blank Candidate ID column would collide and the second insert would be refused. A
+          // blank cell means "not known", which is null, not "". True of every text field here;
+          // sidh_candidate_id is only the one where it now bites.
+          const v = String(r[col] ?? "").trim();
+          if (v) c[field] = v;
+          else blankByField[field] = (blankByField[field] ?? 0) + 1;
+        }
         if (["dob", "last_training_date"].includes(field) && r[col] !== "" && r[col] != null) {
           // QA-097/098: DD-MM-YYYY (the template's own format), ISO and Excel serials all
           // parse; anything else is named by row — new Date() read "05-06-2001" as May 5th
@@ -97,6 +144,15 @@ export const POST = apiHandler(async (req: NextRequest) => {
           if (match) c.education = match;
           else if (raw) eduUnmatched.push(raw);
         }
+        // -154: offered by the catalog, so it is written rather than dropped (REQ-379). Coerced
+        // against the enum exactly as education is - an unrecognised value is REPORTED, never
+        // guessed at, because this field says whether the government has registered a student.
+        if (field === "sidh_status" && r[col]) {
+          const raw = String(r[col]).trim();
+          const match = SIDH_STATUS.find((e) => e.toLowerCase() === raw.toLowerCase());
+          if (match) c.sidh_status = match;
+          else if (raw) sidhStatusUnmatched.push(raw);
+        }
         if (field === "interested_programs" && r[col]) {
           const ids = resolveNames(String(r[col]), progByName);
           if (ids.length) c.interested_programs = ids;
@@ -105,6 +161,9 @@ export const POST = apiHandler(async (req: NextRequest) => {
           const ids = resolveNames(String(r[col]), locByName);
           if (ids.length) c.interested_locations = ids;
         }
+        // -154 (QA-426, REQ-379): the catalog offers it, so SOMETHING here must handle it. If
+        // nothing did, say so - never accept and discard.
+        if (field && !HANDLED_IMPORT_FIELDS.has(field)) unhandledFields.push(field);
       }
       if (acceptUnknown && unknownCols.length) {
         const cf: Record<string, string> = {};
@@ -178,6 +237,14 @@ export const POST = apiHandler(async (req: NextRequest) => {
       template_rows_skipped: templateRows.slice(0, 10), template_rows_skipped_count: templateRows.length,
       duplicates: duplicates.slice(0, 25), duplicate_count: duplicates.length,
       education_unmatched: [...new Set(eduUnmatched)].slice(0, 25),
+      // -154 (QA-426): a mapped destination nothing wrote. Surfaced on the PREVIEW so it is seen
+      // before the import runs, not discovered later by a count that reads wrong.
+      unhandled_fields: [...new Set(unhandledFields)],
+      // per mapped column, how many rows had nothing in it - so a column mapped to the wrong
+      // header shows up here as "all of them" instead of importing silently.
+      blank_by_field: blankByField,
+      row_count: rows.length,
+      sidh_status_unmatched: [...new Set(sidhStatusUnmatched)].slice(0, 25),
       interest_unmatched: [...new Set(interestUnmatched)].slice(0, 25),
       date_unparseable: dateUnparseable.slice(0, 25), date_unparseable_count: dateUnparseable.length,
       phone_invalid: phoneInvalid.slice(0, 25), phone_invalid_count: phoneInvalid.length,
@@ -189,5 +256,5 @@ export const POST = apiHandler(async (req: NextRequest) => {
   }
   const docs = await Candidate.insertMany(candidates);
   await audit({ entity: "Candidate", entityId: docs[0]?._id ?? location, field: "import", newValue: `${docs.length} imported, ${duplicates.length} flagged as possible duplicates${dateUnparseable.length ? `, ${dateUnparseable.length} unreadable dates` : ""}${phoneInvalid.length ? `, ${phoneInvalid.length} un-normalizable phones` : ""}${!acceptUnknown && unknownCols.length ? `, ${unknownCols.length} column(s) ignored: ${unknownCols.join(", ")}` : ""}`, actor: user.id });
-  return NextResponse.json({ imported: docs.length, skipped: rows.length - candidates.length, duplicate_count: duplicates.length, date_unparseable: dateUnparseable.slice(0, 25), date_unparseable_count: dateUnparseable.length, phone_invalid: phoneInvalid.slice(0, 25), phone_invalid_count: phoneInvalid.length, ignored_columns: acceptUnknown ? [] : unknownCols }, { status: 201 });
+  return NextResponse.json({ imported: docs.length, skipped: rows.length - candidates.length, duplicate_count: duplicates.length, date_unparseable: dateUnparseable.slice(0, 25), date_unparseable_count: dateUnparseable.length, phone_invalid: phoneInvalid.slice(0, 25), phone_invalid_count: phoneInvalid.length, ignored_columns: acceptUnknown ? [] : unknownCols, unhandled_fields: [...new Set(unhandledFields)], sidh_status_unmatched: [...new Set(sidhStatusUnmatched)].slice(0, 25), blank_by_field: blankByField }, { status: 201 });
 });

@@ -436,6 +436,21 @@ const CandidateSchema = new Schema({
   custom_fields: { type: Schema.Types.Mixed, default: undefined },
 }, { timestamps: true });
 
+// -154 (QA-417): one portal ID belongs to at most one candidate, enforced by the DATABASE and not
+// by whoever writes next. sidh_candidate_id is the join key for BOTH the government attendance
+// export and the certificate matcher, so a duplicate silently sends one student's hours - and
+// later their certificate - to another person.
+//
+// partialFilterExpression on $type, NOT sparse: true. That is the shape this codebase already
+// trusts for exactly this problem (TrainerSchema tr_id, CandidateResultSchema certificate_no) -
+// a sparse unique index still collides on the SECOND null in some server versions, while a
+// partial filter simply does not index a document that has no string there.
+//
+// EMPTY STRING IS THE HOLE THIS LEAVES: "" is a string, so two candidates holding "" would
+// collide and the second write would be refused. Every writer must store undefined/null, never
+// "" - which is why the import writer trims and drops empties rather than writing a blank.
+CandidateSchema.index({ sidh_candidate_id: 1 }, { unique: true, partialFilterExpression: { sidh_candidate_id: { $type: "string" } } });
+
 // ---------- Batch ----------
 const BatchSchema = new Schema({
   code: { type: String, required: true, unique: true },

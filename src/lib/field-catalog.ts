@@ -107,7 +107,18 @@ export const FIELD_CATALOG: Record<"Candidate" | "Trainer" | "Location", FieldSp
     { key: "education", label: "Education", type: "enum", enum: ["Below 10th", "10th Pass", "12th Pass", "Graduate", "Post Graduate"], aliases: ["education", "qualification", "educational qualification", "highest qualification"] },
     { key: "source", label: "Source", type: "text", aliases: ["source", "mobiliser", "campaign", "reference"] },
     { key: "sidh_status", label: "SIDH status", type: "enum", enum: ["Not Registered", "Link Sent", "Registered", "Registration Failed"], aliases: ["sidh status", "enrolled status", "enrollment status", "registration status"] },
-    { key: "sidh_candidate_id", label: "Portal candidate ID", type: "text", aliases: ["candidate id", "portal candidate id", "can id", "sidh id"] },
+    { key: "sidh_candidate_id", label: "Portal candidate ID (SIDH/NCVET)", type: "text", aliases: ["candidate id", "portal candidate id", "can id", "sidh id"] },
+    // -154 (QA-424): these five have been accepted by the Excel import since it was written and
+    // were never in the catalog, so the catalog and the import screen each held half the truth.
+    // They are all real fields on CandidateSchema.
+    { key: "email", label: "Email", type: "text", aliases: ["email", "email id", "mail", "e mail"] },
+    // The label carries the warning because the ambiguity is the whole defect: QA-414 measured 55
+    // live candidates whose PORTAL id landed here, because this was the closest-looking option on
+    // a screen that did not offer the right one.
+    { key: "id_reference", label: "Govt ID reference (NOT the portal candidate ID)", type: "text", aliases: ["id reference", "govt id", "government id", "aadhaar reference", "id proof"] },
+    { key: "last_training_date", label: "Last training date", type: "date", aliases: ["last training date", "last training", "previous training date"] },
+    { key: "interested_programs", label: "Interested programmes (comma-separated)", type: "list", aliases: ["interested programs", "interested programmes", "preferred course", "course interested"] },
+    { key: "interested_locations", label: "Interested centres (comma-separated)", type: "list", aliases: ["interested locations", "interested centres", "preferred centre", "preferred location"] },
     { key: "location", label: "Location (centre)", type: "fk_location", required: true, aliases: ["location", "interested location", "centre", "center", "institution", "district"] },
     { key: "program", label: "Program (job role)", type: "fk_program", required: true, aliases: ["program", "job role", "course", "trade", "skill"] },
   ],
@@ -147,6 +158,26 @@ export const FIELD_CATALOG: Record<"Candidate" | "Trainer" | "Location", FieldSp
 };
 
 export type CatalogEntity = keyof typeof FIELD_CATALOG;
+
+/**
+ * -154 (QA-414 S1 / QA-424, REQ-380 + REQ-385): the destinations the CANDIDATE EXCEL IMPORT offers
+ * per column - and the ONE list both the mapping screen and the import writer read.
+ *
+ * Before this there were FIVE hand-maintained copies of "the fields a candidate has": this catalog,
+ * the mapping dropdown (candidates/page.tsx), the import writer (candidates/import/route.ts), and
+ * the two drawer routes. The dropdown and the catalog had drifted in BOTH directions, and the cost
+ * was measured: the dropdown never offered sidh_candidate_id, so 55 live candidates hold their
+ * portal ID in id_reference - the nearest-looking option the screen did offer - while the field the
+ * government attendance matcher and the certificate matcher actually read sits empty.
+ *
+ * WHY location AND program ARE EXCLUDED, which is not an oversight: on this screen they are chosen
+ * ONCE FOR THE WHOLE FILE (importState.location / importState.program, posted as form fields and
+ * applied to every row), so offering them per column would invite a second, conflicting answer to a
+ * question already asked. The sheet-sync path DOES map them per column and reads FIELD_CATALOG
+ * directly - which is why this narrowing lives here, named, rather than inside the catalog itself.
+ */
+export const CANDIDATE_IMPORT_FIELDS: FieldSpec[] = FIELD_CATALOG.Candidate
+  .filter((f) => f.type !== "fk_location" && f.type !== "fk_program");
 
 export function fieldSpec(entity: CatalogEntity, key: string): FieldSpec | undefined {
   return FIELD_CATALOG[entity].find((f) => f.key === key);

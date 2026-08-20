@@ -1439,6 +1439,10 @@ ok("cert bulk: certificate_file landed on the result row", /\/api\/files\//.test
 // same CAN id again while file exists + batch still Closing → upsert path allows overwrite
 // pre-completion; the freeze is tested after Completed below.
 
+// -155: certification now requires every enrolled student's portal Candidate ID (the government
+// issues no certificate without one). The R-roster's CANs match the certificate filenames this
+// flow already uploads, so the two stay one story.
+for (const [i, c] of b4Cands.entries()) await req("PATCH", `/api/candidates/${c._id}`, { sidh_candidate_id: `CAN_77${stamp.slice(-4)}${i + 1}` }, 200);
 await req("PUT", `/api/batches/${b4._id}/closure`, { certification_status: "Completed", certification_date: today }, 200);
 await req("PUT", `/api/batches/${b4._id}/closure`, { ready_for_invoice: true }, 200);
 ok("invoice linkage unchanged by per-candidate mode", (await req("GET", `/api/batches/${b4._id}/closure`)).data.invoice?.status === "Ready");
@@ -1543,7 +1547,8 @@ ok("cert bulk: Completed + existing file → frozen (DEC-6)",
 // case: batch long done, certificates arrive later as a folder) — allowed, once.
 const b5 = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, room: room._id, planned_start: today, target_size: 2 }, 201)).data.item;
 const c5a = (await req("POST", "/api/candidates", { name: `LateCert A ${stamp}`, phone: `677${stamp}7`, location: loc._id, program: prog._id, sidh_candidate_id: `CAN88${stamp.slice(-4)}` }, 201)).data.item;
-const c5b = (await req("POST", "/api/candidates", { name: `LateCert B ${stamp}`, phone: `677${stamp}8`, location: loc._id, program: prog._id }, 201)).data.item;
+// -155: a CAN at creation, because certification later in this flow now requires it.
+const c5b = (await req("POST", "/api/candidates", { name: `LateCert B ${stamp}`, phone: `677${stamp}8`, location: loc._id, program: prog._id, sidh_candidate_id: `CAN89${stamp.slice(-4)}` }, 201)).data.item;
 const m5 = [];
 for (const c of [c5a, c5b]) m5.push((await req("POST", `/api/batches/${b5._id}/members`, { candidate: c._id }, 201)).data.item);
 for (const m of m5) await req("PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);

@@ -1355,6 +1355,86 @@ ok("and removed", removed.status === 200, JSON.stringify(removed.data).slice(0, 
 ok("removal is real", (await req(admin, "GET", `/api/sync-sources/${srcId}`)).status === 404);
 
 
+// ---------------------------------------------------------------- -155: the QA-414 recovery, end to end
+// The whole Sachin Kumar story in miniature: a portal row arrives for a CAN the ERP does not hold,
+// the CAN turns out to be sitting in id_reference on a candidate, the health screen recovers it,
+// and the row then attaches by EXACT ID EQUALITY - never by name (QA-085 stands throughout).
+{
+  const orphanCan = `CAN_${STAMP}0040`;
+  const hdr = csvText.split(/\r?\n/)[0];
+  const orphanCsv = [hdr, `1,TESTORG Gurugram -${TC},97000001,${NAME} Orphan,${orphanCan},Trainee,Trainee,11,4,4,0,44:30:00,0,10:00:00,`].join("\n");
+  const orphanImp = await upload(admin, { file: new File([Buffer.from(orphanCsv)], "orphan.csv", { type: "text/csv" }), confirm: "1", period_label: `orphan ${STAMP}` });
+  const orphanRow = ((await req(admin, "GET", `/api/govt-attendance/${orphanImp.data._id}`)).data.rows ?? [])[0];
+  ok("-155 fixture: a row for a CAN the ERP does not hold imports Unmatched",
+    orphanImp.status === 201 && orphanRow?.match_status === "Unmatched", JSON.stringify({ s: orphanImp.status, m: orphanRow?.match_status }));
+
+  // The candidate exists - with the CAN in the WRONG FIELD, exactly like the live 55.
+  const rec = (await req(admin, "POST", "/api/candidates", { name: `${NAME} Recover`, phone: `9${STAMP.slice(1)}1900`, location: loc._id, program: program._id, id_reference: orphanCan }, 201)).data.item;
+
+  const plan1 = (await req(admin, "GET", "/api/candidates/portal-id-health", undefined, 200)).data;
+  ok("-155: before the copy, the row is NOT rematchable (no candidate owns the CAN yet)",
+    !(plan1.rematchable ?? []).some((x) => String(x.row) === String(orphanRow._id))
+      && (plan1.misfiled ?? []).some((x) => String(x.candidate) === String(rec._id)),
+    JSON.stringify({ rematchable: (plan1.rematchable ?? []).length }));
+
+  await req(admin, "POST", "/api/candidates/portal-id-health", { copy: [rec._id] }, 200);
+  const plan2 = (await req(admin, "GET", "/api/candidates/portal-id-health", undefined, 200)).data;
+  ok("-155: after the copy, the SAME row becomes attachable by exact ID equality",
+    (plan2.rematchable ?? []).some((x) => String(x.row) === String(orphanRow._id) && String(x.candidate) === String(rec._id)),
+    JSON.stringify((plan2.rematchable ?? []).map((x) => x.can)));
+
+  const rem = await req(admin, "POST", "/api/candidates/portal-id-health", { rematch: [orphanRow._id] });
+  const rowAfter = ((await req(admin, "GET", `/api/govt-attendance/${orphanImp.data._id}`)).data.rows ?? [])[0];
+  ok("-155: the re-match attaches by ID, says so, and never claims a name decided it",
+    rem.data.rematched === 1 && rowAfter?.match_status === "Matched" && rowAfter?.match_by === "Portal ID (re-match)"
+      && String(rowAfter?.candidate?._id ?? rowAfter?.candidate) === String(rec._id),
+    JSON.stringify({ rem: rem.data, by: rowAfter?.match_by }));
+
+  // The exclusion that keeps the corrupt 20-08 shape out of this door: a shift-suspected import's
+  // rows are attachable by ID but must be HELD, not attached - a corrupt file's row must not
+  // become anybody's newest figure through a recovery screen.
+  const shiftCan = `CAN_${STAMP}0050`;
+  const shiftCsv = [hdr,
+    `1,TESTORG Gurugram -${TC},96000001,${NAME} ShiftOrphan,${shiftCan},Trainee,Trainee,8,,0,0,52.15,0,5.2,`,
+    `2,TESTORG Gurugram -${TC},96000002,${NAME} ShiftOther,,Trainee,Trainee,10,,0,0,44.02,0,4.4,`,
+    `3,TESTORG Gurugram -${TC},96000003,${NAME} ShiftThird,,Trainee,Trainee,12,,0,0,31.90,0,3.1,`,
+  ].join("\n");
+  const shiftImp = await upload(admin, { file: new File([Buffer.from(shiftCsv)], "shift-orphan.csv", { type: "text/csv" }), confirm: "1", accept_column_shift: "1", period_label: `shift-orphan ${STAMP}` });
+  const rec2 = (await req(admin, "POST", "/api/candidates", { name: `${NAME} Recover2`, phone: `9${STAMP.slice(1)}1901`, location: loc._id, program: program._id, id_reference: shiftCan }, 201)).data.item;
+  await req(admin, "POST", "/api/candidates/portal-id-health", { copy: [rec2._id] }, 200);
+  const plan3 = (await req(admin, "GET", "/api/candidates/portal-id-health", undefined, 200)).data;
+  const shiftRowId = ((await req(admin, "GET", `/api/govt-attendance/${shiftImp.data._id}`)).data.rows ?? []).find((r) => r.govt_candidate_id === shiftCan)?._id;
+  ok("-155: a row from a shift-suspected import is HELD, never offered for re-match",
+    (plan3.skipped_suspect_import ?? []).some((x) => String(x.row) === String(shiftRowId))
+      && !(plan3.rematchable ?? []).some((x) => String(x.row) === String(shiftRowId)),
+    JSON.stringify({ skipped: (plan3.skipped_suspect_import ?? []).length }));
+  const remRefused = await req(admin, "POST", "/api/candidates/portal-id-health", { rematch: [shiftRowId] });
+  ok("-155: ...and forcing it through POST is refused on the re-verify",
+    remRefused.status === 200 && remRefused.data.rematched === 0 && (remRefused.data.refused ?? []).length === 1,
+    JSON.stringify(remRefused.data));
+
+  // -155 (Umesh, 20/08): the portal ID becomes MANDATORY at certification, not at enrolment.
+  // BUILD the failing case rather than lean on the roster (the -153 anti-vacuity lesson: the
+  // first draft assumed a Twin still lacked a CAN, and by this point in the suite the resolve
+  // flows have stamped both). Pre-fix this PUT fails with the Rule 43/46 wording; the
+  // discriminator is the sentence naming the portal Candidate ID and the health screen.
+  {
+    const noCanCand = (await req(admin, "POST", "/api/candidates", { name: `${NAME} NoCan`, phone: `9${STAMP.slice(1)}1903`, location: loc._id, program: program._id }, 201)).data.item;
+    const noCanMem = (await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: noCanCand._id }, 201)).data.item;
+    await req(admin, "PATCH", `/api/members/${noCanMem._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+    const gate = await req(admin, "PUT", `/api/batches/${batch._id}/closure`, { certification_status: "Completed" });
+    ok("-155: certification cannot complete while an enrolled student has no portal Candidate ID",
+      gate.status === 409 && /portal Candidate ID/i.test(String(gate.data.error ?? "")) && /Portal ID health/i.test(String(gate.data.error ?? "")) && String(gate.data.error ?? "").includes(`${NAME} NoCan`),
+      JSON.stringify({ s: gate.status, e: String(gate.data.error ?? "").slice(0, 160) }));
+    await req(admin, "DELETE", `/api/members/${noCanMem._id}`, { reason: "-155 gate pin fixture" });
+    await req(admin, "DELETE", `/api/candidates/${noCanCand._id}`);
+  }
+
+  // leave no residue that later blocks would trip over
+  await req(admin, "DELETE", `/api/govt-attendance/${orphanImp.data._id}`);
+  await req(admin, "DELETE", `/api/govt-attendance/${shiftImp.data._id}`);
+}
+
 // ---------------------------------------------------------------- -154 (QA-438, S1): the shifted-column guard
 // Measured on live 20-08, column against column: a 24-row export whose days-attended figures sat
 // in the WORKING-DAYS field (days-present null on every row, hours in decimals where every genuine

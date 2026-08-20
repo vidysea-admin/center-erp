@@ -283,6 +283,36 @@ export async function unresolvedPortalRowsByName(scope: { batchId: unknown; loca
   return byName;
 }
 
+/**
+ * -155 (QA-442 groundwork / census rule): ONE definition of the shifted-column signature. The
+ * import guard (-154), the portal-ID health screen and the ID-re-match all have to answer "is
+ * this import trustworthy?", and three hand-typed copies of the test is exactly how the
+ * catalog/dropdown/writer trio drifted (QA-424). Both halves required, deliberately: a genuinely
+ * empty days-present column happens (a brand-new batch), and a file spanning two batches honestly
+ * carries two working-day figures - either alone must not trip it.
+ */
+export function shiftSignature(rows: Array<{ total_days_present?: number | null; total_working_days?: number | null }>): {
+  suspected: boolean; days_present_empty: number; distinct_working_days: number[];
+} {
+  const daysPresentEmpty = rows.filter((r) => r.total_days_present == null).length;
+  const distinct = [...new Set(rows.map((r) => r.total_working_days).filter((v): v is number => v != null))];
+  return {
+    suspected: rows.length > 0 && daysPresentEmpty >= Math.ceil(rows.length * 0.9) && distinct.length > 2,
+    days_present_empty: daysPresentEmpty,
+    distinct_working_days: distinct,
+  };
+}
+
+/**
+ * -155: ONE normalisation of the portal CAN id. link-portal-ids grew its own local copy first
+ * (-108); the health screen and the re-match need the identical test, and a second regex that is
+ * almost the same is how two doors disagree about one identity.
+ */
+export const normalizeCan = (s: unknown): string | null => {
+  const m = /CAN[\s_-]*(\d+)/i.exec(String(s ?? ""));
+  return m ? "CAN" + m[1] : null;
+};
+
 export type MatchStatus = "Matched" | "Ambiguous" | "Unmatched";
 // -146 (QA-316): `GovtRow &` here, while matchGovtRows now honestly accepts Partial<GovtRow>[],
 // would have made the compiler reject its own function's output. A matched row carries whatever the

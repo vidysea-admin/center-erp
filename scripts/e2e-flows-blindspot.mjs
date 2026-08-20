@@ -512,5 +512,115 @@ console.log("\n--- FL10: batch import (QA-028) — centres/roles by name, unknow
   await req(admin, "POST", `/api/batches/${bCust?._id}/transition`, { target: "Cancelled", reason: "T3 fixture cleanup" }, 200);
 }
 
+console.log("\n--- -155 (QA-414 S1 / 415 / 424 / 425 / 426): the portal ID lands, over the catalog ---");
+{
+  // 55 live candidates hold their portal ID in id_reference because the mapping screen never
+  // offered sidh_candidate_id and the writer would have dropped it anyway. These pins walk the
+  // whole door: offered -> written -> readable, plus the refusals that make silence impossible.
+  const can = `CAN_${stamp}77001`;
+  const rows = [{
+    "Student Name": `PI Land ${stamp}`, "Mobile": "9822200001", "Candidate ID": can,
+    "Email": `pi${stamp}@t.local`, "Reg Status": "Registered", "Edu": "12th Pass",
+  }];
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+  const file = new File([XLSX.write(wb, { type: "buffer", bookType: "xlsx" })], "portal-id.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const mapping = JSON.stringify({
+    "Student Name": "name", "Mobile": "phone", "Candidate ID": "sidh_candidate_id",
+    "Email": "email", "Reg Status": "sidh_status", "Edu": "education",
+  });
+
+  const conf = await multipart(admin, "/api/candidates/import", { file, location: loc._id, program: prog._id, mapping, confirm: "1" });
+  // FIXTURE, not a regression pin - pre-fix this also returns 201 (the unknown field is silently
+  // dropped, which IS the defect); the discriminator is the LANDS pin right below.
+  ok("-155 (QA-414/415) fixture: a mapped Candidate ID column imports at all", conf.status === 201 && conf.data.imported === 1, JSON.stringify({ s: conf.status, d: conf.data }));
+  const landed = ((await req(admin, "GET", `/api/candidates?q=${encodeURIComponent(can)}&limit=5`, undefined, 200)).data.items ?? [])[0];
+  const detail = landed ? (await req(admin, "GET", `/api/candidates/${landed._id}`, undefined, 200)).data.item : null;
+  ok("-155 (QA-414 S1): the value LANDS in sidh_candidate_id - the field both government matchers join on",
+    detail?.sidh_candidate_id === can, JSON.stringify({ sidh: detail?.sidh_candidate_id, id_ref: detail?.id_reference }));
+  ok("-155 (QA-425): the other mapped fields round-trip through the same catalog-driven door",
+    detail?.email === `pi${stamp}@t.local` && detail?.sidh_status === "Registered" && detail?.education === "12th Pass",
+    JSON.stringify({ email: detail?.email, sidh_status: detail?.sidh_status, education: detail?.education }));
+
+  // QA-426: a mapped field NO branch handles is reported, never silently dropped. sidh_link_sent_at
+  // is a real Candidate field that the import deliberately does not offer or handle.
+  const prev2 = await multipart(admin, "/api/candidates/import", {
+    file, location: loc._id, program: prog._id,
+    mapping: JSON.stringify({ "Student Name": "name", "Mobile": "phone", "Candidate ID": "sidh_link_sent_at" }),
+  }, 200);
+  ok("-155 (QA-426): a mapped-but-unhandled destination is NAMED on the preview",
+    (prev2.data.unhandled_fields ?? []).includes("sidh_link_sent_at"), JSON.stringify(prev2.data.unhandled_fields));
+
+  // Umesh ("blank ko accept hi kyun kar raha hai - it should ask"): a mapped column whose cells
+  // are EMPTY is reported per column - never blocked (a fresh roster legitimately has no CANs),
+  // never silent (an all-blank mapped column is what a mis-aligned sheet looks like).
+  const rows3 = [
+    { "Student Name": `PI Blank A ${stamp}`, "Mobile": "9822200002", "Candidate ID": "" },
+    { "Student Name": `PI Blank B ${stamp}`, "Mobile": "9822200003", "Candidate ID": "" },
+  ];
+  const ws3 = XLSX.utils.json_to_sheet(rows3);
+  const wb3 = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb3, ws3, "Sheet1");
+  const file3 = new File([XLSX.write(wb3, { type: "buffer", bookType: "xlsx" })], "blanks.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const prev3 = await multipart(admin, "/api/candidates/import", {
+    file: file3, location: loc._id, program: prog._id,
+    mapping: JSON.stringify({ "Student Name": "name", "Mobile": "phone", "Candidate ID": "sidh_candidate_id" }),
+  }, 200);
+  ok("-155: an all-blank mapped column is counted per field on the preview",
+    prev3.data.blank_by_field?.sidh_candidate_id === 2 && prev3.data.row_count === 2, JSON.stringify(prev3.data.blank_by_field));
+  const conf3 = await multipart(admin, "/api/candidates/import", { file: file3, location: loc._id, program: prog._id, mapping: JSON.stringify({ "Student Name": "name", "Mobile": "phone", "Candidate ID": "sidh_candidate_id" }), confirm: "1" }, 201);
+  // PAIRED with the blank_by_field pin above (which fails pre-fix). Pre-fix this passes for a
+  // boring reason - the field was never written at all - so it is labelled, not counted.
+  ok("-155 (QA-417 groundwork, paired): blank cells import as ABSENT, never as empty-string",
+    conf3.data.imported === 2, JSON.stringify(conf3.data));
+  const blankA = ((await req(admin, "GET", `/api/candidates?q=${encodeURIComponent(`PI Blank A ${stamp}`)}&limit=5`, undefined, 200)).data.items ?? [])[0];
+  const blankDetail = blankA ? (await req(admin, "GET", `/api/candidates/${blankA._id}`, undefined, 200)).data.item : null;
+  ok("-155 (paired): ...verified on the record itself", blankDetail != null && (blankDetail.sidh_candidate_id == null || blankDetail.sidh_candidate_id === undefined), JSON.stringify({ sidh: blankDetail?.sidh_candidate_id }));
+
+  // QA-417: one portal ID, at most one candidate - enforced by the DATABASE.
+  const dup = await req(admin, "POST", "/api/candidates", { name: `PI Dup ${stamp}`, phone: "9822200004", location: loc._id, program: prog._id, sidh_candidate_id: can });
+  ok("-155 (QA-417): a second candidate claiming the same portal ID is refused by the unique index",
+    dup.status === 409, `got ${dup.status}: ${JSON.stringify(dup.data).slice(0, 120)}`);
+}
+
+console.log("\n--- -155 (QA-427): the portal-ID health screen - see it, select it, fix it ---");
+{
+  // Seed the three fixable states deliberately.
+  const canM = `CAN_${stamp}77101`;
+  const m1 = (await req(admin, "POST", "/api/candidates", { name: `PH Misfiled ${stamp}`, phone: "9822200011", location: loc._id, program: prog._id, id_reference: canM }, 201)).data.item;
+  const m3 = (await req(admin, "POST", "/api/candidates", { name: `PH MisfiledB ${stamp}`, phone: "9822200012", location: loc._id, program: prog._id, id_reference: `CAN_${stamp}77102` }, 201)).data.item;
+  const m2 = (await req(admin, "POST", "/api/candidates", { name: `PH Empty ${stamp}`, phone: "9822200013", location: loc._id, program: prog._id, sidh_candidate_id: "" }, 201)).data.item;
+
+  const plan1 = (await req(admin, "GET", "/api/candidates/portal-id-health", undefined, 200)).data;
+  ok("-155 (QA-427): the plan finds the misfiled CAN (the 55-class) and the \"\" artefact",
+    (plan1.misfiled ?? []).some((x) => String(x.candidate) === String(m1._id))
+      && (plan1.misfiled ?? []).some((x) => String(x.candidate) === String(m3._id))
+      && (plan1.empty_strings ?? []).some((x) => String(x.candidate) === String(m2._id)),
+    JSON.stringify({ misfiled: (plan1.misfiled ?? []).length, empty: (plan1.empty_strings ?? []).length }));
+
+  // SELECTED-ONLY is the contract: fix m1 and m2, leave m3 exactly as it is.
+  const applied = await req(admin, "POST", "/api/candidates/portal-id-health", { copy: [m1._id], set_null: [m2._id] });
+  ok("-155 (QA-427): apply fixes ONLY the selected rows", applied.status === 200 && applied.data.copied === 1 && applied.data.set_null === 1, JSON.stringify(applied.data));
+  const m1After = (await req(admin, "GET", `/api/candidates/${m1._id}`, undefined, 200)).data.item;
+  const m3After = (await req(admin, "GET", `/api/candidates/${m3._id}`, undefined, 200)).data.item;
+  ok("-155 (QA-427): the copy lands in the matcher's field and id_reference is untouched",
+    m1After?.sidh_candidate_id === canM && m1After?.id_reference === canM, JSON.stringify({ sidh: m1After?.sidh_candidate_id, ref: m1After?.id_reference }));
+  ok("-155 (QA-427): the UNSELECTED row is untouched - wholesale fixes are not a thing here",
+    !m3After?.sidh_candidate_id, JSON.stringify({ sidh: m3After?.sidh_candidate_id }));
+
+  // Refusal on re-verify: give m3 a DIFFERENT id by hand, then ask the screen to copy - it must
+  // refuse rather than overwrite, because the plan is recomputed at write time.
+  await req(admin, "PATCH", `/api/candidates/${m3._id}`, { sidh_candidate_id: `CAN_${stamp}77999` }, 200);
+  const refused = await req(admin, "POST", "/api/candidates/portal-id-health", { copy: [m3._id] });
+  ok("-155 (QA-427 / REQ-381): a value that appeared since the plan was read is never overwritten",
+    refused.status === 200 && refused.data.copied === 0 && (refused.data.refused ?? []).length === 1,
+    JSON.stringify(refused.data));
+
+  // An empty selection is a mistake, not a mass-fix.
+  const empty = await req(admin, "POST", "/api/candidates/portal-id-health", {});
+  ok("-155 (QA-427): an empty selection is refused - nothing is applied wholesale", empty.status === 400, `got ${empty.status}`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

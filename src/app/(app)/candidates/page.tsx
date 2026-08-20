@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { api, offerable } from "@/lib/client";
+import { CANDIDATE_IMPORT_FIELDS } from "@/lib/field-catalog";
 import { emailError, phoneError } from "@/lib/validate";
 import { FRESH_TAGS, JOURNEY_TAGS, isFreshCandidate, freshJourneyOf as sharedFreshJourneyOf, journeyOf as sharedJourneyOf } from "@/lib/candidate-journey";
 import { Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, ShareLinkPanel, SourceCell, copyText, inputCls , Tabs} from "@/components/ui";
@@ -46,7 +47,12 @@ function CandidatesInner() {
   const [loading, setLoading] = useState(true);
   const [shareLink, setShareLink] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [drawer, setDrawer] = useState<"" | "add" | "edit" | "import" | "assign">("");
+  const [drawer, setDrawer] = useState<"" | "add" | "edit" | "import" | "assign" | "health">("");
+  // -155 (QA-427): the portal-ID health drawer. plan = the GET (writes nothing); sel = the
+  // operator's checked rows, keyed "kind:id" so one Set carries all three fixable groups.
+  const [health, setHealth] = useState<any>(null);
+  const [healthSel, setHealthSel] = useState<Set<string>>(new Set());
+  const [healthBusy, setHealthBusy] = useState(false);
   // QA-021: the drop drawer's state.
   const [dropT, setDropT] = useState<any>(null);
   const [dropForm, setDropForm] = useState<any>({});
@@ -246,6 +252,23 @@ function CandidatesInner() {
 
   // 2026-08-11: per-location public self-registration link. 2026-08-13 (Umesh): alert()
   // text can't be selected — the link now lands in a panel with a selectable input.
+  async function loadHealth() {
+    setHealth(null); setHealthSel(new Set()); setDrawer("health");
+    try { setHealth(await api("/api/candidates/portal-id-health")); }
+    catch (e: any) { setError(e.message); setDrawer(""); }
+  }
+  async function applyHealth() {
+    const body = { set_null: [] as string[], copy: [] as string[], rematch: [] as string[] };
+    for (const k of healthSel) { const [kind, id] = k.split(":"); (body as any)[kind]?.push(id); }
+    setHealthBusy(true);
+    try {
+      const res = await api("/api/candidates/portal-id-health", { method: "POST", json: body });
+      // re-read the PLAN rather than trusting the screen: refusals are the interesting part
+      setHealth({ ...(await api("/api/candidates/portal-id-health")), last_apply: res });
+      setHealthSel(new Set()); load();
+    } catch (e: any) { setError(e.message); }
+    setHealthBusy(false);
+  }
   async function shareRegistrationLink() {
     if (!fLoc) { setError("Pick a location filter first — the link is per location."); return; }
     try {
@@ -360,6 +383,8 @@ function CandidatesInner() {
             {locations.map((l) => <option key={l._id} value={l._id} title={l.name}>{l.name}</option>)}
           </select>
           <Btn kind="ghost" onClick={() => { setImportState({}); setDrawer("import"); }}>Import Excel</Btn>
+          {/* -155 (QA-427): identity data goes wrong quietly; this is where it is seen and fixed. */}
+          <Btn kind="ghost" onClick={loadHealth}>Portal ID health</Btn>
           <Btn kind="ghost" onClick={shareRegistrationLink}>Self-reg link</Btn>
           {/* 2026-08-13 (Umesh): one public door for every candidate — share it anywhere. */}
           <CopyBtn text={`${typeof window !== "undefined" ? window.location.origin : ""}${BASE_PATH}/p/me`}
@@ -824,7 +849,14 @@ function CandidatesInner() {
                     <select className={inputCls} value={importState.mapping?.[c] ?? ""} onChange={(e) => setImportState({ ...importState, mapping: { ...importState.mapping, [c]: e.target.value } })}>
                       <option value="">Ignore</option>
                       {/* F-B4: the eligibility fields (dob · education · last_training_date) are mappable now. */}
-                      {["name", "phone", "alt_phone", "email", "gender", "source", "id_reference", "dob", "education", "last_training_date", "interested_programs", "interested_locations"].map((f) => <option key={f}>{f}</option>)}
+                      {/* -154 (QA-414, S1): this list was written by hand and did not offer
+                          sidh_candidate_id at all, so a sheet column carrying the portal Candidate
+                          ID had NO correct destination and the nearest-looking option - id_reference
+                          - took it. 55 live candidates are in that state, and the field the
+                          government matcher actually reads is empty for every one of them. It comes
+                          from the catalog now (CANDIDATE_IMPORT_FIELDS), so the screen and the
+                          writer cannot drift apart again. The label is shown and the key is stored. */}
+                      {CANDIDATE_IMPORT_FIELDS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
                     </select>
                   </Field>
                 ))}
@@ -892,6 +924,26 @@ function CandidatesInner() {
                   valid values are Below 10th · 10th Pass · 12th Pass · Graduate · Post Graduate.
                 </div>
               )}
+              {/* -154 (Umesh: "blank ko accept hi kyun kar raha hai, it should ask"). A blank
+                  portal ID is legitimate - a candidate exists here before the government registers
+                  them - so this never blocks. But a column the operator MAPPED and left empty is
+                  worth saying out loud: it is what a mis-aligned column, a stale sheet or a half
+                  file looks like, and it is how 55 portal IDs were lost. Reported per column, so a
+                  phone column that comes back all-blank is caught by the same line. */}
+              {Object.entries((importState.preview?.blank_by_field ?? {}) as Record<string, number>)
+                .filter(([, n]) => n > 0)
+                .map(([field, n]) => {
+                  const total = importState.preview?.row_count ?? 0;
+                  const all = total > 0 && n >= total;
+                  return (
+                    <div key={field} className={`rounded-lg border px-3 py-2 text-xs ${all ? "border-amber-300 bg-amber-100 text-amber-900" : "border-gray-200 bg-gray-50 text-gray-700"}`}>
+                      <b>{n} of {total} rows have nothing in the column mapped to {field}.</b>{" "}
+                      {all
+                        ? "That is every row — the column is probably mapped to the wrong header, or this sheet does not carry it. Check before importing; nothing will be written for it."
+                        : "Those rows are imported without it — blank means not known, and nothing is guessed."}
+                    </div>
+                  );
+                })}
               {importState.preview?.duplicate_count > 0 && (
                 <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
                   <div className="font-medium">{importState.preview.duplicate_count} possible duplicate{importState.preview.duplicate_count > 1 ? "s" : ""} — review before importing</div>
@@ -904,6 +956,81 @@ function CandidatesInner() {
             </>
           )}
         </div>
+      </Drawer>
+
+      {/* -155 (QA-427 + the QA-414 recovery door). Umesh: "popup ya preview me aana chahiye
+          properly, jahan wo fix kar sake, aur SELECTED walo ka fix kar paaye." The groups are NOT
+          equally fixable and the layout says so: three selectable fixes, four report-only lists.
+          Every apply re-verifies server-side against the database as it is NOW. */}
+      <Drawer error={error} open={drawer === "health"} onClose={() => setDrawer("")} title="Portal ID health" wide>
+        {!health ? <p className="p-4 text-sm text-gray-400">Reading…</p> : (() => {
+          const toggle = (k: string) => setHealthSel((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
+          const allOf = (kind: string, list: any[], key: string) => setHealthSel((s) => {
+            const n = new Set(s); const keys = list.map((x) => `${kind}:${x[key]}`);
+            const every = keys.every((k) => n.has(k));
+            for (const k of keys) every ? n.delete(k) : n.add(k);
+            return n;
+          });
+          const Fix = ({ kind, list, keyName, title, note, render }: any) => (
+            <div className="rounded-lg border border-gray-200">
+              <div className="flex items-center justify-between border-b border-gray-100 bg-gray-50 px-3 py-2">
+                <b className="text-sm">{title} ({list.length})</b>
+                {list.length > 0 && <button className="text-xs font-medium text-blue-700 hover:underline" onClick={() => allOf(kind, list, keyName)}>select all / none</button>}
+              </div>
+              <p className="px-3 pt-2 text-xs text-gray-500">{note}</p>
+              {list.length === 0 ? <p className="px-3 pb-2 text-xs text-green-700">none — clean</p> : (
+                <ul className="max-h-44 overflow-y-auto p-2 text-sm">
+                  {list.map((x: any) => (
+                    <li key={String(x[keyName])} className="flex items-center gap-2 px-1 py-0.5">
+                      <input type="checkbox" checked={healthSel.has(`${kind}:${x[keyName]}`)} onChange={() => toggle(`${kind}:${x[keyName]}`)} />
+                      {render(x)}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          );
+          const Report = ({ title, note, list, render, tone = "amber" }: any) => (
+            <div className={`rounded-lg border p-3 text-xs ${tone === "red" ? "border-red-200 bg-red-50 text-red-900" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
+              <b>{title} ({list.length})</b> — {note}
+              {list.length > 0 && <ul className="mt-1 space-y-0.5">{list.map((x: any, i: number) => <li key={i}>• {render(x)}</li>)}</ul>}
+            </div>
+          );
+          return (
+            <div className="space-y-3">
+              {health.last_apply && (
+                <div className="rounded-lg border border-green-200 bg-green-50 p-2 text-xs text-green-800">
+                  Applied: {health.last_apply.set_null} blanked · {health.last_apply.copied} copied · {health.last_apply.rematched} re-matched.
+                  {health.last_apply.refused?.length > 0 && <> Refused (re-verified at write time): {health.last_apply.refused.join(" · ")}</>}
+                </div>
+              )}
+              <Fix kind="copy" list={health.misfiled ?? []} keyName="candidate" title="Portal ID sitting in the wrong field"
+                note={'A CAN-shaped value in "Govt ID reference" while the real portal-ID field is empty — the import screen sent it there before -154. Copying is safe: an existing value is never overwritten, and a disagreeing row is refused.'}
+                render={(x: any) => <span><b>{x.name}</b> {x.phone && <span className="text-gray-500">· {x.phone}</span>} → <span className="font-mono">{x.can}</span></span>} />
+              <Fix kind="rematch" list={health.rematchable ?? []} keyName="row" title="Attendance rows attachable by exact portal ID"
+                note={"Unattached portal rows whose CAN matches exactly ONE candidate. This is identity equality, not a name guess — and rows from a shift-suspected import are excluded (listed below, never attachable here)."}
+                render={(x: any) => <span><b>{x.name}</b> <span className="font-mono">{x.can}</span> → {x.candidate_name} <span className="text-gray-500">({x.from}{x.hours_raw ? ` · ${x.hours_raw}` : ""})</span></span>} />
+              <Fix kind="set_null" list={health.empty_strings ?? []} keyName="candidate" title={'Empty-string ("") artefacts'}
+                note={'"" is a string, so under the uniqueness rule two of these would collide. Blank means not-known, which is null.'}
+                render={(x: any) => <span><b>{x.name}</b> {x.phone && <span className="text-gray-500">· {x.phone}</span>}</span>} />
+              <Report tone="red" title="One portal ID on two candidates" list={health.duplicates ?? []}
+                note="the machine must not choose whose identity it is — open each candidate and clear the wrong one"
+                render={(d: any) => <span><span className="font-mono">{d.id}</span>: {d.members.map((m: any) => `${m.name}${m.phone ? ` (${m.phone})` : ""}`).join(" vs ")}</span>} />
+              <Report tone="red" title="id_reference disagrees with the ID on record" list={health.disagreements ?? []}
+                note="two different CANs for one person — a human must look; nothing here touches them"
+                render={(d: any) => <span><b>{d.name}</b>: on record <span className="font-mono">{d.on_record}</span> vs id_reference <span className="font-mono">{d.in_id_reference}</span></span>} />
+              <Report title="Rows held back — their import looks column-shifted" list={health.skipped_suspect_import ?? []}
+                note="attachable by ID, but the -154 signature says the file's columns slipped; quarantine or confirm the import first"
+                render={(x: any) => <span><b>{x.name}</b> <span className="font-mono">{x.can}</span> ({x.from})</span>} />
+              <Report title="Enrolled with no portal ID anywhere" list={health.enrolled_no_can ?? []}
+                note="the government issues the CAN; it cannot be invented here — this is the list to take to the portal"
+                render={(x: any) => <span><b>{x.name}</b> {x.phone && <span className="text-gray-500">· {x.phone}</span>} {x.batch && <span className="text-gray-500">· {x.batch}</span>}</span>} />
+              <Btn onClick={applyHealth} disabled={healthBusy || healthSel.size === 0}>
+                {healthBusy ? "Applying…" : `Fix ${healthSel.size} selected`}
+              </Btn>
+            </div>
+          );
+        })()}
       </Drawer>
     </div>
   );

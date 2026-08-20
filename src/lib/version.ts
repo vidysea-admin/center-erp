@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-154";
+export const RELEASE = "2026.08.14-155";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,26 @@ export const RELEASE = "2026.08.14-154";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-155 is the root of the Sachin Kumar story, closed at every door it touched. Measured on live: 55 " +
+  "candidates carried their government portal Candidate ID in the wrong field - id_reference, the " +
+  "nearest-looking option on a mapping screen that never offered the right one - while the field both " +
+  "government matchers join on sat empty. The import screen now derives its destinations from the " +
+  "field catalog (one source, where there were five hand-maintained copies), the writer stores what " +
+  "the screen offers and REFUSES OUT LOUD a mapped field it cannot handle, an all-blank mapped column " +
+  "is reported per column before import, and a blank cell lands as absent, never as an empty string. " +
+  "One portal identity now belongs to at most one candidate, enforced by the database itself. And the " +
+  "recovery is a screen, not a script: Candidates > Portal ID health shows what is wrong in six " +
+  "honest groups - fixable ones with checkboxes (empty-string artefacts, IDs sitting in the wrong " +
+  "field, attendance rows attachable by EXACT ID equality) and report-only ones the machine must not " +
+  "touch (two people on one ID, disagreeing values, students with no ID anywhere). Every apply " +
+  "re-verifies against the database at write time, never overwrites, and rows from an import bearing " +
+  "the -154 shifted-column signature are held rather than attached. The portal ID also becomes " +
+  "mandatory exactly where it is indispensable: certification cannot be marked complete while an " +
+  "enrolled student has none - enrolment stays open, because a candidate legitimately exists here " +
+  "before the government registers them. ";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-154 is one guard, shipped alone because the deadline sat outside the codebase: a re-upload of " +
   "the government attendance export was being arranged when the 20-08 file was measured, column " +
   "against column, and found SHIFTED - its days-attended figures sitting in the working-days field " +
@@ -31,10 +51,7 @@ export const RELEASE_NOTE_CURRENT =
   "genuine export with one batch-level working-day figure imports exactly as before, which is the " +
   "pin that matters most. The rows the corrupt file already wrote are not repaired by code: " +
   "removing that import is a production data decision, prepared for Umesh, and the moment it is " +
-  "removed the older correct rows become newest again by themselves. ";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "removed the older correct rows become newest again by themselves. " +
   "-153 is the first two rows of Manish's 20 August list, and both are one shape: a screen stating " +
   "something false with complete confidence. QA-395 - a trainer at a centre running two batches was " +
   "shown a batch count of 2 and, on clicking through, one batch. Neither number was wrong; they were " +
