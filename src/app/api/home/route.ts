@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, locationFilter, isScoped } from "@/lib/authz";
 import { Batch, BatchMember, Candidate, DailyLog, FollowUpAction, GovtAttendanceRow, Invoice, Location, LocationTarget, Program, SheetChange, Trainer, TrainerRequest, User } from "@/models";
 import { Types } from "mongoose";
-import { ACTIVE_BATCH_STATUSES, addDays, dayStart, istToday, missingLogQueue } from "@/lib/rules";
+import { ACTIVE_BATCH_STATUSES, addDays, dayStart, istToday, missingLogQueue, trainerForLogin } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 
 // Home Action Center: the three real conditions by name (§5) + operational queues.
@@ -21,6 +21,31 @@ export const GET = apiHandler(async () => {
   // 2026-08-13, found live after the data reset: a scoped user whose centres no longer exist
   // (their demo centre was purged) signs in to a wall of zeros with no explanation. Nothing is
   // broken — but a blank app reads as broken, so say WHY it is empty.
+  // -153 (Manish 20/08: "trainer ko dashboard pe batch count 2 dikh raha hai instead of 1, lekin
+  // jab woh click kar raha hai tab usse ek hi batch dikh raha hai"). Chitrakoot runs two batches
+  // with one trainer each; this tile counted the CENTRE's batches, because a Trainer login is
+  // scoped by location (authz.ts:82 - isScoped is true for the role) and locationFilter knows
+  // nothing about who teaches what.
+  //
+  // The screen the tile links to answers a different question: /api/batches resolves the login to
+  // its own trainer record and the list defaults to the "My batches" pill, so it showed 1. Two
+  // surfaces, two meanings of "my batch", one of them never stated.
+  //
+  // The tile takes the LIST's meaning, using the SAME resolution (trainerForLogin - link first,
+  // then email; never by name), so the two cannot drift apart again. The centre's other batches
+  // are still one click away behind the "All" pill, which is where they belong: a trainer's
+  // headline number is their own teaching load.
+  // AND the null case is not `{ trainer: null }`, which is how this fix nearly became the bug it
+  // was fixing. Mongo matches a null against a field that is null OR ABSENT, so a Trainer login the
+  // ERP cannot resolve to a trainer record would have counted every UNASSIGNED batch in the
+  // database - with no location filter anywhere in the query. That is QA-302/QA-347's family
+  // exactly: a filter that reads as narrowing and silently widens. A trainer we cannot resolve
+  // teaches nothing, so the honest count is zero and the query says zero out loud.
+  const myTrainer = user.role === "Trainer" ? await trainerForLogin(user) : null;
+  const batchCountScope = user.role === "Trainer"
+    ? (myTrainer ? { trainer: myTrainer._id } : { _id: { $in: [] } })
+    : scope;
+
   const scopedNoCentres = isScoped(user)
     ? (await Location.countDocuments({ ...locationFilter(user, "_id") })) === 0
     : false;
@@ -35,8 +60,8 @@ export const GET = apiHandler(async () => {
   const [approvedLocations, pendingLocations, activeBatches, completedBatches, enrolledMembers, poolCandidates, openRequests, fulfilledRequests] = await Promise.all([
     Location.countDocuments({ approval_status: "Approved", ...locationFilter(user, "_id") }),
     Location.countDocuments({ approval_status: "Pending", ...locationFilter(user, "_id") }),
-    Batch.countDocuments({ status: "Active", ...scope }),
-    Batch.countDocuments({ status: "Completed", ...scope }),
+    Batch.countDocuments({ status: "Active", ...batchCountScope }),
+    Batch.countDocuments({ status: "Completed", ...batchCountScope }),
     BatchMember.countDocuments({ left_on: null, enrollment_status: "Completed", ...batchScope }),
     Candidate.countDocuments({ ...scope }),
     TrainerRequest.countDocuments({ status: { $in: ["Open", "In Progress"] }, ...scope }),
@@ -326,6 +351,10 @@ export const GET = apiHandler(async () => {
   const lean = ["Location", "Trainer", "Enrollment"].includes(user.role);
   const kpis: Record<string, unknown> = {
     active_batches: activeBatches, completed_batches: completedBatches,
+    // -153: WHICH batches these two counted, said out loud rather than left to be inferred. The
+    // tile relabels itself from this; a number whose meaning is implicit is how the 2-vs-1 got
+    // shipped in the first place.
+    batch_counts_basis: user.role === "Trainer" ? "mine" : "scope",
     enrolled_students: enrolledMembers, pool_candidates: poolCandidates,
     attendance,
     ...(lean ? {} : {

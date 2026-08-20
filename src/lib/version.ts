@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-152";
+export const RELEASE = "2026.08.14-153";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,29 @@ export const RELEASE = "2026.08.14-152";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-153 is the first of Manish's 20 August list, and both items are the same shape: a screen stating " +
+  "something false with complete confidence. QA-395 - a trainer at a centre running two batches was " +
+  "shown a batch count of 2 and, on clicking through, one batch. Neither number was wrong; they were " +
+  "answers to different questions. A Trainer login is scoped by LOCATION, so the dashboard tile " +
+  "counted the centre, while the list it links to resolves the login to its own trainer record and " +
+  "defaults to My batches. Two meanings of my batch, and only one surface ever said which it meant. " +
+  "The tile now uses the list's meaning, through the same trainerForLogin resolution, so the two " +
+  "cannot drift apart again - and it says which it counted, so the label can read My Ongoing Batches " +
+  "rather than leave a manager to infer it. Writing that fix nearly re-created the bug class it " +
+  "closes: filtering on trainer null would have matched every UNASSIGNED batch in the database, " +
+  "unscoped, for any trainer login the ERP cannot resolve. A trainer we cannot resolve teaches " +
+  "nothing, so that case now counts zero and is pinned. QA-393 and QA-293 - the batch Attendance tab " +
+  "told an operator the government export for two students had never been imported. It had been " +
+  "imported three times, their hours were stored, and the same sentence was correct about the other " +
+  "eight members of that batch, which is what made it dangerous. Both students share a name, so the " +
+  "matcher refused to guess between them - correctly - and the row stayed unattached. Unattached is " +
+  "not missing, so it gets its own verdict: the export carries these hours, the row is not linked to " +
+  "this student yet, and here is the screen that links it. The roster stops estimating zero hours for " +
+  "them off our own daily logs. Nothing here can qualify anybody - QA-085 stands, and only a row the " +
+  "ERP has actually attached to a person may move their hours. " ;
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-152 makes true a claim -150 had already made three times. QA-369: a comment correction was named " +
   "in that release's commit message, in its manifest and in its published note - and git says the " +
   "file was never touched. The cause is small and worth naming exactly: the edit went through a " +
@@ -29,10 +52,7 @@ export const RELEASE_NOTE_CURRENT =
   "outside the app: the missing-row detector walked only from the lowest release number it could " +
   "see, so the FIRST releases of any new series were unprotected - a prefix whose rows start at 3 " +
   "has 1 and 2 missing and nothing said so. It walks from the start of a series now, with the " +
-  "genesis prefix keeping its floor because those predate the discipline and are not owed a row. ";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "genesis prefix keeping its floor because those predate the discipline and are not owed a row. " +
   "-151 fixes a bug I put into product code and could not see, and it took a checker's " +
   "control-character sweep to find it. field-catalog.ts carried a literal NUL byte inside a fallback " +
   "- an escape written into the file as the raw byte it names, the fourth instance of that in one " +

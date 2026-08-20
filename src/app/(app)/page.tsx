@@ -82,9 +82,11 @@ export default function HomePage() {
         {/* -138 (G-11): these two used each other's HEADLINE as their own subtitle — "Ongoing 6 /
             0 completed" beside "Completed 0 / 6 ongoing". Between them the pair carried one fact in
             four places. Every other tile uses the subtitle for a real breakdown; these now do too. */}
-        <KPI label="Ongoing Batches" value={data.kpis.active_batches} tone="violet" icon={<IconCap size={19} />} href="/batches?status=Active"
+        {/* -153: a Trainer's tile counts the batches they TEACH (the "My batches" pill the list
+            defaults to), so the label has to say so - and the link carries them to that same set. */}
+        <KPI label={data.kpis.batch_counts_basis === "mine" ? "My Ongoing Batches" : "Ongoing Batches"} value={data.kpis.active_batches} tone="violet" icon={<IconCap size={19} />} href="/batches?status=Active"
           sub={data.kpis.attendance?.portal_batches ? `${data.kpis.attendance.portal_batches} with portal attendance imported` : "no portal attendance imported yet"} />
-        <KPI label="Completed Batches" value={data.kpis.completed_batches ?? 0} tone="green" icon={<IconCap size={19} />} href="/batches?status=Completed"
+        <KPI label={data.kpis.batch_counts_basis === "mine" ? "My Completed Batches" : "Completed Batches"} value={data.kpis.completed_batches ?? 0} tone="green" icon={<IconCap size={19} />} href="/batches?status=Completed"
           sub={`${data.kpis.enrolled_students ?? 0} students enrolled overall`} />
         {/* QA-012: with zero logs the card used to read "0 of 0" — expected-so-far now rides
             along, so an empty log book says so instead of looking broken. */}

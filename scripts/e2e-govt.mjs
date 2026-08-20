@@ -350,6 +350,54 @@ ok("all 7 rows persisted", detail.data.rows?.length === 7, `got ${detail.data.ro
     JSON.stringify((att.data.members ?? []).map((m) => [m.our_hours, m.basis])));
   ok("R-D: an ambiguous/unmatched student shows NO portal figures (never guessed)",
     rows[`${NAME} Twin`]?.govt === null, JSON.stringify(rows[`${NAME} Twin`]?.govt));
+
+  // ---- -153 (QA-393/QA-293): WHY the figures are absent, and it is not the reason we were giving.
+  // Manish, 20/08, on the two live Sachin Kumars: the tab told the operator the export had never
+  // been imported, for two students whose hours (63:09:00 and 60:30:00) were sitting in this very
+  // collection. It was imported three times. The Twins are the same shape as those two - one name,
+  // two people, no portal IDs, so the matcher refuses to guess (correctly) and their rows stay
+  // Ambiguous with their hours on them.
+  {
+    const twinRows = (att.data.members ?? []).filter((m) => m.name === `${NAME} Twin`);
+    ok("-153 (QA-393): both same-name students are 'awaiting_match', not 'no portal hours'",
+      twinRows.length === 2 && twinRows.every((m) => m.verdict?.state === "awaiting_match"),
+      JSON.stringify(twinRows.map((m) => m.verdict?.state)));
+    ok("-153 (QA-393): and the sentence no longer claims the export was never imported",
+      twinRows.every((m) => !/has not been imported/i.test(String(m.verdict?.detail ?? ""))
+        // matches BOTH branches: "not attached to this student" and "none is attached to a student"
+        && /attached to (a|this) student/i.test(String(m.verdict?.detail ?? ""))
+        && /Government Attendance/i.test(String(m.verdict?.detail ?? ""))),
+      JSON.stringify(twinRows.map((m) => m.verdict?.detail)));
+    // A re-import supersedes rather than doubles: this fixture uploads the same file more than
+    // once, so a helper that counted across imports said "4 rows" about two people.
+    ok("-153: the unresolved-row count is not multiplied by re-imports",
+      twinRows.every((m) => String(m.verdict?.detail ?? "").includes("carries 2 rows under this name")),
+      JSON.stringify(twinRows.map((m) => m.verdict?.detail)));
+    ok("-153 (QA-393): the count is broken out, and no_hours no longer absorbs them",
+      att.data.verdict_counts?.awaiting_match === 2, JSON.stringify(att.data.verdict_counts));
+    // QA-085 is the invariant this must not break: an UNATTACHED row is evidence a number exists,
+    // never evidence whose it is. Nothing here may qualify anybody.
+    ok("-153 (QA-085 holds): an awaiting-match student is never qualified",
+      twinRows.every((m) => m.qualified === false && m.verdict?.qualified === false),
+      JSON.stringify(twinRows.map((m) => [m.qualified, m.verdict?.qualified])));
+    // The rows the matcher DID attach must be untouched by any of this.
+    ok("-153: a matched student is unaffected (Charlie still reads portal hours)",
+      rows[`${NAME} Charlie`]?.verdict?.state !== "awaiting_match" && rows[`${NAME} Charlie`]?.govt?.hours === 76,
+      JSON.stringify(rows[`${NAME} Charlie`]?.verdict?.state));
+
+    // QA-293: the same two students on the ROSTER, where the screen rendered "~0 / 60 hrs (est.)"
+    // off our own daily logs - an estimate that was honest about its basis and still said "~0"
+    // about people who may well have cleared the bar.
+    const roster = await req(admin, "GET", `/api/batches/${batch._id}/members`);
+    const twinMembers = (roster.data.items ?? []).filter((m) => m.candidate?.name === `${NAME} Twin`);
+    ok("-153 (QA-293): the roster knows an unattached portal row exists for them",
+      twinMembers.length === 2 && twinMembers.every((m) => m.hours?.awaiting_match?.count > 0),
+      JSON.stringify(twinMembers.map((m) => m.hours?.awaiting_match)));
+    ok("-153 (QA-293): and a student the portal HAS answered for is not flagged",
+      (roster.data.items ?? []).filter((m) => m.candidate?.name === `${NAME} Charlie`)
+        .every((m) => m.hours?.awaiting_match == null),
+      JSON.stringify((roster.data.items ?? []).filter((m) => m.candidate?.name === `${NAME} Charlie`).map((m) => m.hours?.awaiting_match)));
+  }
   ok("R-D: the day-wise grid is one cell per logged day",
     (att.data.members ?? []).every((m) => m.present_by_day.length === att.data.days_held), `days_held=${att.data.days_held}`);
   // Scope: the endpoint carries no extra permission gate, but Rule 38 still bites — the

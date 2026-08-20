@@ -834,6 +834,10 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
                 if (!h) return <span className="text-xs text-gray-400">—</span>;
                 if (h.qualified) return <span className="rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-semibold text-green-700" title={`Portal-verified: ${h.govt_hours} of ${h.required_hours} hrs`}>✓ {h.govt_hours}/{h.required_hours} hrs</span>;
                 if (h.basis === "portal") return <span className="text-xs tabular-nums text-amber-700">{h.attended_hours}/{h.required_hours} hrs</span>;
+                // -153 (QA-293): checked BEFORE the estimate, because the estimate is the thing
+                // that was lying. Both Sachin Kumars rendered "~0/60 hrs" off our own daily logs
+                // while their real portal hours sat unattached in the same database.
+                if (h.awaiting_match) return <span className="text-xs text-amber-700" title="The government export carries hours under this name — the row just is not attached to this student yet. Resolve it on the Government Attendance screen.">portal hrs — match pending</span>;
                 if (h.basis === "estimate") return <span className="text-xs tabular-nums text-gray-500" title="Days × slot estimate — the portal meter decides">~{h.attended_hours}/{h.required_hours} hrs</span>;
                 return <span className="text-xs text-gray-400" title="No slot on the batch and no portal import yet">awaiting hrs</span>;
               },
@@ -1272,13 +1276,18 @@ function AttendanceTab({ batchId, batch, role, error, setError }: any) {
             // QA-085: the green mark is PORTAL-VERIFIED only — an estimate can never
             // qualify a student, and the chip says which meter it is reading.
             key: "qualified", label: "Assessment", sortable: true, sortValue: (r: any) => (r.qualified ? 1 : 0),
-            filterText: (r: any) => (r.qualified ? "Qualified" : r.basis === "portal" ? "Below threshold" : "Awaiting portal hours"),
+            // -153 (QA-393): the awaiting_match arm sits AHEAD of the estimate arm and links to
+            // the one screen that clears it. The complaint this closes was that the operator was
+            // told to go and fetch a file that had already been imported three times.
+            filterText: (r: any) => (r.qualified ? "Qualified" : r.basis === "portal" ? "Below threshold" : r.verdict?.state === "awaiting_match" ? "Match pending" : "Awaiting portal hours"),
             render: (r: any) => r.left_on
               ? <Chip value="Dropout" />
               : r.qualified
                 ? <span className="rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-semibold text-green-700" title={`Portal-verified: ${r.govt?.hours} of ${data.required_hours} hrs`}>✓ Qualified for assessments</span>
                 : r.basis === "portal"
                   ? <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600" title="Portal hours below the threshold">{r.attended_hours} / {data.required_hours} hrs</span>
+                  : r.verdict?.state === "awaiting_match"
+                    ? <Link href="/govt-attendance" className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800 hover:underline" title={r.verdict.detail}>Portal hours waiting on a match →</Link>
                   : r.basis === "estimate"
                     ? <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700" title="Estimated from our days × slot — the verdict waits for portal hours">~{r.attended_hours} / {data.required_hours} hrs (est.)</span>
                     : <span className="rounded-full bg-gray-50 px-2 py-0.5 text-[11px] text-gray-400" title="No portal import and no slot on the batch">awaiting portal hours</span>,
@@ -2549,6 +2558,9 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
               <span className="text-green-700">{attMeta.verdict_counts.qualified ?? 0} qualified</span>
               {(attMeta.verdict_counts.in_progress ?? 0) > 0 && <> · <span className="text-amber-700">{attMeta.verdict_counts.in_progress} still short (course running)</span></>}
               {(attMeta.verdict_counts.no_hours ?? 0) > 0 && <> · <span className="text-gray-500">{attMeta.verdict_counts.no_hours} with <b>no portal hours imported</b></span></>}
+              {/* -153 (QA-393): counted and named separately, because it is the only one of these
+                  buckets somebody can clear from their own desk in two clicks. */}
+              {(attMeta.verdict_counts.awaiting_match ?? 0) > 0 && <> · <Link href="/govt-attendance" className="font-medium text-amber-700 hover:underline" title="The export carries hours under these names; the rows are not attached to a student yet.">{attMeta.verdict_counts.awaiting_match} whose portal hours are here but <b>unmatched</b> — resolve →</Link></>}
               {(attMeta.verdict_counts.not_eligible ?? 0) > 0 && <> · <span className="text-red-700">{attMeta.verdict_counts.not_eligible} not eligible</span></>}
               {(attMeta.verdict_counts.not_enrolled ?? 0) > 0 && <> · <span className="text-gray-500">{attMeta.verdict_counts.not_enrolled} not enrolled yet</span></>}
             </p>

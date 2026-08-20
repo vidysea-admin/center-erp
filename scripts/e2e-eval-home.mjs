@@ -122,6 +122,76 @@ ok("[best] KPI attendance carries present/roster/pct and today's split", kFinal.
 ok("[worst] …attendance pct is null (not NaN/0) when nothing has been logged",
   kFinal.attendance.roster > 0 ? typeof kFinal.attendance.pct === "number" : kFinal.attendance.pct === null, String(kFinal.attendance.pct));
 
+// ---- -153 (Manish 20/08): a Trainer's batch tile counts the batches THEY TEACH ----
+// "trainer ko dashboard pe batch count 2 dikh raha hai instead of 1, lekin jab woh click kar raha
+// hai tab usse ek hi batch dikh raha hai." Chitrakoot: two batches at one centre, one trainer each.
+// The tile counted the CENTRE (a Trainer login is scoped by location, authz.ts:82) while the list
+// it links to defaults to the "My batches" pill, which resolves the login to its own trainer
+// record. Two surfaces, two meanings of "my batch", and only the list ever said which it meant.
+//
+// This fixture reproduces exactly that: a second Active batch at the SAME centre with a DIFFERENT
+// trainer. Pre-fix the tile reads 2 and the list reads 1.
+{
+  const room2 = (await req(admin, "POST", `/api/locations/${loc._id}/rooms`, { name: "CR2", type: "Classroom" }, 201)).data.item;
+  const mate = (await req(admin, "POST", "/api/trainers", { name: "TEST-EH Colleague " + s, phone: phone("9"), skills: ["EHSkill" + s] }, 201)).data.item;
+  const batch2 = (await req(admin, "POST", "/api/batches", { location: loc._id, program: prog._id, trainer: mate._id, room: room2._id, planned_start: today(), target_size: 1 }, 201)).data.item;
+  const cand2 = (await req(admin, "POST", "/api/candidates", { name: "TEST-EH Cand2 " + s, phone: phone("8"), location: loc._id, program: prog._id }, 201)).data.item;
+  const mem2 = (await req(admin, "POST", `/api/batches/${batch2._id}/members`, { candidate: cand2._id }, 201)).data.item;
+  await req(admin, "PATCH", `/api/members/${mem2._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+  await req(admin, "POST", `/api/batches/${batch2._id}/transition`, { target: "Ready" });
+  const act2 = await req(admin, "POST", `/api/batches/${batch2._id}/transition`, { target: "Active" });
+  ok("-153 fixture: a second Active batch runs at the same centre with a different trainer",
+    act2.status === 200, `got ${act2.status}: ${JSON.stringify(act2.data).slice(0, 160)}`);
+
+  // The login. trainerForLogin resolves by explicit link first, then by email onto an unclaimed
+  // trainer record — the SAME resolution /api/batches uses, which is the whole point of the fix.
+  const tEmail = `eh.trainer.${s}@vidysea-test.local`.toLowerCase();
+  await req(admin, "PATCH", `/api/trainers/${trainer._id}`, { email: tEmail }, 200);
+  await req(admin, "POST", "/api/users", { name: "TEST-EH TrainerLogin " + s, email: tEmail, password: "CiOnly@123", role: "Trainer", can_edit: true, location_scope: [loc._id] });
+  const tSess = await login(tEmail, "CiOnly@123");
+  ok("-153 fixture: the trainer login is available", !!tSess);
+  if (tSess) {
+    const tHome = (await req(tSess, "GET", "/api/home", undefined, 200)).data;
+    const tBatches = (await req(tSess, "GET", "/api/batches?limit=500", undefined, 200)).data.items ?? [];
+    const mine = tBatches.filter((b) => b.is_mine);
+    const mineActive = mine.filter((b) => b.status === "Active");
+    ok("-153: the centre really is running both batches (so the pre-fix count of 2 was reachable)",
+      tBatches.filter((b) => b.status === "Active").length >= 2,
+      JSON.stringify(tBatches.map((b) => [b.code, b.status, b.is_mine])));
+    ok("-153: the Home batch tile equals the trainer's OWN Active batches, not the centre's",
+      tHome.kpis.active_batches === mineActive.length && mineActive.length === 1,
+      JSON.stringify({ tile: tHome.kpis.active_batches, mine_active: mineActive.length, all_active: tBatches.filter((b) => b.status === "Active").length }));
+    ok("-153: …and the tile SAYS which of the two it counted, so the label can match",
+      tHome.kpis.batch_counts_basis === "mine", String(tHome.kpis.batch_counts_basis));
+    // The other roles must be untouched: an Admin's tile still counts everything.
+    const aHome = (await req(admin, "GET", "/api/home", undefined, 200)).data;
+    ok("-153: an Admin's tile is unchanged — still the whole scope, and it says so",
+      aHome.kpis.batch_counts_basis === "scope" && aHome.kpis.active_batches >= 2,
+      JSON.stringify({ basis: aHome.kpis.batch_counts_basis, active: aHome.kpis.active_batches }));
+    // -153: the null branch, which is where this fix nearly re-created the bug it fixes.
+    // `{ trainer: null }` matches a field that is null OR ABSENT, so an unresolvable Trainer login
+    // would have been handed the count of every UNASSIGNED batch in the database, unscoped.
+    const ghostEmail = `eh.ghost.${s}@vidysea-test.local`.toLowerCase();
+    await req(admin, "POST", "/api/users", { name: "TEST-EH Ghost " + s, email: ghostEmail, password: "CiOnly@123", role: "Trainer", can_edit: true, location_scope: [loc._id] });
+    const gSess = await login(ghostEmail, "CiOnly@123");
+    if (gSess) {
+      const gHome = (await req(gSess, "GET", "/api/home", undefined, 200)).data;
+      ok("-153: a Trainer login matching NO trainer record reads 0 batches, not every unassigned batch",
+        gHome.kpis.active_batches === 0 && gHome.kpis.completed_batches === 0,
+        JSON.stringify({ active: gHome.kpis.active_batches, completed: gHome.kpis.completed_batches }));
+      const gu = ((await req(admin, "GET", "/api/users?limit=500")).data.items ?? []).find((x) => x.email === ghostEmail);
+      if (gu) await req(admin, "PATCH", `/api/users/${gu._id}`, { active: false });
+    } else {
+      ok("-153: a Trainer login matching NO trainer record reads 0 batches, not every unassigned batch", false, "ghost login could not be created");
+    }
+
+    // leave no live login behind (the ghost-login discipline this suite already keeps)
+    const u = ((await req(admin, "GET", "/api/users?limit=500")).data.items ?? []).find((x) => x.email === tEmail);
+    if (u) await req(admin, "PATCH", `/api/users/${u._id}`, { active: false });
+  }
+  await req(admin, "POST", `/api/batches/${batch2._id}/transition`, { target: "Cancelled", reason: "eval fixture teardown" });
+}
+
 // cleanup: close down the fixture batch so later suites' KPI deltas start clean
 await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Cancelled", reason: "eval fixture teardown" });
 

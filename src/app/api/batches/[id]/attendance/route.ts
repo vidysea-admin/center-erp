@@ -3,6 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, HttpError } from "@/lib/authz";
 import { Batch, BatchMember, DailyLog, GovtAttendanceRow } from "@/models";
 import { assertBatchInScope, assessmentHoursBar, courseIsFinished, eligibilityVerdict, memberAttendedHours, slotHoursPerDay } from "@/lib/rules";
+import { nameKey, unresolvedPortalRowsByName } from "@/lib/govt-attendance";
 import { getDefaults } from "@/lib/defaults";
 
 // R-D (CEO 14/08): the batch's own "Attendance" tab — day-wise per student, BOTH meters
@@ -38,6 +39,12 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     .select("candidate total_days_present total_working_days total_hours_minutes total_hours_raw createdAt")
     .lean<any[]>();
   const govtByCand = new Map(govtRows.map((r) => [String(r.candidate), r]));
+
+  // -153 (QA-393): the query above filters `match_status: "Matched"`, which is right for computing
+  // hours and is why this screen could not tell "no export arrived" from "the export is sitting
+  // right here, unattached". The unattached rows are read separately and never mixed into the
+  // hours - they only explain the absence.
+  const awaitingByName = await unresolvedPortalRowsByName({ batchId: id, locationId: batch.location });
 
   // -109: is this cohort still teaching? "Not eligible" is a verdict and waits for the course to be
   // over; while it runs, short hours are progress. The portal's own working-day count is the
@@ -83,6 +90,10 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
         requiredHours,
         basis: h.basis,
         courseFinished: finished,
+        // -153 (QA-393): only ever consulted when this member has NO portal hours of their own.
+        // A member whose row is matched never reaches the awaiting_match branch, so a duplicate
+        // name cannot pull a resolved student back into limbo.
+        awaitingMatch: awaitingByName.get(nameKey(m.candidate?.name)) ?? null,
       }),
       enrollment_status: m.enrollment_status ?? null,
     };
@@ -102,7 +113,9 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     // hours on record, 0 genuinely not eligible" instead of lumping the last three together.
     course_finished: finished,
     portal_working_days: portalWorkingDays || null,
-    verdict_counts: ["qualified", "in_progress", "no_hours", "not_eligible", "not_enrolled"].reduce((acc: Record<string, number>, k) => {
+    // -153: awaiting_match joins the buckets. It has to be listed here or the -109 invariant
+    // (the buckets add up to the roster) silently breaks the moment a row goes unresolved.
+    verdict_counts: ["qualified", "in_progress", "no_hours", "awaiting_match", "not_eligible", "not_enrolled"].reduce((acc: Record<string, number>, k) => {
       acc[k] = rows.filter((r) => !r.left_on && r.verdict.state === k).length;
       return acc;
     }, {}),

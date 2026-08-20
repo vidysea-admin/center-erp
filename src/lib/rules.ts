@@ -2061,7 +2061,11 @@ export type EligibilityVerdict = {
   // so they get their own state rather than being squeezed into a student one. eligibilityVerdict()
   // itself never RETURNS it (it is only ever called about a student); the govt-attendance grid,
   // which is the one screen that sees non-student rows, constructs it.
-  state: "qualified" | "in_progress" | "no_hours" | "not_eligible" | "not_enrolled" | "trainer";
+  // -153 (QA-393): "awaiting_match" splits the one honest half off no_hours. no_hours says the
+  // export never arrived; awaiting_match says it DID and the row is not attached to this student
+  // yet. Both are "we cannot judge you", and telling them apart is the whole point - one is a
+  // missing file somebody must go and fetch, the other is two clicks on a screen we already ship.
+  state: "qualified" | "in_progress" | "no_hours" | "awaiting_match" | "not_eligible" | "not_enrolled" | "trainer";
   label: string;
   detail: string;
   qualified: boolean; // kept for every existing caller — true ONLY for a real pass of the bar
@@ -2073,8 +2077,13 @@ export function eligibilityVerdict(opts: {
   requiredHours: number;
   basis: "portal" | "estimate" | null;
   courseFinished: boolean;            // batch past teaching, or the portal's own working days complete
+  // -153 (QA-393): unattached portal rows answering to this student's name, from
+  // unresolvedPortalRowsByName(). Present = the export carries hours under this name but the row
+  // has not been resolved onto a student. NEVER a route to `qualified` - QA-085 stands: only a
+  // row the ERP has actually attached to this person may move their hours.
+  awaitingMatch?: { count: number; hours_minutes: number | null } | null;
 }): EligibilityVerdict {
-  const { enrollmentStatus, sidhStatus, attendedHours, requiredHours, basis, courseFinished } = opts;
+  const { enrollmentStatus, sidhStatus, attendedHours, requiredHours, basis, courseFinished, awaitingMatch } = opts;
 
   // 1. The journey gate. A candidate who has not finished enrolling has not started earning hours,
   //    so "eligible / not eligible" is not a question that has been asked of them yet.
@@ -2097,7 +2106,26 @@ export function eligibilityVerdict(opts: {
   }
 
   // 3. No hours at all is missing DATA, and saying "not eligible" about it is a lie about a student.
+  //
+  // -153 (QA-393): but "missing" has two causes and they need different people to do different
+  // things. Before -153 both read as "the export has not been imported", which was a false
+  // sentence about the two Sachin Kumars on AVP-GURU-RPLAVP-DST-02 - imported three times, hours
+  // stored, ambiguous only because they share a name. It was simultaneously the RIGHT sentence for
+  // the other eight members of that batch, and that is exactly what made it dangerous: an operator
+  // who checks one of the eight, finds it accurate, and then trusts the line for all ten.
   if (attendedHours == null || basis !== "portal") {
+    if (awaitingMatch && awaitingMatch.count > 0) {
+      // Whole hours, via the SAME rounding memberAttendedHours uses (Math.round(min / 60)). A
+      // second convention here would have this line reading 63.2 hrs beside a grid reading 63.
+      const hrs = awaitingMatch.hours_minutes != null ? `${Math.round(awaitingMatch.hours_minutes / 60)} hrs` : "hours";
+      return {
+        state: "awaiting_match", qualified: false,
+        label: "Portal hours waiting on a match",
+        detail: awaitingMatch.count > 1
+          ? `the export carries ${awaitingMatch.count} rows under this name and none is attached to a student yet - open the import on the Government Attendance screen and pick the right person for each, and these hours land by themselves`
+          : `the export DOES carry ${hrs} under this name - the row is just not attached to this student yet; resolve it on the Government Attendance screen and the hours land by themselves`,
+      };
+    }
     return {
       state: "no_hours", qualified: false,
       label: "No portal hours yet",

@@ -13,7 +13,7 @@
 // "Total Days Present" to "Days Present" still imports.
 import * as XLSX from "xlsx";
 import { parseCsv } from "@/lib/sync";
-import { BatchMember, Candidate, DailyLog, Location, Trainer } from "@/models";
+import { BatchMember, Candidate, DailyLog, GovtAttendanceRow, Location, Trainer } from "@/models";
 
 export type GovtRow = {
   sl_no: number | null;
@@ -206,9 +206,82 @@ export function parseGovtAttendance(buf: Buffer, fileName = ""): ParsedFile {
 // Names arrive with portal-side spacing/case noise and the odd honorific.
 // takes `string | undefined` because it already guards for it -- the signature was the only thing
 // pretending otherwise (-146, QA-316).
-const nameKey = (s: string | undefined) =>
+// -153 (QA-393): exported for the same reason isTrainerRow was (QA-045 - one test, two callers).
+// The attendance surfaces need to ask "is there an unattached portal row for THIS person", and the
+// only honest way to ask it is with the identical normalisation the matcher itself used to decide
+// the row was ambiguous. A second, near-enough copy of this regex is how two screens start
+// disagreeing about one student.
+export const nameKey = (s: string | undefined) =>
   String(s ?? "").toLowerCase().replace(/\b(mr|mrs|ms|md|shri|smt|kumari)\.?\s+/g, " ")
     .replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+
+/**
+ * -153 (QA-393/QA-293): the portal rows this batch HOLDS but has not been able to attach to a
+ * student yet - Ambiguous (two people share the name) or Unmatched.
+ *
+ * Every attendance surface reads `match_status: "Matched"`, which is correct for computing hours
+ * and wrong for describing why they are missing. Measured on live -152, batch
+ * AVP-GURU-RPLAVP-DST-02: both Sachin Kumars were told "the government portal export for this
+ * student has not been imported (or its hours column could not be read)". The export was imported
+ * three times and their hours - 63:09:00 and 60:30:00 - are stored on rows in this very
+ * collection. Every clause of that sentence was false about them, while being exactly right about
+ * the eight other members it was also shown to.
+ *
+ * Keyed by nameKey because that is the key the AMBIGUITY IS ABOUT: the matcher could not choose
+ * between two members with one name, so the name is the only handle either side shares.
+ * `count` carries how many unattached rows answer to the name - the ambiguity itself, said out
+ * loud, so a screen can distinguish "your row is sitting there" from "two rows and nobody knows
+ * which is yours".
+ *
+ * QA-085 is untouched by this: nothing here can qualify a student. An unattached row is evidence
+ * that a NUMBER EXISTS, never evidence about whose it is.
+ *
+ * SCOPE, and this is the part that had to be measured rather than assumed. Only the MATCHED branch
+ * of matchGovtRows sets `batch` on a row (it copies it off the member it matched); an Ambiguous row
+ * gets a batch only because the import route writes `batch: r.batch ?? batchId` - i.e. only when
+ * the operator filed that import AGAINST A BATCH. File the same export against the CENTRE and every
+ * ambiguous row lands with batch null, and a `{ batch: batchId }` filter would quietly match
+ * nothing while looking correct. That is the QA-302/QA-347 family and it is not worth re-joining.
+ *
+ * So the scope is the same pair matchGovtRows itself takes: this batch's rows, plus the centre's
+ * rows that were never filed under any batch. A same-name student in a sibling batch at one centre
+ * can pull an unresolved row into view - and that is honest, because such a row genuinely might be
+ * either person's, which is what "waiting on a match" says.
+ */
+export async function unresolvedPortalRowsByName(scope: { batchId: unknown; locationId?: unknown }): Promise<Map<string, { count: number; hours_minutes: number | null; days_present: number | null }>> {
+  const where: Record<string, unknown> = scope.locationId
+    ? { $or: [{ batch: scope.batchId }, { location: scope.locationId, batch: null }] }
+    : { batch: scope.batchId };
+  const rows = await GovtAttendanceRow.find({ ...where, match_status: { $ne: "Matched" } })
+    .select("name candidate_type designation total_hours_minutes total_days_present import createdAt")
+    .sort({ createdAt: -1 })
+    .lean<any[]>();
+  // A RE-IMPORT SUPERSEDES, IT DOES NOT DOUBLE - the rule attendance/route.ts already keeps for
+  // matched rows ("newest import per candidate wins", QA-131). Counting across imports made the
+  // first version of this say "4 rows under this name" for two people in the wall fixture, which
+  // imports one file three times; live, the Gurugram export has also been imported three times, so
+  // the two students this was written for would have been told "6 rows". Rows are newest-first
+  // above, so the FIRST import seen for a name is the newest, and only that import counts.
+  const newestImportForName = new Map<string, string>();
+  const byName = new Map<string, { count: number; hours_minutes: number | null; days_present: number | null }>();
+  for (const r of rows) {
+    // -148/QA-332: a trainer's row is the centre's own delivery record, not a student's missing
+    // hours. It must never be offered as the explanation for a student having none.
+    if (isTrainerRow(r)) continue;
+    const nk = nameKey(r.name);
+    if (!nk) continue;
+    const imp = String(r.import ?? "");
+    if (!newestImportForName.has(nk)) newestImportForName.set(nk, imp);
+    else if (newestImportForName.get(nk) !== imp) continue; // an older import - superseded
+    const prev = byName.get(nk);
+    byName.set(nk, {
+      count: (prev?.count ?? 0) + 1,
+      hours_minutes: r.total_hours_minutes ?? prev?.hours_minutes ?? null,
+      days_present: r.total_days_present ?? prev?.days_present ?? null,
+    });
+  }
+  return byName;
+}
 
 export type MatchStatus = "Matched" | "Ambiguous" | "Unmatched";
 // -146 (QA-316): `GovtRow &` here, while matchGovtRows now honestly accepts Partial<GovtRow>[],

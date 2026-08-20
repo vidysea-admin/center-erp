@@ -4,6 +4,7 @@ import { apiHandler, requireUser, requireEdit, HttpError, assertLocationInScope 
 import { requirePerm } from "@/lib/permissions";
 import { Batch, BatchMember, Candidate, DailyLog, GovtAttendanceRow } from "@/models";
 import { addMemberChecked, assertBatchInScope, assertLocationOperational, assessmentHoursBar, memberAttendedHours, slotHoursPerDay } from "@/lib/rules";
+import { nameKey, unresolvedPortalRowsByName } from "@/lib/govt-attendance";
 import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
 
@@ -38,14 +39,21 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   const govtBy = new Map(govtLatest.map((g: any) => [String(g._id), g]));
 
   // One bar, one verdict — the same shared formulas as the Attendance tab and the portal.
-  const batchDoc = await Batch.findById(id).populate("program", "hours duration_days scheme").select("program slot_start slot_end").lean<any>();
+  const batchDoc = await Batch.findById(id).populate("program", "hours duration_days scheme").select("program slot_start slot_end location").lean<any>();
   const defaults = await getDefaults();
   const { requiredHours } = await assessmentHoursBar(batchDoc?.program?.scheme, batchDoc?.program, defaults.min_attendance_pct ?? 50);
   const hoursPerDay = slotHoursPerDay(batchDoc);
+  // -153 (QA-293): this roster showed both Sachin Kumars as "~0/60 hrs" - an estimate off OUR
+  // daily logs, which hold no present days for them - while their real portal hours sat in this
+  // database. The estimate was honest about its own basis and still said "~0" about students who
+  // had cleared the bar. The chip needs to know an unattached row exists so it can say so instead.
+  const awaitingByName = await unresolvedPortalRowsByName({ batchId: id, locationId: batchDoc?.location });
 
   const withAttendance = items.map((m: any) => {
     const g = govtBy.get(String(m.candidate?._id));
     const h = memberAttendedHours({ internalDays: presentDays.get(String(m._id)) ?? 0, hoursPerDay, govtMinutes: g?.hours_minutes, requiredHours });
+    // Only when the portal has not answered for this member already - a matched row always wins.
+    const awaiting = h.basis === "portal" ? null : (awaitingByName.get(nameKey(m.candidate?.name)) ?? null);
     return {
       ...m,
       attendance: {
@@ -54,7 +62,7 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
         pct: daysHeld ? Math.round((100 * (presentDays.get(String(m._id)) ?? 0)) / daysHeld) : null,
       },
       govt_attendance: g ?? null,
-      hours: { ...h, required_hours: requiredHours },
+      hours: { ...h, required_hours: requiredHours, awaiting_match: awaiting },
     };
   });
   return NextResponse.json({ items: withAttendance, required_hours: requiredHours });
