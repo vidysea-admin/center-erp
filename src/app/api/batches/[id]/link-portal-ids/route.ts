@@ -34,7 +34,9 @@ const canOf = normalizeCan;
 
 async function plan(batchId: string) {
   const members = await BatchMember.find({ batch: batchId })
-    .populate("candidate", "name sidh_candidate_id").lean<any[]>();
+    // -159 cycle 2 (QA-476): the phone rides along - this list names people a human has to go and
+    // resolve by hand, which is exactly the case a bare name cannot serve (REQ-389).
+    .populate("candidate", "name phone sidh_candidate_id").lean<any[]>();
   const candIds = members.map((m) => m.candidate?._id).filter(Boolean);
   const byCand = new Map(members.filter((m) => m.candidate).map((m) => [String(m.candidate._id), m.candidate]));
 
@@ -64,14 +66,14 @@ async function plan(batchId: string) {
     if (!cand) continue;
     const entries = [...ids.entries()];
     if (entries.length > 1) {
-      conflicts.push({ candidate: cid, name: cand.name, ids: entries.map(([can, v]) => ({ can, from: v.from })) });
+      conflicts.push({ candidate: cid, name: cand.name, phone: cand.phone ?? null, ids: entries.map(([can, v]) => ({ can, from: v.from })) });
       continue;
     }
     const [can, v] = entries[0];
     if (cand.sidh_candidate_id) {
       // Only worth mentioning when the portal disagrees with what is on record.
       if (canOf(cand.sidh_candidate_id) !== can) {
-        conflicts.push({ candidate: cid, name: cand.name, on_record: cand.sidh_candidate_id, portal_says: can, from: v.from, note: "already on record and different — left untouched" });
+        conflicts.push({ candidate: cid, name: cand.name, phone: cand.phone ?? null, on_record: cand.sidh_candidate_id, portal_says: can, from: v.from, note: "already on record and different — left untouched" });
       } else {
         already.push({ candidate: cid, name: cand.name, id: cand.sidh_candidate_id });
       }

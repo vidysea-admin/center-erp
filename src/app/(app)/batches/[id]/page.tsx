@@ -3,7 +3,7 @@ import { use, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { api, fmtDate, toInputDate } from "@/lib/client";
+import { api, fmtDate, personList, toInputDate } from "@/lib/client";
 import { trainerSelectGroups } from "@/lib/trainer-select";
 import { slotHoursPerDay } from "@/lib/slot-rules";
 import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, HealthBanner, NameCell, Notice, Section, Tabs, inputCls, statusLabel } from "@/components/ui";
@@ -15,15 +15,8 @@ import { bulkSmsCsv, smsLink, waLink } from "@/lib/messaging";
 
 const TABS = ["Overview", "Candidates", "Enrollment", "Daily Execution", "Attendance", "Closure", "Feedback", "Costs", "Activity"];
 
-// -159 (QA-472): ONE definition of how this screen names a person, because there were four - the
-// complete-batch plan, the assessment blocker, the certification blocker and the portal-ID line -
-// and -158 fixed exactly one of them. REQ-389 decides the shape: the portal ID when present,
-// otherwise the phone. A bare name is not an identity on a roster with two Sachin Kumars, and
-// every one of these lists exists precisely to tell somebody WHO to go and deal with.
-const personLabel = (x: { name?: string | null; phone?: string | null } | null | undefined) =>
-  x?.name ? (x.phone ? `${x.name} (${x.phone})` : x.name) : "";
-const personList = (xs: Array<{ name?: string | null; phone?: string | null }> | null | undefined) =>
-  (xs ?? []).map(personLabel).filter(Boolean).join(", ");
+// -159 cycle 2 (QA-481): the definition moved to @/lib/client, because writing it here made it the
+// THIRD copy in src/ - in the release whose entire point was collapsing copies of this same rule.
 
 export default function BatchDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -441,7 +434,9 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
                 )}
                 {(completePlan?.unsettled?.length ?? 0) > 0 && (
                   <li><b>{completePlan.unsettled.length} passed candidate(s) with no certificate → Not Issued</b>
-                    <span className="text-amber-700"> ({completePlan.unsettled.slice(0, 4).map((u: any) => u.name).filter(Boolean).join(", ")})</span></li>
+                    {/* -159 cycle 2 (QA-476): four lines below the one -159 fixed, on a payload that
+                        already carried the phone. Counting by hand missed it twice. */}
+                    <span className="text-amber-700"> ({personList(completePlan.unsettled.slice(0, 4))})</span></li>
                 )}
               </ul>
               <p className="text-xs">Every one of those rows is audited with your reason. If a student really passed, mark them first — this is the door for a batch that is over, not a shortcut through data entry.</p>
@@ -2514,7 +2509,11 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
     >
       {pending.length > 0 && (
         <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-          Still pending: {pending.map((p) => p.candidate?.name).slice(0, 6).join(", ")}
+          {/* -159 cycle 2 (QA-476): the one the checker caught in a BROWSER, printing "G317511 Echo,
+              G317511 Echo, G317511 Echo" in visible amber copy - not a tooltip, no hover needed, on
+              the same tab as the two this unit had just fixed. The results payload has carried the
+              phone all along. */}
+          Still pending: {personList(pending.slice(0, 6).map((p: any) => p.candidate))}
           {pending.length > 6 ? ` +${pending.length - 6} more` : ""} — assessment cannot be marked Completed until every candidate has a final result.
         </div>
       )}
@@ -2570,7 +2569,7 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
               )}
               {linkPlan.conflicts?.length > 0 && (
                 <div className="mt-1 text-amber-800">
-                  {linkPlan.conflicts.length} left untouched because the portal gives conflicting IDs: {linkPlan.conflicts.slice(0, 3).map((c: any) => c.name).join(", ")}
+                  {linkPlan.conflicts.length} left untouched because the portal gives conflicting IDs: {personList(linkPlan.conflicts.slice(0, 3))}
                   {linkPlan.conflicts.length > 3 ? ` +${linkPlan.conflicts.length - 3}` : ""}.
                 </div>
               )}

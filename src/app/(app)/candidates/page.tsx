@@ -3,7 +3,7 @@ import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { api, offerable } from "@/lib/client";
+import { api, offerable, personLabel } from "@/lib/client";
 import { CANDIDATE_IMPORT_FIELDS } from "@/lib/field-catalog";
 import { emailError, phoneError } from "@/lib/validate";
 import { FRESH_TAGS, JOURNEY_TAGS, isFreshCandidate, freshJourneyOf as sharedFreshJourneyOf, journeyOf as sharedJourneyOf } from "@/lib/candidate-journey";
@@ -1015,7 +1015,7 @@ function CandidatesInner() {
                 render={(x: any) => <span><b>{x.name}</b> {x.phone && <span className="text-gray-500">· {x.phone}</span>}</span>} />
               <Report tone="red" title="One portal ID on two candidates" list={health.duplicates ?? []}
                 note="the machine must not choose whose identity it is — open each candidate and clear the wrong one"
-                render={(d: any) => <span><span className="font-mono">{d.id}</span>: {d.members.map((m: any) => `${m.name}${m.phone ? ` (${m.phone})` : ""}`).join(" vs ")}</span>} />
+                render={(d: any) => <span><span className="font-mono">{d.id}</span>: {d.members.map(personLabel).filter(Boolean).join(" vs ")}</span>} />
               <Report tone="red" title="id_reference disagrees with the ID on record" list={health.disagreements ?? []}
                 note="two different CANs for one person — a human must look; nothing here touches them"
                 render={(d: any) => <span><b>{d.name}</b>: on record <span className="font-mono">{d.on_record}</span> vs id_reference <span className="font-mono">{d.in_id_reference}</span></span>} />

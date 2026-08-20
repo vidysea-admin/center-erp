@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-159";
+export const RELEASE = "2026.08.14-160";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,7 +17,8 @@ export const RELEASE = "2026.08.14-159";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
-  "-159 finishes something -158 only started. -158 stopped one tooltip on the batch screen from naming students by name alone - which on a roster with two students of one name identifies nobody - and the check found the SAME sentence still being written one line above it. Counting properly found four places on that screen where people are listed by name: the complete-batch plan, the two blocker warnings, and the portal-ID line. All four now read one shared definition of how a person is named here - the name with their phone beside it, which is what the contract already required and what a centre uses to tell two people apart on a call - and the check that guards it looks for the whole family rather than the one line that was fixed first. Two of this product own safeguards were repaired in the same pass: one was reading source code with the comments left in, so a comment quoting the right words could satisfy it, and another was watching a fixed-size window that was about five lines of text away from losing sight of the thing it checks. ";
+  "-160 is the third attempt at one thing, and this time the counting is done by the machine rather than by hand. Twice now a release has fixed the places where this product lists people by name alone - which on a roster where two students share a name identifies nobody - and twice the count was wrong. The check found a banner still printing the same name three times over in plain sight, four lines below a line that had just been corrected. So the guard no longer looks for the shape of a fix; it looks for the mistake itself, and it found the survivors on its own before anybody was asked to look again. Every list of people on the batch screen now reads one definition of how a person is named - their name with their phone beside it - and that definition now lives in one place for the whole product, where the previous release had left three copies of it, including one on the very screen it linked people to. ";
+
 
 
 
@@ -25,6 +26,7 @@ export const RELEASE_NOTE_CURRENT =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
+  "-159 finishes something -158 only started. -158 stopped one tooltip on the batch screen from naming students by name alone - which on a roster with two students of one name identifies nobody - and the check found the SAME sentence still being written one line above it. Counting properly found four places on that screen where people are listed by name: the complete-batch plan, the two blocker warnings, and the portal-ID line. All four now read one shared definition of how a person is named here - the name with their phone beside it, which is what the contract already required and what a centre uses to tell two people apart on a call - and the check that guards it looks for the whole family rather than the one line that was fixed first. Two of this product own safeguards were repaired in the same pass: one was reading source code with the comments left in, so a comment quoting the right words could satisfy it, and another was watching a fixed-size window that was about five lines of text away from losing sight of the thing it checks. " +
   "-158 answers the two riders the check on -157 filed, and both are about the same habit: a thing that " +
   "LOOKS like it is watching. The Certification warning that -157 added named the students with no portal " +
   "Candidate ID by name alone - so on the one roster this whole week has been about, where two students " +

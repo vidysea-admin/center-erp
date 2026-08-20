@@ -3,7 +3,7 @@ import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { api, fmtDate, pipelineLabel, toInputDate, offerable } from "@/lib/client";
+import { api, fmtDate, pipelineLabel, toInputDate, offerable, personLabel } from "@/lib/client";
 import { emailError, phoneError } from "@/lib/validate";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, ShareLinkPanel, SourceCell, Tabs, inputCls } from "@/components/ui";
 import { BASE_PATH } from "@/lib/base-path";
@@ -374,7 +374,7 @@ function TrainersInner() {
           {dupeNames.length > 0 && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
               ⚠ <b>{dupeNames.length} name{dupeNames.length > 1 ? "s appear" : " appears"} under more than one phone number</b> — possibly the same person entered twice (the phone-unique rule cannot catch this). Confirm with the team before merging:{" "}
-              {dupeNames.slice(0, 5).map((d) => `${d.name} (${d.phones.join(" / ")})`).join(" · ")}{dupeNames.length > 5 ? " …" : ""}
+              {dupeNames.slice(0, 5).map(personLabel).filter(Boolean).join(" · ")}{dupeNames.length > 5 ? " …" : ""}
             </div>
           )}
           <FilterPills active={tag} onChange={(v) => setTag(v === tag ? "" : v)}

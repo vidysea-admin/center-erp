@@ -579,18 +579,56 @@ for (const file of walk(root)) {
   // row under this name but its hours column could not be read" - and two sibling tooltips in this
   // same page went on asserting hours unconditionally, and asserting they were THIS student's while
   // two people shared the name. A tooltip is a sentence; it is held to the sentence's standard.
-  // -159 (QA-472): THE CLASS, not the instance. This page carries four tooltips that name people -
-  // the complete-batch plan, the assessment blocker, the certification blocker and the portal-ID
-  // line - and -158 fixed one of them, which is how "Sachin Kumar, Sachin Kumar" survived one line
-  // above the tooltip that had just stopped saying it. Any title built by mapping rows to a bare
-  // .name is the defect, wherever it appears; personLabel/personList is the one definition.
+  // -159 cycle 2 (QA-477): THE CLASS, and this time without an exemption to spoof. The first draft
+  // matched a single-line title={...map(...).name...} and the checker walked seven different things
+  // past it - a for loop, a reduce, an own helper, u["name"], a line break, rendered text, and the
+  // word personList written anywhere on the line, since the exemption was a whole-line substring.
+  // Two of the three surfaces it could not see were not tooltips at all; one printed three
+  // identical names in VISIBLE amber copy.
+  //
+  // The structural insight: with a shared labeller the mapping happens INSIDE the helper, so a
+  // person payload and .name never co-occur in page source - personList(blockers.unmarked) contains
+  // no .name anywhere. So the rule is "these payloads are never followed by .name", there is
+  // nothing to exempt, and a loop, a reduce or a private helper all trip it because every one of
+  // them has to reach the name eventually.
+  //
+  // HONEST LIMIT, stated because this pin has now over-claimed twice: it knows the payloads BY
+  // NAME. A person list arriving under a new identifier is not covered until that identifier is
+  // added here. What it does guarantee is that these five - which is every person list on this
+  // screen today - cannot be rendered by name alone.
   {
-    const bare = stripComments(bp).split(/\r?\n/)
-      .filter((l) => /title=\{/.test(l) && /\.map\(/.test(l) && /\.name\b/.test(l) && !/personLabel|personList/.test(l));
-    if (!bare.length) passed++;
+    const PERSON_PAYLOADS = ["unmarked", "unsettled", "noCan", "pending", "conflicts"];
+    const code = stripComments(bp);
+    const offenders = [];
+    for (const payload of PERSON_PAYLOADS) {
+      const rx = new RegExp("\\b" + payload + "\\b[\\s\\S]{0,200}?(\\.name\\b|\\[\"name\"\\])", "g");
+      for (const m of code.matchAll(rx)) {
+        const line = code.slice(0, m.index).split(/\r?\n/).length;
+        offenders.push(`${payload} -> .name at line ~${line}`);
+      }
+    }
+    if (!offenders.length) passed++;
     else {
       failed++;
-      pushCopy(`app/(app)/batches/[id]/page.tsx: ${bare.length} tooltip(s) still name people by bare name, so two students of one name read identically - use the shared personList() (QA-472)`);
+      pushCopy(`app/(app)/batches/[id]/page.tsx: ${offenders.length} person list(s) still reach a bare .name, so two people of one name read identically - render them through personList() from @/lib/client (QA-476): ${offenders.slice(0, 6).join(" | ")}`);
+    }
+  }
+
+  // -159 cycle 2 (QA-481): and ONE definition of it, app-wide. Writing a private personLabel in the
+  // page made it the THIRD copy in src/ - in the release whose whole point was collapsing copies of
+  // this same rule. The two screens that had their own are the Portal ID health screen (which the
+  // -158 tooltip links to) and the trainers duplicate-name banner.
+  {
+    const copies = [];
+    for (const rel of ["app/(app)/candidates/page.tsx", "app/(app)/trainers/page.tsx", "app/(app)/batches/[id]/page.tsx"]) {
+      const src = stripComments(fs.readFileSync(path.join(root, rel), "utf-8"));
+      // a template literal that puts a phone in brackets after a name is this rule, hand-written
+      if (/\`\$\{[a-z]\w*\.name\}[^\`]*\(\$\{[a-z]\w*\.phone/.test(src)) copies.push(rel);
+    }
+    if (!copies.length) passed++;
+    else {
+      failed++;
+      pushStructural(`${copies.join(", ")}: "name (phone)" is written by hand here as well as in lib/client.ts - one rule, ${copies.length + 1} copies, which is the shape ARCHITECTURE section 3 exists to prevent (QA-481)`);
     }
   }
 

@@ -201,6 +201,26 @@ invalid recipient) and **always** write a MailLog row. Bounces: SNS → `public/
   never overwrites) — the link-portal-ids contract one level up. UI: the Candidates page
   "Portal ID health" drawer.
 
+### 3.0b Collapsed in -160 (2026-08-21) — "how a person is named"
+
+- **`personLabel` / `personList` in `lib/client.ts` is the ONLY definition.** REQ-389: the portal
+  ID when present, **otherwise the phone** — because a bare name is not an identity on a roster
+  where two students share one (the two Sachin Kumars this whole week ran through).
+  Readers: the batch page (all seven person lists), `candidates/page.tsx` (Portal ID health), and
+  `trainers/page.tsx` (the duplicate-name banner). It accepts singular `phone` **and** plural
+  `phones` — trainers genuinely carry a list, and that difference is data, not drift.
+- **How this row got here is the warning.** `-158` fixed ONE surface and called it a class. `-159`
+  counted four, called it a class, and wrote its own private `personLabel` — making it the **third**
+  app-wide copy of the rule **in the release whose point was collapsing copies**, with one of the
+  other two sitting on the very screen `-158`'s tooltip links to. The check counted **seven**
+  surfaces and browser-proved a banner printing one name three times in visible copy.
+- **The guard is `check-user-copy`, and it looks for the MISTAKE, not the shape of the fix:** the
+  person payloads (`unmarked`, `unsettled`, `noCan`, `pending`, `conflicts`) may never be followed
+  by `.name`, because with a shared labeller the mapping happens *inside* the helper and the two
+  never co-occur. **No exemption** — the previous version's exemption was defeated by writing
+  `personList` anywhere on the line. Limit: it knows those payloads by name, so a person list under
+  a new identifier needs adding here.
+
 
 Ranked by how likely a change lands on one copy and not the others.
 
