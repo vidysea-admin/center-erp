@@ -1911,6 +1911,9 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
   // own rule (the QA-004 pattern: a button that cannot fire says so instead of bouncing), and the
   // Admin door is offered right here, where the press happens.
   const [blockers, setBlockers] = useState<any>(null);
+  // -157 (QA-462): names of enrolled students with no portal Candidate ID. Certification cannot
+  // complete - by either door - while this is non-empty.
+  const [noCan, setNoCan] = useState<string[]>([]);
   const [adminBusy, setAdminBusy] = useState(false);
   const isAdmin = role === "Admin";
   const loadBlockers = () => api(`/api/batches/${batchId}/complete`).then(setBlockers).catch(() => setBlockers(null));
@@ -1933,6 +1936,11 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
     setForm(d.closure ?? {}); setInvForm(d.invoice ?? {});
     setLegacy(d.legacy !== false);
     setSummary(d.results_summary ?? null);
+    // -157 (QA-462): -156 shipped this field and no component read it, so the gate it explains
+    // stopped certification deriving with nothing on screen to say why - the operator's first news
+    // was a 409 after pressing a button that looked live. A guard that changes what a screen will
+    // do explains itself on that screen.
+    setNoCan(Array.isArray(d.certification_blocked_no_can) ? d.certification_blocked_no_can : []);
     if (d.legacy === false) setPerCandidate(true);
   }).catch((e: any) => setError(e.message));
   useEffect(() => { load(); }, [batchId]);
@@ -2084,7 +2092,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
           <span className="inline-flex flex-col gap-0.5">
             <Btn small
               onClick={() => saveClosure({ certification_status: "Completed", certification_date: form.certification_date ?? new Date(), ...(legacy ? { certificates_issued: form.certificates_issued } : {}) })}
-              disabled={closure?.certification_status === "Completed" || (blockers?.unsettled?.length ?? 0) > 0 || closure?.assessment_status !== "Completed"}>Mark Completed</Btn>
+              disabled={closure?.certification_status === "Completed" || (blockers?.unsettled?.length ?? 0) > 0 || closure?.assessment_status !== "Completed" || noCan.length > 0}>Mark Completed</Btn>
             {closure?.certification_status !== "Completed" && (blockers?.unsettled?.length ?? 0) > 0 && (
               <span className="text-[10px] font-medium text-amber-700"
                 title={(blockers.unsettled ?? []).map((u: any) => u.name).filter(Boolean).join(", ")}>
@@ -2093,6 +2101,18 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
             )}
             {closure?.certification_status !== "Completed" && (blockers?.unsettled?.length ?? 0) === 0 && closure?.assessment_status !== "Completed" && (
               <span className="text-[10px] font-medium text-gray-500">assessment goes first</span>
+            )}
+            {/* -157 (QA-462): the same shape as the unsettled line four lines up, for the same
+                reason. The government issues no certificate without the portal Candidate ID, so
+                this batch cannot certify by ANY door until these students have one - and until
+                -157 the screen said nothing at all while the derived tick silently stopped
+                arriving, which is Manish's "mark complete karne se kuch nahi ho raha" one step
+                earlier. The link goes where the IDs can actually be recovered. */}
+            {closure?.certification_status !== "Completed" && noCan.length > 0 && (
+              <span className="text-[10px] font-medium text-amber-700" title={noCan.join(", ")}>
+                {noCan.length} enrolled student{noCan.length === 1 ? " has" : "s have"} no portal Candidate ID —{" "}
+                <Link href="/candidates" className="underline">Portal ID health</Link> fixes most of them
+              </span>
             )}
           </span>
         </div>

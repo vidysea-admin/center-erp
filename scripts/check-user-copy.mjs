@@ -535,6 +535,24 @@ for (const file of walk(root)) {
     pushStructural(`app/(app)/batches/[id]/page.tsx: the attendance summary line and its generic arm have drifted - ${why} (QA-422)`);
   }
 
+  // -157 (QA-462): a guard that changes what a screen will do has to explain itself ON that screen.
+  // -156 emitted certification_blocked_no_can and no component read it, so certification silently
+  // stopped deriving behind a button that still looked live - and the release note told production
+  // users the screen said who was missing one. Three properties, because any one alone can be true
+  // while the operator still learns it from a 409: the page must READ the field, the Certification
+  // section must RENDER it, and the button must be gated on it.
+  {
+    const cert = (bp.split("<Section title={`Certification")[1] ?? "").slice(0, 4000);
+    const markLine = cert.split(/\r?\n/).find((l) => /Mark Completed<\/Btn>/.test(l)) ?? "";
+    const faults = [];
+    if (!/certification_blocked_no_can/.test(bp)) faults.push("the page never reads certification_blocked_no_can, so the closure route is talking to nobody");
+    if (!cert) faults.push("the Certification section could not be located - this check has lost its subject rather than passed");
+    else if (!/noCan\.length > 0/.test(cert)) faults.push("the Certification section renders nothing when enrolled students have no portal Candidate ID");
+    if (!markLine || !/noCan\.length > 0/.test(markLine)) faults.push("the Mark Completed button is not gated on the missing portal IDs, so it invites a press the server refuses with a 409");
+    if (!faults.length) passed++;
+    else { failed++; for (const f of faults) pushStructural("app/(app)/batches/[id]/page.tsx: " + f + " (QA-462)"); }
+  }
+
   // -156 (QA-434): QA-410 taught the VERDICT to say only what the row holds - "the export carries a
   // row under this name but its hours column could not be read" - and two sibling tooltips in this
   // same page went on asserting hours unconditionally, and asserting they were THIS student's while

@@ -1590,7 +1590,14 @@ ok("removal is real", (await req(admin, "GET", `/api/sync-sources/${srcId}`)).st
       JSON.stringify({ addA: addA.status, addB: addB.status, err: String(addB.data?.error ?? "").slice(0, 90) }));
     await req(admin, "POST", "/api/candidates/portal-id-health", { copy: [twoCand._id] }, 200);
     const planTwo = (await req(admin, "GET", "/api/candidates/portal-id-health", undefined, 200)).data;
-    ok("-156 (QA-453): the plan carries the ambiguous_batch group even while nothing can land in it",
+    // -157 (QA-464): STATED, because the checker measured it and it is true - this line asserts that
+    // the key EXISTS on the payload, and a hardcoded `ambiguous_batch: []` would satisfy it. The
+    // branch's own condition needs two live memberships, which Rule 20 forbids, so nothing in this
+    // suite can run it. -144 (the precedent this unit cites) reached one step short of ITS
+    // unreachable state and pinned a shape that runs the guarded path; there is no such step here,
+    // because the step short of "two live memberships" is one, and one is the ordinary case pinned
+    // on the next line. So this is a presence check and says so, rather than borrowing -144's credit.
+    ok("-156 (QA-453): the plan carries the ambiguous_batch group even while nothing can land in it (presence only - see the note above)",
       Array.isArray(planTwo.ambiguous_batch),
       JSON.stringify({ present: Array.isArray(planTwo.ambiguous_batch), held: (planTwo.ambiguous_batch ?? []).length }));
     // The row that names no batch still attaches, because with one live membership there IS one

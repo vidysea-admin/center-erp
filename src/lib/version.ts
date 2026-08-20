@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-156";
+export const RELEASE = "2026.08.14-157";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,12 @@ export const RELEASE = "2026.08.14-156";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-157 is one fix and one correction, and the correction is the point. -156 built the rule that certification cannot complete while an enrolled student has no portal Candidate ID - at both doors, the typed one and the automatic one - and told you, in this very note, that the Closure screen would say WHO was missing one before anybody pressed anything. It did not. The figure was computed and sent, and no part of the screen read it, so on such a batch the certification tick simply stopped arriving while the button still looked ready to press, and the only explanation came as an error after the click. That is the exact complaint the rule was built to end, one step earlier, and the check caught it before anyone had to report it. Now the Certification section names those students, links to the screen that recovers most of their IDs from where they were misfiled, and the button is disabled while any of them is outstanding - the same shape as the line beside it that has always said how many passed candidates are still waiting on a certificate. ";
+
+
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-156 answers a checker's FAIL and finishes a story the same afternoon started. One number on the " +
   "batch Closure tab counted unmatched portal rows differently from the three chips beside it, " +
   "because it read a bucket the enrolment gate empties while they read the row itself; the line now " +
@@ -30,15 +36,13 @@ export const RELEASE_NOTE_CURRENT =
   "centres they have no scope over - and that group is now scoped like the other five. " +
   "Certification could still complete itself on a batch full of students with no portal Candidate " +
   "ID, because the gate was written on the hand-typed door and per-candidate batches derive instead " +
-  "of typing; both doors ask one question now, and the Closure screen says who is missing one " +
-  "before anybody presses anything. A blank Candidate ID is stored as absence rather than an empty " +
+  "of typing; both doors ask one question now. THE HALF -156 CLAIMED AND DID NOT SHIP: it said the " +
+  "Closure screen named who was missing one - the payload was there and no screen read it, so the " +
+  "derived tick stopped arriving behind a button that still looked live. The check caught it and " +
+  "-157 is the screen. A blank Candidate ID is stored as absence rather than an empty " +
   "string, so the second person without one is no longer refused as a duplicate identity. And a " +
   "portal row that names no batch is held for a person when its student is on two - the ID says " +
-  "who, never which batch. ";
-
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "who, never which batch. " +
   "-155 is the root of the Sachin Kumar story, closed at every door it touched. Measured on live: 55 " +
   "candidates carried their government portal Candidate ID in the wrong field - id_reference, the " +
   "nearest-looking option on a mapping screen that never offered the right one - while the field both " +
