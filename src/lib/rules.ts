@@ -2055,6 +2055,16 @@ export function memberAttendedHours(opts: {
 //      Before that the honest thing to show is where they are in the journey.
 //   2. the TIME gate — "not eligible" is a verdict, so it waits until the course is actually over.
 //      While it runs, a student below the bar is IN PROGRESS, not rejected.
+// -153 cycle 2 (QA-413): the bucket list in the attendance route was six hand-typed strings against
+// a union that has now grown twice (trainer in -127, awaiting_match in -153). The only thing keeping
+// the -109 invariant true - that the buckets partition the roster - was somebody remembering to edit
+// both places. A guard made of memory is the thing this project keeps paying for. The union and the
+// list are ONE value now, so a new state joins the buckets by existing.
+export const ELIGIBILITY_STATES = [
+  "qualified", "in_progress", "no_hours", "awaiting_match", "not_eligible", "not_enrolled", "trainer",
+] as const;
+export type EligibilityState = (typeof ELIGIBILITY_STATES)[number];
+
 export type EligibilityVerdict = {
   // -127 (QA-180): "trainer" is a state, not a verdict. A portal export carries the centre's own
   // trainers alongside its students, and eligibility is a question that was never asked of them —
@@ -2065,7 +2075,7 @@ export type EligibilityVerdict = {
   // export never arrived; awaiting_match says it DID and the row is not attached to this student
   // yet. Both are "we cannot judge you", and telling them apart is the whole point - one is a
   // missing file somebody must go and fetch, the other is two clicks on a screen we already ship.
-  state: "qualified" | "in_progress" | "no_hours" | "awaiting_match" | "not_eligible" | "not_enrolled" | "trainer";
+  state: EligibilityState;
   label: string;
   detail: string;
   qualified: boolean; // kept for every existing caller — true ONLY for a real pass of the bar
@@ -2117,13 +2127,20 @@ export function eligibilityVerdict(opts: {
     if (awaitingMatch && awaitingMatch.count > 0) {
       // Whole hours, via the SAME rounding memberAttendedHours uses (Math.round(min / 60)). A
       // second convention here would have this line reading 63.2 hrs beside a grid reading 63.
-      const hrs = awaitingMatch.hours_minutes != null ? `${Math.round(awaitingMatch.hours_minutes / 60)} hrs` : "hours";
+      // -153 cycle 2 (QA-410): say only what the row actually holds. A row whose hours column the
+      // importer could not read is still a row waiting to be matched - but claiming it "DOES carry
+      // hours" about a null trades one confident falsehood for another, which is the exact shape
+      // this state exists to end. The wording it replaced was careful to allow for an unreadable
+      // column; this must be too.
+      const mins = awaitingMatch.hours_minutes;
       return {
         state: "awaiting_match", qualified: false,
         label: "Portal hours waiting on a match",
         detail: awaitingMatch.count > 1
-          ? `the export carries ${awaitingMatch.count} rows under this name and none is attached to a student yet - open the import on the Government Attendance screen and pick the right person for each, and these hours land by themselves`
-          : `the export DOES carry ${hrs} under this name - the row is just not attached to this student yet; resolve it on the Government Attendance screen and the hours land by themselves`,
+          ? `the export carries ${awaitingMatch.count} rows under this name and none is attached to a student yet - open the import on the Government Attendance screen and pick the right person for each, and whatever they hold lands by itself`
+          : mins != null
+            ? `the export DOES carry ${Math.round(mins / 60)} hrs under this name - the row is just not attached to this student yet; resolve it on the Government Attendance screen and the hours land by themselves`
+            : `the export carries a row under this name but its hours column could not be read - attach the row on the Government Attendance screen, and re-import if the hours are still blank after that`,
       };
     }
     return {

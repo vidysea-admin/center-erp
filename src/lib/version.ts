@@ -17,26 +17,27 @@ export const RELEASE = "2026.08.14-153";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
-  "-153 is the first of Manish's 20 August list, and both items are the same shape: a screen stating " +
+  "-153 is the first two rows of Manish's 20 August list, and both are one shape: a screen stating " +
   "something false with complete confidence. QA-395 - a trainer at a centre running two batches was " +
   "shown a batch count of 2 and, on clicking through, one batch. Neither number was wrong; they were " +
-  "answers to different questions. A Trainer login is scoped by LOCATION, so the dashboard tile " +
-  "counted the centre, while the list it links to resolves the login to its own trainer record and " +
-  "defaults to My batches. Two meanings of my batch, and only one surface ever said which it meant. " +
-  "The tile now uses the list's meaning, through the same trainerForLogin resolution, so the two " +
-  "cannot drift apart again - and it says which it counted, so the label can read My Ongoing Batches " +
-  "rather than leave a manager to infer it. Writing that fix nearly re-created the bug class it " +
-  "closes: filtering on trainer null would have matched every UNASSIGNED batch in the database, " +
-  "unscoped, for any trainer login the ERP cannot resolve. A trainer we cannot resolve teaches " +
-  "nothing, so that case now counts zero and is pinned. QA-393 and QA-293 - the batch Attendance tab " +
-  "told an operator the government export for two students had never been imported. It had been " +
-  "imported three times, their hours were stored, and the same sentence was correct about the other " +
-  "eight members of that batch, which is what made it dangerous. Both students share a name, so the " +
-  "matcher refused to guess between them - correctly - and the row stayed unattached. Unattached is " +
-  "not missing, so it gets its own verdict: the export carries these hours, the row is not linked to " +
-  "this student yet, and here is the screen that links it. The roster stops estimating zero hours for " +
-  "them off our own daily logs. Nothing here can qualify anybody - QA-085 stands, and only a row the " +
-  "ERP has actually attached to a person may move their hours. " ;
+  "answers to different questions. A Trainer login is scoped by LOCATION, so the dashboard counted " +
+  "the centre, while the list it links to resolves the login to its own trainer record and defaults " +
+  "to My batches. There is now one definition of which batches a login's Home is about, and every " +
+  "figure on it reads that - the counts, the subtitles printed under them, attendance, enrolment and " +
+  "the log queues. That breadth is the checker's doing: the first attempt moved the two counts and " +
+  "left a centre figure in the subtitle directly beneath a headline newly labelled My, which is the " +
+  "same defect one line lower, shipped by its own fix. QA-393 and QA-293 - the batch Attendance tab " +
+  "told an operator the government export for two students had never been imported. It had been, " +
+  "three times, their hours were stored, and the same sentence was correct about the other eight " +
+  "members of that batch, which is what made it dangerous. Both students share a name, so the matcher " +
+  "refused to guess between them - correctly - and the rows stayed unattached. Unattached is not " +
+  "missing, so it now has its own verdict: the export carries these hours, the row is not linked to " +
+  "this student yet, and here is the screen that links it. Where the hours column itself could not be " +
+  "read the wording says that instead of claiming hours exist. The student's own page was a third " +
+  "surface carrying the same false sentence and, after the first attempt, the only one still carrying " +
+  "it; it now says the portal has sent their hours and the centre is confirming whose they are, and " +
+  "quotes no shortfall computed off our own logs while it waits. Nothing here can qualify anybody - " +
+  "only a row the ERP has actually attached to a person may move their hours. ";
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =

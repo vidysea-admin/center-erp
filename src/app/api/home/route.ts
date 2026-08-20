@@ -13,39 +13,37 @@ export const GET = apiHandler(async () => {
   const scope = locationFilter(user);
   const defaults = await getDefaults();
 
+  // -153 (QA-395, Manish 20/08) and -153 cycle 2 (QA-408, the checker, on my own cycle-1 fix).
+  //
+  // A Trainer login is scoped by LOCATION (authz.ts:82 - isScoped() is true for the role), so every
+  // batch-derived figure on this route described the CENTRE. Manish reported the visible half:
+  // "trainer ko dashboard pe batch count 2 dikh raha hai instead of 1, lekin jab woh click kar raha
+  // hai tab usse ek hi batch dikh raha hai" - the tile counted the centre, while the list it links
+  // to resolves the login to its own trainer record and defaults to the "My batches" pill.
+  //
+  // CYCLE 1 MOVED THE TWO COUNTS AND NOTHING ELSE, which left a centre figure in the subtitle
+  // printed directly under a headline now labelled "My": "My Ongoing Batches / 0 / 1 with portal
+  // attendance imported". That is the same defect one line lower, shipped by its own fix. So the
+  // scope is defined ONCE, here, and every batch-derived figure below reads it - the counts, the
+  // subtitles under them, attendance, enrolment, and the log queues.
+  //
+  // An unresolvable Trainer login is NOT { trainer: null }: Mongo matches a null against a field
+  // that is null OR ABSENT, so that would return every unassigned batch in the database with no
+  // location filter at all - QA-302 / QA-347 family. A trainer we cannot resolve teaches nothing,
+  // so it matches nothing.
+  const myTrainer = user.role === "Trainer" ? await trainerForLogin(user) : null;
+  const homeBatchFilter: Record<string, unknown> = user.role === "Trainer"
+    ? (myTrainer ? { trainer: myTrainer._id } : { _id: { $in: [] } })
+    : scope;
+
   // Rule 38: every scoped user (Location, and Enrollment when a scope is set) sees only
   // their own locations' rows — including the KPI counts.
-  const scopedBatchIds = isScoped(user) ? await Batch.find(scope).distinct("_id") : null;
+  const scopedBatchIds = isScoped(user) ? await Batch.find(homeBatchFilter).distinct("_id") : null;
   const batchScope = scopedBatchIds ? { batch: { $in: scopedBatchIds } } : {};
 
   // 2026-08-13, found live after the data reset: a scoped user whose centres no longer exist
   // (their demo centre was purged) signs in to a wall of zeros with no explanation. Nothing is
   // broken — but a blank app reads as broken, so say WHY it is empty.
-  // -153 (Manish 20/08: "trainer ko dashboard pe batch count 2 dikh raha hai instead of 1, lekin
-  // jab woh click kar raha hai tab usse ek hi batch dikh raha hai"). Chitrakoot runs two batches
-  // with one trainer each; this tile counted the CENTRE's batches, because a Trainer login is
-  // scoped by location (authz.ts:82 - isScoped is true for the role) and locationFilter knows
-  // nothing about who teaches what.
-  //
-  // The screen the tile links to answers a different question: /api/batches resolves the login to
-  // its own trainer record and the list defaults to the "My batches" pill, so it showed 1. Two
-  // surfaces, two meanings of "my batch", one of them never stated.
-  //
-  // The tile takes the LIST's meaning, using the SAME resolution (trainerForLogin - link first,
-  // then email; never by name), so the two cannot drift apart again. The centre's other batches
-  // are still one click away behind the "All" pill, which is where they belong: a trainer's
-  // headline number is their own teaching load.
-  // AND the null case is not `{ trainer: null }`, which is how this fix nearly became the bug it
-  // was fixing. Mongo matches a null against a field that is null OR ABSENT, so a Trainer login the
-  // ERP cannot resolve to a trainer record would have counted every UNASSIGNED batch in the
-  // database - with no location filter anywhere in the query. That is QA-302/QA-347's family
-  // exactly: a filter that reads as narrowing and silently widens. A trainer we cannot resolve
-  // teaches nothing, so the honest count is zero and the query says zero out loud.
-  const myTrainer = user.role === "Trainer" ? await trainerForLogin(user) : null;
-  const batchCountScope = user.role === "Trainer"
-    ? (myTrainer ? { trainer: myTrainer._id } : { _id: { $in: [] } })
-    : scope;
-
   const scopedNoCentres = isScoped(user)
     ? (await Location.countDocuments({ ...locationFilter(user, "_id") })) === 0
     : false;
@@ -60,8 +58,8 @@ export const GET = apiHandler(async () => {
   const [approvedLocations, pendingLocations, activeBatches, completedBatches, enrolledMembers, poolCandidates, openRequests, fulfilledRequests] = await Promise.all([
     Location.countDocuments({ approval_status: "Approved", ...locationFilter(user, "_id") }),
     Location.countDocuments({ approval_status: "Pending", ...locationFilter(user, "_id") }),
-    Batch.countDocuments({ status: "Active", ...batchCountScope }),
-    Batch.countDocuments({ status: "Completed", ...batchCountScope }),
+    Batch.countDocuments({ status: "Active", ...homeBatchFilter }),
+    Batch.countDocuments({ status: "Completed", ...homeBatchFilter }),
     BatchMember.countDocuments({ left_on: null, enrollment_status: "Completed", ...batchScope }),
     Candidate.countDocuments({ ...scope }),
     TrainerRequest.countDocuments({ status: { $in: ["Open", "In Progress"] }, ...scope }),
@@ -193,7 +191,7 @@ export const GET = apiHandler(async () => {
   // card can say "0 logged of 390 expected — no daily logs entered yet" honestly.
   // -102 (Manish 17/08): this same list is what the new "log today's attendance" shortcut
   // needs, so it carries code + centre now instead of a second identical query.
-  const activeForExp = await Batch.find({ status: "Active", ...scope })
+  const activeForExp = await Batch.find({ status: "Active", ...homeBatchFilter })
     .populate("program", "operating_days").populate("location", "name code")
     .select("actual_start program code location").lean<any[]>();
   const expRoster = activeForExp.length ? await BatchMember.aggregate([
@@ -267,7 +265,10 @@ export const GET = apiHandler(async () => {
   };
 
   // Queue 1: missing daily logs (Rule 33)
-  const missingLogs = await missingLogQueue(scope);
+  // -153 cycle 2 (QA-408): a trainer's log queues are their OWN batches. They listed the
+  // centre's, which the checker measured as today_logging 1 and attendance_gaps 3 beside an
+  // Ongoing count of 0 - the same two-meanings-in-one-box defect as the tile itself.
+  const missingLogs = await missingLogQueue(homeBatchFilter);
 
   // -102, Manish 17/08 ([07:09] "teen click pe main chauthe click pe yaha aa raha hu… daily
   // execution aur government attendance wala main dashboard me hi daal dunga"): a trainer signs

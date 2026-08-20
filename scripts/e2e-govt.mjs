@@ -385,6 +385,46 @@ ok("all 7 rows persisted", detail.data.rows?.length === 7, `got ${detail.data.ro
       rows[`${NAME} Charlie`]?.verdict?.state !== "awaiting_match" && rows[`${NAME} Charlie`]?.govt?.hours === 76,
       JSON.stringify(rows[`${NAME} Charlie`]?.verdict?.state));
 
+    // -153 cycle 2 (QA-413): the -109 invariant is that the buckets PARTITION the roster. Four
+    // assertions pinned particular bucket values and NOTHING pinned the sum, so the hand-typed
+    // list could go stale silently the next time a state was added - which is what awaiting_match
+    // nearly did.
+    {
+      const live = (att.data.members ?? []).filter((m) => !m.left_on).length;
+      const summed = Object.values(att.data.verdict_counts ?? {}).reduce((a, b) => a + b, 0);
+      ok("-153 (QA-413): the verdict buckets partition the roster (sum == live members)",
+        summed === live, JSON.stringify({ summed, live, buckets: att.data.verdict_counts }));
+      ok("-153 (QA-413): every state the code can return has a bucket, including the empty ones",
+        ["qualified", "in_progress", "no_hours", "awaiting_match", "not_eligible", "not_enrolled", "trainer"]
+          .every((k) => typeof att.data.verdict_counts?.[k] === "number"),
+        JSON.stringify(Object.keys(att.data.verdict_counts ?? {})));
+    }
+
+    // -153 cycle 2 (QA-409): the STUDENTS own page is a third surface carrying the same false
+    // sentence, and after cycle 1 it was the only one still carrying it. QA-085s validation
+    // condition is that the candidates portal page and the batch tab cannot disagree.
+    {
+      const twin = (att.data.members ?? []).find((m) => m.name === `${NAME} Twin`);
+      const links = await req(admin, "POST", "/api/public-tokens", { purpose: "attendance", batch: batch._id });
+      const mine = (links.data.items ?? []).find((i) => String(i.batch_member?._id ?? i.batch_member) === String(twin?.member_id));
+      ok("-153 (QA-409) fixture: an attendance link exists for a same-name student",
+        !!mine?.token, JSON.stringify({ member: twin?.member_id, got: (links.data.items ?? []).length }));
+      if (mine?.token) {
+        const pub = await fetch(`${BASE}/api/public/attendance/${mine.token}`).then((r) => r.json()).catch(() => ({}));
+        ok("-153 (QA-409): the students own page knows the portal row is waiting on a match",
+          (pub?.awaiting_match?.count ?? 0) > 0, JSON.stringify({ awaiting: pub?.awaiting_match, basis: pub?.hours_basis }));
+        // INVARIANT, not a regression pin, and said so because the pre-fix run proved it: this
+        // fixture batch has no slot (QA-085), so there is no estimate to quote and remaining_hours
+        // is null on both sides. It still has to hold - a student waiting on a match must never be
+        // handed a shortfall computed off our own logs - so it stays, honestly labelled.
+        ok("-153 (QA-409, invariant): no shortfall is quoted off our own logs while a row waits",
+          pub?.remaining_hours === null, JSON.stringify({ remaining: pub?.remaining_hours, attended: pub?.attended_hours }));
+      } else {
+        ok("-153 (QA-409): the students own page knows the portal row is waiting on a match", false, "no token");
+        ok("-153 (QA-409, invariant): no shortfall is quoted off our own logs while a row waits", false, "no token");
+      }
+    }
+
     // QA-293: the same two students on the ROSTER, where the screen rendered "~0 / 60 hrs (est.)"
     // off our own daily logs - an estimate that was honest about its basis and still said "~0"
     // about people who may well have cleared the bar.

@@ -4,6 +4,7 @@ import { apiHandler, HttpError } from "@/lib/authz";
 import { CandidateResult, Closure, DailyLog, GovtAttendanceRow, PublicToken } from "@/models";
 import { getDefaults } from "@/lib/defaults";
 import { assessmentHoursBar, memberAttendedHours, slotHoursPerDay } from "@/lib/rules";
+import { nameKey, unresolvedPortalRowsByName } from "@/lib/govt-attendance";
 
 // Public per-student attendance view (2026-08-13, Manish: "bacche baar-baar request karte hain
 // sir hamein attendance dekhiye… 60 plus hona mandatory hai" — eligibility is min_attendance_pct
@@ -64,6 +65,19 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   const attendedHours = h.attended_hours;
   const basis = h.basis;
 
+  // -153 cycle 2 (QA-409). QA-085s own validation condition was that "the candidates own portal
+  // page and the batch tab cannot disagree". -153 cycle 1 taught the two STAFF screens to tell an
+  // unattached portal row from a missing export and left this one - the page the STUDENT reads -
+  // still saying "hours will appear once the portal attendance is imported" about hours that had
+  // already arrived. After that release this was the only surface still saying it.
+  //
+  // Same lookup as the staff screens, so the three cannot drift; and only consulted when the
+  // portal has NOT already answered for this student, so a matched student is never pulled back.
+  const awaitingMatch = basis === "portal"
+    ? null
+    : (await unresolvedPortalRowsByName({ batchId: batch?._id, locationId: batch?.location?._id ?? batch?.location }))
+        .get(nameKey(m.candidate?.name)) ?? null;
+
   const closure = await Closure.findOne({ batch: batch._id }).select("assessment_date").lean<any>();
   // Result & certificate — the "aage kya hua" answer once the exam happens.
   const result = await CandidateResult.findOne({ batch: batch._id, candidate: m.candidate?._id })
@@ -103,7 +117,12 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     required_hours: requiredHours,
     attended_hours: attendedHours,
     hours_basis: basis, // "portal" (authoritative) | "estimate" (days × slot) | null (no slot, no import)
-    remaining_hours: attendedHours != null ? Math.max(0, requiredHours - attendedHours) : null,
+    // -153 cycle 2 (QA-409): a shortfall computed off OUR daily logs, told to a student whose real
+    // portal hours are sitting in an unattached row, is a number that can be wrong in the direction
+    // that matters most to them. While a row is waiting to be matched we owe them the situation,
+    // not an arithmetic answer - so no shortfall is quoted and the page says what is happening.
+    awaiting_match: awaitingMatch ? { count: awaitingMatch.count } : null,
+    remaining_hours: awaitingMatch ? null : (attendedHours != null ? Math.max(0, requiredHours - attendedHours) : null),
     eligible: govtHours != null && govtHours >= requiredHours,
     assessment_date: closure?.assessment_date ?? null,
   });

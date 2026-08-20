@@ -168,6 +168,31 @@ ok("[worst] …attendance pct is null (not NaN/0) when nothing has been logged",
     ok("-153: an Admin's tile is unchanged — still the whole scope, and it says so",
       aHome.kpis.batch_counts_basis === "scope" && aHome.kpis.active_batches >= 2,
       JSON.stringify({ basis: aHome.kpis.batch_counts_basis, active: aHome.kpis.active_batches }));
+    // -153 cycle 2 (QA-408): the checker found cycle 1 had moved the two COUNTS and left every
+    // other batch-derived figure on Home reading the CENTRE - so a headline labelled "My Ongoing
+    // Batches" sat directly above a subtitle counting somebody elses batches. Same defect one line
+    // lower, shipped by its own fix. These pin the whole tile, not just the number.
+    // NOTE on what is NOT pinned here: the Ongoing tile prints attendance.portal_batches as its
+    // subtitle, and this fixture imports no portal attendance, so that figure is 0 whichever scope
+    // computes it. An assertion on it passed against the pre-fix build and was therefore deleted.
+    // It rides the SAME batchScope as enrolled_students, and that one below does fail pre-fix.
+    {
+      // the enrolled figure printed under "My Completed Batches" must be this trainers roster too
+      const mineIds = new Set(mine.map((b) => String(b._id)));
+      const foreign = tBatches.filter((b) => !mineIds.has(String(b._id)));
+      ok("-153 (QA-408): the enrolled count under a trainer tile is their own roster",
+        typeof tHome.kpis.enrolled_students === "number" && tHome.kpis.enrolled_students <= 1,
+        JSON.stringify({ enrolled: tHome.kpis.enrolled_students, my_batches: mine.length, foreign_batches: foreign.length }));
+      ok("-153 (QA-408): and the log queues are the trainers own batches, not the centres",
+        (tHome.queues?.missing_logs ?? []).every((x) => mineIds.has(String(x.batch?._id)))
+          && (tHome.queues?.today_logging ?? []).every((x) => mineIds.has(String(x._id))),
+        JSON.stringify({
+          missing: (tHome.queues?.missing_logs ?? []).map((x) => x.batch?.code),
+          today: (tHome.queues?.today_logging ?? []).map((x) => x.code),
+          mine: mine.map((b) => b.code),
+        }));
+    }
+
     // -153: the null branch, which is where this fix nearly re-created the bug it fixes.
     // `{ trainer: null }` matches a field that is null OR ABSENT, so an unresolvable Trainer login
     // would have been handed the count of every UNASSIGNED batch in the database, unscoped.

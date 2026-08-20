@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, HttpError } from "@/lib/authz";
 import { Batch, BatchMember, DailyLog, GovtAttendanceRow } from "@/models";
-import { assertBatchInScope, assessmentHoursBar, courseIsFinished, eligibilityVerdict, memberAttendedHours, slotHoursPerDay } from "@/lib/rules";
+import { ELIGIBILITY_STATES, assertBatchInScope, assessmentHoursBar, courseIsFinished, eligibilityVerdict, memberAttendedHours, slotHoursPerDay } from "@/lib/rules";
 import { nameKey, unresolvedPortalRowsByName } from "@/lib/govt-attendance";
 import { getDefaults } from "@/lib/defaults";
 
@@ -113,9 +113,12 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     // hours on record, 0 genuinely not eligible" instead of lumping the last three together.
     course_finished: finished,
     portal_working_days: portalWorkingDays || null,
-    // -153: awaiting_match joins the buckets. It has to be listed here or the -109 invariant
-    // (the buckets add up to the roster) silently breaks the moment a row goes unresolved.
-    verdict_counts: ["qualified", "in_progress", "no_hours", "awaiting_match", "not_eligible", "not_enrolled"].reduce((acc: Record<string, number>, k) => {
+    // -153 cycle 2 (QA-413): this was a hand-typed list, and awaiting_match had to be remembered
+    // into it or the -109 invariant (the buckets partition the roster) would have broken silently
+    // the first time a row went unresolved. It reads the one exported state list now, so the union
+    // and the buckets cannot drift apart. ("trainer" is constructed by the govt-attendance grid,
+    // never returned here, so its bucket is a constant 0 on this route - present and honest.)
+    verdict_counts: ELIGIBILITY_STATES.reduce((acc: Record<string, number>, k) => {
       acc[k] = rows.filter((r) => !r.left_on && r.verdict.state === k).length;
       return acc;
     }, {}),

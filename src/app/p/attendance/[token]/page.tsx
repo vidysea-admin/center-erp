@@ -80,9 +80,11 @@ export default function PublicAttendancePage({ params }: { params: Promise<{ tok
             <p className={`font-semibold ${data.eligible ? "text-green-800" : "text-amber-800"}`}>
               {data.eligible
                 ? "You are eligible for the exam"
-                : data.remaining_hours != null
-                  ? `${data.remaining_hours} more hour${data.remaining_hours === 1 ? "" : "s"} needed for exam eligibility`
-                  : "Your hours are being confirmed with the government portal"}
+                : data.awaiting_match
+                  ? "Your portal attendance has arrived and is being matched to your record"
+                  : data.remaining_hours != null
+                    ? `${data.remaining_hours} more hour${data.remaining_hours === 1 ? "" : "s"} needed for exam eligibility`
+                    : "Your hours are being confirmed with the government portal"}
             </p>
             <p className="mt-1 text-xs text-gray-500">
               Required: {data.required_hours} of {data.program_hours} hours ({data.min_attendance_pct}%)
@@ -93,9 +95,15 @@ export default function PublicAttendancePage({ params }: { params: Promise<{ tok
             {/* QA-085/086: eligibility is settled by the government portal's meter — an
                 estimate from our own logs is shown as exactly that. */}
             <p className="mt-1 text-xs font-medium text-gray-600">
-              {data.attended_hours != null
-                ? `${data.attended_hours} hours attended${data.hours_basis === "estimate" ? " (estimated — portal hours pending)" : ""}`
-                : "hours will appear once the portal attendance is imported"}
+              {/* -153 (QA-409): checked BEFORE the estimate and before the "not imported" line,
+                  because both of those were false for a student whose portal row is here and
+                  simply not attached to them yet. A student cannot fix this and must not be sent
+                  to try, so this says what is happening rather than what to do. */}
+              {data.awaiting_match
+                ? "The government portal has sent your hours; your centre is confirming which record they belong to."
+                : data.attended_hours != null
+                  ? `${data.attended_hours} hours attended${data.hours_basis === "estimate" ? " (estimated — portal hours pending)" : ""}`
+                  : "hours will appear once the portal attendance is imported"}
             </p>
           </div>
 
