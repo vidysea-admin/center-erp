@@ -186,6 +186,22 @@ invalid recipient) and **always** write a MailLog row. Bounces: SNS → `public/
 
 ## 3. THE DUPLICATION MAP — read this before changing any shared concept
 
+### 3.0 Collapsed in -155 (2026-08-20) — one definition each, do not re-grow the copies
+
+- **"the fields a Candidate has" (import surface):** was FIVE hand-typed copies (FIELD_CATALOG,
+  the candidates-page mapping dropdown, the import writer, both drawer routes). The dropdown and
+  the writer now BOTH read `CANDIDATE_IMPORT_FIELDS` (`field-catalog.ts`) — cost of the drift was
+  55 live portal IDs landing in `id_reference` (QA-414 S1). `trainers/import` `TEXT_FIELDS` is the
+  same disease waiting to repeat (QA-424 residue — still hand-typed).
+- **shifted-column signature:** `shiftSignature()` in `lib/govt-attendance.ts` is the ONLY
+  definition; readers = the -154 import guard, the portal-id-health screen, the ID-re-match.
+- **CAN normalisation:** `normalizeCan()` in `lib/govt-attendance.ts`; `link-portal-ids` aliases
+  its old local `canOf` to it. Never write a near-copy of that regex.
+- **New door:** `api/candidates/portal-id-health` (GET plan / POST selected fixes, audited,
+  never overwrites) — the link-portal-ids contract one level up. UI: the Candidates page
+  "Portal ID health" drawer.
+
+
 Ranked by how likely a change lands on one copy and not the others.
 
 ### 3.1 Two roster-add paths that already disagree — **live defect, QA-273**
