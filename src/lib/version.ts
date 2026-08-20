@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-158";
+export const RELEASE = "2026.08.14-159";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,14 @@ export const RELEASE = "2026.08.14-158";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-159 finishes something -158 only started. -158 stopped one tooltip on the batch screen from naming students by name alone - which on a roster with two students of one name identifies nobody - and the check found the SAME sentence still being written one line above it. Counting properly found four places on that screen where people are listed by name: the complete-batch plan, the two blocker warnings, and the portal-ID line. All four now read one shared definition of how a person is named here - the name with their phone beside it, which is what the contract already required and what a centre uses to tell two people apart on a call - and the check that guards it looks for the whole family rather than the one line that was fixed first. Two of this product own safeguards were repaired in the same pass: one was reading source code with the comments left in, so a comment quoting the right words could satisfy it, and another was watching a fixed-size window that was about five lines of text away from losing sight of the thing it checks. ";
+
+
+
+
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-158 answers the two riders the check on -157 filed, and both are about the same habit: a thing that " +
   "LOOKS like it is watching. The Certification warning that -157 added named the students with no portal " +
   "Candidate ID by name alone - so on the one roster this whole week has been about, where two students " +
@@ -24,13 +32,7 @@ export const RELEASE_NOTE_CURRENT =
   "the recovery screen shows and what a centre actually uses to tell them apart. And the check that is " +
   "supposed to keep that warning on the screen turned out to be watching a phrase the DISABLED BUTTON " +
   "also carries, so the entire warning could be deleted and the check would still pass. It now looks for " +
-  "the sentence a person reads, proved by deleting the warning and watching it go red. ";
-
-
-
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "the sentence a person reads, proved by deleting the warning and watching it go red. " +
   "-157 is one fix and one correction, and the correction is the point. -156 built the rule that certification cannot complete while an enrolled student has no portal Candidate ID - at both doors, the typed one and the automatic one - and told you, in this very note, that the Closure screen would say WHO was missing one before anybody pressed anything. It did not. The figure was computed and sent, and no part of the screen read it, so on such a batch the certification tick simply stopped arriving while the button still looked ready to press, and the only explanation came as an error after the click. That is the exact complaint the rule was built to end, one step earlier, and the check caught it before anyone had to report it. Now the Certification section names those students, links to the screen that recovers most of their IDs from where they were misfiled, and the button is disabled while any of them is outstanding - the same shape as the line beside it that has always said how many passed candidates are still waiting on a certificate. " +
   "-156 answers a checker's FAIL and finishes a story the same afternoon started. One number on the " +
   "batch Closure tab counted unmatched portal rows differently from the three chips beside it, " +

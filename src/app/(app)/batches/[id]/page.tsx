@@ -15,6 +15,16 @@ import { bulkSmsCsv, smsLink, waLink } from "@/lib/messaging";
 
 const TABS = ["Overview", "Candidates", "Enrollment", "Daily Execution", "Attendance", "Closure", "Feedback", "Costs", "Activity"];
 
+// -159 (QA-472): ONE definition of how this screen names a person, because there were four - the
+// complete-batch plan, the assessment blocker, the certification blocker and the portal-ID line -
+// and -158 fixed exactly one of them. REQ-389 decides the shape: the portal ID when present,
+// otherwise the phone. A bare name is not an identity on a roster with two Sachin Kumars, and
+// every one of these lists exists precisely to tell somebody WHO to go and deal with.
+const personLabel = (x: { name?: string | null; phone?: string | null } | null | undefined) =>
+  x?.name ? (x.phone ? `${x.name} (${x.phone})` : x.name) : "";
+const personList = (xs: Array<{ name?: string | null; phone?: string | null }> | null | undefined) =>
+  (xs ?? []).map(personLabel).filter(Boolean).join(", ");
+
 export default function BatchDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const sp = useSearchParams();
@@ -427,7 +437,7 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
               <ul className="ml-4 list-disc">
                 {(completePlan?.unmarked?.length ?? 0) > 0 && (
                   <li><b>{completePlan.unmarked.length} student(s) with no result → Absent</b>
-                    <span className="text-amber-700"> ({completePlan.unmarked.slice(0, 4).map((u: any) => u.name).filter(Boolean).join(", ")}{completePlan.unmarked.length > 4 ? ` +${completePlan.unmarked.length - 4}` : ""})</span></li>
+                    <span className="text-amber-700"> ({personList(completePlan.unmarked.slice(0, 4))}{completePlan.unmarked.length > 4 ? ` +${completePlan.unmarked.length - 4}` : ""})</span></li>
                 )}
                 {(completePlan?.unsettled?.length ?? 0) > 0 && (
                   <li><b>{completePlan.unsettled.length} passed candidate(s) with no certificate → Not Issued</b>
@@ -2066,7 +2076,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
               disabled={closure?.assessment_status === "Completed" || (blockers?.unmarked?.length ?? 0) > 0}>Mark Completed</Btn>
             {closure?.assessment_status !== "Completed" && (blockers?.unmarked?.length ?? 0) > 0 && (
               <span className="text-[10px] font-medium text-amber-700"
-                title={(blockers.unmarked ?? []).map((u: any) => u.name).filter(Boolean).join(", ")}>
+                title={personList(blockers.unmarked)}>
                 {blockers.unmarked.length} student(s) have no result yet — mark them and this turns on by itself
               </span>
             )}
@@ -2095,7 +2105,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
               disabled={closure?.certification_status === "Completed" || (blockers?.unsettled?.length ?? 0) > 0 || closure?.assessment_status !== "Completed" || noCan.length > 0}>Mark Completed</Btn>
             {closure?.certification_status !== "Completed" && (blockers?.unsettled?.length ?? 0) > 0 && (
               <span className="text-[10px] font-medium text-amber-700"
-                title={(blockers.unsettled ?? []).map((u: any) => u.name).filter(Boolean).join(", ")}>
+                title={personList(blockers.unsettled)}>
                 {blockers.unsettled.length} passed candidate(s) have no certificate yet
               </span>
             )}
@@ -2113,7 +2123,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
                 /* -158 (QA-471): name AND phone, because two students of one name are exactly the
                    case this batch tab exists to stop being ambiguous, and "Sachin Kumar, Sachin
                    Kumar" names nobody. */
-                title={noCan.map((x) => (x.phone ? `${x.name} (${x.phone})` : x.name)).join(", ")}>
+                title={personList(noCan)}>
                 {noCan.length} enrolled student{noCan.length === 1 ? " has" : "s have"} no portal Candidate ID —{" "}
                 <Link href="/candidates" className="underline">Portal ID health</Link> fixes most of them
               </span>

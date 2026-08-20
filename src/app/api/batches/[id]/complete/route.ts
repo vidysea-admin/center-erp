@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, requireRole, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
-import { Batch, CandidateResult, Closure } from "@/models";
+import { Batch, BatchMember, CandidateResult, Closure } from "@/models";
 import { assertBatchInScope, activeRoster, recomputeClosureAggregates, transitionBatch, upsertCandidateResult } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
@@ -25,18 +25,29 @@ import { audit } from "@/lib/audit";
 
 async function outstanding(batchId: string) {
   // activeRoster is already the NOT-dropped roster (left_on: null) — the same list Rule 43 walks.
+  // -159 (QA-472): the PHONE rides on both lists. REQ-389 is the reason and it is not a preference:
+  // "the portal ID when present, otherwise the phone" - and on the roster this week has been about,
+  // two students share a name, so a list of names identifies nobody. -158 fixed one screen that had
+  // this defect and left three; this is the payload all three of them read.
   const roster = await activeRoster(batchId);
   const live = new Set(roster.map((m: any) => String(m._id)));
-  const rows = await CandidateResult.find({ batch: batchId }).populate("candidate", "name").lean<any[]>();
+  const rows = await CandidateResult.find({ batch: batchId }).populate("candidate", "name phone").lean<any[]>();
   const byMember = new Map(rows.map((r) => [String(r.batch_member), r]));
-  const unmarked: { member: string; name?: string }[] = [];
+  // An UNMARKED member may have no result row at all, so the name cannot come from the row - it has
+  // to come from the roster. Before this, a member with no row got `name: undefined` and was
+  // rendered as nothing at all by the surfaces that .filter(Boolean) their names.
+  const withCand = await BatchMember.find({ batch: batchId, left_on: null })
+    .populate("candidate", "name phone").select("candidate").lean<any[]>();
+  const candByMember = new Map(withCand.map((m: any) => [String(m._id), m.candidate]));
+  const unmarked: { member: string; name?: string; phone?: string | null }[] = [];
   for (const m of roster) {
     const row = byMember.get(String(m._id));
-    if (!row || row.result === "Pending") unmarked.push({ member: String(m._id), name: row?.candidate?.name });
+    const cand = row?.candidate ?? candByMember.get(String(m._id));
+    if (!row || row.result === "Pending") unmarked.push({ member: String(m._id), name: cand?.name, phone: cand?.phone ?? null });
   }
   const unsettled = rows.filter((r) => r.result === "Pass" && live.has(String(r.batch_member))
     && !["Issued", "Not Issued"].includes(r.certificate_status))
-    .map((r) => ({ id: String(r._id), name: r.candidate?.name, status: r.certificate_status, has_file: !!r.certificate_file }));
+    .map((r) => ({ id: String(r._id), name: r.candidate?.name, phone: r.candidate?.phone ?? null, status: r.certificate_status, has_file: !!r.certificate_file }));
   return { unmarked, unsettled, roster_count: roster.length, marked: roster.length - unmarked.length };
 }
 

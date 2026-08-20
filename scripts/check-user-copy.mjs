@@ -511,7 +511,11 @@ for (const file of walk(root)) {
   // twice. Stated plainly, because QA-437 is about pins that overclaim: this does NOT prove the arm
   // renders in a browser - it proves the two lists cannot drift apart, which is the defect QA-422
   // was raised for.
-  const summary = (bp.split("Attendance hours (bar ")[1] ?? "").slice(0, 3500);
+  // -159 (QA-474): the sibling of the window -158 fixed, and the checker measured its headroom at
+  // 440 characters - about five lines of comment - over a 33,997-character remainder. -158 diagnosed
+  // "a subject that can slide out of its own window" and repaired exactly one of the two instances
+  // in this file. Bounded by the paragraph's own close now, like the other one.
+  const summary = ((bp.split("Attendance hours (bar ")[1] ?? "").split("</p>")[0]) ?? "";
   const inclLine = summary.split(/\r?\n/).find((l) => /\.includes\(k\)/.test(l)) ?? "";
   const excluded = [...inclLine.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
   // a state is "named" when the sentence reads its own count - either the bucket
@@ -546,10 +550,15 @@ for (const file of walk(root)) {
     // already too small the moment a comment was added inside the section - the sentence this
     // check looks for sat at offset 4,183 - and a check whose subject can quietly slide out of its
     // own window is the same failure as a check that cannot see a deletion.
-    const cert = ((bp.split("<Section title={`Certification")[1] ?? "").split("</Section>")[0]) ?? "";
+    // -159 (QA-473): read the source with COMMENTS STRIPPED. The checker showed that deleting the
+    // rendered span and leaving a comment that quotes both phrases returned this file to 207/0 -
+    // strictly harder to trip than the defect it replaced, and still the same class the block
+    // exists to end. stripComments() was already in this file and this block was not using it.
+    const bpCode = stripComments(bp);
+    const cert = ((bpCode.split("<Section title={`Certification")[1] ?? "").split("</Section>")[0]) ?? "";
     const markLine = cert.split(/\r?\n/).find((l) => /Mark Completed<\/Btn>/.test(l)) ?? "";
     const faults = [];
-    if (!/certification_blocked_no_can/.test(bp)) faults.push("the page never reads certification_blocked_no_can, so the closure route is talking to nobody");
+    if (!/certification_blocked_no_can/.test(bpCode)) faults.push("the page never reads certification_blocked_no_can, so the closure route is talking to nobody");
     if (!cert) faults.push("the Certification section could not be located - this check has lost its subject rather than passed");
     // -158 (QA-470): this used to look for `noCan.length > 0` anywhere in the Certification slice -
     // and the BUTTON's disabled= expression carries that same token, so deleting the whole rendered
@@ -557,7 +566,10 @@ for (const file of walk(root)) {
     // reading. It now looks for the SENTENCE a person sees, and for the tooltip being built from
     // the rows rather than from a fixed string, which is what the button line cannot satisfy.
     else if (!/no portal Candidate ID/.test(cert)) faults.push("the Certification section renders no sentence about students with no portal Candidate ID - the payload arrives and the screen says nothing");
-    else if (!/title=\{noCan\.map\(/.test(cert)) faults.push("the Certification line's tooltip is not built from the rows, so it cannot tell two students of one name apart (QA-471's shape)");
+    // -159 (QA-472): the shape moved from a hand-written join to the ONE shared labeller, because
+    // this page had FOUR tooltips naming people and -158 fixed one. What is pinned is unchanged in
+    // substance: the tooltip is built from the rows, not from a fixed string.
+    else if (!/title=\{personList\(noCan\)\}/.test(cert)) faults.push("the Certification line's tooltip is not built from the rows, so it cannot tell two students of one name apart (QA-471's shape)");
     if (!markLine || !/noCan\.length > 0/.test(markLine)) faults.push("the Mark Completed button is not gated on the missing portal IDs, so it invites a press the server refuses with a 409");
     if (!faults.length) passed++;
     else { failed++; for (const f of faults) pushStructural("app/(app)/batches/[id]/page.tsx: " + f + " (QA-462)"); }
@@ -567,6 +579,21 @@ for (const file of walk(root)) {
   // row under this name but its hours column could not be read" - and two sibling tooltips in this
   // same page went on asserting hours unconditionally, and asserting they were THIS student's while
   // two people shared the name. A tooltip is a sentence; it is held to the sentence's standard.
+  // -159 (QA-472): THE CLASS, not the instance. This page carries four tooltips that name people -
+  // the complete-batch plan, the assessment blocker, the certification blocker and the portal-ID
+  // line - and -158 fixed one of them, which is how "Sachin Kumar, Sachin Kumar" survived one line
+  // above the tooltip that had just stopped saying it. Any title built by mapping rows to a bare
+  // .name is the defect, wherever it appears; personLabel/personList is the one definition.
+  {
+    const bare = stripComments(bp).split(/\r?\n/)
+      .filter((l) => /title=\{/.test(l) && /\.map\(/.test(l) && /\.name\b/.test(l) && !/personLabel|personList/.test(l));
+    if (!bare.length) passed++;
+    else {
+      failed++;
+      pushCopy(`app/(app)/batches/[id]/page.tsx: ${bare.length} tooltip(s) still name people by bare name, so two students of one name read identically - use the shared personList() (QA-472)`);
+    }
+  }
+
   const tips = bp.split(/\r?\n/).filter((l) => /title=/.test(l) && /awaiting_match/.test(l));
   const tipFaults = [];
   if (tips.length < 3) tipFaults.push(`app/(app)/batches/[id]/page.tsx: only ${tips.length} of the three awaiting-match tooltips (Candidates chip, Attendance chip, Closure summary) can be found - this check has lost a subject rather than passed (QA-434)`);
