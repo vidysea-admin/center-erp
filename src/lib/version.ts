@@ -35,9 +35,19 @@ export const RELEASE_NOTE_CURRENT =
   "this student yet, and here is the screen that links it. Where the hours column itself could not be " +
   "read the wording says that instead of claiming hours exist. The student's own page was a third " +
   "surface carrying the same false sentence and, after the first attempt, the only one still carrying " +
-  "it; it now says the portal has sent their hours and the centre is confirming whose they are, and " +
-  "quotes no shortfall computed off our own logs while it waits. Nothing here can qualify anybody - " +
-  "only a row the ERP has actually attached to a person may move their hours. ";
+  "it; it now says a portal attendance record IN THEIR NAME is being matched to them, and quotes " +
+  "no shortfall computed off our own logs while it waits - in words or in the progress bar, which " +
+  "went on painting a figure from our own logs after every sentence around it had stopped. Saying " +
+  "the portal had sent THEIR hours would have been a confident falsehood told to a student whose " +
+  "registration is still pending, which is the reader least able to check it. The last correction " +
+  "is the one worth naming: three surfaces were given the same LOOKUP and not the same GATE, so one " +
+  "unattached row produced three different answers about one not-enrolled student. Eligibility is " +
+  "gated on enrolment and always was; where a students hours are is a fact about data and is gated " +
+  "on nothing. One helper decides it, the answer rides on the row, and every surface reads that one " +
+  "field. A fourth surface - one summary line on the Closure tab - still counts these off the " +
+  "gated verdict and under-reports them; it is recorded as QA-432 and fixed in its own unit rather " +
+  "than in a hurried fourth pass at this one. Nothing here can qualify anybody - only a row the ERP " +
+  "has actually attached to a person may move their hours. ";
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
