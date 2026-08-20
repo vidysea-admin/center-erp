@@ -201,28 +201,55 @@ invalid recipient) and **always** write a MailLog row. Bounces: SNS → `public/
   never overwrites) — the link-portal-ids contract one level up. UI: the Candidates page
   "Portal ID health" drawer.
 
-### 3.0b Collapsed in -160 (2026-08-21) — "how a person is named"
+### 3.0b "How a person is named" — collapsed over -160/-161, and a warning about this row's own history
 
-- **`personLabel` / `personList` in `lib/client.ts` is the ONLY definition.** REQ-389: the portal
-  ID when present, **otherwise the phone** — because a bare name is not an identity on a roster
-  where two students share one (the two Sachin Kumars this whole week ran through).
-  Readers: the batch page (all seven person lists), `candidates/page.tsx` (Portal ID health), and
-  `trainers/page.tsx` (the duplicate-name banner). It accepts singular `phone` **and** plural
-  `phones` — trainers genuinely carry a list, and that difference is data, not drift.
-- **How this row got here is the warning.** `-158` fixed ONE surface and called it a class. `-159`
-  counted four, called it a class, and wrote its own private `personLabel` — making it the **third**
-  app-wide copy of the rule **in the release whose point was collapsing copies**, with one of the
-  other two sitting on the very screen `-158`'s tooltip links to. The check counted **seven**
-  surfaces and browser-proved a banner printing one name three times in visible copy.
-- **The guard is `check-user-copy`, and it looks for the MISTAKE, not the shape of the fix:** the
-  person payloads (`unmarked`, `unsettled`, `noCan`, `pending`, `conflicts`) may never be followed
-  by `.name`, because with a shared labeller the mapping happens *inside* the helper and the two
-  never co-occur. **No exemption** — the previous version's exemption was defeated by writing
-  `personList` anywhere on the line. Limit: it knows those payloads by name, so a person list under
-  a new identifier needs adding here.
+**The rule (REQ-389):** wherever a list can contain two people with the same name, each row shows
+something that tells them apart — **the portal ID when present, otherwise the phone**. A name alone
+is never sufficient identification on a screen a person acts on.
 
+**Where it lives:** `lib/person.ts` — `personLabel` (name + separator), `personSeparator` (the
+separator alone, for surfaces that render the name themselves), `personList` (a joined list).
+It sits in a **neutral** module, not `lib/client.ts`, because that file opens with `"use client"`
+and no API route could import it — which is *why* seven server-side copies existed.
 
-Ranked by how likely a change lands on one copy and not the others.
+**Readers, measured at `-161` rather than asserted:** `batches/[id]/page.tsx` (the Closure blockers,
+the portal-ID line, the complete-batch plan, the Attendance name column, the tap-present grid),
+`candidates/page.tsx`, `trainers/page.tsx`, `api/candidates/import`, `api/trainers/import`,
+`lib/duplicates.ts`.
+
+**Read this part before trusting the row above it.** Three consecutive releases claimed this
+concept was collapsed and each claim was false when measured:
+
+| Release | Claimed | Measured by the check |
+|---|---|---|
+| `-158` | one tooltip fixed, "a class" | the sibling one line above still bare |
+| `-159` | four surfaces, "the class" | **seven**, one printing three identical names in visible copy |
+| `-160` | *"the ONLY definition"* | **seven more** hand-written copies elsewhere in `src/`, one of them inside `lib/duplicates.ts` — the duplicate-**candidate** detector's own message |
+
+The surface that hid longest was `batches/[id]/page.tsx`'s Attendance name column
+(`sub={r.sidh_candidate_id ?? undefined}`) — **the line REQ-389 was written from**, and an open S2
+(QA-430) on this project's own ledger the whole time. It survived three censuses because every one
+of them searched for `.map(…).name` joins, and that line has no join and no `.name` in it.
+
+**What guards it, and what the guard cannot do** (`scripts/check-user-copy.mjs`):
+
+- **Check A — whole-app, precise.** No file outside `lib/person.ts` may write the
+  `name (separator)` template by hand. This caught a seventh copy the maker had missed.
+- **Check B — scoped, and the scope is a confession.** It flags a `.map(…)` that reaches a bare
+  name and joins it, on the three screens this concept was measured against. Run app-wide the same
+  shape reported 11 sites of which four were centres, a generic array renderer, and a
+  certificate-filename list whose file column *is* the separator. **Asking "is this list people?"
+  is a semantic question and a regex cannot answer it.** A check that fails on non-defects gets
+  narrowed by the next person until it is green — which is how three previous versions of this
+  check came to exist.
+- **Known blind spots**, listed so nobody rediscovers them: a person list on a screen outside the
+  scoped set (filed as **QA-487**); a name rendered with no join and no `.name` token, which is how
+  QA-430 hid; string concatenation instead of a template literal in check A.
+
+**The transferable lesson, which is why this row is this long:** the failure was never the tooltips.
+It was asserting closure — on this map, which is the first thing every session reads. Three times a
+wrong row here would have told the next reader the concept was safe. Say what was measured, and
+name what was not.
 
 ### 3.1 Two roster-add paths that already disagree — **live defect, QA-273**
 | Copy | Where | Walk-in (no centre) |

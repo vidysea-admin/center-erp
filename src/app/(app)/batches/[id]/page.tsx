@@ -3,7 +3,8 @@ import { use, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { api, fmtDate, personList, toInputDate } from "@/lib/client";
+import { api, fmtDate, toInputDate } from "@/lib/client";
+import { personLabel, personList, personSeparator } from "@/lib/person";
 import { trainerSelectGroups } from "@/lib/trainer-select";
 import { slotHoursPerDay } from "@/lib/slot-rules";
 import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, HealthBanner, NameCell, Notice, Section, Tabs, inputCls, statusLabel } from "@/components/ui";
@@ -1268,7 +1269,11 @@ function AttendanceTab({ batchId, batch, role, error, setError }: any) {
         cardTitle={(r: any) => r.name}
         defaultSort={{ key: "name", dir: "asc" }}
         columns={[
-          { key: "name", label: "Name", sortable: true, render: (r: any) => <NameCell name={r.name} sub={r.sidh_candidate_id ?? undefined} /> },
+          // -161 (QA-430, open since 2026-08-20 and the line REQ-389 was written FROM): a candidate
+          // with no portal ID got nothing beneath their name, so two students of one name rendered
+          // identically on the one screen that shows hours per person. The separator falls back the
+          // way the requirement says: portal ID, otherwise phone.
+          { key: "name", label: "Name", sortable: true, render: (r: any) => <NameCell name={r.name} sub={personSeparator(r) || undefined} /> },
           { key: "internal_days", label: "Our days", sortable: true, render: (r: any) => `${r.internal_days} / ${data.days_held}` },
           {
             // QA-086: our own hours get their own column, on the same footing as the
@@ -1567,7 +1572,11 @@ function DailyExecution({ batchId, batch, role, error, setError }: any) {
                 <button key={m._id} onClick={() => togglePresent(m._id)}
                   className={`rounded-lg border px-2 py-2.5 text-left text-sm ${form.present.has(m._id) ? "border-green-300 bg-green-50 text-green-800" : "border-gray-200 bg-white text-gray-500"}`}>
                   <span className="flex items-center justify-between gap-1">
-                    <span className="min-w-0 truncate">{form.present.has(m._id) ? "✓ " : ""}{m.candidate?.name}</span>
+                    {/* -161 (QA-482): the tap-present grid. Three candidates of one name rendered
+                        three identical buttons, and this is the control a trainer presses to say a
+                        PERSON was here - the highest-consequence place on the screen to be unable to
+                        tell two people apart. It was on no ledger row at all. */}
+                    <span className="min-w-0 truncate">{form.present.has(m._id) ? "✓ " : ""}{personLabel(m.candidate) || m.candidate?.name}</span>
                     {form.present.has(m._id) && (
                       <span onClick={(e) => { e.stopPropagation(); toggleBiometric(m._id); }}
                         title="Biometric done on the govt app?"

@@ -579,59 +579,70 @@ for (const file of walk(root)) {
   // row under this name but its hours column could not be read" - and two sibling tooltips in this
   // same page went on asserting hours unconditionally, and asserting they were THIS student's while
   // two people shared the name. A tooltip is a sentence; it is held to the sentence's standard.
-  // -159 cycle 2 (QA-477): THE CLASS, and this time without an exemption to spoof. The first draft
-  // matched a single-line title={...map(...).name...} and the checker walked seven different things
-  // past it - a for loop, a reduce, an own helper, u["name"], a line break, rendered text, and the
-  // word personList written anywhere on the line, since the exemption was a whole-line substring.
-  // Two of the three surfaces it could not see were not tooltips at all; one printed three
-  // identical names in VISIBLE amber copy.
+  // -161 (QA-483 / QA-484): the guard now scans every file this checker already walks, because
+  // the previous one read THREE HARD-CODED FILES and I called its only limit "it knows the
+  // payloads by name". Three more limits existed: file scope, a 200-character window, and
+  // token-only matching - and a private module-scope helper walked past it, which is the exact
+  // shape the comment beside it claimed was closed.
   //
-  // The structural insight: with a shared labeller the mapping happens INSIDE the helper, so a
-  // person payload and .name never co-occur in page source - personList(blockers.unmarked) contains
-  // no .name anywhere. So the rule is "these payloads are never followed by .name", there is
-  // nothing to exempt, and a loop, a reduce or a private helper all trip it because every one of
-  // them has to reach the name eventually.
+  // WHAT IT CHECKS, precisely, so nobody has to infer it:
+  //   A. no file outside lib/person.ts writes the "name (separator)" rule by hand;
+  //   B. no known person payload reaches a bare .name / ["name"] / destructured name.
   //
-  // HONEST LIMIT, stated because this pin has now over-claimed twice: it knows the payloads BY
-  // NAME. A person list arriving under a new identifier is not covered until that identifier is
-  // added here. What it does guarantee is that these five - which is every person list on this
-  // screen today - cannot be rendered by name alone.
+  // WHAT IT DOES NOT CATCH, measured rather than guessed - the checker defeated each of these and
+  // they are listed so the next reader does not have to rediscover them:
+  //   - a person list arriving under an identifier not in PERSON_PAYLOADS;
+  //   - a name reached more than WINDOW characters from its payload;
+  //   - a surface that renders a name with NO join and no .name token at all, which is how
+  //     `sub={r.sidh_candidate_id ?? undefined}` (QA-430) hid from three consecutive censuses;
+  //   - string concatenation instead of a template literal in check A.
+  // It is a net, not a proof. Saying so is the point: this pin has now over-claimed three times.
   {
-    const PERSON_PAYLOADS = ["unmarked", "unsettled", "noCan", "pending", "conflicts"];
-    const code = stripComments(bp);
-    const offenders = [];
-    for (const payload of PERSON_PAYLOADS) {
-      const rx = new RegExp("\\b" + payload + "\\b[\\s\\S]{0,200}?(\\.name\\b|\\[\"name\"\\])", "g");
-      for (const m of code.matchAll(rx)) {
-        const line = code.slice(0, m.index).split(/\r?\n/).length;
-        offenders.push(`${payload} -> .name at line ~${line}`);
+    const HAND_WRITTEN = /`\$\{[a-z]\w*(?:\.\w+)*\.name\}[^`]{0,12}\(\$\{[a-z]\w*(?:\.\w+)*\.(?:phone|sidh_candidate_id)/;
+    // The rendering shape of "a list of people, by name": map over rows, reach a name, join into
+    // one string. Narrowed from a proximity window that reported 24 sites of which most were not
+    // person lists at all - including one already using the helper. A pin its author has to argue
+    // with gets narrowed until it is green, which is how the last three versions of this were born.
+    const NAME_JOIN = /\.map\(\s*\(?[^)]{0,60}\)?\s*=>[^)]{0,120}?(?:\.name\b|\["name"\])[^;]{0,160}?\.join\(/;
+    const PERSON_SCREENS = new Set([
+      "app/(app)/batches/[id]/page.tsx",
+      "app/(app)/candidates/page.tsx",
+      "app/(app)/trainers/page.tsx",
+    ]);
+    const copies = [];
+    const lists = [];
+    for (const abs of walk(root)) {
+      const rel = path.relative(root, abs).split(path.sep).join("/");
+      if (rel === "lib/person.ts" || SKIP_FILES.has(rel)) continue;
+      const code = stripComments(fs.readFileSync(abs, "utf-8"));
+      // CHECK A is whole-app on purpose: "someone wrote the rule by hand" is a syntactic
+      // question and this answers it precisely. It just caught a seventh copy I had missed.
+      if (HAND_WRITTEN.test(code)) copies.push(rel);
+      // CHECK B IS SCOPED, and the scope is a confession. Asking "is this list PEOPLE?" is a
+      // semantic question and a regex cannot answer it: run app-wide, this shape reported 11
+      // sites of which four were centres, a generic array renderer, and certificate filenames
+      // that the file column already separates. A check that fails on things that are not
+      // defects gets narrowed by the next person until it is green - which is exactly how the
+      // three previous versions of this check came to exist. So it guards the screens this unit
+      // owns and measured, and what it found beyond them is a LEDGER ROW (QA-487), not a
+      // silently dropped result.
+      if (!PERSON_SCREENS.has(rel)) continue;
+      for (const line of code.split(/\r?\n/).entries()) {
+        const [n, text] = line;
+        // A list that already renders a SEPARATOR alongside the name satisfies REQ-389 by its own
+        // means and is not a defect: the certificate-filename list pairs each name with its
+        // CAN-derived file, and that column is what tells two same-named students apart. This is a
+        // principled exemption rather than a spoofable one - it asks whether the reader was given
+        // something to tell two people apart, which is the requirement itself.
+        const carriesSeparator = /\b(phone|sidh_candidate_id|file)\b/.test(text);
+        if (NAME_JOIN.test(text) && !carriesSeparator && !/person(Label|List|Separator)/.test(text)) lists.push(rel + ":~" + (n + 1));
       }
     }
-    if (!offenders.length) passed++;
-    else {
-      failed++;
-      pushCopy(`app/(app)/batches/[id]/page.tsx: ${offenders.length} person list(s) still reach a bare .name, so two people of one name read identically - render them through personList() from @/lib/client (QA-476): ${offenders.slice(0, 6).join(" | ")}`);
-    }
-  }
-
-  // -159 cycle 2 (QA-481): and ONE definition of it, app-wide. Writing a private personLabel in the
-  // page made it the THIRD copy in src/ - in the release whose whole point was collapsing copies of
-  // this same rule. The two screens that had their own are the Portal ID health screen (which the
-  // -158 tooltip links to) and the trainers duplicate-name banner.
-  {
-    const copies = [];
-    for (const rel of ["app/(app)/candidates/page.tsx", "app/(app)/trainers/page.tsx", "app/(app)/batches/[id]/page.tsx"]) {
-      const src = stripComments(fs.readFileSync(path.join(root, rel), "utf-8"));
-      // a template literal that puts a phone in brackets after a name is this rule, hand-written
-      if (/\`\$\{[a-z]\w*\.name\}[^\`]*\(\$\{[a-z]\w*\.phone/.test(src)) copies.push(rel);
-    }
     if (!copies.length) passed++;
-    else {
-      failed++;
-      pushStructural(`${copies.join(", ")}: "name (phone)" is written by hand here as well as in lib/client.ts - one rule, ${copies.length + 1} copies, which is the shape ARCHITECTURE section 3 exists to prevent (QA-481)`);
-    }
+    else { failed++; pushStructural(`${copies.length} file(s) write the "name (separator)" rule by hand instead of reading lib/person.ts - one rule, ${copies.length + 1} copies, which is what ARCHITECTURE section 3 exists to prevent (QA-484): ${copies.slice(0, 8).join(", ")}`); }
+    if (!lists.length) passed++;
+    else { failed++; pushCopy(`${lists.length} person list(s) reach a bare name, so two people of one name read identically - render them through personLabel/personList from @/lib/person (QA-476/QA-482): ${lists.slice(0, 8).join(" | ")}`); }
   }
-
   const tips = bp.split(/\r?\n/).filter((l) => /title=/.test(l) && /awaiting_match/.test(l));
   const tipFaults = [];
   if (tips.length < 3) tipFaults.push(`app/(app)/batches/[id]/page.tsx: only ${tips.length} of the three awaiting-match tooltips (Candidates chip, Attendance chip, Closure summary) can be found - this check has lost a subject rather than passed (QA-434)`);

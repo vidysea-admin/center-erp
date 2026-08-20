@@ -22,7 +22,9 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   if (!batch) throw new HttpError(404, "Batch not found");
 
   const [members, logs, defaults] = await Promise.all([
-    BatchMember.find({ batch: id }).populate("candidate", "name sidh_candidate_id sidh_status").lean<any[]>(),
+    // -161 (QA-430): the phone rides along, because REQ-389's fallback needs it - the attendance
+    // payload carried the portal ID and nothing else, which is why the sub-line fell back to blank.
+    BatchMember.find({ batch: id }).populate("candidate", "name phone sidh_candidate_id sidh_status").lean<any[]>(),
     DailyLog.find({ batch: id }).select("log_date present_member_ids").sort({ log_date: 1 }).lean<any[]>(),
     getDefaults(),
   ]);
@@ -77,6 +79,7 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
       candidate_id: m.candidate?._id ?? null,
       name: m.candidate?.name ?? "(removed)",
       sidh_candidate_id: m.candidate?.sidh_candidate_id ?? null,
+      phone: m.candidate?.phone ?? null,
       left_on: m.left_on ?? null,
       present_by_day: presentByDay,
       internal_days: internalDays,

@@ -9,6 +9,7 @@ import { CANDIDATE_IMPORT_FIELDS } from "@/lib/field-catalog";
 import { audit } from "@/lib/audit";
 import { findDuplicateCandidates, normalizePhone } from "@/lib/duplicates";
 import { canonicalPhone } from "@/lib/validate";
+import { personLabel } from "@/lib/person";
 
 // -154 (QA-424, REQ-385): the SET of importable fields comes from the catalog; the HANDLING stays
 // deliberate. Deriving behaviour from a type would have quietly changed how existing fields are
@@ -209,7 +210,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
       if (!c[f]) continue;
       const p = canonicalPhone(c[f]);
       if (p) c[f] = p;
-      else if (f === "phone") phoneInvalid.push(`${c.name} (${c.phone})`);
+      else if (f === "phone") phoneInvalid.push(personLabel(c));
     }
   }
 
@@ -220,13 +221,13 @@ export const POST = apiHandler(async (req: NextRequest) => {
   for (const c of candidates) {
     const key = normalizePhone(c.phone);
     if (!key) continue;
-    if (seen.has(key)) inFile.push(`${c.name} (${c.phone}) — same number as row ${seen.get(key)! + 1} in this file`);
+    if (seen.has(key)) inFile.push(`${personLabel(c)} — same number as row ${seen.get(key)! + 1} in this file`);
     else seen.set(key, candidates.indexOf(c));
   }
   const existingHits: string[] = [];
   for (const c of candidates.slice(0, 300)) { // bounded: preview only, not a full-file scan
     const hits = await findDuplicateCandidates({ name: String(c.name), phone: String(c.phone), dob: c.dob as Date });
-    if (hits.length) existingHits.push(`${c.name} (${c.phone}) → already exists: ${hits[0].message}`);
+    if (hits.length) existingHits.push(`${personLabel(c)} → already exists: ${hits[0].message}`);
   }
   const duplicates = [...inFile, ...existingHits];
 

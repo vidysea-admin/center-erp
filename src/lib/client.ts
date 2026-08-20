@@ -96,25 +96,3 @@ export function toInputDate(d?: string | Date | null): string {
   const x = new Date(d);
   return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
 }
-
-// -159 cycle 2 (QA-481): ONE definition of how this product names a person, for every screen.
-// The release that collapsed four copies of this rule inside one file created a THIRD app-wide
-// copy while doing it - page.tsx had personLabel, candidates/page.tsx renders `${m.name}${m.phone
-// ? ` (${m.phone})` : ""}` on the Portal ID health screen (the very screen the -158 tooltip links
-// to), and trainers/page.tsx renders `${d.name} (${d.phones.join(" / ")})`. Three implementations
-// of one sentence, and the duplication map did not carry the row.
-//
-// REQ-389 decides the shape: the portal ID when present, otherwise the phone. Both singular
-// `phone` and plural `phones` are accepted because trainers carry a list and candidates carry one
-// - that difference is real data, not drift, and forcing either side to convert would just move
-// the duplication somewhere quieter.
-export function personLabel(x?: { name?: string | null; phone?: string | null; phones?: Array<string | null | undefined> | null } | null): string {
-  const name = String(x?.name ?? "").trim();
-  if (!name) return "";
-  const phones = (Array.isArray(x?.phones) ? x!.phones! : [x?.phone]).map((p) => String(p ?? "").trim()).filter(Boolean);
-  return phones.length ? `${name} (${phones.join(" / ")})` : name;
-}
-
-export const personList = (
-  xs?: Array<Parameters<typeof personLabel>[0]> | null,
-) => (xs ?? []).map(personLabel).filter(Boolean).join(", ");

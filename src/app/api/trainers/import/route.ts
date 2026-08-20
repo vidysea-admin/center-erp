@@ -7,6 +7,7 @@ import { JobRole, Location, Program, Trainer, TRAINER_PIPELINE } from "@/models"
 import { audit } from "@/lib/audit";
 import { normalizePhone } from "@/lib/duplicates";
 import { canonicalPhone } from "@/lib/validate";
+import { personLabel } from "@/lib/person";
 
 // F-TRAINER-IMPORT (2026-08-14): Manish's stage-wise trainer sheet (qa/templates #3)
 // lands here — same 3-step shape as the candidates importer: upload → map → preview →
@@ -212,7 +213,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   for (const t of trainers) {
     const p = canonicalPhone(t.phone);
     if (p) t.phone = p;
-    else phoneInvalid.push(`${t.name} (${t.phone})`);
+    else phoneInvalid.push(personLabel(t));
   }
 
   // Phone-dedup, in-file and against the directory. Unlike candidates, a trainer's
@@ -241,12 +242,12 @@ export const POST = apiHandler(async (req: NextRequest) => {
     if (!key) continue;
     if (seen.has(key)) {
       inFileDupe.add(i);
-      duplicates.push(`${t.name} (${t.phone}) — same number as row ${seen.get(key)! + 1} in this file, skipped`);
+      duplicates.push(`${personLabel(t)} — same number as row ${seen.get(key)! + 1} in this file, skipped`);
     } else seen.set(key, i);
   }
   const existing = await Trainer.find({ phone: { $in: [...seen.keys()] } }).select("name phone").lean<any[]>();
   const existingPhones = new Set(existing.map((e) => normalizePhone(e.phone)));
-  for (const e of existing) duplicates.push(`${e.name} (${e.phone}) — already in the trainer directory, skipped`);
+  for (const e of existing) duplicates.push(`${personLabel(e)} — already in the trainer directory, skipped`);
   const importable = trainers.filter((t, i) => !inFileDupe.has(i) && !existingPhones.has(normalizePhone(t.phone)));
 
   const report = {

@@ -2,6 +2,7 @@
 // Deliberately a WARNING, never a block — in rural intake one phone number often serves a
 // whole household, and the process doc itself says "flag as Duplicate", not "reject".
 import { Candidate } from "@/models";
+import { personLabel } from "@/lib/person";
 
 // Indian mobile numbers arrive with +91, spaces, dashes. Compare the last 10 digits only.
 export function normalizePhone(raw: unknown): string {
@@ -57,7 +58,7 @@ export async function findDuplicateCandidates(input: { name?: string; phone?: st
       phone: c.phone,
       location: c.location?.name,
       lifecycle_status: c.lifecycle_status,
-      message: `${c.name} (${c.phone})${where} — ${c.lifecycle_status}`,
+      message: `${personLabel(c)}${where} — ${c.lifecycle_status}`,
     } as DuplicateHit;
   });
 }
