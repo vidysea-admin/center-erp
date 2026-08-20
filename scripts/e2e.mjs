@@ -635,6 +635,17 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   ok("-156 (QA-445): ...and the closure screen is told WHO is missing one, rather than showing a tick that never arrives",
     Array.isArray(gateBody.certification_blocked_no_can) && gateBody.certification_blocked_no_can.length === 2,
     JSON.stringify(gateBody.certification_blocked_no_can));
+  // -158 (QA-471): a NAME does not identify a student on the roster this whole story is about -
+  // two Sachin Kumars, one batch - so the payload that feeds the tooltip has to carry something
+  // that tells two entries apart. It sent bare names and the screen rendered one name twice.
+  {
+    const blocked = gateBody.certification_blocked_no_can ?? [];
+    const phones = blocked.map((x) => x && x.phone).filter(Boolean);
+    ok("-158 (QA-471): each blocked student carries what distinguishes them, not just a name",
+      blocked.every((x) => x && typeof x.name === "string" && x.name) && phones.length === blocked.length
+        && new Set(phones).size === phones.length,
+      JSON.stringify(blocked));
+  }
   // the centre does what the message asks: the portal IDs go on the students
   for (const [i, c] of cd1.entries()) await req("PATCH", `/api/candidates/${c._id}`, { sidh_candidate_id: `CAN_${stamp}77${i}` }, 200);
   // a touch on a settled row is what re-runs the derivation (every result upsert recomputes)

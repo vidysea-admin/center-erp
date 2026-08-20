@@ -1913,7 +1913,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
   const [blockers, setBlockers] = useState<any>(null);
   // -157 (QA-462): names of enrolled students with no portal Candidate ID. Certification cannot
   // complete - by either door - while this is non-empty.
-  const [noCan, setNoCan] = useState<string[]>([]);
+  const [noCan, setNoCan] = useState<Array<{ name: string; phone: string | null }>>([]);
   const [adminBusy, setAdminBusy] = useState(false);
   const isAdmin = role === "Admin";
   const loadBlockers = () => api(`/api/batches/${batchId}/complete`).then(setBlockers).catch(() => setBlockers(null));
@@ -2109,7 +2109,11 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
                 arriving, which is Manish's "mark complete karne se kuch nahi ho raha" one step
                 earlier. The link goes where the IDs can actually be recovered. */}
             {closure?.certification_status !== "Completed" && noCan.length > 0 && (
-              <span className="text-[10px] font-medium text-amber-700" title={noCan.join(", ")}>
+              <span className="text-[10px] font-medium text-amber-700"
+                /* -158 (QA-471): name AND phone, because two students of one name are exactly the
+                   case this batch tab exists to stop being ambiguous, and "Sachin Kumar, Sachin
+                   Kumar" names nobody. */
+                title={noCan.map((x) => (x.phone ? `${x.name} (${x.phone})` : x.name)).join(", ")}>
                 {noCan.length} enrolled student{noCan.length === 1 ? " has" : "s have"} no portal Candidate ID —{" "}
                 <Link href="/candidates" className="underline">Portal ID health</Link> fixes most of them
               </span>

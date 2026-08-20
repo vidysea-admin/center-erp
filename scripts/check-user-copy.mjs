@@ -542,12 +542,22 @@ for (const file of walk(root)) {
   // while the operator still learns it from a 409: the page must READ the field, the Certification
   // section must RENDER it, and the button must be gated on it.
   {
-    const cert = (bp.split("<Section title={`Certification")[1] ?? "").slice(0, 4000);
+    // -158: bounded by the section END, not by a character count. The 4,000-char window was
+    // already too small the moment a comment was added inside the section - the sentence this
+    // check looks for sat at offset 4,183 - and a check whose subject can quietly slide out of its
+    // own window is the same failure as a check that cannot see a deletion.
+    const cert = ((bp.split("<Section title={`Certification")[1] ?? "").split("</Section>")[0]) ?? "";
     const markLine = cert.split(/\r?\n/).find((l) => /Mark Completed<\/Btn>/.test(l)) ?? "";
     const faults = [];
     if (!/certification_blocked_no_can/.test(bp)) faults.push("the page never reads certification_blocked_no_can, so the closure route is talking to nobody");
     if (!cert) faults.push("the Certification section could not be located - this check has lost its subject rather than passed");
-    else if (!/noCan\.length > 0/.test(cert)) faults.push("the Certification section renders nothing when enrolled students have no portal Candidate ID");
+    // -158 (QA-470): this used to look for `noCan.length > 0` anywhere in the Certification slice -
+    // and the BUTTON's disabled= expression carries that same token, so deleting the whole rendered
+    // span (sentence, tooltip and link) left the check green. Proved by a mutation matrix, not by
+    // reading. It now looks for the SENTENCE a person sees, and for the tooltip being built from
+    // the rows rather than from a fixed string, which is what the button line cannot satisfy.
+    else if (!/no portal Candidate ID/.test(cert)) faults.push("the Certification section renders no sentence about students with no portal Candidate ID - the payload arrives and the screen says nothing");
+    else if (!/title=\{noCan\.map\(/.test(cert)) faults.push("the Certification line's tooltip is not built from the rows, so it cannot tell two students of one name apart (QA-471's shape)");
     if (!markLine || !/noCan\.length > 0/.test(markLine)) faults.push("the Mark Completed button is not gated on the missing portal IDs, so it invites a press the server refuses with a 409");
     if (!faults.length) passed++;
     else { failed++; for (const f of faults) pushStructural("app/(app)/batches/[id]/page.tsx: " + f + " (QA-462)"); }

@@ -25,7 +25,12 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     // kuch nahi ho raha" complaint one step earlier. The hand door says why when it is clicked;
     // this says why before anybody clicks. Legacy batches are exempt for the same reason the gate
     // itself is: a pre-portal paper batch was never asked for portal IDs.
-    certification_blocked_no_can: rows.length === 0 ? [] : (await enrolledWithoutCan(id)).map((x) => x.name),
+    // -158 (QA-471): the NAME alone came back here and the screen rendered it twice for the two
+    // students it cannot tell apart - in the unit that argued no screen may do that. It carries
+    // what distinguishes them now; the helper had it all along and this line dropped it.
+    certification_blocked_no_can: rows.length === 0
+      ? []
+      : (await enrolledWithoutCan(id)).map((x) => ({ name: x.name, phone: x.phone })),
   });
 });
 

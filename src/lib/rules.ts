@@ -1233,11 +1233,14 @@ export async function assessmentCompleteness(batchId: string) {
 // and per-candidate batches are precisely the mode where certification DERIVES rather than being
 // typed - so the narrowing aimed the gate at the door nobody uses.
 export async function enrolledWithoutCan(batchId: string) {
+  // -158 (QA-471): the PHONE rides along, because a name does not identify a student on the one
+  // roster this whole story is about - two Sachin Kumars, one batch. The phone is what the Portal
+  // ID health screen shows beside each of them and what a centre actually uses to tell them apart.
   const members = await BatchMember.find({ batch: batchId, left_on: null, enrollment_status: "Completed" })
-    .populate("candidate", "name sidh_candidate_id").lean<any[]>();
+    .populate("candidate", "name phone sidh_candidate_id").lean<any[]>();
   return members
     .filter((m) => m.candidate && !normalizeCan(m.candidate.sidh_candidate_id))
-    .map((m) => ({ member: String(m._id), name: String(m.candidate?.name ?? "") }));
+    .map((m) => ({ member: String(m._id), name: String(m.candidate?.name ?? ""), phone: m.candidate?.phone ?? null }));
 }
 
 // Rules 45/46: certification completes when every Pass candidate holds an Issued certificate.
