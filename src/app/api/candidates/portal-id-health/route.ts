@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, locationFilter, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, isScoped, locationFilter, HttpError } from "@/lib/authz";
 import { requirePerm, requireView } from "@/lib/permissions";
-import { BatchMember, Candidate, GovtAttendanceImport, GovtAttendanceRow } from "@/models";
+import { Batch, BatchMember, Candidate, GovtAttendanceImport, GovtAttendanceRow } from "@/models";
 import { normalizeCan, shiftSignature } from "@/lib/govt-attendance";
 import { audit } from "@/lib/audit";
 
@@ -28,6 +28,7 @@ import { audit } from "@/lib/audit";
 //   disagreements   -> a human must look; the machine never chooses        - report only
 //   duplicates      -> one government identity, two people; human decides  - report only
 //   enrolled_no_can -> the government issues the ID; we cannot invent it   - report only
+//   ambiguous_batch -> the ID says WHO; nothing here says WHICH BATCH      - report only
 
 const CAN_SHAPE = /CAN/i;
 
@@ -79,8 +80,21 @@ async function plan(user: Awaited<ReturnType<typeof requireUser>>) {
   const imports = await GovtAttendanceImport.find({ _id: { $in: importIds } })
     .select("period_label file_name").lean<any[]>();
   const impById = new Map(imports.map((i) => [String(i._id), i]));
+  // -156 (QA-453): identity equality answers WHICH CANDIDATE, and that is the whole argument for
+  // this door being safe where a name match is not. It does not answer WHICH BATCH. A row that
+  // names no batch was attached to whatever membership findOne returned first - an arbitrary pick,
+  // made silently, and then audited as "attached by exact portal-ID equality", which is true of the
+  // candidate and not of the batch. A screen that refuses to choose between two Sachins does not
+  // get to choose between two of one Sachin's batches.
+  const ownerIds = [...canOwners.values()].flat().map((c) => c._id);
+  const liveMemberships = new Map<string, number>();
+  for (const m of await BatchMember.find({ left_on: null, candidate: { $in: ownerIds } }).select("candidate").lean<any[]>()) {
+    const k = String(m.candidate);
+    liveMemberships.set(k, (liveMemberships.get(k) ?? 0) + 1);
+  }
   const rematchable: any[] = [];
   const skippedSuspectImport: any[] = [];
+  const ambiguousBatch: any[] = [];
   for (const r of unattached) {
     const can = normalizeCan(r.govt_candidate_id);
     if (!can) continue;
@@ -93,11 +107,28 @@ async function plan(user: Awaited<ReturnType<typeof requireUser>>) {
       hours_raw: r.total_hours_raw ?? null,
     };
     if (suspectImports.has(String(r.import))) skippedSuspectImport.push(entry);
-    else rematchable.push(entry);
+    else if (!r.batch && (liveMemberships.get(String(owners[0]._id)) ?? 0) > 1) {
+      // -156 (QA-453): report only, and DEFENCE IN DEPTH rather than a live case - Rule 20
+      // (addMemberChecked) refuses a candidate a SECOND live membership, so "which batch" has
+      // exactly one answer today and this group is always empty. The suite proves that rule rather
+      // than this branch, on the -144 (QA-314) precedent: a guard whose precondition no door can
+      // produce is worth keeping and is NOT worth a pin that cannot fail. If Rule 20 is ever
+      // relaxed, the pin on it goes red and this branch is already here.
+      ambiguousBatch.push({ ...entry, live_memberships: liveMemberships.get(String(owners[0]._id)) ?? 0 });
+    } else rematchable.push(entry);
   }
 
   // f) enrolled with no CAN anywhere - the list Manish sir needs, not a write.
-  const enrolled = await BatchMember.find({ left_on: null, enrollment_status: "Completed" })
+  // -156 (QA-444): SCOPED, like the five groups above it. This one query shipped with no filter of
+  // any kind, so a Location user scoped to a brand-new empty centre read 65 OTHER centres' students
+  // - names, phone numbers and batch codes - on a screen -155 goes out of its way to invite them
+  // to open. The manifest called it "unscoped by batch ... across the whole scope"; it was unscoped
+  // by LOCATION and there was no scope in it at all. It keys on the BATCH's centre, because the
+  // centre running the batch is whose problem this row is, and it is the centre this row names.
+  const scopedBatchIds = isScoped(user)
+    ? await Batch.find(locationFilter(user, "location")).distinct("_id")
+    : null;
+  const enrolled = await BatchMember.find({ left_on: null, enrollment_status: "Completed", ...(scopedBatchIds ? { batch: { $in: scopedBatchIds } } : {}) })
     .populate("candidate", "name phone sidh_candidate_id id_reference")
     .populate("batch", "code location").lean<any[]>();
   const enrolledNoCan = enrolled.filter((m) => {
@@ -114,6 +145,7 @@ async function plan(user: Awaited<ReturnType<typeof requireUser>>) {
     duplicates: dupRows.map((d) => ({ id: d._id, members: d.members })),
     rematchable,
     skipped_suspect_import: skippedSuspectImport,
+    ambiguous_batch: ambiguousBatch,
     enrolled_no_can: enrolledNoCan,
   };
 }

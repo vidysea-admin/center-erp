@@ -577,20 +577,27 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
 {
   // Rule 13 books a room for the whole date range and Rule 10 does the same for a trainer, so each
   // fixture batch gets its own of both — three batches sharing one room is a room conflict, rightly.
-  const mkBatch = async (size, tag) => {
+  // -156 (QA-445): `noCan` builds the batch the gate is meant to stop - used exactly once, by d1,
+  // to prove the derived door asks the same question as the hand door. Every other batch here goes
+  // on to certify, and in the real world a batch that certifies carries portal Candidate IDs.
+  const mkBatch = async (size, tag, { noCan = false } = {}) => {
     const room = (await req("POST", `/api/locations/${loc._id}/rooms`, { name: `D112-${tag}-${stamp}`, type: "Classroom" }, 201)).data.item;
     const tr = (await req("POST", "/api/trainers", { name: `TEST-D112${tag} ${stamp}`, phone: `85${tag}${stamp}9`.slice(0, 10), skills: [prog.trainer_skill] }, 201)).data.item;
     const b = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: tr._id, room: room._id, planned_start: today, target_size: size }, 201)).data.item;
     const mems = [];
+    const cands = [];
     for (let i = 0; i < size; i++) {
-      const c = (await req("POST", "/api/candidates", { name: `D112 ${tag}${i} ${stamp}`, phone: `84${tag}${i}${stamp}`.slice(0, 10), location: loc._id, program: prog._id }, 201)).data.item;
+      const c = (await req("POST", "/api/candidates", {
+        name: `D112 ${tag}${i} ${stamp}`, phone: `84${tag}${i}${stamp}`.slice(0, 10), location: loc._id, program: prog._id,
+        ...(noCan ? {} : { sidh_candidate_id: `CAN_${stamp}${tag}${i}` }),   // DIGITS after CAN: normalizeCan is /CAN[s_-]*(d+)/i, so a letter here reads as NO id at all
+      }, 201)).data.item;
       const m = (await req("POST", `/api/batches/${b._id}/members`, { candidate: c._id }, 201)).data.item;
       await req("PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
-      mems.push(m);
+      mems.push(m); cands.push(c);
     }
     await req("POST", `/api/batches/${b._id}/transition`, { target: "Ready" }, 200);
     await req("POST", `/api/batches/${b._id}/transition`, { target: "Active" }, 200);
-    return { b, mems };
+    return { b, mems, cands };
   };
   const upload = async (name) => {
     const fd = new FormData();
@@ -603,7 +610,7 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   const rowsOf = async (id) => (await req("GET", `/api/batches/${id}/results`)).data.items;
 
   // (a) the happy chain: two Passes, two certificate files → Completed with no hand tick at all.
-  const { b: d1, mems: m1 } = await mkBatch(2, 1);
+  const { b: d1, mems: m1, cands: cd1 } = await mkBatch(2, 1, { noCan: true });
   await req("PUT", `/api/batches/${d1._id}/results`, { rows: m1.map((m) => ({ member: String(m._id), result: "Pass", score: 70, max_score: 100, assessed_on: today })) }, 200);
   const afterMarks = await closureOf(d1._id);
   ok("-112: every roster row final → assessment Completed derives itself (no hand tick)",
@@ -616,6 +623,22 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   ok("-112: a certificate FILE on a Pass row IS the certificate — status Issued, dated, without walking the ladder by hand",
     r1b.every((i) => i.result?.certificate_status === "Issued" && !!i.result?.certificate_date && !!i.result?.certificate_file),
     JSON.stringify(r1b.map((i) => [i.result?.certificate_status, !!i.result?.certificate_date])));
+  // -156 (QA-445): the -155 gate was written on the hand-typed door and narrowed to per-candidate
+  // batches - and per-candidate is exactly the mode that DERIVES instead of typing, so the gate was
+  // aimed at the door nobody uses. This fixture is the proof: its candidates carry no portal ID at
+  // all, and at -155 certification derived itself here while the same shape was refused 409 through
+  // the hand door. Two doors, one question, two answers.
+  const c1gate = await closureOf(d1._id);
+  ok("-156 (QA-445): certification does NOT derive while an enrolled student has no portal Candidate ID",
+    c1gate?.certification_status !== "Completed", String(c1gate?.certification_status));
+  const gateBody = (await req("GET", `/api/batches/${d1._id}/closure`)).data;
+  ok("-156 (QA-445): ...and the closure screen is told WHO is missing one, rather than showing a tick that never arrives",
+    Array.isArray(gateBody.certification_blocked_no_can) && gateBody.certification_blocked_no_can.length === 2,
+    JSON.stringify(gateBody.certification_blocked_no_can));
+  // the centre does what the message asks: the portal IDs go on the students
+  for (const [i, c] of cd1.entries()) await req("PATCH", `/api/candidates/${c._id}`, { sidh_candidate_id: `CAN_${stamp}77${i}` }, 200);
+  // a touch on a settled row is what re-runs the derivation (every result upsert recomputes)
+  await req("PATCH", `/api/results/${r1[0].result._id}`, { certificate_no: `CERT-D112-${stamp}` }, 200);
   const c1 = await closureOf(d1._id);
   ok("-112: every Pass settled → certification Completed derives itself", c1?.certification_status === "Completed", String(c1?.certification_status));
   ok("-112: the derived figures are real, not blank", (c1?.passed ?? 0) === 2 && (c1?.certificates_issued ?? 0) === 2, JSON.stringify({ p: c1?.passed, ci: c1?.certificates_issued }));

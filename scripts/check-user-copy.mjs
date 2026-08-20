@@ -457,11 +457,19 @@ for (const file of walk(root)) {
   // sentence around it had been suppressed for waiting on a match - remaining_hours went null and
   // the bar went on painting 13%. A quantity in a bar is a quantity.
   const bar = fs.readFileSync(path.join(root, "app/p/attendance/[token]/page.tsx"), "utf-8");
-  const widthLine = bar.split(/\r?\n/).find((l) => /style=\{\{ width:/.test(l)) ?? "";
-  if (widthLine && /awaiting_match/.test(widthLine)) passed++;
+  // -156 (QA-437): this asked whether the identifier "awaiting_match" appeared ANYWHERE on the
+  // first line matching the width pattern. Two rewrites walked past it while keeping the defect:
+  // `width: ${data.awaiting_match ? pct : pct}%` mentions it and paints the estimate anyway, and a
+  // SECOND bar added below the first was never looked at, because .find() stops at one. It now
+  // checks EVERY width line and requires the gate to yield zero - the property, not the name.
+  const widthLines = bar.split(/\r?\n/).filter((l) => /style=\{\{ width:/.test(l));
+  const unGated = widthLines.filter((l) => !/awaiting_match\s*\?\s*0\b/.test(l));
+  if (widthLines.length > 0 && unGated.length === 0) passed++;
   else {
     failed++;
-    pushStructural("app/p/attendance/[token]/page.tsx: the progress bar's width is not gated on awaiting_match, so it paints a figure derived from OUR daily logs while every sentence around it says the portal row is still being matched (QA-421)");
+    pushStructural(widthLines.length === 0
+      ? "app/p/attendance/[token]/page.tsx: no progress bar width expression found at all - the QA-421 check has lost its subject and is no longer watching anything"
+      : `app/p/attendance/[token]/page.tsx: ${unGated.length} of ${widthLines.length} progress bars do not resolve to 0 while awaiting_match, so a bar paints a figure derived from OUR daily logs while every sentence around it says the portal row is still being matched (QA-421)`);
   }
 
   // QA-422: QA-413 made the PAYLOAD derive its buckets from ELIGIBILITY_STATES, and the sentence a
@@ -472,19 +480,80 @@ for (const file of walk(root)) {
   // still pending. "The government portal has sent your hours" is a confident falsehood told to
   // the reader least able to check it - what is true in every case is that a row under their NAME
   // is waiting to be attached. This lives in the page, so an API assertion could never catch it.
-  if (!/sent your hours/i.test(bar)) passed++;
+  // -156 (QA-437): banning one exact phrasing is not the same as requiring the true sentence -
+  // "the portal has sent your attendance hours" walked straight past /sent your hours/. Both halves
+  // are asserted now: the page MUST attribute the record to the NAME (which is all anyone knows
+  // while the row is unattached), and must not claim the hours are the reader's under any wording.
+  // -156 (QA-439): the shared-name branch on the student's own page. A page that says "your centre
+  // is confirming that it is yours" to BOTH students of one name tells one of them something
+  // nobody knows yet - and this is the reader least able to check it.
+  if (/same_name_members/.test(bar) && /shares your name/i.test(bar)) passed++;
   else {
     failed++;
-    pushCopy("app/p/attendance/[token]/page.tsx: tells the student the portal sent THEIR hours, which is not true for a student whose registration is still pending - it is a row under their name (QA-419)");
+    pushCopy("app/p/attendance/[token]/page.tsx: the waiting-on-a-match sentence has no shared-name branch, so two students of one name are both told the record is being confirmed as theirs - one of them is being told something nobody knows (QA-439)");
+  }
+  const saysUnderYourName = /under your name/i.test(bar);
+  const claimsTheyAreYours = /sent\s+your\s+(\w+\s+){0,3}hours/i.test(bar);
+  if (saysUnderYourName && !claimsTheyAreYours) passed++;
+  else {
+    failed++;
+    pushCopy(claimsTheyAreYours
+      ? "app/p/attendance/[token]/page.tsx: tells the student the portal sent THEIR hours, which is not true for a student whose registration is still pending - it is a row under their name (QA-419)"
+      : "app/p/attendance/[token]/page.tsx: the waiting-on-a-match sentence no longer says the record is under the student's NAME, which is the only thing that is true of an unattached row (QA-419)");
   }
 
   const bp = fs.readFileSync(path.join(root, "app/(app)/batches/[id]/page.tsx"), "utf-8");
-  const summary = (bp.split("Attendance hours (bar ")[1] ?? "").slice(0, 2000);
-  if (summary && /Object\.entries\(attMeta\.verdict_counts/.test(summary)) passed++;
+  // -156 (QA-437): requiring the literal "Object.entries(attMeta.verdict_counts" inside the
+  // sentence proved the generic arm was WRITTEN, not that it does anything - ".filter(() => false)"
+  // passes it while rendering nothing. What is checkable from source, and what actually matters, is
+  // the correspondence: the arm skips exactly the states that have a phrase of their own. A state
+  // excluded with no phrase is silently dropped; a state with a phrase and no exclusion is printed
+  // twice. Stated plainly, because QA-437 is about pins that overclaim: this does NOT prove the arm
+  // renders in a browser - it proves the two lists cannot drift apart, which is the defect QA-422
+  // was raised for.
+  const summary = (bp.split("Attendance hours (bar ")[1] ?? "").slice(0, 3500);
+  const inclLine = summary.split(/\r?\n/).find((l) => /\.includes\(k\)/.test(l)) ?? "";
+  const excluded = [...inclLine.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
+  // a state is "named" when the sentence reads its own count - either the bucket
+  // (verdict_counts.no_hours) or a count of its own beside the buckets (attMeta.awaiting_match_rows).
+  const named = new Set([
+    ...[...summary.matchAll(/verdict_counts\.([a-z_]+)/g)].map((m) => m[1]),
+    ...[...summary.matchAll(/attMeta\.([a-z_]+)_rows/g)].map((m) => m[1]),
+  ]);
+  const droppedSilently = excluded.filter((k) => !named.has(k));
+  const printedTwice = [...named].filter((k) => !excluded.includes(k));
+  const why = !summary ? "the sentence anchor 'Attendance hours (bar ' is gone, so this check has no subject"
+    : !/Object\.entries\(attMeta\.verdict_counts/.test(summary) ? "there is no generic arm over verdict_counts at all"
+      : !/n > 0/.test(inclLine) ? "the generic arm no longer filters on the count, so zero-valued states would print"
+        : !excluded.length ? "the generic arm excludes nothing, so it either prints every state twice or (with a constant-false filter) nothing at all"
+          : droppedSilently.length ? `${JSON.stringify(droppedSilently)} is excluded from the generic arm and has no phrase of its own - it would be counted in the payload and silently missing from the sentence`
+            : printedTwice.length ? `${JSON.stringify(printedTwice)} has a phrase of its own AND is not excluded from the generic arm - it would appear twice in one sentence`
+              : "";
+  if (!why) passed++;
   else {
     failed++;
-    pushStructural("app/(app)/batches/[id]/page.tsx: the attendance summary line hand-lists verdict states with no generic arm, so a state added to ELIGIBILITY_STATES will be counted in the payload and silently missing from the sentence (QA-422)");
+    pushStructural(`app/(app)/batches/[id]/page.tsx: the attendance summary line and its generic arm have drifted - ${why} (QA-422)`);
   }
+
+  // -156 (QA-434): QA-410 taught the VERDICT to say only what the row holds - "the export carries a
+  // row under this name but its hours column could not be read" - and two sibling tooltips in this
+  // same page went on asserting hours unconditionally, and asserting they were THIS student's while
+  // two people shared the name. A tooltip is a sentence; it is held to the sentence's standard.
+  const tips = bp.split(/\r?\n/).filter((l) => /title=/.test(l) && /awaiting_match/.test(l));
+  const tipFaults = [];
+  if (tips.length < 3) tipFaults.push(`app/(app)/batches/[id]/page.tsx: only ${tips.length} of the three awaiting-match tooltips (Candidates chip, Attendance chip, Closure summary) can be found - this check has lost a subject rather than passed (QA-434)`);
+  for (const l of tips) {
+    if (/carries hours/i.test(l)) tipFaults.push("app/(app)/batches/[id]/page.tsx: a tooltip still states the export CARRIES HOURS under this name, which is false for a row whose hours column could not be read (QA-434)");
+    if (/this student/i.test(l)) tipFaults.push("app/(app)/batches/[id]/page.tsx: a tooltip still says the row is not attached to THIS STUDENT yet, which asserts the row is theirs - the thing nobody knows while two people share the name (QA-434)");
+    // A ROW-level tooltip (one that reads this row's own awaiting_match) has to be built FROM the
+    // row. The Closure summary tooltip is deliberately not held to this - it describes a group and
+    // reads attMeta.awaiting_match_rows, which this test does not match.
+    const titleExpr = l.slice(l.indexOf("title="));
+    if (/[hr]\.awaiting_match\b/.test(l) && (/^title="/.test(titleExpr) || !/(awaiting_match|verdict)/.test(titleExpr)))
+      tipFaults.push("app/(app)/batches/[id]/page.tsx: a row-level tooltip is a fixed string beside a row that carries the facts (count, hours_minutes) - it can only be right by luck (QA-434)");
+  }
+  if (!tipFaults.length) passed++;
+  else { failed++; for (const t of [...new Set(tipFaults)]) pushCopy(t); }
 }
 
 for (const h of hits) console.log("  ✗ " + h);

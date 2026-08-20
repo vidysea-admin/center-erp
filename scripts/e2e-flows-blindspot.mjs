@@ -590,18 +590,39 @@ console.log("\n--- -155 (QA-427): the portal-ID health screen - see it, select i
   const canM = `CAN_${stamp}77101`;
   const m1 = (await req(admin, "POST", "/api/candidates", { name: `PH Misfiled ${stamp}`, phone: "9822200011", location: loc._id, program: prog._id, id_reference: canM }, 201)).data.item;
   const m3 = (await req(admin, "POST", "/api/candidates", { name: `PH MisfiledB ${stamp}`, phone: "9822200012", location: loc._id, program: prog._id, id_reference: `CAN_${stamp}77102` }, 201)).data.item;
+  // -156 (QA-450): this fixture used to be the proof that "" reaches the database - it posted an
+  // empty portal ID and the empty_strings group found it. That was the defect, not the feature: ""
+  // IS a string, so the QA-417 partial unique index indexed it, and the SECOND person saved with a
+  // blank field was refused with "That sidh candidate id is already in use." - a duplicate identity
+  // that does not exist. The door now stores absence, so the fixture proves the door instead.
   const m2 = (await req(admin, "POST", "/api/candidates", { name: `PH Empty ${stamp}`, phone: "9822200013", location: loc._id, program: prog._id, sidh_candidate_id: "" }, 201)).data.item;
+  const m2Read = (await req(admin, "GET", `/api/candidates/${m2._id}`, undefined, 200)).data.item;
+  // == null, not !value: "" is FALSY, so the first draft of this line passed on the very state it
+  // exists to forbid. The distinction between "" and absent IS the issue.
+  ok("-156 (QA-450): a blank portal ID is stored as ABSENT, never as \"\" - absence of an identity is not an identity",
+    m2Read?.sidh_candidate_id == null, JSON.stringify({ stored: m2Read?.sidh_candidate_id ?? "(absent)" }));
+  const m2b = await req(admin, "POST", "/api/candidates", { name: `PH Empty B ${stamp}`, phone: "9822200014", location: loc._id, program: prog._id, sidh_candidate_id: "" });
+  ok("-156 (QA-450): a SECOND person with no portal ID is not a collision with the first",
+    m2b.status === 201, `got ${m2b.status}: ${JSON.stringify(m2b.data).slice(0, 140)}`);
+  const m2c = await req(admin, "PATCH", `/api/candidates/${m2._id}`, { sidh_candidate_id: "   " });
+  const m2cRead = (await req(admin, "GET", `/api/candidates/${m2._id}`, undefined, 200)).data.item;
+  ok("-156 (QA-450): and clearing the field through the edit door clears it, rather than storing whitespace",
+    m2c.status === 200 && m2cRead?.sidh_candidate_id == null, JSON.stringify({ s: m2c.status, stored: m2cRead?.sidh_candidate_id ?? "(absent)" }));
 
   const plan1 = (await req(admin, "GET", "/api/candidates/portal-id-health", undefined, 200)).data;
-  ok("-155 (QA-427): the plan finds the misfiled CAN (the 55-class) and the \"\" artefact",
+  // -156 (QA-450): the empty_strings clause is gone from this assertion because no door can create
+  // that state any more - it is now a HISTORICAL group, cleaning rows written before -156, and the
+  // suite cannot construct one to select. That loss is disclosed rather than papered over: the
+  // set_null apply path is exercised by no pin after this change, and the group's presence on the
+  // payload is covered by the six-groups assertion in e2e-govt.
+  ok("-155 (QA-427): the plan finds the misfiled CAN - the 55-class - on both candidates",
     (plan1.misfiled ?? []).some((x) => String(x.candidate) === String(m1._id))
-      && (plan1.misfiled ?? []).some((x) => String(x.candidate) === String(m3._id))
-      && (plan1.empty_strings ?? []).some((x) => String(x.candidate) === String(m2._id)),
+      && (plan1.misfiled ?? []).some((x) => String(x.candidate) === String(m3._id)),
     JSON.stringify({ misfiled: (plan1.misfiled ?? []).length, empty: (plan1.empty_strings ?? []).length }));
 
-  // SELECTED-ONLY is the contract: fix m1 and m2, leave m3 exactly as it is.
-  const applied = await req(admin, "POST", "/api/candidates/portal-id-health", { copy: [m1._id], set_null: [m2._id] });
-  ok("-155 (QA-427): apply fixes ONLY the selected rows", applied.status === 200 && applied.data.copied === 1 && applied.data.set_null === 1, JSON.stringify(applied.data));
+  // SELECTED-ONLY is the contract: fix m1, leave m3 exactly as it is.
+  const applied = await req(admin, "POST", "/api/candidates/portal-id-health", { copy: [m1._id] });
+  ok("-155 (QA-427): apply fixes ONLY the selected rows", applied.status === 200 && applied.data.copied === 1, JSON.stringify(applied.data));
   const m1After = (await req(admin, "GET", `/api/candidates/${m1._id}`, undefined, 200)).data.item;
   const m3After = (await req(admin, "GET", `/api/candidates/${m3._id}`, undefined, 200)).data.item;
   ok("-155 (QA-427): the copy lands in the matcher's field and id_reference is untouched",

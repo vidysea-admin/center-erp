@@ -103,7 +103,9 @@ export default function PublicAttendancePage({ params }: { params: Promise<{ tok
                   simply not attached to them yet. A student cannot fix this and must not be sent
                   to try, so this says what is happening rather than what to do. */}
               {data.awaiting_match
-                ? "The government portal has sent an attendance record under your name. Your centre is confirming that it is yours, and your hours will show here once it is."
+                ? (data.awaiting_match.same_name_members > 1
+                  ? "The government portal has sent an attendance record under your name. Another student in your batch shares your name, so your centre is confirming which of you it belongs to — it may not be yours. Check back once it's resolved."
+                  : "The government portal has sent an attendance record under your name. Your centre is confirming that it is yours, and your hours will show here once it is.")
                 : data.attended_hours != null
                   ? `${data.attended_hours} hours attended${data.hours_basis === "estimate" ? " (estimated — portal hours pending)" : ""}`
                   : "hours will appear once the portal attendance is imported"}

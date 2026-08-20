@@ -26,6 +26,9 @@ export const { GET, PATCH } = itemRoutes({
   permission: "candidates.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
   // QA-141 (Umesh): edits are as strict as creates — fixed-up numbers land as the bare 10.
   beforeUpdate(_id, body, _existing, user) {
+    // -156 (QA-450): null, not "" - clearing the field has to stay possible, and the QA-417 partial
+    // index does not index null. Same reasoning as the create door one file over.
+    if (typeof body.sidh_candidate_id === "string" && !body.sidh_candidate_id.trim()) body.sidh_candidate_id = null;
     // -135 (QA-283): the caller may say "these documents were done on SIDH". It does NOT get to say
     // WHO confirmed it or WHEN — the server stamps both from the session, because a mark whose
     // provenance the client can write is not evidence, it is a field. Clearing it clears them too,

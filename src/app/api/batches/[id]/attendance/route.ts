@@ -45,6 +45,13 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   // right here, unattached". The unattached rows are read separately and never mixed into the
   // hours - they only explain the absence.
   const awaitingByName = await unresolvedPortalRowsByName({ batchId: id, locationId: batch.location });
+  // -156 (QA-439): one row cannot belong to two people, so the sentence must not say it does.
+  const sameNameCount = new Map<string, number>();
+  for (const m of members) {
+    if (m.left_on) continue;
+    const nk = nameKey(m.candidate?.name);
+    if (nk) sameNameCount.set(nk, (sameNameCount.get(nk) ?? 0) + 1);
+  }
 
   // -109: is this cohort still teaching? "Not eligible" is a verdict and waits for the course to be
   // over; while it runs, short hours are progress. The portal's own working-day count is the
@@ -98,6 +105,7 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
         // gate ahead of it - a not-enrolled student gets "Not enrolled yet" as their VERDICT, which
         // is a different question from where their hours are.
         awaitingMatch: awaiting,
+        sameNameMembers: sameNameCount.get(nameKey(m.candidate?.name)) ?? 1,
       }),
       // -153 cycle 3 (QA-419): the hours story, on the row, so all three surfaces read one field.
       awaiting_match: awaiting,
@@ -124,6 +132,12 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     // the first time a row went unresolved. It reads the one exported state list now, so the union
     // and the buckets cannot drift apart. ("trainer" is constructed by the govt-attendance grid,
     // never returned here, so its bucket is a constant 0 on this route - present and honest.)
+    // -156 (QA-432): the count the Closure line needs, and it is NOT verdict_counts.awaiting_match.
+    // That bucket is journey-gated (a not-enrolled member is not_enrolled, never awaiting_match),
+    // while every chip on this page reads the ungated ROW field - so the line under-reported and
+    // three surfaces disagreed with it. Counting the rows is the fix; widening the bucket would
+    // break the -109 partition, which is the one thing that must not move.
+    awaiting_match_rows: rows.filter((r) => !r.left_on && r.awaiting_match).length,
     verdict_counts: ELIGIBILITY_STATES.reduce((acc: Record<string, number>, k) => {
       acc[k] = rows.filter((r) => !r.left_on && r.verdict.state === k).length;
       return acc;

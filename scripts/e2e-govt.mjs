@@ -362,16 +362,24 @@ ok("all 7 rows persisted", detail.data.rows?.length === 7, `got ${detail.data.ro
     ok("-153 (QA-393): both same-name students are 'awaiting_match', not 'no portal hours'",
       twinRows.length === 2 && twinRows.every((m) => m.verdict?.state === "awaiting_match"),
       JSON.stringify(twinRows.map((m) => m.verdict?.state)));
+    // -156 (QA-439): this assertion pinned the exact sentence QA-439 exists to change. What it was
+    // really testing survives word-for-word - the line must not claim the export was never imported,
+    // and it must point at the screen that resolves the row - so those two clauses are untouched.
+    // The third clause named one wording of "the row is not attached yet"; the shared-name branch
+    // says the same thing differently ("which of them it belongs to ... has not been decided yet"),
+    // so the clause now accepts either. Changed because the behaviour changed, not to go green.
     ok("-153 (QA-393): and the sentence no longer claims the export was never imported",
       twinRows.every((m) => !/has not been imported/i.test(String(m.verdict?.detail ?? ""))
-        // matches BOTH branches: "not attached to this student" and "none is attached to a student"
-        && /attached to (a|this) student/i.test(String(m.verdict?.detail ?? ""))
+        && /(attached to (a|this) student|has not been decided)/i.test(String(m.verdict?.detail ?? ""))
         && /Government Attendance/i.test(String(m.verdict?.detail ?? ""))),
       JSON.stringify(twinRows.map((m) => m.verdict?.detail)));
     // A re-import supersedes rather than doubles: this fixture uploads the same file more than
     // once, so a helper that counted across imports said "4 rows" about two people.
+    // -156 (QA-439): same reason - the FIGURE is what this pins (2, not 4, after three imports of
+    // one file), and the shared-name branch says "under it" where the single-name branch said
+    // "under this name". The number and its meaning are unchanged.
     ok("-153: the unresolved-row count is not multiplied by re-imports",
-      twinRows.every((m) => String(m.verdict?.detail ?? "").includes("carries 2 rows under this name")),
+      twinRows.every((m) => /carries 2 rows under (this name|it)/.test(String(m.verdict?.detail ?? ""))),
       JSON.stringify(twinRows.map((m) => m.verdict?.detail)));
     ok("-153 (QA-393): the count is broken out, and no_hours no longer absorbs them",
       att.data.verdict_counts?.awaiting_match === 2, JSON.stringify(att.data.verdict_counts));
@@ -413,6 +421,13 @@ ok("all 7 rows persisted", detail.data.rows?.length === 7, `got ${detail.data.ro
         const pub = await fetch(`${BASE}/api/public/attendance/${mine.token}`).then((r) => r.json()).catch(() => ({}));
         ok("-153 (QA-409): the students own page knows the portal row is waiting on a match",
           (pub?.awaiting_match?.count ?? 0) > 0, JSON.stringify({ awaiting: pub?.awaiting_match, basis: pub?.hours_basis }));
+        // -156 (QA-439): the THIRD surface, and the only one a student sees. The batch tab and the
+        // roster were taught not to tell two same-name students "it is yours"; this page reaches
+        // awaitingMatchFor() directly and never passes through eligibilityVerdict, so the sentence
+        // it renders had to be taught separately or the person most affected keeps the old claim.
+        ok("-156 (QA-439): the student's own page knows how many people on this roster answer to their name",
+          (pub?.awaiting_match?.same_name_members ?? 0) > 1,
+          JSON.stringify({ awaiting: pub?.awaiting_match }));
         // -153 cycle 3 (QA-423): cycle 2 kept this and called it an invariant. It is vacuous in
         // exactly the way the assertion cycle 2 DELETED was vacuous - this fixture batch carries no
         // slot (QA-085 pins that), so attended_hours is null and remaining_hours is null whichever
@@ -455,6 +470,30 @@ ok("all 7 rows persisted", detail.data.rows?.length === 7, `got ${detail.data.ro
         notEnrolledWaiting.length > 0,
         JSON.stringify(live.map((m) => [m.name, m.enrollment_status, !!m.awaiting_match])));
 
+      // -156 (QA-432): the FOURTH surface. Every chip reads the ungated ROW; the Closure summary
+      // line read the journey-gated BUCKET, so a not-enrolled member with an unattached row was
+      // shown by three surfaces and counted by none. The discriminator is that the two numbers
+      // differ in the right direction while the -109 partition still holds untouched.
+      {
+        const liveRows = live.filter((m) => m.awaiting_match).length;
+        ok("-156 (QA-432): the Closure count reads the ROW field, so it includes the not-enrolled one",
+          att2.data.awaiting_match_rows === liveRows && liveRows > (att2.data.verdict_counts?.awaiting_match ?? 0),
+          JSON.stringify({ rows: att2.data.awaiting_match_rows, computed: liveRows, gated_bucket: att2.data.verdict_counts?.awaiting_match }));
+        const summed = Object.values(att2.data.verdict_counts ?? {}).reduce((a, b) => a + b, 0);
+        ok("-156 (QA-432): ...and verdict_counts is UNCHANGED - still a partition of the roster",
+          summed === live.length, JSON.stringify({ summed, live: live.length }));
+      }
+
+      // -156 (QA-439): one row cannot belong to two people. With the third same-name member on the
+      // roster the sentence must stop saying "this student" and say whose it is has not been decided.
+      {
+        const shared = live.filter((m) => m.verdict?.state === "awaiting_match" && m.name === `${NAME} Twin`);
+        ok("-156 (QA-439): with a shared name the sentence never claims the row is THIS student's",
+          shared.length > 0 && shared.every((m) => !/attached to this student/i.test(String(m.verdict?.detail ?? ""))
+            && /share this name/i.test(String(m.verdict?.detail ?? ""))),
+          JSON.stringify(shared.map((m) => String(m.verdict?.detail ?? "").slice(0, 110))));
+      }
+
       const disagree = live.filter((m) => !!m.awaiting_match !== !!rosterBy.get(String(m.member_id))?.hours?.awaiting_match);
       ok("-153 (QA-419): the Attendance tab and the roster agree about every member, enrolled or not",
         disagree.length === 0,
@@ -476,6 +515,20 @@ ok("all 7 rows persisted", detail.data.rows?.length === 7, `got ${detail.data.ro
       // registration is still pending - lives in the page, not in this payload, so an assertion
       // here could never fail. It is checked in check-user-copy.mjs where it is actually true.
 
+      // -156 (QA-436): the links minted above outlive the member they were minted for - the token
+      // row survives with active:true and batch_member pointing at a document that no longer
+      // exists (measured: 13 attendance tokens per wall, exactly 1 orphaned). It 404s, so there is
+      // no user-facing harm; a fixture that leaves live credentials behind is still debris.
+      // NOTE, stated rather than implied: this pin CANNOT fail on pre-fix source, because the
+      // defect and the fix both live in this file. Its evidence is the orphan count in the test
+      // database before and after, recorded in the manifest - not a red line in a pre-fix run.
+      const minted = (links2.data.items ?? []).filter((i) => String(i.batch_member?._id ?? i.batch_member) === String(ncMem?._id));
+      const revoked = [];
+      for (const t of minted) revoked.push((await req(admin, "PATCH", `/api/public-tokens/${t._id}`, { active: false })).data.item);
+      ok("-156 (QA-436): every attendance link minted for the transient member is revoked before it is deleted",
+        minted.length > 0 && revoked.length === minted.length && revoked.every((d) => d && d.active === false),
+        JSON.stringify({ minted: minted.length, revoked: revoked.filter((d) => d?.active === false).length }));
+
       // clean up so the resolve-drawer assertions below still see exactly two same-name candidates
       await req(admin, "DELETE", `/api/members/${ncMem._id}`, { reason: "-153 QA-419 pin fixture" });
       await req(admin, "DELETE", `/api/candidates/${ncCand._id}`, { reason: "-153 QA-419 pin fixture" });
@@ -483,6 +536,12 @@ ok("all 7 rows persisted", detail.data.rows?.length === 7, `got ${detail.data.ro
       ok("-153 (QA-419) fixture removed: the roster is back to its original size",
         backTo.length === (att.data.members ?? []).length,
         JSON.stringify({ before: (att.data.members ?? []).length, after: backTo.length }));
+      // -156 (QA-436): "back to its original size" is a weaker claim than it reads as - one row
+      // added and another dropped satisfies it. Assert what was actually created is actually gone.
+      const goneCand = await req(admin, "GET", `/api/candidates/${ncCand._id}`);
+      ok("-156 (QA-436): ...and each thing the fixture created is gone by name, not merely by count",
+        !backTo.some((m) => String(m.member_id) === String(ncMem?._id)) && goneCand.status === 404,
+        JSON.stringify({ member_still_there: backTo.some((m) => String(m.member_id) === String(ncMem?._id)), candidate_get: goneCand.status }));
     }
 
     // QA-293: the same two students on the ROSTER, where the screen rendered "~0 / 60 hrs (est.)"
@@ -994,6 +1053,65 @@ ok("the first import is still intact", (await req(admin, "GET", `/api/govt-atten
   ok("-146 (QA-313): ...but a READ never decides the match - the stored status is still Unmatched",
     after?.match_status === "Unmatched", String(after?.match_status));
 }
+// ---- -156 (QA-433 / QA-410): the sentence for a row whose HOURS COLUMN could not be read ----
+// -153 cycle 2 wrote that branch and disclosed that it shipped without a pin, giving the reason
+// "the wall's fixture CSV carries no blank-hours row, and adding one shifts counts that several
+// existing assertions pin". The checker showed the reason was wrong about this file: it already
+// builds one-row synthetic imports of its own twice (echo.csv, newcomer.csv) and never touches the
+// shared fixture to do it. This is one more of those, and it disturbs no existing count.
+//
+// The shape has to be built exactly: a row is only ever "waiting on a match" when it is UNRESOLVED,
+// and a name matching a single candidate resolves itself. So the name is shared by two CANDIDATES
+// at this centre (which is what makes the row Ambiguous) while only ONE of them is on this batch's
+// roster - which keeps the single-name sentence under test rather than QA-439's shared-name one.
+{
+  const soloName = `${NAME} Solo`;
+  const onRoster = (await req(admin, "POST", "/api/candidates", {
+    name: soloName, phone: `9${STAMP.slice(1)}7001`, location: loc._id, program: program._id,
+  }, 201)).data.item;
+  const elsewhere = (await req(admin, "POST", "/api/candidates", {
+    name: soloName, phone: `9${STAMP.slice(1)}7002`, location: loc._id, program: program._id,
+  }, 201)).data.item;
+  // Its OWN batch, for a reason the first draft learned the hard way: Rule 48 caps enrolment at
+  // target_size and the shared fixture batch is full at 5, so the enrolment PATCH was refused 409
+  // and this suite's req() drops the expected-status argument on the floor - the member sat at
+  // "Not Started", the journey gate answered not_enrolled, and the pin went red claiming a wording
+  // defect that was really a fixture defect. A pin that fails for the wrong reason is worth no
+  // more than one that passes for the wrong reason.
+  const soloBatch = (await req(admin, "POST", "/api/batches", {
+    location: loc._id, program: program._id, target_size: 2, planned_start: localDate(Date.now() - 25 * 86400_000),
+  })).data.item;
+  const soloMem = (await req(admin, "POST", `/api/batches/${soloBatch._id}/members`, {
+    candidate: onRoster._id, joined_on: localDate(Date.now() - 20 * 86400_000),
+  }, 201)).data.item;
+  await req(admin, "PATCH", `/api/members/${soloMem._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+
+  // hours cell (Total Hours Spent) and Average Per Day deliberately EMPTY - the shape a portal
+  // export takes when the column is present and unfilled, which is not the same as junk-hours.csv
+  // (a value that cannot be parsed) and not the same as no-present-col.csv (a missing column).
+  const soloCsv = [csvText.split(/\r?\n/)[0], `1,TESTORG Gurugram -${TC},99000004,${soloName},,Trainee,Trainee,11,3,3,0,,0,,`].join("\n");
+  const soloImp = await upload(admin, {
+    file: new File([Buffer.from(soloCsv)], "blank-hours.csv", { type: "text/csv" }),
+    confirm: "1", period_label: `blank hours ${STAMP}`,
+  });
+  const soloRow = ((await req(admin, "GET", `/api/govt-attendance/${soloImp.data._id}`)).data.rows ?? [])[0];
+  ok("-156 (QA-410) fixture: the row is unresolved AND its hours are null - both halves of the case",
+    soloRow?.match_status === "Ambiguous" && soloRow?.total_hours_minutes == null,
+    JSON.stringify({ status: soloRow?.match_status, minutes: soloRow?.total_hours_minutes, note: String(soloRow?.match_note ?? "").slice(0, 90) }));
+
+  const soloAtt = (await req(admin, "GET", `/api/batches/${soloBatch._id}/attendance`)).data.members ?? [];
+  const meRow = soloAtt.find((m) => m.name === soloName);
+  ok("-156 (QA-410) anti-vacuity: exactly ONE live member of this batch answers to the name, and they are ENROLLED - so the journey gate is past and it is the single-name sentence under test",
+    soloAtt.filter((m) => !m.left_on && m.name === soloName).length === 1
+      && meRow?.enrollment_status === "Completed",
+    JSON.stringify({ same_name: soloAtt.filter((m) => m.name === soloName).length, enrolment: meRow?.enrollment_status }));
+  ok("-156 (QA-410): a row whose hours column could not be read says exactly that, and never claims a figure",
+    meRow?.verdict?.state === "awaiting_match"
+      && /hours column could not be read/i.test(String(meRow?.verdict?.detail ?? ""))
+      && !/DOES carry/i.test(String(meRow?.verdict?.detail ?? "")),
+    JSON.stringify({ state: meRow?.verdict?.state, detail: String(meRow?.verdict?.detail ?? "").slice(0, 150) }));
+  void elsewhere;
+}
 // ---- -148 (QA-332): a TRAINER row must never be offered a student ----
 // -146 widened the read-time note to every unresolved row and did not construct the case where
 // that row is a TRAINER. The portal export carries the centre's own trainers alongside its
@@ -1260,7 +1378,10 @@ const mk2 = await req(admin, "POST", "/api/batches", {
 });
 ok("lock fixture: batch2 created", mk2.status === 201, JSON.stringify(mk2.data).slice(0, 200));
 const batch2 = mk2.data.item;
-const c2 = (await req(admin, "POST", "/api/candidates", { name: `${NAME} Lockcase`, phone: `9${STAMP.slice(1)}2004`, location: loc._id, program: program._id })).data.item;
+// -156 (QA-445): this fixture walks a batch all the way to Completed, and certification now needs
+// the portal Candidate ID at BOTH doors - the hand-typed one this uses and the derived one. A batch
+// that certifies carries portal IDs in the real world; the fixture says so too.
+const c2 = (await req(admin, "POST", "/api/candidates", { name: `${NAME} Lockcase`, phone: `9${STAMP.slice(1)}2004`, location: loc._id, program: program._id, sidh_candidate_id: `CAN_${STAMP}2004` })).data.item;
 const m2 = (await req(admin, "POST", `/api/batches/${batch2._id}/members`, { candidate: c2._id })).data.item;
 await req(admin, "PATCH", `/api/members/${m2._id}`, { reg_done: true, kyc_done: true, accept_done: true });
 await req(admin, "POST", `/api/batches/${batch2._id}/transition`, { target: "Ready" });
@@ -1412,6 +1533,73 @@ ok("removal is real", (await req(admin, "GET", `/api/sync-sources/${srcId}`)).st
   ok("-155: ...and forcing it through POST is refused on the re-verify",
     remRefused.status === 200 && remRefused.data.rematched === 0 && (remRefused.data.refused ?? []).length === 1,
     JSON.stringify(remRefused.data));
+
+  // -156 (QA-444): five groups on this plan were scoped and the sixth read the whole database. A
+  // Location user scoped to a brand-new empty centre got 65 other centres' students back - names,
+  // phones and batch codes - on a screen -155 invites them to open. Anti-vacuity first, because a
+  // scoped ZERO only means something if the unscoped answer is not zero either.
+  {
+    const farLoc = (await req(admin, "POST", "/api/locations", {
+      code: `TEST-PH${STAMP}`, name: `TEST PortalHealth Far ${STAMP}`,
+      approval_status: "Approved", operational_status: "Active",
+    }, 201)).data.item;
+    const farEmail = `test.ph.far.${STAMP}@vidysea-test.local`.toLowerCase();
+    await req(admin, "POST", "/api/users", {
+      name: `PH Far ${STAMP}`, email: farEmail, password: "CiOnly@123", role: "Location",
+      can_edit: true, active: true, location_scope: [farLoc._id],
+    }, 201);
+    const far = await login(farEmail, "CiOnly@123");
+    const planAdmin = (await req(admin, "GET", "/api/candidates/portal-id-health", undefined, 200)).data;
+    const planFar = far ? (await req(far, "GET", "/api/candidates/portal-id-health", undefined, 200)).data : null;
+    ok("-156 (QA-444) anti-vacuity: the unscoped plan really does carry enrolled students with no portal ID",
+      (planAdmin.enrolled_no_can ?? []).length > 0, JSON.stringify({ admin: (planAdmin.enrolled_no_can ?? []).length }));
+    ok("-156 (QA-444): a centre-scoped reader gets their OWN centre's identity problems and nobody else's",
+      !!planFar && (planFar.enrolled_no_can ?? []).length === 0 && (planFar.misfiled ?? []).length === 0
+        && (planFar.rematchable ?? []).length === 0,
+      JSON.stringify({
+        admin_enrolled: (planAdmin.enrolled_no_can ?? []).length,
+        far_enrolled: (planFar?.enrolled_no_can ?? []).length,
+        far_misfiled: (planFar?.misfiled ?? []).length,
+      }));
+  }
+
+  // -156 (QA-453): exact-ID equality answers WHICH CANDIDATE - the whole argument for this door
+  // being safe where a name match is not. It does not answer WHICH BATCH, and a row naming no batch
+  // was attached to whatever membership Mongo returned first, then audited as decided by the ID.
+  {
+    const twoCan = `CAN_${STAMP}0060`;
+    const twoCsv = [hdr, `1,TESTORG Gurugram -${TC},95000001,${NAME} TwoBatch,${twoCan},Trainee,Trainee,11,4,4,0,40:00:00,0,10:00:00,`].join("\n");
+    const twoImp = await upload(admin, { file: new File([Buffer.from(twoCsv)], "two-batch.csv", { type: "text/csv" }), confirm: "1", period_label: `two-batch ${STAMP}` });
+    const twoRow = ((await req(admin, "GET", `/api/govt-attendance/${twoImp.data._id}`)).data.rows ?? [])[0];
+    const twoCand = (await req(admin, "POST", "/api/candidates", {
+      name: `${NAME} TwoBatch`, phone: `9${STAMP.slice(1)}1902`, location: loc._id, program: program._id, id_reference: twoCan,
+    }, 201)).data.item;
+    const mkHome = async (offsetDays) => (await req(admin, "POST", "/api/batches", {
+      location: loc._id, program: program._id, target_size: 2, planned_start: localDate(Date.now() + offsetDays * 86400_000),
+    })).data.item;
+    const homeA = await mkHome(12);
+    const homeB = await mkHome(40);
+    const addA = await req(admin, "POST", `/api/batches/${homeA?._id}/members`, { candidate: twoCand._id });
+    const addB = await req(admin, "POST", `/api/batches/${homeB?._id}/members`, { candidate: twoCand._id });
+    // THE FIXTURE REFUTED ITS OWN ROW. QA-453 says the exposure is "a candidate re-enrolled into a
+    // second batch, which this product supports" - and it does not: Rule 20 (addMemberChecked)
+    // refuses the second ACTIVE membership. Trying to build the case IS the measurement, so it is
+    // what gets asserted; the arbitrary pick the row describes needs a state no door can produce.
+    ok("-156 (QA-453): Rule 20 is why the ambiguity cannot arise - a second LIVE membership is refused, so 'which batch' has exactly one answer",
+      addA.status === 201 && addB.status === 409 && /already active in batch/i.test(String(addB.data?.error ?? "")),
+      JSON.stringify({ addA: addA.status, addB: addB.status, err: String(addB.data?.error ?? "").slice(0, 90) }));
+    await req(admin, "POST", "/api/candidates/portal-id-health", { copy: [twoCand._id] }, 200);
+    const planTwo = (await req(admin, "GET", "/api/candidates/portal-id-health", undefined, 200)).data;
+    ok("-156 (QA-453): the plan carries the ambiguous_batch group even while nothing can land in it",
+      Array.isArray(planTwo.ambiguous_batch),
+      JSON.stringify({ present: Array.isArray(planTwo.ambiguous_batch), held: (planTwo.ambiguous_batch ?? []).length }));
+    // The row that names no batch still attaches, because with one live membership there IS one
+    // answer - and the note it writes is now the only claim it can support.
+    const twoDone = await req(admin, "POST", "/api/candidates/portal-id-health", { rematch: [twoRow._id] });
+    ok("-156 (QA-453): a no-batch row with exactly ONE live membership attaches, which is the case that actually exists",
+      twoDone.status === 200 && twoDone.data.rematched === 1,
+      JSON.stringify(twoDone.data));
+  }
 
   // -155 (Umesh, 20/08): the portal ID becomes MANDATORY at certification, not at enrolment.
   // BUILD the failing case rather than lean on the roster (the -153 anti-vacuity lesson: the

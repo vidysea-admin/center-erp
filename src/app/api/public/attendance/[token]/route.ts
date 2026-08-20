@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, HttpError } from "@/lib/authz";
-import { CandidateResult, Closure, DailyLog, GovtAttendanceRow, PublicToken } from "@/models";
+import { BatchMember, CandidateResult, Closure, DailyLog, GovtAttendanceRow, PublicToken } from "@/models";
 import { getDefaults } from "@/lib/defaults";
 import { assessmentHoursBar, awaitingMatchFor, memberAttendedHours, slotHoursPerDay } from "@/lib/rules";
 import { nameKey, unresolvedPortalRowsByName } from "@/lib/govt-attendance";
@@ -78,6 +78,16 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     hit: (await unresolvedPortalRowsByName({ batchId: batch?._id, locationId: batch?.location?._id ?? batch?.location }))
       .get(nameKey(m.candidate?.name)),
   });
+  // -156 (QA-439): the third surface. The batch Attendance tab and the Candidates tab were taught
+  // not to tell two same-name students "it is yours" from a single unattached row - this is the
+  // page one of them is actually reading. Only queried when it matters (a row IS waiting).
+  let sameNameMembers = 1;
+  if (awaitingMatch) {
+    const others = await BatchMember.find({ batch: batch?._id, left_on: null, _id: { $ne: m._id } })
+      .populate("candidate", "name").select("candidate").lean<any[]>();
+    const nk = nameKey(m.candidate?.name);
+    sameNameMembers = 1 + others.filter((o) => nameKey(o.candidate?.name) === nk).length;
+  }
 
   const closure = await Closure.findOne({ batch: batch._id }).select("assessment_date").lean<any>();
   // Result & certificate — the "aage kya hua" answer once the exam happens.
@@ -122,7 +132,7 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     // portal hours are sitting in an unattached row, is a number that can be wrong in the direction
     // that matters most to them. While a row is waiting to be matched we owe them the situation,
     // not an arithmetic answer - so no shortfall is quoted and the page says what is happening.
-    awaiting_match: awaitingMatch ? { count: awaitingMatch.count } : null,
+    awaiting_match: awaitingMatch ? { count: awaitingMatch.count, same_name_members: sameNameMembers } : null,
     remaining_hours: awaitingMatch ? null : (attendedHours != null ? Math.max(0, requiredHours - attendedHours) : null),
     eligible: govtHours != null && govtHours >= requiredHours,
     assessment_date: closure?.assessment_date ?? null,

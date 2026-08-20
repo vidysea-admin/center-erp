@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-155";
+export const RELEASE = "2026.08.14-156";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,28 @@ export const RELEASE = "2026.08.14-155";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-156 answers a checker's FAIL and finishes a story the same afternoon started. One number on the " +
+  "batch Closure tab counted unmatched portal rows differently from the three chips beside it, " +
+  "because it read a bucket the enrolment gate empties while they read the row itself; the line now " +
+  "counts rows, and says out loud that it cuts across the groups above rather than being a seventh " +
+  "one. Where two students of one name are waiting on a single portal row, no screen tells either " +
+  "of them it is theirs any more - not the batch tab, not the roster, and not the student's own " +
+  "page, which is the reader least able to check. A tooltip that promised hours now reads what the " +
+  "row actually holds, including a row whose hours column could not be read. " +
+  "And from the check of -155: the Portal ID health screen was showing a centre-scoped user every " +
+  "enrolled student in the database without a portal ID - names, phones and batch codes from " +
+  "centres they have no scope over - and that group is now scoped like the other five. " +
+  "Certification could still complete itself on a batch full of students with no portal Candidate " +
+  "ID, because the gate was written on the hand-typed door and per-candidate batches derive instead " +
+  "of typing; both doors ask one question now, and the Closure screen says who is missing one " +
+  "before anybody presses anything. A blank Candidate ID is stored as absence rather than an empty " +
+  "string, so the second person without one is no longer refused as a duplicate identity. And a " +
+  "portal row that names no batch is held for a person when its student is on two - the ID says " +
+  "who, never which batch. ";
+
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-155 is the root of the Sachin Kumar story, closed at every door it touched. Measured on live: 55 " +
   "candidates carried their government portal Candidate ID in the wrong field - id_reference, the " +
   "nearest-looking option on a mapping screen that never offered the right one - while the field both " +
@@ -33,10 +55,7 @@ export const RELEASE_NOTE_CURRENT =
   "the -154 shifted-column signature are held rather than attached. The portal ID also becomes " +
   "mandatory exactly where it is indispensable: certification cannot be marked complete while an " +
   "enrolled student has none - enrolment stays open, because a candidate legitimately exists here " +
-  "before the government registers them. ";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "before the government registers them. " +
   "-154 is one guard, shipped alone because the deadline sat outside the codebase: a re-upload of " +
   "the government attendance export was being arranged when the 20-08 file was measured, column " +
   "against column, and found SHIFTED - its days-attended figures sitting in the working-days field " +

@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { CandidateResult, Closure, Invoice } from "@/models";
-import { assertBatchInScope, summarizeBatchResults, upsertClosureChecked } from "@/lib/rules";
+import { assertBatchInScope, enrolledWithoutCan, summarizeBatchResults, upsertClosureChecked } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
 export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
@@ -21,6 +21,11 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     closure, invoice,
     legacy: rows.length === 0,
     results_summary: await summarizeBatchResults(id, rows),
+    // -156 (QA-445): a derivation that quietly does not happen is Manish's "mark complete karne se
+    // kuch nahi ho raha" complaint one step earlier. The hand door says why when it is clicked;
+    // this says why before anybody clicks. Legacy batches are exempt for the same reason the gate
+    // itself is: a pre-portal paper batch was never asked for portal IDs.
+    certification_blocked_no_can: rows.length === 0 ? [] : (await enrolledWithoutCan(id)).map((x) => x.name),
   });
 });
 

@@ -1162,8 +1162,16 @@ export async function deriveCompletion(batchId: string, actorId?: string) {
       await audit({ entity: "Closure", entityId: closure._id, field: "assessment_status", oldValue: "Completed", newValue: "Pending — the derived sign-off no longer holds: a roster member has no final result", actor: actorId ?? null, actorType: "SYSTEM" });
     }
     const c = await certificationCompleteness(batchId);
+    // -156 (QA-445): the same question the hand door asks. Proved by the wall rather than by
+    // reading: the -112 fixture builds a per-candidate batch of candidates with no portal ID, marks
+    // every row Pass, and its derived certification went Completed at -155 while a direct PUT on
+    // the identical shape was refused 409. Two doors, one question, two answers.
+    // It gates the FORWARD derivation only. The walk-back below is deliberately untouched: a
+    // certificate already issued is not un-issued because somebody later cleared an ID, and
+    // derivation that reversed on that would be a claim about the certificate it cannot make.
+    const noCan = await enrolledWithoutCan(batchId);
     if (closure.assessment_status === "Completed" && closure.certification_status !== "Completed") {
-      if (!c.legacy && c.pass_count > 0 && c.complete) {
+      if (!c.legacy && c.pass_count > 0 && c.complete && noCan.length === 0) {
         closure.certification_status = "Completed";
         closure.certification_derived = true;
         if (!closure.certification_date) closure.certification_date = new Date();
@@ -1216,6 +1224,20 @@ export async function assessmentCompleteness(batchId: string) {
     pending,
     complete: roster.length > 0 && pending.length === 0,
   };
+}
+
+// -156 (QA-445): ONE definition of "who is enrolled on this batch with no portal Candidate ID",
+// because -155 wrote the test inline on the hand-typed door and the automatic door never asked the
+// question. That is the F-010 lesson landing one branch over: the gate was narrowed to per-candidate
+// batches for a correct reason (a legacy paper batch cannot be asked for IDs that never existed),
+// and per-candidate batches are precisely the mode where certification DERIVES rather than being
+// typed - so the narrowing aimed the gate at the door nobody uses.
+export async function enrolledWithoutCan(batchId: string) {
+  const members = await BatchMember.find({ batch: batchId, left_on: null, enrollment_status: "Completed" })
+    .populate("candidate", "name sidh_candidate_id").lean<any[]>();
+  return members
+    .filter((m) => m.candidate && !normalizeCan(m.candidate.sidh_candidate_id))
+    .map((m) => ({ member: String(m._id), name: String(m.candidate?.name ?? "") }));
 }
 
 // Rules 45/46: certification completes when every Pass candidate holds an Issued certificate.
@@ -1468,12 +1490,13 @@ export async function upsertClosureChecked(batchId: string, patch: Record<string
     // no-op on a frozen batch, and the wall caught this gate breaking that - a re-statement of
     // certification Completed must not suddenly demand IDs the record was closed without.
     if (patch.certification_status === "Completed" && closure.certification_status !== "Completed") {
-      const enrolledMembers = await BatchMember.find({ batch: batchId, left_on: null, enrollment_status: "Completed" })
-        .populate("candidate", "name sidh_candidate_id").lean<any[]>();
-      const noCan = enrolledMembers.filter((m) => m.candidate && !normalizeCan(m.candidate.sidh_candidate_id));
+      // -156 (QA-445): this door and deriveCompletion() now read ONE definition of the test. It
+      // was inline here, and the automatic door - the one per-candidate batches actually use -
+      // never asked the question at all.
+      const noCan = await enrolledWithoutCan(batchId);
       if (noCan.length) {
         throw new HttpError(409,
-          `${noCan.length} enrolled student(s) have no portal Candidate ID, and the government issues no certificate without one: ${noCan.map((m) => m.candidate?.name).filter(Boolean).slice(0, 5).join(", ")}${noCan.length > 5 ? "…" : ""}. Fix it from Candidates → Portal ID health (a misfiled or unattached ID may already be in the system), or set the ID on each candidate's card.`);
+          `${noCan.length} enrolled student(s) have no portal Candidate ID, and the government issues no certificate without one: ${noCan.map((m) => m.name).filter(Boolean).slice(0, 5).join(", ")}${noCan.length > 5 ? "…" : ""}. Fix it from Candidates → Portal ID health (a misfiled or unattached ID may already be in the system), or set the ID on each candidate's card.`);
       }
     }
     // Rules 45/46
@@ -2133,8 +2156,12 @@ export function eligibilityVerdict(opts: {
   // has not been resolved onto a student. NEVER a route to `qualified` - QA-085 stands: only a
   // row the ERP has actually attached to this person may move their hours.
   awaitingMatch?: { count: number; hours_minutes: number | null } | null;
+  // -156 (QA-439): how many LIVE members of this batch answer to this student's name. "under this
+  // name" is defensible; "not attached to THIS STUDENT yet" asserts the row IS theirs - which is
+  // precisely what nobody knows while two people share the name.
+  sameNameMembers?: number;
 }): EligibilityVerdict {
-  const { enrollmentStatus, sidhStatus, attendedHours, requiredHours, basis, courseFinished, awaitingMatch } = opts;
+  const { enrollmentStatus, sidhStatus, attendedHours, requiredHours, basis, courseFinished, awaitingMatch, sameNameMembers } = opts;
 
   // 1. The journey gate. A candidate who has not finished enrolling has not started earning hours,
   //    so "eligible / not eligible" is not a question that has been asked of them yet.
@@ -2174,6 +2201,17 @@ export function eligibilityVerdict(opts: {
       // this state exists to end. The wording it replaced was careful to allow for an unreadable
       // column; this must be too.
       const mins = awaitingMatch.hours_minutes;
+      // -156 (QA-439): when more than one student here answers to this name, a single unattached
+      // row cannot be said to be ANY of theirs - resolving it is what decides whose it is. The
+      // figure is still worth stating, because it is what the export holds under the name; what
+      // must not be said is "yours".
+      if ((sameNameMembers ?? 1) > 1) {
+        return {
+          state: "awaiting_match", qualified: false,
+          label: "Portal hours waiting on a match",
+          detail: `${sameNameMembers} students in this batch share this name, and the export carries ${awaitingMatch.count === 1 ? "one row" : `${awaitingMatch.count} rows`} under it${mins != null && awaitingMatch.count === 1 ? ` (${Math.round(mins / 60)} hrs)` : ""} - which of them it belongs to is exactly what has not been decided yet. Open the import on the Government Attendance screen and pick the right person; nobody's hours can move until then`,
+        };
+      }
       return {
         state: "awaiting_match", qualified: false,
         label: "Portal hours waiting on a match",

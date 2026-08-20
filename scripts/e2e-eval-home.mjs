@@ -204,6 +204,15 @@ ok("[worst] …attendance pct is null (not NaN/0) when nothing has been logged",
       ok("-153: a Trainer login matching NO trainer record reads 0 batches, not every unassigned batch",
         gHome.kpis.active_batches === 0 && gHome.kpis.completed_batches === 0,
         JSON.stringify({ active: gHome.kpis.active_batches, completed: gHome.kpis.completed_batches }));
+      // -156 (QA-433): QA-420 shipped the banner that explains this page of correct zeros, and
+      // shipped it with no assertion anywhere - the checker filed that as its own row, noting the
+      // banner it copies is pinned one line above. The zero is right; the SILENCE was the defect,
+      // so the flag that ends the silence is what gets pinned. scoped_no_centres must be FALSE at
+      // the same time: this login HAS a centre, and telling them their centres are gone would be a
+      // second false explanation for the same empty page.
+      ok("-156 (QA-433): ...and the page SAYS why it is empty, rather than reading as broken",
+        gHome.trainer_not_linked === true && gHome.scoped_no_centres === false,
+        JSON.stringify({ not_linked: gHome.trainer_not_linked, no_centres: gHome.scoped_no_centres }));
       const gu = ((await req(admin, "GET", "/api/users?limit=500")).data.items ?? []).find((x) => x.email === ghostEmail);
       if (gu) await req(admin, "PATCH", `/api/users/${gu._id}`, { active: false });
     } else {

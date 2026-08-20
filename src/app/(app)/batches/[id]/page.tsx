@@ -837,7 +837,10 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
                 // -153 (QA-293): checked BEFORE the estimate, because the estimate is the thing
                 // that was lying. Both Sachin Kumars rendered "~0/60 hrs" off our own daily logs
                 // while their real portal hours sat unattached in the same database.
-                if (h.awaiting_match) return <span className="text-xs text-amber-700" title="The government export carries hours under this name — the row just is not attached to this student yet. Resolve it on the Government Attendance screen.">portal hrs — match pending</span>;
+                // -156 (QA-434): built from the row, not asserted. The export may carry a row whose
+                // HOURS column could not be read, and the name may be shared - neither can be
+                // promised in a fixed sentence.
+                if (h.awaiting_match) return <span className="text-xs text-amber-700" title={`The government export carries ${h.awaiting_match.count > 1 ? `${h.awaiting_match.count} rows` : "a row"} under this name${h.awaiting_match.hours_minutes != null ? ` (${Math.round(h.awaiting_match.hours_minutes / 60)} hrs)` : ", though its hours column could not be read"}. Nothing is attached to a student yet — resolve it on the Government Attendance screen.`}>portal hrs — match pending</span>;
                 if (h.basis === "estimate") return <span className="text-xs tabular-nums text-gray-500" title="Days × slot estimate — the portal meter decides">~{h.attended_hours}/{h.required_hours} hrs</span>;
                 return <span className="text-xs text-gray-400" title="No slot on the batch and no portal import yet">awaiting hrs</span>;
               },
@@ -1287,7 +1290,7 @@ function AttendanceTab({ batchId, batch, role, error, setError }: any) {
                 : r.basis === "portal"
                   ? <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600" title="Portal hours below the threshold">{r.attended_hours} / {data.required_hours} hrs</span>
                   : r.awaiting_match
-                    ? <Link href="/govt-attendance" className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800 hover:underline" title={r.verdict?.state === "awaiting_match" ? r.verdict.detail : "The government export carries a row under this name that is not attached to a student yet. Resolve it on the Government Attendance screen."}>Portal hours waiting on a match →</Link>
+                    ? <Link href="/govt-attendance" className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800 hover:underline" title={r.verdict?.state === "awaiting_match" ? r.verdict.detail : `The government export carries ${(r.awaiting_match?.count ?? 1) > 1 ? `${r.awaiting_match.count} rows` : "a row"} under this name, not attached to a student yet. Resolve it on the Government Attendance screen.`}>Portal hours waiting on a match →</Link>
                   : r.basis === "estimate"
                     ? <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700" title="Estimated from our days × slot — the verdict waits for portal hours">~{r.attended_hours} / {data.required_hours} hrs (est.)</span>
                     : <span className="rounded-full bg-gray-50 px-2 py-0.5 text-[11px] text-gray-400" title="No portal import and no slot on the batch">awaiting portal hours</span>,
@@ -2273,7 +2276,7 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
     api(`/api/batches/${batchId}/results`).then((d) => { setItems(d.items); setSummary(d.summary); }),
     api("/api/master-lists/failure-reasons").then((d) => setReasons(d.items)).catch(() => setReasons([])),
     api(`/api/batches/${batchId}/attendance`).then((d) => {
-      setAttMeta({ required_hours: d.required_hours, course_finished: d.course_finished, portal_working_days: d.portal_working_days, verdict_counts: d.verdict_counts ?? {} });
+      setAttMeta({ required_hours: d.required_hours, course_finished: d.course_finished, portal_working_days: d.portal_working_days, verdict_counts: d.verdict_counts ?? {}, awaiting_match_rows: d.awaiting_match_rows ?? 0 });
       setHoursBy(new Map((d.members ?? []).map((m: any) => [String(m.member_id), { qualified: m.qualified, attended_hours: m.attended_hours, basis: m.basis, required_hours: d.required_hours, verdict: m.verdict }])));
     }).catch(() => {}),
   ]).catch((e: any) => setError(e.message)).finally(() => setLoaded(true));
@@ -2568,9 +2571,16 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
               {(attMeta.verdict_counts.no_hours ?? 0) > 0 && <> · <span className="text-gray-500">{attMeta.verdict_counts.no_hours} with <b>no portal hours imported</b></span></>}
               {/* -153 (QA-393): counted and named separately, because it is the only one of these
                   buckets somebody can clear from their own desk in two clicks. */}
-              {(attMeta.verdict_counts.awaiting_match ?? 0) > 0 && <> · <Link href="/govt-attendance" className="font-medium text-amber-700 hover:underline" title="The export carries hours under these names; the rows are not attached to a student yet.">{attMeta.verdict_counts.awaiting_match} whose portal hours are here but <b>unmatched</b> — resolve →</Link></>}
               {(attMeta.verdict_counts.not_eligible ?? 0) > 0 && <> · <span className="text-red-700">{attMeta.verdict_counts.not_eligible} not eligible</span></>}
               {(attMeta.verdict_counts.not_enrolled ?? 0) > 0 && <> · <span className="text-gray-500">{attMeta.verdict_counts.not_enrolled} not enrolled yet</span></>}
+              {/* -156 (QA-432): reads the ROW count, not the journey-gated bucket - a not-enrolled
+                  student with an unattached row is still a row somebody must resolve, and this line
+                  used to leave them out while three chips on the same page showed them.
+                  IT IS NOT A SEVENTH BUCKET, and it is placed after the partition and says so
+                  out loud: every name in it is ALSO counted in one of the groups above (usually
+                  "not enrolled yet"), so a reader who summed a bucket-shaped list would get more
+                  than the roster. The buckets partition; this cuts across them. */}
+              {(attMeta.awaiting_match_rows ?? 0) > 0 && <> · <Link href="/govt-attendance" className="font-medium text-amber-700 hover:underline" title="The export carries a row under each of these names and none is attached to a student yet. These students are also counted above under their own status - this is a separate thing to clear, not another group.">{attMeta.awaiting_match_rows} of them have <b>portal rows here but unmatched</b> (counted above too) — resolve →</Link></>}
             </p>
           )}
 

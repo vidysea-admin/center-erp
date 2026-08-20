@@ -33,6 +33,12 @@ export const { GET, POST } = collectionRoutes({
   ],
   // Rule 38: creating a record at someone else's location was previously unchecked.
   beforeCreate(data, user) {
+    // -156 (QA-450): a blank portal ID is the ABSENCE of an identity, and "" is a string, so the
+    // QA-417 partial unique index indexed it and the SECOND person saved with a blank field was
+    // told "That sidh candidate id is already in use." - naming a duplicate identity that does not
+    // exist. The Excel writer and sheet-sync already store absent; this is the door that did not,
+    // and it is the door the drawer's Add form posts through (type-then-clear reproduces it).
+    if (typeof data.sidh_candidate_id === "string" && !data.sidh_candidate_id.trim()) delete data.sidh_candidate_id;
     // QA-141 (Umesh): manual entry is strict; bulk import keeps its own normalize-and-report
     // lane (rows are client data and are never dropped over format).
     const pErr = phoneError(data.phone);
