@@ -73,6 +73,18 @@ export default function HomePage() {
         </div>
       )}
 
+      {/* -153 (QA-420): the other way a Home is legitimately empty. A trainer sign-in that no
+          trainer record answers to teaches nothing, so every figure is a correct 0 - and a screen
+          of correct zeros with no explanation reads exactly like a broken one. */}
+      {data.trainer_not_linked && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+          <b>This sign-in isn't linked to a trainer record yet.</b> Your batches, attendance and
+          daily-log shortcuts will appear as soon as an Admin links it (Admin → Trainers → set
+          this email on your trainer record). Until then everything below is empty because there is
+          nothing assigned to you — not because anything has gone wrong.
+        </div>
+      )}
+
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
         {/* 2026-08-13 (Manish, role-wise cards): Admin/Operations get the project picture —
             ongoing + completed batches, active trainers job-role-wise, total attendance,

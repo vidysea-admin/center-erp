@@ -2080,6 +2080,21 @@ export type EligibilityVerdict = {
   detail: string;
   qualified: boolean; // kept for every existing caller — true ONLY for a real pass of the bar
 };
+// -153 cycle 3 (QA-419): the ONE gate. Three surfaces consulted unresolvedPortalRowsByName with
+// three different conditions - eligibilityVerdict behind the -109 journey gate, members/route.ts
+// and the public route behind none - so a not-enrolled student got three different answers about
+// one unattached row. The question "is a portal row waiting to be attached to this name" has
+// nothing to do with enrolment: it is a fact about data. Enrolment gates the ELIGIBILITY VERDICT,
+// which is a different question and keeps its own gate below.
+export function awaitingMatchFor(opts: {
+  basis: "portal" | "estimate" | null;
+  hit?: { count: number; hours_minutes: number | null } | null;
+}): { count: number; hours_minutes: number | null } | null {
+  // A member the portal has already answered for is never pulled back into limbo by a namesake.
+  if (opts.basis === "portal") return null;
+  return opts.hit && opts.hit.count > 0 ? opts.hit : null;
+}
+
 export function eligibilityVerdict(opts: {
   enrollmentStatus?: string | null;   // BatchMember.enrollment_status — "Completed" = enrolled (Rule 21)
   sidhStatus?: string | null;         // where the candidate is in portal registration

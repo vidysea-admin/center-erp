@@ -449,6 +449,44 @@ for (const file of walk(root)) {
   }
 }
 
+// -153 cycle 3. Two facts that live in JSX and therefore cannot be reached by an HTTP suite, both
+// raised by the checker against cycle 2. Source-level because that is where they are true, and
+// each was proved failing by breaking the line it watches and watching this file go red.
+{
+  // QA-421: the student's progress bar was still filled from the our-logs ESTIMATE while every
+  // sentence around it had been suppressed for waiting on a match - remaining_hours went null and
+  // the bar went on painting 13%. A quantity in a bar is a quantity.
+  const bar = fs.readFileSync(path.join(root, "app/p/attendance/[token]/page.tsx"), "utf-8");
+  const widthLine = bar.split(/\r?\n/).find((l) => /style=\{\{ width:/.test(l)) ?? "";
+  if (widthLine && /awaiting_match/.test(widthLine)) passed++;
+  else {
+    failed++;
+    pushStructural("app/p/attendance/[token]/page.tsx: the progress bar's width is not gated on awaiting_match, so it paints a figure derived from OUR daily logs while every sentence around it says the portal row is still being matched (QA-421)");
+  }
+
+  // QA-422: QA-413 made the PAYLOAD derive its buckets from ELIGIBILITY_STATES, and the sentence a
+  // human reads went on hand-listing six of the seven. The next state added would be counted, would
+  // keep the pinned sum invariant true, and would silently not appear in the line - the same
+  // guard-made-of-memory one layer up. The line must carry a generic arm for anything unnamed.
+  // QA-419: and the sentence it shows must be true for a student whose portal REGISTRATION is
+  // still pending. "The government portal has sent your hours" is a confident falsehood told to
+  // the reader least able to check it - what is true in every case is that a row under their NAME
+  // is waiting to be attached. This lives in the page, so an API assertion could never catch it.
+  if (!/sent your hours/i.test(bar)) passed++;
+  else {
+    failed++;
+    pushCopy("app/p/attendance/[token]/page.tsx: tells the student the portal sent THEIR hours, which is not true for a student whose registration is still pending - it is a row under their name (QA-419)");
+  }
+
+  const bp = fs.readFileSync(path.join(root, "app/(app)/batches/[id]/page.tsx"), "utf-8");
+  const summary = (bp.split("Attendance hours (bar ")[1] ?? "").slice(0, 2000);
+  if (summary && /Object\.entries\(attMeta\.verdict_counts/.test(summary)) passed++;
+  else {
+    failed++;
+    pushStructural("app/(app)/batches/[id]/page.tsx: the attendance summary line hand-lists verdict states with no generic arm, so a state added to ELIGIBILITY_STATES will be counted in the payload and silently missing from the sentence (QA-422)");
+  }
+}
+
 for (const h of hits) console.log("  ✗ " + h);
 // -149 (QA-324): this file started as one check and now carries several - the ASI trap, the
 // drawer ceiling, the scope-collision scan. Every finding was summarised as "user-facing

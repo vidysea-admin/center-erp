@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, HttpError } from "@/lib/authz";
 import { CandidateResult, Closure, DailyLog, GovtAttendanceRow, PublicToken } from "@/models";
 import { getDefaults } from "@/lib/defaults";
-import { assessmentHoursBar, memberAttendedHours, slotHoursPerDay } from "@/lib/rules";
+import { assessmentHoursBar, awaitingMatchFor, memberAttendedHours, slotHoursPerDay } from "@/lib/rules";
 import { nameKey, unresolvedPortalRowsByName } from "@/lib/govt-attendance";
 
 // Public per-student attendance view (2026-08-13, Manish: "bacche baar-baar request karte hain
@@ -73,10 +73,11 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   //
   // Same lookup as the staff screens, so the three cannot drift; and only consulted when the
   // portal has NOT already answered for this student, so a matched student is never pulled back.
-  const awaitingMatch = basis === "portal"
-    ? null
-    : (await unresolvedPortalRowsByName({ batchId: batch?._id, locationId: batch?.location?._id ?? batch?.location }))
-        .get(nameKey(m.candidate?.name)) ?? null;
+  const awaitingMatch = awaitingMatchFor({
+    basis,
+    hit: (await unresolvedPortalRowsByName({ batchId: batch?._id, locationId: batch?.location?._id ?? batch?.location }))
+      .get(nameKey(m.candidate?.name)),
+  });
 
   const closure = await Closure.findOne({ batch: batch._id }).select("assessment_date").lean<any>();
   // Result & certificate — the "aage kya hua" answer once the exam happens.

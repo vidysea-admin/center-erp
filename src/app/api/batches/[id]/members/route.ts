@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError, assertLocationInScope } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, BatchMember, Candidate, DailyLog, GovtAttendanceRow } from "@/models";
-import { addMemberChecked, assertBatchInScope, assertLocationOperational, assessmentHoursBar, memberAttendedHours, slotHoursPerDay } from "@/lib/rules";
+import { addMemberChecked, assertBatchInScope, assertLocationOperational, assessmentHoursBar, awaitingMatchFor, memberAttendedHours, slotHoursPerDay } from "@/lib/rules";
 import { nameKey, unresolvedPortalRowsByName } from "@/lib/govt-attendance";
 import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
@@ -52,8 +52,10 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   const withAttendance = items.map((m: any) => {
     const g = govtBy.get(String(m.candidate?._id));
     const h = memberAttendedHours({ internalDays: presentDays.get(String(m._id)) ?? 0, hoursPerDay, govtMinutes: g?.hours_minutes, requiredHours });
-    // Only when the portal has not answered for this member already - a matched row always wins.
-    const awaiting = h.basis === "portal" ? null : (awaitingByName.get(nameKey(m.candidate?.name)) ?? null);
+    // -153 cycle 3 (QA-419): the same helper as the other two surfaces, not a re-typed condition.
+    // Cycle 2 wrote this test out by hand here and inside eligibilityVerdict and again in the
+    // public route, and the three drifted the moment a member was not enrolled.
+    const awaiting = awaitingMatchFor({ basis: h.basis, hit: awaitingByName.get(nameKey(m.candidate?.name)) });
     return {
       ...m,
       attendance: {

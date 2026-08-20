@@ -47,6 +47,12 @@ export const GET = apiHandler(async () => {
   const scopedNoCentres = isScoped(user)
     ? (await Location.countDocuments({ ...locationFilter(user, "_id") })) === 0
     : false;
+  // -153 cycle 3 (QA-420): the same courtesy for the other way a Home can be legitimately empty.
+  // Since cycle 2 every batch-derived figure reads homeBatchFilter, so a Trainer login with no
+  // trainer record behind it now zeroes the WHOLE page - the counts, the subtitles, attendance and
+  // all four queues, including the daily-logging shortcut -102 put there for exactly this person.
+  // The zero is right; the silence is not.
+  const trainerNotLinked = user.role === "Trainer" && !myTrainer;
 
   // 2026-08-13 (Manish): "approved location mein aap yeh tab ka naam approved location kar
   // sakte hain" — the headline KPI counts centres the scheme has APPROVED (approval_status),
@@ -411,5 +417,6 @@ export const GET = apiHandler(async () => {
     },
     thresholds: { amber: defaults.attendance_gap_amber, red: defaults.attendance_gap_red },
     scoped_no_centres: scopedNoCentres,
+    trainer_not_linked: trainerNotLinked,
   });
 });

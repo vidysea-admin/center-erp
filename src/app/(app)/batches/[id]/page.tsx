@@ -1279,15 +1279,15 @@ function AttendanceTab({ batchId, batch, role, error, setError }: any) {
             // -153 (QA-393): the awaiting_match arm sits AHEAD of the estimate arm and links to
             // the one screen that clears it. The complaint this closes was that the operator was
             // told to go and fetch a file that had already been imported three times.
-            filterText: (r: any) => (r.qualified ? "Qualified" : r.basis === "portal" ? "Below threshold" : r.verdict?.state === "awaiting_match" ? "Match pending" : "Awaiting portal hours"),
+            filterText: (r: any) => (r.qualified ? "Qualified" : r.basis === "portal" ? "Below threshold" : r.awaiting_match ? "Match pending" : "Awaiting portal hours"),
             render: (r: any) => r.left_on
               ? <Chip value="Dropout" />
               : r.qualified
                 ? <span className="rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-semibold text-green-700" title={`Portal-verified: ${r.govt?.hours} of ${data.required_hours} hrs`}>✓ Qualified for assessments</span>
                 : r.basis === "portal"
                   ? <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600" title="Portal hours below the threshold">{r.attended_hours} / {data.required_hours} hrs</span>
-                  : r.verdict?.state === "awaiting_match"
-                    ? <Link href="/govt-attendance" className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800 hover:underline" title={r.verdict.detail}>Portal hours waiting on a match →</Link>
+                  : r.awaiting_match
+                    ? <Link href="/govt-attendance" className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800 hover:underline" title={r.verdict?.state === "awaiting_match" ? r.verdict.detail : "The government export carries a row under this name that is not attached to a student yet. Resolve it on the Government Attendance screen."}>Portal hours waiting on a match →</Link>
                   : r.basis === "estimate"
                     ? <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700" title="Estimated from our days × slot — the verdict waits for portal hours">~{r.attended_hours} / {data.required_hours} hrs (est.)</span>
                     : <span className="rounded-full bg-gray-50 px-2 py-0.5 text-[11px] text-gray-400" title="No portal import and no slot on the batch">awaiting portal hours</span>,
@@ -2556,6 +2556,14 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
               {attMeta.portal_working_days ? `, portal shows ${attMeta.portal_working_days} working days` : ""}
               {attMeta.course_finished ? ", course over" : ", course still running"}):{" "}
               <span className="text-green-700">{attMeta.verdict_counts.qualified ?? 0} qualified</span>
+              {/* -153 cycle 3 (QA-422): QA-413 made the PAYLOAD derive its buckets from
+                  ELIGIBILITY_STATES and this sentence went on hand-listing six of the seven, so the
+                  next state added would be counted, keep the pinned sum invariant true, and
+                  silently not appear in the line a human reads. Anything without a phrase of its
+                  own is named here rather than dropped. */}
+              {Object.entries(attMeta.verdict_counts as Record<string, number>)
+                .filter(([k, n]) => n > 0 && !["qualified", "in_progress", "no_hours", "awaiting_match", "not_eligible", "not_enrolled"].includes(k))
+                .map(([k, n]) => <span key={k}> · <span className="text-gray-500">{n} {k.replace(/_/g, " ")}</span></span>)}
               {(attMeta.verdict_counts.in_progress ?? 0) > 0 && <> · <span className="text-amber-700">{attMeta.verdict_counts.in_progress} still short (course running)</span></>}
               {(attMeta.verdict_counts.no_hours ?? 0) > 0 && <> · <span className="text-gray-500">{attMeta.verdict_counts.no_hours} with <b>no portal hours imported</b></span></>}
               {/* -153 (QA-393): counted and named separately, because it is the only one of these

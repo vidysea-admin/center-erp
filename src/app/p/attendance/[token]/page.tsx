@@ -81,7 +81,7 @@ export default function PublicAttendancePage({ params }: { params: Promise<{ tok
               {data.eligible
                 ? "You are eligible for the exam"
                 : data.awaiting_match
-                  ? "Your portal attendance has arrived and is being matched to your record"
+                  ? "A portal attendance record in your name is being matched to you"
                   : data.remaining_hours != null
                     ? `${data.remaining_hours} more hour${data.remaining_hours === 1 ? "" : "s"} needed for exam eligibility`
                     : "Your hours are being confirmed with the government portal"}
@@ -90,7 +90,10 @@ export default function PublicAttendancePage({ params }: { params: Promise<{ tok
               Required: {data.required_hours} of {data.program_hours} hours ({data.min_attendance_pct}%)
             </p>
             <div className="mx-auto mt-3 h-2 w-full overflow-hidden rounded-full bg-gray-200">
-              <div className={`h-full ${data.eligible ? "bg-green-500" : "bg-amber-500"}`} style={{ width: `${pct}%` }} />
+              {/* -153 cycle 3 (QA-421): while a row waits, nothing derived from our own daily logs
+                  goes out - in words OR in pixels. The bar was still painting 13% from the estimate
+                  under a headline that had stopped quoting it. */}
+              <div className={`h-full ${data.eligible ? "bg-green-500" : "bg-amber-500"}`} style={{ width: `${data.awaiting_match ? 0 : pct}%` }} />
             </div>
             {/* QA-085/086: eligibility is settled by the government portal's meter — an
                 estimate from our own logs is shown as exactly that. */}
@@ -100,7 +103,7 @@ export default function PublicAttendancePage({ params }: { params: Promise<{ tok
                   simply not attached to them yet. A student cannot fix this and must not be sent
                   to try, so this says what is happening rather than what to do. */}
               {data.awaiting_match
-                ? "The government portal has sent your hours; your centre is confirming which record they belong to."
+                ? "The government portal has sent an attendance record under your name. Your centre is confirming that it is yours, and your hours will show here once it is."
                 : data.attended_hours != null
                   ? `${data.attended_hours} hours attended${data.hours_basis === "estimate" ? " (estimated — portal hours pending)" : ""}`
                   : "hours will appear once the portal attendance is imported"}

@@ -413,16 +413,76 @@ ok("all 7 rows persisted", detail.data.rows?.length === 7, `got ${detail.data.ro
         const pub = await fetch(`${BASE}/api/public/attendance/${mine.token}`).then((r) => r.json()).catch(() => ({}));
         ok("-153 (QA-409): the students own page knows the portal row is waiting on a match",
           (pub?.awaiting_match?.count ?? 0) > 0, JSON.stringify({ awaiting: pub?.awaiting_match, basis: pub?.hours_basis }));
-        // INVARIANT, not a regression pin, and said so because the pre-fix run proved it: this
-        // fixture batch has no slot (QA-085), so there is no estimate to quote and remaining_hours
-        // is null on both sides. It still has to hold - a student waiting on a match must never be
-        // handed a shortfall computed off our own logs - so it stays, honestly labelled.
-        ok("-153 (QA-409, invariant): no shortfall is quoted off our own logs while a row waits",
-          pub?.remaining_hours === null, JSON.stringify({ remaining: pub?.remaining_hours, attended: pub?.attended_hours }));
+        // -153 cycle 3 (QA-423): cycle 2 kept this and called it an invariant. It is vacuous in
+        // exactly the way the assertion cycle 2 DELETED was vacuous - this fixture batch carries no
+        // slot (QA-085 pins that), so attended_hours is null and remaining_hours is null whichever
+        // way the code goes. Two assertions, one property, two standards. Deleted, same as the
+        // other one. The behaviour is real and the checker measured it on a slot-bearing batch;
+        // what is gone is a green line that could not go red.
       } else {
         ok("-153 (QA-409): the students own page knows the portal row is waiting on a match", false, "no token");
-        ok("-153 (QA-409, invariant): no shortfall is quoted off our own logs while a row waits", false, "no token");
       }
+    }
+
+    // -153 cycle 3 (QA-419). Cycle 2 gave the three surfaces the same LOOKUP and not the same
+    // GATE: eligibilityVerdict returns not_enrolled at gate 1 and never reaches awaiting_match,
+    // while members/route.ts and the public route consulted the lookup with no enrolment test at
+    // all. One unattached row, three answers - and the Attendance tab fell back to "~0/60 hrs
+    // (est.)", which is QA-293s own string, still rendered by the release written to end it.
+    //
+    // The gate is now ONE helper and the answer rides on the ROW, so enrolment cannot split them.
+    {
+      // Build the case rather than hope for it: a THIRD candidate sharing the Twins name, added to
+      // the roster and deliberately left un-enrolled. Removed at the end of this block, because the
+      // resolve-drawer assertions further down count exactly two same-name candidates.
+      const ncCand = (await req(admin, "POST", "/api/candidates", {
+        name: `${NAME} Twin`, phone: `9${STAMP.slice(1)}1900`, location: loc._id, program: program._id,
+      }, 201)).data.item;
+      const ncMem = (await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: ncCand._id }, 201)).data.item;
+      ok("-153 (QA-419) fixture: a NOT-enrolled member sharing the same name is on the roster",
+        !!ncMem?._id, JSON.stringify(ncMem).slice(0, 140));
+
+      const att2 = await req(admin, "GET", `/api/batches/${batch._id}/attendance`);
+      const roster2 = await req(admin, "GET", `/api/batches/${batch._id}/members`);
+      const rosterBy = new Map((roster2.data.items ?? []).map((m) => [String(m._id), m]));
+      const live = (att2.data.members ?? []).filter((m) => !m.left_on);
+
+      // ANTI-VACUITY FIRST: the first draft of this pin assumed the fixture already held this case
+      // and its own guard proved it did not - every member read "Completed". Assert the case exists
+      // before asserting anything about it.
+      const notEnrolledWaiting = live.filter((m) => m.enrollment_status !== "Completed" && m.awaiting_match);
+      ok("-153 (QA-419) anti-vacuity: a NOT-enrolled member with an unattached row is really present",
+        notEnrolledWaiting.length > 0,
+        JSON.stringify(live.map((m) => [m.name, m.enrollment_status, !!m.awaiting_match])));
+
+      const disagree = live.filter((m) => !!m.awaiting_match !== !!rosterBy.get(String(m.member_id))?.hours?.awaiting_match);
+      ok("-153 (QA-419): the Attendance tab and the roster agree about every member, enrolled or not",
+        disagree.length === 0,
+        JSON.stringify(disagree.map((m) => ({
+          name: m.name, enrolment: m.enrollment_status, verdict: m.verdict?.state,
+          tab: !!m.awaiting_match, roster: !!rosterBy.get(String(m.member_id))?.hours?.awaiting_match,
+        }))));
+
+      const target = notEnrolledWaiting[0] ?? live.find((m) => String(m.member_id) === String(ncMem?._id));
+      const links2 = await req(admin, "POST", "/api/public-tokens", { purpose: "attendance", batch: batch._id });
+      const link2 = (links2.data.items ?? []).find((i) => String(i.batch_member?._id ?? i.batch_member) === String(target?.member_id));
+      const pub2 = link2?.token
+        ? await fetch(`${BASE}/api/public/attendance/${link2.token}`).then((r) => r.json()).catch(() => ({}))
+        : {};
+      ok("-153 (QA-419): and the students own page agrees with both, for a NOT-enrolled member",
+        !!pub2?.awaiting_match === !!target?.awaiting_match && !!target?.awaiting_match,
+        JSON.stringify({ name: target?.name, enrolment: target?.enrollment_status, tab: !!target?.awaiting_match, student: !!pub2?.awaiting_match }));
+      // The WORDING that must not be used - "the portal has sent your hours" to a student whose
+      // registration is still pending - lives in the page, not in this payload, so an assertion
+      // here could never fail. It is checked in check-user-copy.mjs where it is actually true.
+
+      // clean up so the resolve-drawer assertions below still see exactly two same-name candidates
+      await req(admin, "DELETE", `/api/members/${ncMem._id}`, { reason: "-153 QA-419 pin fixture" });
+      await req(admin, "DELETE", `/api/candidates/${ncCand._id}`, { reason: "-153 QA-419 pin fixture" });
+      const backTo = (await req(admin, "GET", `/api/batches/${batch._id}/attendance`)).data.members ?? [];
+      ok("-153 (QA-419) fixture removed: the roster is back to its original size",
+        backTo.length === (att.data.members ?? []).length,
+        JSON.stringify({ before: (att.data.members ?? []).length, after: backTo.length }));
     }
 
     // QA-293: the same two students on the ROSTER, where the screen rendered "~0 / 60 hrs (est.)"

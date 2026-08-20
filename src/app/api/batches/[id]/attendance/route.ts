@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, HttpError } from "@/lib/authz";
 import { Batch, BatchMember, DailyLog, GovtAttendanceRow } from "@/models";
-import { ELIGIBILITY_STATES, assertBatchInScope, assessmentHoursBar, courseIsFinished, eligibilityVerdict, memberAttendedHours, slotHoursPerDay } from "@/lib/rules";
+import { ELIGIBILITY_STATES, assertBatchInScope, assessmentHoursBar, awaitingMatchFor, courseIsFinished, eligibilityVerdict, memberAttendedHours, slotHoursPerDay } from "@/lib/rules";
 import { nameKey, unresolvedPortalRowsByName } from "@/lib/govt-attendance";
 import { getDefaults } from "@/lib/defaults";
 
@@ -61,6 +61,10 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     // QA-070 (-70): the shared verdict (memberAttendedHours) — QA-085/086 semantics live
     // there now: green from PORTAL hours alone, no assumed 8 when the batch has no slot.
     const h = memberAttendedHours({ internalDays, hoursPerDay, govtMinutes: g?.total_hours_minutes, requiredHours });
+    // -153 cycle 3 (QA-419): computed ONCE, exposed on the row, and read by every surface. It used
+    // to live only inside the verdict, where the -109 journey gate hid it from not-enrolled members
+    // while the other two screens showed it - one row, three answers.
+    const awaiting = awaitingMatchFor({ basis: h.basis, hit: awaitingByName.get(nameKey(m.candidate?.name)) });
     return {
       member_id: mid,
       candidate_id: m.candidate?._id ?? null,
@@ -90,11 +94,13 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
         requiredHours,
         basis: h.basis,
         courseFinished: finished,
-        // -153 (QA-393): only ever consulted when this member has NO portal hours of their own.
-        // A member whose row is matched never reaches the awaiting_match branch, so a duplicate
-        // name cannot pull a resolved student back into limbo.
-        awaitingMatch: awaitingByName.get(nameKey(m.candidate?.name)) ?? null,
+        // -153 (QA-393/QA-419): the same value the row carries. The verdict keeps the -109 journey
+        // gate ahead of it - a not-enrolled student gets "Not enrolled yet" as their VERDICT, which
+        // is a different question from where their hours are.
+        awaitingMatch: awaiting,
       }),
+      // -153 cycle 3 (QA-419): the hours story, on the row, so all three surfaces read one field.
+      awaiting_match: awaiting,
       enrollment_status: m.enrollment_status ?? null,
     };
   });
