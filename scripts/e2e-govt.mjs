@@ -1355,6 +1355,60 @@ ok("and removed", removed.status === 200, JSON.stringify(removed.data).slice(0, 
 ok("removal is real", (await req(admin, "GET", `/api/sync-sources/${srcId}`)).status === 404);
 
 
+// ---------------------------------------------------------------- -154 (QA-438, S1): the shifted-column guard
+// Measured on live 20-08, column against column: a 24-row export whose days-attended figures sat
+// in the WORKING-DAYS field (days-present null on every row, hours in decimals where every genuine
+// file is HH:MM:SS) imported silently, became the newest matched rows, and read two students who
+// had genuinely cleared the 60-hour bar as not_eligible. This block rebuilds that exact signature
+// as an inline CSV (the echo.csv precedent) and pins the guard on it.
+{
+  const hdr = csvText.split(/\r?\n/)[0];
+  // per-student working-days (8,10,11,12 - four distinct), days-present EMPTY on all four rows,
+  // decimal hours: the measured signature of the corrupt 20-08 file.
+  const shifted = [hdr,
+    `1,TESTORG Gurugram -${TC},98000001,${NAME} ShiftA,,Trainee,Trainee,8,,0,0,52.15,0,5.2,`,
+    `2,TESTORG Gurugram -${TC},98000002,${NAME} ShiftB,,Trainee,Trainee,10,,0,0,59.42,0,4.9,`,
+    `3,TESTORG Gurugram -${TC},98000003,${NAME} ShiftC,,Trainee,Trainee,11,,0,0,61.69,0,5.6,`,
+    `4,TESTORG Gurugram -${TC},98000004,${NAME} ShiftD,,Trainee,Trainee,12,,0,0,48.02,0,4.0,`,
+  ].join("\n");
+  const shiftFile = () => new File([Buffer.from(shifted)], "shifted.csv", { type: "text/csv" });
+
+  // 1. the preview NAMES it - fails pre-fix (the field does not exist)
+  const sPre = await upload(admin, { file: shiftFile() });
+  ok("-154 (QA-438): a shifted-layout file is named on the preview",
+    sPre.status === 200 && sPre.data.column_shift_suspected === true
+      && sPre.data.column_shift_detail?.days_present_empty === 4
+      && (sPre.data.column_shift_detail?.distinct_working_days ?? []).length === 4,
+    JSON.stringify({ s: sPre.data.column_shift_suspected, d: sPre.data.column_shift_detail }));
+
+  // 2. the commit is REFUSED without an explicit override, and nothing is written - fails pre-fix
+  const before = ((await req(admin, "GET", "/api/govt-attendance")).data.items ?? []).length;
+  const refused = await upload(admin, { file: shiftFile(), confirm: "1", period_label: `shift ${STAMP}` });
+  const after = ((await req(admin, "GET", "/api/govt-attendance")).data.items ?? []).length;
+  ok("-154 (QA-438): the same file is refused at commit, naming the shape and the cost",
+    refused.status === 400 && /column-shifted/i.test(String(refused.data.error ?? ""))
+      && /60-hour bar/.test(String(refused.data.error ?? "")),
+    JSON.stringify({ status: refused.status, error: String(refused.data.error ?? "").slice(0, 140) }));
+  ok("-154 (QA-438): ...and the refusal wrote NOTHING (import count unchanged)",
+    after === before, JSON.stringify({ before, after }));
+
+  // 3. the operator is never trapped: the explicit override imports. On the PRE-fix build this
+  //    passes trivially (there is no gate at all) - it is a discriminator only paired with #2,
+  //    and it is labelled so rather than counted as a regression pin.
+  const forced = await upload(admin, { file: shiftFile(), confirm: "1", accept_column_shift: "1", period_label: `shift-forced ${STAMP}` });
+  ok("-154 (QA-438, paired with the refusal above): the explicit override still imports",
+    forced.status === 201 && !!forced.data._id, JSON.stringify({ status: forced.status }));
+  if (forced.data._id) await req(admin, "DELETE", `/api/govt-attendance/${forced.data._id}`); // no residue
+
+  // 4. THE PIN THAT MATTERS MOST: a genuine file - one batch-level working-day figure, populated
+  //    days-present, HH:MM:SS hours - is NOT flagged. Strict === false so this also fails pre-fix
+  //    (the field is undefined there) while post-fix it proves the guard cannot bite a real export.
+  const gPre = await upload(admin, { file: csvFile() });
+  ok("-154 (QA-438): a genuine export is not flagged (column_shift_suspected === false)",
+    gPre.status === 200 && gPre.data.column_shift_suspected === false,
+    JSON.stringify({ s: gPre.data.column_shift_suspected }));
+}
+
 // ---------------------------------------------------------------- SSRF guard (2026-08-12 security review)
 // Sheet source URLs are typed in by a person, so every fetch of one is a request the server makes
 // on someone else's behalf. This server runs on EC2, where 169.254.169.254 hands out IAM

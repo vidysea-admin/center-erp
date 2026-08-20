@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-153";
+export const RELEASE = "2026.08.14-154";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,24 @@ export const RELEASE = "2026.08.14-153";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-154 is one guard, shipped alone because the deadline sat outside the codebase: a re-upload of " +
+  "the government attendance export was being arranged when the 20-08 file was measured, column " +
+  "against column, and found SHIFTED - its days-attended figures sitting in the working-days field " +
+  "(24 of 24 rows, days-present empty on every one) with hours in decimals where every genuine file " +
+  "is HH:MM:SS. That file imported silently, its rows became the newest matched rows, and two " +
+  "students who had genuinely cleared the 60-hour bar read as not eligible off figures the " +
+  "government never asserted. Newest-import-wins is the right rule; a misread file wearing the " +
+  "newest timestamp is how it lies. The import now recognises that signature at preview - " +
+  "days-present empty on nearly every row WHILE working-days varies per student, both halves " +
+  "required so a genuinely empty column or a two-batch file cannot trip it - names it in red while " +
+  "the operator still has the file open, and holds the import button until an explicit tick. A " +
+  "genuine export with one batch-level working-day figure imports exactly as before, which is the " +
+  "pin that matters most. The rows the corrupt file already wrote are not repaired by code: " +
+  "removing that import is a production data decision, prepared for Umesh, and the moment it is " +
+  "removed the older correct rows become newest again by themselves. ";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-153 is the first two rows of Manish's 20 August list, and both are one shape: a screen stating " +
   "something false with complete confidence. QA-395 - a trainer at a centre running two batches was " +
   "shown a batch count of 2 and, on clicking through, one batch. Neither number was wrong; they were " +
@@ -47,10 +65,7 @@ export const RELEASE_NOTE_CURRENT =
   "field. A fourth surface - one summary line on the Closure tab - still counts these off the " +
   "gated verdict and under-reports them; it is recorded as QA-432 and fixed in its own unit rather " +
   "than in a hurried fourth pass at this one. Nothing here can qualify anybody - only a row the ERP " +
-  "has actually attached to a person may move their hours. ";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "has actually attached to a person may move their hours. " +
   "-152 makes true a claim -150 had already made three times. QA-369: a comment correction was named " +
   "in that release's commit message, in its manifest and in its published note - and git says the " +
   "file was never touched. The cause is small and worth naming exactly: the edit went through a " +

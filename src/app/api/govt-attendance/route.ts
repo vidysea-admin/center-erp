@@ -68,6 +68,27 @@ export const POST = apiHandler(async (req: NextRequest) => {
   }
   if (!parsed.rows.length) throw new HttpError(400, "The file has a header but no attendance rows.");
 
+  // -154 (QA-438, S1): the shifted-column signature, checked BEFORE anything is written.
+  //
+  // Measured on live 20-08 (Umesh, column against column, not a story about the file): a 24-row
+  // export landed whose days-attended figures sat in the WORKING-DAYS field - 24 of 24 rows had
+  // new.total_working_days == old.total_days_present and total_days_present null on every row,
+  // with hours in decimals where every genuine file is HH:MM:SS. It imported silently, its rows
+  // became the newest matched rows, and two students who had genuinely cleared the 60-hour bar
+  // (Laxman Singh 67:16:14, Mukesh Kumar 63:26:42) read as not_eligible off figures the
+  // government never asserted. "Newest import wins" is the right rule; a misread file wearing
+  // the newest timestamp is how it lies.
+  //
+  // BOTH halves are required, deliberately. A genuinely empty days-present column happens (a
+  // brand-new batch), and a file spanning two batches can honestly carry two working-day figures
+  // - either alone must not trip this. Together - days-present empty on ~every row while
+  // working-days VARIES per student, where a real export carries one batch-level figure - they
+  // are the signature of columns that have slipped.
+  const dpEmpty = parsed.rows.filter((r) => r.total_days_present == null).length;
+  const wdDistinct = [...new Set(parsed.rows.map((r) => r.total_working_days).filter((v) => v != null))];
+  const columnShiftSuspected = dpEmpty >= Math.ceil(parsed.rows.length * 0.9) && wdDistinct.length > 2;
+  const acceptShift = form.get("accept_column_shift") === "1";
+
   // The portal stamps the TC code into "Org Name", so the centre is usually self-evident; the
   // operator can still override it when a file spans centres or the code is missing.
   const auto = await resolveLocationFromFile(parsed);
@@ -119,7 +140,23 @@ export const POST = apiHandler(async (req: NextRequest) => {
       portal_ids_to_link: matched.filter((r) => r.stamp_candidate_id).map((r) => ({
         name: r.name, id: r.stamp_candidate_id, matched_by: r.match_by,
       })),
+      // -154 (QA-438): named on the PREVIEW, where the operator still has the file open in front
+      // of them - not discovered three hours later in a qualified count that moved down.
+      column_shift_suspected: columnShiftSuspected,
+      ...(columnShiftSuspected ? { column_shift_detail: {
+        rows: parsed.rows.length, days_present_empty: dpEmpty,
+        distinct_working_days: wdDistinct.slice(0, 12),
+      } } : {}),
     });
+  }
+
+  // -154 (QA-438): the commit gate. Same shape as the candidate import's mis-mapped-phone gate
+  // (the report stays a report; the WRITE waits for an explicit, informed confirmation) - the
+  // operator is never trapped, but a silent pass is exactly what put two qualified students below
+  // the bar on 20-08.
+  if (columnShiftSuspected && !acceptShift) {
+    throw new HttpError(400,
+      `This file looks column-shifted: ${dpEmpty} of ${parsed.rows.length} rows have nothing in "Total Days Present" while "Total Working days" differs per student (${wdDistinct.slice(0, 6).join(", ")}${wdDistinct.length > 6 ? ", …" : ""}) - a genuine export carries ONE working-day figure for the whole batch. This is the layout that read two qualified students as below the 60-hour bar on 20-08. Check the file's columns before importing; if it really is right, confirm the checkbox on the preview and import again.`);
   }
 
   const imp = await GovtAttendanceImport.create({

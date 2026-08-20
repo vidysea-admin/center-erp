@@ -35,6 +35,8 @@ function Inner() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [upload, setUpload] = useState<any>(null); // { file, preview, counts… }
+  // -154 (QA-438): the operator's explicit "yes, import the suspicious layout anyway".
+  const [acceptShift, setAcceptShift] = useState(false);
   const [busy, setBusy] = useState(false);
   const [resolve, setResolve] = useState<any>(null); // -102: the Ambiguous/Unmatched row being resolved
   // 2026-08-13: per-batch import ("har batch ke andar daily basis pe upload attendance") —
@@ -72,6 +74,7 @@ function Inner() {
     try {
       const res = await api("/api/govt-attendance", { method: "POST", body: fd });
       setUpload({ file, ...res });
+      setAcceptShift(false); // a fresh file starts with no override, whatever the last one did
     } catch (e: any) { setError(e.message); setUpload(null); }
     setBusy(false);
   }
@@ -80,6 +83,7 @@ function Inner() {
     setBusy(true);
     const fd = new FormData();
     fd.append("file", upload.file); fd.append("confirm", "1");
+    if (acceptShift) fd.append("accept_column_shift", "1");
     if (batchParam) fd.append("batch", batchParam);
     if (manualLoc) fd.append("location", manualLoc);
     if (upload.period_label) fd.append("period_label", upload.period_label);
@@ -354,6 +358,25 @@ function Inner() {
                 </details>
               </div>
             )}
+            {/* -154 (QA-438, S1): the shifted-column signature, named where the operator can still
+                act on it. The 20-08 file put two genuinely qualified students below the 60-hour
+                bar because its days-attended column sat in the working-days field - and nothing
+                said a word until the count moved. The import button holds until the box is
+                ticked; a genuine file never shows this block at all. */}
+            {upload.column_shift_suspected && (
+              <div className="rounded-lg border border-red-300 bg-red-50 p-3 text-xs text-red-900">
+                <b>This file looks column-shifted — check it before importing.</b>{" "}
+                {upload.column_shift_detail?.days_present_empty ?? "All"} of {upload.column_shift_detail?.rows ?? upload.row_count} rows have nothing in
+                {" "}<b>Total Days Present</b>, while <b>Total Working days</b> differs per student
+                ({(upload.column_shift_detail?.distinct_working_days ?? []).join(", ")}) — a genuine export carries one
+                working-day figure for the whole batch. This is the layout that read two qualified students as below the
+                60-hour bar on 20-08. If the portal really produced it this way, tick to import anyway:
+                <label className="mt-2 flex cursor-pointer items-center gap-2 font-medium">
+                  <input type="checkbox" checked={acceptShift} onChange={(e) => setAcceptShift(e.target.checked)} />
+                  I have checked the file — import it as it is
+                </label>
+              </div>
+            )}
             {upload.hours_parsed === 0 && upload.row_count > 0 && (
               <p className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
                 <b>No hour figure could be read from any row</b>, so nobody in this file can be judged qualified
@@ -374,7 +397,7 @@ function Inner() {
                 </tbody>
               </table>
             </div>
-            <Btn onClick={commit} disabled={busy}>{busy ? "Importing…" : `Import ${upload.row_count} rows`}</Btn>
+            <Btn onClick={commit} disabled={busy || (upload.column_shift_suspected && !acceptShift)}>{busy ? "Importing…" : upload.column_shift_suspected && !acceptShift ? "Held — check the red box above" : `Import ${upload.row_count} rows`}</Btn>
           </div>
         )}
       </Drawer>
