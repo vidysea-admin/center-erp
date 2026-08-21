@@ -857,7 +857,18 @@ for (const file of walk(root)) {
   // control-character scan caught it one run later. That check exists for exactly this, and a
   // pin catching the maker's hand is the pin earning its keep.
   const closedByDefault = hasCard && !/ open|\sopen=/.test(openTag);
-  const caveatOutside = hasCard && caveatAt > cardEnd && cardEnd > 0;
+  // -181 (QA-567, cycle 3): `caveatAt > cardEnd` asks "after THIS card". REQ-367b asks "outside
+  // ANY disclosure card" - and a checker proved the gap by wrapping the caveat in its OWN <details>
+  // placed after the definitions card: the pin passed while the rule was broken. That is QA-567's
+  // own definition of the defect, landed on the very unit that taught this page to fold things
+  // into cards, which is exactly where it would have drifted.
+  //
+  // Balance is the answer and it needs no browser: count the tags before the caveat. Nesting depth
+  // zero means every <details> opened before it has also closed, so the caveat sits outside all of
+  // them - not merely after one.
+  const before = reportSrc.slice(0, caveatAt < 0 ? 0 : caveatAt);
+  const depth = (before.match(/<details\b/g) ?? []).length - (before.match(/<\/details>/g) ?? []).length;
+  const caveatOutside = hasCard && caveatAt > cardEnd && cardEnd > 0 && depth === 0;
   if (hasCard && closedByDefault && caveatOutside) passed++;
   else { failed++; pushStructural("app/(app)/reports/page.tsx: the definitions card is not collapsed-by-default with the caveat left OUTSIDE it (card " + hasCard + ", closed by default " + closedByDefault + ", caveat after the card " + caveatOutside + ") - QA-564 / QA-567. Folding the warning behind a click hides the one line that changes how the figures beside it should be read."); }
 

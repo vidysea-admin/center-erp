@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-180";
+export const RELEASE = "2026.08.14-181";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,16 +17,22 @@ export const RELEASE = "2026.08.14-180";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-181 is a test fix, not a product change: nothing on any screen moves. The check that " +
+  "guards the report's always-visible caution had a hole in it - it confirmed the caution sat " +
+  "after the explanations card, which is not the same as confirming it sits outside every such " +
+  "card. Wrapping it in a second one would have passed while the rule was broken. The check now " +
+  "requires every card opened before that line to have closed, and the exact case it used to " +
+  "miss is proved failing.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-180 puts back something the last release quietly removed. Every figure on the report is " +
   "supposed to say where it came from - the client's master sheet, or our own records. When " +
   "the explanations were folded into a card, the four figures taken from the client kept that " +
   "label and the three taken from our records lost it, because those three had been showing a " +
   "percentage instead. All seven now name their source whether the card is open or shut. The " +
   "note under them also stops saying two numbers are close and gives the actual proportion " +
-  "instead, so the reader judges rather than being told.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "instead, so the reader judges rather than being told." +
   "-179 gives the report columns their real names. The screen had been shortening them to " +
   "three or four letters while the Excel download spelled them out, so one column had two " +
   "names and downloading quietly renamed every one of them. They now read the same in both " +
