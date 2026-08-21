@@ -159,18 +159,39 @@ export default function ReportsPage() {
       )}
 
       {s && (
-        // REQ-367: on the screen, not in a footnote. Two of these numbers are the client's and
-        // three are ours, and every argument about this report starts with which is which.
-        <div className="space-y-1 rounded-xl border border-gray-100 bg-gray-50 px-4 py-3 text-[11px] leading-relaxed text-gray-600">
-          <div><b>Target</b> — {s.target}</div>
-          <div><b>Approved</b> — {s.approved}</div>
-          <div><b>Not approved</b> — {s.not_approved}</div>
-          <div><b>No verdict yet</b> — {s.unknown}</div>
-          <div><b>Mobilised</b> — {s.mobilised}</div>
-          <div><b>In training</b> — {s.in_training}</div>
-          <div><b>Passed</b> — {s.certified}</div>
-          <div className="pt-1 font-medium text-amber-800">{s.caveat}</div>
-        </div>
+        // QA-564 (-178) — Umesh: "ye definations wala dropdown type card hoga." It used to sit open
+        // permanently: seven definitions and a caveat, eight lines, pushing the table itself below
+        // the fold on the one screen people came to read the table on.
+        //
+        // <details>/<summary> rather than a new component - the same disclosure card this codebase
+        // already uses at admin/page.tsx:430 and govt-attendance/page.tsx:348.
+        //
+        // REQ-367 says these sources belong "on the screen, not in a footnote", and folding them
+        // behind a click moves toward a footnote. So the split is deliberate: the DEFINITIONS go
+        // inside, because they are reference you consult once; the WARNINGS stay outside and always
+        // visible, because a line that stops a reader misunderstanding a number is worthless if the
+        // reader has to know to go looking for it. The checker rules on whether that satisfies
+        // REQ-367 - the maker does not edit the contract.
+        <details className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
+          <summary className="cursor-pointer text-[11px] font-semibold uppercase tracking-wider text-gray-500">
+            Where these numbers come from
+          </summary>
+          <div className="mt-2 space-y-1 text-[11px] leading-relaxed text-gray-600">
+            <div><b>Target</b> — {s.target}</div>
+            <div><b>Approved</b> — {s.approved}</div>
+            <div><b>Not approved</b> — {s.not_approved}</div>
+            <div><b>No verdict yet</b> — {s.unknown}</div>
+            <div><b>Mobilised</b> — {s.mobilised}</div>
+            <div><b>In training</b> — {s.in_training}</div>
+            <div><b>Passed</b> — {s.certified}</div>
+          </div>
+        </details>
+      )}
+
+      {/* The caveat is OUTSIDE the card on purpose - see the note above. It is the one line that
+          changes how the figures beside it should be read. */}
+      {s?.caveat && (
+        <p className="px-1 text-[11px] font-medium leading-relaxed text-amber-800">{s.caveat}</p>
       )}
 
       {/* QA-552: a value the report does not recognise is NAMED, not quietly counted as blank.

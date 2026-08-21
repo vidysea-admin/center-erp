@@ -826,6 +826,17 @@ for (const file of walk(root)) {
   if (pickerSections && pickerGroupToggle) passed++;
   else { failed++; pushStructural("components/ui.tsx: the Columns picker does not section a grouped table (sections " + pickerSections + ", group toggle " + pickerGroupToggle + ") - QA-555. On the report it lists five identical labels per job role with nothing naming the role, so no entry can be told from another."); }
 
+  // QA-564 (-178): the column definitions fold into a disclosure card - Umesh, "ye definations wala
+  // dropdown type card hoga" - but the WARNINGS stay outside it. REQ-367 puts these sources "on the
+  // screen, not in a footnote", and a warning behind a click is a warning the reader has to already
+  // know about. So two things are asserted, and the second is the one that would quietly rot: the
+  // card exists, AND the caveat is not inside it.
+  const hasCard = reportSrc.includes("<details") && reportSrc.includes("Where these numbers come from");
+  const detailsBlock = (reportSrc.match(/<details[\s\S]*?<\/details>/) ?? [""])[0];
+  const caveatOutside = reportSrc.includes("s?.caveat") && !detailsBlock.includes("s.caveat");
+  if (hasCard && caveatOutside) passed++;
+  else { failed++; pushStructural("app/(app)/reports/page.tsx: the definitions are not a disclosure card with the caveat left OUTSIDE it (card " + hasCard + ", caveat outside " + caveatOutside + ") - QA-564. Folding the warning behind a click hides the one line that changes how the figures beside it should be read."); }
+
   // QA-552: the report must SURFACE a status value it does not recognise. `unknown` is a default
   // bucket, so without this it silently absorbs any new word the client's sheet grows.
   if (/unrecognised_status/.test(reportSrc)) passed++;

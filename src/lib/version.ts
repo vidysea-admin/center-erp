@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-177";
+export const RELEASE = "2026.08.14-178";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,14 @@ export const RELEASE = "2026.08.14-177";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-178 tidies the top of the report. The block explaining where each column's numbers come " +
+  "from used to sit open all the time - seven definitions and a note, pushing the table itself " +
+  "down the page on the one screen people open to read the table. It folds into a card now, and " +
+  "opens when you want it. The one line that changes how the figures should be read stays " +
+  "visible outside the card, because a caution you have to go looking for is not a caution.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-177 gives the report the two things it was missing at the front. The first two columns now " +
   "carry their own headings - Batch Location and Status - and both can be filtered, so you can " +
   "ask to see only the approved centres and get exactly those. Until now those headings were " +
@@ -26,10 +34,7 @@ export const RELEASE_NOTE_CURRENT =
   "row of figures always has the centre name beside it. And the meaning of Mobilised has been " +
   "corrected: it now counts people actually enrolled onto a batch, not everyone typed into the " +
   "system, so it and In training describe two genuinely different stages instead of nearly the " +
-  "same one.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "same one." +
   "-176 makes the report something you can work in rather than only read. The approval " +
   "verdict was shown as a small label next to each centre, which looked tidy and turned out to " +
   "be the wrong trade: a label cannot be filtered, sorted, or carried into a download, and " +
