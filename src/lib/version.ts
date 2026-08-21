@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-181";
+export const RELEASE = "2026.08.14-182";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,15 +17,23 @@ export const RELEASE = "2026.08.14-181";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-182 finishes two things the last release only appeared to do. The wider column names were " +
+  "set but never reached the screen - the table was sharing its space equally between columns " +
+  "and ignoring them - so headings like In training and Not approved still broke onto two " +
+  "lines, which was the original complaint. They fit on one line now. And the tidier list of " +
+  "columns, which was asked for on the report and only there, had been applied to every table " +
+  "of its kind; on the batch planning table it merged two different dates that happen to share " +
+  "a name, so hiding one hid both. That list is now the report's alone and every other table " +
+  "behaves exactly as it did before.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-181 is a test fix, not a product change: nothing on any screen moves. The check that " +
   "guards the report's always-visible caution had a hole in it - it confirmed the caution sat " +
   "after the explanations card, which is not the same as confirming it sits outside every such " +
   "card. Wrapping it in a second one would have passed while the rule was broken. The check now " +
   "requires every card opened before that line to have closed, and the exact case it used to " +
-  "miss is proved failing.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "miss is proved failing." +
   "-180 puts back something the last release quietly removed. Every figure on the report is " +
   "supposed to say where it came from - the client's master sheet, or our own records. When " +
   "the explanations were folded into a card, the four figures taken from the client kept that " +

@@ -825,8 +825,21 @@ for (const file of walk(root)) {
   // a checker measured what -176 actually shipped: 34 entries, 20 exact repeats. The list is now
   // built so each entry appears once: ungrouped columns as themselves, each MEASURE once (toggling
   // every column with that label), each GROUP once. The assertion moved with it.
-  const pickerUnique = tableSrc.includes("measures.find((m) => m.label === c.label)") && tableSrc.includes("Visible columns");
+  // -182: this asserted one exact expression, so writing the same comparison the other way round
+  // (`c.label === m.label`) made it FAIL correct code - a pin that accuses the innocent, which is
+  // the mirror image of one that lets the guilty through, and this file has now shipped both.
+  // Behaviour, not spelling: the merge exists, and it is REPORT-ONLY per REQ-397.
+  const pickerUnique = /measures\.find\(/.test(tableSrc) && tableSrc.includes("Visible columns");
   const pickerGroupToggle = tableSrc.includes("cols.forEach((c) => setColVisible");
+  // QA-580: REQ-397's scope clause, and its "a check must prove it" half. The unique list must be
+  // opt-in and the report must be the ONLY caller - the plan-tracker is the other grouped table and
+  // merging on label alone welded its TOT start to its batch start.
+  const gated = /pickerMode !== "unique"/.test(tableSrc) && /pickerMode\?: "unique"/.test(tableSrc);
+  const callers = (spawnSync("git", ["grep", "-l", 'pickerMode="unique"', "--", "src"], { cwd: path.join(root, ".."), encoding: "utf8" }).stdout || "")
+    .split(String.fromCharCode(10)).filter(Boolean);
+  const onlyReport = callers.length === 1 && callers[0].includes("reports/page.tsx");
+  if (gated && onlyReport) passed++;
+  else { failed++; pushStructural("components/ui.tsx + reports: the unique-entry Columns picker is not gated to the report (opt-in " + gated + ", callers " + JSON.stringify(callers) + ") - QA-580 / REQ-397. The other grouped table is the plan-tracker, where TOT -> Starts and Batch -> Starts share a label and merging on label alone hides both at once."); }
   if (pickerUnique && pickerGroupToggle) passed++;
   else { failed++; pushStructural("components/ui.tsx: the Columns picker still repeats a label once per group instead of listing it ONCE (unique " + pickerUnique + ", group toggle " + pickerGroupToggle + ") - QA-538. Umesh asked for unique entries only; -176 grouped them, which made the repeats legible without removing them - 34 entries, 20 exact repeats."); }
 
@@ -886,9 +899,14 @@ for (const file of walk(root)) {
   // column had two names and downloading silently renamed every one of them. Umesh: "column name
   // kya complete rakhna chaiye, abhi ye 2-3-4 letters hai" - and his own argument settles the width
   // objection, because the table already offers resize, hide and horizontal scroll.
-  const abbrev = ['label: "Appr."', 'label: "Mob."', 'label: "In trg"', 'label: "Not appr."'].filter((a) => reportSrc.includes(a));
-  if (!abbrev.length) passed++;
-  else { failed++; pushStructural("app/(app)/reports/page.tsx: column labels are still abbreviated on screen while the Excel export spells them out - QA-565. One column, two names: " + abbrev.join(", ")); }
+  // -182: a checker broke this pin in the obvious direction - it asserted the ABSENCE of four exact
+  // strings, so restoring the abbreviations as `Mob` / `In trg.` / `Not appr` (no trailing dot) left
+  // it green. Asserting the PRESENCE of the full names cannot be dodged by respelling the short
+  // ones, because there is nothing to respell: the words either appear or they do not.
+  const wantLabels = ["Target", "Approved", "Mobilised", "In training", "Passed", "Not approved", "No verdict"];
+  const missingLabels = wantLabels.filter((w) => !reportSrc.includes('label: "' + w + '"'));
+  if (!missingLabels.length) passed++;
+  else { failed++; pushStructural("app/(app)/reports/page.tsx: the report does not use the full column names the Excel export uses - QA-565. Missing: " + missingLabels.join(", ") + ". One column, two names is the defect; the export has always spelled them out."); }
 
   // QA-552: the report must SURFACE a status value it does not recognise. `unknown` is a default
   // bucket, so without this it silently absorbs any new word the client's sheet grows.

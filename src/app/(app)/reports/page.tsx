@@ -96,24 +96,24 @@ export default function ReportsPage() {
   });
   for (const role of roles) {
     columns.push(
-      { key: `${role}|t`, group: role, label: "Target", minWidth: 92, sortable: true, sortValue: (r: any) => r.cells[role]?.target ?? 0, render: (r: any) => num(r.cells[role]?.target ?? 0), total: roleTotal(role, "target") },
-      { key: `${role}|a`, group: role, label: "Approved", minWidth: 104, sortable: true, sortValue: (r: any) => r.cells[role]?.approved ?? 0, render: (r: any) => num(r.cells[role]?.approved ?? 0), total: roleTotal(role, "approved") },
-      { key: `${role}|m`, group: role, label: "Mobilised", minWidth: 108, sortable: true, sortValue: (r: any) => r.cells[role]?.mobilised ?? 0, render: (r: any) => num(r.cells[role]?.mobilised ?? 0), total: roleTotal(role, "mobilised") },
-      { key: `${role}|i`, group: role, label: "In training", minWidth: 112, sortable: true, sortValue: (r: any) => r.cells[role]?.in_training ?? 0, render: (r: any) => num(r.cells[role]?.in_training ?? 0), total: roleTotal(role, "in_training") },
-      { key: `${role}|c`, group: role, label: "Passed", minWidth: 92, sortable: true, sortValue: (r: any) => r.cells[role]?.certified ?? 0, render: (r: any) => num(r.cells[role]?.certified ?? 0), total: roleTotal(role, "certified") },
+      { key: `${role}|t`, group: role, label: "Target", minWidth: 94, sortable: true, sortValue: (r: any) => r.cells[role]?.target ?? 0, render: (r: any) => num(r.cells[role]?.target ?? 0), total: roleTotal(role, "target") },
+      { key: `${role}|a`, group: role, label: "Approved", minWidth: 112, sortable: true, sortValue: (r: any) => r.cells[role]?.approved ?? 0, render: (r: any) => num(r.cells[role]?.approved ?? 0), total: roleTotal(role, "approved") },
+      { key: `${role}|m`, group: role, label: "Mobilised", minWidth: 114, sortable: true, sortValue: (r: any) => r.cells[role]?.mobilised ?? 0, render: (r: any) => num(r.cells[role]?.mobilised ?? 0), total: roleTotal(role, "mobilised") },
+      { key: `${role}|i`, group: role, label: "In training", minWidth: 122, sortable: true, sortValue: (r: any) => r.cells[role]?.in_training ?? 0, render: (r: any) => num(r.cells[role]?.in_training ?? 0), total: roleTotal(role, "in_training") },
+      { key: `${role}|c`, group: role, label: "Passed", minWidth: 94, sortable: true, sortValue: (r: any) => r.cells[role]?.certified ?? 0, render: (r: any) => num(r.cells[role]?.certified ?? 0), total: roleTotal(role, "certified") },
     );
   }
   columns.push(
     { key: "gt", group: "Grand Total", label: "Target", minWidth: 96, sortable: true, sortValue: (r: any) => r.total.target, render: (r: any) => <b>{num(r.total.target)}</b>, total: grandTotal("target") },
-    { key: "ga", group: "Grand Total", label: "Approved", minWidth: 108, sortable: true, sortValue: (r: any) => r.total.approved, render: (r: any) => <b>{num(r.total.approved)}</b>, total: grandTotal("approved") },
+    { key: "ga", group: "Grand Total", label: "Approved", minWidth: 114, sortable: true, sortValue: (r: any) => r.total.approved, render: (r: any) => <b>{num(r.total.approved)}</b>, total: grandTotal("approved") },
     // QA-527: the two columns that make Target readable. They sit in the Grand Total group ONLY -
     // adding them under every job role would widen the table by 40% to answer a question that is
     // asked of the centre, not of the cell. The per-role split IS in the Excel export, which is
     // where the pivoting happens and where width costs nothing.
-    { key: "gn", group: "Grand Total", label: "Not approved", minWidth: 120, sortable: true, sortValue: (r: any) => r.total.not_approved, render: (r: any) => num(r.total.not_approved), total: grandTotal("not_approved") },
-    { key: "gu", group: "Grand Total", label: "No verdict", minWidth: 112, sortable: true, sortValue: (r: any) => r.total.unknown, render: (r: any) => num(r.total.unknown), total: grandTotal("unknown") },
-    { key: "gm", group: "Grand Total", label: "Mobilised", minWidth: 112, sortable: true, sortValue: (r: any) => r.total.mobilised, render: (r: any) => <b>{num(r.total.mobilised)}</b>, total: grandTotal("mobilised") },
-    { key: "gi", group: "Grand Total", label: "In training", minWidth: 116, sortable: true, sortValue: (r: any) => r.total.in_training, render: (r: any) => <b>{num(r.total.in_training)}</b>, total: grandTotal("in_training") },
+    { key: "gn", group: "Grand Total", label: "Not approved", minWidth: 140, sortable: true, sortValue: (r: any) => r.total.not_approved, render: (r: any) => num(r.total.not_approved), total: grandTotal("not_approved") },
+    { key: "gu", group: "Grand Total", label: "No verdict", minWidth: 122, sortable: true, sortValue: (r: any) => r.total.unknown, render: (r: any) => num(r.total.unknown), total: grandTotal("unknown") },
+    { key: "gm", group: "Grand Total", label: "Mobilised", minWidth: 116, sortable: true, sortValue: (r: any) => r.total.mobilised, render: (r: any) => <b>{num(r.total.mobilised)}</b>, total: grandTotal("mobilised") },
+    { key: "gi", group: "Grand Total", label: "In training", minWidth: 124, sortable: true, sortValue: (r: any) => r.total.in_training, render: (r: any) => <b>{num(r.total.in_training)}</b>, total: grandTotal("in_training") },
     { key: "gc", group: "Grand Total", label: "Passed", minWidth: 96, sortable: true, sortValue: (r: any) => r.total.certified, render: (r: any) => <b>{num(r.total.certified)}</b>, total: grandTotal("certified") },
   );
 
@@ -226,6 +226,9 @@ export default function ReportsPage() {
         // reader never loses whose row they are on. QA-543: search is on explicitly rather than
         // left to the >10-rows default, because a report is searched even when it is short.
         freeze={2}
+        // QA-580: REQ-397 - "sirf report wali tab ke liye". The unique-entry list is opted into HERE
+        // and nowhere else, so every other table picker is untouched.
+        pickerMode="unique"
         searchable
       />
     </div>

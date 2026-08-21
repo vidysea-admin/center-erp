@@ -261,7 +261,7 @@ export function FilterPills({ options, active, onChange }: {
 // whole point of a total is that it covers what you are looking at, and "Showing 1–25 of 57" means
 // the page is a window, not the answer. Filter or switch tab and it recomputes, because `view` is
 // what the table itself is filtering by.
-export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClick, empty, cardTitle, pageSize = 25, defaultSort, searchable, initialSearch, resizable = true, loading, storageKey, totals, freeze }: {
+export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClick, empty, cardTitle, pageSize = 25, defaultSort, searchable, initialSearch, resizable = true, loading, storageKey, totals, freeze, pickerMode }: {
   columns: {
     key: string; label: string; render?: (row: T) => ReactNode; mobile?: boolean;
     sortable?: boolean; sortValue?: (row: T) => string | number | null | undefined;
@@ -295,6 +295,18 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
   cardTitle?: (row: T) => ReactNode;
   pageSize?: number;
   defaultSort?: { key: string; dir: "asc" | "desc" };
+  // QA-580 (-182): the unique-entry picker is REPORT-ONLY, by contract. REQ-397 says it in so
+  // many words - "Scope: the report only… Other tables' pickers must be byte-for-byte
+  // unchanged, and a check must prove it" - and -179 put the rewrite into this shared
+  // component with no gate. A checker opened the second grouped table (Batches -> Planning)
+  // and found the damage: it has colliding labels ACROSS groups - TOT -> Starts and
+  // Batch -> Starts - and merging on label alone welded them, so one click hid both an
+  // unrelated TOT date and the batch date, with no way to keep one. It also produced `Batch`
+  // one line above `Batch x5`: one word naming two things, created by the change whose whole
+  // purpose was to stop one word naming several things.
+  //
+  // Opt-in, so every other picker renders exactly as it did before.
+  pickerMode?: "unique";
   // QA-544: how many LEADING columns stay put while the rest scroll sideways. Frozen columns get
   // an explicit width so their offsets are computable; omit it and nothing changes.
   freeze?: number;
@@ -597,6 +609,32 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
         // Nine plus five instead of thirty-four, no entry repeated, and both actions still
         // available - "hide Mobilised everywhere" and "hide this job role" are different jobs and
         // the old list could do neither without hunting.
+        // Not the report -> the -178 sectioned list, unchanged.
+        if (pickerMode !== "unique") {
+          const sections: { group?: string; cols: Col[] }[] = [];
+          for (const c of pickable) {
+            const last = sections[sections.length - 1];
+            if (last && last.group === c.group) last.cols.push(c);
+            else sections.push({ group: c.group, cols: [c] });
+          }
+          const row = (c: Col) => (
+            <label key={c.key} className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 hover:bg-gray-50">
+              <input type="checkbox" checked={colChoice[c.key] ?? !c.hidden} onChange={(e) => setColVisible(c.key, e.target.checked)} />
+              <span className="min-w-0 flex-1 truncate text-gray-700" title={c.group ? `${c.group} — ${c.label}` : c.label}>{c.label}</span>
+            </label>
+          );
+          return sections.map((sec, i) => sec.group ? (
+            <div key={sec.group + i} className="mt-1 border-t border-gray-100 pt-1">
+              <label className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 font-semibold text-gray-600 hover:bg-gray-50">
+                <input type="checkbox"
+                  checked={sec.cols.some((c) => colChoice[c.key] ?? !c.hidden)}
+                  onChange={(e) => sec.cols.forEach((c) => setColVisible(c.key, e.target.checked))} />
+                <span className="min-w-0 flex-1 truncate" title={sec.group}>{sec.group}</span>
+              </label>
+              <div className="pl-4">{sec.cols.map(row)}</div>
+            </div>
+          ) : <div key={"_" + i}>{sec.cols.map(row)}</div>);
+        }
         const ungrouped = pickable.filter((c) => !c.group);
         const grouped = pickable.filter((c) => c.group);
         const measures: { label: string; cols: Col[] }[] = [];
@@ -698,8 +736,17 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
           <table className="w-full text-sm" style={tableStyle}>
             {anyWidth && <colgroup>{visCols.map((c, i) => (
               // A frozen column always carries an explicit width — that is what makes its
-              // neighbour's `left` offset knowable. Unfrozen columns keep the old behaviour.
-              <col key={c.key} style={widths[c.key] ? { width: widths[c.key] } : i < freezeN ? { width: frozenW(c) } : undefined} />
+              // neighbour's `left` offset knowable.
+              //
+              // QA-581 (-182): EVERY column now carries one, and the reason is a defect a checker
+              // measured rather than a preference. `anyWidth` turns on `table-layout: fixed`, and
+              // freeze={2} turns `anyWidth` on — so on the report the 27 unfrozen columns had no
+              // width here, fixed layout split the remainder EQUALLY, and every one of them
+              // rendered at exactly 103px. `minWidth` only ever reached the table's min-width sum;
+              // it never reached a column. So -179 raised those numbers to 92–120 to stop the
+              // labels wrapping, and seven header cells kept wrapping anyway, including the exact
+              // complaint Umesh made: `In training` on two lines, the same shape as `IN TRG`.
+              <col key={c.key} style={{ width: widths[c.key] ?? (i < freezeN ? frozenW(c) : colFloor(c)) }} />
             ))}</colgroup>}
             <thead className="text-left text-[11px] uppercase tracking-wider text-gray-400">
               {visCols.some((c) => c.group) && (
