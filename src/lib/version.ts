@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-173";
+export const RELEASE = "2026.08.14-174";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,18 @@ export const RELEASE = "2026.08.14-173";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-174 finishes the batch planner. The Plan a batch drawer used to ask for a date and nothing " +
+  "else, so it could not know WHICH CENTRE you meant - and everything the last three releases " +
+  "taught the system stayed out of reach of the one screen a person opens to plan. It now asks " +
+  "for the centre, and once you name one it tells you the earliest that centre could actually " +
+  "start and why, warns when the date you typed is inside that window, and drops the trainer-" +
+  "certification steps when the trainer teaching there is already certified. Naming a centre is " +
+  "optional - without one the plan is exactly what it always was, because people share a plan " +
+  "before a centre is picked. The planning table also downloads as Excel now, the same way the " +
+  "report does, carrying the same rows the screen shows.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-173 stops a save from pretending. Each screen has a list of the fields it is allowed to " +
   "write, which is right - it is what keeps a request from setting something nobody meant to " +
   "expose. What was wrong is that it did this in silence: send a field the screen does not " +
@@ -28,10 +40,7 @@ export const RELEASE_NOTE_CURRENT =
   "until someone reads that record weeks later. Saves now name anything they did not write. " +
   "Nothing became writable that was not before: the rules are exactly as strict, they simply " +
   "say so. Ids and timestamps a screen sends back unchanged are left out, because those are not " +
-  "attempts to write anything.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "attempts to write anything." +
   "-172 puts the total row back on the report. The figures were being worked out and sent to " +
   "the page all along, and the page never showed them - so anyone wanting the overall number " +
   "had to add twenty rows by eye, which is the exact habit the report was built to end. The " +

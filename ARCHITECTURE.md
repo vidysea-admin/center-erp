@@ -92,6 +92,8 @@ StoredFile, ApprovalRule, ApprovalRequest, AuditLog, Scheme, JobRole, CandidateD
 - **Sheet/sync:** `sheet-changes`, `sync-sources/[id]/{run,snapshots,tab-mappings}`, `workbook-changes`, `mapping/readiness`.
 - **Files:** `upload`, `upload/{intent,complete,abort}`, `files/[name]`.
 - **Admin/system:** `defaults`, `users`, `permissions`, `master-lists/[list]`, `approvals`, `notifications`, `audit/*`, `home`, `invoices`, `costs`, `test-email`, `test-storage`.
+- **Reporting (Karunn sir's two, -170/-171/-174):** `reports/rollup` + `reports/rollup/export` (QA-398/QA-441) · `plan-tracker` + `plan-tracker/export` (QA-399/QA-526) · `plan-batch` (the standalone backward planner, `?start=&location=&program=&trainer=`).
+  **Each screen and its export MUST read the same function** — `reportRollup` and `planTrackerRows` in `rules.ts`. An export that recomputes is an export that eventually disagrees, and then nobody can say which one is the report. If you change either function, both doors move together; there is no second copy to update, and there must never be one.
 - **PUBLIC (no session — a token IS the credential):** `public/register/[token]` · `public/enrol-otp` · `public/trainer-apply` · `public/attendance/[token]` · `public/feedback/[token]` · `public/plan/[token]` · `public/portal-lookup` · `public/ses-notifications` · `public/version`.
 
 ### 1.5 `src/app/(app)/**` — authenticated screens
@@ -100,7 +102,8 @@ StoredFile, ApprovalRule, ApprovalRequest, AuditLog, Scheme, JobRole, CandidateD
 |---|---|---|
 | `page.tsx` | 343 | Home / Action Center. **Structure pinned by `scripts/check-home-structure.mjs`** |
 | `batches/[id]/page.tsx` | **2,988** | The monster. Tab components: `Overview`(128) `EditDetails`(525) `Roster`(663) `Enrollment`(917) `AttendanceTab`(1001) `DailyExecution`(1266) `ClosureTab`(1844) `CandidateResults`(2109) `FeedbackTab`(2762) `CostsTab`(2831) |
-| `batches/page.tsx` | 744 | List + create drawer + CSV import |
+| `batches/page.tsx` | ~830 | List + create drawer + CSV import + **`PlanningTable`** (the Planning tab, QA-399) + the **"Plan a batch" drawer** (QA-501: it takes centre + job role and renders `earliest_possible_start`) |
+| `reports/page.tsx` | ~200 | Karunn sir's five-column report (QA-398). ONE table, `Approved` is a COLUMN — both readings sit together, decided by Umesh 2026-08-21 |
 | `candidates/page.tsx` | 878 | Pool, buckets, drawer (incl. the 9 government-portal fields), SIDH walk, docs, import |
 | `trainers/page.tsx` | 769 | Directory · availability tags (`availabilityTag` :22) · stage strip · Requests · Open Positions · quick-invite |
 | `trainers/[id]/page.tsx` | 476 | Pipeline rail · **Move drawer (`doMove` :91)** · Documents · Profile · Assignments |

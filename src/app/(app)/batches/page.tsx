@@ -84,7 +84,12 @@ function BatchesInner() {
   useEffect(() => { setTrainerReq(""); }, [form.location, form.program]); // a different centre/role = a different request
   const set = (k: string, v: unknown) => setForm((f: any) => ({ ...f, [k]: v }));
   // 2026-08-11: standalone backward-plan calculator — the shareable "इस-इस date तक ये काम" sheet
-  const [planner, setPlanner] = useState<{ open: boolean; start?: string; plan?: any[] }>({ open: false });
+  // -174 (QA-501): the drawer now carries WHICH CENTRE, and what that centre can actually do -
+  // the earliest it could start, whether any date works at all, and whose trainer the plan used.
+  const [planner, setPlanner] = useState<{
+    open: boolean; start?: string; plan?: any[];
+    location?: string; program?: string; eps?: any; tooSoon?: boolean | null; scopedTo?: any;
+  }>({ open: false });
   const { copied: planCopied, copy: copyPlan } = useCopied();
   const [info, setInfo] = useState("");
 
@@ -214,12 +219,24 @@ function BatchesInner() {
     } catch (e: any) { setError(e.message); }
   }
 
-  async function runPlanner(start: string) {
-    setPlanner((p) => ({ ...p, start }));
-    if (!start) return;
+  // -174 (QA-501): this drawer asked for a DATE and nothing else, so everything -164, -165 and
+  // -168 built never reached the one screen a person opens to plan. It could not know the centre,
+  // so it could not know the centre could not START then, and it printed TOT steps for a trainer
+  // who was already certified - the very thing QA-460 fixed, still wrong here.
+  //
+  // The centre stays OPTIONAL. People use this before a centre is picked ("main jab chahun ek
+  // batch planning nikaal ke kisi ko bhi share kar sakun"), and there the full plan is the honest
+  // answer. Name a centre and it gets sharper, which is the point.
+  async function runPlanner(next: { start?: string; location?: string; program?: string }) {
+    const s = { ...planner, ...next };
+    setPlanner(s);
+    if (!s.start) return;
     try {
-      const d = await api(`/api/plan-batch?start=${start}`);
-      setPlanner((p) => ({ ...p, plan: d.milestones }));
+      const q = new URLSearchParams({ start: s.start });
+      if (s.location) q.set("location", String(s.location));
+      if (s.program) q.set("program", String(s.program));
+      const d = await api(`/api/plan-batch?${q.toString()}`);
+      setPlanner((p) => ({ ...p, plan: d.milestones, eps: d.earliest_possible_start ?? null, tooSoon: d.starts_too_soon ?? null, scopedTo: d.scoped_to ?? null }));
     } catch (e: any) { setError(e.message); }
   }
 
@@ -615,9 +632,43 @@ function BatchesInner() {
       {/* 2026-08-11: backward-plan calculator — printable, shareable, no batch needed */}
       <Drawer error={error} open={planner.open} onClose={() => setPlanner({ open: false })} title="Backward batch plan">
         <div className="space-y-4">
-          <Field label="Batch start date" required>
-            <input type="date" className={inputCls} value={planner.start ?? ""} onChange={(e) => runPlanner(e.target.value)} />
-          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Batch start date" required>
+              <input type="date" className={inputCls} value={planner.start ?? ""} onChange={(e) => runPlanner({ start: e.target.value })} />
+            </Field>
+            <Field label="Centre (optional)">
+              <select className={inputCls} value={planner.location ?? ""} onChange={(e) => runPlanner({ location: e.target.value })}>
+                <option value="">Not a specific centre</option>
+                {locations.map((l: any) => <option key={l._id} value={l._id}>{l.name}</option>)}
+              </select>
+            </Field>
+          </div>
+          {planner.location && (
+            <Field label="Job role (optional)">
+              <select className={inputCls} value={planner.program ?? ""} onChange={(e) => runPlanner({ program: e.target.value })}>
+                <option value="">Any job role at this centre</option>
+                {programs.map((p: any) => <option key={p._id} value={p._id}>{p.name}</option>)}
+              </select>
+            </Field>
+          )}
+          {planner.eps && (
+            // -168 wrote this sentence once so every screen says it the same way. The planner and
+            // the batch form now read the SAME note off the SAME calculation.
+            <p className={"rounded-lg px-3 py-2 text-xs " + (planner.tooSoon ? "border border-amber-200 bg-amber-50 font-medium text-amber-800" : "bg-blue-50 text-blue-700")}>
+              {planner.eps.blocked
+                ? <>⚠ This centre cannot start a batch yet ({planner.eps.note}). Any date you pick here will miss.</>
+                : planner.tooSoon
+                  ? <>⚠ {fmtDate(planner.start!)} is before the earliest this centre could start — <b>{fmtDate(planner.eps.date)}</b> ({planner.eps.note}). The dates below are still counted back from your date, so they have already passed.</>
+                  : <>Earliest this centre could start: <b>{fmtDate(planner.eps.date)}</b> ({planner.eps.note})</>}
+            </p>
+          )}
+          {planner.scopedTo?.trainer && (
+            <p className="text-xs text-gray-500">
+              Using <b>{planner.scopedTo.trainer.name}</b>, who teaches here now.
+              {(planner.scopedTo.trainer.pipeline_status === "Certified" || planner.scopedTo.trainer.tot_done_on)
+                && " They are already certified, so the TOT steps are not in this plan."}
+            </p>
+          )}
           {planner.plan && (
             <>
               <div className="overflow-hidden rounded-lg border">
@@ -834,6 +885,11 @@ function PlanningTable({ rows, onSaved, onError }: { rows: any[] | null; onSaved
 
   return (
     <div className="space-y-3">
+      <div className="flex justify-end">
+        {/* QA-526: the man this table was built for keeps it in a spreadsheet today. Without a
+            download he reads it once and goes back to Excel, which is the whole thing this replaces. */}
+        <Btn kind="ghost" onClick={() => { window.location.href = `${BASE_PATH}/api/plan-tracker/export`; }}>Download Excel</Btn>
+      </div>
       <p className="rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-800">
         Every live batch, the way the planning sheet reads it. The three dates you can click are the
         trainer&apos;s own — they are stored once on the trainer, so a trainer running two batches shows

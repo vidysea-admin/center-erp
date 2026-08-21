@@ -2127,6 +2127,64 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
       scopedTk.status === 200 && !scopedBatches.includes(String(tkA._id)),
       JSON.stringify({ status: scopedTk.status, n: scopedBatches.length, leaked: scopedBatches.includes(String(tkA._id)) }));
 
+    // ---- -174 (QA-526): the planning table downloads ----
+    // The report got an export in -170 because Manish sir asked. Nobody asked for this one, and
+    // that is the reason it exists: Karunn sir keeps this table in a SPREADSHEET today, so a
+    // version he cannot download is a version he reads once and then goes back to Excel for.
+    //
+    // Every read below is guarded before it is used. In a pre-fix run this route does not exist,
+    // so the answer is a 404 HTML page - three suite crashes in -170 were all the same mistake:
+    // assuming the response has the shape the feature would have given it.
+    {
+      const ex = await fetch(BASE + "/api/plan-tracker/export", { headers: { cookie } });
+      const exBuf = Buffer.from(await ex.arrayBuffer().catch(() => new ArrayBuffer(0)));
+      const isXlsx = ex.status === 200 && exBuf.length > 4 && exBuf.slice(0, 2).toString() === "PK"
+        && /spreadsheetml/.test(ex.headers.get("content-type") ?? "");
+      ok("QA-526 (-174): the planning table downloads as a real xlsx",
+        isXlsx,
+        `status=${ex.status} ct=${ex.headers.get("content-type")} len=${exBuf.length}`);
+
+      // Same rows as the screen. An export that recomputes is an export that eventually
+      // disagrees, and then nobody can say which one is the plan.
+      let exCodes = null, exCols = null;
+      if (isXlsx) {
+        try {
+          const wb = XLSX.read(exBuf, { type: "buffer" });
+          const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+          exCodes = rows.map((r) => String(r.Batch ?? "")).filter(Boolean);
+          exCols = Object.keys(rows[0] ?? {});
+        } catch { /* left null - the assertions below fail loudly rather than crash the suite */ }
+      }
+      const screen = (await req("GET", "/api/plan-tracker", undefined, 200)).data;
+      const screenCodes = (screen.rows ?? []).map((r) => String(r.batch?.code ?? "")).filter(Boolean);
+      ok("QA-526 (-174): the file carries the SAME rows the screen carries - it reads planTrackerRows, it does not recount",
+        !!exCodes && screenCodes.length > 0 && exCodes.length === screenCodes.length
+          && screenCodes.every((c) => exCodes.includes(c)),
+        JSON.stringify({ file: (exCodes ?? []).slice(0, 4), screen: screenCodes.slice(0, 4), nf: exCodes?.length ?? null, ns: screenCodes.length }));
+
+      // His column order, his headings. A download that renames his columns is a download he has
+      // to translate before he can use it.
+      ok("QA-526 (-174): his own headings are on the file, not the API field names",
+        !!exCols && ["SL#", "Location", "Job Role", "Batch", "Trainer Name", "TR ID", "Expected batch start"].every((h) => exCols.includes(h)),
+        JSON.stringify({ cols: (exCols ?? []).slice(0, 8) }));
+
+      // The scoping landmine, measured from the scoped login itself. authz builds its $in from
+      // .map(String) and mongoose does not cast inside a pipeline - four live defects came from
+      // exactly that, and none of them is visible from an admin session.
+      const exScoped = await fetch(BASE + "/api/plan-tracker/export", { headers: { cookie: tkSpoc } });
+      const exScopedBuf = Buffer.from(await exScoped.arrayBuffer().catch(() => new ArrayBuffer(0)));
+      let scopedCodes = null;
+      if (exScoped.status === 200 && exScopedBuf.length > 4 && exScopedBuf.slice(0, 2).toString() === "PK") {
+        try {
+          const wb2 = XLSX.read(exScopedBuf, { type: "buffer" });
+          scopedCodes = XLSX.utils.sheet_to_json(wb2.Sheets[wb2.SheetNames[0]]).map((r) => String(r.Batch ?? ""));
+        } catch { /* stays null */ }
+      }
+      ok("QA-526 (-174): a scoped login downloads only its own centres' rows",
+        !!scopedCodes && !scopedCodes.includes(String(tkA.code)),
+        JSON.stringify({ status: exScoped.status, n: scopedCodes?.length ?? null, leaked: scopedCodes ? scopedCodes.includes(String(tkA.code)) : null }));
+    }
+
     for (const b of [tkA, tkB, tkC]) {
       await req("POST", `/api/batches/${b._id}/transition`, { target: "Cancelled", reason: "-171 QA-399 pin cleanup" }, 200);
     }
