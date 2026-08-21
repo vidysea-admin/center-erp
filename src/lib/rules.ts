@@ -2480,6 +2480,137 @@ function readinessBlockers(
 // awaited each in turn — about five queries per row, run sequentially, which measured 10.3s for 81
 // rows on a laptop. Home calls this on every load for every user, so that was a real outage in
 // waiting. This does the same work in three aggregations regardless of how many targets exist.
+// ---------- The high-level report (QA-398) ----------
+// Karunn sir, 18:51: "aapki ek ye HIGH LEVEL aur doosra batch planning - bas in do mein saara kaam
+// nikal jaata hai, teesri cheez ki zaroorat hi nahi." This is the first of those two.
+//
+// Rows are institutions, columns are job roles, and FIVE figures sit under each job role. Two of
+// them come from the client's own sheet and three from our records, and the screen says which is
+// which - a number whose origin is not stated is a number nobody can argue with.
+//
+// THE ONE MISTAKE THIS FUNCTION EXISTS TO NOT MAKE: cells are SUMMED, never assigned. A
+// (centre x job role) cell can receive more than one PROGRAMME, because a programme is
+// scheme-x-job-role fused while his columns are job roles alone. Writing `cell[centre][role] = v`
+// is keep-last, and keep-last was measured to leave Approved looking EXACTLY RIGHT while Target
+// went quietly short - so a reviewer who checks Approved, sees it reconcile, and concludes the
+// report is sound is precisely the person it fools. Summing costs one character and removes the
+// whole class.
+export type ReportCell = { target: number; approved: number; mobilised: number; in_training: number; certified: number };
+export type ReportRow = {
+  location: { _id: string; name: string; code?: string };
+  cells: Record<string, ReportCell>;   // job role -> figures
+  total: ReportCell;
+  // criterion 3: every row must read Target >= Mobilised >= In Training >= Certified, or SAY why
+  // not. A report that silently renders an impossible row teaches people to distrust all of it.
+  breaks: string[];
+};
+
+const emptyCell = (): ReportCell => ({ target: 0, approved: 0, mobilised: 0, in_training: 0, certified: 0 });
+const addInto = (a: ReportCell, b: ReportCell) => {
+  a.target += b.target; a.approved += b.approved; a.mobilised += b.mobilised;
+  a.in_training += b.in_training; a.certified += b.certified;
+};
+
+export async function reportRollup(scope: Record<string, unknown> = {}) {
+  // find() + populate, not an aggregation over the scope filter: authz.ts builds `$in` from
+  // `.map(String)`, mongoose casts strings to ObjectId inside find() but NOT inside a pipeline,
+  // and four live defects came from exactly that (QA-302, QA-347, QA-350, QA-395). The
+  // aggregations below only ever receive ObjectIds taken off documents we already loaded.
+  const targets = await LocationTarget.find(scope)
+    .populate("location", "name code")
+    .populate("program", "name code scheme")
+    .lean<any[]>();
+  if (!targets.length) return { rows: [] as ReportRow[], roles: [] as string[], total: emptyCell(), sources: SOURCES };
+
+  const locIds = [...new Set(targets.map((t) => t.location?._id).filter(Boolean))];
+  const progIds = [...new Set(targets.map((t) => t.program?._id).filter(Boolean))];
+  const key = (l: unknown, p: unknown) => `${String(l)}|${String(p)}`;
+
+  // Mobilised counts EVERY candidate record for that centre x course at whatever stage, off
+  // Candidate.location + Candidate.program. Deliberately not interested_programs /
+  // interested_locations: measured, those carry data on 2 of 252 records, so a report built on
+  // them would read as near-empty and be believed.
+  const candRows = await Candidate.aggregate([
+    { $match: { location: { $in: locIds }, program: { $in: progIds } } },
+    { $group: {
+      _id: { l: "$location", p: "$program" },
+      mobilised: { $sum: 1 },
+      in_training: { $sum: { $cond: [{ $eq: ["$lifecycle_status", "Enrolled"] }, 1, 0] } },
+    } },
+  ]);
+  const candBy = new Map(candRows.map((r: any) => [key(r._id.l, r._id.p), r]));
+
+  // Certified = an assessment result of Pass. The screen names it that way rather than
+  // "certified", because a certificate being ISSUED is a further step and conflating the two
+  // would overstate the last column of every row.
+  const passRows = await CandidateResult.aggregate([
+    { $match: { result: "Pass" } },
+    { $lookup: { from: "candidates", localField: "candidate", foreignField: "_id", as: "c" } },
+    { $unwind: "$c" },
+    { $match: { "c.location": { $in: locIds }, "c.program": { $in: progIds } } },
+    { $group: { _id: { l: "$c.location", p: "$c.program" }, certified: { $sum: 1 } } },
+  ]);
+  const passBy = new Map(passRows.map((r: any) => [key(r._id.l, r._id.p), r]));
+
+  const byLoc = new Map<string, ReportRow>();
+  const roles = new Set<string>();
+  const grand = emptyCell();
+
+  for (const t of targets) {
+    if (!t.location?._id || !t.program?._id) continue;
+    const role = String(t.program.name ?? "").trim() || String(t.program.code ?? "");
+    roles.add(role);
+    const lid = String(t.location._id);
+    if (!byLoc.has(lid)) {
+      byLoc.set(lid, {
+        location: { _id: lid, name: t.location.name, code: t.location.code },
+        cells: {}, total: emptyCell(), breaks: [],
+      });
+    }
+    const row = byLoc.get(lid)!;
+    if (!row.cells[role]) row.cells[role] = emptyCell();
+
+    const c = candBy.get(key(t.location._id, t.program._id));
+    const p = passBy.get(key(t.location._id, t.program._id));
+    const one: ReportCell = {
+      target: t.approved_target ?? 0,
+      // The sheet's own verdict, per (centre x job role) row. Anything other than an exact
+      // "Approved" is not approved - blank included, which is what four of the disputed rows say.
+      approved: t.tc_status === "Approved" ? (t.approved_target ?? 0) : 0,
+      mobilised: c?.mobilised ?? 0,
+      in_training: c?.in_training ?? 0,
+      certified: p?.certified ?? 0,
+    };
+    // SUM. Never assign. See the note above this function.
+    addInto(row.cells[role], one);
+    addInto(row.total, one);
+    addInto(grand, one);
+  }
+
+  const rows = [...byLoc.values()].sort((a, b) => a.location.name.localeCompare(b.location.name));
+  for (const r of rows) {
+    for (const [role, cell] of Object.entries(r.cells)) {
+      if (cell.mobilised > cell.target) r.breaks.push(`${role}: mobilised ${cell.mobilised} is more than the target ${cell.target}`);
+      if (cell.in_training > cell.mobilised) r.breaks.push(`${role}: in training ${cell.in_training} is more than mobilised ${cell.mobilised}`);
+      if (cell.certified > cell.in_training) r.breaks.push(`${role}: passed ${cell.certified} is more than in training ${cell.in_training}`);
+    }
+  }
+  return { rows, roles: [...roles].sort(), total: grand, sources: SOURCES };
+}
+
+// REQ-367: every column says where it came from, on the screen. Two are the client's numbers and
+// three are ours, and an argument about the report always starts with which is which.
+export const SOURCES = {
+  target: "Client sheet - the approved target on this centre x job role row",
+  approved: "Client sheet - the same target, counted only where its TC Status reads Approved",
+  mobilised: "Our records - every candidate entered for this centre x job role, at any stage",
+  in_training: "Our records - candidates whose enrolment is complete",
+  certified: "Our records - candidates with a Pass assessment result (a certificate being issued is a further step)",
+  // criterion 9 / REQ-366b. This has to be ON the screen, not in a footnote: today the two
+  // columns are nearly the same number, and anyone reading a funnel would assume that is a finding.
+  caveat: "Mobilised currently tracks In Training closely, because candidates are entered when they enrol - the pre-batch pool is not recorded yet.",
+} as const;
+
 export async function mappingReadinessBulk(targetFilter: Record<string, unknown>, limit = 2000) {
   const targets = await LocationTarget.find(targetFilter)
     .populate("location", "name code tc_id tc_status approval_status operational_status")

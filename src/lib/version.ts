@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-169";
+export const RELEASE = "2026.08.14-170";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,24 @@ export const RELEASE = "2026.08.14-169";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-170 adds the report the client has been asking for: every centre down the side, every job " +
+  "role across the top, and five figures under each one - the approved target, how much of it " +
+  "the government has actually approved, how many candidates have been taken on, how many are " +
+  "in training, and how many have passed. It is ONE table, not two. Their own workbook keeps " +
+  "two pivots, one for approved centres and one for the rest, and that was nearly built as two " +
+  "reports - but a spreadsheet keeps two because it cannot do better, and the ask was the " +
+  "opposite: put the approved figure in as a COLUMN so both readings sit in one place, because " +
+  "reports keep multiplying and the person at the end gets fed up. Every column says on screen " +
+  "where it came from, since two of the five come from the client sheet and three are ours, " +
+  "and any argument about the report starts there. Percentages are taken against the approved " +
+  "figure rather than the total, which is how they described the funnel. A row whose numbers " +
+  "cannot all be true is flagged rather than shown straight-faced. And the screen says plainly " +
+  "that the mobilised count currently tracks those in training, because candidates are entered " +
+  "when they enrol and the pool before that is not recorded yet. It downloads as Excel, with " +
+  "the same numbers and the same notes on where they came from.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-169 lets a correction made in the client sheet reach the row it is actually about. The " +
   "government does not approve a centre as a whole - it registers the centre for each scheme " +
   "and gives every registration its own number, so one building can hold several. The ERP " +
@@ -29,10 +47,7 @@ export const RELEASE_NOTE_CURRENT =
   "it, so existing sources are untouched. The job role is still chosen by the mapping, because " +
   "one registration usually covers several. If the same number is claimed by two different " +
   "centres the row is skipped and the run says so plainly instead of picking one. The tool " +
-  "that fills these numbers in proposes them for a person to check before anything is written.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "that fills these numbers in proposes them for a person to check before anything is written." +
   "-168 makes the product give ONE answer to the question of how soon a centre could start a " +
   "batch. There were four, and they disagreed. The batch form worked one out in the browser, " +
   "the save checked it again its own way, an edit checked it a third way, and the planner added " +

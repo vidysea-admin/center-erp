@@ -87,6 +87,10 @@ const NAV = [
   // 2026-08-13 (Umesh): attendance is OFF the principal/SPOC plate entirely — Location removed.
   { href: "/govt-attendance", label: "Govt Attendance", Icon: IconCap, roles: ["Admin", "Operations", "Trainer"], perm: "attendance.govt" },
   { href: "/costs", label: "Costs", Icon: IconWallet, roles: ["Admin", "Operations"], perm: "costs.manage" },
+  // -170 (QA-398): the high-level report. No new permission - Rule 38's location scope already
+  // decides who sees which rows, so a centre login opening this sees its own centre and nothing
+  // else. Everyone gets the entry; the report itself is what is scoped.
+  { href: "/reports", label: "Reports", Icon: IconCap },
 ] as { href: string; label: string; Icon: any; badge?: string; roles?: string[]; perm?: string }[];
 
 // ---- Location context (header switcher; pages read via this hook) ----

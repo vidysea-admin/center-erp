@@ -1974,6 +1974,90 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
     scoped.earliest_possible_start?.blocked === false,
     JSON.stringify({ blocked: scoped.earliest_possible_start?.blocked }));
 
+  // ---- -170 (QA-398): the high-level report ----
+  // Karunn sir, 18:51: "aapki ek ye high level aur doosra batch planning - bas in do mein saara
+  // kaam nikal jaata hai." This is the first of the two, and these are the assertions that decide
+  // whether it can be trusted.
+  {
+    // ONE centre, ONE job role, TWO programmes. This is the shape that breaks a report: a
+    // programme is scheme-x-job-role fused, his columns are job roles alone, so two programmes
+    // land on one cell. Writing cell[centre][role] = value is keep-last - and keep-last was
+    // measured to leave Approved reading EXACTLY RIGHT while Target went quietly short, which
+    // fools precisely the reviewer who checks the total that reconciles.
+    const rpLoc = (await req("POST", "/api/locations", { code: "RP" + stamp, name: "TEST-Report " + stamp, approval_status: "Approved", city: "Meerut" }, 201)).data.item;
+    const ROLE = "Report Role " + stamp;
+    // Real schemes, and deliberately the live shape: Khurja and Madihan each carry an RPL-AVPL row
+    // beside a PMKVY-BECIL one. The first draft invented "SchemeA"/"SchemeB", the product refused
+    // them by its own enum, and the pin then died on undefined._id - taking every assertion after
+    // it down with it. A fixture the product would never accept proves nothing either way.
+    const rpA = (await req("POST", "/api/programs", { code: "RPA" + stamp, name: ROLE, scheme: "RPL-AVPL", trainer_skill: "RPSkillA" + stamp }, 201)).data.item;
+    const rpB = (await req("POST", "/api/programs", { code: "RPB" + stamp, name: ROLE, scheme: "PMKVY-BECIL", trainer_skill: "RPSkillB" + stamp }, 201)).data.item;
+    ok("-170 fixture guard: both programmes exist before anything is asserted about summing them",
+      !!rpA?._id && !!rpB?._id, JSON.stringify({ a: rpA?._id ?? null, b: rpB?._id ?? null }));
+    if (rpA?._id && rpB?._id) {
+      await req("PUT", `/api/locations/${rpLoc._id}/targets`, { program: rpA._id, approved_target: 180, tc_status: "Approved" }, 200);
+      await req("PUT", `/api/locations/${rpLoc._id}/targets`, { program: rpB._id, approved_target: 280, tc_status: "" }, 200);
+    }
+
+    const rep = (await req("GET", "/api/reports/rollup", undefined, 200)).data;
+    const rpRow = (rep.rows ?? []).find((r) => String(r.location._id) === String(rpLoc._id));
+    ok("QA-398 (-170): two programmes on ONE job role are SUMMED, not assigned - keep-last silently loses a target while the approved column still reconciles",
+      rpRow?.cells?.[ROLE]?.target === 460,
+      JSON.stringify({ target: rpRow?.cells?.[ROLE]?.target, expected: 460, cell: rpRow?.cells?.[ROLE] }));
+    ok("QA-398 (-170): ...and Approved counts only the row whose TC Status actually reads Approved",
+      rpRow?.cells?.[ROLE]?.approved === 180,
+      JSON.stringify({ approved: rpRow?.cells?.[ROLE]?.approved, expected: 180 }));
+
+    // The grand total has to reconcile from BOTH directions. A report that adds up one way and
+    // not the other is a report with a hole somebody will find in front of the client.
+    const byRow = (rep.rows ?? []).reduce((a, r) => a + (r.total?.target ?? 0), 0);
+    const byRole = (rep.rows ?? []).reduce((a, r) => a + (rep.roles ?? []).reduce((b, role) => b + (r.cells?.[role]?.target ?? 0), 0), 0);
+    ok("QA-398 (-170): the grand total reconciles by centre AND by job role, independently",
+      !!rep.total && byRow === rep.total.target && byRole === rep.total.target,
+      JSON.stringify({ byRow, byRole, grand: rep.total?.target ?? null }));
+
+    // Mobilised is every candidate for that centre x job role at any stage, off
+    // Candidate.location + Candidate.program. NOT interested_programs - measured, those carry
+    // data on 2 of 252 records, so a report built on them reads near-empty and gets believed.
+    if (rpA?._id) await req("POST", "/api/candidates", { name: "Report Cand " + stamp, phone: "92222" + stamp.slice(0, 5), location: rpLoc._id, program: rpA._id }, 201);
+    const rep2 = (await req("GET", "/api/reports/rollup", undefined, 200)).data;
+    const rpRow2 = (rep2.rows ?? []).find((r) => String(r.location._id) === String(rpLoc._id));
+    ok("QA-398 (-170): Mobilised counts a candidate at ANY stage, from the candidate's own centre and course",
+      rpRow2?.cells?.[ROLE]?.mobilised === 1 && rpRow2?.cells?.[ROLE]?.in_training === 0,
+      JSON.stringify({ mob: rpRow2?.cells?.[ROLE]?.mobilised, intrg: rpRow2?.cells?.[ROLE]?.in_training }));
+
+    // REQ-367: the sources travel WITH the payload, so the screen cannot render a number
+    // whose origin only exists in someone's memory. The caveat is asserted too: today
+    // Mobilised tracks In Training closely, and a reader would otherwise take that for a
+    // finding rather than a gap in what gets entered.
+    ok("QA-398 (-170): every column carries a stated source, on the screen payload itself",
+      typeof rep.sources?.target === "string" && /client sheet/i.test(rep.sources.target)
+        && /our records/i.test(rep.sources.mobilised) && /pre-batch pool/i.test(rep.sources.caveat),
+      JSON.stringify(rep.sources));
+
+    // SCOPING, run from the SCOPED login on purpose: authz builds its $in from .map(String), and
+    // mongoose casts strings inside find() but NOT inside an aggregation pipeline. Four live
+    // defects came from exactly that (QA-302/347/350/395), and none of them is visible from an
+    // admin session.
+    const rpSpoc = await loginAs("spoc.jpr03@vidysea.com", "CiOnly@123");
+    const scopedRep = await fetch(BASE + "/api/reports/rollup", { headers: { cookie: rpSpoc } });
+    // A 404 from a route that does not exist yet is Next's HTML page, not JSON. Parsing it
+    // unguarded is how this pin took the suite down on its third attempt - the same shape as
+    // the two crashes before it, in a raw fetch this time rather than a fixture.
+    const scopedJson = await scopedRep.json().catch(() => ({}));
+    const scopedIds = (scopedJson.rows ?? []).map((r) => String(r.location._id));
+    ok("QA-398 (-170): a scoped login sees ONLY its own centres - measured from that login, never inferred from an admin view",
+      scopedRep.status === 200 && scopedIds.length > 0 && !scopedIds.includes(String(rpLoc._id)),
+      JSON.stringify({ status: scopedRep.status, n: scopedIds.length, leaked: scopedIds.includes(String(rpLoc._id)) }));
+
+    // QA-441: the export must carry the SAME numbers. An export that recomputes is an export
+    // that eventually disagrees, and then nobody can say which one is the report.
+    const xl = await fetch(BASE + "/api/reports/rollup/export", { headers: { cookie } });
+    const xlBuf = Buffer.from(await xl.arrayBuffer());
+    ok("QA-441 (-170): the report downloads as a real xlsx",
+      xl.status === 200 && xlBuf.slice(0, 2).toString() === "PK" && /spreadsheetml/.test(xl.headers.get("content-type") ?? ""),
+      `status=${xl.status} ct=${xl.headers.get("content-type")} len=${xlBuf.length}`);
+  }
   // (k) QA-509 (-168) - ONE earliest-possible-start, not four. The batch form computed it in the
   // browser, POST /api/batches computed it again, PATCH computed it a third time, and -164 added
   // a fourth that also knew about rooms and the trainer's concurrency cap. Four answers to one

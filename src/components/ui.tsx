@@ -273,6 +273,13 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
     // Room this column needs to stay readable (px). Feeds the table's min-width floor —
     // heavy columns (old→new diffs, note text) declare more than the 130 default.
     minWidth?: number;
+    // -170 (QA-398): a banner header spanning consecutive columns that share it. The high-level
+    // report is five figures under each job role, and Manish sir picked that shape from two he was
+    // shown ("yahi wala better hai na?"). Added HERE rather than in a second table component, so
+    // the report keeps the search, funnel filters, column widths and top scrollbar this one
+    // already has — a report nobody can filter is a report people export and then work in Excel,
+    // which is the habit this is meant to end.
+    group?: string;
     // Starts invisible; still searchable and offered in the Columns picker. For wide
     // sheet-format tables whose long tail matters but should not open by default.
     hidden?: boolean;
@@ -599,8 +606,29 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
           <table className="w-full text-sm" style={tableStyle}>
             {anyWidth && <colgroup>{visCols.map((c) => <col key={c.key} style={widths[c.key] ? { width: widths[c.key] } : undefined} />)}</colgroup>}
             <thead className="text-left text-[11px] uppercase tracking-wider text-gray-400">
+              {visCols.some((c) => c.group) && (
+                <tr>
+                  {(() => {
+                    // Consecutive columns sharing a group become one banner cell. Non-grouped
+                    // columns (the row label) span both header rows so the two lines stay aligned.
+                    const spans: { group?: string; n: number }[] = [];
+                    for (const c of visCols) {
+                      const last = spans[spans.length - 1];
+                      if (last && last.group === c.group && c.group) last.n += 1;
+                      else spans.push({ group: c.group, n: 1 });
+                    }
+                    return spans.map((s, i) => (
+                      <th key={s.group ?? "_" + i} colSpan={s.n} rowSpan={s.group ? 1 : 2}
+                        className={"sticky top-0 z-[6] border-b border-gray-100 bg-gray-50 px-3.5 pt-3 pb-1 text-center font-semibold "
+                          + (s.group ? "border-l border-gray-200 text-gray-600" : "text-left align-bottom")}>
+                        {s.group ?? ""}
+                      </th>
+                    ));
+                  })()}
+                </tr>
+              )}
               <tr>
-                {visCols.map((c) => (
+                {visCols.filter((c) => !visCols.some((x) => x.group) || c.group).map((c) => (
                   <th key={c.key} className="sticky top-0 z-[5] border-b border-gray-100 bg-gray-50 px-3.5 py-3 font-semibold">
                     <span className="flex items-center gap-1">
                       {headerCell(c)}
