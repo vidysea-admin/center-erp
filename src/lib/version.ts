@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-172";
+export const RELEASE = "2026.08.14-173";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,21 @@ export const RELEASE = "2026.08.14-172";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-173 stops a save from pretending. Each screen has a list of the fields it is allowed to " +
+  "write, which is right - it is what keeps a request from setting something nobody meant to " +
+  "expose. What was wrong is that it did this in silence: send a field the screen does not " +
+  "accept and the save came back successful with that field untouched, and there was no way to " +
+  "tell what had been saved from what had been quietly dropped. It was found the honest way, by " +
+  "a test that set three trainer dates only the certification process may stamp, got a success " +
+  "back, and read them as empty. There it only proved the test wrong; in front of a person it " +
+  "means they save something, the screen agrees, and nothing changed - and nobody finds out " +
+  "until someone reads that record weeks later. Saves now name anything they did not write. " +
+  "Nothing became writable that was not before: the rules are exactly as strict, they simply " +
+  "say so. Ids and timestamps a screen sends back unchanged are left out, because those are not " +
+  "attempts to write anything.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-172 puts the total row back on the report. The figures were being worked out and sent to " +
   "the page all along, and the page never showed them - so anyone wanting the overall number " +
   "had to add twenty rows by eye, which is the exact habit the report was built to end. The " +
@@ -25,10 +40,7 @@ export const RELEASE_NOTE_CURRENT =
   "job role as well as the overall one, and it follows whatever the table is showing: filter or " +
   "search the list and the totals describe what is in front of you, not the full set. A standing " +
   "check now fails the build if that row ever goes missing again, because the version that was " +
-  "missing looked completely finished from the outside.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "missing looked completely finished from the outside." +
   "-171 adds the planning table the client keeps in a spreadsheet, as a Planning tab beside the " +
   "batches: one row for every live batch, with where its trainer has got to and where the batch " +
   "itself has got to, side by side. Eighteen columns, the same ones they track today. The part " +

@@ -55,6 +55,25 @@ export function pick(body: Record<string, unknown>, fields: string[]) {
   return out;
 }
 
+// QA-523 (-173): which keys the caller sent that this door will NOT write.
+//
+// `pick` is the write whitelist and that is right - it is what stops a request setting a field
+// nobody meant to expose. What was wrong is that it worked in SILENCE: a PATCH carrying a field the
+// door does not accept came back 200 with the field untouched, and the caller had no way to tell a
+// saved field from an ignored one. Found the honest way, on qa-171: a fixture set three trainer
+// dates that only the pipeline may stamp, got 200, and read back nulls. There it only proved a test
+// wrong. The same shape in front of an operator means they save something, the screen agrees, and
+// nothing changed - and nobody finds out until somebody reads the row weeks later.
+//
+// This does NOT make the fields writable. The whitelist stays exactly as strict. It just stops the
+// door pretending. Two things are excluded from the report because they are not attempts to write:
+// mongoose bookkeeping, and the id keys a client naturally echoes back from a GET.
+const ECHOED = new Set(["_id", "id", "__v", "createdAt", "updatedAt", "created_by"]);
+export function ignoredKeys(body: Record<string, unknown>, fields: string[]): string[] {
+  const allowed = new Set(fields);
+  return Object.keys(body ?? {}).filter((k) => !allowed.has(k) && !ECHOED.has(k) && body[k] !== undefined);
+}
+
 async function checkWrite(user: SessionUser, cfg: CrudConfig) {
   requireEdit(user); // Rule 39
   if (cfg.permission) {
@@ -138,11 +157,13 @@ export function collectionRoutes(cfg: CrudConfig) {
     await checkWrite(user, cfg);
     const body = await req.json();
     const data = pick(body, cfg.fields);
+    const ignored = ignoredKeys(body, cfg.fields);
     if (cfg.beforeCreate) await cfg.beforeCreate(data, user);
     const doc = await cfg.model.create({ ...data, created_by: user.id });
     await audit({ entity: cfg.entity, entityId: doc._id, field: undefined, newValue: "created", actor: user.id });
     if (cfg.afterWrite) await cfg.afterWrite(doc, user);
-    return NextResponse.json({ item: doc }, { status: 201 });
+    // QA-523: say what was NOT written. Additive, so nothing that reads `item` changes.
+    return NextResponse.json({ item: doc, ...(ignored.length ? { ignored_fields: ignored } : {}) }, { status: 201 });
   });
 
   return { GET, POST };
@@ -194,6 +215,7 @@ export function itemRoutes(cfg: CrudConfig) {
     if (cfg.scopeAssert) cfg.scopeAssert(user, existing); // QA-125: multi-field union scope
     const body = await req.json();
     const data = pick(body, cfg.fields);
+    const ignored = ignoredKeys(body, cfg.fields);
     if (cfg.beforeUpdate) await cfg.beforeUpdate(id, data, existing, user);
     const before = existing.toObject();
     Object.assign(existing, data);
@@ -202,7 +224,7 @@ export function itemRoutes(cfg: CrudConfig) {
     await existing.save({ validateModifiedOnly: true });
     await auditDiff(cfg.entity, existing._id, before, data, user.id); // audit each field (Rule 27 spirit)
     if (cfg.afterWrite) await cfg.afterWrite(existing, user);
-    return NextResponse.json({ item: existing });
+    return NextResponse.json({ item: existing, ...(ignored.length ? { ignored_fields: ignored } : {}) });
   });
 
   return { GET, PATCH };

@@ -1974,6 +1974,54 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
     scoped.earliest_possible_start?.blocked === false,
     JSON.stringify({ blocked: scoped.earliest_possible_start?.blocked }));
 
+  // ---- -173 (QA-523): a write door says what it would not write ----
+  // pick() is the write whitelist and it stays exactly as strict - it is what stops a request
+  // setting a field nobody meant to expose. What was wrong is that it worked in SILENCE: a PATCH
+  // carrying a field the door does not accept came back 200 with the field untouched, and the
+  // caller could not tell a saved field from an ignored one.
+  //
+  // The fixture is the REAL case that found it, on qa-171: nsdc_submitted_on / nsdc_result_on /
+  // paid_on are stamped by the pipeline transitions and must not be settable here. There it only
+  // proved a test fixture wrong. In front of an operator the same shape means they save something,
+  // the screen agrees, and nothing changed.
+  //
+  // ONE pin and four GUARDS, and the split is deliberate: the defect is exactly one thing -
+  // silence - so exactly one assertion can be red before the fix. The other four exist to catch
+  // the ways a fix like this goes wrong: loosening the whitelist, refusing the whole request,
+  // putting the field on every response, or reporting the ids a client naturally echoes back.
+  {
+    const igTrainer = (await req("POST", "/api/trainers", {
+      name: "Ignored Fields " + stamp, phone: "97000" + stamp.slice(0, 5), skills: ["TestSkill" + stamp],
+    }, 201)).data.item;
+    const res = await req("PATCH", `/api/trainers/${igTrainer._id}`, {
+      name: "Ignored Fields Renamed " + stamp,          // accepted
+      nsdc_submitted_on: "2027-01-05",                    // refused - the pipeline stamps it
+      paid_on: "2027-01-25",                              // refused, same reason
+    }, 200);
+    const ig = res.data.ignored_fields ?? [];
+    ok("QA-523 (-173): the door NAMES the fields it would not write, instead of dropping them in silence",
+      ig.includes("nsdc_submitted_on") && ig.includes("paid_on"),
+      JSON.stringify({ ignored: ig }));
+    ok("QA-523 (-173) [guard]: ...and it is still strict - the refused fields really did not land",
+      !res.data.item?.nsdc_submitted_on && !res.data.item?.paid_on,
+      JSON.stringify({ sub: res.data.item?.nsdc_submitted_on ?? null, paid: res.data.item?.paid_on ?? null }));
+    ok("QA-523 (-173) [guard]: ...and the field it DOES accept was written, so this is a report and not a refusal",
+      res.data.item?.name === "Ignored Fields Renamed " + stamp,
+      JSON.stringify({ name: res.data.item?.name }));
+
+    // A clean write must stay clean: no key on the response when nothing was ignored, or every
+    // caller learns to skip past a field that is always there.
+    const clean = await req("PATCH", `/api/trainers/${igTrainer._id}`, { name: "Ignored Fields Clean " + stamp }, 200);
+    ok("QA-523 (-173) [guard]: a request that asked for nothing extra carries no ignored_fields at all",
+      !("ignored_fields" in (clean.data ?? {})), JSON.stringify({ keys: Object.keys(clean.data ?? {}) }));
+
+    // The ids a client echoes back from a GET are not attempts to write, and reporting them would
+    // make the field noise on every save the UI does.
+    const echo = await req("PATCH", `/api/trainers/${igTrainer._id}`, { _id: igTrainer._id, createdAt: "2020-01-01", name: "Ignored Fields Echo " + stamp }, 200);
+    ok("QA-523 (-173) [guard]: echoed ids and timestamps are not reported - they are not attempts to write",
+      !("ignored_fields" in (echo.data ?? {})), JSON.stringify({ ignored: echo.data?.ignored_fields ?? null }));
+  }
+
   // ---- -171 (QA-399): Karunn sir's Back-dated Planning table ----
   // His sheet is 18 columns x 16 rows, one row per (Location x Job Role x Batch). The columns sit
   // at THREE grains - 1 on the location, TEN on the trainer, 7 on the batch - and getting that
