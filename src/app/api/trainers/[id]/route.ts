@@ -31,7 +31,11 @@ export const { GET, PATCH } = itemRoutes({
   fields: ["name", "phone", "email", "skills", "home_location", "home_location_other", "status", "available_from", "day_rate", "incentive_note", "max_concurrent_batches", "active", "tr_id", "capable_locations", "programs_applied", "compensation_type", "compensation_fixed", "govt_candidate_id",
     "nominated_for_location", "nominated_for_program", "source", "qualification",
     "industry_experience_years", "teaching_experience_years", "nsdc_remarks",
-    "eligibility_payment_amount", "payment_reference", "tot_certificate_no", "pipeline_note"],
+    "eligibility_payment_amount", "payment_reference", "tot_certificate_no", "pipeline_note",
+    // -171 (QA-399) cols 5, 6, 13. -169 put these on the CREATE allowlist and missed this one -
+    // the same list living in two files, which is the disease ARCHITECTURE section 3 names. They
+    // are edited on the Planning tab, so the EDIT door is the one that actually matters for them.
+    "sidh_profile_verified_on", "eligibility_checked_on", "tot_result_expected_on"],
   readRoles: ["Admin", "Operations", "Location"], // QA-095: same door as the list
   writeRoles: ["Admin", "Operations"],
   permission: "trainers.manage", // 2026-08-11 togglable right (writeRoles = fallback only)

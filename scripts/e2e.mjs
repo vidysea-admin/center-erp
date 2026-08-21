@@ -1974,6 +1974,115 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
     scoped.earliest_possible_start?.blocked === false,
     JSON.stringify({ blocked: scoped.earliest_possible_start?.blocked }));
 
+  // ---- -171 (QA-399): Karunn sir's Back-dated Planning table ----
+  // His sheet is 18 columns x 16 rows, one row per (Location x Job Role x Batch). The columns sit
+  // at THREE grains - 1 on the location, TEN on the trainer, 7 on the batch - and getting that
+  // wrong is the only way this can fail badly, because a trainer does TOT ONCE and runs up to
+  // four batches. Every assertion below exists to keep that true.
+  //
+  // Every read is guarded. Three times in the previous unit a pin took the whole suite down by
+  // assuming the pre-fix answer would have the same shape as the post-fix one; on pre-fix code
+  // this endpoint does not exist and returns Next's 404 HTML.
+  {
+    const tkTrainer = (await req("POST", "/api/trainers", {
+      name: "Tracker Trainer " + stamp, phone: "91111" + stamp.slice(0, 5),
+      skills: ["TestSkill" + stamp], pipeline_status: "Fresh Lead",
+    }, 201)).data.item;
+    // Dates on the TRAINER, which is where his columns 5-13 live.
+    //
+    // MEASURED, not assumed: nsdc_submitted_on / nsdc_result_on / paid_on are NOT settable through
+    // this door and should not be - the pipeline transitions stamp them, which is why the trainer
+    // journey is a journey and not a form. The first draft of this pin set them anyway; `pick()`
+    // dropped them silently, the door still answered 200, and the assertion failed with three
+    // nulls. The three dates below ARE editable, because they are exactly the three that had
+    // nowhere to live before this unit.
+    await req("PATCH", `/api/trainers/${tkTrainer._id}`, {
+      sidh_profile_verified_on: "2027-01-02", eligibility_checked_on: "2027-01-03",
+      tot_result_expected_on: "2027-02-10",
+    }, 200);
+
+    // TWO batches, ONE trainer. This is the case the whole design turns on.
+    const tkA = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: tkTrainer._id, planned_start: "2029-03-01", target_size: 3 }, 201)).data.item;
+    const tkB = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: tkTrainer._id, planned_start: "2029-04-01", target_size: 3 }, 201)).data.item;
+    await req("PATCH", `/api/batches/${tkA._id}/milestones`, { create: true }, 200);
+    await req("PATCH", `/api/batches/${tkB._id}/milestones`, { create: true }, 200);
+
+    const tk = (await req("GET", "/api/plan-tracker", undefined, 200)).data;
+    const rowA = (tk.rows ?? []).find((r) => String(r.batch?._id) === String(tkA._id));
+    const rowB = (tk.rows ?? []).find((r) => String(r.batch?._id) === String(tkB._id));
+    ok("QA-399 (-171) fixture guard: both batches appear as tracker rows (without this the next assertions prove nothing)",
+      !!rowA && !!rowB, JSON.stringify({ a: !!rowA, b: !!rowB, n: (tk.rows ?? []).length }));
+
+    // THE assertion this whole design turns on. Every trainer column is read off the trainer
+    // document, so one trainer on two batches shows ONE set of dates on both rows - because it IS
+    // one set. Any implementation that copied them onto the batch would give two copies free to
+    // drift, and this fails the moment they do.
+    ok("QA-399 (-171): ONE trainer on TWO batches shows ONE set of trainer dates - the same values on both rows, because it IS the same document",
+      !!rowA && !!rowB
+        && String(rowA.sidh_profile_verified_on) === String(rowB.sidh_profile_verified_on)
+        && String(rowA.eligibility_checked_on) === String(rowB.eligibility_checked_on)
+        && String(rowA.tot_result_expected_on) === String(rowB.tot_result_expected_on)
+        && String(rowA.sidh_profile_verified_on ?? "").startsWith("2027-01-02"),
+      JSON.stringify({ a: rowA?.sidh_profile_verified_on, b: rowB?.sidh_profile_verified_on }));
+    // …and the pipeline-stamped half travels the same way: same object, so same value on both rows.
+    ok("QA-399 (-171): the NSDC round-trip is read from the trainer too - identical on both rows whatever it holds",
+      !!rowA && !!rowB
+        && String(rowA.nsdc_submitted_on) === String(rowB.nsdc_submitted_on)
+        && String(rowA.nsdc_result_on) === String(rowB.nsdc_result_on)
+        && String(rowA.paid_on) === String(rowB.paid_on),
+      JSON.stringify({ sub: [rowA?.nsdc_submitted_on, rowB?.nsdc_submitted_on], res: [rowA?.nsdc_result_on, rowB?.nsdc_result_on] }));
+
+    ok("QA-399 (-171): his columns 5, 6 and 13 come off the trainer too - the three dates that had nowhere to live before",
+      !!rowA
+        && String(rowA.sidh_profile_verified_on ?? "").startsWith("2027-01-02")
+        && String(rowA.eligibility_checked_on ?? "").startsWith("2027-01-03")
+        && String(rowA.tot_result_expected_on ?? "").startsWith("2027-02-10"),
+      JSON.stringify({ p: rowA?.sidh_profile_verified_on, e: rowA?.eligibility_checked_on, r: rowA?.tot_result_expected_on }));
+
+    // All 18 of his columns, by name. A tracker that quietly drops one is a tracker he goes back
+    // to Excel for.
+    const need18 = ["sl", "location", "job_role", "batch", "trainer", "sidh_profile_verified_on",
+      "eligibility_checked_on", "ready_for_tot", "nsdc_submitted_on", "nsdc_result_on", "paid_on",
+      "tot_start", "tot_done_on", "tot_result_expected_on", "trainer_mapped_sidh", "mobilization",
+      "enrollment_done", "planned_start", "planned_end"];
+    ok("QA-399 (-171): every one of his 18 columns is present on the row",
+      !!rowA && need18.every((k) => k in rowA), JSON.stringify(need18.filter((k) => !(rowA ?? {})[k] && !(k in (rowA ?? {})))));
+
+    // Column 15 is a STATE and a COUNT ("Yes - 38"), and the count is derived from the roster,
+    // never stored - trainers_required already carries the comment explaining why.
+    const tkCand = (await req("POST", "/api/candidates", { name: "Tracker Cand " + stamp, phone: "93333" + stamp.slice(0, 5), location: loc._id, program: prog._id }, 201)).data.item;
+    await req("POST", `/api/batches/${tkA._id}/members`, { candidate: tkCand._id }, 201);
+    const tk2 = (await req("GET", "/api/plan-tracker", undefined, 200)).data;
+    const rowA2 = (tk2.rows ?? []).find((r) => String(r.batch?._id) === String(tkA._id));
+    ok("QA-399 (-171): column 15 carries a state AND a count, and the count is the roster - derived, never stored",
+      rowA2?.mobilization?.count === 1 && typeof rowA2?.mobilization?.status === "string",
+      JSON.stringify(rowA2?.mobilization));
+
+    // A certified trainer's TOT columns read HIS word - "Not needed" - rather than sitting blank,
+    // because blank reads as "nobody has done it yet". Rows 7, 14 and 15 of his own sheet.
+    const tkCert = (await req("POST", "/api/trainers", { name: "Tracker Certified " + stamp, phone: "94444" + stamp.slice(0, 5), skills: ["TestSkill" + stamp], pipeline_status: "Certified", tr_id: "TRT" + stamp }, 201)).data.item;
+    const tkC = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: tkCert._id, planned_start: "2029-05-01", target_size: 3 }, 201)).data.item;
+    await req("PATCH", `/api/batches/${tkC._id}/milestones`, { create: true }, 200);
+    const tk3 = (await req("GET", "/api/plan-tracker", undefined, 200)).data;
+    const rowC = (tk3.rows ?? []).find((r) => String(r.batch?._id) === String(tkC._id));
+    ok("QA-399 (-171): a certified trainer's TOT columns say \"Not needed\" - his own word - instead of leaving cells blank",
+      rowC?.nsdc_submitted_on === "Not needed" && rowC?.tot_start === "Not needed" && rowC?.ready_for_tot === "Not needed",
+      JSON.stringify({ sub: rowC?.nsdc_submitted_on, start: rowC?.tot_start, ready: rowC?.ready_for_tot }));
+
+    // SCOPING from the SCOPED login: authz builds $in from .map(String) and mongoose does not
+    // cast inside a pipeline. Four live defects came from that, and none is visible as an admin.
+    const tkSpoc = await loginAs("spoc.jpr03@vidysea.com", "CiOnly@123");
+    const scopedTk = await fetch(BASE + "/api/plan-tracker", { headers: { cookie: tkSpoc } });
+    const scopedTkJson = await scopedTk.json().catch(() => ({}));
+    const scopedBatches = (scopedTkJson.rows ?? []).map((r) => String(r.batch?._id));
+    ok("QA-399 (-171): a scoped login sees only its own centres' batches - measured from that login",
+      scopedTk.status === 200 && !scopedBatches.includes(String(tkA._id)),
+      JSON.stringify({ status: scopedTk.status, n: scopedBatches.length, leaked: scopedBatches.includes(String(tkA._id)) }));
+
+    for (const b of [tkA, tkB, tkC]) {
+      await req("POST", `/api/batches/${b._id}/transition`, { target: "Cancelled", reason: "-171 QA-399 pin cleanup" }, 200);
+    }
+  }
   // ---- -170 (QA-398): the high-level report ----
   // Karunn sir, 18:51: "aapki ek ye high level aur doosra batch planning - bas in do mein saara
   // kaam nikal jaata hai." This is the first of the two, and these are the assertions that decide

@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-170";
+export const RELEASE = "2026.08.14-171";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,23 @@ export const RELEASE = "2026.08.14-170";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-171 adds the planning table the client keeps in a spreadsheet, as a Planning tab beside the " +
+  "batches: one row for every live batch, with where its trainer has got to and where the batch " +
+  "itself has got to, side by side. Eighteen columns, the same ones they track today. The part " +
+  "worth explaining is what it deliberately does NOT do: it does not copy the trainer details " +
+  "onto each batch. A trainer does their training-of-trainers ONCE and can run up to four " +
+  "batches, so copying those dates onto every row would leave four copies of one fact, and " +
+  "sooner or later they stop agreeing. Every trainer column is read from the trainer, which is " +
+  "why one trainer running two batches shows the same date on both rows - it is the same date. " +
+  "The mobilisation column shows a state and a headcount, and the headcount is counted from the " +
+  "batch roster each time rather than stored anywhere. Where a trainer is already certified, " +
+  "the training columns read Not needed rather than sitting empty, because an empty cell reads " +
+  "as nobody having done it yet. And three dates that had nowhere to live before - the SIDH " +
+  "profile check, the eligibility check, and when the result is expected - can be filled in " +
+  "directly on this table, since that is where the person tracking them is actually working.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-170 adds the report the client has been asking for: every centre down the side, every job " +
   "role across the top, and five figures under each one - the approved target, how much of it " +
   "the government has actually approved, how many candidates have been taken on, how many are " +
@@ -31,10 +48,7 @@ export const RELEASE_NOTE_CURRENT =
   "cannot all be true is flagged rather than shown straight-faced. And the screen says plainly " +
   "that the mobilised count currently tracks those in training, because candidates are entered " +
   "when they enrol and the pool before that is not recorded yet. It downloads as Excel, with " +
-  "the same numbers and the same notes on where they came from.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "the same numbers and the same notes on where they came from." +
   "-169 lets a correction made in the client sheet reach the row it is actually about. The " +
   "government does not approve a centre as a whole - it registers the centre for each scheme " +
   "and gives every registration its own number, so one building can hold several. The ERP " +

@@ -43,7 +43,16 @@ function BatchesInner() {
   useEffect(() => { if (!sp.get("location")) setFLoc(ctxLoc); }, [ctxLoc]); // eslint-disable-line react-hooks/exhaustive-deps
   // 2026-08-13 (Umesh): "Batches | Preparation" — the preparation tab is the full backward-
   // planning view (every location×program target with its readiness gaps).
-  const [tab, setTab] = useState(sp.get("tab") === "Preparation" ? "Preparation" : "Batches");
+  // -171 (QA-399): a third tab, not a third route. Karunn sir's Back-dated Planning table lives
+  // beside the batches it describes, because it IS those batches read the other way round.
+  const [tab, setTab] = useState(
+    sp.get("tab") === "Preparation" ? "Preparation" : sp.get("tab") === "Planning" ? "Planning" : "Batches",
+  );
+  const [track, setTrack] = useState<any[] | null>(null);
+  useEffect(() => {
+    if (tab !== "Planning" || track) return;
+    api("/api/plan-tracker").then((d) => setTrack(d.rows ?? [])).catch((e) => setError(String(e?.message ?? e)));
+  }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
   const [prep, setPrep] = useState<any>(null);
   const [prepFilter, setPrepFilter] = useState("");
   const [error, setError] = useState("");
@@ -235,9 +244,13 @@ function BatchesInner() {
           ⚠ {info} <button className="ml-2 font-bold" onClick={() => setInfo("")}>×</button>
         </div>
       )}
-      <Tabs tabs={["Batches", `Preparation${prep ? ` (${prep.blocked_count ?? 0} blocked)` : ""}`]}
+      <Tabs tabs={["Batches", `Preparation${prep ? ` (${prep.blocked_count ?? 0} blocked)` : ""}`, "Planning"]}
         active={tab === "Preparation" ? `Preparation${prep ? ` (${prep.blocked_count ?? 0} blocked)` : ""}` : tab}
-        onChange={(t) => setTab(t.startsWith("Preparation") ? "Preparation" : "Batches")} />
+        onChange={(t) => setTab(t.startsWith("Preparation") ? "Preparation" : t === "Planning" ? "Planning" : "Batches")} />
+
+      {tab === "Planning" && (
+        <PlanningTable rows={track} onSaved={() => setTrack(null)} onError={setError} />
+      )}
 
       {tab === "Batches" ? (
         <>
@@ -753,6 +766,81 @@ function BatchesInner() {
           </div>
         )}
       </Drawer>
+    </div>
+  );
+}
+
+// -171 (QA-399) — Karunn sir's Back-dated Planning table, all 18 of his columns.
+//
+// The three trainer dates (his columns 5, 6 and 13) are editable RIGHT HERE, because this is where
+// he works. Putting them only on the trainer form would mean they never get filled, and a tracker
+// with three permanently empty columns teaches people to go back to the spreadsheet.
+//
+// Every trainer column reads the TRAINER, so one trainer on two batches shows one TOT date on both
+// rows — it is the same date, not two copies of it. "Not needed" is his own word for a batch whose
+// trainer is already certified; the cell says it rather than sitting blank, because blank reads as
+// "nobody has done this yet".
+function PlanningTable({ rows, onSaved, onError }: { rows: any[] | null; onSaved: () => void; onError: (m: string) => void }) {
+  const [editing, setEditing] = useState<{ id: string; field: string } | null>(null);
+  const [value, setValue] = useState("");
+  const d = (v: any) => (v == null || v === "" ? <span className="text-gray-300">·</span> : v === "Not needed" ? <span className="text-[10px] uppercase tracking-wide text-gray-400">Not needed</span> : fmtDate(v));
+
+  const save = async (trainerId: string, field: string) => {
+    try {
+      await api(`/api/trainers/${trainerId}`, { method: "PATCH", body: JSON.stringify({ [field]: value || null }) });
+      setEditing(null); setValue(""); onSaved();
+    } catch (e: any) { onError(String(e?.message ?? e)); }
+  };
+  const cell = (r: any, field: string) => {
+    if (!r.trainer) return <span className="text-gray-300">·</span>;
+    const on = editing?.id === r.trainer._id && editing?.field === field;
+    if (on) {
+      return (
+        <input type="date" autoFocus className="w-[130px] rounded border border-blue-300 px-1 py-0.5 text-xs"
+          value={value} onChange={(e) => setValue(e.target.value)}
+          onBlur={() => save(r.trainer._id, field)}
+          onKeyDown={(e) => { if (e.key === "Enter") save(r.trainer._id, field); if (e.key === "Escape") setEditing(null); }} />
+      );
+    }
+    return (
+      <button className="w-full text-left hover:underline"
+        onClick={() => { setEditing({ id: r.trainer._id, field }); setValue(r[field] ? String(r[field]).slice(0, 10) : ""); }}>
+        {d(r[field])}
+      </button>
+    );
+  };
+
+  const columns: any[] = [
+    { key: "sl", label: "SL#", minWidth: 52, render: (r: any) => r.sl },
+    { key: "location", label: "Location", minWidth: 200, sortable: true, sortValue: (r: any) => r.location?.name ?? "", filterText: (r: any) => r.location?.name ?? "", render: (r: any) => r.location?.name ?? "—" },
+    { key: "job_role", label: "Job Role", minWidth: 170, sortable: true, filterText: (r: any) => `${r.job_role ?? ""} ${r.scheme ?? ""}`, render: (r: any) => <>{r.job_role ?? "—"}{r.scheme && <span className="block text-[10px] text-gray-400">{r.scheme}</span>}</> },
+    { key: "batch", label: "Batch", minWidth: 150, filterText: (r: any) => r.batch?.code ?? "", render: (r: any) => <Link className="text-blue-700 hover:underline" href={`/batches/${r.batch._id}`}>{r.batch.code}</Link> },
+    { key: "trainer", label: "Trainer", minWidth: 160, sortable: true, sortValue: (r: any) => r.trainer?.name ?? "", filterText: (r: any) => `${r.trainer?.name ?? ""} ${r.trainer?.tr_id ?? ""}`, render: (r: any) => r.trainer ? <>{r.trainer.name}{r.trainer.tr_id && <span className="block text-[10px] text-gray-400">{r.trainer.tr_id}</span>}</> : <span className="text-amber-700">no trainer</span> },
+    { key: "sidh_profile_verified_on", group: "Trainer preparation", label: "Profile on SIDH", minWidth: 132, render: (r: any) => cell(r, "sidh_profile_verified_on") },
+    { key: "eligibility_checked_on", group: "Trainer preparation", label: "Eligibility check", minWidth: 132, render: (r: any) => cell(r, "eligibility_checked_on") },
+    { key: "ready_for_tot", group: "Trainer preparation", label: "Ready for TOT", minWidth: 124, render: (r: any) => d(r.ready_for_tot) },
+    { key: "nsdc_submitted_on", group: "SSC / NSDC", label: "Submitted", minWidth: 118, render: (r: any) => d(r.nsdc_submitted_on) },
+    { key: "nsdc_result_on", group: "SSC / NSDC", label: "Approved", minWidth: 118, render: (r: any) => <>{d(r.nsdc_result_on)}{r.nsdc_remarks && <span className="block text-[10px] text-amber-700" title={r.nsdc_remarks}>remarks</span>}</> },
+    { key: "paid_on", group: "SSC / NSDC", label: "Fee paid", minWidth: 112, render: (r: any) => d(r.paid_on) },
+    { key: "tot_start", group: "TOT", label: "Starts", minWidth: 112, render: (r: any) => d(r.tot_start) },
+    { key: "tot_done_on", group: "TOT", label: "Ends", minWidth: 112, render: (r: any) => d(r.tot_done_on) },
+    { key: "tot_result_expected_on", group: "TOT", label: "Result expected", minWidth: 136, render: (r: any) => cell(r, "tot_result_expected_on") },
+    { key: "trainer_mapped_sidh", group: "Batch", label: "Mapped on SIDH", minWidth: 132, render: (r: any) => d(r.trainer_mapped_sidh) },
+    { key: "mobilization", group: "Batch", label: "Mobilisation", minWidth: 132, filterText: (r: any) => r.mobilization?.status ?? "", render: (r: any) => <>{r.mobilization.status}{r.mobilization.count > 0 && <span className="text-gray-400"> · {r.mobilization.count}</span>}</> },
+    { key: "enrollment_done", group: "Batch", label: "Enrolment done", minWidth: 132, render: (r: any) => d(r.enrollment_done) },
+    { key: "planned_start", group: "Batch", label: "Starts", minWidth: 112, sortable: true, sortValue: (r: any) => r.planned_start ?? "", render: (r: any) => d(r.planned_start) },
+    { key: "planned_end", group: "Batch", label: "Ends", minWidth: 112, render: (r: any) => d(r.planned_end) },
+  ];
+
+  return (
+    <div className="space-y-3">
+      <p className="rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-800">
+        Every live batch, the way the planning sheet reads it. The three dates you can click are the
+        trainer&apos;s own — they are stored once on the trainer, so a trainer running two batches shows
+        the same date on both rows rather than two copies that can drift apart.
+      </p>
+      <DataTable storageKey="plan-tracker" rows={rows ?? []} loading={rows === null} columns={columns}
+        cardTitle={(r: any) => <>{r.batch.code} <span className="text-xs text-gray-400">· {r.location?.name}</span></>} />
     </div>
   );
 }

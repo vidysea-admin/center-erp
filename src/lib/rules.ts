@@ -2480,6 +2480,83 @@ function readinessBlockers(
 // awaited each in turn — about five queries per row, run sequentially, which measured 10.3s for 81
 // rows on a laptop. Home calls this on every load for every user, so that was a real outage in
 // waiting. This does the same work in three aggregations regardless of how many targets exist.
+// ---------- Karunn sir's Back-dated Planning table (QA-399) ----------
+// The second of the two things he said the whole job needs. His sheet is 18 columns x 16 rows, one
+// row per (Location x Job Role x Batch), and it is a TRACKER: where does every batch across every
+// centre actually stand. `planBatchBackward` is a CALCULATOR: given one date, what is due when.
+// They are transposes of each other and the contract asks for both, not one instead of the other.
+//
+// ⛔ THE THING THIS MUST NOT BECOME: a BatchPlan collection. His sheet is flat, so the 18 columns
+// read like 18 properties of a batch. They are not - they sit at THREE grains: 1 belongs to the
+// location, TEN to the trainer, and 7 to the batch. A trainer does TOT ONCE, not once per batch,
+// and `max_concurrent_batches` defaults to 4 - so copying nsdc_submitted_on / nsdc_result_on /
+// paid_on / tot_done_on onto each row would give one trainer FOUR copies of one TOT, and they would
+// drift. Every trainer column here is read from the TRAINER document, so two batches of one trainer
+// show the same date because it IS the same date.
+export async function planTrackerRows(scope: Record<string, unknown> = {}) {
+  // find() + populate, never an aggregation over the scope filter - authz builds its $in from
+  // .map(String) and mongoose does not cast inside a pipeline (QA-302/347/350/395).
+  const batches = await Batch.find({ ...scope, status: { $in: ACTIVE_BATCH_STATUSES } })
+    .populate("location", "name code")
+    .populate("program", "name code scheme")
+    .populate("trainer",
+      "name tr_id pipeline_status sidh_profile_verified_on eligibility_checked_on "
+      + "nomination_sent_on nsdc_submitted_on nsdc_result_on nsdc_remarks paid_on payment_reference "
+      + "tot_scheduled_on tot_done_on tot_result_expected_on tot_certificate_no")
+    .sort({ planned_start: 1 })
+    .lean<any[]>();
+  if (!batches.length) return [];
+
+  // Column 15 is "Is mobilization done for this batch?" and he writes "Yes - 38" in it: a state AND
+  // a count. The count is DERIVED from the roster, never stored - `trainers_required` already
+  // carries the comment explaining why ("the two sheets already disagree with each other... which
+  // is exactly what happens when a count is kept in more than one place").
+  const ids = batches.map((b) => b._id);
+  const memberRows = await BatchMember.aggregate([
+    { $match: { batch: { $in: ids }, left_on: null } },
+    { $group: { _id: "$batch", n: { $sum: 1 } } },
+  ]);
+  const memberBy = new Map(memberRows.map((r: any) => [String(r._id), r.n]));
+
+  const ms = (b: any, key: string) => (b.milestones ?? []).find((m: any) => m.key === key) ?? null;
+  // "Not needed" is his own word for the TOT columns of a batch whose trainer is already certified -
+  // rows 7, 14 and 15 of his sheet. The planner already drops those milestones (QA-460); the tracker
+  // has to SAY so rather than leave the cell blank, because blank reads as "nobody has done it yet".
+  const totNeeded = (t: any) => !(t && (t.pipeline_status === "Certified" || t.tot_done_on));
+
+  return batches.map((b, i) => {
+    const t = b.trainer ?? null;
+    const need = totNeeded(t);
+    const mob = ms(b, "mobilization");
+    return {
+      sl: i + 1,                                                    // 1
+      location: b.location ? { _id: String(b.location._id), name: b.location.name } : null, // 2
+      job_role: b.program?.name ?? null,                            // 3
+      scheme: b.program?.scheme ?? null,
+      batch: { _id: String(b._id), code: b.code, status: b.status },
+      trainer: t ? { _id: String(t._id), name: t.name, tr_id: t.tr_id ?? null } : null, // 4
+      sidh_profile_verified_on: t?.sidh_profile_verified_on ?? null, // 5
+      eligibility_checked_on: t?.eligibility_checked_on ?? null,     // 6
+      ready_for_tot: need ? (ms(b, "trainer_ready_for_tot")?.done_on ?? ms(b, "trainer_ready_for_tot")?.due_date ?? null) : "Not needed", // 7
+      nsdc_submitted_on: need ? (t?.nsdc_submitted_on ?? null) : "Not needed",   // 8
+      nsdc_result_on: need ? (t?.nsdc_result_on ?? null) : "Not needed",         // 9
+      nsdc_remarks: t?.nsdc_remarks ?? null,
+      paid_on: need ? (t?.paid_on ?? null) : "Not needed",                       // 10
+      tot_start: need ? (t?.tot_scheduled_on ?? ms(b, "tot_start")?.due_date ?? null) : "Not needed", // 11
+      tot_done_on: t?.tot_done_on ?? null,                                       // 12
+      tot_result_expected_on: need ? (t?.tot_result_expected_on ?? null) : "Not needed", // 13
+      trainer_mapped_sidh: ms(b, "trainer_mapped_sidh")?.done_on ?? ms(b, "trainer_mapped_sidh")?.due_date ?? null, // 14
+      mobilization: {                                                            // 15
+        status: mob?.done_on ? "Yes" : mob ? "In progress" : "Not started",
+        count: memberBy.get(String(b._id)) ?? 0,
+      },
+      enrollment_done: ms(b, "enrollment_done")?.done_on ?? ms(b, "enrollment_done")?.due_date ?? null, // 16
+      planned_start: b.planned_start ?? null,                                    // 17
+      planned_end: b.planned_end ?? null,                                        // 18
+    };
+  });
+}
+
 // ---------- The high-level report (QA-398) ----------
 // Karunn sir, 18:51: "aapki ek ye HIGH LEVEL aur doosra batch planning - bas in do mein saara kaam
 // nikal jaata hai, teesri cheez ki zaroorat hi nahi." This is the first of those two.
