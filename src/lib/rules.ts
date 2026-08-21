@@ -1772,26 +1772,120 @@ export function planExportRows(art: Awaited<ReturnType<typeof planArtifact>>) {
   }));
 }
 
+// QA-460 (-164): the plan is no longer the same seven rows for every batch. Karunn sir writes
+// "Not needed" in the TOT columns of rows 7, 14 and 15 of his own sheet, because those trainers
+// are already certified — 3 of his 16 rows. This function had a HARD-CODED seven-element array
+// with zero conditionals, so it handed those batches TOT deadlines nobody has to meet, and it
+// did that on the first screen he would open.
+//
+// `trainer` is optional and the no-trainer call is unchanged on purpose: the standalone
+// calculator (/api/plan-batch?start=) is used BEFORE a batch or a trainer exists — "मैं जब चाहूं
+// एक batch planning निकाल के किसी को भी share कर सकूं" — and there the full plan is the honest
+// answer, because no trainer is known to be certified yet.
 export function planBatchBackward(
   planned_start: Date,
   defaults: {
     lead_enrollment_days: number; lead_mobilization_days: number; lead_trainer_ready_days: number;
     lead_tot_done_days: number; lead_trainer_found_days: number;
     lead_tot_start_days: number; lead_trainer_ready_for_tot_days: number;
+    lead_trainer_mapped_sidh_days?: number;
   },
+  opts?: { trainer?: { pipeline_status?: string | null; tot_done_on?: Date | string | null } | null },
 ): Milestone[] {
   const start = dayStart(planned_start);
+  // Either signal alone is enough: `Certified` is the pipeline's own terminal state, and
+  // tot_done_on is stamped when it is reached — but a trainer imported or bypassed into service
+  // can carry the date without the stage, and Rule 11 already trusts the date.
+  const tr = opts?.trainer;
+  const totNeeded = !(tr && (tr.pipeline_status === "Certified" || !!tr.tot_done_on));
   const plan: Milestone[] = [
     { key: "trainer_found", label: "Trainer identified", due_date: addDays(start, -defaults.lead_trainer_found_days) },
     // The CEO's own gap: how long TOT itself takes was never captured, only its deadline.
     { key: "trainer_ready_for_tot", label: "Trainer available & ready for TOT", due_date: addDays(start, -(defaults.lead_trainer_ready_for_tot_days ?? 12)) },
-    { key: "tot_start", label: "TOT starts", due_date: addDays(start, -(defaults.lead_tot_start_days ?? 10)) },
-    { key: "tot_done", label: "Trainer TOT completed", due_date: addDays(start, -defaults.lead_tot_done_days) },
+    ...(totNeeded ? [
+      { key: "tot_start", label: "TOT starts", due_date: addDays(start, -(defaults.lead_tot_start_days ?? 10)) },
+      { key: "tot_done", label: "Trainer TOT completed", due_date: addDays(start, -defaults.lead_tot_done_days) },
+    ] : []),
+    // Karunn sir's column 14, "Date for Trainer Mapping on SIDH Portal?". Per batch, because the
+    // trainer is mapped to EACH batch separately on the portal. It sits after TOT and before
+    // mobilization: nobody can be mapped before they are certified, and candidates should not be
+    // mobilised for a batch with no mapped trainer. Its lead time is a Default, not a constant.
+    { key: "trainer_mapped_sidh", label: "Trainer mapped on SIDH portal", due_date: addDays(start, -(defaults.lead_trainer_mapped_sidh_days ?? 5)) },
     { key: "mobilization", label: "Candidate mobilization complete", due_date: addDays(start, -defaults.lead_mobilization_days) },
     { key: "trainer_ready", label: "Trainer finalized & ready", due_date: addDays(start, -defaults.lead_trainer_ready_days) },
     { key: "enrollment_done", label: "Registration & enrollment done", due_date: addDays(start, -defaults.lead_enrollment_days) },
   ];
   return plan.sort((a, b) => a.due_date.getTime() - b.due_date.getTime());
+}
+
+// QA-461 / REQ-185 (-164): the planner could only answer "if I pick this date, what must finish
+// by when". It could not answer "which date is even possible here", so it would happily count
+// backwards past today and hand out deadlines that expired before they were printed.
+//
+// max(trainer availability, first free room, today + mobilisation lead) — the contract's formula.
+// It returns the BASIS as well as the date, because a date with no reason is not usable: the
+// operator has to be able to see which of the three constraints is the binding one and go fix it.
+export async function earliestPossibleStart(
+  locationId: unknown,
+  opts?: { trainerId?: unknown },
+): Promise<{ date: Date; basis: { key: string; label: string; date: Date | null; note: string }[] }> {
+  const defaults = await getDefaults();
+  const today = istToday();
+  const basis: { key: string; label: string; date: Date | null; note: string }[] = [];
+
+  // 1. Mobilisation floor — candidates cannot be found retrospectively.
+  const mobFloor = addDays(today, defaults.mobilisation_lead_days ?? 7);
+  basis.push({
+    key: "mobilisation", label: "Mobilisation lead", date: mobFloor,
+    note: `${defaults.mobilisation_lead_days ?? 7} days from today to mobilise candidates`,
+  });
+
+  // 2. Trainer — available_from, and if they are already at their concurrency cap, the day the
+  // earliest of those batches frees a slot. Both are real blocks Rule 10 would enforce anyway.
+  if (opts?.trainerId) {
+    const t = await Trainer.findById(opts.trainerId as any).select("name available_from max_concurrent_batches").lean<any>();
+    if (t) {
+      let when: Date | null = t.available_from ? dayStart(t.available_from) : null;
+      let note = t.available_from ? `${t.name} is free from ${dayStart(t.available_from).toDateString()}` : `${t.name} has no availability date on file`;
+      const cap = t.max_concurrent_batches ?? defaults.max_concurrent_batches ?? 1;
+      const booked = await Batch.find({ trainer: opts.trainerId as any, status: { $in: ACTIVE_BATCH_STATUSES } }).lean<any[]>();
+      if (booked.length >= cap) {
+        // The cap frees up when the earliest-ending of the booked batches ends.
+        const firstFree = addDays(booked.map((b) => batchRange(b)[1]).sort((a, b) => a.getTime() - b.getTime())[0], 1);
+        if (!when || firstFree > when) { when = firstFree; }
+        note = `${t.name} is at the ${cap}-batch cap until ${firstFree.toDateString()}`;
+      }
+      basis.push({ key: "trainer", label: "Trainer availability", date: when, note });
+    }
+  }
+
+  // 3. Room — the Room model has existed since the first schema and NO planning path has ever
+  // read it. A centre with no room at all is a real state (centres are created before they are
+  // equipped), and it is reported rather than silently treated as "free today".
+  const rooms = await Room.find({ location: locationId as any, active: true }).select("name").lean<any[]>();
+  if (rooms.length === 0) {
+    basis.push({ key: "room", label: "Room", date: null, note: "No active room at this centre — a room has to exist before a batch can be scheduled here" });
+  } else {
+    const roomIds = rooms.map((r) => r._id);
+    const booked = await Batch.find({ room: { $in: roomIds }, status: { $in: ACTIVE_BATCH_STATUSES } }).lean<any[]>();
+    // A room is free on day D if it hosts nothing overlapping [D, D+duration]. Rather than
+    // scanning days, take each room's last booked end: the earliest of those is the first day
+    // some room in this centre is certainly free.
+    let firstFree: Date | null = null;
+    for (const r of rooms) {
+      const mine = booked.filter((b) => String(b.room) === String(r._id));
+      const free = mine.length === 0 ? today : addDays(mine.map((b) => batchRange(b)[1]).sort((a, b) => b.getTime() - a.getTime())[0], 1);
+      if (!firstFree || free < firstFree) firstFree = free;
+    }
+    basis.push({
+      key: "room", label: "Room availability", date: firstFree,
+      note: firstFree && firstFree <= today ? `${rooms.length} room(s) here, free now` : `first free room from ${firstFree?.toDateString()}`,
+    });
+  }
+
+  const dates = basis.map((b) => b.date).filter(Boolean) as Date[];
+  const date = dates.reduce((a, b) => (b > a ? b : a), dayStart(today));
+  return { date, basis };
 }
 
 // ---------- Batch code (CEO 14/08 [32:47], QA-076: CENTRE-COURSE-SKILL-NN) ----------

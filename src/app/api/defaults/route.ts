@@ -25,7 +25,7 @@ export const PUT = apiHandler(async (req: NextRequest) => {
     "enrollment_threshold_pct", "roster_threshold_pct",
     // 2026-08-11 tunables
     "min_age", "max_age", "training_cooldown_months",
-    "lead_enrollment_days", "lead_mobilization_days", "lead_trainer_ready_days", "lead_tot_done_days", "lead_tot_start_days", "lead_trainer_ready_for_tot_days", "lead_trainer_found_days",
+    "lead_enrollment_days", "lead_mobilization_days", "lead_trainer_ready_days", "lead_tot_done_days", "lead_tot_start_days", "lead_trainer_ready_for_tot_days", "lead_trainer_found_days", "lead_trainer_mapped_sidh_days",
     "min_daily_evidence", "sidh_url", "drive_root_url", "snapshot_retention_per_tab",
     // -87 (QA-157): media compression knobs
     "image_max_px", "image_quality", "pdf_compress",

@@ -1797,7 +1797,7 @@ await req("POST", `/api/batches/${warnBatch.data.item._id}/transition`, { target
 
 // ---- Backward batch planner ----
 const plan = (await req("GET", "/api/plan-batch?start=2026-09-20", undefined, 200)).data;
-ok("planner: 7 milestones, sorted by date", plan.milestones?.length === 7 &&
+ok("planner: 8 milestones, sorted by date", plan.milestones?.length === 8 &&
   plan.milestones.every((m, i, a) => i === 0 || new Date(a[i - 1].due_date) <= new Date(m.due_date)), JSON.stringify(plan.milestones?.map((m) => m.key)));
 const totMs = plan.milestones.find((m) => m.key === "tot_done");
 const totGap = Math.round((new Date("2026-09-20") - new Date(totMs?.due_date)) / 86400e3);
@@ -1808,12 +1808,100 @@ ok("QA-152: a new batch carries NO plan (milestones empty, plan_enabled false)",
 await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { key: "mobilization", done: true }, 409); // nothing to tick without a plan
 await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { regenerate: true }, 409); // nothing to regenerate either
 const planMade = (await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { create: true }, 200)).data.item;
-ok("QA-152: 'Create backward plan' makes the 7 milestones and enables the plan", planMade.milestones?.length === 7 && planMade.plan_enabled === true, `count=${planMade.milestones?.length} enabled=${planMade.plan_enabled}`);
+ok("QA-152: 'Create backward plan' makes the 8 milestones and enables the plan", planMade.milestones?.length === 8 && planMade.plan_enabled === true, `count=${planMade.milestones?.length} enabled=${planMade.plan_enabled}`);
 const ticked = (await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { key: "mobilization", done: true }, 200)).data.item;
 ok("milestone tick-off records done_on", !!ticked.milestones.find((m) => m.key === "mobilization")?.done_on);
 await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { regenerate: true }, 200);
 const regen = (await req("GET", `/api/batches/${planBatch._id}`)).data.item;
 ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.key === "mobilization")?.done_on);
+
+// ---- -164: the planner stops being one shape for every batch ----
+// REQ-388: every assertion in this block FAILS on pre-fix code. planBatchBackward was a
+// hard-coded seven-element array with ZERO conditionals, and /api/plan-batch read only ?start=.
+{
+  // (a) QA-460 - the 'Not needed' skip path. 3 of the 16 rows on Karunn sir's own sheet have a
+  // trainer who is already certified, and the planner handed all three TOT deadlines anyway.
+  const certTrainer = (await req("POST", "/api/trainers", {
+    name: "Certified Trainer " + stamp, phone: "96666" + stamp.slice(0, 5),
+    skills: ["TestSkill" + stamp], pipeline_status: "Certified", tr_id: "TRC" + stamp,
+  }, 201)).data.item;
+  const certBatch = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: certTrainer._id, planned_start: "2028-03-10", target_size: 3 }, 201)).data.item;
+  const certPlan = (await req("PATCH", `/api/batches/${certBatch._id}/milestones`, { create: true }, 200)).data.item;
+  const certKeys = (certPlan.milestones ?? []).map((m) => m.key);
+  ok("QA-460 (-164): a batch whose trainer is Certified gets NO tot_start and NO tot_done",
+    !certKeys.includes("tot_start") && !certKeys.includes("tot_done"), JSON.stringify(certKeys));
+  ok("QA-460 (-164): ...and keeps every other milestone - it skips, it does not truncate",
+    ["trainer_found", "trainer_ready_for_tot", "trainer_mapped_sidh", "mobilization", "trainer_ready", "enrollment_done"].every((k) => certKeys.includes(k)) && certKeys.length === 6,
+    JSON.stringify(certKeys));
+
+  // (b) the OTHER way a trainer becomes certified: the pipeline itself. A bypass jump stamps
+  // tot_done_on, and the plan must drop TOT for that trainer too.
+  //
+  // HONEST LIMIT, measured rather than assumed. planBatchBackward also skips on tot_done_on
+  // ALONE, and that arm is deliberately NOT pinned because it cannot be built through the
+  // product: tot_done_on is not in the trainer create/update allowlist (trainers/route.ts:66)
+  // - only the Certified transition writes it - and PATCHing pipeline_status back to an earlier
+  // stage is a silent no-op. The arm stays in the code for legacy and imported rows, where a
+  // date exists without the stage; here it would only be pinned by faking a row the app cannot
+  // make, which proves nothing about the app. First fixture for this assertion tried exactly
+  // that and the fixture guard below caught it.
+  const pipeTrainer2 = (await req("POST", "/api/trainers", {
+    name: "Bypass-certified Trainer " + stamp, phone: "95555" + stamp.slice(0, 5),
+    skills: ["TestSkill" + stamp], pipeline_status: "Fresh Lead",
+  }, 201)).data.item;
+  const jumped = (await req("POST", `/api/trainers/${pipeTrainer2._id}/transition`, { target: "Certified", bypass: true, payload: { tr_id: "TRB" + stamp, tot_certificate_no: "TOTB-" + stamp } }, 200)).data.item;
+  ok("-164 fixture guard: the bypass jump really stamps tot_done_on (without this the next assertion proves nothing)", !!jumped.tot_done_on && jumped.pipeline_status === "Certified", JSON.stringify({ tot_done_on: jumped.tot_done_on, stage: jumped.pipeline_status }));
+  const dateBatch = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: pipeTrainer2._id, planned_start: "2028-02-10", target_size: 3 }, 201)).data.item;
+  const datePlan = (await req("PATCH", `/api/batches/${dateBatch._id}/milestones`, { create: true }, 200)).data.item;
+  const dateKeys = (datePlan.milestones ?? []).map((m) => m.key);
+  ok("QA-460 (-164): a trainer certified THROUGH THE PIPELINE also gets no TOT rows",
+    !dateKeys.includes("tot_start") && !dateKeys.includes("tot_done") && dateKeys.length === 6, JSON.stringify({ stage: jumped.pipeline_status, keys: dateKeys }));
+
+  // (c) a batch with NO trainer keeps the full plan - the calculator is used before anyone is
+  // hired, and there the full plan is the honest answer, not a shortened one.
+  ok("-164: a batch with no trainer still gets all 8, TOT included", (planMade.milestones ?? []).map((m) => m.key).includes("tot_done"), JSON.stringify((planMade.milestones ?? []).map((m) => m.key)));
+
+  // (d) contract criterion 6 - trainer_mapped_sidh is Karunn sir's column 14 and its lead time
+  // is a Default, not a constant. Proved by moving the Default and watching the date move.
+  const mapped0 = (certPlan.milestones ?? []).find((m) => m.key === "trainer_mapped_sidh");
+  const gap0 = Math.round((new Date("2028-03-10") - new Date(mapped0?.due_date)) / 86400e3);
+  ok("-164: trainer_mapped_sidh defaults to 5 days before start", gap0 === 5, `gap=${gap0}d due=${mapped0?.due_date}`);
+  await req("PUT", "/api/defaults", { lead_trainer_mapped_sidh_days: 9 }, 200);
+  const reMapped = (await req("PATCH", `/api/batches/${certBatch._id}/milestones`, { regenerate: true }, 200)).data.item.milestones.find((m) => m.key === "trainer_mapped_sidh");
+  const gap1 = Math.round((new Date("2028-03-10") - new Date(reMapped?.due_date)) / 86400e3);
+  ok("-164: ...and it is READ from Defaults, not hard-coded (5 -> 9 moves the date)", gap1 === 9, `gap=${gap1}d due=${reMapped?.due_date}`);
+  await req("PUT", "/api/defaults", { lead_trainer_mapped_sidh_days: 5 }, 200); // restore for the rest of the wall
+
+  // (e) REQ-186 / QA-461 - the calculator becomes centre-aware, and answers 'which date is even
+  // possible' instead of only 'if I pick this date, what is due when'.
+  const bare = (await req("GET", "/api/plan-batch?start=2028-06-01", undefined, 200)).data;
+  ok("-164: WITHOUT ?location= nothing changes - no scope, no earliest, full plan (today's behaviour preserved)",
+    bare.scoped_to === null && bare.earliest_possible_start === null && bare.milestones.length === 8 && bare.tot_skipped === false,
+    JSON.stringify({ scoped: bare.scoped_to, earliest: bare.earliest_possible_start, n: bare.milestones.length }));
+  const scoped = (await req("GET", `/api/plan-batch?start=2028-06-01&location=${loc._id}&program=${prog._id}`, undefined, 200)).data;
+  ok("QA-461 (-164): ?location= changes the answer - the centre's certified trainer removes the TOT rows",
+    scoped.tot_skipped === true && scoped.milestones.length === 6 && !scoped.milestones.some((m) => m.key === "tot_done") && scoped.scoped_to?.trainer?.name === certTrainer.name,
+    JSON.stringify({ skipped: scoped.tot_skipped, n: scoped.milestones.length, trainer: scoped.scoped_to?.trainer?.name }));
+  const eps = scoped.earliest_possible_start;
+  const epsKeys = (eps?.basis ?? []).map((b) => b.key);
+  ok("QA-461 (-164): earliest_possible_start comes back WITH its basis - all three constraints named",
+    !!eps?.date && epsKeys.includes("mobilisation") && epsKeys.includes("trainer") && epsKeys.includes("room") && (eps.basis ?? []).every((b) => !!b.note),
+    JSON.stringify({ date: eps?.date, basis: epsKeys }));
+  ok("QA-461 (-164): the date is the MAX of the constraints, never earlier than any one of them",
+    (eps.basis ?? []).filter((b) => b.date).every((b) => new Date(b.date) <= new Date(eps.date)),
+    JSON.stringify((eps.basis ?? []).map((b) => [b.key, String(b.date).slice(0, 10)])));
+  const tooSoon = (await req("GET", `/api/plan-batch?start=2020-01-01&location=${loc._id}&program=${prog._id}`, undefined, 200)).data;
+  ok("QA-461 (-164): a start the centre cannot meet is FLAGGED instead of silently back-dated",
+    tooSoon.starts_too_soon === true && new Date(tooSoon.earliest_possible_start.date) > new Date("2020-01-01"),
+    JSON.stringify({ flag: tooSoon.starts_too_soon, earliest: tooSoon.earliest_possible_start?.date }));
+  ok("-164: the mobilisation lead is a real floor - the earliest is never inside it",
+    new Date(eps.date) >= new Date((eps.basis.find((b) => b.key === "mobilisation") ?? {}).date),
+    JSON.stringify({ date: eps.date, mob: eps.basis.find((b) => b.key === "mobilisation")?.date }));
+
+  await req("POST", `/api/batches/${certBatch._id}/transition`, { target: "Cancelled", reason: "-164 planner pin cleanup" }, 200);
+  await req("POST", `/api/batches/${dateBatch._id}/transition`, { target: "Cancelled", reason: "-164 planner pin cleanup" }, 200);
+}
+
 
 // ---- QA-152 part 2 (-82): the plan as an editable, shareable, exportable artifact ----
 {
@@ -1823,10 +1911,10 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
   await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { edit: { key: "tot_done", label: "" } }, 400);
   const added = (await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { add: { label: "Lab equipment delivered", due_date: "2027-03-25", owner_label: "Ops" } }, 201)).data.item;
   const custom = added.milestones.find((m) => m.custom);
-  ok("-82: planner adds a custom row, kept in date order", !!custom && custom.label === "Lab equipment delivered" && added.milestones.length === 8
+  ok("-82: planner adds a custom row, kept in date order", !!custom && custom.label === "Lab equipment delivered" && added.milestones.length === 9
     && added.milestones.every((m, i, a) => i === 0 || new Date(a[i - 1].due_date) <= new Date(m.due_date)), JSON.stringify(added.milestones.map((m) => [m.key, String(m.due_date).slice(0, 10)])));
   const planView = (await req("GET", `/api/batches/${planBatch._id}/plan`)).data;
-  ok("-82: GET /plan returns the artifact (batch, 8 milestones, counts, plan_flags, no share yet)", planView.batch?.code === planBatch.code && planView.milestones?.length === 8 && planView.counts?.total === 8 && "tot_lead_ok" in (planView.plan_flags ?? {}) && planView.share === null, JSON.stringify({ n: planView.milestones?.length, counts: planView.counts, share: planView.share }));
+  ok("-82: GET /plan returns the artifact (batch, 9 milestones, counts, plan_flags, no share yet)", planView.batch?.code === planBatch.code && planView.milestones?.length === 9 && planView.counts?.total === 9 && "tot_lead_ok" in (planView.plan_flags ?? {}) && planView.share === null, JSON.stringify({ n: planView.milestones?.length, counts: planView.counts, share: planView.share }));
   const xl = await fetch(BASE + `/api/batches/${planBatch._id}/plan/export`, { headers: { cookie } });
   const xlBuf = Buffer.from(await xl.arrayBuffer());
   ok("-82: Excel export is a real xlsx (PK zip header, xlsx content-type, filename carries the batch code)", xl.status === 200 && xlBuf.slice(0, 2).toString() === "PK" && /spreadsheetml/.test(xl.headers.get("content-type") ?? "") && (xl.headers.get("content-disposition") ?? "").includes(planBatch.code), `status=${xl.status} ct=${xl.headers.get("content-type")} len=${xlBuf.length}`);
@@ -1835,7 +1923,7 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
   ok("-82: a plan link is minted (32-hex, purpose plan, read-only by default)", /^[a-f0-9]{32}$/.test(linkRO.token) && linkRO.purpose === "plan" && linkRO.allow_updates === false, JSON.stringify({ t: linkRO.token?.length, p: linkRO.purpose, u: linkRO.allow_updates }));
   const pub = await fetch(BASE + `/api/public/plan/${linkRO.token}`);
   const pubJ = await pub.json();
-  ok("-82: the public plan opens with NO login and carries the same rows", pub.status === 200 && pubJ.milestones?.length === 8 && pubJ.batch?.code === planBatch.code && pubJ.allow_updates === false && !pubJ.batch?._id, JSON.stringify({ s: pub.status, n: pubJ.milestones?.length, code: pubJ.batch?.code, id: pubJ.batch?._id }));
+  ok("-82: the public plan opens with NO login and carries the same rows", pub.status === 200 && pubJ.milestones?.length === 9 && pubJ.batch?.code === planBatch.code && pubJ.allow_updates === false && !pubJ.batch?._id, JSON.stringify({ s: pub.status, n: pubJ.milestones?.length, code: pubJ.batch?.code, id: pubJ.batch?._id }));
   const pubTick = await fetch(BASE + `/api/public/plan/${linkRO.token}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: "trainer_found", done: true }) });
   ok("-82: a read-only link cannot tick (403)", pubTick.status === 403, `status=${pubTick.status}`);
   const pubXl = await fetch(BASE + `/api/public/plan/${linkRO.token}?format=xlsx`);
@@ -1854,7 +1942,7 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
   await fetch(BASE + `/api/public/plan/${linkRW.token}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: "trainer_found", done: false }) });
   ok("-82: unknown key via link → 404", (await fetch(BASE + `/api/public/plan/${linkRW.token}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: "nope", done: true }) })).status === 404);
   const removed = (await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { remove: custom.key }, 200)).data.item;
-  ok("-82: planner removes the custom row", removed.milestones.length === 7 && !removed.milestones.some((m) => m.key === custom.key));
+  ok("-82: planner removes the custom row", removed.milestones.length === 8 && !removed.milestones.some((m) => m.key === custom.key));
   await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { remove: "nope" }, 404);
   await req("POST", "/api/public-tokens", { purpose: "plan" }, 400); // batch required
   ok("-82: a bad public token → 404", (await fetch(BASE + `/api/public/plan/${"0".repeat(32)}`)).status === 404);

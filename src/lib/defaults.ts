@@ -24,6 +24,7 @@ export type AppDefaults = {
   lead_tot_start_days: number;       // TOT actually begins
   lead_trainer_ready_for_tot_days: number; // trainer available and ready to be sent for TOT
   lead_trainer_found_days: number;   // trainer identified
+  lead_trainer_mapped_sidh_days: number; // -164: trainer mapped to this batch on the SIDH portal
   // Daily evidence (2026-08-11: photos/videos "दिन में दो बार कम से कम")
   min_daily_evidence: number;
   // -87 (QA-157): media compression at the storage door
@@ -96,6 +97,7 @@ export const DEFAULT_VALUES: AppDefaults = {
   lead_tot_start_days: 10,
   lead_trainer_ready_for_tot_days: 15,
   lead_trainer_found_days: 20,
+  lead_trainer_mapped_sidh_days: 5,
   min_daily_evidence: 2,
   sidh_url: "https://www.skillindiadigital.gov.in/",
   drive_root_url: "https://drive.google.com/drive/folders/1NOfRCw9lIyRoJTEFAg4--HIJiTG-Of0G",

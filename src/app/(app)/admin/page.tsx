@@ -839,6 +839,9 @@ function DefaultsTab({ error, setError }: any) {
     ["lead_trainer_ready_for_tot_days", "Trainer ready for TOT (days before start)"],
     ["lead_tot_start_days", "TOT begins (days before start)"],
     ["lead_tot_done_days", "TOT done (days before start)"],
+    // -164, Karunn sir col 14. Added here in the same change as the schema and the API
+    // allowlist: this list has already drifted once (see the 2026-08-13 note above).
+    ["lead_trainer_mapped_sidh_days", "Trainer mapped on SIDH portal (days before start)"],
     ["lead_mobilization_days", "Mobilization done (days before start)"],
     ["lead_trainer_ready_days", "Trainer ready (days before start)"],
     ["lead_enrollment_days", "Registration & enrollment done (days before start)"],

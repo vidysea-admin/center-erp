@@ -1096,6 +1096,11 @@ const DefaultsSchema = new Schema({
   lead_tot_start_days: { type: Number, default: 10 },
   lead_trainer_ready_for_tot_days: { type: Number, default: 15 },
   lead_trainer_found_days: { type: Number, default: 20 },
+  // -164: Karunn sir's column 14, "Date for Trainer Mapping on SIDH Portal?". It is a lead time
+  // like the seven above and NOT hard-coded, per the planner contract §3 — the portal step sits
+  // between TOT completion and mobilisation, because a trainer cannot be mapped before they are
+  // certified and candidates should not be mobilised for a batch with no mapped trainer.
+  lead_trainer_mapped_sidh_days: { type: Number, default: 5 },
   min_daily_evidence: { type: Number, default: 2 },
   // -87 (QA-157): media compression knobs — Umesh turns them after eyeballing one clip/scan.
   image_max_px: { type: Number, default: 1600 },

@@ -124,7 +124,13 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   // Ready/Active the dates are history and stay put.
   if (patch.planned_start && batch.status === "Planning" && batch.plan_enabled) { // QA-152: only a requested plan follows the date
     const doneByKey = new Map((batch.milestones ?? []).map((m: any) => [m.key, m]));
-    patch.milestones = planBatchBackward(newStart, await getDefaults()).map((m) => ({
+    // QA-460 (-164): follow the trainer this PATCH is LEAVING the batch with, not the one it had
+    // — assigning a certified trainer is precisely when the TOT rows should disappear.
+    const nextTrainer = trainer ?? batch.trainer;
+    const planTrainer = nextTrainer
+      ? await Trainer.findById(nextTrainer).select("pipeline_status tot_done_on").lean<any>()
+      : null;
+    patch.milestones = planBatchBackward(newStart, await getDefaults(), { trainer: planTrainer }).map((m) => ({
       ...m,
       done_on: (doneByKey.get(m.key) as any)?.done_on,
       done_by: (doneByKey.get(m.key) as any)?.done_by,

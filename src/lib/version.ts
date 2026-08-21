@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-163";
+export const RELEASE = "2026.08.14-164";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,22 @@ export const RELEASE = "2026.08.14-163";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-164 makes batch planning answer the question people actually ask. Until now the planner " +
+  "produced the same seven steps for every batch and only ever answered one question: if you " +
+  "pick this date, what has to be finished by when. It could not skip a step, and it could not " +
+  "tell you whether the date was possible at all - so a batch whose trainer was already " +
+  "certified still got Trainer TOT deadlines nobody had to meet, and a date in the past was " +
+  "accepted in silence, handing back deadlines that had already expired before they printed. " +
+  "Now a batch whose trainer is certified simply has no TOT steps. A new step - trainer mapped " +
+  "on the SIDH portal - sits between TOT and mobilisation, with its own lead time in Admin " +
+  "Defaults alongside the other seven. And the planner can be pointed at a centre: it then " +
+  "reads that centre's own trainer, and reports the earliest date the centre could realistically " +
+  "start, with the reason - mobilisation lead, the trainer's availability or cap, and the first " +
+  "free room. The room list has existed since the first schema and no planning path had ever " +
+  "read it. Asked without a centre, the planner behaves exactly as it did before.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-163 closes a hole that let a wrong row exist forever. A centre's target is stored per job " +
   "role, and until now the job role was part of the row's IDENTITY rather than something you " +
   "could correct - so if a target landed under the wrong job role, sending the right one simply " +
@@ -27,18 +43,7 @@ export const RELEASE_NOTE_CURRENT =
   "survived every check that only looked at totals. A target can now be MOVED to the job role its " +
   "own source row states: it travels whole, carrying the government TC identity that belongs to " +
   "it, the move is audited and needs a written reason, and if the destination already has a " +
-  "target the move is refused by name rather than quietly merging two government approvals. ";
-
-
-
-
-
-
-
-
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "target the move is refused by name rather than quietly merging two government approvals. " +
   "-162 is Manish sir's release. Three things he reported on 20 August had gone a month of " +
   "releases without being opened, and all three were about a screen refusing to say what it knew. " +
   "On a finished batch both Mark Completed buttons were dead AND silent - the very fact that " +
