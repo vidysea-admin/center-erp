@@ -55,8 +55,6 @@ await req(admin, "PUT", `/api/locations/${loc._id}/targets`, { program: "0000000
     clash.status === 409 && /already has a target row/i.test(String(clash.data.error ?? "")), `${clash.status} ${String(clash.data.error ?? "").slice(0, 90)}`);
 
   // a clean move: destination empty, and the row must ARRIVE whole - its tc identity travels with it
-  const beforeRows = (await req(admin, "GET", `/api/locations/${mvLoc._id}/targets`, undefined, 200)).data.items ?? [];
-  const totalBefore = beforeRows.reduce((acc, t) => acc + (t.approved_target ?? 0), 0);
   const progC = (await req(admin, "POST", "/api/programs", { code: s + "C", name: "EvalLoc ProgC " + s, trainer_skill: "ELSkillC" + s }, 201)).data.item;
   const moved = await req(admin, "PATCH", `/api/locations/${mvLoc._id}/targets`, { from_program: progB._id, to_program: progC._id, reason: "-163 pin: the sheet calls this row a different job role" });
   const after = (await req(admin, "GET", `/api/locations/${mvLoc._id}/targets`, undefined, 200)).data.items ?? [];
@@ -69,13 +67,31 @@ await req(admin, "PUT", `/api/locations/${loc._id}/targets`, { program: "0000000
     onC[0]?.approved_target === 280 && onC[0]?.tc_id === "TCMOVE" + s && onC[0]?.tc_status === "Approved",
     JSON.stringify({ target: onC[0]?.approved_target, tc_id: onC[0]?.tc_id, tc_status: onC[0]?.tc_status }));
 
-  // The centre's total must MOVE, not GROW - a second row is exactly what PUT would have produced.
-  // Asserted as "unchanged" rather than against an absolute figure: the first draft hard-coded
-  // 120+280 and the suite's own earlier edits had already made it 420, so the pin would have failed
-  // for a reason that has nothing to do with the move.
-  const totalAfter = after.reduce((acc, t) => acc + (t.approved_target ?? 0), 0);
-  ok("-163 (QA-496): the centre's total is UNCHANGED by the move - a second row would have grown it by 280",
-    totalAfter === totalBefore, JSON.stringify({ before: totalBefore, after: totalAfter }));
+  // -163 cycle 2 (QA-502). THIS ASSERTION USED TO BE VACUOUS AND A CHECKER PROVED IT.
+  // It read `totalAfter === totalBefore` with both figures taken inside this block, so on pre-fix
+  // code - where the PATCH 405s and writes nothing - the two reads were trivially equal and it
+  // PASSED on broken source. It passed precisely because nothing had happened. REQ-388: a pin that
+  // passes before the fix is not a pin, it is a description.
+  //
+  // Rewritten to assert the OUTCOME AN OPERATOR NEEDS, reached through whichever route the product
+  // actually offers. Pre-fix there is no move door, so the only thing available is a PUT of the
+  // corrected job role - and PUT upserts on { location, program }, so it ADDS a second row and the
+  // centre's approved target GROWS by 280 instead of moving. That is the defect itself, and this is
+  // now red for exactly that reason. Its own centre, so nothing else's rollups move.
+  const fixLoc = (await req(admin, "POST", "/api/locations", { code: "LF" + s, name: "TEST-EvalMoveOutcome " + s, approval_status: "Approved", city: "Meerut" }, 201)).data.item;
+  await req(admin, "PUT", `/api/locations/${fixLoc._id}/targets`, { program: progB._id, approved_target: 280, tc_id: "TCFIX" + s, tc_status: "Approved" }, 200);
+  const sumFix = async () => ((await req(admin, "GET", `/api/locations/${fixLoc._id}/targets`, undefined, 200)).data.items ?? []).reduce((acc, t) => acc + (t.approved_target ?? 0), 0);
+  const fixBefore = await sumFix();
+  const attempt = await req(admin, "PATCH", `/api/locations/${fixLoc._id}/targets`, { from_program: progB._id, to_program: progC._id, reason: "-163 pin: the sheet calls this row a different job role" });
+  if (attempt.status === 404 || attempt.status === 405 || attempt.status === 501) {
+    // No move door. This branch is what the product left an operator with, and taking it is the
+    // whole point - the assertion below then measures the damage rather than measuring nothing.
+    await req(admin, "PUT", `/api/locations/${fixLoc._id}/targets`, { program: progC._id, approved_target: 280 }, 200);
+  }
+  const fixAfter = await sumFix();
+  ok("-163 (QA-496): correcting a mis-filed target MOVES it - the centre's approved target does not grow",
+    fixAfter === fixBefore,
+    JSON.stringify({ before: fixBefore, after: fixAfter, via: attempt.status === 200 ? "PATCH move" : `PUT fallback (PATCH ${attempt.status})` }));
 }
 
 // ---- 2026-08-13 (Manish: "31 approved hain, 10 nahi"): approval is per centre×job-role ----
