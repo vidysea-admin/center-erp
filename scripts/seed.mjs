@@ -2,9 +2,10 @@
 // Run: node --env-file=.env.local scripts/seed.mjs
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
+import { requireSafeDb } from "./db-guard.mjs";
 
 const url = process.env.MONGODB_URL;
-const dbName = process.env.MONGODB_DB || "center_erp";
+const dbName = requireSafeDb("seed");
 if (!url) { console.error("MONGODB_URL missing"); process.exit(1); }
 
 await mongoose.connect(url, { dbName, serverSelectionTimeoutMS: 10000 });

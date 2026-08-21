@@ -15,6 +15,7 @@
 // a future edit to this file cannot re-arm them either.
 // See OPERATIONS.md "Sync sources — single-truth policy".
 import mongoose from "mongoose";
+import { requireSafeDb } from "./db-guard.mjs";
 
 const CLIENT_WORKBOOK_URL =
   process.env.CLIENT_WORKBOOK_URL || process.env.WATCH_SOURCE_URL ||
@@ -65,7 +66,7 @@ const SOURCES = [
 ];
 
 await mongoose.connect(process.env.MONGODB_URL, {
-  dbName: process.env.MONGODB_DB || "center_erp",
+  dbName: requireSafeDb("setup-watch-source"),
   serverSelectionTimeoutMS: 10000,
 });
 const db = mongoose.connection.db;

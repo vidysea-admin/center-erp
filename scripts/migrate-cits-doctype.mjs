@@ -22,13 +22,14 @@
 // Reports counts before and after, and is idempotent — running it twice changes nothing the second
 // time. Safe to run before OR after the code deploy: the two are independent.
 import { MongoClient } from "mongodb";
+import { requireSafeDb } from "./db-guard.mjs";
 
 const APPLY = process.argv.includes("--apply");
 const OLD = "CIPSA Certificate";
 const NEW = "CITS Certificate";
 
 const url = process.env.MONGODB_URL || process.env.MONGODB_URI;
-const dbName = process.env.MONGODB_DB;
+const dbName = requireSafeDb("migrate-cits-doctype");
 if (!url || !dbName) {
   console.error("MONGODB_URL and MONGODB_DB must be set (use --env-file=.env.local).");
   process.exit(2);

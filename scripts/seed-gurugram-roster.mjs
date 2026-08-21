@@ -12,6 +12,7 @@
 import { readFileSync } from "node:fs";
 import mongoose from "mongoose";
 import * as XLSX from "xlsx";
+import { requireSafeDb } from "./db-guard.mjs";
 
 const URL = process.env.AVPL_SHEET_URL
   || "https://docs.google.com/spreadsheets/d/1f9veYSwuLktmggOJdUlspl_yydotdqnf/export?format=xlsx";
@@ -62,7 +63,7 @@ const portal = csvRows.slice(1)
   .filter((r) => S(r[IX.can]).toUpperCase().startsWith("CAN"))
   .map((r) => ({ name: S(r[IX.name]), can: S(r[IX.can]).toUpperCase(), org: S(r[IX.org]), present: S(r[IX.present]), working: S(r[IX.working]) }));
 
-await mongoose.connect(process.env.MONGODB_URL, { dbName: process.env.MONGODB_DB, serverSelectionTimeoutMS: 15000 });
+await mongoose.connect(process.env.MONGODB_URL, { dbName: requireSafeDb("seed-gurugram-roster"), serverSelectionTimeoutMS: 15000 });
 const db = mongoose.connection.db;
 
 const report = { members: 0, existing: 0, can_ids: 0, skipped: [], batches: [], created: [] };

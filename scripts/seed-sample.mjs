@@ -2,8 +2,9 @@
 // Run: node --env-file=.env.local scripts/seed-sample.mjs   (server must be running)
 // Idempotent: aborts if JPR03 already exists.
 import mongoose from "mongoose";
+import { requireSafeDb, requireLocalBase } from "./db-guard.mjs";
 
-const BASE = process.env.BASE_URL || "http://localhost:3000/erp";
+const BASE = requireLocalBase("seed-sample", process.env.BASE_URL || "http://localhost:3000/erp");
 let cookie = "";
 
 async function req(method, path, body) {
@@ -198,7 +199,7 @@ await req("POST", `/api/batches/${b5.batch._id}/transition`, { target: "Active" 
 // Backdate actual_start so historical daily logs pass Rule 32 (sample-data-only step,
 // done directly in Mongo because the API rightly refuses to fabricate history).
 const url = process.env.MONGODB_URL;
-await mongoose.connect(url, { dbName: process.env.MONGODB_DB || "center_erp" });
+await mongoose.connect(url, { dbName: requireSafeDb("seed-sample") });
 const db = mongoose.connection.db;
 const { ObjectId } = mongoose.Types;
 const back = (id, days) => db.collection("batches").updateOne({ _id: new ObjectId(String(id)) }, { $set: { actual_start: new Date(Date.now() - days * 86400000) } });

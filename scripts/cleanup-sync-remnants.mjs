@@ -20,9 +20,10 @@
 //   MONGODB_URL=... MONGODB_DB=center_erp node scripts/cleanup-sync-remnants.mjs --apply
 import { MongoClient } from "mongodb";
 import * as XLSX from "xlsx";
+import { requireSafeDb } from "./db-guard.mjs";
 
 const APPLY = process.argv.includes("--apply");
-const url = process.env.MONGODB_URL, dbName = process.env.MONGODB_DB;
+const url = process.env.MONGODB_URL, dbName = requireSafeDb("cleanup-sync-remnants");
 if (!url || !dbName) { console.error("MONGODB_URL and MONGODB_DB are required."); process.exit(1); }
 
 // The OneDrive truth workbook (same share + badger flow as seed-rpl.mjs).

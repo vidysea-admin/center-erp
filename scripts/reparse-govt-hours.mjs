@@ -18,6 +18,7 @@
 //
 // Idempotent: a second run finds nothing, because every row it fixed now has minutes.
 import { MongoClient } from "mongodb";
+import { requireSafeDb } from "./db-guard.mjs";
 
 // THE PARSER IS A COPY, AND THAT IS A DELIBERATE, GUARDED CHOICE — not an oversight.
 // The real one is hhmmssToMinutes in src/lib/govt-attendance.ts, but that module imports @/models,
@@ -65,7 +66,7 @@ if (process.argv.includes("--selftest")) {
 
 const APPLY = process.argv.includes("--apply");
 const url = process.env.MONGODB_URL || process.env.MONGODB_URI;
-const dbName = process.env.MONGODB_DB;
+const dbName = requireSafeDb("reparse-govt-hours");
 if (!url || !dbName) {
   console.error("MONGODB_URL and MONGODB_DB must be set (use --env-file=.env.local).");
   process.exit(2);

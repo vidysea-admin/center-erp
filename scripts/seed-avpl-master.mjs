@@ -8,6 +8,7 @@
 // Refuses without an explicit MONGODB_DB. Anything it cannot map is REPORTED, never guessed.
 import mongoose from "mongoose";
 import * as XLSX from "xlsx";
+import { requireSafeDb } from "./db-guard.mjs";
 
 const URL = process.env.AVPL_SHEET_URL
   || "https://docs.google.com/spreadsheets/d/1f9veYSwuLktmggOJdUlspl_yydotdqnf/export?format=xlsx";
@@ -26,7 +27,7 @@ if (buf.slice(0, 2).toString() !== "PK") {
 }
 const wb = XLSX.read(buf, { type: "buffer" });
 
-await mongoose.connect(process.env.MONGODB_URL, { dbName: process.env.MONGODB_DB, serverSelectionTimeoutMS: 15000 });
+await mongoose.connect(process.env.MONGODB_URL, { dbName: requireSafeDb("seed-avpl-master"), serverSelectionTimeoutMS: 15000 });
 const db = mongoose.connection.db;
 
 // ---------------------------------------------------------------- helpers

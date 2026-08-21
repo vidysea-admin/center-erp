@@ -14,6 +14,7 @@
 //   node scripts/restore-candidate-fields.mjs           → dry run (prints every restore)
 //   node scripts/restore-candidate-fields.mjs --apply   → write
 import { MongoClient } from "mongodb";
+import { requireSafeDb } from "./db-guard.mjs";
 
 const APPLY = process.argv.includes("--apply");
 const FIELDS = ["lifecycle_status", "sidh_status", "sidh_registered_on", "sidh_link_sent_at", "sidh_failure_reason", "name", "location", "source", "dob", "education"];
@@ -21,7 +22,7 @@ const FIELDS = ["lifecycle_status", "sidh_status", "sidh_registered_on", "sidh_l
 const pre = await MongoClient.connect(process.env.BACKUP_URL || "mongodb://127.0.0.1:27017");
 const prod = await MongoClient.connect(process.env.MONGODB_URL || "mongodb://13.202.206.101:27017");
 const before = pre.db(process.env.BACKUP_DB || "center_erp_pre").collection("candidates");
-const now = prod.db(process.env.MONGODB_DB || "center_erp").collection("candidates");
+const now = prod.db(requireSafeDb("restore-candidate-fields")).collection("candidates");
 
 const backup = await before.find({}).toArray();
 const nowById = new Map((await now.find({}).toArray()).map((c) => [String(c._id), c]));

@@ -3,8 +3,9 @@
 // Run: node --env-file=.env.local scripts/cleanup-testdata.mjs
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
+import { requireSafeDb } from "./db-guard.mjs";
 
-await mongoose.connect(process.env.MONGODB_URL, { dbName: process.env.MONGODB_DB || "center_erp", serverSelectionTimeoutMS: 10000 });
+await mongoose.connect(process.env.MONGODB_URL, { dbName: requireSafeDb("cleanup-testdata"), serverSelectionTimeoutMS: 10000 });
 const db = mongoose.connection.db;
 const ids = (docs) => docs.map((d) => d._id);
 

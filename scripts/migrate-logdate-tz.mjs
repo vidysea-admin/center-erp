@@ -18,13 +18,14 @@
 // attendance rows. It refuses to merge collisions — if two rows would land on the same calendar
 // day for one batch it reports them and leaves both alone for a human to settle.
 import { MongoClient } from "mongodb";
+import { requireSafeDb } from "./db-guard.mjs";
 
 const APPLY = process.argv.includes("--apply");
 const fromTzArg = process.argv.find((a) => a.startsWith("--from-tz="));
 const FROM_TZ = fromTzArg ? fromTzArg.split("=")[1] : "Asia/Kolkata";
 
 const url = process.env.MONGODB_URL;
-const dbName = process.env.MONGODB_DB;
+const dbName = requireSafeDb("migrate-logdate-tz");
 if (!url || !dbName) { console.error("MONGODB_URL and MONGODB_DB are required"); process.exit(1); }
 
 // The calendar date this instant falls on, as seen in FROM_TZ.

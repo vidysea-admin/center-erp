@@ -4,9 +4,10 @@
 // Everything else added that day is new fields with schema defaults — no data to move.
 // Safe to re-run. Run: node --env-file=.env.local scripts/migrate-policy-2026-08-11.mjs
 import mongoose from "mongoose";
+import { requireSafeDb } from "./db-guard.mjs";
 
 await mongoose.connect(process.env.MONGODB_URL, {
-  dbName: process.env.MONGODB_DB || "center_erp",
+  dbName: requireSafeDb("migrate-policy-2026-08-11"),
   serverSelectionTimeoutMS: 10000,
 });
 const db = mongoose.connection.db;

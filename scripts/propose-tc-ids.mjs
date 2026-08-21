@@ -17,6 +17,7 @@
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import * as XLSX from "xlsx";
 import mongoose from "mongoose";
+import { requireSafeDb } from "./db-guard.mjs";
 
 const APPLY = process.argv.includes("--apply");
 const OUT = "tc-id-proposal.json";
@@ -26,7 +27,7 @@ const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 const APP_ID = "5cbed6ac-a083-4e14-b191-b4ba07653de2";
 
 const MONGODB_URL = process.env.MONGODB_URL || "mongodb://127.0.0.1:27017";
-const MONGODB_DB = process.env.MONGODB_DB || "center_erp";
+const MONGODB_DB = requireSafeDb("propose-tc-ids");
 
 // Names differ between the sheet and the ERP in punctuation, "Govt."/"Government", and spacing.
 const norm = (s) => String(s ?? "").toLowerCase()

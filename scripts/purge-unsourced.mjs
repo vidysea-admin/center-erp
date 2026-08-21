@@ -23,11 +23,12 @@
 //
 // TAKE A DATABASE BACKUP FIRST. This is irreversible and there is no undo.
 import { MongoClient } from "mongodb";
+import { requireSafeDb } from "./db-guard.mjs";
 
 const APPLY = process.argv.includes("--apply");
 
 const url = process.env.MONGODB_URL;
-const dbName = process.env.MONGODB_DB;
+const dbName = requireSafeDb("purge-unsourced");
 if (!url || !dbName) {
   console.error("MONGODB_URL and MONGODB_DB must both be set. Refusing to guess which database to purge.");
   process.exit(1);

@@ -13,6 +13,7 @@
 // Google sign-in wall and stops — that is the signal to ask Umesh, not to work around it.
 import mongoose from "mongoose";
 import * as XLSX from "xlsx";
+import { requireSafeDb } from "./db-guard.mjs";
 
 const SHEET_URL = process.env.TRAINER_SHEET_URL
   || "https://docs.google.com/spreadsheets/d/1f9veYSwuLktmggOJdUlspl_yydotdqnf/export?format=xlsx";
@@ -73,7 +74,7 @@ if (!process.env.MONGODB_URL || !process.env.MONGODB_DB) {
   console.error("MONGODB_URL and MONGODB_DB must both be set. Refusing to guess which database.");
   process.exit(1);
 }
-await mongoose.connect(process.env.MONGODB_URL, { dbName: process.env.MONGODB_DB, serverSelectionTimeoutMS: 10000 });
+await mongoose.connect(process.env.MONGODB_URL, { dbName: requireSafeDb("seed-trainers"), serverSelectionTimeoutMS: 10000 });
 const db = mongoose.connection.db;
 
 const locations = await db.collection("locations").find({}).project({ name: 1, district: 1, city: 1 }).toArray();

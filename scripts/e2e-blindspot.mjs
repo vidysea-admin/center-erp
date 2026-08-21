@@ -216,5 +216,91 @@ ok("public registration works (location Not Started — advance pooling)", pubRe
 const shortPhone = await fetch(BASE + `/api/public/register/${regTok.token}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "Pub short", phone: "123456789" }) });
 ok("public registration rejects <10-digit phone", shortPhone.status === 400, `status=${shortPhone.status}`);
 
+// ---- QA-510 / QA-514 (-167): a destructive script must not have a production DEFAULT ----
+// Eight scripts read process.env.MONGODB_DB with a FALLBACK to the production database name.
+// (Spelled out rather than quoted verbatim: the census below sweeps this file too, and a comment
+// that quotes the offending pattern makes the check report itself.) One
+// forgotten --env-file and `npm run seed` writes defaults, master lists and an admin user WITH A
+// PASSWORD into the live database - silently, because a default is not an error. cleanup-testdata
+// was in the same set, and that one DELETES.
+//
+// These assertions run the guard in real child processes rather than importing it, because the
+// guard's whole job is to call process.exit - importing it would take this suite down with it.
+// Nothing here connects to any database: the guard refuses before a connection is opened, and
+// that ordering is itself one of the assertions.
+{
+  const { execFileSync } = await import("node:child_process");
+  const { readdirSync, readFileSync } = await import("node:fs");
+
+  const runGuard = (env, call) => {
+    try {
+      const out = execFileSync(process.execPath, ["--input-type=module", "-e", call], {
+        cwd: "scripts", env: { ...process.env, ...env }, encoding: "utf8", stdio: "pipe",
+      });
+      return { code: 0, out };
+    } catch (e) {
+      return { code: e.status ?? -1, out: String(e.stdout ?? "") + String(e.stderr ?? "") };
+    }
+  };
+  const CALL = 'import { requireSafeDb } from "./db-guard.mjs"; console.log("DB=" + requireSafeDb("seed"));';
+  const BASECALL = 'import { requireLocalBase } from "./db-guard.mjs"; console.log("BASE=" + requireLocalBase("seed-sample", process.env.BASE_URL));';
+
+  const unset = runGuard({ MONGODB_DB: undefined }, CALL);
+  ok("QA-510: with MONGODB_DB unset a writing script REFUSES instead of guessing production",
+    unset.code === 1 && /will not guess/i.test(unset.out), `code=${unset.code} ${unset.out.slice(0, 120)}`);
+
+  const prod = runGuard({ MONGODB_DB: "center_erp", ALLOW_PRODUCTION_WRITE: undefined }, CALL);
+  ok("QA-510: naming the PRODUCTION database is refused on its own - the name alone is not consent",
+    prod.code === 1 && /PRODUCTION database/.test(prod.out), `code=${prod.code} ${prod.out.slice(0, 120)}`);
+
+  const ci = runGuard({ MONGODB_DB: "center_erp_ci" }, CALL);
+  ok("QA-510: a named non-production database runs normally - the guard blocks accidents, not work",
+    ci.code === 0 && /DB=center_erp_ci/.test(ci.out), `code=${ci.code} ${ci.out.slice(0, 120)}`);
+
+  const deliberate = runGuard({ MONGODB_DB: "center_erp", ALLOW_PRODUCTION_WRITE: "yes-i-mean-production" }, CALL);
+  ok("QA-510: production IS reachable when somebody says so in full - a guard with no door gets deleted",
+    deliberate.code === 0 && /DB=center_erp/.test(deliberate.out), `code=${deliberate.code} ${deliberate.out.slice(0, 120)}`);
+
+  const remote = runGuard({ BASE_URL: "https://www.vidysea.com/erp", ALLOW_PRODUCTION_WRITE: undefined }, BASECALL);
+  ok("QA-514: seeding THROUGH a remote server is refused - naming a test database there proves nothing",
+    remote.code === 1 && /not local/i.test(remote.out), `code=${remote.code} ${remote.out.slice(0, 120)}`);
+
+  const localBase = runGuard({ BASE_URL: "http://localhost:3000/erp" }, BASECALL);
+  ok("QA-514: ...and a localhost base is fine",
+    localBase.code === 0 && /BASE=http/.test(localBase.out), `code=${localBase.code} ${localBase.out.slice(0, 120)}`);
+
+  // The census, so a NEW script cannot quietly reintroduce the default. This is the part that
+  // makes the fix survive: the guard exists once, and this asserts nobody wrote their own.
+  //
+  // The pattern is ASSEMBLED rather than written as a literal. The first version of this check was
+  // a regex literal, so the check's own source matched it and this suite reported ITSELF as an
+  // offender - a census that cannot see past its own reflection. Building the string means the
+  // sweep genuinely covers every file, including this one.
+  const DEFAULT_PATTERN = new RegExp("MONGODB_DB" + "\\s*\\|\\|\\s*" + "[\"']" + "center" + "_erp" + "[\"']");
+  const files = readdirSync("scripts").filter((f) => f.endsWith(".mjs") && f !== "db-guard.mjs");
+  const srcOf = (f) => readFileSync("scripts/" + f, "utf8");
+  const offenders = files.filter((f) => DEFAULT_PATTERN.test(srcOf(f)));
+  ok("QA-510: NO script anywhere still defaults its database to production",
+    offenders.length === 0, JSON.stringify(offenders));
+
+  // The rule is about WRITES, and saying so is not narrowing it to fit: a read-only script aimed
+  // at production cannot cause the harm this guard exists to prevent, and forbidding it would only
+  // add friction to legitimate work. So the requirement is stated as it actually is - every script
+  // that WRITES asks first - and the exemption is asserted rather than assumed: the scripts left
+  // out must contain no write call at all.
+  const WRITE_CALLS = /insertOne|insertMany|updateOne|updateMany|deleteOne|deleteMany|bulkWrite|findOneAndUpdate|findOneAndDelete|replaceOne|dropDatabase|\.save\(\)/;
+  const connects = files.filter((f) => /mongoose\.connect|new MongoClient/.test(srcOf(f)));
+  const writers = connects.filter((f) => WRITE_CALLS.test(srcOf(f)));
+  const readersOnly = connects.filter((f) => !WRITE_CALLS.test(srcOf(f)));
+  const unguarded = writers.filter((f) => {
+    const src = srcOf(f);
+    // a suite pinned to the CI database is already safe by construction
+    return !/db-guard\.mjs/.test(src) && !/center_erp_ci/.test(src);
+  });
+  ok("QA-510: every script that WRITES to a database asks the guard first (or is pinned to the CI database)",
+    unguarded.length === 0, JSON.stringify(unguarded));
+  ok("QA-510: ...and the scripts exempted as read-only really are read-only - the exemption is measured, not assumed",
+    readersOnly.every((f) => !WRITE_CALLS.test(srcOf(f))), JSON.stringify(readersOnly));
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

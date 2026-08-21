@@ -15,9 +15,10 @@
 //   node --env-file=.env.local scripts/seed-rpl.mjs --apply
 import { MongoClient } from "mongodb";
 import * as XLSX from "xlsx";
+import { requireSafeDb } from "./db-guard.mjs";
 
 const APPLY = process.argv.includes("--apply");
-const url = process.env.MONGODB_URL, dbName = process.env.MONGODB_DB;
+const url = process.env.MONGODB_URL, dbName = requireSafeDb("seed-rpl");
 if (!url || !dbName) { console.error("MONGODB_URL and MONGODB_DB are required."); process.exit(1); }
 
 const SHARE = "https://onedrive.live.com/:x:/g/personal/c1d310c499f08fba/IQBHQGQ1_HmBRZjCmC1XQMK8AQCFnOpu1H8GXm3MNvZnypE";

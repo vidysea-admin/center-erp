@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-166";
+export const RELEASE = "2026.08.14-167";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,21 @@ export const RELEASE = "2026.08.14-166";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-167 is a safety release with no visible change: it stops the maintenance scripts from " +
+  "being able to hit the live database by accident. Seventeen of them write - they seed data, " +
+  "run migrations, clean up test records, one of them deletes - and until now, if the variable " +
+  "naming the database was simply absent, eight of those quietly fell back to the LIVE one. Not " +
+  "an error, not a prompt: a default. One forgotten flag and a seeder would rewrite live " +
+  "settings and reset an administrator password, and the run would look completely normal. " +
+  "Every script that writes now asks a single shared guard first. With no database named it " +
+  "stops and says so instead of guessing; naming the live database is refused on its own, " +
+  "because the name alone is not consent; and reaching it deliberately takes a second, " +
+  "explicit instruction. The sample seeder writes THROUGH a running server, so it also refuses " +
+  "when pointed at anything other than a local one. A standing check now sweeps every script " +
+  "in the repository so a new one cannot bring the old default back.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-166 lets the client's own master sheet correct one thing it never could: whether the " +
   "government has approved a particular job role at a particular centre. That verdict is " +
   "recorded per centre AND job role - one centre can be approved for one course and not " +
@@ -29,10 +44,7 @@ export const RELEASE_NOTE_CURRENT =
   "cell is treated as a real answer rather than a missing one, because blank is what the master " +
   "actually says on the rows that disagree today; and a verdict for a job role the centre has " +
   "no target on is refused with the reason rather than quietly creating that target, since a " +
-  "status must not invent the thing it describes.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "status must not invent the thing it describes." +
   "-165 is the correction pass on -164, and every item in it was found by review rather than by " +
   "a user hitting it. The worst was quiet: the new rule that drops TOT steps for an already-" +
   "certified trainer was also DELETING what people had recorded. A regenerated plan was rebuilt " +
