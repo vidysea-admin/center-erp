@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-185";
+export const RELEASE = "2026.08.14-186";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,17 @@ export const RELEASE = "2026.08.14-185";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-186 changes nothing you can see. It is the third attempt at one check - the one that keeps the " +
+  "report headings on a single line - and this time the check finds the heading by the only fact " +
+  "that actually matters: the heading sits inside that box, so that box is where it could wrap. " +
+  "The two previous attempts each identified the heading by something incidental - first by how its " +
+  "styling was spelled, then by which handler it happened to call - and each time the check could " +
+  "be satisfied by a decoy while the real heading was left unprotected, or could report a fault on " +
+  "a heading that was perfectly fine. Every check written here was also run against the three " +
+  "earlier versions of itself, so each one is shown catching something those versions let past.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-185 changes nothing you can see. The check added two releases ago to stop the report headings " +
   "breaking onto two lines was itself wrong in both directions, and this repairs both. It read only " +
   "the first button it found in the file, so another button written earlier could stand in for the " +
@@ -24,10 +35,7 @@ export const RELEASE_NOTE_CURRENT =
   "headings style be written in one particular order, so simply rearranging it, without changing " +
   "anything a reader would see, made the check report a fault that did not exist. It now finds the " +
   "heading by what it does rather than by where it sits or how it is spelled, and every such " +
-  "heading has to pass rather than the first one found.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "heading has to pass rather than the first one found." +
   "-184 changes nothing you can see. It repairs two of the automated checks that are supposed to " +
   "stop earlier problems coming back, both of which could be satisfied without the thing they " +
   "check being true. One guarded the report heading against breaking onto two lines and could be " +

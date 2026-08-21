@@ -918,29 +918,63 @@ for (const file of walk(root)) {
   // elsewhere is then irrelevant - it renders no label - and the class list may be in any order,
   // because the whole className is read rather than matched from its first token.
   //
-  // `{c.label}` renders in THREE places in this file (the header button, the Columns picker entry,
-  // and a card label), so "every render site must sit in a nowrap button" is too strong and failed
-  // correct code on the first attempt at this fix. The SORT-LABEL button identifies itself by what
-  // it does: it calls `setSort`. That is the discriminator - not its position, not its class order.
-  const labelSites = [...tableSrc.matchAll(/\{c\.label\}/g)].map((m) => {
+  // -185 cycle 3 (QA-596 + QA-597): cycle 2 revived BOTH diseases in the lines written to cure them.
+  //   (a) QA-596 - `indexOf(">", open)` ends the tag at the first ">" CHARACTER, and in JSX that is
+  //       usually the arrow of `onClick={() =>`. It only worked because className happens to be
+  //       written before onClick today; move one attribute and the pin reports `class lists seen:
+  //       [null]`, sending a reader to fix a class that was never wrong. A tag ends at the ">" that
+  //       is at brace-depth 0 and outside quotes - so scan for it, do not guess.
+  //   (b) QA-597 - gating on `setSort` made the pin's sight depend on where the handler is written.
+  //       Extract the onClick to a named handler and the REAL site disappears from the list; any
+  //       other setSort button then satisfies `every` alone, and the pin is green with the heading
+  //       unprotected. Both earlier revisions caught that shape; cycle 2 stopped catching it.
+  //
+  // The structural fact is ENCLOSURE: a label can only wrap inside the box that contains it. So a
+  // site is a `{c.label}` whose nearest preceding `<button>` has not already closed before it.
+  // Measured on this file: of the three `{c.label}` renders, only the header's is enclosed - the
+  // Columns picker entry and the card label sit after their nearest button has closed.
+  //
+  // `setSort` is now used for NOTHING but the failure message. A tiebreak was tried first - check
+  // only the enclosing sites that call setSort - and this proof caught it reopening the very hole
+  // it was meant to close: extract the handler and add a decoy that both setSorts and renders a
+  // label, and the decoy became the only "sort site", satisfying the check while the real heading
+  // carried nothing. Any button enclosing a rendered label is a box that label can wrap inside, so
+  // EVERY one of them must refuse to wrap. On this file that is exactly one site today. If a future
+  // design deliberately wants a wrapping label inside some other button, that is a deliberate change
+  // and it should arrive with a deliberate change to this pin - not be pre-forgiven by a tiebreak
+  // that also forgives the defect.
+  const tagEndAt = (from) => {                    // the ">" that really ends this opening tag
+    let depth = 0, quote = null;
+    for (let i = from; i < tableSrc.length; i++) {
+      const ch = tableSrc[i];
+      if (quote) { if (ch === quote && tableSrc[i - 1] !== "\\") quote = null; continue; }
+      if (ch === '"' || ch === "'" || ch === "`") { quote = ch; continue; }
+      if (ch === "{") depth++;
+      else if (ch === "}") depth--;
+      else if (ch === ">" && depth === 0) return i;
+    }
+    return -1;
+  };
+  const enclosingSites = [...tableSrc.matchAll(/\{c\.label\}/g)].map((m) => {
     const open = tableSrc.lastIndexOf("<button", m.index);
     if (open < 0) return null;
-    const close = tableSrc.indexOf("</button>", m.index);
-    const element = close < 0 ? tableSrc.slice(open) : tableSrc.slice(open, close);
-    if (!element.includes("setSort")) return null;          // not the sort label - picker, card, ...
-    const tag = tableSrc.slice(open, tableSrc.indexOf(">", open) + 1);
+    const close = tableSrc.indexOf("</button>", open);
+    if (close < 0 || close < m.index) return null;   // that button closed before the label: not its box
+    const end = tagEndAt(open);
+    if (end < 0) return null;
+    const tag = tableSrc.slice(open, end + 1);
     // Both spellings: className="..." and className={`...`} / {clsx(...)}. Reading the braced form
     // too is what stops a future refactor to a template literal from being called a defect.
     const q = tag.match(/className="([^"]*)"/);
-    const b = q ? null : tag.match(/className=\{([\s\S]*)/);
-    return { at: m.index, cls: q ? q[1] : (b ? b[1] : null) };
+    const b = q ? null : tag.match(/className=\{([\s\S]*)\}?\s*$/);
+    return { at: m.index, cls: q ? q[1] : (b ? b[1] : null), sorts: tableSrc.slice(open, close).includes("setSort") };
   }).filter(Boolean);
-  // EVERY sort label must carry the token - not merely the first one the regex happens to reach.
-  const labelClasses = labelSites.map((s) => s.cls);
-  const labelNoWrap = labelSites.length > 0 && labelClasses.every(
+  const sortSites = enclosingSites.filter((s) => s.sorts);   // reported, never used to narrow
+  const labelClasses = enclosingSites.map((s) => s.cls);
+  const labelNoWrap = enclosingSites.length > 0 && labelClasses.every(
     (cls) => cls !== null && cls.split(/[\s`'"+${}]+/).includes("whitespace-nowrap"));
   if (labelNoWrap) passed++;
-  else { failed++; pushStructural("components/ui.tsx: a sortable header label can still wrap - " + labelSites.length + " sort-label button(s) render {c.label} and not all carry whitespace-nowrap (class lists seen: " + JSON.stringify(labelClasses) + ") - QA-584 / QA-594. Widths cannot hold this: the filter funnel adds 16px only once a column has 2-25 distinct values, so a width that fits today breaks when the data grows. Umesh has now reported this heading wrapping twice."); }
+  else { failed++; pushStructural("components/ui.tsx: a header label can still wrap - " + enclosingSites.length + " button(s) enclose a rendered {c.label}, " + sortSites.length + " of them call setSort, and not all of them carry whitespace-nowrap (class lists seen: " + JSON.stringify(labelClasses) + ") - QA-584 / QA-594 / QA-597. A null class list means the opening tag could not be read, not that the class is missing. Widths cannot hold this: the filter funnel adds 16px only once a column has 2-25 distinct values, so a width that fits today breaks when the data grows. Umesh has now reported this heading wrapping twice."); }
 
   // QA-564 (-178): the column definitions fold into a disclosure card - Umesh, "ye definations wala
   // dropdown type card hoga" - but the WARNINGS stay outside it. REQ-367 puts these sources "on the
