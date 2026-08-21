@@ -650,5 +650,85 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
     ok("QA-497: ...and no row was created behind the refusal", !(await rowOf(p4b)), "no change row was raised, so nothing could be written either");
   }
 }
+// ---- QA-520 (-169): a sheet row finds its centre by its OWN registration number ----
+// The government registers a centre per scheme and numbers each registration, so ONE CENTRE HAS
+// SEVERAL TC IDs (Charthwal: TC353328 for AVPL, TC352938 for HSL) while Location.external_id holds
+// exactly one. Measured on live: 20 of the sheet's 35 TC IDs reached no location at all, including
+// four of the five rows QA-440 exists for. Those rows could never be corrected from the sheet, and
+// the sync reported a clean run - it did raise a change, with no centre attached to it, which is a
+// row nobody can act on.
+//
+// The number identifies the CENTRE, not the job role: propose-tc-ids.mjs:96 says "A TC ID repeats
+// across job-role rows", and live agrees - 35 distinct TC IDs against 55 target rows. So the job
+// role still comes from the mapping's :CODE, and the first draft of this block (refuse whenever
+// more than one row carries the number) would have blocked most of the sheet.
+{
+  const s5 = "A" + Date.now().toString().slice(-6);
+  const p5 = (await req("POST", "/api/programs", { code: s5, name: "Anchor Prog " + s5, trainer_skill: "AncSkill" + s5 }, 201)).data.item;
+  // The centre's key is a DIFFERENT TC ID from the row's - exactly the live shape.
+  const l5 = (await req("POST", "/api/locations", { code: "AL" + s5, name: "Anchor Loc " + s5, external_id: "TCCENTRE" + s5, approval_status: "Approved", city: "Meerut" }, 201)).data.item;
+  await req("PUT", `/api/locations/${l5._id}/targets`, { program: p5._id, approved_target: 400, tc_id: "TCROW" + s5, tc_status: "Approved" }, 200);
+  const rowOf5 = async () => ((await req("GET", `/api/locations/${l5._id}/targets`)).data.items ?? [])
+    .find((t) => String(t.program?._id ?? t.program) === String(p5._id));
+  const mkSrc5 = async (csv, label, mappings) => {
+    const fd = new FormData();
+    fd.append("file", new File([csv], "anc.csv", { type: "text/csv" }));
+    const u = (await req("POST", "/api/upload", fd, 200)).data;
+    return (await req("POST", "/api/sync-sources", {
+      name: label + " " + s5, source_url: new URL(u.url, BASE).href, field_mappings: mappings,
+    }, 201)).data.item;
+  };
+
+  // (1) the sheet row carries the ROW's TC ID, which is NOT any centre's key. Today: invisible.
+  // The mapping names a DIFFERENT programme code on purpose - the anchored row's own job role
+  // must win, because that is the government's answer and the mapping is only a guess.
+  const F5 = `tc_status:${s5}`;
+  const src5 = await mkSrc5(`TC ID,TC Status\nTCROW${s5},Unapproved\n`, "Anchor sheet",
+    { "TC ID": "external_id", "TC Status": F5 });
+  const r5 = (await req("POST", `/api/sync-sources/${src5._id}/run`, undefined, 200)).data;
+  const c5 = ((await req("GET", "/api/sheet-changes?status=Open")).data.items ?? [])
+    .find((c) => String(c.location?._id ?? c.location) === String(l5._id) && String(c.field_name).startsWith("tc_status:"));
+  ok("QA-520: a row whose TC ID is NOT its centre's key is finally SEEN, and ATTACHED to that centre - today it raises an orphan change with no centre at all",
+    r5.created === 1 && !!c5, JSON.stringify({ run: r5, change: c5?.field_name ?? null }));
+
+  if (c5) {
+    ok("QA-520: the change carries the ERP's current value, so the reviewer sees what they are changing",
+      c5.field_name === F5 && c5.old_value === "Approved" && c5.new_value === "Unapproved",
+      JSON.stringify({ f: c5.field_name, o: c5.old_value, n: c5.new_value }));
+    await req("POST", `/api/sheet-changes/${c5._id}/apply`, { action: "Update target" }, 200);
+    ok("QA-520: ...and applying it reaches THAT row",
+      (await rowOf5())?.tc_status === "Unapproved", JSON.stringify(await rowOf5()));
+  } else {
+    ok("QA-520: the change carries the ERP's current value", false, "no change row attached to this centre");
+    ok("QA-520: ...and applying it reaches THAT row", false, "no change row to apply");
+  }
+
+  // (2) the SAME number on a SECOND job role of the SAME centre must keep working. This is the
+  // normal shape of the client's sheet - one registration covering several job roles - and the
+  // first draft of this feature refused exactly this, which would have blocked most of the sheet.
+  const p5b = (await req("POST", "/api/programs", { code: s5 + "B", name: "Anchor Prog B " + s5, trainer_skill: "AncSkillB" + s5 }, 201)).data.item;
+  await req("PUT", `/api/locations/${l5._id}/targets`, { program: p5b._id, approved_target: 100, tc_id: "TCROW" + s5, tc_status: "Approved" }, 200);
+  const F5b = `tc_status:${s5}B`;
+  const srcB = await mkSrc5(`TC ID,TC Status\nTCROW${s5},Unapproved\n`, "Anchor second role",
+    { "TC ID": "external_id", "TC Status": F5b });
+  const rB = (await req("POST", `/api/sync-sources/${srcB._id}/run`, undefined, 200)).data;
+  const cB = ((await req("GET", "/api/sheet-changes?status=Open")).data.items ?? [])
+    .find((c) => c.field_name === F5b && String(c.location?._id ?? c.location) === String(l5._id));
+  ok("QA-520: one registration number covering SEVERAL job roles is the normal case, not an error - the mapping's :CODE still picks the row",
+    rB.status === "OK" && !!cB, JSON.stringify({ run: rB, change: cB?.field_name ?? null }));
+
+  // (3) the ambiguity that IS real: one number claimed by two DIFFERENT centres. Never settled by
+  // write order - the whole row is skipped and the run says Partial, never a clean OK.
+  const l5b = (await req("POST", "/api/locations", { code: "AL" + s5 + "B", name: "Anchor Loc B " + s5, external_id: "TCCENTRE" + s5 + "B", approval_status: "Approved", city: "Meerut" }, 201)).data.item;
+  await req("PUT", `/api/locations/${l5b._id}/targets`, { program: p5._id, approved_target: 50, tc_id: "TCROW" + s5 }, 200);
+  const srcDup = await mkSrc5(`TC ID,TC Status\nTCROW${s5},Approved\n`, "Anchor clash sheet",
+    { "TC ID": "external_id", "TC Status": F5 });
+  const rDup = (await req("POST", `/api/sync-sources/${srcDup._id}/run`, undefined, 200)).data;
+  ok("QA-520: one TC ID claimed by TWO CENTRES is refused, not guessed - and the run says Partial, never a clean OK",
+    rDup.created === 0 && rDup.status === "Partial" && /more than one centre/i.test(String(rDup.error ?? "")),
+    JSON.stringify(rDup));
+  ok("QA-520: ...and nothing was written while it was ambiguous",
+    (await rowOf5())?.tc_status === "Unapproved", JSON.stringify({ tc_status: (await rowOf5())?.tc_status }));
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

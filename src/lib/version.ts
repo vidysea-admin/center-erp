@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-168";
+export const RELEASE = "2026.08.14-169";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,22 @@ export const RELEASE = "2026.08.14-168";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-169 lets a correction made in the client sheet reach the row it is actually about. The " +
+  "government does not approve a centre as a whole - it registers the centre for each scheme " +
+  "and gives every registration its own number, so one building can hold several. The ERP " +
+  "could only remember ONE number per centre, and used that number to decide which centre a " +
+  "sheet row belonged to. Any row carrying one of the other numbers matched nothing: it was " +
+  "reported as a change with no centre attached to it, which nobody could act on, and the run " +
+  "still finished saying everything was fine. On the live data that was twenty of the " +
+  "thirty-five numbers in the sheet. A row can now carry its own registration number, and the " +
+  "sync uses that to find the centre - falling back to the old behaviour when nothing carries " +
+  "it, so existing sources are untouched. The job role is still chosen by the mapping, because " +
+  "one registration usually covers several. If the same number is claimed by two different " +
+  "centres the row is skipped and the run says so plainly instead of picking one. The tool " +
+  "that fills these numbers in proposes them for a person to check before anything is written.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-168 makes the product give ONE answer to the question of how soon a centre could start a " +
   "batch. There were four, and they disagreed. The batch form worked one out in the browser, " +
   "the save checked it again its own way, an edit checked it a third way, and the planner added " +
@@ -27,10 +43,7 @@ export const RELEASE_NOTE_CURRENT =
   "wrong date, because there is nothing there to doubt. All four now read the same calculation, " +
   "and they explain it in the same words: the mobilisation lead, the trainer availability or " +
   "batch cap, and the first free room. When a centre has no room at all, the screen now says " +
-  "plainly that planning is blocked until one exists, instead of offering a date.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "plainly that planning is blocked until one exists, instead of offering a date." +
   "-167 is a safety release with no visible change: it stops the maintenance scripts from " +
   "being able to hit the live database by accident. Seventeen of them write - they seed data, " +
   "run migrations, clean up test records, one of them deletes - and until now, if the variable " +

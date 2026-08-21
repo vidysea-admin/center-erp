@@ -67,7 +67,9 @@ export const { GET, POST } = collectionRoutes({
     // 2026-08-12 hiring pipeline (Manish's RPL walkthrough)
     "nominated_for_location", "nominated_for_program", "source", "qualification",
     "industry_experience_years", "teaching_experience_years", "nsdc_remarks",
-    "eligibility_payment_amount", "payment_reference", "tot_certificate_no", "pipeline_note"],
+    "eligibility_payment_amount", "payment_reference", "tot_certificate_no", "pipeline_note",
+    // -169 (QA-399) cols 5, 6, 13
+    "sidh_profile_verified_on", "eligibility_checked_on", "tot_result_expected_on"],
   searchFields: ["name", "phone", "email", "tr_id"],
   // QA-095/091/061 (checker round 5, "the sixth time in this pattern"): the CEO closed the
   // Trainer's doors in the MENU; the server now closes them too. A Trainer never reads the

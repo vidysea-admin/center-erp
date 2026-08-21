@@ -274,6 +274,14 @@ const TrainerSchema = new Schema({
   teaching_experience_years: Number,
   // The NSDC round-trip. ABPL submit from their own email, so we hold dates and their verdict,
   // not the submission itself: "approve होके आता है… profile में क्या त्रुटि है वो बताते हैं".
+  // -169 (QA-399), Karunn sir's Back-dated Planning columns 5, 6 and 13. They sit HERE, inside the
+  // NSDC block, because they are part of the same round-trip and splitting them would be the first
+  // step toward a second place where a trainer's preparation is recorded.
+  sidh_profile_verified_on: Date,   // col 5  - TR ID + experience letters generated on SIDH
+  eligibility_checked_on: Date,     // col 6  - pipeline "Documents Completed" is a DIFFERENT question
+  // col 13. EXPECTED, deliberately distinct from tot_certificate_no which is the OUTCOME: he tracks
+  // the date he is waiting on, and a field that only exists once the wait is over cannot be tracked.
+  tot_result_expected_on: Date,
   nomination_sent_on: Date,
   nsdc_submitted_on: Date,
   nsdc_result_on: Date,

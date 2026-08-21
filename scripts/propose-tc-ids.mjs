@@ -3,6 +3,13 @@
 //     node scripts/propose-tc-ids.mjs            → writes tc-id-proposal.json, changes nothing
 //     node scripts/propose-tc-ids.mjs --apply    → applies ONLY the rows left marked "apply": true
 //
+// -169 (QA-520) added a SECOND proposal in the same file: `target_rows`, which puts each sheet
+// row's TC ID onto the (centre × job role) row it belongs to (LocationTarget.tc_id). Why that
+// matters: a centre has SEVERAL government registrations and Location.external_id holds exactly
+// one, so on live 20 of the sheet's 35 TC IDs reached no centre at all — four of the five rows the
+// 7,315/6,315 correction is about among them. Once a target row carries its own number, the sync
+// can find it, and the correction stops being a thing somebody has to redo by hand every time.
+//
 // Why this exists: the government attendance import identifies a centre by the TC ID stamped
 // into the portal's Org Name ("AVPL Gurugram -TC352854"), matched against Location.external_id.
 // The client workbook carries that TC ID in a column, but Sheet Watch runs in watch mode with no
@@ -80,7 +87,35 @@ if (APPLY) {
     console.log(`SET   ${loc.name} → ${r.tc_id}`);
     done++;
   }
-  console.log(`\n${done} applied, ${skipped} skipped.`);
+  // -169 (QA-520): the per-row half. Same rules as above — never overwrite a value someone else
+  // set, and only touch rows a human marked.
+  const todoRows = (proposal.target_rows ?? []).filter((r) => r.apply === true && r.location_id && r.program_id && r.tc_id);
+  let rDone = 0, rSkipped = 0;
+  for (const r of todoRows) {
+    const existing = await db.collection("locationtargets").findOne({
+      location: new mongoose.Types.ObjectId(r.location_id), program: new mongoose.Types.ObjectId(r.program_id),
+    });
+    if (!existing) {
+      console.log(`SKIP  ${r.tc_id} — ${r.location_name} has no target row for ${r.program_code} yet`);
+      rSkipped++; continue;
+    }
+    if (existing.tc_id && existing.tc_id !== r.tc_id) {
+      console.log(`SKIP  ${r.location_name} / ${r.program_code} already carries "${existing.tc_id}" (proposal says ${r.tc_id}) — resolve by hand`);
+      rSkipped++; continue;
+    }
+    if (existing.tc_id === r.tc_id) { rSkipped++; continue; }
+    await db.collection("locationtargets").updateOne({ _id: existing._id }, { $set: { tc_id: r.tc_id, updatedAt: new Date() } });
+    await db.collection("auditlogs").insertOne({
+      entity: "LocationTarget", entity_id: existing._id, field: "tc_id",
+      old_value: existing.tc_id ?? null, new_value: r.tc_id,
+      actor_type: "EXTERNAL_SYNC", note: "per-row TC ID backfilled from the client workbook via propose-tc-ids.mjs (QA-520)",
+      createdAt: new Date(), updatedAt: new Date(),
+    });
+    console.log(`SET   ${r.location_name} / ${r.program_code} → ${r.tc_id}`);
+    rDone++;
+  }
+  console.log(`\n${done} location key(s) applied, ${skipped} skipped.`);
+  console.log(`${rDone} target row TC ID(s) applied, ${rSkipped} skipped.`);
   await mongoose.disconnect();
   process.exit(0);
 }
@@ -135,14 +170,55 @@ for (const c of centres.values()) {
   }
 }
 
+// -169 (QA-520): the per-row proposal. The centre still comes from the name match above (with a
+// human confirming it), and the JOB ROLE comes from the sheet row's own columns — so this never
+// guesses at the thing the government actually numbered.
+const cRole = col(/job\s*role/i), cScheme = col(/scheme/i);
+const programs = await db.collection("programs").find({}, { projection: { name: 1, code: 1, scheme: 1 } }).toArray();
+const centreOf = new Map(rows.filter((r) => r.location_id).map((r) => [r.tc_id, r]));
+const target_rows = [];
+if (cRole < 0) {
+  console.log("NOTE  no 'Job Role' column found in the workbook — the per-row proposal is empty.");
+  console.log("      (Nothing is guessed: without the job role there is no row to attach a TC ID to.)");
+} else {
+  const seen = new Set();
+  for (const r of grid.slice(h + 1)) {
+    const tc = String(r[cTc] ?? "").trim();
+    const role = String(r[cRole] ?? "").trim();
+    if (!tc || !role) continue;
+    const key = tc + "|" + norm(role);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const centre = centreOf.get(tc);
+    const scheme = cScheme >= 0 ? String(r[cScheme] ?? "").trim() : "";
+    const byName = programs.filter((p) => norm(p.name) === norm(role));
+    const hitsP = byName.length > 1 && scheme ? byName.filter((p) => norm(p.scheme) === norm(scheme)) : byName;
+    const prog = hitsP.length === 1 ? hitsP[0] : null;
+    target_rows.push({
+      tc_id: tc, job_role: role, scheme,
+      location_id: centre?.location_id ?? "", location_name: centre?.location_name ?? "",
+      program_id: prog ? String(prog._id) : "", program_code: prog?.code ?? "",
+      status: !centre?.location_id ? "NO CENTRE — resolve the centre above first"
+        : !prog ? (byName.length > 1 ? `AMBIGUOUS — ${byName.length} programmes named "${role}"` : `NO PROGRAMME — nothing in the ERP is named "${role}"`)
+        : "MATCH",
+      // Pre-approved only when BOTH ends are unambiguous and the centre itself was an exact match.
+      apply: !!(centre?.location_id && prog && centre.apply === true),
+    });
+  }
+}
+const rowTally = target_rows.reduce((a, r) => { const k = r.status.split(" —")[0]; a[k] = (a[k] ?? 0) + 1; return a; }, {});
+
 const tally = rows.reduce((a, r) => { const k = r.status.split(" —")[0]; a[k] = (a[k] ?? 0) + 1; return a; }, {});
 writeFileSync(OUT, JSON.stringify({
   generated_at: new Date().toISOString(), database: MONGODB_DB, source: SHARE.split("?")[0],
-  how_to_use: "Review every row. Set apply:true on the ones that are right; fix location_id on AMBIGUOUS rows first. Then: node scripts/propose-tc-ids.mjs --apply",
-  summary: tally, rows,
+  how_to_use: "Review every row in BOTH lists. Set apply:true on the ones that are right; fix location_id on AMBIGUOUS rows first. \"rows\" sets each centre's key (Location.external_id); \"target_rows\" sets each (centre x job role) row's own TC ID (LocationTarget.tc_id) — that second one is what lets the sheet correct a row whose number is not its centre's key. Then: node scripts/propose-tc-ids.mjs --apply",
+  summary: tally, rows, target_row_summary: rowTally, target_rows,
 }, null, 2));
 
 console.log(Object.entries(tally).map(([k, v]) => `  ${v}  ${k}`).join("\n"));
 console.log(`\nWrote ${OUT}. Nothing has been changed.`);
-console.log(`${rows.filter((r) => r.apply).length} row(s) are pre-approved (exact name match); the rest need a human.`);
+console.log(`${rows.filter((r) => r.apply).length} centre key(s) are pre-approved (exact name match); the rest need a human.`);
+console.log(`\n${target_rows.length} per-row TC ID proposal(s):`);
+console.log(Object.entries(rowTally).map(([k, v]) => `  ${v}  ${k}`).join("\n") || "  (none)");
+console.log(`${target_rows.filter((r) => r.apply).length} pre-approved; the rest need a human.`);
 await mongoose.disconnect();

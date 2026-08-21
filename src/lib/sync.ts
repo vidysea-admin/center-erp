@@ -181,6 +181,9 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
   // matter, so a CSV that merely omits trailing unmapped cells is still read normally.
   const maxMappedIdx = Math.max(...mappedCols.map((c) => colIdx.get(c)!));
   const truncated: number[] = [];
+  // QA-520: registration numbers that more than one CENTRE claims. Never resolved by write
+  // order - reported, like a truncated row, so a partial read never reads as a clean one.
+  const ambiguous: string[] = [];
 
   let created = 0;
   for (const [rowNo, raw] of rows.slice(1).entries()) {
@@ -192,6 +195,26 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
     const externalId = (raw[colIdx.get(idCol)!] ?? "").trim();
     if (!externalId) continue;
     const loc = await Location.findOne({ external_id: externalId }).lean<any>();
+    // QA-520 (-169): the sheet's row identity is its OWN TC ID, and a centre has SEVERAL - the
+    // government registers each (centre x scheme x job role) separately and numbers each one
+    // (Charthwal: TC353328 for AVPL, TC352938 for HSL). `Location.external_id` can hold exactly
+    // one of them, so on live 20 of the sheet's 35 TC IDs reached NO location at all - including
+    // four of the five rows QA-440 exists for. Those rows could not be corrected from the sheet,
+    // ever, and the sync reported a clean run while ignoring them.
+    //
+    // So a row-level field asks WHICH CENTRE carries this number. It is the centre the number
+    // identifies, not the job role: `propose-tc-ids.mjs:96` says it in one line - "A TC ID
+    // repeats across job-role rows" - and live agrees, 35 distinct TC IDs against 55 target rows.
+    // The job role still comes from the mapping's :CODE, exactly as before.
+    const anchors = await LocationTarget.find({ tc_id: externalId }).select("location").lean<any[]>();
+    const anchorLocs = [...new Set(anchors.map((a) => String(a.location)))];
+    // ONE number pointing at TWO centres is not something to settle by write order - it is a
+    // question, and the same standard the -163 move door holds. Refuse the whole row and say so.
+    if (anchorLocs.length > 1) {
+      ambiguous.push(`${externalId} (${anchorLocs.length} different centres carry it)`);
+      continue;
+    }
+    const anchorLoc = anchorLocs.length === 1 ? anchors[0].location : null;
     for (const col of mappedCols) {
       const field = mappings[col];
       if (field === "external_id") continue;
@@ -201,7 +224,11 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
       if (rowField) {
         const program = await Program.findOne({ code: rowField.code }).lean<any>();
         if (!program) continue;
-        const lt = loc ? await LocationTarget.findOne({ location: loc._id, program: program._id }).lean<any>() : null;
+        // QA-520: the centre comes from whoever carries this registration number, and only falls
+        // back to the sheet key when nobody does. That fallback is what keeps every source that
+        // has always keyed on a centre working exactly as it did.
+        const ltLoc = anchorLoc ?? loc?._id ?? null;
+        const lt = ltLoc ? await LocationTarget.findOne({ location: ltLoc, program: program._id }).lean<any>() : null;
         // A BLANK stored value has to compare as blank, not as "0" or "undefined" - the five rows
         // in QA-440 are blank in the sheet and Approved in the ERP, and a diff that cannot see
         // blank-vs-value is a diff that cannot report them.
@@ -219,11 +246,15 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
       // recreated it. A decision the user has already made is a decision, not a fresh diff, so a
       // matching row in ANY status suppresses re-creation. It only comes back if the sheet
       // actually changes to a NEW value.
-      const dup = await SheetChange.findOne({ sync_source: src._id, location: loc?._id ?? null, field_name: field, new_value: incoming, status: { $in: ["Open", "Actioned", "Ignored"] } });
+      // QA-520: a row-level change belongs to the centre that carries the number; everything else
+      // keeps the sheet key's centre. Same value used for the duplicate check and the write, or a
+      // re-run would raise a second row for the same fact.
+      const changeLoc = (rowField ? anchorLoc : null) ?? loc?._id ?? null;
+      const dup = await SheetChange.findOne({ sync_source: src._id, location: changeLoc, field_name: field, new_value: incoming, status: { $in: ["Open", "Actioned", "Ignored"] } });
       if (dup) continue;
       await SheetChange.create({
         sync_source: src._id,
-        location: loc?._id ?? null,
+        location: changeLoc,
         field_name: field,
         old_value: stored,
         new_value: incoming,
@@ -231,6 +262,15 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
       });
       created++;
     }
+  }
+  // QA-520: a run that skipped rows because their registration number is claimed twice is NOT a
+  // clean run, and reporting it as one is how the last of these stayed invisible for a month.
+  if (ambiguous.length) {
+    src.last_status = "Partial";
+    src.last_error = `${ambiguous.length} TC ID(s) are carried by more than one centre, so those sheet rows were skipped rather than guessed: ${ambiguous.slice(0, 5).join("; ")}${ambiguous.length > 5 ? "; …" : ""}. One government registration number belongs to one centre — correct it on the location screen.`;
+    src.last_synced_at = new Date();
+    await src.save();
+    return { created, status: "Partial", error: src.last_error };
   }
   // Rule 2 at row level: say so plainly rather than reporting a clean run over a partial read.
   if (truncated.length) {
