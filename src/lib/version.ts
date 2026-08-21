@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-179";
+export const RELEASE = "2026.08.14-180";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,16 @@ export const RELEASE = "2026.08.14-179";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-180 puts back something the last release quietly removed. Every figure on the report is " +
+  "supposed to say where it came from - the client's master sheet, or our own records. When " +
+  "the explanations were folded into a card, the four figures taken from the client kept that " +
+  "label and the three taken from our records lost it, because those three had been showing a " +
+  "percentage instead. All seven now name their source whether the card is open or shut. The " +
+  "note under them also stops saying two numbers are close and gives the actual proportion " +
+  "instead, so the reader judges rather than being told.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-179 gives the report columns their real names. The screen had been shortening them to " +
   "three or four letters while the Excel download spelled them out, so one column had two " +
   "names and downloading quietly renamed every one of them. They now read the same in both " +
@@ -25,10 +35,7 @@ export const RELEASE_NOTE_CURRENT =
   "you can switch on and off was also repeating itself: the same five measures appeared once " +
   "per job role, thirty-four entries with twenty exact duplicates. Each name is listed once " +
   "now, with a count of how many columns it covers, and job roles are listed separately - so " +
-  "hiding one measure everywhere and hiding one whole job role are both a single click.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "hiding one measure everywhere and hiding one whole job role are both a single click." +
   "-178 tidies the top of the report. The block explaining where each column's numbers come " +
   "from used to sit open all the time - seven definitions and a note, pushing the table itself " +
   "down the page on the one screen people open to read the table. It folds into a card now, and " +

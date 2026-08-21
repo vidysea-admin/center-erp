@@ -137,6 +137,16 @@ export default function ReportsPage() {
       {t && (
         <div className="flex flex-wrap gap-3">
           {[
+            // QA-566 (-180) - EVERY tile names its source, and that is REQ-367's actual demand:
+            // each figure says WHICH of the sources it came from. Before this, four tiles said
+            // "Client sheet" and three said "3% of approved" - a denominator, not a source. So
+            // when -178 folded the definitions into a card, the client's four numbers kept their
+            // attribution on screen and OUR three lost theirs. A checker measured it: with the
+            // card closed, "Client sheet" renders and "Our records" renders nowhere.
+            //
+            // The split I made in -178 (definitions fold, warnings stay) was the right instinct
+            // applied AROUND the block instead of THROUGH it. The label belongs with the figure
+            // and always visible; only the elaboration may fold.
             ["Target", t.target, "Client sheet"],
             ["Approved", t.approved, "Client sheet"],
             // QA-527 / his own words at 17:09: "approve kitne hain, NOT APPROVED kitne hain."
@@ -144,10 +154,10 @@ export default function ReportsPage() {
             // blanks were 4,775 of 12,090, so reporting them as "not approved" would have been a
             // number nobody said.
             ["Not approved", t.not_approved, "Client sheet"],
-            ["No verdict yet", t.unknown, "TC Status is blank"],
-            ["Mobilised", t.mobilised, `${pct(t.mobilised)}% of approved`],
-            ["In training", t.in_training, `${pct(t.in_training)}% of approved`],
-            ["Passed", t.certified, `${pct(t.certified)}% of approved`],
+            ["No verdict yet", t.unknown, "Client sheet · TC Status blank"],
+            ["Mobilised", t.mobilised, `Our records · ${pct(t.mobilised)}% of approved`],
+            ["In training", t.in_training, `Our records · ${pct(t.in_training)}% of approved`],
+            ["Passed", t.certified, `Our records · ${pct(t.certified)}% of approved`],
           ].map(([label, value, sub]) => (
             <div key={String(label)} className="min-w-[140px] flex-1 rounded-xl border border-gray-100 bg-white px-4 py-3">
               <div className="text-[11px] uppercase tracking-wider text-gray-400">{String(label)}</div>

@@ -835,11 +835,40 @@ for (const file of walk(root)) {
   // screen, not in a footnote", and a warning behind a click is a warning the reader has to already
   // know about. So two things are asserted, and the second is the one that would quietly rot: the
   // card exists, AND the caveat is not inside it.
-  const hasCard = reportSrc.includes("<details") && reportSrc.includes("Where these numbers come from");
-  const detailsBlock = (reportSrc.match(/<details[\s\S]*?<\/details>/) ?? [""])[0];
-  const caveatOutside = reportSrc.includes("s?.caveat") && !detailsBlock.includes("s.caveat");
-  if (hasCard && caveatOutside) passed++;
-  else { failed++; pushStructural("app/(app)/reports/page.tsx: the definitions are not a disclosure card with the caveat left OUTSIDE it (card " + hasCard + ", caveat outside " + caveatOutside + ") - QA-564. Folding the warning behind a click hides the one line that changes how the figures beside it should be read."); }
+  // QA-567 (-180): the checker took this pin apart and it was right on all three counts. The old
+  // "caveat is outside" assertion (a) PASSED with the caveat moved INSIDE spelled `{s?.caveat}` -
+  // because the string "s?.caveat" does not contain "s.caveat", and `s?.caveat` is this file's own
+  // idiom one line above; (b) passed on `<details open>`, so the hidden-BY-DEFAULT behaviour Umesh
+  // actually asked for was held by nothing at all; (c) went vacuous the moment any earlier
+  // <details> appeared, because the regex matched that one instead.
+  //
+  // Rebuilt to test position rather than membership: find the card by its own summary, require it
+  // to carry no `open`, and require the caveat to appear AFTER the card closes. Honest limit,
+  // stated rather than hidden: this is still a SOURCE scan. The checker's preferred fix is a DOM
+  // suite that opens and closes the card and looks - the wall has no browser harness today, so
+  // that is a gap this pin narrows and does not close.
+  const cardStart = reportSrc.indexOf("Where these numbers come from");
+  const openTag = cardStart < 0 ? "" : reportSrc.slice(reportSrc.lastIndexOf("<details", cardStart), cardStart);
+  const cardEnd = cardStart < 0 ? -1 : reportSrc.indexOf("</details>", cardStart);
+  const caveatAt = reportSrc.search(/\{s\??\.?caveat\}|s\?\.caveat &&/);
+  const hasCard = cardStart >= 0 && openTag.startsWith("<details");
+  // Written carefully: the first attempt put a real 0x08 byte here - a regex word-boundary
+  // that collapsed into a backspace on the way through a shell heredoc - and THIS FILE's own
+  // control-character scan caught it one run later. That check exists for exactly this, and a
+  // pin catching the maker's hand is the pin earning its keep.
+  const closedByDefault = hasCard && !/ open|\sopen=/.test(openTag);
+  const caveatOutside = hasCard && caveatAt > cardEnd && cardEnd > 0;
+  if (hasCard && closedByDefault && caveatOutside) passed++;
+  else { failed++; pushStructural("app/(app)/reports/page.tsx: the definitions card is not collapsed-by-default with the caveat left OUTSIDE it (card " + hasCard + ", closed by default " + closedByDefault + ", caveat after the card " + caveatOutside + ") - QA-564 / QA-567. Folding the warning behind a click hides the one line that changes how the figures beside it should be read."); }
+
+  // QA-566 (-180): every KPI tile names its SOURCE. REQ-367 asks each figure to say which of the
+  // sources it came from - and before this, four tiles said "Client sheet" while our three said
+  // "3% of approved", which is a denominator. So folding the definitions in -178 took provenance
+  // away from OUR columns only and left the client's intact. Measured by a checker on live: with
+  // the card closed, "Client sheet" rendered and "Our records" rendered nowhere.
+  const ourTiles = (reportSrc.match(/Our records ·/g) ?? []).length;
+  if (ourTiles >= 3) passed++;
+  else { failed++; pushStructural("app/(app)/reports/page.tsx: the Mobilised / In training / Passed tiles do not name their source (found " + ourTiles + " of 3) - QA-566. A percentage is a denominator, not a provenance, so with the definitions card closed those three figures say where they came from nowhere on the screen."); }
 
   // QA-565 (-179): the screen must call a column what the DOWNLOAD calls it. The report read
   // APPR. / MOB. / IN TRG while rollup/export writes Approved / Mobilised / In training, so one

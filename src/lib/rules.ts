@@ -2767,10 +2767,18 @@ export async function reportRollup(scope: Record<string, unknown> = {}) {
     }
   }
   return {
-    rows, roles: [...roles].sort(), total: grand, sources: SOURCES,
+    rows, roles: [...roles].sort(), total: grand,
     // Empty on todays data, and that is the point: the day the sheet grows a word like
     // "Transferable", it appears HERE instead of being absorbed into a bucket labelled blank.
     unrecognised_status: [...unrecognised.entries()].map(([value, rows]) => ({ value, rows })).sort((a, b) => b.rows - a.rows),
+    // QA-568: the caveat carries the actual proportion rather than the word "close" (REQ-366b).
+    // Computed here so it can never drift from the figures printed beside it.
+    sources: {
+      ...SOURCES,
+      caveat: grand.mobilised
+        ? `Mobilised counts everyone put on a batch (${grand.mobilised.toLocaleString("en-IN")}); In training counts the ones still studying (${grand.in_training.toLocaleString("en-IN")}) - ${Math.round((grand.in_training / grand.mobilised) * 100)}%. The rest have finished, failed or dropped out.`
+        : SOURCES.caveat,
+    },
   };
 }
 
@@ -2789,7 +2797,11 @@ export const SOURCES = {
   certified: "Our records - candidates with a Pass assessment result (a certificate being issued is a further step)",
   // criterion 9 / REQ-366b. This has to be ON the screen, not in a footnote: today the two
   // columns are nearly the same number, and anyone reading a funnel would assume that is a finding.
-  caveat: "Mobilised and In training are close because almost everyone enrolled is still studying - the difference is the ones who have finished, failed or dropped out.",
+  // QA-568 (-180): this line used to say Mobilised and In training were "close", and REQ-366b
+  // forbids exactly that word - it asks for the FIGURE. "Close" is the reader's judgement to make
+  // and the report's job to enable; a number does that and an adjective does not. reportRollup
+  // computes the real percentage and overrides this at return time.
+  caveat: "Mobilised counts everyone put on a batch; In training counts the ones still studying.",
 } as const;
 
 export async function mappingReadinessBulk(targetFilter: Record<string, unknown>, limit = 2000) {
