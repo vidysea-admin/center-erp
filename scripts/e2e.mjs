@@ -2269,6 +2269,72 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
     // that eventually disagrees, and then nobody can say which one is the report.
     const xl = await fetch(BASE + "/api/reports/rollup/export", { headers: { cookie } });
     const xlBuf = Buffer.from(await xl.arrayBuffer());
+    // ---- -176 (QA-551): a snapshot for LOOKING at screens carries no live credential ----
+    // A checker found this against the file QA-536 had just fixed. QA-536's lesson was written
+    // as "the worst secret is a FIELD, not a collection" - and applying it, I stopped looking at
+    // collections. publictokens is 59 rows of which 58 are active, the 32-hex token IS the
+    // credential, and 45 of them open one NAMED candidate's whole record on the live site.
+    //
+    // A SOURCE pin, and labelled as one: mirror-prod.mjs talks to production, so no assertion
+    // that RUNS it belongs in the wall. What can be checked mechanically is that the guard names
+    // the collection - and that the rule and the list cannot drift apart again, which is exactly
+    // how this was missed: the comment above SKIP already said "collections whose rows are
+    // credentials or one-time tokens" and the set did not contain the one collection that is.
+    {
+      const mir = (await import("node:fs")).readFileSync("scripts/mirror-prod.mjs", "utf8");
+      const skipLine = (mir.match(/const SKIP = new Set\(\[[^\]]*\]\)/) ?? [""])[0];
+      ok("QA-551 (-176) [source pin]: the mirror refuses to copy publictokens - every row of it is a live credential",
+        /publictokens/.test(skipLine), JSON.stringify({ skip: skipLine.slice(0, 160) }));
+
+      // The other half of the same lesson: the FIELD redaction must still be there. Losing it
+      // while adding the collection would be the same mistake with the halves swapped.
+      ok("QA-536 (-176) [source pin]: and it still redacts the government-portal password field",
+        /tc_password/.test(mir) && /REDACT/.test(mir), JSON.stringify({ hasRedact: /REDACT/.test(mir), hasTcPassword: /tc_password/.test(mir) }));
+
+      // The guard that stops the mirror being written onto the host it was read from. It exists
+      // because the first draft did exactly that, on production.
+      ok("QA-530 (-176) [source pin]: and it refuses a target on the SAME HOST as the source",
+        /SAME HOST as the source/.test(mir) && /MIRROR_TARGET_URL/.test(mir), JSON.stringify({ ok: /SAME HOST/.test(mir) }));
+    }
+
+    // ---- -176 (QA-552): an unrecognised status is NAMED, never absorbed ----
+    // `unknown` is a DEFAULT bucket, so it takes a blank AND any word nobody taught tcVerdict -
+    // and the screen labelled the whole bucket "BLANK". Same two-meanings-one-number defect that
+    // QA-527 exists to end, one level down, written by me while fixing it. Karunn sir says
+    // "transferable" out loud at 12:31 about the very rows in dispute.
+    {
+      const oddProg = (await req("POST", "/api/programs", { code: "RPD" + stamp, name: "Report Role Odd " + stamp, scheme: "RPL-AVPL", trainer_skill: "RPSkillD" + stamp }, 201)).data.item;
+      ok("-176 fixture guard: the odd-status programme exists", !!oddProg?._id, JSON.stringify({ d: oddProg?._id ?? null }));
+      if (oddProg?._id) {
+        await req("PUT", `/api/locations/${rpLoc._id}/targets`, { program: oddProg._id, approved_target: 70, tc_status: "Transferable" }, 200);
+        const rp4 = (await req("GET", "/api/reports/rollup", undefined, 200)).data;
+        const odd = (rp4.unrecognised_status ?? []).find((u) => u.value === "Transferable");
+        ok("QA-552 (-176): a status the report does not recognise is reported by NAME, not silently counted as blank",
+          !!odd && odd.rows >= 1, JSON.stringify({ unrecognised: rp4.unrecognised_status ?? null }));
+
+        // It still has to be COUNTED somewhere, or the row would stop adding up - the honest
+        // place is `unknown`, and the screen says so rather than the label pretending it is blank.
+        const bad4 = (rp4.rows ?? []).filter((r) => {
+          const t = r.total ?? {};
+          return (t.approved ?? 0) + (t.not_approved ?? 0) + (t.unknown ?? 0) !== (t.target ?? 0);
+        });
+        ok("QA-552 (-176): ...and the three buckets still add back to Target with it in play",
+          bad4.length === 0, JSON.stringify({ offenders: bad4.slice(0, 2).map((r) => r.total) }));
+
+        ok("QA-552 (-176): the stated source no longer claims the bucket is only blanks",
+          /BLANK/.test(rp4.sources?.unknown ?? "") && /does not recognise|not recognise/.test(rp4.sources?.unknown ?? ""),
+          JSON.stringify({ un: (rp4.sources?.unknown ?? "").slice(0, 120) }));
+
+        // A clean sheet reports an EMPTY list, not a missing key - a caller should not have to
+        // tell 'nothing odd' from 'this build does not check'.
+        await req("PUT", `/api/locations/${rpLoc._id}/targets`, { program: oddProg._id, approved_target: 70, tc_status: "Approved" }, 200);
+        const rp5 = (await req("GET", "/api/reports/rollup", undefined, 200)).data;
+        ok("QA-552 (-176): with nothing odd in the data the list is present and EMPTY, not absent",
+          Array.isArray(rp5.unrecognised_status) && rp5.unrecognised_status.length === 0,
+          JSON.stringify({ v: rp5.unrecognised_status ?? null }));
+      }
+    }
+
     // ---- -175 (QA-527): a blank verdict is not a refusal ----
     // Umesh, reading the shipped report: "ye approved location ka hai ya not approved ka, vo pata
     // nahi chal raha." He was right, and the production data says why - measured 2026-08-21 over
@@ -2369,7 +2435,27 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
         // approval_status and the pin failed against code that was correct. A pin that fails for
         // its own reasons is worse than no pin - it teaches you to read past a FAIL.
         const derives = /plannerLocations\s*=\s*locations\.filter\([\s\S]{0,120}?approval_status/.test(src);
-        const usesFiltered = /{plannerLocations\.map\(/.test(src) && !/<option value="">Not a specific centre<\/option>[\s\S]{0,120}\{locations\.map\(/.test(src);
+        // QA-553 (-176): the anti-regression half used to be anchored to the UI sentence "Not a
+        // specific centre". That is ordinary copy, this repo edits copy constantly (check-user-copy
+        // exists for it), and once the sentence changed the negative lookup could no longer match -
+        // so the clause would go PERMANENTLY TRUE and the pin would quietly degrade to "a variable
+        // called plannerLocations exists somewhere" while still reporting PASS. A pin that stops
+        // testing without failing is worse than one that was never written.
+        //
+        // Anchored to STRUCTURE instead: the drawer must not map the unfiltered `locations` inside
+        // any <select>, anywhere in the file. Copy can change freely; a revert to the full list
+        // cannot.
+        // Scoped to the PLANNER's own selects, identified by the handler they call. "No select in
+        // this file maps `locations`" was the first attempt and it was wrong in the other
+        // direction: the New Batch form's centre select maps the full list and SHOULD - you may
+        // create a batch at a centre you cannot yet plan one at. A pin that forbids correct code is
+        // as bad as one that permits broken code, and this one was caught by running it against
+        // -175, where it failed a fix that was present.
+        const selectBlocks = src.match(/<select[\s\S]*?<\/select>/g) ?? [];
+        const plannerSelects = selectBlocks.filter((b) => /runPlanner\(/.test(b));
+        const usesFiltered = plannerSelects.length > 0
+          && plannerSelects.some((b) => /\{plannerLocations\.map\(/.test(b))
+          && !plannerSelects.some((b) => /\{locations\.map\(/.test(b));
         ok("QA-528 (-175) [source pin]: the planner centre list is derived by filtering on approval_status, and the drawer renders THAT list - not the full one",
           derives && usesFiltered, JSON.stringify({ derives, usesFiltered }));
       }

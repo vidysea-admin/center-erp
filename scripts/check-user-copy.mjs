@@ -747,6 +747,54 @@ for (const file of walk(root)) {
   }
 }
 
+// ---- -176 (QA-542 / QA-543 / QA-544): the report has to be WORKABLE, not just correct ----
+// Umesh, reading the -175 report on live: "bas centre pr label show krne se kuch nhi hoga naa…
+// ya ek status wala column de de aur uss column mai status daal dena", and "her column ko filters
+// … taaki selective row ko bhi filter out kiya jaya saka … first two columns … woh FREEZE rahe."
+//
+// -175 put the approval verdict in a CHIP to save table width. A chip cannot be filtered, cannot
+// be sorted, and does not leave the screen as a value - so the trade bought width with the one
+// thing the answer was for. A checker reached the same place from the other side (QA-554): 7 of
+// the 20 live centres read "mixed", and those seven carry the largest targets.
+//
+// Structural, because none of it is visible over HTTP.
+{
+  const reportSrc = stripComments(fs.readFileSync(path.join(root, "app/(app)/reports/page.tsx"), "utf8"));
+  const tableSrc = stripComments(fs.readFileSync(path.join(root, "components/ui.tsx"), "utf8"));
+
+  // QA-542: a Status COLUMN, and it must be filterable - a status you cannot filter by is a label.
+  const hasCol = /key:\s*"verdict"/.test(reportSrc);
+  // The column's own declaration line, not the whole file: `[^}]*` would stop at the first `}`
+  // inside a render arrow, and matching across the file would let a `filterable: true` on some
+  // OTHER column satisfy this.
+  const verdictDecl = (reportSrc.match(/key:\s*"verdict"[^\n]*/) ?? [""])[0];
+  const colFilterable = /filterable:\s*true/.test(verdictDecl);
+  if (hasCol && colFilterable) passed++;
+  else { failed++; pushStructural("app/(app)/reports/page.tsx: the approval verdict is not a filterable COLUMN (verdict column " + hasCol + ", filterable " + colFilterable + ") - QA-542. A chip cannot be filtered, sorted, or exported, which is the whole reason the column exists."); }
+
+  // QA-544: the shared table must be able to freeze leading columns, and the report must use it.
+  const tableCanFreeze = /freeze\?:\s*number/.test(tableSrc) && /sticky/.test(tableSrc);
+  const reportFreezes = /freeze=\{\s*2\s*\}/.test(reportSrc);
+  if (tableCanFreeze && reportFreezes) passed++;
+  else { failed++; pushStructural("components/ui.tsx / reports: leading columns do not stay put on horizontal scroll (table supports it " + tableCanFreeze + ", report asks for it " + reportFreezes + ") - QA-544. The report is four job roles of five figures plus a seven-column total group; the centre name leaves the screen and every figure after it is unattributed."); }
+
+  // QA-555: on a GROUPED table the Columns picker must SECTION by group. Umesh, on the report:
+  // "isme bahut saari duplicate entries hai, bas unique ones hi aani chahiye" - twenty-eight rows
+  // of which twenty-five read Target / Appr. / Mob. / In trg / Passed, with nothing saying which
+  // job role. Two things are asserted, and the second is the one that would rot: the picker reads
+  // the group, AND the group carries its own toggle - a section header with no toggle is just a
+  // relabelling of the same unusable list.
+  const pickerSections = tableSrc.includes("sections.push({ group") && tableSrc.includes("Visible columns");
+  const pickerGroupToggle = tableSrc.includes("s.cols.forEach((c) => setColVisible");
+  if (pickerSections && pickerGroupToggle) passed++;
+  else { failed++; pushStructural("components/ui.tsx: the Columns picker does not section a grouped table (sections " + pickerSections + ", group toggle " + pickerGroupToggle + ") - QA-555. On the report it lists five identical labels per job role with nothing naming the role, so no entry can be told from another."); }
+
+  // QA-552: the report must SURFACE a status value it does not recognise. `unknown` is a default
+  // bucket, so without this it silently absorbs any new word the client's sheet grows.
+  if (/unrecognised_status/.test(reportSrc)) passed++;
+  else { failed++; pushStructural("app/(app)/reports/page.tsx: an unrecognised TC Status is not surfaced on the screen - QA-552. The no-verdict bucket is a DEFAULT, so anything nobody taught the report lands there under a label saying the cell is blank."); }
+}
+
 // -149 (QA-324): this file started as one check and now carries several - the ASI trap, the
 // drawer ceiling, the scope-collision scan. Every finding was summarised as "user-facing
 // string(s) still carry a Rule/DEC/QA code", so a scope leak was reported as a copy problem and

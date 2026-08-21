@@ -34,7 +34,23 @@ const LOCAL_PW = process.env.MIRROR_PASSWORD || "LocalOnly@123";
 // Collections whose rows are credentials or one-time tokens. A local copy of production is a
 // convenience; a local copy of production's session and login material is a liability sitting on
 // a laptop. Skipped by name rather than by pattern, so adding a collection is a decision.
-const SKIP = new Set(["sessions", "accounts", "verificationtokens", "auditlogs"]);
+const SKIP = new Set(["sessions", "accounts", "verificationtokens", "auditlogs", "publictokens"]);
+
+// QA-551 (S1) — `publictokens` was added to that list AFTER a checker found it, and the way it was
+// missed is worth more than the fix. QA-536 taught me "the worst secret is a FIELD, not a
+// collection", I applied that lesson, and in applying it I stopped looking at collections. This one
+// is 59 rows of which 58 are active, and **the 32-hex token IS the credential** — the public routes
+// resolve `{ token, purpose, active: true }` and check nothing else. 45 of them are attendance
+// tokens, and each opens one NAMED candidate's whole record on the live site: centre, trainer,
+// dates, SIDH registration, exam date, result, certificate.
+//
+// The line above this set already said "collections whose rows are credentials or one-time tokens".
+// It described `publictokens` exactly and did not contain it. A rule written down is not a rule
+// applied.
+//
+// SKIPPED rather than field-redacted, unlike tc_password: a token row with its token removed still
+// looks like a working share link on any screen that lists them, and a broken credential that looks
+// live is worse than an obviously empty list. Locally, generate a fresh link instead.
 
 // QA-536 (S1, found by the sweep against THIS script within an hour of it being written): skipping
 // whole COLLECTIONS is not enough, because the worst secret in this database is a FIELD. Ten of the

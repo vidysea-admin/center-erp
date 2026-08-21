@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-175";
+export const RELEASE = "2026.08.14-176";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,20 @@ export const RELEASE = "2026.08.14-175";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-176 makes the report something you can work in rather than only read. The approval " +
+  "verdict was shown as a small label next to each centre, which looked tidy and turned out to " +
+  "be the wrong trade: a label cannot be filtered, sorted, or carried into a download, and " +
+  "filtering by it is the whole reason anyone wants it. It is a proper column now, and it " +
+  "matters most on the seven largest centres, whose job roles are part approved and part still " +
+  "undecided. The centre and its status stay in place while the figures scroll sideways, so a " +
+  "long row never becomes a set of numbers with no name attached. The report also stops " +
+  "quietly absorbing anything it does not recognise: a status word nobody taught it used to be " +
+  "counted as an empty cell, under a heading that said the cell was empty - those are now " +
+  "listed by name on the screen instead. Separately, the tool that copies live data to a " +
+  "developer machine no longer copies the share links that grant access to a candidate record.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-175 makes the report say what a blank actually means. It used to report how much of the " +
   "target was approved, and everything else read as zero - which quietly merged two completely " +
   "different things: a centre the government has refused, and a centre nobody has decided about " +
@@ -27,10 +41,7 @@ export const RELEASE_NOTE_CURRENT =
   "eye. Each centre also carries its own verdict beside its name, because that is the level the " +
   "question gets asked at. The full split per job role is in the Excel download, where pivoting " +
   "happens. Separately, planning a batch now offers only centres and courses that are actually " +
-  "approved, and says how many were left out rather than quietly showing a shorter list.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "approved, and says how many were left out rather than quietly showing a shorter list." +
   "-174 finishes the batch planner. The Plan a batch drawer used to ask for a date and nothing " +
   "else, so it could not know WHICH CENTRE you meant - and everything the last three releases " +
   "taught the system stayed out of reach of the one screen a person opens to plan. It now asks " +

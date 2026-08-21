@@ -261,7 +261,7 @@ export function FilterPills({ options, active, onChange }: {
 // whole point of a total is that it covers what you are looking at, and "Showing 1–25 of 57" means
 // the page is a window, not the answer. Filter or switch tab and it recomputes, because `view` is
 // what the table itself is filtering by.
-export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClick, empty, cardTitle, pageSize = 25, defaultSort, searchable, initialSearch, resizable = true, loading, storageKey, totals }: {
+export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClick, empty, cardTitle, pageSize = 25, defaultSort, searchable, initialSearch, resizable = true, loading, storageKey, totals, freeze }: {
   columns: {
     key: string; label: string; render?: (row: T) => ReactNode; mobile?: boolean;
     sortable?: boolean; sortValue?: (row: T) => string | number | null | undefined;
@@ -295,6 +295,9 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
   cardTitle?: (row: T) => ReactNode;
   pageSize?: number;
   defaultSort?: { key: string; dir: "asc" | "desc" };
+  // QA-544: how many LEADING columns stay put while the rest scroll sideways. Frozen columns get
+  // an explicit width so their offsets are computable; omit it and nothing changes.
+  freeze?: number;
   searchable?: boolean;   // default: only tables with >10 rows get the search box
   initialSearch?: string; // seeds (and follows) the ?q= deep link from global search
   resizable?: boolean;
@@ -493,7 +496,31 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   };
-  const anyWidth = Object.keys(widths).length > 0;
+  // QA-544 (-176) — Umesh, reading the report: "first two columns ho jayenge… woh FREEZE rahe, taaki
+  // jab hum horizontal scroll karein to tab bhi dikhe ki center se related hum report dekh rahe
+  // hain." The report is four job roles of five figures plus a seven-column Grand Total group, so
+  // the centre name leaves the screen almost immediately and every figure after it is unattributed.
+  // Built HERE rather than in the report, because the planning table (18 columns) and the locations
+  // grid have the same problem — one definition, per ARCHITECTURE section 3.
+  //
+  // Sticky-left needs a KNOWN pixel offset, and this table normally lets the browser size columns.
+  // So freezing forces explicit widths on the frozen columns only: they become deterministic, the
+  // offsets are computable, and every column after them is laid out exactly as before.
+  const freezeN = Math.min(freeze ?? 0, visCols.length);
+  const frozenW = (c: Col) => widths[c.key] ?? c.minWidth ?? (c.label ? 130 : 48);
+  const frozenLeft: number[] = [];
+  for (let i = 0, acc = 0; i < freezeN; i++) { frozenLeft.push(acc); acc += frozenW(visCols[i]); }
+  // A frozen cell must paint an OPAQUE background or the scrolling columns show through it, and it
+  // must sit above them in z-order. The header is already sticky vertically; a frozen header cell
+  // is sticky in both directions at once, which is why its z is the highest of the three.
+  const frozenCell = (i: number, kind: "head" | "body" | "foot") =>
+    i >= freezeN ? {} : {
+      className: "sticky " + (kind === "head" ? "z-[7] bg-gray-50" : kind === "foot" ? "z-[3] bg-gray-50" : "z-[2] bg-white group-hover:bg-blue-50/40")
+        + (i === freezeN - 1 ? " border-r border-gray-200" : ""),
+      style: { left: frozenLeft[i] },
+    };
+
+  const anyWidth = Object.keys(widths).length > 0 || freezeN > 0;
   // Every table gets a min-width floor from its columns (2026-08-13, Umesh: "horizontal
   // scroller daal jahan needful hai" — without a floor, wide tables crushed every column
   // into unreadable slivers instead of scrolling). Below the floor the overflow-x-auto
@@ -545,12 +572,41 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
     <div data-dt-pop style={{ position: "fixed", left: pickerAt.x, top: pickerAt.y }}
       className="z-50 max-h-72 w-60 overflow-y-auto rounded-lg border border-gray-200 bg-white p-2 text-xs shadow-lg">
       <div className="px-1.5 pb-1 font-semibold uppercase tracking-wider text-gray-400">Visible columns</div>
-      {pickable.map((c) => (
-        <label key={c.key} className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 hover:bg-gray-50">
-          <input type="checkbox" checked={colChoice[c.key] ?? !c.hidden} onChange={(e) => setColVisible(c.key, e.target.checked)} />
-          <span className="min-w-0 flex-1 truncate text-gray-700" title={c.label}>{c.label}</span>
-        </label>
-      ))}
+      {/* QA-555 (-176) — on a GROUPED table this list was unusable. Umesh, on the report: "isme
+          bahut saari duplicate entries hai, bas unique ones hi aani chahiye." He was reading
+          twenty-eight rows of which twenty-five said Target / Appr. / Mob. / In trg / Passed over
+          and over, because five figures repeat under every job role and again under Grand Total.
+          Nothing in the list said WHICH job role, so no entry could be told from any other.
+
+          Sectioned by the banner group instead, with a group-level toggle - so the entries are
+          distinct within their section AND the useful action on a four-job-role report becomes
+          possible: hide a whole job role at once, rather than un-ticking five identical rows and
+          hoping they were the right five. Ungrouped tables render exactly as before. */}
+      {(() => {
+        const sections: { group?: string; cols: Col[] }[] = [];
+        for (const c of pickable) {
+          const last = sections[sections.length - 1];
+          if (last && last.group === c.group) last.cols.push(c);
+          else sections.push({ group: c.group, cols: [c] });
+        }
+        const row = (c: Col) => (
+          <label key={c.key} className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 hover:bg-gray-50">
+            <input type="checkbox" checked={colChoice[c.key] ?? !c.hidden} onChange={(e) => setColVisible(c.key, e.target.checked)} />
+            <span className="min-w-0 flex-1 truncate text-gray-700" title={c.group ? `${c.group} — ${c.label}` : c.label}>{c.label}</span>
+          </label>
+        );
+        return sections.map((s, i) => s.group ? (
+          <div key={s.group + i} className="mt-1 border-t border-gray-100 pt-1">
+            <label className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 font-semibold text-gray-600 hover:bg-gray-50">
+              <input type="checkbox"
+                checked={s.cols.some((c) => colChoice[c.key] ?? !c.hidden)}
+                onChange={(e) => s.cols.forEach((c) => setColVisible(c.key, e.target.checked))} />
+              <span className="min-w-0 flex-1 truncate" title={s.group}>{s.group}</span>
+            </label>
+            <div className="pl-4">{s.cols.map(row)}</div>
+          </div>
+        ) : <div key={"_" + i}>{s.cols.map(row)}</div>);
+      })()}
       <button className="mt-1 w-full rounded border px-2 py-1 font-medium text-gray-600 hover:bg-gray-50" onClick={resetCols}>
         Reset to default
       </button>
@@ -609,7 +665,11 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
             and the bg must be opaque or data rows ghost through while scrolling. */}
         <div ref={bodyScrollRef} onScroll={() => syncScroll(bodyScrollRef.current, topScrollRef.current)} className="dt-scroll max-h-[72vh] overflow-auto">
           <table className="w-full text-sm" style={tableStyle}>
-            {anyWidth && <colgroup>{visCols.map((c) => <col key={c.key} style={widths[c.key] ? { width: widths[c.key] } : undefined} />)}</colgroup>}
+            {anyWidth && <colgroup>{visCols.map((c, i) => (
+              // A frozen column always carries an explicit width — that is what makes its
+              // neighbour's `left` offset knowable. Unfrozen columns keep the old behaviour.
+              <col key={c.key} style={widths[c.key] ? { width: widths[c.key] } : i < freezeN ? { width: frozenW(c) } : undefined} />
+            ))}</colgroup>}
             <thead className="text-left text-[11px] uppercase tracking-wider text-gray-400">
               {visCols.some((c) => c.group) && (
                 <tr>
@@ -633,8 +693,11 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
                 </tr>
               )}
               <tr>
-                {visCols.filter((c) => !visCols.some((x) => x.group) || c.group).map((c) => (
-                  <th key={c.key} className="sticky top-0 z-[5] border-b border-gray-100 bg-gray-50 px-3.5 py-3 font-semibold">
+                {visCols.filter((c) => !visCols.some((x) => x.group) || c.group).map((c) => {
+                  const fi = visCols.indexOf(c); const f = frozenCell(fi, "head");
+                  return (
+                  <th key={c.key} style={f.style}
+                    className={"sticky top-0 border-b border-gray-100 bg-gray-50 px-3.5 py-3 font-semibold " + (f.className ?? "z-[5]")}>
                     <span className="flex items-center gap-1">
                       {headerCell(c)}
                       {funnel(c)}
@@ -646,17 +709,24 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
                         className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize touch-none select-none hover:bg-blue-300" />
                     )}
                   </th>
-                ))}
+                  );
+                })}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {slice.length === 0 ? (
                 <tr><td colSpan={visCols.length} className="px-3.5 py-8 text-center text-sm text-gray-400">{noMatch}</td></tr>
               ) : slice.map((r, i) => (
-                <tr key={r._id ?? i} onClick={() => onRowClick?.(r)} className={onRowClick ? "cursor-pointer transition-colors hover:bg-blue-50/40" : ""}>
+                // `group` so a frozen cell can follow the row's hover. A frozen cell paints its own
+                // opaque background, so without this the row highlights and the frozen columns stay
+                // white — the row visibly splits in two as the pointer crosses it.
+                <tr key={r._id ?? i} onClick={() => onRowClick?.(r)} className={"group " + (onRowClick ? "cursor-pointer transition-colors hover:bg-blue-50/40" : "")}>
                   {/* align-top: a tall cell (multi-line old→new diff) reads row-wise only if
                       its siblings start at the same line, not floating mid-air. */}
-                  {visCols.map((c) => <td key={c.key} className="break-words px-3.5 py-3 align-top">{cell(c, r)}</td>)}
+                  {visCols.map((c, ci) => {
+                    const f = frozenCell(ci, "body");
+                    return <td key={c.key} style={f.style} className={"break-words px-3.5 py-3 align-top " + (f.className ?? "")}>{cell(c, r)}</td>;
+                  })}
                 </tr>
               ))}
             </tbody>
@@ -666,11 +736,14 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
               // describing something else.
               <tfoot className="text-[13px]">
                 <tr className="border-t-2 border-gray-200 bg-gray-50 font-semibold">
-                  {visCols.map((c, i) => (
-                    <td key={c.key} className="px-3.5 py-3">
-                      {c.total ? c.total(view) : i === 0 ? "All centres" : null}
-                    </td>
-                  ))}
+                  {visCols.map((c, i) => {
+                    const f = frozenCell(i, "foot");
+                    return (
+                      <td key={c.key} style={f.style} className={"px-3.5 py-3 " + (f.className ?? "")}>
+                        {c.total ? c.total(view) : i === 0 ? "All centres" : null}
+                      </td>
+                    );
+                  })}
                 </tr>
               </tfoot>
             )}

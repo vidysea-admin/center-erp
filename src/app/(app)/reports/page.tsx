@@ -36,6 +36,15 @@ export default function ReportsPage() {
   const sumOf = (rs: any[], pick: (r: any) => number) => <b>{num(rs.reduce((a, r) => a + (pick(r) || 0), 0))}</b>;
   const roleTotal = (role: string, k: string) => (rs: any[]) => sumOf(rs, (r) => r.cells?.[role]?.[k] ?? 0);
   const grandTotal = (k: string) => (rs: any[]) => sumOf(rs, (r) => r.total?.[k] ?? 0);
+  // One definition of a centre's verdict, used by the column, its filter, its sort and its tooltip.
+  // Writing it four times is how three of them end up disagreeing.
+  const verdictOf = (c: any = {}) => {
+    if (!c.target) return { label: "", cls: "", title: "" };
+    if (c.approved === c.target) return { label: "Approved", cls: "bg-green-100 text-green-800", title: "Every job role at this centre reads Approved on the client sheet" };
+    if (c.not_approved === c.target) return { label: "Not approved", cls: "bg-red-100 text-red-800", title: "Every job role at this centre is marked Unapproved on the client sheet" };
+    if (c.unknown === c.target) return { label: "No verdict yet", cls: "bg-gray-200 text-gray-700", title: "The client sheet has not filled in TC Status for any job role here. Nobody has refused this centre - nobody has approved it either." };
+    return { label: "Mixed", cls: "bg-amber-100 text-amber-800", title: `Approved ${c.approved}, not approved ${c.not_approved}, no verdict ${c.unknown}, of ${c.target}. Filter a job role column to see which one.` };
+  };
   const columns: any[] = [
     {
       key: "name", label: "Institution", minWidth: 260, sortable: true,
@@ -49,15 +58,6 @@ export default function ReportsPage() {
               vo pata nahi chal raha." The Appr. figures could not answer it, because a refusal and
               a blank both render as 0. The verdict belongs HERE, on the centre, because that is the
               level the question is asked at - and it costs no width in the numeric groups. */}
-          {(() => {
-            const c = r.total ?? {};
-            if (c.target && c.approved === c.target) return <span className="ml-2 rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-semibold text-green-800" title="Every job role at this centre reads Approved on the client sheet">approved</span>;
-            if (c.target && c.not_approved === c.target) return <span className="ml-2 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-800" title="Every job role at this centre is marked Unapproved on the client sheet">not approved</span>;
-            if (c.target && c.unknown === c.target) return <span className="ml-2 rounded bg-gray-200 px-1.5 py-0.5 text-[10px] font-semibold text-gray-700" title="The client sheet has NOT filled in TC Status for any job role here. Nobody has refused this centre - nobody has approved it either.">no verdict yet</span>;
-            if (c.target) return <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800"
-              title={`Mixed on the client sheet - approved ${c.approved}, not approved ${c.not_approved}, no verdict ${c.unknown}, of ${c.target}`}>mixed</span>;
-            return null;
-          })()}
           {r.breaks?.length > 0 && (
             // criterion 3: a row that cannot be true says so, here, instead of being rendered
             // straight-faced. Hiding it would teach people to distrust the whole table.
@@ -68,6 +68,23 @@ export default function ReportsPage() {
       ),
     },
   ];
+  // QA-542 / QA-554 (-176) — the verdict as a COLUMN, not only a chip. Umesh: "bas centre pr label
+  // show krne se kuch nhi hoga naa… ya ek status wala column de de aur uss column mai status daal
+  // dena." He is right and the -175 trade was wrong: I saved table width and gave up the one thing
+  // a person wants to do with the answer, which is FILTER BY IT. A chip cannot be filtered, cannot
+  // be sorted, and does not leave the screen as a value.
+  //
+  // A checker reached the same place from the other side (QA-554): 7 of the 20 live centres read
+  // "mixed", and those seven carry the LARGEST targets — Madihan 1,090, Mirzapur 1,045, Khurja 910.
+  // For them the chip alone says nothing useful; the column and its filter are how you get from
+  // "mixed" to which rows to look at.
+  columns.push({
+    key: "verdict", label: "Status", minWidth: 132, sortable: true, filterable: true,
+    sortValue: (r: any) => verdictOf(r.total).label,
+    filterText: (r: any) => verdictOf(r.total).label,
+    render: (r: any) => { const v = verdictOf(r.total); return v.label ? <span className={"rounded px-1.5 py-0.5 text-[11px] font-semibold " + v.cls} title={v.title}>{v.label}</span> : null; },
+    total: (rs: any[]) => <span className="text-xs font-normal text-gray-500">{rs.length} shown</span>,
+  });
   for (const role of roles) {
     columns.push(
       { key: `${role}|t`, group: role, label: "Target", minWidth: 74, sortable: true, sortValue: (r: any) => r.cells[role]?.target ?? 0, render: (r: any) => num(r.cells[role]?.target ?? 0), total: roleTotal(role, "target") },
@@ -147,6 +164,17 @@ export default function ReportsPage() {
         </div>
       )}
 
+      {/* QA-552: a value the report does not recognise is NAMED, not quietly counted as blank.
+          Empty today, and that is exactly why it has to be here - the row that grows a word like
+          "Transferable" (Karunn sir's own word at 12:31) is the one nobody would go looking for. */}
+      {data?.unrecognised_status?.length > 0 && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+          <b>The client sheet has {data.unrecognised_status.length} status value(s) this report does not recognise.</b>{" "}
+          They are counted under <b>No verdict yet</b> for now, because guessing what they mean would put words in the client&apos;s mouth:{" "}
+          {data.unrecognised_status.map((u: any) => `"${u.value}" (${u.rows} row${u.rows === 1 ? "" : "s"})`).join(" · ")}
+        </div>
+      )}
+
       <DataTable
         storageKey="reports-rollup"
         rows={data?.rows ?? []}
@@ -154,6 +182,11 @@ export default function ReportsPage() {
         columns={columns}
         defaultSort={{ key: "name", dir: "asc" }}
         cardTitle={(r: any) => r.location.name}
+        // QA-544: the centre and its Status stay put while the figures scroll under them, so a
+        // reader never loses whose row they are on. QA-543: search is on explicitly rather than
+        // left to the >10-rows default, because a report is searched even when it is short.
+        freeze={2}
+        searchable
       />
     </div>
   );

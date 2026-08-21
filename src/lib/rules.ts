@@ -2622,6 +2622,21 @@ export function tcVerdict(tc_status: unknown): "approved" | "not_approved" | "un
   return "unknown";
 }
 
+// QA-552 (-176): `unknown` is a DEFAULT, so it receives a blank AND any word nobody taught this
+// function. The screen labelled the whole bucket "TC Status is BLANK" - which is the same
+// two-meanings-one-number defect QA-527 was raised to end, one level down and written by me while
+// fixing it. It is not hypothetical: Karunn sir says "transferable" out loud at 12:31 about the
+// very rows in dispute, and a sheet edit that writes it would be counted as "nobody has filled
+// this in" under a label asserting exactly that.
+//
+// Rather than invent a fourth column for something that is currently empty, the unrecognised
+// VALUES are collected and reported, so the day one appears it is visible instead of absorbed.
+export function unrecognisedTcStatus(tc_status: unknown): string | null {
+  const raw = String(tc_status ?? "").trim();
+  if (!raw) return null;                       // blank is a known, expected state
+  return tcVerdict(raw) === "unknown" ? raw : null;
+}
+
 export async function reportRollup(scope: Record<string, unknown> = {}) {
   // find() + populate, not an aggregation over the scope filter: authz.ts builds `$in` from
   // `.map(String)`, mongoose casts strings to ObjectId inside find() but NOT inside a pipeline,
@@ -2666,6 +2681,8 @@ export async function reportRollup(scope: Record<string, unknown> = {}) {
   const byLoc = new Map<string, ReportRow>();
   const roles = new Set<string>();
   const grand = emptyCell();
+  // QA-552: every TC Status value this function did not recognise, and how many rows carry it.
+  const unrecognised = new Map<string, number>();
 
   for (const t of targets) {
     if (!t.location?._id || !t.program?._id) continue;
@@ -2688,6 +2705,8 @@ export async function reportRollup(scope: Record<string, unknown> = {}) {
     // always target and a reader can check the row adds up without being told to.
     const tgt = t.approved_target ?? 0;
     const verdict = tcVerdict(t.tc_status);
+    const odd = unrecognisedTcStatus(t.tc_status);
+    if (odd) unrecognised.set(odd, (unrecognised.get(odd) ?? 0) + 1);
     const one: ReportCell = {
       target: tgt,
       approved: verdict === "approved" ? tgt : 0,
@@ -2711,7 +2730,12 @@ export async function reportRollup(scope: Record<string, unknown> = {}) {
       if (cell.certified > cell.in_training) r.breaks.push(`${role}: passed ${cell.certified} is more than in training ${cell.in_training}`);
     }
   }
-  return { rows, roles: [...roles].sort(), total: grand, sources: SOURCES };
+  return {
+    rows, roles: [...roles].sort(), total: grand, sources: SOURCES,
+    // Empty on todays data, and that is the point: the day the sheet grows a word like
+    // "Transferable", it appears HERE instead of being absorbed into a bucket labelled blank.
+    unrecognised_status: [...unrecognised.entries()].map(([value, rows]) => ({ value, rows })).sort((a, b) => b.rows - a.rows),
+  };
 }
 
 // REQ-367: every column says where it came from, on the screen. Two are the client's numbers and
@@ -2723,7 +2747,7 @@ export const SOURCES = {
   // blank, and on this data the blank is a THIRD of the target. Saying so on the screen matters
   // more than usual here: the two look identical in every export anyone has made so far.
   not_approved: "Client sheet - target on rows whose TC Status says Unapproved / Not approved / Rejected",
-  unknown: "Client sheet - target on rows where TC Status is BLANK. Nobody has refused these; nobody has approved them either. On 2026-08-21 this was 24 of 55 rows and 4,775 of the target.",
+  unknown: "Client sheet - target on rows whose TC Status is BLANK, plus any value this report does not recognise (those are listed separately on the screen, never hidden here). Nobody has refused these; nobody has approved them either. On 2026-08-21 it was 24 of 55 rows and 4,775 of the target, all of them genuinely blank.",
   mobilised: "Our records - every candidate entered for this centre x job role, at any stage",
   in_training: "Our records - candidates whose enrolment is complete",
   certified: "Our records - candidates with a Pass assessment result (a certificate being issued is a further step)",
