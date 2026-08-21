@@ -89,9 +89,17 @@ await req(admin, "PUT", `/api/locations/${loc._id}/targets`, { program: "0000000
     await req(admin, "PUT", `/api/locations/${fixLoc._id}/targets`, { program: progC._id, approved_target: 280 }, 200);
   }
   const fixAfter = await sumFix();
-  ok("-163 (QA-496): correcting a mis-filed target MOVES it - the centre's approved target does not grow",
-    fixAfter === fixBefore,
-    JSON.stringify({ before: fixBefore, after: fixAfter, via: attempt.status === 200 ? "PATCH move" : `PUT fallback (PATCH ${attempt.status})` }));
+  // QA-516 (a checker, on the cycle-2 rewrite of this very pin): the total alone is red only
+  // against method-ABSENCE. If someone shipped a PATCH that answered 200 and wrote nothing, the
+  // fallback would not fire, the total would not move, and this would go GREEN on a broken move.
+  // So the assertion also states WHERE the row ended up: the corrected job role must hold it and
+  // the wrong one must not. That is red for a no-op 200 as well as for a missing method.
+  const fixRows = ((await req(admin, "GET", `/api/locations/${fixLoc._id}/targets`, undefined, 200)).data.items ?? []);
+  const onWrong = fixRows.filter((t) => String(t.program?._id ?? t.program) === String(progB._id));
+  const onRight = fixRows.filter((t) => String(t.program?._id ?? t.program) === String(progC._id));
+  ok("-163 (QA-496): correcting a mis-filed target MOVES it - the total does not grow AND the row is on the corrected job role",
+    fixAfter === fixBefore && onRight.length === 1 && onWrong.length === 0,
+    JSON.stringify({ before: fixBefore, after: fixAfter, onWrong: onWrong.length, onRight: onRight.length, via: attempt.status === 200 ? "PATCH move" : `PUT fallback (PATCH ${attempt.status})` }));
 }
 
 // ---- 2026-08-13 (Manish: "31 approved hain, 10 nahi"): approval is per centre×job-role ----

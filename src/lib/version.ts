@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-165";
+export const RELEASE = "2026.08.14-166";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,22 @@ export const RELEASE = "2026.08.14-165";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-166 lets the client's own master sheet correct one thing it never could: whether the " +
+  "government has approved a particular job role at a particular centre. That verdict is " +
+  "recorded per centre AND job role - one centre can be approved for one course and not " +
+  "another, and each row even carries its own TC number - but the sheet sync could only ever " +
+  "set it for the centre as a whole, while every count in the product reads the per-row value. " +
+  "Two different places, and nothing connected them. So a correction made in the sheet simply " +
+  "did not arrive, and the sync reported a clean run while doing nothing. The mapping now " +
+  "accepts TC Status and TC ID per job role, the same way approved targets have always worked, " +
+  "and a change to either shows up for review like any other. Two deliberate limits: a blank " +
+  "cell is treated as a real answer rather than a missing one, because blank is what the master " +
+  "actually says on the rows that disagree today; and a verdict for a job role the centre has " +
+  "no target on is refused with the reason rather than quietly creating that target, since a " +
+  "status must not invent the thing it describes.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-165 is the correction pass on -164, and every item in it was found by review rather than by " +
   "a user hitting it. The worst was quiet: the new rule that drops TOT steps for an already-" +
   "certified trainer was also DELETING what people had recorded. A regenerated plan was rebuilt " +
@@ -32,10 +48,7 @@ export const RELEASE_NOTE_CURRENT =
   "room at all was handed an earliest start date it could not possibly meet, with no warning - " +
   "it is now told plainly that the plan is blocked until a room exists. And the skip now also " +
   "covers the step that asks whether the trainer is ready for a TOT they have already " +
-  "finished.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "finished." +
   "-164 makes batch planning answer the question people actually ask. Until now the planner " +
   "produced the same seven steps for every batch and only ever answered one question: if you " +
   "pick this date, what has to be finished by when. It could not skip a step, and it could not " +

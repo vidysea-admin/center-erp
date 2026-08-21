@@ -568,7 +568,7 @@ function SyncSources({ error, setError }: any) {
   function open(s?: any) {
     setEdit(s ?? null);
     setForm(s ?? { frequency: "Manual only" });
-    setMapping(s ? JSON.stringify(s.field_mappings ?? {}, null, 2) : '{\n  "Center ID": "external_id",\n  "Status": "approval_status",\n  "Target": "approved_target:PROG1"\n}');
+    setMapping(s ? JSON.stringify(s.field_mappings ?? {}, null, 2) : '{\n  "Center ID": "external_id",\n  "Status": "approval_status",\n  "Target": "approved_target:PROG1",\n  "TC Status": "tc_status:PROG1"\n}');
   }
   async function save() {
     try {
@@ -649,7 +649,7 @@ function SyncSources({ error, setError }: any) {
                 </select>
               </Field>
             </div>
-            <Field label='Field mappings (JSON: "Sheet Column" → erp_field; one column must map to external_id; targets as "approved_target:<PROGRAM_CODE>")'>
+            <Field label='Field mappings (JSON: "Sheet Column" → erp_field; one column must map to external_id; per job role: "approved_target:<PROGRAM_CODE>", "tc_status:<PROGRAM_CODE>", "tc_id:<PROGRAM_CODE>")'>
               <textarea className={inputCls + " mt-1 h-40 font-mono text-xs"} value={mapping} onChange={(e) => setMapping(e.target.value)} />
             </Field>
           </>

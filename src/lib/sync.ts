@@ -81,6 +81,28 @@ const LOCATION_FIELDS = new Set([
   "tc_status", "tc_id", "tc_password",
 ]);
 
+// QA-497 (-166): fields that live on the (centre x job role) ROW, addressed as
+// "<field>:<PROGRAM_CODE>". `approved_target` has worked this way since the first sync; the
+// government's own verdict never did, and that is the whole defect.
+//
+// The sheet states TC Status per ROW - "31 approved hain, 10 nahi" - and each row even carries its
+// own TC ID (Charthwal: TC353328 for AVPL, TC352938 for HSL). But `tc_status` was only ever in
+// LOCATION_FIELDS, which is CENTRE-level, while every count in the product reads
+// LocationTarget.tc_status. So the client could correct their master and the ERP would not move:
+// grepping every writer of LocationTarget.tc_status returned a one-off rebase script and the manual
+// PUT on the location screen, and no sync path at all. That is why the 1,000 (QA-440) had to be
+// corrected by hand and would have had to be corrected by hand again.
+//
+// One Set, read by BOTH the diff loop and the apply switch, because two lists of "what is a row
+// field" is exactly the ARCHITECTURE section 3 disease.
+const TARGET_ROW_FIELDS = new Set(["approved_target", "tc_status", "tc_id"]);
+export function targetRowField(field: string): { base: string; code: string } | null {
+  const i = field.indexOf(":");
+  if (i < 0) return null;
+  const base = field.slice(0, i), code = field.slice(i + 1);
+  return TARGET_ROW_FIELDS.has(base) && code ? { base, code } : null;
+}
+
 async function impactSnapshot(locationId: unknown) {
   const [batches, trainers, requests, candidates] = await Promise.all([
     Batch.countDocuments({ location: locationId, status: { $in: ACTIVE_BATCH_STATUSES } }),
@@ -175,12 +197,15 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
       if (field === "external_id") continue;
       const incoming = (raw[colIdx.get(col)!] ?? "").trim();
       let stored: string;
-      if (field.startsWith("approved_target:")) {
-        const code = field.split(":")[1];
-        const program = await Program.findOne({ code }).lean<any>();
+      const rowField = targetRowField(field);
+      if (rowField) {
+        const program = await Program.findOne({ code: rowField.code }).lean<any>();
         if (!program) continue;
         const lt = loc ? await LocationTarget.findOne({ location: loc._id, program: program._id }).lean<any>() : null;
-        stored = lt?.approved_target != null ? String(lt.approved_target) : "";
+        // A BLANK stored value has to compare as blank, not as "0" or "undefined" - the five rows
+        // in QA-440 are blank in the sheet and Approved in the ERP, and a diff that cannot see
+        // blank-vs-value is a diff that cannot report them.
+        stored = (lt as any)?.[rowField.base] != null ? String((lt as any)[rowField.base]) : "";
       } else if (LOCATION_FIELDS.has(field)) {
         stored = loc?.[field] != null ? String(loc[field]) : "";
       } else {
@@ -259,26 +284,48 @@ export async function applySheetChange(changeId: string, action: string, note: s
     case "Update target": {
       // Rule 4: writes approved_target only; never edits batches
       if (!loc) throw new HttpError(400, "Change has no matched location.");
-      if (!change.field_name.startsWith("approved_target:")) throw new HttpError(400, "Not a target change.");
-      const code = change.field_name.split(":")[1];
-      const program = await Program.findOne({ code });
-      if (!program) throw new HttpError(400, `Program ${code} not found.`);
+      const rowField = targetRowField(change.field_name);
+      if (!rowField) throw new HttpError(400, "Not a target-row change.");
+      const program = await Program.findOne({ code: rowField.code });
+      if (!program) throw new HttpError(400, `Program ${rowField.code} not found.`);
       // 2026-08-12 audit (sync S1-1): parseInt(new_value || "0") turned a blank cell into a
       // target of ZERO and truncated "1,200" to 1 — silently, on the number that drives how many
       // batches get planned and how many trainers get hired against a government approval.
       // A sheet cell we cannot read confidently is a question for a human, not a guess.
-      const raw = String(change.new_value ?? "").trim().replace(/,/g, "");
-      if (!/^\d+$/.test(raw)) {
-        throw new HttpError(400,
-          `"${change.new_value ?? ""}" is not a whole number, so the approved target was not changed. Correct the sheet cell, or set the target by hand on the location.`);
+      let value: string | number;
+      if (rowField.base === "approved_target") {
+        // 2026-08-12 audit (sync S1-1): parseInt(new_value || "0") turned a blank cell into a
+        // target of ZERO and truncated "1,200" to 1 - silently, on the number that drives how many
+        // batches get planned. A cell we cannot read confidently is a question for a human.
+        const raw = String(change.new_value ?? "").trim().replace(/,/g, "");
+        if (!/^\d+$/.test(raw)) {
+          throw new HttpError(400,
+            `"${change.new_value ?? ""}" is not a whole number, so the approved target was not changed. Correct the sheet cell, or set the target by hand on the location.`);
+        }
+        value = Number(raw);
+      } else {
+        // QA-497: tc_status and tc_id are free text FROM THE SHEET and the schema says so
+        // ("free text from the sheet (\"Approved\", blank, ...)"). A BLANK is a real value here,
+        // not a missing one - the five rows in QA-440 are blank in the client's master and
+        // Approved in the ERP, and refusing blank would make the sheet unable to say so. No
+        // vocabulary is enforced: inventing one would silently reinterpret the government's own
+        // words, and the third state Karunn sir described at 12:31 is still undecided (REQ-365c).
+        value = String(change.new_value ?? "").trim();
       }
-      const value = Number(raw);
+      // `upsert` stays for approved_target (a target row is created by its target) but a status or
+      // an id must never CONJURE a row: a government verdict for a job role this centre has no
+      // target on is a question, not a write.
+      const existing = await LocationTarget.findOne({ location: loc._id, program: program._id });
+      if (!existing && rowField.base !== "approved_target") {
+        throw new HttpError(409,
+          `${loc.name} has no target row for ${program.name}, so there is nothing to mark "${value}". Set that job role's approved target first - a status cannot create the row it describes.`);
+      }
       await LocationTarget.findOneAndUpdate(
         { location: loc._id, program: program._id },
-        { $set: { approved_target: value } },
-        { upsert: true },
+        { $set: { [rowField.base]: value } },
+        { upsert: rowField.base === "approved_target" },
       );
-      await audit({ entity: "LocationTarget", entityId: loc._id, field: "approved_target", oldValue: change.old_value, newValue: value, actor: actorId, actorType: "EXTERNAL_SYNC" });
+      await audit({ entity: "LocationTarget", entityId: loc._id, field: `${rowField.base} (${program.code})`, oldValue: change.old_value, newValue: String(value), actor: actorId, actorType: "EXTERNAL_SYNC" });
       break;
     }
     case "Start location": {
@@ -301,7 +348,7 @@ export async function applySheetChange(changeId: string, action: string, note: s
       // field_name is sheet data, not a free property path — only catalog/mapping fields may be
       // written, and status fields must go through their own guarded actions above.
       const blocked = ["approval_status", "operational_status", "pipeline_status", "lifecycle_status"];
-      const allowed = !blocked.includes(change.field_name) && !change.field_name.startsWith("approved_target:")
+      const allowed = !blocked.includes(change.field_name) && !targetRowField(change.field_name)
         && (entityType === "Location" ? LOCATION_FIELDS.has(change.field_name) : !!fieldSpec(entityType, change.field_name));
       if (!allowed) throw new HttpError(400, `"${change.field_name}" cannot be written by Apply value — use the specific action for it.`);
       const doc = await Model.findById(targetId);

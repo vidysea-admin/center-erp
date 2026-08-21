@@ -555,5 +555,100 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
   await req("PUT", `/api/sync-sources/${srcMapped._id}/tab-mappings`, { tab: "X", entity_type: "Candidate", columns: [{ header: "A", field: "phone" }], constants: {}, key_field: "phone" }, 400);
 }
 
+// ---- QA-497 (-166): the sheet's PER-ROW government verdict must reach LocationTarget ----
+// tc_status was only ever in LOCATION_FIELDS, which is CENTRE-level, while every count in the
+// product reads LocationTarget.tc_status. So the client could correct their own master and the
+// ERP would not move - which is why the 1,000 (QA-440) had to be corrected by hand, and would
+// have had to be corrected by hand again after the next sheet edit.
+{
+  const s4 = "Q" + Date.now().toString().slice(-6);
+  const p4 = (await req("POST", "/api/programs", { code: s4, name: "TC Prog " + s4, trainer_skill: "TCSkill" + s4 }, 201)).data.item;
+  const p4b = (await req("POST", "/api/programs", { code: s4 + "B", name: "TC Prog B " + s4, trainer_skill: "TCSkillB" + s4 }, 201)).data.item;
+  const l4 = (await req("POST", "/api/locations", { code: "TL" + s4, name: "TC Loc " + s4, external_id: "TC" + s4, approval_status: "Approved", city: "Meerut" }, 201)).data.item;
+  // The row has to exist first: a government verdict for a job role this centre has no target on
+  // is a question, not a write - asserted at the end of this block.
+  await req("PUT", `/api/locations/${l4._id}/targets`, { program: p4._id, approved_target: 300, tc_status: "Approved" }, 200);
+  const rowOf = async (prog) => ((await req("GET", `/api/locations/${l4._id}/targets`)).data.items ?? [])
+    .find((t) => String(t.program?._id ?? t.program) === String(prog._id));
+
+  // CSV upload, the fixture shape this suite already proves works. The first draft used an
+  // in-memory xlsx data: URL and the header lookup never found the row - the pin then failed for
+  // a reason that had nothing to do with the defect, which is a pin that cannot be trusted either
+  // way round.
+  const mkSrc = async (csv, label, mappings) => {
+    const fd = new FormData();
+    fd.append("file", new File([csv], "tc.csv", { type: "text/csv" }));
+    const u = (await req("POST", "/api/upload", fd, 200)).data;
+    return (await req("POST", "/api/sync-sources", {
+      name: label + " " + s4, source_url: new URL(u.url, BASE).href, field_mappings: mappings,
+    }, 201)).data.item;
+  };
+  const openFor = async (field) => ((await req("GET", "/api/sheet-changes?status=Open")).data.items ?? [])
+    .find((c) => c.field_name === field && String(c.location?._id ?? c.location) === String(l4._id));
+
+  // (1) the sheet says this row is NOT approved any more
+  const F1 = `tc_status:${s4}`;
+  const src1 = await mkSrc(`Center ID,TC Status\nTC${s4},Unapproved\n`, "TC status sheet", { "Center ID": "external_id", "TC Status": F1 });
+  const r1 = (await req("POST", `/api/sync-sources/${src1._id}/run`, undefined, 200)).data;
+  const c1 = await openFor(F1);
+  ok("QA-497: a per-row TC Status change is DETECTED - the sheet can finally address (centre x job role)",
+    r1.created === 1 && !!c1, JSON.stringify({ run: r1, change: c1?.field_name ?? null }));
+  if (c1) {
+    ok("QA-497: ...and the change names the row field, with the ERP's current value as old_value",
+      c1.old_value === "Approved" && c1.new_value === "Unapproved", JSON.stringify({ o: c1.old_value, n: c1.new_value }));
+    await req("POST", `/api/sheet-changes/${c1._id}/apply`, { action: "Update target" }, 200);
+    ok("QA-497: applying it writes LocationTarget.tc_status - the field every count in the product reads",
+      (await rowOf(p4))?.tc_status === "Unapproved", JSON.stringify(await rowOf(p4)));
+  } else {
+    ok("QA-497: ...and the change names the row field", false, "no change row - the mapping was not recognised at all");
+    ok("QA-497: applying it writes LocationTarget.tc_status", false, "no change row to apply");
+  }
+
+  // (2) a BLANK cell is a REAL value, and this is exactly the QA-440 five rows: blank in the
+  // client's master, Approved in the ERP. If blank cannot travel, the sheet cannot say it.
+  const src2 = await mkSrc(`Center ID,TC Status\nTC${s4},\n`, "TC blank sheet", { "Center ID": "external_id", "TC Status": F1 });
+  const r2 = (await req("POST", `/api/sync-sources/${src2._id}/run`, undefined, 200)).data;
+  const c2 = await openFor(F1);
+  ok("QA-497: a BLANK cell is detected as a change (blank is what the client's master says on the QA-440 rows)",
+    !!c2 && c2.new_value === "", JSON.stringify({ run: r2, o: c2?.old_value, n: JSON.stringify(c2?.new_value ?? null) }));
+  if (c2) {
+    await req("POST", `/api/sheet-changes/${c2._id}/apply`, { action: "Update target" }, 200);
+    const blanked = (await rowOf(p4))?.tc_status;
+    ok("QA-497: ...and it lands as blank, not as the string 'undefined' and not left untouched",
+      blanked === "" || blanked == null, JSON.stringify({ tc_status: blanked }));
+  } else {
+    ok("QA-497: ...and it lands as blank", false, "no blank change row to apply");
+  }
+
+  // (3) the row's own government TC ID travels the same way - each sheet row carries its own
+  // (Charthwal: TC353328 for AVPL, TC352938 for HSL), and that id is the anchor the whole
+  // 1,000-target reconciliation was done on.
+  const F3 = `tc_id:${s4}`;
+  const src3 = await mkSrc(`Center ID,Row TC\nTC${s4},TC999${s4}\n`, "TC id sheet", { "Center ID": "external_id", "Row TC": F3 });
+  await req("POST", `/api/sync-sources/${src3._id}/run`, undefined, 200);
+  const c3 = await openFor(F3);
+  if (c3) await req("POST", `/api/sheet-changes/${c3._id}/apply`, { action: "Update target" }, 200);
+  ok("QA-497: the row's own TC ID reaches the row too",
+    !!c3 && (await rowOf(p4))?.tc_id === "TC999" + s4, JSON.stringify({ change: !!c3, tc_id: (await rowOf(p4))?.tc_id ?? null }));
+
+  // (4) a status must NEVER conjure the row it describes. approved_target upserts because a
+  // target row is created BY its target; a verdict for a job role with no target row is a
+  // question for a human, and answering it by inventing a row would put a government approval
+  // on a job role nobody has agreed to.
+  const F4 = `tc_status:${s4}B`;
+  const src4 = await mkSrc(`Center ID,TC Status\nTC${s4},Approved\n`, "TC orphan sheet", { "Center ID": "external_id", "TC Status": F4 });
+  await req("POST", `/api/sync-sources/${src4._id}/run`, undefined, 200);
+  const c4 = await openFor(F4);
+  if (c4) {
+    const orphan = await req("POST", `/api/sheet-changes/${c4._id}/apply`, { action: "Update target" });
+    ok("QA-497: a verdict for a job role with NO target row is refused and says why - it does not upsert one into existence",
+      orphan.status === 409 && /no target row/i.test(String(orphan.data?.error ?? "")), JSON.stringify({ s: orphan.status, e: String(orphan.data?.error ?? "").slice(0, 110) }));
+    ok("QA-497: ...and no row was created behind the refusal",
+      !(await rowOf(p4b)), JSON.stringify({ created: !!(await rowOf(p4b)) }));
+  } else {
+    ok("QA-497: a verdict for a job role with NO target row is refused", false, "no change row - the mapping was not recognised at all");
+    ok("QA-497: ...and no row was created behind the refusal", !(await rowOf(p4b)), "no change row was raised, so nothing could be written either");
+  }
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
