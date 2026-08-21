@@ -2073,7 +2073,8 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
           <p className="mt-2 text-xs text-gray-500">Batch-level figures (recorded before per-candidate marking existed).</p>
         )}
         <div className="mt-3 flex gap-2">
-          <Btn small kind="ghost" onClick={() => saveClosure({ assessment_date: form.assessment_date, ...(legacy && !perCandidate && showLegacyEntry ? { appeared: form.appeared, passed: form.passed } : {}) })}>Save</Btn>
+          <Btn small kind="ghost" disabled={closed}
+            onClick={() => saveClosure({ assessment_date: form.assessment_date, ...(legacy && !perCandidate && showLegacyEntry ? { appeared: form.appeared, passed: form.passed } : {}) })}>Save</Btn>
           <span className="inline-flex flex-col gap-0.5">
             <Btn small
               onClick={() => saveClosure({ assessment_status: "Completed", assessment_date: form.assessment_date ?? new Date(), ...(legacy && !perCandidate && showLegacyEntry ? { appeared: form.appeared, passed: form.passed } : {}) })}
@@ -2083,6 +2084,19 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
                 title={personList(blockers.unmarked)}>
                 {blockers.unmarked.length} student(s) have no result yet — mark them and this turns on by itself
               </span>
+            )}
+            {/* -162 (QA-394): the finished state, which nothing covered. The condition that disables
+                this button used to be the same condition that hid every explanation beside it, so an
+                operator on a Completed batch met a dead control and silence. QA-245 fixed the
+                blocked-while-Active case and is untouched; this is the other end of the same story. */}
+            {closure?.assessment_status === "Completed" && (
+              <span className="text-[10px] font-medium text-gray-500">
+                already signed off{closure?.assessment_date ? ` on ${fmtDate(closure.assessment_date)}` : ""}
+                {closed ? " — the batch is finished, so this is frozen. An Admin can Reopen it from the Overview tab." : ""}
+              </span>
+            )}
+            {closed && closure?.assessment_status !== "Completed" && (
+              <span className="text-[10px] font-medium text-gray-500">the batch is finished — Reopen it from the Overview tab to change results</span>
             )}
           </span>
         </div>
@@ -2102,7 +2116,8 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
           <p className="mt-2 text-xs text-amber-700">{summary.passed - summary.certificates_issued} passed candidate(s) still need an issued certificate.</p>
         )}
         <div className="mt-3 flex gap-2">
-          <Btn small kind="ghost" onClick={() => saveClosure({ certification_date: form.certification_date, ...(legacy ? { certificates_issued: form.certificates_issued } : {}) })}>Save</Btn>
+          <Btn small kind="ghost" disabled={closed}
+            onClick={() => saveClosure({ certification_date: form.certification_date, ...(legacy ? { certificates_issued: form.certificates_issued } : {}) })}>Save</Btn>
           <span className="inline-flex flex-col gap-0.5">
             <Btn small
               onClick={() => saveClosure({ certification_status: "Completed", certification_date: form.certification_date ?? new Date(), ...(legacy ? { certificates_issued: form.certificates_issued } : {}) })}
@@ -2115,6 +2130,16 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
             )}
             {closure?.certification_status !== "Completed" && (blockers?.unsettled?.length ?? 0) === 0 && closure?.assessment_status !== "Completed" && (
               <span className="text-[10px] font-medium text-gray-500">assessment goes first</span>
+            )}
+            {/* -162 (QA-394): same gap, same fix — this section hid its reason on a finished batch too. */}
+            {closure?.certification_status === "Completed" && (
+              <span className="text-[10px] font-medium text-gray-500">
+                already signed off{closure?.certification_date ? ` on ${fmtDate(closure.certification_date)}` : ""}
+                {closed ? " — the batch is finished, so this is frozen. An Admin can Reopen it from the Overview tab." : ""}
+              </span>
+            )}
+            {closed && closure?.certification_status !== "Completed" && (
+              <span className="text-[10px] font-medium text-gray-500">the batch is finished — Reopen it from the Overview tab to change certification</span>
             )}
             {/* -157 (QA-462): the same shape as the unsettled line four lines up, for the same
                 reason. The government issues no certificate without the portal Candidate ID, so
@@ -2588,8 +2613,18 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
           {/* 2. Who can take a certificate today, and who cannot — in words, not rule numbers. */}
           <p className="text-xs text-gray-600">
             <b className="text-green-700">{certReady.length} can take a certificate now</b> (Pass, none attached yet)
-            {certDone.length > 0 && <> · <span className="text-gray-500">{certDone.length} already have one</span></>}
-            {certNoNumber.length > 0 && <> · <span className="cursor-help text-amber-700" title="The certificate file settles the candidate's status; the NUMBER is what invoicing and audits quote. Add it on each candidate's card (or in Issue certificates) when the awarding body sends it.">{certNoNumber.length} without a certificate number</span></>}
+            {/* -162 (QA-396, Manish sir 20/08): “9 already have one · 9 without a certificate
+                number : iska kya matlab hai bhai”. He was right — it reads as EIGHTEEN people.
+                certNoNumber is certDone.filter(...), a SUBSET of the same nine, printed beside them
+                as though it were a second group. One group, stated once, subset said as a subset. */}
+            {certDone.length > 0 && <> · <span className="text-gray-500">{certDone.length} already have one</span>
+              {certNoNumber.length > 0 && (
+                <span className="cursor-help text-amber-700" title="The certificate file settles the candidate's status; the NUMBER is what invoicing and audits quote. Add it on each candidate's card (or in Issue certificates) when the awarding body sends it.">
+                  {certNoNumber.length === certDone.length
+                    ? ", and none of them carries a certificate number yet"
+                    : `, ${certNoNumber.length} of them with no certificate number yet`}
+                </span>
+              )}</>}
             {pending.length > 0 && <> · <span className="text-amber-700">{pending.length} not marked yet — mark the result first</span></>}
             {notPassed.length > 0 && <> · <span className="text-gray-500">{notPassed.length} Fail/Absent — no certificate</span></>}
           </p>

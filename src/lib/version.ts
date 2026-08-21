@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-161";
+export const RELEASE = "2026.08.14-162";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,30 @@ export const RELEASE = "2026.08.14-161";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-162 is Manish sir's release. Three things he reported on 20 August had gone a month of " +
+  "releases without being opened, and all three were about a screen refusing to say what it knew. " +
+  "On a finished batch both Mark Completed buttons were dead AND silent - the very fact that " +
+  "switched them off was the fact that hid the explanation beside them - so an operator met a " +
+  "control that would not move and no reason why. They now say they are already signed off, when, " +
+  "and that an Admin can reopen the batch from the Overview tab; and Save no longer offers itself " +
+  "on a frozen batch only to be refused by the server in a banner at the top of the page. The " +
+  "certificate line that read '39 already have one, 9 without a certificate number' was describing " +
+  "ONE group of nine twice, which reads as eighteen people; it now names the nine once and says " +
+  "plainly that none of them carries a number yet. And Total Attendance was a single percentage " +
+  "averaged over two meters that cannot be averaged - the government portal's roster and our own " +
+  "daily logs, added together into one denominator. The government meter is the one that decides " +
+  "who qualifies, so it is the headline now, our own logs sit beside it, and the line says they " +
+  "are counted separately and never added. ";
+
+
+
+
+
+
+
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-161 is the third correction of one thing, and the honest headline is that the previous two " +
   "releases said this was finished and it was not. Wherever this product lists people, a name on its " +
   "own is not enough to tell two of them apart - and the screen that needed it most was the " +
@@ -29,16 +53,7 @@ export const RELEASE_NOTE_CURRENT =
   "duplicate candidates; there is one definition now and every screen reads it. And the note the " +
   "last release published quoted the requirement while shipping only half of it: the requirement " +
   "says show the portal ID when there is one and the phone otherwise, and only the phone was ever " +
-  "shown. ";
-
-
-
-
-
-
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "shown. " +
   "-160 is the third attempt at one thing, and this time the counting is done by the machine rather than by hand. Twice now a release has fixed the places where this product lists people by name alone - which on a roster where two students share a name identifies nobody - and twice the count was wrong. The check found a banner still printing the same name three times over in plain sight, four lines below a line that had just been corrected. So the guard no longer looks for the shape of a fix; it looks for the mistake itself, and it found the survivors on its own before anybody was asked to look again. Every list of people on the batch screen now reads one definition of how a person is named - their name with their phone beside it - and that definition now lives in one place for the whole product, where the previous release had left three copies of it, including one on the very screen it linked people to. " +
   "-159 finishes something -158 only started. -158 stopped one tooltip on the batch screen from naming students by name alone - which on a roster with two students of one name identifies nobody - and the check found the SAME sentence still being written one line above it. Counting properly found four places on that screen where people are listed by name: the complete-batch plan, the two blocker warnings, and the portal-ID line. All four now read one shared definition of how a person is named here - the name with their phone beside it, which is what the contract already required and what a centre uses to tell two people apart on a call - and the check that guards it looks for the whole family rather than the one line that was fixed first. Two of this product own safeguards were repaired in the same pass: one was reading source code with the comments left in, so a comment quoting the right words could satisfy it, and another was watching a fixed-size window that was about five lines of text away from losing sight of the thing it checks. " +
   "-158 answers the two riders the check on -157 filed, and both are about the same habit: a thing that " +

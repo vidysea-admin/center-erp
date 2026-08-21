@@ -35,5 +35,26 @@ ok("home: the strip's gate is at top level (6-space indent) — its only gates a
 const stripClose = src.indexOf("\n      )}\n", stripText);
 ok("home: the strip's JSX closes before the trainers-by-role block", stripClose > 0 && stripClose < byRole, `stripClose=${stripClose} byRole=${byRole}`);
 
+
+// -162 (QA-397, Manish sir 20/08): "Total attendance 30% and the below thing is confusing and not
+// clear". The headline was ONE percentage over TWO incompatible meters - a portal roster of 1,447
+// and an own-log roster of 270 summed into 1,717. The government meter decides eligibility (QA-085);
+// our logs are an estimate; adding them answers a question nobody asked.
+//
+// Pinned as the defect: the tile must not headline the FUSED figure, and when both meters exist it
+// must say they are not added. Limit, stated: this proves the fusion is gone, not that the wording
+// reads well - and it cannot render the page, only read its source.
+{
+  const fused = src.includes("attendance.pct}%") || src.includes("attendance?.pct}%");
+  ok("-162 (QA-397): the attendance tile does not headline one percentage fused from two different meters",
+    !fused, fused ? "value still reads attendance.pct" : "");
+  const saysApart = src.includes("counted separately, never added");
+  ok("-162 (QA-397): ...and when both meters are present the line says they are not added together",
+    saysApart, saysApart ? "" : "no sentence separates the two meters");
+  const labelled = src.includes('"Attendance \u2014 government portal"') && src.includes('"Attendance \u2014 our own logs"');
+  ok("-162 (QA-397): ...and the tile names WHICH attendance the number is",
+    labelled, labelled ? "" : "the label does not name the meter");
+}
+
 console.log(`\ncheck-home-structure: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

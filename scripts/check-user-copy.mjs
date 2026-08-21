@@ -575,6 +575,57 @@ for (const file of walk(root)) {
     else { failed++; for (const f of faults) pushStructural("app/(app)/batches/[id]/page.tsx: " + f + " (QA-462)"); }
   }
 
+  // -162 (QA-394, Manish sir 20/08): "save, mark completed, ye buttons kaam hi nahi kar raha hai...
+  // inke upar hover karne pe kuch information aa rahi hai ki dikkat kya hai?" On a FINISHED batch
+  // both Mark Completed buttons were dead AND silent, because the status that DISABLED them was the
+  // same status every explanation beside them was gated AGAINST. QA-245 fixed the
+  // blocked-while-Active case and is untouched; nobody had covered the other end.
+  //
+  // Pinned as the DEFECT rather than the shape of the fix: a section whose button disables on
+  // `=== "Completed"` must also RENDER something on `=== "Completed"`. Stated limits, because this
+  // file has over-claimed before: it proves an explanation EXISTS, not that its wording is good,
+  // and it finds the two sections by their headings.
+  {
+    const SECTIONS = [["Assessment", "assessment_status"], ["Certification", "certification_status"]];
+    const code = stripComments(bp);
+    const NLC = String.fromCharCode(10);
+    const faults = [];
+    for (const [name, field] of SECTIONS) {
+      const after = code.split("title={`" + name)[1];
+      const sec = after ? after.split("</Section>")[0] : "";
+      if (!sec) { faults.push(name + ": section not found - this check has lost its subject rather than passed"); continue; }
+      const lines = sec.split(NLC);
+      const markLine = lines.find((l) => l.includes("Mark Completed</Btn>")) ?? "";
+      const disablesOnDone = markLine.includes('closure?.' + field + ' === "Completed"');
+      const explainsDone = sec.includes('closure?.' + field + ' === "Completed" &&');
+      const saveIdx = sec.indexOf(">Save</Btn>");
+      const saveGated = saveIdx < 0 || sec.slice(0, saveIdx).includes("disabled={closed}");
+      if (!markLine) faults.push(name + ": no Mark Completed button found");
+      else if (!disablesOnDone) faults.push(name + ": the button no longer disables on its own completed status");
+      if (!explainsDone) faults.push(name + ": the button disables when the batch is finished and NOTHING on screen says so - the condition that kills it also hides its reason");
+      if (!saveGated) faults.push(name + ": Save is live on a frozen batch, so it posts a value the server refuses and the 409 lands in the banner at the top of the page");
+    }
+    if (!faults.length) passed++;
+    else { failed++; for (const f of faults) pushCopy("app/(app)/batches/[id]/page.tsx: " + f + " (QA-394)"); }
+  }
+
+  // -162 (QA-396, Manish sir 20/08): "9 already have one - 9 without a certificate number : iska
+  // kya matlab hai bhai". certNoNumber is certDone.filter(...) - a SUBSET of the same nine - and it
+  // was printed as its own bullet beside them, so one group of nine read as eighteen people.
+  //
+  // The defect shape, which is what gets pinned: a subset must not be rendered as a peer bullet of
+  // the group it belongs to. Limit, stated: this knows the two identifiers by name.
+  {
+    const code = stripComments(bp);
+    const faults = [];
+    const bulletOwn = code.includes("{certNoNumber.length > 0 && <> " + String.fromCharCode(183));
+    const relative = code.includes("certNoNumber.length === certDone.length");
+    if (bulletOwn) faults.push("the certificate-number figure is its own bullet beside the group it is a subset of, so one group of nine reads as eighteen people");
+    if (!relative) faults.push("the certificate-number figure is not stated relative to the group it belongs to");
+    if (!faults.length) passed++;
+    else { failed++; for (const f of faults) pushCopy("app/(app)/batches/[id]/page.tsx: " + f + " (QA-396)"); }
+  }
+
   // -156 (QA-434): QA-410 taught the VERDICT to say only what the row holds - "the export carries a
   // row under this name but its hours column could not be read" - and two sibling tooltips in this
   // same page went on asserting hours unconditionally, and asserting they were THIS student's while

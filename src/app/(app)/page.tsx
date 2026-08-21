@@ -102,16 +102,37 @@ export default function HomePage() {
           sub={`${data.kpis.enrolled_students ?? 0} students enrolled overall`} />
         {/* QA-012: with zero logs the card used to read "0 of 0" — expected-so-far now rides
             along, so an empty log book says so instead of looking broken. */}
-        <KPI label="Total Attendance" tone="blue" icon={<IconUsers size={19} />} href="/govt-attendance"
-          value={data.kpis.attendance?.pct != null ? `${data.kpis.attendance.pct}%` : "—"}
-          sub={data.kpis.attendance?.roster
-            ? `${data.kpis.attendance.present} of ${data.kpis.attendance.roster} student-days${
-                data.kpis.attendance.portal_roster
-                  ? ` · ${data.kpis.attendance.portal_present}/${data.kpis.attendance.portal_roster} from the government portal${data.kpis.attendance.our_roster ? ` · ${data.kpis.attendance.our_present}/${data.kpis.attendance.our_roster} from our own logs` : ""}`
-                  : " — all from our own logs"}`
-            : data.kpis.attendance?.expected_so_far
-              ? `nothing recorded yet — ${data.kpis.attendance.expected_so_far} student-days expected so far`
-              : "no active batches logging yet"} />
+        {/* -162 (QA-397, Manish sir 20/08): “Total attendance 30% and the below thing is
+            confusing and not clear”. The headline was ONE percentage over TWO incompatible
+            meters — a portal roster of 1,447 and an own-log roster of 270 summed into 1,717 — so
+            it answered a question nobody asked. The government meter is the one that decides
+            eligibility (QA-085); our logs are an estimate. They are shown apart now, and the line
+            says they are not added. The location-wise breakdown he also asked for is NOT this tile:
+            it belongs to Karunn sir’s report (QA-398), and putting it here would be a second
+            one-off aggregate beside the one being built. */}
+        <KPI label={data.kpis.attendance?.portal_roster ? "Attendance — government portal" : "Attendance — our own logs"}
+          tone="blue" icon={<IconUsers size={19} />} href="/govt-attendance"
+          value={(() => {
+            const a = data.kpis.attendance;
+            if (!a) return "—";
+            const p = a.portal_roster ? Math.round((100 * a.portal_present) / a.portal_roster) : null;
+            const o = a.our_roster ? Math.round((100 * a.our_present) / a.our_roster) : null;
+            const head = p != null ? p : o;
+            return head != null ? `${head}%` : "—";
+          })()}
+          sub={(() => {
+            const a = data.kpis.attendance;
+            if (!a) return "no active batches logging yet";
+            const parts = [];
+            if (a.portal_roster) parts.push(`${a.portal_present} of ${a.portal_roster} student-days on the government portal`);
+            if (a.our_roster) parts.push(`${a.our_present} of ${a.our_roster} from our own logs${a.portal_roster ? ` (${Math.round((100 * a.our_present) / a.our_roster)}%)` : ""}`);
+            if (!parts.length) {
+              return a.expected_so_far
+                ? `nothing recorded yet — ${a.expected_so_far} student-days expected so far`
+                : "no active batches logging yet";
+            }
+            return parts.join(" · ") + (a.portal_roster && a.our_roster ? " — counted separately, never added" : "");
+          })()} />
 
         {/* QA-002: this total and the Open Positions board count different universes —
             both numbers travel together so the difference is explained, not hidden.
