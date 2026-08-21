@@ -280,6 +280,11 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
     // already has — a report nobody can filter is a report people export and then work in Excel,
     // which is the habit this is meant to end.
     group?: string;
+    // -172 (QA-524): what this column contributes to the total row under the table. His own pivot
+    // has that row (row 15: 1080, 900, 1120, 3215, 6315) and 6,315 is the number he speaks in —
+    // "main 6,315 pe hi kaam kar sakta hoon". A report whose total exists only in the payload
+    // makes a reader add twenty rows by eye, which is the habit the report is meant to end.
+    total?: (rows: T[]) => ReactNode;
     // Starts invisible; still searchable and offered in the Columns picker. For wide
     // sheet-format tables whose long tail matters but should not open by default.
     hidden?: boolean;
@@ -655,6 +660,20 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
                 </tr>
               ))}
             </tbody>
+            {visCols.some((c) => c.total) && (
+              // Totals are computed over the FILTERED rows, not the page: the number has to answer
+              // "what is on screen right now", or filtering the table would quietly leave a total
+              // describing something else.
+              <tfoot className="text-[13px]">
+                <tr className="border-t-2 border-gray-200 bg-gray-50 font-semibold">
+                  {visCols.map((c, i) => (
+                    <td key={c.key} className="px-3.5 py-3">
+                      {c.total ? c.total(view) : i === 0 ? "All centres" : null}
+                    </td>
+                  ))}
+                </tr>
+              </tfoot>
+            )}
           </table>
         </div>
         {totalsStrip}

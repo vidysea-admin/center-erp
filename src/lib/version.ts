@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-171";
+export const RELEASE = "2026.08.14-172";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,18 @@ export const RELEASE = "2026.08.14-171";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-172 puts the total row back on the report. The figures were being worked out and sent to " +
+  "the page all along, and the page never showed them - so anyone wanting the overall number " +
+  "had to add twenty rows by eye, which is the exact habit the report was built to end. The " +
+  "client own pivot has that row, and the approved total is the number they speak in when they " +
+  "say what they can actually work with. It now sits under the table with a figure for every " +
+  "job role as well as the overall one, and it follows whatever the table is showing: filter or " +
+  "search the list and the totals describe what is in front of you, not the full set. A standing " +
+  "check now fails the build if that row ever goes missing again, because the version that was " +
+  "missing looked completely finished from the outside.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-171 adds the planning table the client keeps in a spreadsheet, as a Planning tab beside the " +
   "batches: one row for every live batch, with where its trainer has got to and where the batch " +
   "itself has got to, side by side. Eighteen columns, the same ones they track today. The part " +
@@ -30,10 +42,7 @@ export const RELEASE_NOTE_CURRENT =
   "the training columns read Not needed rather than sitting empty, because an empty cell reads " +
   "as nobody having done it yet. And three dates that had nowhere to live before - the SIDH " +
   "profile check, the eligibility check, and when the result is expected - can be filled in " +
-  "directly on this table, since that is where the person tracking them is actually working.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "directly on this table, since that is where the person tracking them is actually working." +
   "-170 adds the report the client has been asking for: every centre down the side, every job " +
   "role across the top, and five figures under each one - the approved target, how much of it " +
   "the government has actually approved, how many candidates have been taken on, how many are " +

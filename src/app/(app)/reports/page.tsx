@@ -30,9 +30,16 @@ export default function ReportsPage() {
   // Five figures under each job role, then a Grand Total group — the shape Manish sir picked from
   // the two he was shown ("yahi wala better hai na?").
   const num = (v: number) => (v ? v.toLocaleString("en-IN") : <span className="text-gray-300">·</span>);
+  // QA-524: the total row, per job role, the way his own pivot has it. Summed over the rows the
+  // table is CURRENTLY showing — a total that ignored the filter would describe something the
+  // reader is not looking at, which is worse than no total at all.
+  const sumOf = (rs: any[], pick: (r: any) => number) => <b>{num(rs.reduce((a, r) => a + (pick(r) || 0), 0))}</b>;
+  const roleTotal = (role: string, k: string) => (rs: any[]) => sumOf(rs, (r) => r.cells?.[role]?.[k] ?? 0);
+  const grandTotal = (k: string) => (rs: any[]) => sumOf(rs, (r) => r.total?.[k] ?? 0);
   const columns: any[] = [
     {
       key: "name", label: "Institution", minWidth: 260, sortable: true,
+      total: (rs: any[]) => <span className="whitespace-nowrap">All centres <span className="font-normal text-gray-400">({rs.length})</span></span>,
       sortValue: (r: any) => r.location.name,
       filterText: (r: any) => r.location.name,
       render: (r: any) => (
@@ -50,19 +57,19 @@ export default function ReportsPage() {
   ];
   for (const role of roles) {
     columns.push(
-      { key: `${role}|t`, group: role, label: "Target", minWidth: 74, sortable: true, sortValue: (r: any) => r.cells[role]?.target ?? 0, render: (r: any) => num(r.cells[role]?.target ?? 0) },
-      { key: `${role}|a`, group: role, label: "Appr.", minWidth: 74, sortable: true, sortValue: (r: any) => r.cells[role]?.approved ?? 0, render: (r: any) => num(r.cells[role]?.approved ?? 0) },
-      { key: `${role}|m`, group: role, label: "Mob.", minWidth: 74, sortable: true, sortValue: (r: any) => r.cells[role]?.mobilised ?? 0, render: (r: any) => num(r.cells[role]?.mobilised ?? 0) },
-      { key: `${role}|i`, group: role, label: "In trg", minWidth: 74, sortable: true, sortValue: (r: any) => r.cells[role]?.in_training ?? 0, render: (r: any) => num(r.cells[role]?.in_training ?? 0) },
-      { key: `${role}|c`, group: role, label: "Passed", minWidth: 78, sortable: true, sortValue: (r: any) => r.cells[role]?.certified ?? 0, render: (r: any) => num(r.cells[role]?.certified ?? 0) },
+      { key: `${role}|t`, group: role, label: "Target", minWidth: 74, sortable: true, sortValue: (r: any) => r.cells[role]?.target ?? 0, render: (r: any) => num(r.cells[role]?.target ?? 0), total: roleTotal(role, "target") },
+      { key: `${role}|a`, group: role, label: "Appr.", minWidth: 74, sortable: true, sortValue: (r: any) => r.cells[role]?.approved ?? 0, render: (r: any) => num(r.cells[role]?.approved ?? 0), total: roleTotal(role, "approved") },
+      { key: `${role}|m`, group: role, label: "Mob.", minWidth: 74, sortable: true, sortValue: (r: any) => r.cells[role]?.mobilised ?? 0, render: (r: any) => num(r.cells[role]?.mobilised ?? 0), total: roleTotal(role, "mobilised") },
+      { key: `${role}|i`, group: role, label: "In trg", minWidth: 74, sortable: true, sortValue: (r: any) => r.cells[role]?.in_training ?? 0, render: (r: any) => num(r.cells[role]?.in_training ?? 0), total: roleTotal(role, "in_training") },
+      { key: `${role}|c`, group: role, label: "Passed", minWidth: 78, sortable: true, sortValue: (r: any) => r.cells[role]?.certified ?? 0, render: (r: any) => num(r.cells[role]?.certified ?? 0), total: roleTotal(role, "certified") },
     );
   }
   columns.push(
-    { key: "gt", group: "Grand Total", label: "Target", minWidth: 80, sortable: true, sortValue: (r: any) => r.total.target, render: (r: any) => <b>{num(r.total.target)}</b> },
-    { key: "ga", group: "Grand Total", label: "Appr.", minWidth: 80, sortable: true, sortValue: (r: any) => r.total.approved, render: (r: any) => <b>{num(r.total.approved)}</b> },
-    { key: "gm", group: "Grand Total", label: "Mob.", minWidth: 80, sortable: true, sortValue: (r: any) => r.total.mobilised, render: (r: any) => <b>{num(r.total.mobilised)}</b> },
-    { key: "gi", group: "Grand Total", label: "In trg", minWidth: 80, sortable: true, sortValue: (r: any) => r.total.in_training, render: (r: any) => <b>{num(r.total.in_training)}</b> },
-    { key: "gc", group: "Grand Total", label: "Passed", minWidth: 84, sortable: true, sortValue: (r: any) => r.total.certified, render: (r: any) => <b>{num(r.total.certified)}</b> },
+    { key: "gt", group: "Grand Total", label: "Target", minWidth: 80, sortable: true, sortValue: (r: any) => r.total.target, render: (r: any) => <b>{num(r.total.target)}</b>, total: grandTotal("target") },
+    { key: "ga", group: "Grand Total", label: "Appr.", minWidth: 80, sortable: true, sortValue: (r: any) => r.total.approved, render: (r: any) => <b>{num(r.total.approved)}</b>, total: grandTotal("approved") },
+    { key: "gm", group: "Grand Total", label: "Mob.", minWidth: 80, sortable: true, sortValue: (r: any) => r.total.mobilised, render: (r: any) => <b>{num(r.total.mobilised)}</b>, total: grandTotal("mobilised") },
+    { key: "gi", group: "Grand Total", label: "In trg", minWidth: 80, sortable: true, sortValue: (r: any) => r.total.in_training, render: (r: any) => <b>{num(r.total.in_training)}</b>, total: grandTotal("in_training") },
+    { key: "gc", group: "Grand Total", label: "Passed", minWidth: 84, sortable: true, sortValue: (r: any) => r.total.certified, render: (r: any) => <b>{num(r.total.certified)}</b>, total: grandTotal("certified") },
   );
 
   const t = data?.total;

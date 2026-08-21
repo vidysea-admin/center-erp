@@ -712,6 +712,31 @@ for (const file of walk(root)) {
 }
 
 for (const h of hits) console.log("  ✗ " + h);
+// ---- -172 (QA-524): the report's total row has to be ON THE PAGE ----
+// A checker measured the live report: tfoot 0 rows, and the only "Grand Total" in the table was a
+// column-group header - while GET /api/reports/rollup had been returning the totals all along. The
+// figure was computed, returned, and never shown. His own pivot HAS that row (row 15: 1080, 900,
+// 1120, 3215, 6315) and 6,315 is the number he speaks in: "main 6,315 pe hi kaam kar sakta hoon".
+// Without it a reader adds twenty rows by eye, which is the habit this report exists to end.
+//
+// A STRUCTURE check, not an API one: no request can tell you whether a number reached the screen.
+// stripComments runs first, so writing the promise in a comment cannot satisfy it.
+{
+  const reportSrc = stripComments(fs.readFileSync(path.join(root, "app/(app)/reports/page.tsx"), "utf8"));
+  const tableSrc = stripComments(fs.readFileSync(path.join(root, "components/ui.tsx"), "utf8"));
+  if (!(/<tfoot/.test(tableSrc) && /c\.total/.test(tableSrc))) {
+    failed++; pushStructural("components/ui.tsx: the shared table cannot render a totals row (no tfoot driven by a column total) - QA-524, and his own pivot has that row.");
+  }
+  const roleN = (reportSrc.match(/total: roleTotal\(/g) || []).length;
+  const grandN = (reportSrc.match(/total: grandTotal\(/g) || []).length;
+  if (roleN < 5 || grandN !== 5) {
+    failed++; pushStructural("app/(app)/reports/page.tsx: the report does not ask for a totals row per job role AND a grand total (roleTotal x" + roleN + ", grandTotal x" + grandN + ") - QA-524. The tiles at the top only total across ALL job roles; his row 15 totals each one.");
+  }
+  if (!/c\.total\(view\)/.test(tableSrc)) {
+    failed++; pushStructural("components/ui.tsx: the totals row is computed from something other than the filtered rows - QA-524. A total that ignores the filter describes something the reader is not looking at.");
+  }
+}
+
 // -149 (QA-324): this file started as one check and now carries several - the ASI trap, the
 // drawer ceiling, the scope-collision scan. Every finding was summarised as "user-facing
 // string(s) still carry a Rule/DEC/QA code", so a scope leak was reported as a copy problem and
@@ -738,5 +763,6 @@ for (const h of hits) console.log("  ✗ " + h);
   if (copyHits.length) console.log(copyHits.length + ' user-facing string(s) still carry a Rule/DEC/QA code - rewrite as "what happened + what to do".');
   if (structural) console.log(structural + ' structural finding(s) above are NOT copy problems - read the line, not this summary.');
 }
+
 console.log(`\ncheck-user-copy: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
