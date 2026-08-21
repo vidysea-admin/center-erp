@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-176";
+export const RELEASE = "2026.08.14-177";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,19 @@ export const RELEASE = "2026.08.14-176";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-177 gives the report the two things it was missing at the front. The first two columns now " +
+  "carry their own headings - Batch Location and Status - and both can be filtered, so you can " +
+  "ask to see only the approved centres and get exactly those. Until now those headings were " +
+  "blank: the column and its figures were on screen, and the little control that filters them " +
+  "was never drawn, which is why filtering by status was not possible even though the status " +
+  "was right there. Those two columns also stay in place when you scroll sideways, so a long " +
+  "row of figures always has the centre name beside it. And the meaning of Mobilised has been " +
+  "corrected: it now counts people actually enrolled onto a batch, not everyone typed into the " +
+  "system, so it and In training describe two genuinely different stages instead of nearly the " +
+  "same one.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-176 makes the report something you can work in rather than only read. The approval " +
   "verdict was shown as a small label next to each centre, which looked tidy and turned out to " +
   "be the wrong trade: a label cannot be filtered, sorted, or carried into a download, and " +
@@ -27,10 +40,7 @@ export const RELEASE_NOTE_CURRENT =
   "quietly absorbing anything it does not recognise: a status word nobody taught it used to be " +
   "counted as an empty cell, under a heading that said the cell was empty - those are now " +
   "listed by name on the screen instead. Separately, the tool that copies live data to a " +
-  "developer machine no longer copies the share links that grant access to a candidate record.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "developer machine no longer copies the share links that grant access to a candidate record." +
   "-175 makes the report say what a blank actually means. It used to report how much of the " +
   "target was approved, and everything else read as zero - which quietly merged two completely " +
   "different things: a centre the government has refused, and a centre nobody has decided about " +

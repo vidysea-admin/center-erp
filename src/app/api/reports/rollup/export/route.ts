@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, locationFilter } from "@/lib/authz";
-import { reportRollup } from "@/lib/rules";
+import { centreVerdict, reportRollup } from "@/lib/rules";
 
 // QA-441: the report as an .xlsx, carrying THE SAME NUMBERS as the screen. It reads the same
 // `reportRollup` the screen reads — an export that recomputes is an export that eventually
@@ -15,7 +15,7 @@ export const GET = apiHandler(async (_req: NextRequest) => {
   // One flat sheet: Excel has no two-row header worth trusting, so each job role's five figures
   // become five named columns. The names carry the job role so a filter in Excel still works.
   const flat = rows.map((r) => {
-    const out: Record<string, string | number> = { Institution: r.location.name };
+    const out: Record<string, string | number> = { "Batch Location": r.location.name, Status: centreVerdict(r.total) };
     for (const role of roles) {
       const c = r.cells[role];
       out[`${role} — Target`] = c?.target ?? 0;
@@ -41,7 +41,7 @@ export const GET = apiHandler(async (_req: NextRequest) => {
     out["Check"] = r.breaks.length ? r.breaks.join(" · ") : "";
     return out;
   });
-  const totalRow: Record<string, string | number> = { Institution: "ALL CENTRES" };
+  const totalRow: Record<string, string | number> = { "Batch Location": "ALL CENTRES", Status: "" };
   for (const role of roles) {
     const sum = rows.reduce((a, r) => {
       const c = r.cells[role];

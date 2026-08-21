@@ -2598,6 +2598,11 @@ export type ReportRow = {
   // criterion 3: every row must read Target >= Mobilised >= In Training >= Certified, or SAY why
   // not. A report that silently renders an impossible row teaches people to distrust all of it.
   breaks: string[];
+  // QA-562 (-177): the centre's verdict is computed HERE and sent, so the screen renders a word it
+  // was given rather than deriving its own. rules.ts pulls in mongoose, so a client component
+  // cannot import centreVerdict() - and a second copy in the page is exactly how the screen and
+  // the Excel export would drift apart on what "Approved" means.
+  verdict: ReturnType<typeof centreVerdict>;
 };
 
 const emptyCell = (): ReportCell => ({
@@ -2631,6 +2636,20 @@ export function tcVerdict(tc_status: unknown): "approved" | "not_approved" | "un
 //
 // Rather than invent a fourth column for something that is currently empty, the unrecognised
 // VALUES are collected and reported, so the day one appears it is visible instead of absorbed.
+// QA-542/QA-562 (-177): one centre's verdict, in ONE place. The screen needs it for its column,
+// its filter and its sort; the Excel export needs the same word or the file and the screen answer
+// the same question differently - which is the whole disease ARCHITECTURE section 3 is about, and
+// the export is exactly where a disagreement would be found last.
+export function centreVerdict(c?: { target?: number; approved?: number; not_approved?: number; unknown?: number }):
+  "" | "Approved" | "Not approved" | "No verdict yet" | "Mixed" {
+  const t = c?.target ?? 0;
+  if (!t) return "";
+  if ((c?.approved ?? 0) === t) return "Approved";
+  if ((c?.not_approved ?? 0) === t) return "Not approved";
+  if ((c?.unknown ?? 0) === t) return "No verdict yet";
+  return "Mixed";
+}
+
 export function unrecognisedTcStatus(tc_status: unknown): string | null {
   const raw = String(tc_status ?? "").trim();
   if (!raw) return null;                       // blank is a known, expected state
@@ -2652,15 +2671,31 @@ export async function reportRollup(scope: Record<string, unknown> = {}) {
   const progIds = [...new Set(targets.map((t) => t.program?._id).filter(Boolean))];
   const key = (l: unknown, p: unknown) => `${String(l)}|${String(p)}`;
 
-  // Mobilised counts EVERY candidate record for that centre x course at whatever stage, off
-  // Candidate.location + Candidate.program. Deliberately not interested_programs /
-  // interested_locations: measured, those carry data on 2 of 252 records, so a report built on
-  // them would read as near-empty and be believed.
+  // QA-556 (-177) - MOBILISED MEANS ENROLLED INTO A BATCH. Umesh, 2026-08-21, correcting the
+  // column's stated source on the live screen: "mobilized vo hoga jo koi bhi ENROLLED hoga uss
+  // batch mai. enrollment is needed."
+  //
+  // It used to count EVERY candidate record for the centre x job role at whatever stage, which
+  // made the number "people we have typed in" rather than "people who are actually on a batch".
+  // The report's own caveat had been apologising for that since -170 - "Mobilised currently tracks
+  // In Training closely, because candidates are entered when they enrol" - and his instruction is
+  // the resolution: stop describing the pool, count the enrolment.
+  //
+  // MEASURED on production before changing it, so the size of the move is known and not a
+  // surprise: 252 candidate records, 251 of them on a batch roster, 209 with lifecycle Enrolled.
+  // So Mobilised goes 252 -> 251 today. The point is not the one row - it is that the two columns
+  // now mean two different things on purpose: Mobilised is "ever enrolled onto a batch here",
+  // In training is "studying right now", and the gap between them (Failed 30, Completed 9,
+  // Dropped 1) is a real funnel rather than an artefact of when a record was typed.
+  //
+  // `enrolled` is a lookup rather than a status test because BatchMember.status is null on every
+  // one of the 251 live rows - the roster row EXISTING is the enrolment.
   const candRows = await Candidate.aggregate([
     { $match: { location: { $in: locIds }, program: { $in: progIds } } },
+    { $lookup: { from: "batchmembers", localField: "_id", foreignField: "candidate", as: "bm" } },
     { $group: {
       _id: { l: "$location", p: "$program" },
-      mobilised: { $sum: 1 },
+      mobilised: { $sum: { $cond: [{ $gt: [{ $size: "$bm" }, 0] }, 1, 0] } },
       in_training: { $sum: { $cond: [{ $eq: ["$lifecycle_status", "Enrolled"] }, 1, 0] } },
     } },
   ]);
@@ -2692,7 +2727,7 @@ export async function reportRollup(scope: Record<string, unknown> = {}) {
     if (!byLoc.has(lid)) {
       byLoc.set(lid, {
         location: { _id: lid, name: t.location.name, code: t.location.code },
-        cells: {}, total: emptyCell(), breaks: [],
+        cells: {}, total: emptyCell(), breaks: [], verdict: "",
       });
     }
     const row = byLoc.get(lid)!;
@@ -2724,6 +2759,7 @@ export async function reportRollup(scope: Record<string, unknown> = {}) {
 
   const rows = [...byLoc.values()].sort((a, b) => a.location.name.localeCompare(b.location.name));
   for (const r of rows) {
+    r.verdict = centreVerdict(r.total);
     for (const [role, cell] of Object.entries(r.cells)) {
       if (cell.mobilised > cell.target) r.breaks.push(`${role}: mobilised ${cell.mobilised} is more than the target ${cell.target}`);
       if (cell.in_training > cell.mobilised) r.breaks.push(`${role}: in training ${cell.in_training} is more than mobilised ${cell.mobilised}`);
@@ -2748,12 +2784,12 @@ export const SOURCES = {
   // more than usual here: the two look identical in every export anyone has made so far.
   not_approved: "Client sheet - target on rows whose TC Status says Unapproved / Not approved / Rejected",
   unknown: "Client sheet - target on rows whose TC Status is BLANK, plus any value this report does not recognise (those are listed separately on the screen, never hidden here). Nobody has refused these; nobody has approved them either. On 2026-08-21 it was 24 of 55 rows and 4,775 of the target, all of them genuinely blank.",
-  mobilised: "Our records - every candidate entered for this centre x job role, at any stage",
+  mobilised: "Our records - candidates ENROLLED onto a batch at this centre x job role. A candidate typed into the pool but not yet put on a batch is not counted.",
   in_training: "Our records - candidates whose enrolment is complete",
   certified: "Our records - candidates with a Pass assessment result (a certificate being issued is a further step)",
   // criterion 9 / REQ-366b. This has to be ON the screen, not in a footnote: today the two
   // columns are nearly the same number, and anyone reading a funnel would assume that is a finding.
-  caveat: "Mobilised currently tracks In Training closely, because candidates are entered when they enrol - the pre-batch pool is not recorded yet.",
+  caveat: "Mobilised and In training are close because almost everyone enrolled is still studying - the difference is the ones who have finished, failed or dropped out.",
 } as const;
 
 export async function mappingReadinessBulk(targetFilter: Record<string, unknown>, limit = 2000) {

@@ -761,6 +761,8 @@ for (const file of walk(root)) {
 {
   const reportSrc = stripComments(fs.readFileSync(path.join(root, "app/(app)/reports/page.tsx"), "utf8"));
   const tableSrc = stripComments(fs.readFileSync(path.join(root, "components/ui.tsx"), "utf8"));
+  const tableSrcRules = stripComments(fs.readFileSync(path.join(root, "lib/rules.ts"), "utf8"));
+  const exportSrc = stripComments(fs.readFileSync(path.join(root, "app/api/reports/rollup/export/route.ts"), "utf8"));
 
   // QA-542: a Status COLUMN, and it must be filterable - a status you cannot filter by is a label.
   const hasCol = /key:\s*"verdict"/.test(reportSrc);
@@ -777,6 +779,41 @@ for (const file of walk(root)) {
   const reportFreezes = /freeze=\{\s*2\s*\}/.test(reportSrc);
   if (tableCanFreeze && reportFreezes) passed++;
   else { failed++; pushStructural("components/ui.tsx / reports: leading columns do not stay put on horizontal scroll (table supports it " + tableCanFreeze + ", report asks for it " + reportFreezes + ") - QA-544. The report is four job roles of five figures plus a seven-column total group; the centre name leaves the screen and every figure after it is unattributed."); }
+
+  // QA-562 (-177): on a GROUPED table an UNGROUPED column must still render its own header - the
+  // label, the sort control and the FUNNEL. It did not: the banner row printed `{s.group ?? ""}`,
+  // which is blank for an ungrouped column, and the second header row renders only grouped ones.
+  // Institution had no header from -170 (a row label is recognisable without one, so nobody saw
+  // it), and then -176 put the Status column - the one thing Umesh asked for, "agar main sirf
+  // approved ko filter out karna chahun" - into the same hole. MEASURED on live -176:
+  // hasStatusHeader false, 20 funnels, none on Status. The column shipped and its control did not.
+  const ungroupedHeader = tableSrc.includes("headerCell(s.col)") && tableSrc.includes("funnel(s.col)");
+  if (ungroupedHeader) passed++;
+  else { failed++; pushStructural("components/ui.tsx: on a grouped table an ungrouped column renders no header, so its label, sort and funnel exist nowhere - QA-556. That is why the report's Status column cannot be filtered even though the column and its data are there."); }
+
+  // QA-563 (-177): and the frozen columns ARE the ungrouped ones, so the freeze has to be applied
+  // in that same banner row. -176 applied it only to the second header row, so on live the body
+  // cells stayed put while their headers scrolled away with the figures.
+  const frozenHeaderRow = tableSrc.includes('frozenCell(s.at, "head")');
+  if (frozenHeaderRow) passed++;
+  else { failed++; pushStructural("components/ui.tsx: frozen columns keep their body cells in place but not their header cells - QA-557. Scrolling sideways leaves a pinned column under a header that has moved on."); }
+
+  // QA-562 (-177): the two ungrouped columns are the ones a person reads a row BY, so they carry
+  // Umesh's own names - "first column ka name hoga batch location aur second column ka heading
+  // status rakh, aur inme bhi filters daal" - and both must be filterable. The names are asserted
+  // because a rename back to "Institution" would be a silent step away from what he asked for.
+  const nameCol = (reportSrc.match(/key:\s*"name"[^\n]*/) ?? [""])[0];
+  const namedRight = /label:\s*"Batch Location"/.test(nameCol) && /filterable:\s*true/.test(nameCol);
+  if (namedRight) passed++;
+  else { failed++; pushStructural("app/(app)/reports/page.tsx: the first column is not a filterable \"Batch Location\" - QA-558. Umesh named these two columns himself and asked for filters on both."); }
+
+  // QA-559: and the verdict WORD is computed once, server-side, so the screen and the Excel export
+  // cannot answer "is this centre approved" differently. rules.ts pulls in mongoose, so the page
+  // cannot import centreVerdict() - it reads the value off the row instead of deriving its own.
+  const verdictShared = tableSrcRules.includes("export function centreVerdict")
+    && reportSrc.includes("r?.verdict") && exportSrc.includes("centreVerdict(r.total)");
+  if (verdictShared) passed++;
+  else { failed++; pushStructural("lib/rules.ts + reports page + rollup export: the centre verdict is not computed in ONE place and read by both surfaces - QA-559. A screen and its download must not be able to disagree about a centre's status."); }
 
   // QA-555: on a GROUPED table the Columns picker must SECTION by group. Umesh, on the report:
   // "isme bahut saari duplicate entries hai, bas unique ones hi aani chahiye" - twenty-eight rows

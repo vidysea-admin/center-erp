@@ -676,19 +676,52 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
                   {(() => {
                     // Consecutive columns sharing a group become one banner cell. Non-grouped
                     // columns (the row label) span both header rows so the two lines stay aligned.
-                    const spans: { group?: string; n: number }[] = [];
+                    //
+                    // QA-562 (-177): this cell used to render `{s.group ?? ""}` - so on a grouped
+                    // table an UNGROUPED column got a BLANK header here, and the second header row
+                    // renders only grouped columns, so its label, its sort control and its FUNNEL
+                    // were rendered nowhere at all. Institution has had no header since -170 and
+                    // nobody noticed, because a row label is recognisable without one. Then -176
+                    // added a Status column for the one thing Umesh actually asked for - "agar main
+                    // sirf approved ko filter out karna chahun toh woh kar sakoon" - and it landed
+                    // in the same hole: the column shipped, the data shipped, and the control that
+                    // makes it worth having was never drawn. Measured on live -176:
+                    // hasStatusHeader false, funnels 20, none of them on Status.
+                    //
+                    // So an ungrouped span now renders its own column's header, exactly as the
+                    // second row would have. Same headerCell() and funnel() - no second copy.
+                    const spans: { group?: string; n: number; col?: Col; at: number }[] = [];
+                    let at = 0;
                     for (const c of visCols) {
                       const last = spans[spans.length - 1];
                       if (last && last.group === c.group && c.group) last.n += 1;
-                      else spans.push({ group: c.group, n: 1 });
+                      else spans.push({ group: c.group, n: 1, col: c.group ? undefined : c, at });
+                      at++;
                     }
-                    return spans.map((s, i) => (
-                      <th key={s.group ?? "_" + i} colSpan={s.n} rowSpan={s.group ? 1 : 2}
-                        className={"sticky top-0 z-[6] border-b border-gray-100 bg-gray-50 px-3.5 pt-3 pb-1 text-center font-semibold "
-                          + (s.group ? "border-l border-gray-200 text-gray-600" : "text-left align-bottom")}>
-                        {s.group ?? ""}
-                      </th>
-                    ));
+                    return spans.map((s, i) => {
+                      // QA-557: the frozen columns are ungrouped ones, and they live in THIS row.
+                      // -176 applied the freeze to the second header row only, so on live the body
+                      // cells stayed put and their headers scrolled away with the figures.
+                      const f = s.col ? frozenCell(s.at, "head") : {} as { className?: string; style?: object };
+                      return (
+                        <th key={s.group ?? "_" + i} colSpan={s.n} rowSpan={s.group ? 1 : 2} style={f.style}
+                          className={"sticky top-0 border-b border-gray-100 bg-gray-50 px-3.5 pt-3 pb-1 font-semibold "
+                            + (s.group ? "z-[6] border-l border-gray-200 text-center text-gray-600" : "text-left align-bottom " + (f.className ?? "z-[6]"))}>
+                          {s.col ? (
+                            <span className="flex items-center gap-1">
+                              {headerCell(s.col)}
+                              {funnel(s.col)}
+                            </span>
+                          ) : s.group}
+                          {s.col && resizable && (
+                            <span onPointerDown={startResize(s.col.key)}
+                              onDoubleClick={() => setWidths((w) => { const { [s.col!.key]: _drop, ...rest } = w; return rest; })}
+                              title="Drag to resize · double-click to reset"
+                              className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize touch-none select-none hover:bg-blue-300" />
+                          )}
+                        </th>
+                      );
+                    });
                   })()}
                 </tr>
               )}

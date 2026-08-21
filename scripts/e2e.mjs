@@ -2237,17 +2237,58 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
     if (rpA?._id) await req("POST", "/api/candidates", { name: "Report Cand " + stamp, phone: "92222" + stamp.slice(0, 5), location: rpLoc._id, program: rpA._id }, 201);
     const rep2 = (await req("GET", "/api/reports/rollup", undefined, 200)).data;
     const rpRow2 = (rep2.rows ?? []).find((r) => String(r.location._id) === String(rpLoc._id));
-    ok("QA-398 (-170): Mobilised counts a candidate at ANY stage, from the candidate's own centre and course",
-      rpRow2?.cells?.[ROLE]?.mobilised === 1 && rpRow2?.cells?.[ROLE]?.in_training === 0,
+    // QA-556 (-177) - THIS PIN'S RULE CHANGED, on Umesh's instruction, and the old assertion is
+    // rewritten rather than deleted so the change is visible in the diff. It used to read
+    // "Mobilised counts a candidate at ANY stage" and assert mobilised === 1 for a candidate who
+    // was on no batch at all. He corrected the column's own stated source on the live screen:
+    // "mobilized vo hoga jo koi bhi ENROLLED hoga uss batch mai. enrollment is needed."
+    //
+    // So the same fixture now proves the OPPOSITE, and that is the point: a candidate typed into
+    // the pool is not mobilised until they are actually on a batch.
+    ok("QA-556 (-177): a candidate entered but NOT on any batch is not counted as mobilised - enrolment is what mobilised means",
+      rpRow2?.cells?.[ROLE]?.mobilised === 0 && rpRow2?.cells?.[ROLE]?.in_training === 0,
       JSON.stringify({ mob: rpRow2?.cells?.[ROLE]?.mobilised, intrg: rpRow2?.cells?.[ROLE]?.in_training }));
 
+    // ...and the moment they ARE enrolled onto a batch here, they count. Same candidate, one
+    // roster row of difference - which is exactly the line Umesh drew.
+    {
+      const mobBatch = (await req("POST", "/api/batches", { location: rpLoc._id, program: rpA._id, planned_start: "2029-04-02", target_size: 5 }, 201)).data.item;
+      const mobCand = (await req("GET", "/api/candidates?limit=200", undefined, 200)).data.items.find((x) => x.name === "Report Cand " + stamp);
+      ok("-177 fixture guard: the batch and the candidate both exist before the enrolment is asserted",
+        !!mobBatch?._id && !!mobCand?._id, JSON.stringify({ b: mobBatch?._id ?? null, c: mobCand?._id ?? null }));
+      if (mobBatch?._id && mobCand?._id) {
+        await req("POST", `/api/batches/${mobBatch._id}/members`, { candidate: mobCand._id }, 201);
+        const rep2b = (await req("GET", "/api/reports/rollup", undefined, 200)).data;
+        const row2b = (rep2b.rows ?? []).find((r) => String(r.location._id) === String(rpLoc._id));
+        ok("QA-556 (-177): once enrolled onto a batch at this centre x job role, the SAME candidate counts as mobilised",
+          row2b?.cells?.[ROLE]?.mobilised === 1,
+          JSON.stringify({ mob: row2b?.cells?.[ROLE]?.mobilised, intrg: row2b?.cells?.[ROLE]?.in_training }));
+
+        // The column's stated source has to say the new rule too - the screen prints it, and a
+        // definition that changed in code and not in the sentence beside it is how a reader ends
+        // up trusting the wrong one.
+        ok("QA-556 (-177): the stated source says mobilised means ENROLLED, not merely entered",
+          /ENROLLED onto a batch/i.test(rep2b.sources?.mobilised ?? ""),
+          JSON.stringify({ m: (rep2b.sources?.mobilised ?? "").slice(0, 110) }));
+
+        await req("POST", `/api/batches/${mobBatch._id}/transition`, { target: "Cancelled", reason: "-177 QA-559 pin cleanup" }, 200);
+      }
+    }
+
     // REQ-367: the sources travel WITH the payload, so the screen cannot render a number
-    // whose origin only exists in someone's memory. The caveat is asserted too: today
-    // Mobilised tracks In Training closely, and a reader would otherwise take that for a
-    // finding rather than a gap in what gets entered.
-    ok("QA-398 (-170): every column carries a stated source, on the screen payload itself",
+    // whose origin only exists in someone's memory. The caveat is asserted too, because a reader
+    // who sees Mobilised and In training almost equal would otherwise take that for a finding.
+    //
+    // -177: this assertion used to require the word "pre-batch pool" in the caveat, which was the
+    // OLD apology - Mobilised counted every candidate record, so it tracked In training closely
+    // and the caveat explained why. Umesh changed the rule (QA-559): mobilised means enrolled onto
+    // a batch. The wall caught the stale words the same hour, which is the pin doing its job - a
+    // definition that changes in code and not in the sentence beside it is how a reader ends up
+    // trusting the wrong one. Rewritten to the NEW rule rather than loosened.
+    ok("QA-398 (-170) / QA-556 (-177): every column carries a stated source, and Mobilised's says ENROLLED",
       typeof rep.sources?.target === "string" && /client sheet/i.test(rep.sources.target)
-        && /our records/i.test(rep.sources.mobilised) && /pre-batch pool/i.test(rep.sources.caveat),
+        && /our records/i.test(rep.sources.mobilised) && /ENROLLED onto a batch/i.test(rep.sources.mobilised)
+        && /finished, failed or dropped/i.test(rep.sources.caveat),
       JSON.stringify(rep.sources));
 
     // SCOPING, run from the SCOPED login on purpose: authz builds its $in from .map(String), and
