@@ -902,10 +902,45 @@ for (const file of walk(root)) {
   // only inside `title="Sort by this column (whitespace-nowrap)"`. Both leave the heading free to
   // wrap. Capture the className and test THAT, as a token rather than a substring, so neither a
   // neighbouring element nor prose in an attribute can stand in for the class.
-  const labelBtn = tableSrc.match(/<button className="(flex items-center gap-1[^"]*)"[\s\S]{0,240}?\{c\.label\}/);
-  const labelNoWrap = !!labelBtn && labelBtn[1].split(/\s+/).includes("whitespace-nowrap");
+  //
+  // -184 cycle 2 (QA-594 + the rest of QA-587): the -184 attempt was still wrong in BOTH directions,
+  // and the checker found each by pointing this pin's own thesis back at it.
+  //   (a) `String.match` without /g returns the FIRST match. A decoy `<button className="...">`
+  //       earlier in the file shadows the real one, and the pin goes green while the sort label
+  //       carries nothing. This is the SAME "an earlier element captures the regex" family that
+  //       has now burned this file three times (QA-567's card, QA-567's caveat, and now this).
+  //   (b) The capture was anchored on the literal prefix `flex items-center gap-1`, so simply
+  //       REORDERING the class list - or writing className as a template expression - made the pin
+  //       FAIL CORRECT CODE. QA-587's own filing row said to drop the anchor and I did not.
+  //
+  // Anchor from the LABEL BACKWARDS instead. `{c.label}` is the thing whose wrapping is at stake,
+  // so find every place it is rendered and walk back to the button that encloses it. A decoy
+  // elsewhere is then irrelevant - it renders no label - and the class list may be in any order,
+  // because the whole className is read rather than matched from its first token.
+  //
+  // `{c.label}` renders in THREE places in this file (the header button, the Columns picker entry,
+  // and a card label), so "every render site must sit in a nowrap button" is too strong and failed
+  // correct code on the first attempt at this fix. The SORT-LABEL button identifies itself by what
+  // it does: it calls `setSort`. That is the discriminator - not its position, not its class order.
+  const labelSites = [...tableSrc.matchAll(/\{c\.label\}/g)].map((m) => {
+    const open = tableSrc.lastIndexOf("<button", m.index);
+    if (open < 0) return null;
+    const close = tableSrc.indexOf("</button>", m.index);
+    const element = close < 0 ? tableSrc.slice(open) : tableSrc.slice(open, close);
+    if (!element.includes("setSort")) return null;          // not the sort label - picker, card, ...
+    const tag = tableSrc.slice(open, tableSrc.indexOf(">", open) + 1);
+    // Both spellings: className="..." and className={`...`} / {clsx(...)}. Reading the braced form
+    // too is what stops a future refactor to a template literal from being called a defect.
+    const q = tag.match(/className="([^"]*)"/);
+    const b = q ? null : tag.match(/className=\{([\s\S]*)/);
+    return { at: m.index, cls: q ? q[1] : (b ? b[1] : null) };
+  }).filter(Boolean);
+  // EVERY sort label must carry the token - not merely the first one the regex happens to reach.
+  const labelClasses = labelSites.map((s) => s.cls);
+  const labelNoWrap = labelSites.length > 0 && labelClasses.every(
+    (cls) => cls !== null && cls.split(/[\s`'"+${}]+/).includes("whitespace-nowrap"));
   if (labelNoWrap) passed++;
-  else { failed++; pushStructural("components/ui.tsx: the sortable header label can still wrap - the button that renders {c.label} does not carry whitespace-nowrap (found the button: " + !!labelBtn + ") - QA-584. Widths cannot hold this: the filter funnel adds 16px only once a column has 2-25 distinct values, so a width that fits today breaks when the data grows. Umesh has now reported this heading wrapping twice."); }
+  else { failed++; pushStructural("components/ui.tsx: a sortable header label can still wrap - " + labelSites.length + " sort-label button(s) render {c.label} and not all carry whitespace-nowrap (class lists seen: " + JSON.stringify(labelClasses) + ") - QA-584 / QA-594. Widths cannot hold this: the filter funnel adds 16px only once a column has 2-25 distinct values, so a width that fits today breaks when the data grows. Umesh has now reported this heading wrapping twice."); }
 
   // QA-564 (-178): the column definitions fold into a disclosure card - Umesh, "ye definations wala
   // dropdown type card hoga" - but the WARNINGS stay outside it. REQ-367 puts these sources "on the

@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-184";
+export const RELEASE = "2026.08.14-185";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,17 @@ export const RELEASE = "2026.08.14-184";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-185 changes nothing you can see. The check added two releases ago to stop the report headings " +
+  "breaking onto two lines was itself wrong in both directions, and this repairs both. It read only " +
+  "the first button it found in the file, so another button written earlier could stand in for the " +
+  "heading and the check would pass while the heading was unprotected. It also insisted the " +
+  "headings style be written in one particular order, so simply rearranging it, without changing " +
+  "anything a reader would see, made the check report a fault that did not exist. It now finds the " +
+  "heading by what it does rather than by where it sits or how it is spelled, and every such " +
+  "heading has to pass rather than the first one found.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-184 changes nothing you can see. It repairs two of the automated checks that are supposed to " +
   "stop earlier problems coming back, both of which could be satisfied without the thing they " +
   "check being true. One guarded the report heading against breaking onto two lines and could be " +
@@ -24,10 +35,7 @@ export const RELEASE_NOTE_CURRENT =
   "guarded the warning line above the report, which must stay visible rather than folding away " +
   "behind a click, and it was reading the position of the test that decides whether to draw the " +
   "warning instead of the position of the warning. Each repair was demonstrated by first breaking " +
-  "the screen in the exact way the old check allowed and confirming the new one refuses it.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "the screen in the exact way the old check allowed and confirming the new one refuses it." +
   "-183 stops the report headings breaking onto two lines, which is where this started. The " +
   "last two attempts widened the columns, and the widths were measured against a heading with " +
   "no filter control on it - the control takes sixteen pixels, so the longer names still wrapped. " +
