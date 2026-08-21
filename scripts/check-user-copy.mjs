@@ -716,6 +716,32 @@ for (const file of walk(root)) {
 // saying what failed, and the summary underneath said the finding was "above" when nothing was.
 // It cost real minutes to bisect, and a checker reading only the suite output could not have done
 // it at all. The printing belongs after the LAST check, which is where it is now.
+// ---- -182 (QA-574): the release step with no gate is the one that keeps getting skipped ----
+// Fourth generation. QA-364, then QA-383, then QA-547 — which was closed by BACKFILLING two rows
+// while correctly writing down that the step has no gate — and then five more releases shipped
+// without a CHANGELOG row in the four hours after that. Diagnosing a hole is not plugging it.
+//
+// So the gate: whatever RELEASE version.ts declares must have a row in qa/CHANGELOG.jsonl.
+//
+// Honest limit, stated rather than discovered later: qa/ lives in the ROOT repo (d:/erp), not in
+// this app repo, so CI has no copy of it. When the file is unreachable this check SKIPS rather
+// than failing — a gate that fails in CI for being in the wrong repo gets disabled within a day,
+// and a skip that is announced is more durable than a failure that gets muted. Locally it fires on
+// every wall run, and a wall run is what every release passes through.
+{
+  const relLine = fs.readFileSync(path.join(root, "lib/version.ts"), "utf-8").match(/export const RELEASE = "([^"]+)"/);
+  const rel = relLine ? relLine[1] : "";
+  const chPath = path.resolve(root, "..", "..", "qa", "CHANGELOG.jsonl");
+  if (!rel || !fs.existsSync(chPath)) {
+    passed++;
+    if (rel) console.log("  ·   CHANGELOG gate skipped — qa/CHANGELOG.jsonl is in the root repo and is not present here");
+  } else {
+    const ch = fs.readFileSync(chPath, "utf-8");
+    if (ch.includes('"release":"' + rel + '"')) passed++;
+    else { failed++; pushStructural(`qa/CHANGELOG.jsonl: no row for ${rel} — QA-574. This is the one release step with nothing in front of it, which is why it has now been missed in four separate generations of this defect. Add the row before pushing.`); }
+  }
+}
+
 // ---- -172 (QA-524): the report's total row has to be ON THE PAGE ----
 // A checker measured the live report: tfoot 0 rows, and the only "Grand Total" in the table was a
 // column-group header - while GET /api/reports/rollup had been returning the totals all along. The
@@ -834,14 +860,45 @@ for (const file of walk(root)) {
   // QA-580: REQ-397's scope clause, and its "a check must prove it" half. The unique list must be
   // opt-in and the report must be the ONLY caller - the plan-tracker is the other grouped table and
   // merging on label alone welded its TOT start to its batch start.
-  const gated = /pickerMode !== "unique"/.test(tableSrc) && /pickerMode\?: "unique"/.test(tableSrc);
-  const callers = (spawnSync("git", ["grep", "-l", 'pickerMode="unique"', "--", "src"], { cwd: path.join(root, ".."), encoding: "utf8" }).stdout || "")
+  // -183: a checker found three ways past this and all three are closed here.
+  //   (a) `&& false` after the guard neutered it silently  -> the guard expression must be the
+  //       WHOLE condition, so the `if` line is matched as a unit;
+  //   (b) `pickerMode={"unique"}` in braces evaded a grep for the quoted attribute -> match both
+  //       spellings;
+  //   (c) swapping the merge key from `m.label` to `m.key` rebuilt the 34-entry duplicate list
+  //       with the pin still green -> assert the merge is keyed on the LABEL, which is the whole
+  //       point of merging.
+  const gated = /if \(pickerMode !== "unique"\) \{/.test(tableSrc) && /pickerMode\?: "unique"/.test(tableSrc);
+  const mergesOnLabel = /measures\.find\(\(m\) => m\.label === c\.label\)|measures\.find\(\(m\) => c\.label === m\.label\)/.test(tableSrc);
+  // A character class, not `\{?`: in a JS string `\{` collapses to a bare `{`, and `{` is an
+  // interval operator in ERE - so the pattern silently matched nothing and the pin reported
+  // `callers []`, accusing correct code. Escapes have been eaten six times in this file's history;
+  // `[{]` needs none.
+  const callers = (spawnSync("git", ["grep", "-lE", 'pickerMode=[{]?"unique"', "--", "src"], { cwd: path.join(root, ".."), encoding: "utf8" }).stdout || "")
     .split(String.fromCharCode(10)).filter(Boolean);
   const onlyReport = callers.length === 1 && callers[0].includes("reports/page.tsx");
-  if (gated && onlyReport) passed++;
-  else { failed++; pushStructural("components/ui.tsx + reports: the unique-entry Columns picker is not gated to the report (opt-in " + gated + ", callers " + JSON.stringify(callers) + ") - QA-580 / REQ-397. The other grouped table is the plan-tracker, where TOT -> Starts and Batch -> Starts share a label and merging on label alone hides both at once."); }
+  if (gated && mergesOnLabel && onlyReport) passed++;
+  else { failed++; pushStructural("components/ui.tsx + reports: the unique-entry Columns picker is not gated to the report, or does not merge on the LABEL (opt-in " + gated + ", merges on label " + mergesOnLabel + ", callers " + JSON.stringify(callers) + ") - QA-580 / REQ-397. The other grouped table is the plan-tracker, where TOT -> Starts and Batch -> Starts share a label and merging on label alone hides both at once."); }
   if (pickerUnique && pickerGroupToggle) passed++;
   else { failed++; pushStructural("components/ui.tsx: the Columns picker still repeats a label once per group instead of listing it ONCE (unique " + pickerUnique + ", group toggle " + pickerGroupToggle + ") - QA-538. Umesh asked for unique entries only; -176 grouped them, which made the repeats legible without removing them - 34 entries, 20 exact repeats."); }
+
+  // QA-584 (-183): the header LABEL refuses to wrap. Two releases tried to buy the same outcome
+  // with pixels - -179 raised minWidth, -182 pushed the widths into the colgroup so they actually
+  // reached the column - and both were measured against a header with no filter funnel on it. The
+  // funnel costs 16px and only appears at 2-25 distinct values, so the widths were right for the
+  // data that happened to be loaded and wrong for the data that arrives later. Measured on a
+  // running -183 with 102 header cells: with this class every label button is 16px tall and none
+  // is clipped (scrollWidth == clientWidth); strip the class in the live DOM and nine cells jump
+  // to 31px - `In training`, `Not approved`, `No verdict`, exactly the three the checker named.
+  //
+  // Pinned as position, not membership: the class must sit on the SORT-LABEL button - the one that
+  // renders `{c.label}` - not merely somewhere in a file that already uses `whitespace-nowrap` in
+  // four other components. A membership test would have stayed green if the class landed on the
+  // Button primitive or a nav tab instead.
+  const labelBtn = tableSrc.match(/<button className="flex items-center gap-1[^"]*"[\s\S]{0,240}?\{c\.label\}/);
+  const labelNoWrap = !!labelBtn && labelBtn[0].includes("whitespace-nowrap");
+  if (labelNoWrap) passed++;
+  else { failed++; pushStructural("components/ui.tsx: the sortable header label can still wrap - the button that renders {c.label} does not carry whitespace-nowrap (found the button: " + !!labelBtn + ") - QA-584. Widths cannot hold this: the filter funnel adds 16px only once a column has 2-25 distinct values, so a width that fits today breaks when the data grows. Umesh has now reported this heading wrapping twice."); }
 
   // QA-564 (-178): the column definitions fold into a disclosure card - Umesh, "ye definations wala
   // dropdown type card hoga" - but the WARNINGS stay outside it. REQ-367 puts these sources "on the
@@ -904,7 +961,12 @@ for (const file of walk(root)) {
   // it green. Asserting the PRESENCE of the full names cannot be dodged by respelling the short
   // ones, because there is nothing to respell: the words either appear or they do not.
   const wantLabels = ["Target", "Approved", "Mobilised", "In training", "Passed", "Not approved", "No verdict"];
-  const missingLabels = wantLabels.filter((w) => !reportSrc.includes('label: "' + w + '"'));
+  // -183: presence-once left 20 of 27 columns unprotected - abbreviating the PER-ROLE `In training`
+  // while the Grand Total group kept the full name passed. The five per-role measures appear once
+  // per job role plus once in Grand Total, so each must appear at least twice.
+  const twice = new Set(["Target", "Approved", "Mobilised", "In training", "Passed"]);
+  const countOf = (w) => (reportSrc.match(new RegExp('label: "' + w.replace(/ /g, " ") + '"', "g")) ?? []).length;
+  const missingLabels = wantLabels.filter((w) => countOf(w) < (twice.has(w) ? 2 : 1));
   if (!missingLabels.length) passed++;
   else { failed++; pushStructural("app/(app)/reports/page.tsx: the report does not use the full column names the Excel export uses - QA-565. Missing: " + missingLabels.join(", ") + ". One column, two names is the defect; the export has always spelled them out."); }
 

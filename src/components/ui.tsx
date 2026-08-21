@@ -480,7 +480,18 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
     if (!c.sortable) return c.label;
     const is = sort?.key === c.key;
     return (
-      <button className="flex items-center gap-1 font-semibold uppercase tracking-wider hover:text-gray-600"
+      // QA-584 (-183): `whitespace-nowrap` on the LABEL, not more pixels on the width. A checker
+      // measured why the last attempt missed: the widths were sized against a funnel-less header,
+      // and the filter funnel costs 16px (12 + a 4px gap), so `In training` and `No verdict` need
+      // 126 and shipped at 122/124 — five of 27 headers still on two lines, which is the complaint
+      // Umesh made at 19:55 about `IN TRG`, one release after I said it was fixed.
+      //
+      // Adding 4px would have fixed today and broken later: the funnel only appears at 2–25
+      // distinct values, so `Not approved` fits at 140 until the data grows one more distinct
+      // value and then needs 145. A width rule that depends on the data is a bug with a delay on
+      // it. Refusing to wrap does not care how wide the column is, and a reader who wants it
+      // narrower can still drag it.
+      <button className="flex items-center gap-1 whitespace-nowrap font-semibold uppercase tracking-wider hover:text-gray-600"
         onClick={() => setSort(is && sort!.dir === -1 ? null : { key: c.key, dir: is ? -1 : 1 })}
         title="Sort">
         {c.label}
