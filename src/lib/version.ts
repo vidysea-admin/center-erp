@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-162";
+export const RELEASE = "2026.08.14-163";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,28 @@ export const RELEASE = "2026.08.14-162";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-163 closes a hole that let a wrong row exist forever. A centre's target is stored per job " +
+  "role, and until now the job role was part of the row's IDENTITY rather than something you " +
+  "could correct - so if a target landed under the wrong job role, sending the right one simply " +
+  "created a SECOND row and left the first behind, taking that centre's target UP instead of " +
+  "moving it. Nothing anywhere could delete the wrong row either. That is not hypothetical: two " +
+  "rows carrying 280 each sit under a job role the client's own sheet does not have at all, which " +
+  "puts 560 of target in the wrong column while the grand total stays right - the reason it " +
+  "survived every check that only looked at totals. A target can now be MOVED to the job role its " +
+  "own source row states: it travels whole, carrying the government TC identity that belongs to " +
+  "it, the move is audited and needs a written reason, and if the destination already has a " +
+  "target the move is refused by name rather than quietly merging two government approvals. ";
+
+
+
+
+
+
+
+
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-162 is Manish sir's release. Three things he reported on 20 August had gone a month of " +
   "releases without being opened, and all three were about a screen refusing to say what it knew. " +
   "On a finished batch both Mark Completed buttons were dead AND silent - the very fact that " +
@@ -30,17 +52,7 @@ export const RELEASE_NOTE_CURRENT =
   "averaged over two meters that cannot be averaged - the government portal's roster and our own " +
   "daily logs, added together into one denominator. The government meter is the one that decides " +
   "who qualifies, so it is the headline now, our own logs sit beside it, and the line says they " +
-  "are counted separately and never added. ";
-
-
-
-
-
-
-
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "are counted separately and never added. " +
   "-161 is the third correction of one thing, and the honest headline is that the previous two " +
   "releases said this was finished and it was not. Wherever this product lists people, a name on its " +
   "own is not enough to tell two of them apart - and the screen that needed it most was the " +

@@ -110,3 +110,58 @@ export const PUT = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   await audit({ entity: "LocationTarget", entityId: doc._id, field: "target", newValue: set, actor: user.id });
   return NextResponse.json({ item: doc });
 });
+
+// PATCH: move a target row to the job role its own source row states (QA-496).
+//
+// -163: a wrong (centre x job role) row could be CREATED and never REMOVED through the product.
+// PUT upserts on { location, program } - `program` is the KEY, not a settable field - so sending
+// the corrected job role creates a SECOND row and leaves the wrong one behind, taking the centre's
+// target UP by the amount instead of moving it. And nothing anywhere deletes a LocationTarget: this
+// route exported only GET and PUT, and `LocationTarget.delete` appears nowhere in the codebase.
+//
+// That is why QA-496 survived: two rows sit on PMKVYB-DST ("Drone Service Technician") while the
+// client sheet has no PMKVY-BECIL Drone Service row at all - every PMKVY-BECIL row reads Drone
+// SOFTWARE. It moves 560 of target into the wrong column while the GRAND TOTAL stays right, which
+// is exactly why every total-level check passed over it.
+//
+// A move, not a delete-and-retype: the row carries its own tc_id, tc_status and the sheet's claimed
+// counts, and all of them belong to the same source row. Deleting would throw them away and the
+// operator would retype figures that are contract numbers.
+export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
+  await dbConnect();
+  const user = await requireUser();
+  requireEdit(user);
+  await requirePerm(user, "locations.manage");
+  const { id } = await ctx.params;
+  assertLocationInScope(user, id);
+  const body = await req.json();
+  const fromId = body.from_program, toId = body.to_program;
+  const reason = String(body.reason ?? "").trim();
+  if (!fromId || !toId) throw new HttpError(400, "from_program and to_program are both required.");
+  if (String(fromId) === String(toId)) throw new HttpError(400, "The row is already on that job role.");
+  // A move rewrites which job role a government approval belongs to, so it says why - the same
+  // standard the result-row deletion door holds (-103).
+  if (!reason) throw new HttpError(400, "A reason is required - this moves a government-approved target from one job role to another.");
+  const [from, to] = await Promise.all([Program.findById(fromId).lean(), Program.findById(toId).lean()]);
+  if (!from || !to) throw new HttpError(400, "Program not found");
+  const row = await LocationTarget.findOne({ location: id, program: fromId });
+  if (!row) throw new HttpError(404, "No target row for that job role at this centre.");
+  // Two rows cannot be merged by a mechanism: which figures survive is a decision, and the operator
+  // has to make it. Refuse out loud and name both, rather than picking one by write order.
+  const clash = await LocationTarget.findOne({ location: id, program: toId }).lean<any>();
+  if (clash) {
+    throw new HttpError(409,
+      `This centre already has a target row for ${(to as any).name} (${(clash.approved_target ?? 0)}). `
+      + `Merging two targets is a decision, not a move - set the correct figure on that row and clear this one instead.`);
+  }
+  const before = { program: String(fromId), approved_target: row.approved_target ?? null };
+  row.program = toId;
+  await row.save();
+  await audit({
+    entity: "LocationTarget", entityId: row._id, field: "program",
+    oldValue: `${(from as any).name} (${(from as any).code}) - target ${before.approved_target ?? 0}`,
+    newValue: `${(to as any).name} (${(to as any).code}) - ${reason}`,
+    actor: user.id,
+  });
+  return NextResponse.json({ item: row, moved: { from: (from as any).code, to: (to as any).code } });
+});

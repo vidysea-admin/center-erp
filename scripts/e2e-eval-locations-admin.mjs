@@ -27,6 +27,57 @@ ok("[avg] re-PUT updates the same row (no duplicate target)", targets2.length ==
 // [worst] a target for a nonexistent program is refused.
 await req(admin, "PUT", `/api/locations/${loc._id}/targets`, { program: "000000000000000000000000", approved_target: 10 }, 400);
 
+// ---- -163 (QA-496): a wrong (centre x job role) row could be created and never removed ----
+// The client sheet has no PMKVY-BECIL Drone SERVICE row at all, yet two 280-target rows sat on that
+// programme in the ERP - 560 of target in the wrong column while the GRAND TOTAL stayed right, which
+// is why every total-level check passed over it. And it could not be corrected through the product:
+// PUT upserts on { location, program }, so `program` is the KEY - sending the right job role creates
+// a SECOND row and leaves the wrong one, taking the centre UP by 560 instead of moving it. No delete
+// existed anywhere.
+{
+  // Its OWN centre. The first draft used the shared `loc` and its extra target rows changed that
+  // centre's rollups two assertions later - the same lesson the QA-410 fixture taught: a pin that
+  // disturbs the fixture it borrows is a pin that fails somebody else's check.
+  const mvLoc = (await req(admin, "POST", "/api/locations", { code: "LM" + s, name: "TEST-EvalMove " + s, approval_status: "Approved", city: "Meerut" }, 201)).data.item;
+  const progB = (await req(admin, "POST", "/api/programs", { code: s + "B", name: "EvalLoc ProgB " + s, trainer_skill: "ELSkillB" + s }, 201)).data.item;
+  // Two rows on this centre, because the clash case needs a DESTINATION that is already taken -
+  // and it has to be built here rather than borrowed, which is what the first draft got wrong.
+  await req(admin, "PUT", `/api/locations/${mvLoc._id}/targets`, { program: prog._id, approved_target: 120 }, 200);
+  await req(admin, "PUT", `/api/locations/${mvLoc._id}/targets`, { program: progB._id, approved_target: 280, tc_id: "TCMOVE" + s, tc_status: "Approved" }, 200);
+
+  const noReason = await req(admin, "PATCH", `/api/locations/${mvLoc._id}/targets`, { from_program: progB._id, to_program: prog._id });
+  ok("-163 (QA-496): moving a government-approved target between job roles demands a reason",
+    noReason.status === 400, `got ${noReason.status}`);
+
+  // the destination already has a row, so a move would silently merge two approvals - refuse, name both
+  const clash = await req(admin, "PATCH", `/api/locations/${mvLoc._id}/targets`, { from_program: progB._id, to_program: prog._id, reason: "-163 pin: clash" });
+  ok("-163 (QA-496): it refuses to merge two targets and says which row already holds one",
+    clash.status === 409 && /already has a target row/i.test(String(clash.data.error ?? "")), `${clash.status} ${String(clash.data.error ?? "").slice(0, 90)}`);
+
+  // a clean move: destination empty, and the row must ARRIVE whole - its tc identity travels with it
+  const beforeRows = (await req(admin, "GET", `/api/locations/${mvLoc._id}/targets`, undefined, 200)).data.items ?? [];
+  const totalBefore = beforeRows.reduce((acc, t) => acc + (t.approved_target ?? 0), 0);
+  const progC = (await req(admin, "POST", "/api/programs", { code: s + "C", name: "EvalLoc ProgC " + s, trainer_skill: "ELSkillC" + s }, 201)).data.item;
+  const moved = await req(admin, "PATCH", `/api/locations/${mvLoc._id}/targets`, { from_program: progB._id, to_program: progC._id, reason: "-163 pin: the sheet calls this row a different job role" });
+  const after = (await req(admin, "GET", `/api/locations/${mvLoc._id}/targets`, undefined, 200)).data.items ?? [];
+  const onB = after.filter((t) => String(t.program?._id ?? t.program) === String(progB._id));
+  const onC = after.filter((t) => String(t.program?._id ?? t.program) === String(progC._id));
+  ok("-163 (QA-496): the row MOVES - it leaves the wrong job role rather than being copied to the right one",
+    moved.status === 200 && onB.length === 0 && onC.length === 1,
+    JSON.stringify({ status: moved.status, onB: onB.length, onC: onC.length }));
+  ok("-163 (QA-496): ...and it arrives whole, carrying the government identity that belongs to that source row",
+    onC[0]?.approved_target === 280 && onC[0]?.tc_id === "TCMOVE" + s && onC[0]?.tc_status === "Approved",
+    JSON.stringify({ target: onC[0]?.approved_target, tc_id: onC[0]?.tc_id, tc_status: onC[0]?.tc_status }));
+
+  // The centre's total must MOVE, not GROW - a second row is exactly what PUT would have produced.
+  // Asserted as "unchanged" rather than against an absolute figure: the first draft hard-coded
+  // 120+280 and the suite's own earlier edits had already made it 420, so the pin would have failed
+  // for a reason that has nothing to do with the move.
+  const totalAfter = after.reduce((acc, t) => acc + (t.approved_target ?? 0), 0);
+  ok("-163 (QA-496): the centre's total is UNCHANGED by the move - a second row would have grown it by 280",
+    totalAfter === totalBefore, JSON.stringify({ before: totalBefore, after: totalAfter }));
+}
+
 // ---- 2026-08-13 (Manish: "31 approved hain, 10 nahi"): approval is per centre×job-role ----
 await req(admin, "PUT", `/api/locations/${loc._id}/targets`, { program: prog._id, tc_id: "TCROW" + s, tc_status: "Approved" }, 200);
 const tRow = ((await req(admin, "GET", `/api/locations/${loc._id}/targets`, undefined, 200)).data.items ?? [])[0];
