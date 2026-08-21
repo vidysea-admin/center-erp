@@ -204,9 +204,14 @@ invalid recipient) and **always** write a MailLog row. Bounces: SNS → `public/
 ### 3.0c "The earliest a centre could start" — collapsed in -168 (QA-509)
 
 **FOUR implementations, and the concept was not on this map at all** — which is how it reached four.
-A checker found it while checking the unit that added the fourth; it also recorded that the row it
-had itself written for QA-461 was wrong ("the identifier appears NOWHERE in `src/`" — it appeared
-three times).
+A checker found it while checking the unit that added the fourth.
+
+**Read the next sentence carefully, because it is the whole method:** the row QA-461 was written from
+said *"the identifier appears NOWHERE in `src/`"*. Measured (QA-521): the **identifier appeared
+ONCE** — in a comment, on the line directly above one of the implementations, spelling out the
+formula and its weakness — while the **concept had THREE implementations**. A grep for the name found
+one hit; a census of the behaviour found three. **Searching for a name is not a census**, and this
+row exists because the difference between those two numbers is where the other three copies lived.
 
 | Was | Formula |
 |---|---|
