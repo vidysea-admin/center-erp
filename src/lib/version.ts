@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-164";
+export const RELEASE = "2026.08.14-165";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,25 @@ export const RELEASE = "2026.08.14-164";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-165 is the correction pass on -164, and every item in it was found by review rather than by " +
+  "a user hitting it. The worst was quiet: the new rule that drops TOT steps for an already-" +
+  "certified trainer was also DELETING what people had recorded. A regenerated plan was rebuilt " +
+  "from scratch, so any step the new plan no longer wanted disappeared along with its tick, its " +
+  "note and its owner - and that happened on the ordinary path, the moment a trainer was marked " +
+  "certified and the start date was edited. A plan may now move a date; it may never erase what " +
+  "somebody wrote down. Next: the new SIDH-portal mapping step had a default that placed it " +
+  "BEFORE the trainer TOT it depends on, so the checklist asked for the portal mapping two days " +
+  "before the certification that makes it possible. It now sits after TOT and before " +
+  "mobilisation, and steps that fall on the same day keep their real order. The centre-scoped " +
+  "planner also read CANCELLED batches when deciding which trainer a centre uses, so a batch " +
+  "nobody is running could remove the TOT steps; it reads live batches only. A centre with no " +
+  "room at all was handed an earliest start date it could not possibly meet, with no warning - " +
+  "it is now told plainly that the plan is blocked until a room exists. And the skip now also " +
+  "covers the step that asks whether the trainer is ready for a TOT they have already " +
+  "finished.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-164 makes batch planning answer the question people actually ask. Until now the planner " +
   "produced the same seven steps for every batch and only ever answered one question: if you " +
   "pick this date, what has to be finished by when. It could not skip a step, and it could not " +
@@ -29,10 +48,7 @@ export const RELEASE_NOTE_CURRENT =
   "reads that centre's own trainer, and reports the earliest date the centre could realistically " +
   "start, with the reason - mobilisation lead, the trainer's availability or cap, and the first " +
   "free room. The room list has existed since the first schema and no planning path had ever " +
-  "read it. Asked without a centre, the planner behaves exactly as it did before.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "read it. Asked without a centre, the planner behaves exactly as it did before." +
   "-163 closes a hole that let a wrong row exist forever. A centre's target is stored per job " +
   "role, and until now the job role was part of the row's IDENTITY rather than something you " +
   "could correct - so if a target landed under the wrong job role, sending the right one simply " +

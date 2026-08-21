@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, Trainer } from "@/models";
-import { assertBatchInScope, planBatchBackward } from "@/lib/rules";
+import { assertBatchInScope, mergePlan, planBatchBackward } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
 
@@ -29,17 +29,17 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
     if (batch.status !== "Planning") throw new HttpError(409, body.create ? "A backward plan is made while the batch is in Planning." : "Plan can only be regenerated while the batch is in Planning.");
     const creating = !batch.plan_enabled;
     batch.plan_enabled = true;
-    const doneByKey = new Map((batch.milestones ?? []).map((m: any) => [m.key, m]));
     // QA-460 (-164): the batch's own trainer decides whether TOT rows belong in this plan. Read
     // here rather than inside the planner so the planner stays a pure function.
     const planTrainer = batch.trainer
       ? await Trainer.findById(batch.trainer).select("pipeline_status tot_done_on").lean<any>()
       : null;
-    batch.milestones = planBatchBackward(batch.planned_start, await getDefaults(), { trainer: planTrainer }).map((m) => ({
-      ...m,
-      done_on: (doneByKey.get(m.key) as any)?.done_on,
-      done_by: (doneByKey.get(m.key) as any)?.done_by,
-    })) as any;
+    // QA-504: mergePlan, not .map() - a regenerated plan may move dates, never erase a tick, a
+    // note, an owner or a hand-added row. The skip makes omission normal, so this is load-bearing.
+    batch.milestones = mergePlan(
+      batch.milestones ?? [],
+      planBatchBackward(batch.planned_start, await getDefaults(), { trainer: planTrainer }),
+    ) as any;
     await batch.save();
     await audit({ entity: "Batch", entityId: batch._id, field: "milestones", newValue: creating ? "plan created" : "plan regenerated", actor: user.id });
     return NextResponse.json({ item: batch });

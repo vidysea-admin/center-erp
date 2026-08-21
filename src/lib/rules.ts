@@ -1710,6 +1710,9 @@ export function candidateEligibility(
 // पहले, trainer एक दिन पहले trained, TOT done at least three days before" — each lead time
 // configurable in Defaults, the whole plan shareable as a checklist.
 export type Milestone = { key: string; label: string; due_date: Date };
+// One row of the earliest-possible-start reasoning. `date` null + `blocking` true means the
+// constraint cannot be satisfied at all (QA-506) - which is stronger than a late date, not weaker.
+export type Basis = { key: string; label: string; date: Date | null; blocking?: boolean; note: string };
 
 // QA-152 part 2 (-82, Umesh 15/08): the batch plan as an ARTIFACT — its own view, a
 // shareable link (like the self-registration form: the token is the credential), Excel
@@ -1798,11 +1801,16 @@ export function planBatchBackward(
   // can carry the date without the stage, and Rule 11 already trusts the date.
   const tr = opts?.trainer;
   const totNeeded = !(tr && (tr.pipeline_status === "Certified" || !!tr.tot_done_on));
+  // -164 cycle 2, contract §7 fold: trainer_ready_for_tot goes with them. It asks whether the
+  // trainer is available and ready for a TOT they finished in January - the same dead deadline
+  // QA-460 is written from. Karunn sir answers columns 7 through 13 as ONE block ("Not needed"),
+  // and 7 is the first of them. Cycle 1 shipped six milestones, one of which asked that question;
+  // the checker folded the widening after the maker raised it rather than deciding it alone.
   const plan: Milestone[] = [
     { key: "trainer_found", label: "Trainer identified", due_date: addDays(start, -defaults.lead_trainer_found_days) },
-    // The CEO's own gap: how long TOT itself takes was never captured, only its deadline.
-    { key: "trainer_ready_for_tot", label: "Trainer available & ready for TOT", due_date: addDays(start, -(defaults.lead_trainer_ready_for_tot_days ?? 12)) },
     ...(totNeeded ? [
+      // The CEO's own gap: how long TOT itself takes was never captured, only its deadline.
+      { key: "trainer_ready_for_tot", label: "Trainer available & ready for TOT", due_date: addDays(start, -(defaults.lead_trainer_ready_for_tot_days ?? 12)) },
       { key: "tot_start", label: "TOT starts", due_date: addDays(start, -(defaults.lead_tot_start_days ?? 10)) },
       { key: "tot_done", label: "Trainer TOT completed", due_date: addDays(start, -defaults.lead_tot_done_days) },
     ] : []),
@@ -1810,12 +1818,60 @@ export function planBatchBackward(
     // trainer is mapped to EACH batch separately on the portal. It sits after TOT and before
     // mobilization: nobody can be mapped before they are certified, and candidates should not be
     // mobilised for a batch with no mapped trainer. Its lead time is a Default, not a constant.
-    { key: "trainer_mapped_sidh", label: "Trainer mapped on SIDH portal", due_date: addDays(start, -(defaults.lead_trainer_mapped_sidh_days ?? 5)) },
+    //
+    // QA-503 (-164 cycle 1 shipped this WRONG): the default was 5, and a bigger lead means an
+    // EARLIER date, so on the shipped defaults it sorted five days before start while tot_done
+    // sits three days before - the plan told you to map the trainer on the portal two days
+    // BEFORE their TOT completed. Exactly the impossibility the paragraph above exists to
+    // prevent, printed by the code that paragraph is attached to. Default is 2 now, which is
+    // after tot_done (3) and level with mobilization (2), and the sort below breaks that tie by
+    // the declared stage order rather than leaving it to chance.
+    { key: "trainer_mapped_sidh", label: "Trainer mapped on SIDH portal", due_date: addDays(start, -(defaults.lead_trainer_mapped_sidh_days ?? 2)) },
     { key: "mobilization", label: "Candidate mobilization complete", due_date: addDays(start, -defaults.lead_mobilization_days) },
     { key: "trainer_ready", label: "Trainer finalized & ready", due_date: addDays(start, -defaults.lead_trainer_ready_days) },
     { key: "enrollment_done", label: "Registration & enrollment done", due_date: addDays(start, -defaults.lead_enrollment_days) },
   ];
-  return plan.sort((a, b) => a.due_date.getTime() - b.due_date.getTime());
+  // QA-503: date first, DECLARED STAGE ORDER as the tiebreak. Two milestones can legitimately
+  // fall on the same day (trainer_mapped_sidh and mobilization both do on the shipped defaults),
+  // and a bare date sort leaves which one reads first to the sort's internals. The array above is
+  // the sequence of the work; it is the right tiebreak. A lead time an admin configures into
+  // nonsense still shows up as an out-of-order DATE, exactly as it always has for the other
+  // seven - that is visible, and it is not this change's job to hide it.
+  return plan
+    .map((m, i) => ({ m, i }))
+    .sort((a, b) => a.m.due_date.getTime() - b.m.due_date.getTime() || a.i - b.i)
+    .map((x) => x.m);
+}
+
+// QA-504 (-164 cycle 2). THE SKIP WAS SILENTLY DELETING RECORDED WORK, and the deletion was new
+// in -164 because the skip is what makes a milestone disappear from a regenerated plan at all.
+// Both callers rebuilt `batch.milestones` with .map() over the NEW plan, carrying only done_on
+// and done_by across - so any row the new plan omits was dropped outright, and any row it keeps
+// lost its notes and its owner. Measured by the checker on the NORMAL path: a ticked tot_done
+// carrying "TOT finished, certificate in hand" vanished the moment the trainer certified and
+// planned_start was edited.
+//
+// A recalculation may move a DATE. It may never erase what a person recorded. A row that carries
+// a tick, a note, an owner, or that a planner added by hand, survives regeneration on its own
+// due date even when the new plan has no place for it.
+export function mergePlan(existing: any[], next: Milestone[]): any[] {
+  const carriesWork = (m: any) => !!m?.done_on || !!m?.custom
+    || String(m?.notes ?? "").trim() !== "" || String(m?.owner_label ?? "").trim() !== "";
+  const byKey = new Map((existing ?? []).map((m: any) => [m.key, m]));
+  const kept = new Set(next.map((m) => m.key));
+  const merged: any[] = next.map((m) => {
+    const old: any = byKey.get(m.key);
+    return {
+      ...m,
+      done_on: old?.done_on, done_by: old?.done_by, done_via: old?.done_via,
+      notes: old?.notes, owner_label: old?.owner_label, custom: old?.custom,
+    };
+  });
+  for (const old of existing ?? []) {
+    if (kept.has(old.key) || !carriesWork(old)) continue;
+    merged.push(old);
+  }
+  return merged.sort((a, b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime());
 }
 
 // QA-461 / REQ-185 (-164): the planner could only answer "if I pick this date, what must finish
@@ -1828,10 +1884,10 @@ export function planBatchBackward(
 export async function earliestPossibleStart(
   locationId: unknown,
   opts?: { trainerId?: unknown },
-): Promise<{ date: Date; basis: { key: string; label: string; date: Date | null; note: string }[] }> {
+): Promise<{ date: Date; blocked: boolean; basis: Basis[] }> {
   const defaults = await getDefaults();
   const today = istToday();
-  const basis: { key: string; label: string; date: Date | null; note: string }[] = [];
+  const basis: Basis[] = [];
 
   // 1. Mobilisation floor — candidates cannot be found retrospectively.
   const mobFloor = addDays(today, defaults.mobilisation_lead_days ?? 7);
@@ -1864,7 +1920,12 @@ export async function earliestPossibleStart(
   // equipped), and it is reported rather than silently treated as "free today".
   const rooms = await Room.find({ location: locationId as any, active: true }).select("name").lean<any[]>();
   if (rooms.length === 0) {
-    basis.push({ key: "room", label: "Room", date: null, note: "No active room at this centre — a room has to exist before a batch can be scheduled here" });
+    // QA-506 (-164 cycle 2): this used to push a null date and nothing else, and the reducer below
+    // then FILTERED IT OUT - so a centre with no room at all was handed a date it cannot possibly
+    // meet, and starts_too_soon said false. A constraint we cannot satisfy is not an absent
+    // constraint; it is the binding one. `blocking` says so, and the caller must not present the
+    // date as achievable while it is set.
+    basis.push({ key: "room", label: "Room", date: null, blocking: true, note: "No active room at this centre — a room has to exist before a batch can be scheduled here" });
   } else {
     const roomIds = rooms.map((r) => r._id);
     const booked = await Batch.find({ room: { $in: roomIds }, status: { $in: ACTIVE_BATCH_STATUSES } }).lean<any[]>();
@@ -1885,7 +1946,9 @@ export async function earliestPossibleStart(
 
   const dates = basis.map((b) => b.date).filter(Boolean) as Date[];
   const date = dates.reduce((a, b) => (b > a ? b : a), dayStart(today));
-  return { date, basis };
+  // `date` is still the best answer the satisfiable constraints allow, because an operator wants
+  // to see it - but `blocked` travels with it so nothing can quote the date without the caveat.
+  return { date, blocked: basis.some((b) => b.blocking), basis };
 }
 
 // ---------- Batch code (CEO 14/08 [32:47], QA-076: CENTRE-COURSE-SKILL-NN) ----------

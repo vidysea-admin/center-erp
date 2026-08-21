@@ -97,7 +97,7 @@ export const DEFAULT_VALUES: AppDefaults = {
   lead_tot_start_days: 10,
   lead_trainer_ready_for_tot_days: 15,
   lead_trainer_found_days: 20,
-  lead_trainer_mapped_sidh_days: 5,
+  lead_trainer_mapped_sidh_days: 2,
   min_daily_evidence: 2,
   sidh_url: "https://www.skillindiadigital.gov.in/",
   drive_root_url: "https://drive.google.com/drive/folders/1NOfRCw9lIyRoJTEFAg4--HIJiTG-Of0G",

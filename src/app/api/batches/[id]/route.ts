@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, BatchMember, CandidateResult, Closure, CostEntry, DailyLog, GovtAttendanceRow, Invoice, Program, Trainer } from "@/models";
-import { assertBatchInScope, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, batchReadiness, planBatchBackward, settlementStage, trainerBookingWarnings } from "@/lib/rules";
+import { assertBatchInScope, mergePlan, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, batchReadiness, planBatchBackward, settlementStage, trainerBookingWarnings } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { audit, auditDiff } from "@/lib/audit";
 
@@ -123,18 +123,18 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   // Backward plan follows the start date while the batch is still being planned; once
   // Ready/Active the dates are history and stay put.
   if (patch.planned_start && batch.status === "Planning" && batch.plan_enabled) { // QA-152: only a requested plan follows the date
-    const doneByKey = new Map((batch.milestones ?? []).map((m: any) => [m.key, m]));
     // QA-460 (-164): follow the trainer this PATCH is LEAVING the batch with, not the one it had
     // — assigning a certified trainer is precisely when the TOT rows should disappear.
     const nextTrainer = trainer ?? batch.trainer;
     const planTrainer = nextTrainer
       ? await Trainer.findById(nextTrainer).select("pipeline_status tot_done_on").lean<any>()
       : null;
-    patch.milestones = planBatchBackward(newStart, await getDefaults(), { trainer: planTrainer }).map((m) => ({
-      ...m,
-      done_on: (doneByKey.get(m.key) as any)?.done_on,
-      done_by: (doneByKey.get(m.key) as any)?.done_by,
-    }));
+    // QA-504: this is the exact path the checker measured the data loss on - certify the trainer,
+    // edit the start date, and a ticked tot_done with its note was gone. mergePlan keeps it.
+    patch.milestones = mergePlan(
+      batch.milestones ?? [],
+      planBatchBackward(newStart, await getDefaults(), { trainer: planTrainer }),
+    );
   }
 
   const oldTrainer = batch.trainer ? String(batch.trainer) : null;

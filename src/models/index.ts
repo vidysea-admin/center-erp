@@ -1100,7 +1100,7 @@ const DefaultsSchema = new Schema({
   // like the seven above and NOT hard-coded, per the planner contract §3 — the portal step sits
   // between TOT completion and mobilisation, because a trainer cannot be mapped before they are
   // certified and candidates should not be mobilised for a batch with no mapped trainer.
-  lead_trainer_mapped_sidh_days: { type: Number, default: 5 },
+  lead_trainer_mapped_sidh_days: { type: Number, default: 2 }, // QA-503: 5 put it BEFORE tot_done (3)
   min_daily_evidence: { type: Number, default: 2 },
   // -87 (QA-157): media compression knobs — Umesh turns them after eyeballing one clip/scan.
   image_max_px: { type: Number, default: 1600 },

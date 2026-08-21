@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, HttpError } from "@/lib/authz";
-import { earliestPossibleStart, planBatchBackward } from "@/lib/rules";
+import { ACTIVE_BATCH_STATUSES, earliestPossibleStart, planBatchBackward } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { Batch, Trainer } from "@/models";
 
@@ -33,7 +33,13 @@ export const GET = apiHandler(async (req: NextRequest) => {
   // planner never needs a trainer picker of its own.
   let trainer: any = null;
   if (location) {
-    const b = await Batch.findOne({ location, ...(program ? { program } : {}), trainer: { $ne: null } })
+    // QA-505 (-164 cycle 2): this query had NO status filter, so a CANCELLED batch could decide
+    // whether the TOT rows appear - while the same file's room and cap logic has always filtered
+    // on ACTIVE_BATCH_STATUSES. "Who teaches this here" means a live batch.
+    const b = await Batch.findOne({
+      location, ...(program ? { program } : {}), trainer: { $ne: null },
+      status: { $in: ACTIVE_BATCH_STATUSES },
+    })
       .sort({ planned_start: -1 })
       .select("trainer").lean<any>();
     if (b?.trainer) trainer = await Trainer.findById(b.trainer).select("name pipeline_status tot_done_on").lean<any>();
@@ -50,7 +56,10 @@ export const GET = apiHandler(async (req: NextRequest) => {
     // showing a due date nobody owes.
     scoped_to: location ? { location, program: program ?? null, trainer: trainer ? { name: trainer.name, pipeline_status: trainer.pipeline_status ?? null, tot_done_on: trainer.tot_done_on ?? null } : null } : null,
     tot_skipped: !!trainer && (trainer.pipeline_status === "Certified" || !!trainer.tot_done_on),
-    earliest_possible_start: earliest ? { date: earliest.date, basis: earliest.basis } : null,
-    starts_too_soon: earliest ? new Date(start) < earliest.date : null,
+    earliest_possible_start: earliest ? { date: earliest.date, blocked: earliest.blocked, basis: earliest.basis } : null,
+    // QA-506: blocked means a constraint cannot be met at all (no room at this centre), so ANY
+    // start is too soon. Reporting false there would be the screen agreeing with a date it has
+    // just been told is impossible.
+    starts_too_soon: earliest ? (earliest.blocked || new Date(start) < earliest.date) : null,
   });
 });

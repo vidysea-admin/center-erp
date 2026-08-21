@@ -1819,6 +1819,30 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
 // REQ-388: every assertion in this block FAILS on pre-fix code. planBatchBackward was a
 // hard-coded seven-element array with ZERO conditionals, and /api/plan-batch read only ?start=.
 {
+  // (f) QA-503 - the milestone this unit ADDED sorted into an impossible place. Its default lead
+  // was 5, and a BIGGER lead means an EARLIER date, so it landed 5 days before start while
+  // tot_done sits at 3: the plan said map the trainer on the SIDH portal two days BEFORE their
+  // TOT completed. The comment directly above that line in rules.ts exists to forbid exactly it.
+  //
+  // THIS RUNS FIRST, and that placement is the pin. The first version of this block sat after
+  // (d), which PUTs lead_trainer_mapped_sidh_days itself - so it was asserting against a value
+  // the suite had just written, and it PASSED on pre-fix code. My own pre-fix run caught that,
+  // which is the qa-163 lesson landing one unit later: ask of every assertion whether it could
+  // fail if the feature were absent, and here the answer was no.
+  const shipped = (await req("GET", "/api/defaults", undefined, 200)).data.item;
+  ok("QA-503 (-164 c2): the SHIPPED default puts trainer_mapped_sidh after tot_done (lead must be smaller)",
+    shipped.lead_trainer_mapped_sidh_days < shipped.lead_tot_done_days,
+    JSON.stringify({ mapped_sidh: shipped.lead_trainer_mapped_sidh_days, tot_done: shipped.lead_tot_done_days }));
+  const ordPlan = (await req("GET", "/api/plan-batch?start=2028-06-01", undefined, 200)).data.milestones;
+  const dueOf = (k) => new Date(ordPlan.find((m) => m.key === k)?.due_date).getTime();
+  ok("QA-503 (-164 c2): and the plan shows it - trainer_mapped_sidh falls AFTER tot_done",
+    dueOf("trainer_mapped_sidh") > dueOf("tot_done"),
+    JSON.stringify(ordPlan.map((m) => [m.key, String(m.due_date).slice(0, 10)])));
+  ok("QA-503 (-164 c2): ...and reads BEFORE mobilization even though both fall on the same day - declared stage order breaks the tie",
+    dueOf("trainer_mapped_sidh") === dueOf("mobilization")
+      && ordPlan.findIndex((m) => m.key === "trainer_mapped_sidh") < ordPlan.findIndex((m) => m.key === "mobilization"),
+    JSON.stringify(ordPlan.map((m) => m.key)));
+
   // (a) QA-460 - the 'Not needed' skip path. 3 of the 16 rows on Karunn sir's own sheet have a
   // trainer who is already certified, and the planner handed all three TOT deadlines anyway.
   const certTrainer = (await req("POST", "/api/trainers", {
@@ -1830,9 +1854,13 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
   const certKeys = (certPlan.milestones ?? []).map((m) => m.key);
   ok("QA-460 (-164): a batch whose trainer is Certified gets NO tot_start and NO tot_done",
     !certKeys.includes("tot_start") && !certKeys.includes("tot_done"), JSON.stringify(certKeys));
-  ok("QA-460 (-164): ...and keeps every other milestone - it skips, it does not truncate",
-    ["trainer_found", "trainer_ready_for_tot", "trainer_mapped_sidh", "mobilization", "trainer_ready", "enrollment_done"].every((k) => certKeys.includes(k)) && certKeys.length === 6,
+  ok("QA-460 (-164 c2): ...and keeps every other milestone - it skips, it does not truncate",
+    ["trainer_found", "trainer_mapped_sidh", "mobilization", "trainer_ready", "enrollment_done"].every((k) => certKeys.includes(k)) && certKeys.length === 5,
     JSON.stringify(certKeys));
+  // contract §7 fold (cycle 2): trainer_ready_for_tot goes with the TOT rows. Asking whether a
+  // trainer is "available & ready for TOT" they finished in January is the same dead deadline.
+  ok("-164 c2 (fold): trainer_ready_for_tot is skipped too, not left asking about a finished TOT",
+    !certKeys.includes("trainer_ready_for_tot"), JSON.stringify(certKeys));
 
   // (b) the OTHER way a trainer becomes certified: the pipeline itself. A bypass jump stamps
   // tot_done_on, and the plan must drop TOT for that trainer too.
@@ -1855,7 +1883,7 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
   const datePlan = (await req("PATCH", `/api/batches/${dateBatch._id}/milestones`, { create: true }, 200)).data.item;
   const dateKeys = (datePlan.milestones ?? []).map((m) => m.key);
   ok("QA-460 (-164): a trainer certified THROUGH THE PIPELINE also gets no TOT rows",
-    !dateKeys.includes("tot_start") && !dateKeys.includes("tot_done") && dateKeys.length === 6, JSON.stringify({ stage: jumped.pipeline_status, keys: dateKeys }));
+    !dateKeys.includes("tot_start") && !dateKeys.includes("tot_done") && dateKeys.length === 5, JSON.stringify({ stage: jumped.pipeline_status, keys: dateKeys }));
 
   // (c) a batch with NO trainer keeps the full plan - the calculator is used before anyone is
   // hired, and there the full plan is the honest answer, not a shortened one.
@@ -1865,12 +1893,12 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
   // is a Default, not a constant. Proved by moving the Default and watching the date move.
   const mapped0 = (certPlan.milestones ?? []).find((m) => m.key === "trainer_mapped_sidh");
   const gap0 = Math.round((new Date("2028-03-10") - new Date(mapped0?.due_date)) / 86400e3);
-  ok("-164: trainer_mapped_sidh defaults to 5 days before start", gap0 === 5, `gap=${gap0}d due=${mapped0?.due_date}`);
-  await req("PUT", "/api/defaults", { lead_trainer_mapped_sidh_days: 9 }, 200);
+  ok("-164 c2: trainer_mapped_sidh defaults to 2 days before start", gap0 === 2, `gap=${gap0}d due=${mapped0?.due_date}`);
+  await req("PUT", "/api/defaults", { lead_trainer_mapped_sidh_days: 1 }, 200);
   const reMapped = (await req("PATCH", `/api/batches/${certBatch._id}/milestones`, { regenerate: true }, 200)).data.item.milestones.find((m) => m.key === "trainer_mapped_sidh");
   const gap1 = Math.round((new Date("2028-03-10") - new Date(reMapped?.due_date)) / 86400e3);
-  ok("-164: ...and it is READ from Defaults, not hard-coded (5 -> 9 moves the date)", gap1 === 9, `gap=${gap1}d due=${reMapped?.due_date}`);
-  await req("PUT", "/api/defaults", { lead_trainer_mapped_sidh_days: 5 }, 200); // restore for the rest of the wall
+  ok("-164 c2: ...and it is READ from Defaults, not hard-coded (2 -> 1 moves the date)", gap1 === 1, `gap=${gap1}d due=${reMapped?.due_date}`);
+  await req("PUT", "/api/defaults", { lead_trainer_mapped_sidh_days: 2 }, 200); // restore for the rest of the wall
 
   // (e) REQ-186 / QA-461 - the calculator becomes centre-aware, and answers 'which date is even
   // possible' instead of only 'if I pick this date, what is due when'.
@@ -1880,7 +1908,7 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
     JSON.stringify({ scoped: bare.scoped_to, earliest: bare.earliest_possible_start, n: bare.milestones.length }));
   const scoped = (await req("GET", `/api/plan-batch?start=2028-06-01&location=${loc._id}&program=${prog._id}`, undefined, 200)).data;
   ok("QA-461 (-164): ?location= changes the answer - the centre's certified trainer removes the TOT rows",
-    scoped.tot_skipped === true && scoped.milestones.length === 6 && !scoped.milestones.some((m) => m.key === "tot_done") && scoped.scoped_to?.trainer?.name === certTrainer.name,
+    scoped.tot_skipped === true && scoped.milestones.length === 5 && !scoped.milestones.some((m) => m.key === "tot_done") && scoped.scoped_to?.trainer?.name === certTrainer.name,
     JSON.stringify({ skipped: scoped.tot_skipped, n: scoped.milestones.length, trainer: scoped.scoped_to?.trainer?.name }));
   const eps = scoped.earliest_possible_start;
   const epsKeys = (eps?.basis ?? []).map((b) => b.key);
@@ -1898,8 +1926,78 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
     new Date(eps.date) >= new Date((eps.basis.find((b) => b.key === "mobilisation") ?? {}).date),
     JSON.stringify({ date: eps.date, mob: eps.basis.find((b) => b.key === "mobilisation")?.date }));
 
+
+  // ---- -164 CYCLE 2: four defects a checker found that cycle 1 shipped or mis-stated ----
+
+
+  // (g) QA-504 - the skip was DELETING RECORDED WORK, on the normal path. Both callers rebuilt
+  // the array with .map() over the new plan, so a row the new plan omits was dropped with its
+  // tick, its note and its owner. -164 is what made omission normal. Certify the trainer, edit
+  // the start date, and the evidence that the TOT actually happened was gone.
+  const lossBatch = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, planned_start: "2028-08-01", target_size: 3 }, 201)).data.item;
+  await req("PATCH", `/api/batches/${lossBatch._id}/milestones`, { create: true }, 200);
+  await req("PATCH", `/api/batches/${lossBatch._id}/milestones`, { key: "tot_done", done: true }, 200);
+  await req("PATCH", `/api/batches/${lossBatch._id}/milestones`, { edit: { key: "tot_done", notes: "TOT finished, certificate in hand", owner_label: "Divya" } }, 200);
+  // now the thing that makes tot_done disappear from the plan: a certified trainer
+  const afterLoss = (await req("PATCH", `/api/batches/${lossBatch._id}`, { trainer: certTrainer._id, planned_start: "2028-08-15" }, 200)).data.item;
+  const keptRow = (afterLoss.milestones ?? []).find((m) => m.key === "tot_done");
+  ok("QA-504 (-164 c2): a regenerated plan may move a date - it may NEVER erase a tick, a note or an owner",
+    !!keptRow?.done_on && keptRow?.notes === "TOT finished, certificate in hand" && keptRow?.owner_label === "Divya",
+    JSON.stringify({ present: !!keptRow, done_on: keptRow?.done_on, notes: keptRow?.notes, owner: keptRow?.owner_label, keys: (afterLoss.milestones ?? []).map((m) => m.key) }));
+  ok("QA-504 (-164 c2): ...and the rows the new plan does want are still there, so it kept work without refusing to skip",
+    (afterLoss.milestones ?? []).some((m) => m.key === "trainer_mapped_sidh") && !(afterLoss.milestones ?? []).some((m) => m.key === "tot_start"),
+    JSON.stringify((afterLoss.milestones ?? []).map((m) => m.key)));
+
+  // (h) QA-505 - the scoped query had no status filter, so a CANCELLED batch could decide
+  // whether the TOT rows appear, while the room and cap logic in the same file has always
+  // filtered on ACTIVE_BATCH_STATUSES. "Who teaches this here" means a LIVE batch.
+  const deadLoc = (await req("POST", "/api/locations", { code: "PD" + stamp, name: "TEST-PlanDead " + stamp, approval_status: "Approved", city: "Meerut" }, 201)).data.item;
+  const deadBatch = (await req("POST", "/api/batches", { location: deadLoc._id, program: prog._id, trainer: certTrainer._id, planned_start: "2028-09-01", target_size: 3 }, 201)).data.item;
+  await req("POST", `/api/batches/${deadBatch._id}/transition`, { target: "Cancelled", reason: "-164 c2: QA-505 pin" }, 200);
+  const deadPlan = (await req("GET", `/api/plan-batch?start=2028-12-01&location=${deadLoc._id}&program=${prog._id}`, undefined, 200)).data;
+  ok("QA-505 (-164 c2): a CANCELLED batch does not decide the plan - its certified trainer no longer removes the TOT rows",
+    deadPlan.tot_skipped === false && deadPlan.scoped_to?.trainer === null && deadPlan.milestones.length === 8,
+    JSON.stringify({ skipped: deadPlan.tot_skipped, trainer: deadPlan.scoped_to?.trainer, n: deadPlan.milestones.length }));
+
+  // (j) QA-506 - a constraint that CANNOT be satisfied was silently dropped instead of binding.
+  // earliestPossibleStart pushed a null date for "no active room at this centre" and the reducer
+  // filtered nulls out, so such a centre was handed a date it cannot possibly meet and
+  // starts_too_soon said false. deadLoc above has no room, which makes it the right fixture.
+  const noRoom = (await req("GET", `/api/plan-batch?start=2030-01-01&location=${deadLoc._id}&program=${prog._id}`, undefined, 200)).data;
+  ok("QA-506 (-164 c2): a centre with no room is told the plan is BLOCKED, not handed a date it cannot meet",
+    noRoom.earliest_possible_start?.blocked === true
+      && (noRoom.earliest_possible_start?.basis ?? []).some((b) => b.key === "room" && b.blocking === true && b.date === null),
+    JSON.stringify({ blocked: noRoom.earliest_possible_start?.blocked, basis: (noRoom.earliest_possible_start?.basis ?? []).map((b) => [b.key, b.date, b.blocking]) }));
+  ok("QA-506 (-164 c2): ...and even a start five years out reads starts_too_soon, because no date meets an unmeetable constraint",
+    noRoom.starts_too_soon === true, JSON.stringify({ start: "2030-01-01", too_soon: noRoom.starts_too_soon, earliest: noRoom.earliest_possible_start?.date }));
+  ok("QA-506 (-164 c2): a centre that HAS rooms is not blocked - the flag means blocked, not merely constrained",
+    scoped.earliest_possible_start?.blocked === false,
+    JSON.stringify({ blocked: scoped.earliest_possible_start?.blocked }));
+
+  // (i) QA-507 - cycle 1 claimed the DATE-ONLY arm was unreachable through the product and
+  // therefore left it unpinned. That claim was wrong and a checker disproved it: Certified ->
+  // Dropped -> Fresh Lead are ordinary TRAINER_FLOW edges and NOTHING ever clears tot_done_on.
+  // So the arm is reachable, and here it is, pinned.
+  // Free the trainer first. Rule: a trainer still assigned to a LIVE batch cannot be Dropped
+  // (409, "Reassign that batch") - the first draft of this pin ignored that and both of its
+  // transitions failed, which then made the second one report a misleading reason. The gate is
+  // correct product behaviour, not an obstacle: it is why the reopened-trainer route is a real
+  // route rather than a trick.
+  await req("POST", `/api/batches/${dateBatch._id}/transition`, { target: "Cancelled", reason: "-164 c2: free the trainer for the QA-507 pin" }, 200);
+  const reopened = (await req("POST", `/api/trainers/${pipeTrainer2._id}/transition`, { target: "Dropped", reason: "-164 c2: QA-507 pin" }, 200)).data.item;
+  const back = (await req("POST", `/api/trainers/${pipeTrainer2._id}/transition`, { target: "Fresh Lead" }, 200)).data.item;
+  ok("QA-507 (-164 c2) fixture guard: the reopened trainer really is out of Certified and STILL carries tot_done_on",
+    back.pipeline_status === "Fresh Lead" && !!back.tot_done_on,
+    JSON.stringify({ dropped: reopened.pipeline_status, now: back.pipeline_status, tot_done_on: back.tot_done_on }));
+  const armBatch = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: pipeTrainer2._id, planned_start: "2028-10-01", target_size: 3 }, 201)).data.item;
+  const armPlan = (await req("PATCH", `/api/batches/${armBatch._id}/milestones`, { create: true }, 200)).data.item;
+  const armKeys = (armPlan.milestones ?? []).map((m) => m.key);
+  ok("QA-507 (-164 c2): tot_done_on ALONE skips TOT - the date is the fact, the stage is not",
+    !armKeys.includes("tot_start") && !armKeys.includes("tot_done") && !armKeys.includes("trainer_ready_for_tot") && armKeys.length === 5,
+    JSON.stringify({ stage: back.pipeline_status, keys: armKeys }));
+  await req("POST", `/api/batches/${armBatch._id}/transition`, { target: "Cancelled", reason: "-164 c2 pin cleanup" }, 200);
+  await req("POST", `/api/batches/${lossBatch._id}/transition`, { target: "Cancelled", reason: "-164 c2 pin cleanup" }, 200);
   await req("POST", `/api/batches/${certBatch._id}/transition`, { target: "Cancelled", reason: "-164 planner pin cleanup" }, 200);
-  await req("POST", `/api/batches/${dateBatch._id}/transition`, { target: "Cancelled", reason: "-164 planner pin cleanup" }, 200);
 }
 
 
