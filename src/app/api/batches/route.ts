@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, requireRole, locationFilter, assertLocationInScope, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, BatchMember, Candidate, Closure, DailyLog, GovtAttendanceRow, Invoice, Location, Notification, Program, Trainer } from "@/models";
-import { assertLocationOperational, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, nextBatchCode, settlementStage, trainerBookingWarnings, trainerForLogin } from "@/lib/rules";
+import { assertLocationOperational, earliestPossibleStart, earliestStartNote, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, nextBatchCode, settlementStage, trainerBookingWarnings, trainerForLogin } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
 import { mailUsersByRole } from "@/lib/mailer";
@@ -150,16 +150,16 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const warnings = trainer ? await trainerBookingWarnings(trainer, location) : [];
   // QA-139 (checker, 15/08): the earliest-possible-start was computed, displayed, then ignored
   // at save. Warn — never block; a back-planned batch is sometimes deliberate.
+  // QA-509 (-168): this used to be its OWN max(mobilisation, trainer.available_from) - one of FOUR
+  // implementations of "earliest possible start" in the product, each with a different formula. The
+  // batch screen had one, this route had one, the PATCH route had a third, and -164 added a fourth
+  // that knew about rooms and the trainer's concurrency cap. Four answers to one question is how a
+  // screen and the server that serves it end up disagreeing about the same centre. One now.
   {
     const day = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
-    const mob = new Date(); mob.setDate(mob.getDate() + (defaults.mobilisation_lead_days ?? 7));
-    let earliest = mob;
-    if (trainer) {
-      const tDoc = await Trainer.findById(trainer).select("available_from").lean<any>();
-      if (tDoc?.available_from && new Date(tDoc.available_from) > earliest) earliest = new Date(tDoc.available_from);
-    }
-    if (day(start) < day(earliest)) {
-      warnings.push(`Planned start ${start.toLocaleDateString("en-IN")} is before the earliest possible start ${earliest.toLocaleDateString("en-IN")} (mobilisation lead ${defaults.mobilisation_lead_days ?? 7}d${trainer ? " / trainer availability" : ""}) — the batch is created, but it will not be ready by then.`);
+    const eps = await earliestPossibleStart(location, { trainerId: trainer ?? undefined });
+    if (eps.blocked || day(start) < day(eps.date)) {
+      warnings.push(`Planned start ${start.toLocaleDateString("en-IN")} is before the earliest possible start ${eps.date.toLocaleDateString("en-IN")} (${earliestStartNote(eps)}) — the batch is created, but it will not be ready by then.`);
     }
   }
   await audit({ entity: "Batch", entityId: doc._id, newValue: "created " + doc.code, actor: user.id });

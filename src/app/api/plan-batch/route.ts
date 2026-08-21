@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, HttpError } from "@/lib/authz";
-import { ACTIVE_BATCH_STATUSES, earliestPossibleStart, planBatchBackward } from "@/lib/rules";
+import { ACTIVE_BATCH_STATUSES, earliestPossibleStart, earliestStartNote, planBatchBackward } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { Batch, Trainer } from "@/models";
 
@@ -25,6 +25,10 @@ export const GET = apiHandler(async (req: NextRequest) => {
   const start = q.get("start");
   const location = q.get("location");
   const program = q.get("program");
+  // QA-509 (-168): the batch form is choosing a trainer that may not be on any batch here yet, so
+  // it names them directly. Without it the centre's CURRENT trainer is used, which is what the
+  // planner screen wants.
+  const trainerParam = q.get("trainer");
   if (!start || isNaN(new Date(start).getTime())) throw new HttpError(400, "start (YYYY-MM-DD) is required");
   const defaults = await getDefaults();
 
@@ -32,7 +36,9 @@ export const GET = apiHandler(async (req: NextRequest) => {
   // trainer whose TOT state the plan depends on, and reading it from the live batches means the
   // planner never needs a trainer picker of its own.
   let trainer: any = null;
-  if (location) {
+  if (trainerParam) {
+    trainer = await Trainer.findById(trainerParam).select("name pipeline_status tot_done_on").lean<any>();
+  } else if (location) {
     // QA-505 (-164 cycle 2): this query had NO status filter, so a CANCELLED batch could decide
     // whether the TOT rows appear - while the same file's room and cap logic has always filtered
     // on ACTIVE_BATCH_STATUSES. "Who teaches this here" means a live batch.
@@ -56,7 +62,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
     // showing a due date nobody owes.
     scoped_to: location ? { location, program: program ?? null, trainer: trainer ? { name: trainer.name, pipeline_status: trainer.pipeline_status ?? null, tot_done_on: trainer.tot_done_on ?? null } : null } : null,
     tot_skipped: !!trainer && (trainer.pipeline_status === "Certified" || !!trainer.tot_done_on),
-    earliest_possible_start: earliest ? { date: earliest.date, blocked: earliest.blocked, basis: earliest.basis } : null,
+    earliest_possible_start: earliest ? { date: earliest.date, blocked: earliest.blocked, basis: earliest.basis, note: earliestStartNote(earliest) } : null,
     // QA-506: blocked means a constraint cannot be met at all (no room at this centre), so ANY
     // start is too soon. Reporting false there would be the screen agreeing with a date it has
     // just been told is impossible.

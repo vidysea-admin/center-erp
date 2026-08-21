@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-167";
+export const RELEASE = "2026.08.14-168";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,20 @@ export const RELEASE = "2026.08.14-167";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-168 makes the product give ONE answer to the question of how soon a centre could start a " +
+  "batch. There were four, and they disagreed. The batch form worked one out in the browser, " +
+  "the save checked it again its own way, an edit checked it a third way, and the planner added " +
+  "a fourth that also looked at whether a room was free and whether the trainer was already at " +
+  "capacity. The first three knew nothing about rooms, so on a centre whose only room is booked " +
+  "they did not disagree politely - they said nothing at all, and a start date that could never " +
+  "work was accepted without a word. Silence about a date that cannot work is worse than a " +
+  "wrong date, because there is nothing there to doubt. All four now read the same calculation, " +
+  "and they explain it in the same words: the mobilisation lead, the trainer availability or " +
+  "batch cap, and the first free room. When a centre has no room at all, the screen now says " +
+  "plainly that planning is blocked until one exists, instead of offering a date.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-167 is a safety release with no visible change: it stops the maintenance scripts from " +
   "being able to hit the live database by accident. Seventeen of them write - they seed data, " +
   "run migrations, clean up test records, one of them deletes - and until now, if the variable " +
@@ -28,10 +42,7 @@ export const RELEASE_NOTE_CURRENT =
   "because the name alone is not consent; and reaching it deliberately takes a second, " +
   "explicit instruction. The sample seeder writes THROUGH a running server, so it also refuses " +
   "when pointed at anything other than a local one. A standing check now sweeps every script " +
-  "in the repository so a new one cannot bring the old default back.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "in the repository so a new one cannot bring the old default back." +
   "-166 lets the client's own master sheet correct one thing it never could: whether the " +
   "government has approved a particular job role at a particular centre. That verdict is " +
   "recorded per centre AND job role - one centre can be approved for one course and not " +

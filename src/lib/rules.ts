@@ -1874,6 +1874,14 @@ export function mergePlan(existing: any[], next: Milestone[]): any[] {
   return merged.sort((a, b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime());
 }
 
+// QA-509 (-168): the ONE sentence for the earliest-possible-start, so the three screens that state
+// it cannot state it differently. Built from the same `basis` the computation returns, which is why
+// it cannot drift from the number it explains.
+export function earliestStartNote(res: { blocked: boolean; basis: Basis[] }): string {
+  const parts = res.basis.filter((b) => b.note).map((b) => b.note);
+  return parts.join(" · ");
+}
+
 // QA-461 / REQ-185 (-164): the planner could only answer "if I pick this date, what must finish
 // by when". It could not answer "which date is even possible here", so it would happily count
 // backwards past today and hand out deadlines that expired before they were printed.

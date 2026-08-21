@@ -160,23 +160,39 @@ function BatchesInner() {
       .catch(() => setReadiness(null));
   }, [form.location, form.program]);
 
-  // §5 earliest_possible_start = max(trainer.available_from, today + mobilisation_lead_days)
+  // QA-509 (-168): this used to compute max(trainer.available_from, today + mobilisation lead) IN
+  // THE BROWSER - the fourth of four "earliest possible start" implementations, and the only one a
+  // user reads. It knew nothing about rooms or the trainer's concurrency cap, so the hint on this
+  // screen and the warning the server returned on save were answering one question with two
+  // formulas. It now asks the server for the same figure the server will judge the save by.
   const [defaults, setDefaults] = useState<any>(null);
   useEffect(() => { api("/api/defaults").then((d) => setDefaults(d.item)).catch(() => {}); }, []);
   const selTrainer = trainers.find((t) => t._id === form.trainer);
-  const earliestStartDate = (() => {
-    if (!defaults) return null;
-    const mob = new Date(); mob.setDate(mob.getDate() + (defaults.mobilisation_lead_days ?? 7));
-    const avail = selTrainer?.available_from ? new Date(selTrainer.available_from) : null;
-    return avail && avail > mob ? avail : mob;
-  })();
+  const [eps, setEps] = useState<any>(null);
+  useEffect(() => {
+    // Needs a centre: rooms are half the answer, and a figure that silently leaves them out is the
+    // defect this replaces. Until one is picked there is nothing honest to show.
+    if (!form.location) { setEps(null); return; }
+    const q = new URLSearchParams({ start: form.planned_start || new Date().toISOString().slice(0, 10), location: String(form.location) });
+    if (form.program) q.set("program", String(form.program));
+    if (form.trainer) q.set("trainer", String(form.trainer));
+    let live = true;
+    api(`/api/plan-batch?${q.toString()}`)
+      .then((d) => { if (live) setEps(d.earliest_possible_start ?? null); })
+      .catch(() => { if (live) setEps(null); });
+    return () => { live = false; };
+  }, [form.location, form.program, form.trainer, form.planned_start]);
+  const earliestStartDate = eps?.date ? new Date(eps.date) : null;
   const earliestStart = earliestStartDate
     ? earliestStartDate.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })
     : null;
   // QA-139: advice that can be silently ignored is not advice — the same date now warns
   // (never blocks) when the chosen start is before it. The server repeats the warning.
   const dayFloor = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  const startsTooEarly = !!(earliestStartDate && form.planned_start && new Date(form.planned_start) < dayFloor(earliestStartDate));
+  // QA-506: `blocked` means a constraint cannot be met at all (no room at this centre), so every
+  // date is too early - saying otherwise would be the screen agreeing with a date the server has
+  // already called impossible.
+  const startsTooEarly = !!(eps?.blocked || (earliestStartDate && form.planned_start && new Date(form.planned_start) < dayFloor(earliestStartDate)));
   // QA-138: the slot rule runs while the operator types — same function the API blocks with
   // (slot-rules.ts), so the two can never disagree.
   const slotErrs = slotGuidelineErrors({ slot_start: form.slot_start, slot_end: form.slot_end }, defaults ?? {});
@@ -543,15 +559,16 @@ function BatchesInner() {
           </Field>
           {earliestStart && !startsTooEarly && (
             <p className="rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-700">
-              Earliest possible start: <b>{earliestStart}</b> (mobilisation lead {defaults?.mobilisation_lead_days ?? 7}d{selTrainer?.available_from ? `, trainer available ${new Date(selTrainer.available_from).toLocaleDateString("en-IN")}` : ""})
+              Earliest possible start: <b>{earliestStart}</b> ({eps?.note})
             </p>
           )}
           {/* QA-139: same fact, amber, when the chosen date ignores it. Creating still works. */}
           {startsTooEarly && (
             <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
-              ⚠ Planned start is before the earliest possible start <b>{earliestStart}</b> (mobilisation
-              lead {defaults?.mobilisation_lead_days ?? 7}d{selTrainer?.available_from ? `, trainer available ${new Date(selTrainer.available_from).toLocaleDateString("en-IN")}` : ""}).
-              You can still create the batch — but mobilisation says it will not be ready by then.
+              {eps?.blocked
+                ? <>⚠ This centre cannot start a batch yet ({eps?.note}). You can still create it — but nothing will make that date work until the blocker is cleared.</>
+                : <>⚠ Planned start is before the earliest possible start <b>{earliestStart}</b> ({eps?.note}).
+                  You can still create the batch — but mobilisation says it will not be ready by then.</>}
             </p>
           )}
           {/* Location + trainer + candidate: say which of the three is missing before the batch

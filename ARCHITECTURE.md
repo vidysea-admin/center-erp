@@ -201,6 +201,35 @@ invalid recipient) and **always** write a MailLog row. Bounces: SNS → `public/
   never overwrites) — the link-portal-ids contract one level up. UI: the Candidates page
   "Portal ID health" drawer.
 
+### 3.0c "The earliest a centre could start" — collapsed in -168 (QA-509)
+
+**FOUR implementations, and the concept was not on this map at all** — which is how it reached four.
+A checker found it while checking the unit that added the fourth; it also recorded that the row it
+had itself written for QA-461 was wrong ("the identifier appears NOWHERE in `src/`" — it appeared
+three times).
+
+| Was | Formula |
+|---|---|
+| `batches/page.tsx` — computed IN THE BROWSER | `max(mobilisation lead, trainer.available_from)` |
+| `api/batches/route.ts` — the create door | the same thing, written again |
+| `api/batches/[id]/route.ts` — the reschedule door | the same thing, a third time |
+| `rules.ts earliestPossibleStart` — added by -164 | `max(mobilisation, trainer availability AND cap, first free room)` |
+
+The first three knew nothing about **rooms**. Measured on a centre whose only room was held until
+22 June 2029: a create with a start of 15 January 2029 produced **`warning: ""`** — not a different
+date, **no warning at all**. Silence about a date that cannot work is worse than a wrong date,
+because there is nothing there to doubt.
+
+**Now:** `earliestPossibleStart(location, { trainerId })` in `rules.ts` is the ONLY definition, and
+`earliestStartNote(res)` beside it is the ONLY sentence — built from the same `basis` the
+calculation returns, so the words cannot drift from the number they explain. Readers: the create
+door, the reschedule door, and `GET /api/plan-batch` (which the batch form now asks instead of
+computing). `mobilisation_lead_days` is READ in exactly one place in `src/`.
+
+**Do not re-grow this.** A screen that wants the figure asks `/api/plan-batch?location=…&trainer=…`;
+it does not recompute. Pinned by the QA-509 block in `scripts/e2e.mjs`, which asserts the three
+doors name the SAME date on a room-constrained centre — a disagreement test, not a presence test.
+
 ### 3.0b "How a person is named" — collapsed over -160/-161, and a warning about this row's own history
 
 **The rule (REQ-389):** wherever a list can contain two people with the same name, each row shows

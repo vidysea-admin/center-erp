@@ -1974,6 +1974,51 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
     scoped.earliest_possible_start?.blocked === false,
     JSON.stringify({ blocked: scoped.earliest_possible_start?.blocked }));
 
+  // (k) QA-509 (-168) - ONE earliest-possible-start, not four. The batch form computed it in the
+  // browser, POST /api/batches computed it again, PATCH computed it a third time, and -164 added
+  // a fourth that also knew about rooms and the trainer's concurrency cap. Four answers to one
+  // question is how a screen and the server that serves it end up disagreeing about one centre.
+  //
+  // The pin is a DISAGREEMENT test, not a presence test: build a centre whose rooms are busy so
+  // the room constraint is the binding one, then check that the create door, the reschedule door
+  // and the planner endpoint all name the SAME date. The three old copies knew nothing about
+  // rooms, so on this fixture they answered earlier than the truth - which is exactly the shape
+  // of the bug and exactly what this catches.
+  const busyLoc = (await req("POST", "/api/locations", { code: "EP" + stamp, name: "TEST-EarliestOne " + stamp, approval_status: "Approved", city: "Meerut" }, 201)).data.item;
+  const busyRoom = (await req("POST", `/api/locations/${busyLoc._id}/rooms`, { name: "OnlyRoom", type: "Classroom" }, 201)).data.item;
+  const busyTrainer = (await req("POST", "/api/trainers", { name: "Earliest Trainer " + stamp, phone: "93333" + stamp.slice(0, 5), skills: ["TestSkill" + stamp] }, 201)).data.item;
+  // one live batch holding the only room well into the future
+  const holder = (await req("POST", "/api/batches", { location: busyLoc._id, program: prog._id, trainer: busyTrainer._id, room: busyRoom._id, planned_start: "2029-06-01", target_size: 3 }, 201)).data.item;
+  const epsRes = (await req("GET", `/api/plan-batch?start=2029-01-01&location=${busyLoc._id}&program=${prog._id}&trainer=${busyTrainer._id}`, undefined, 200)).data.earliest_possible_start;
+  // SUPPORTING, not a pin: -164's implementation already knew about rooms, so this passes before
+  // the collapse too. It is here to catch the collapse LOSING that knowledge, which is the way a
+  // "make them all agree" change usually goes wrong - everyone agreeing on the weakest answer.
+  ok("QA-509 (-168) [supporting]: the surviving definition still accounts for the room being held - the collapse did not agree DOWN to the old formula",
+    !!epsRes && new Date(epsRes.date) > new Date("2029-06-01"),
+    JSON.stringify({ date: epsRes?.date, basis: (epsRes?.basis ?? []).map((b) => [b.key, b.date]) }));
+  ok("QA-509 (-168): ...and it comes with ONE note, assembled from that same reasoning",
+    typeof epsRes?.note === "string" && epsRes.note.length > 0 && epsRes.note.includes("mobilise"),
+    JSON.stringify({ note: epsRes?.note }));
+
+  // the create door must quote the SAME date the planner just gave
+  const dateIn = (msg) => (String(msg).match(/earliest possible start ([0-9]{1,2}\/[0-9]{1,2}\/[0-9]{4})/) ?? [])[1] ?? null;
+  const created = await req("POST", "/api/batches", { location: busyLoc._id, program: prog._id, planned_start: "2029-01-15", target_size: 3 }, 201);
+  const epsDay = new Date(epsRes.date).toLocaleDateString("en-IN");
+  // Pre-fix this did not merely disagree - it said NOTHING. The old create-door formula was
+  // max(mobilisation lead, trainer.available_from), which on this fixture lands in 2026, so a start
+  // in Jan 2029 looked fine to it while the only room is held until mid-2029. Silence on a date
+  // that cannot work is worse than a wrong date, because there is nothing for the operator to doubt.
+  ok("QA-509 (-168): the CREATE door warns AT ALL, and with the same date the planner reports",
+    dateIn(created.data.warning) === epsDay, JSON.stringify({ fromPlanner: epsDay, fromCreate: dateIn(created.data.warning), warning: String(created.data.warning ?? "").slice(0, 140) }));
+
+  // and so must the reschedule door
+  const resched = await req("PATCH", `/api/batches/${created.data.item._id}`, { planned_start: "2029-02-01" }, 200);
+  ok("QA-509 (-168): the RESCHEDULE door agrees with both - a create and an edit cannot name different dates for one centre",
+    dateIn(resched.data.warning) === epsDay, JSON.stringify({ fromPlanner: epsDay, fromReschedule: dateIn(resched.data.warning), warning: String(resched.data.warning ?? "").slice(0, 140) }));
+
+  await req("POST", `/api/batches/${created.data.item._id}/transition`, { target: "Cancelled", reason: "-168 QA-509 pin cleanup" }, 200);
+  await req("POST", `/api/batches/${holder._id}/transition`, { target: "Cancelled", reason: "-168 QA-509 pin cleanup" }, 200);
+
   // (i) QA-507 - cycle 1 claimed the DATE-ONLY arm was unreachable through the product and
   // therefore left it unpinned. That claim was wrong and a checker disproved it: Certified ->
   // Dropped -> Fresh Lead are ordinary TRAINER_FLOW edges and NOTHING ever clears tot_done_on.
