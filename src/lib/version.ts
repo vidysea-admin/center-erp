@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-187";
+export const RELEASE = "2026.08.14-188";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,19 @@ export const RELEASE = "2026.08.14-187";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-188 closes three gaps in the change the last release made, all of them found by reading it " +
+  "rather than by anything going wrong. A sheet line that left the job role EMPTY was quietly " +
+  "passed over while the run still reported success - which is the very thing the last release set " +
+  "out to stop, so an empty job role is now reported as loudly as a wrong one. The message about " +
+  "skipped lines said the whole line was skipped when only its job-role figures were; the centre " +
+  "details on that line are still read, and the message now says so. And a sheet that both names " +
+  "its job-role column and pins a job role on a figure column is refused outright instead of being " +
+  "warned about in help text - that combination would write one job role for every line of a " +
+  "centre. Two reasons for an incomplete run are also reported together now rather than only the " +
+  "first one.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-187 lets the centre sheet say something about one job role at a time. The client master lists " +
   "one line per centre and job role with a single status column, but a sheet could only ever be " +
   "connected the other way round - one column per job role - so that master could not be connected " +
@@ -25,10 +38,7 @@ export const RELEASE_NOTE_CURRENT =
   "job-role column, and each line is matched to that centre registration number own row for that " +
   "job role, so the scheme is settled by the number rather than guessed from a name - two job roles " +
   "here share a name and differ only by scheme. A line naming a job role the centre has no target " +
-  "for is left alone and reported, instead of being written somewhere plausible.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "for is left alone and reported, instead of being written somewhere plausible." +
   "-186 changes nothing you can see. It is the third attempt at one check - the one that keeps the " +
   "report headings on a single line - and this time the check finds the heading by the only fact " +
   "that actually matters: the heading sits inside that box, so that box is where it could wrap. " +

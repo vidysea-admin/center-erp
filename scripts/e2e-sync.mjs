@@ -805,6 +805,58 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
   ok("QA-440: a job role with no target row on that centre is refused and the run says Partial, never a clean OK",
     r6b.created === 0 && r6b.status === "Partial" && /could not be matched to a target row/i.test(String(r6b.error ?? "")),
     JSON.stringify(r6b));
+
+  // The three below are a checker's leads from a run that never got to execute - it destroyed the
+  // shared node_modules and returned BLOCKED, but it had READ the diff, and all three were real.
+  // Pinned here because each is the unit's own thesis turned back on it.
+
+  // (1) A BLANK job-role cell was the sharpest: the first version guarded resolution with
+  // `if (roleText)`, so a blank pushed nothing, resolved to nothing, silently dropped every
+  // per-job-role field on that row - and reported OK. The exact "invisible behind last_status: OK"
+  // shape this unit exists to kill, rebuilt in the lines written to kill it.
+  const fd6c = new FormData();
+  fd6c.append("file", new File([`TC ID,Job role,TC Status\n${TC},,Approved\n`], "blankrole.csv", { type: "text/csv" }));
+  const u6c = (await req("POST", "/api/upload", fd6c, 200)).data;
+  const src6c = (await req("POST", "/api/sync-sources", {
+    name: "Long sheet blank role " + s6, source_url: new URL(u6c.url, BASE).href,
+    field_mappings: { "TC ID": "external_id", "Job role": "job_role", "TC Status": "tc_status" },
+  }, 201)).data.item;
+  const r6c = (await req("POST", `/api/sync-sources/${src6c._id}/run`, undefined, 200)).data;
+  ok("QA-440: a BLANK job-role cell is reported, not silently dropped behind a clean OK",
+    r6c.created === 0 && r6c.status === "Partial" && /job-role cell is blank/i.test(String(r6c.error ?? "")),
+    JSON.stringify(r6c));
+
+  // (2) The message used to say "rows were skipped". Only the per-JOB-ROLE fields are skipped -
+  // the row's centre-level fields are still read, because the centre is known and only the job
+  // role is not. Both the behaviour and the wording are pinned, since the wording was the wrong half.
+  const fd6d = new FormData();
+  fd6d.append("file", new File([`TC ID,Job role,TC Status,City\n${TC},Not A Real Job Role ${s6},Approved,Varanasi\n`], "citytoo.csv", { type: "text/csv" }));
+  const u6d = (await req("POST", "/api/upload", fd6d, 200)).data;
+  const src6d = (await req("POST", "/api/sync-sources", {
+    name: "Long sheet city too " + s6, source_url: new URL(u6d.url, BASE).href,
+    field_mappings: { "TC ID": "external_id", "Job role": "job_role", "TC Status": "tc_status", "City": "city" },
+  }, 201)).data.item;
+  const r6d = (await req("POST", `/api/sync-sources/${src6d._id}/run`, undefined, 200)).data;
+  const cityChg = ((await req("GET", "/api/sheet-changes?status=Open")).data.items ?? [])
+    .find((c) => String(c.sync_source?._id ?? c.sync_source) === String(src6d._id) && String(c.field_name) === "city");
+  ok("QA-440: an unresolvable job role skips only that row's PER-JOB-ROLE fields - its centre-level fields are still read, and the message says which",
+    r6d.status === "Partial" && !!cityChg && /PER-JOB-ROLE FIELDS were skipped/i.test(String(r6d.error ?? "")),
+    JSON.stringify({ status: r6d.status, city: cityChg?.new_value, err: String(r6d.error ?? "").slice(0, 120) }));
+
+  // (3) job_role AND a ":CODE" column on one source is the hazard the Admin help text warns about
+  // in prose. Prose is not enforcement: on a long sheet the ":CODE" column resolves per MAPPING,
+  // so every row of a centre writes that one programme. Refused when the run starts.
+  const fd6e = new FormData();
+  fd6e.append("file", new File([`TC ID,Job role,TC Status\n${TC},Drone Service Technician ${s6},Approved\n`], "both.csv", { type: "text/csv" }));
+  const u6e = (await req("POST", "/api/upload", fd6e, 200)).data;
+  const src6e = (await req("POST", "/api/sync-sources", {
+    name: "Long sheet both shapes " + s6, source_url: new URL(u6e.url, BASE).href,
+    field_mappings: { "TC ID": "external_id", "Job role": "job_role", "TC Status": `tc_status:${pB.code}` },
+  }, 201)).data.item;
+  const r6e = await req("POST", `/api/sync-sources/${src6e._id}/run`, undefined, 400);
+  ok("QA-440: mapping job_role AND a :CODE column on one source is refused, not half-applied",
+    r6e.status === 400 && /would write that one programme for every row/i.test(String(r6e.data?.error ?? "")),
+    JSON.stringify({ status: r6e.status, error: String(r6e.data?.error ?? "").slice(0, 140) }));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

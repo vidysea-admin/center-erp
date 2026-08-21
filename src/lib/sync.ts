@@ -186,6 +186,18 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
   // "tc_id", "approved_target" with no ":CODE") is resolved per row from that column instead.
   // Sources that do not map it are untouched - `:CODE` still means exactly what it meant.
   const roleCol = mappedCols.find((c) => mappings[c] === "job_role");
+  // The two shapes are mutually exclusive, and saying so only in the Admin help text left the
+  // hazard the help text describes unenforced: on a LONG sheet a ":CODE" column resolves per
+  // MAPPING rather than per row, so every one of a centre's rows writes that same programme -
+  // the silent last-row-wins this change exists to prevent. A configuration error, so it is
+  // refused at the start of the run rather than half-applied and explained afterwards.
+  if (roleCol) {
+    const coded = mappedCols.filter((c) => targetRowField(mappings[c]));
+    if (coded.length) {
+      throw new HttpError(400,
+        `This source maps "${roleCol}" to job_role, so its rows are one per centre and job role. Column(s) ${coded.map((c) => `"${c}"`).join(", ")} still name a programme (${coded.map((c) => mappings[c]).join(", ")}), which would write that one programme for every row of a centre. Drop the ":CODE" suffix from them, or remove the job_role mapping.`);
+    }
+  }
   // Resolve WITHIN THE TC ID'S OWN TARGET ROWS, never by programme name alone: measured on live
   // 2026-08-22, two programmes carry the identical name "Drone Service Technician" (RPLAVP-DST and
   // PMKVYB-DST) and differ only by scheme. The TC ID already pins the scheme - the government
@@ -242,7 +254,15 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
     let rowCode: string | null = null;
     if (roleCol) {
       const roleText = (raw[colIdx.get(roleCol)!] ?? "").trim();
-      if (roleText) {
+      // A BLANK job-role cell is not "nothing to do" - it is a row that cannot be addressed, and
+      // the first version of this guarded resolution with `if (roleText)`, so a blank pushed
+      // nothing, resolved to nothing, and every per-job-role field on the row was dropped while
+      // the run still reported OK. That is the precise shape this whole change exists to kill
+      // ("both halves of the client's problem sat behind last_status: OK for weeks"), rebuilt in
+      // the lines written to kill it. A blank is now as loud as a wrong name.
+      if (!roleText) {
+        unresolvedRoles.push(`${externalId} / (the job-role cell is blank)`);
+      } else {
         const own = await LocationTarget.find({ tc_id: externalId }).populate("program", "code name").lean<any[]>();
         const hits = own.filter((r) => String(r.program?.name ?? "").trim().toLowerCase() === roleText.toLowerCase());
         const codes = [...new Set(hits.map((h) => String(h.program?.code ?? "")).filter(Boolean))];
@@ -259,6 +279,13 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
       // A bare row field on a job_role-mapped source resolves per row. If the row's job role could
       // not be resolved, the field is SKIPPED rather than falling through to LOCATION_FIELDS -
       // that fall-through is exactly the centre-level write this change exists to stop.
+      //
+      // Note what is NOT skipped, because the first wording of the Partial message said "rows were
+      // skipped" and that was not true: this `continue` sits inside the per-COLUMN loop, so the
+      // row's CENTRE-level fields (name, city, spoc, ...) are still written. That is correct - the
+      // centre is known, only the job role is not - and it is a deliberate difference from the
+      // ambiguous-TC-ID path above, which abandons the whole row because the CENTRE itself is in
+      // doubt. The message now says which of the two happened.
       const bareRowField = !!roleCol && !field.includes(":") && TARGET_ROW_FIELDS.has(field);
       if (bareRowField && !rowCode) continue;
       const rowField = targetRowField(field) ?? (bareRowField ? { base: field, code: rowCode! } : null);
@@ -323,17 +350,20 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
   // row - or matched more than one - was NOT written, and a run that skipped rows is not a clean
   // run. Both halves of the client's problem were invisible for weeks behind a `last_status: OK`,
   // so silence here would rebuild the exact thing being fixed.
+  // Two Partial reasons used to be two early returns, so a sheet with both reported only the first
+  // and the second vanished - an information regression on exactly the signal that says a run was
+  // not clean. They are collected and reported together now.
+  const partialReasons: string[] = [];
   if (unresolvedRoles.length) {
-    src.last_status = "Partial";
-    src.last_error = `${unresolvedRoles.length} row(s) named a job role that could not be matched to a target row, so they were skipped rather than guessed: ${unresolvedRoles.slice(0, 5).join("; ")}${unresolvedRoles.length > 5 ? "; …" : ""}. Set that job role's approved target on the centre first, or correct the job role in the sheet.`;
-    src.last_synced_at = new Date();
-    await src.save();
-    return { created, status: "Partial", error: src.last_error };
+    partialReasons.push(`${unresolvedRoles.length} row(s) named a job role that could not be matched to a target row, so THAT ROW'S PER-JOB-ROLE FIELDS were skipped rather than guessed (the row's centre-level fields were still read): ${unresolvedRoles.slice(0, 5).join("; ")}${unresolvedRoles.length > 5 ? "; …" : ""}. Set that job role's approved target on the centre first, or correct the job role in the sheet.`);
   }
   // Rule 2 at row level: say so plainly rather than reporting a clean run over a partial read.
   if (truncated.length) {
+    partialReasons.push(`${truncated.length} row(s) were missing one or more mapped columns and were skipped entirely (row ${truncated.slice(0, 10).join(", ")}${truncated.length > 10 ? ", …" : ""}).`);
+  }
+  if (partialReasons.length) {
     src.last_status = "Partial";
-    src.last_error = `${truncated.length} row(s) were missing one or more mapped columns and were skipped (row ${truncated.slice(0, 10).join(", ")}${truncated.length > 10 ? ", …" : ""}).`;
+    src.last_error = partialReasons.join(" ");
     src.last_synced_at = new Date();
     await src.save();
     return { created, status: "Partial", error: src.last_error };
