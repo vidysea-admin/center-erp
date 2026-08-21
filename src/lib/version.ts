@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-188";
+export const RELEASE = "2026.08.14-189";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,19 @@ export const RELEASE = "2026.08.14-188";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-189 fixes three edges of the last two releases, all found by an independent check. If a sheet " +
+  "had TWO columns with the same heading and that heading was in use, the sync quietly read the " +
+  "second one and reported success - so a government approval could land against the wrong job " +
+  "role with nothing said. There is no way to tell which of two identically named columns was " +
+  "meant, so the run is now refused and names the column. Second, a refused run left no mark: the " +
+  "source kept showing the result of its last good run, and on the daily schedule that meant the " +
+  "screen said all was well while nothing had run for days. A refusal is now recorded before it is " +
+  "raised. Third, a run can be incomplete for three different reasons and only one was ever " +
+  "reported; the last release merged two of the three, which left the same problem for every pair " +
+  "involving the third. All three are reported together now.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-188 closes three gaps in the change the last release made, all of them found by reading it " +
   "rather than by anything going wrong. A sheet line that left the job role EMPTY was quietly " +
   "passed over while the run still reported success - which is the very thing the last release set " +
@@ -26,10 +39,7 @@ export const RELEASE_NOTE_CURRENT =
   "its job-role column and pins a job role on a figure column is refused outright instead of being " +
   "warned about in help text - that combination would write one job role for every line of a " +
   "centre. Two reasons for an incomplete run are also reported together now rather than only the " +
-  "first one.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "first one." +
   "-187 lets the centre sheet say something about one job role at a time. The client master lists " +
   "one line per centre and job role with a single status column, but a sheet could only ever be " +
   "connected the other way round - one column per job role - so that master could not be connected " +

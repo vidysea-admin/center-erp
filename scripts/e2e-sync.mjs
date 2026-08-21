@@ -857,6 +857,55 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
   ok("QA-440: mapping job_role AND a :CODE column on one source is refused, not half-applied",
     r6e.status === 400 && /would write that one programme for every row/i.test(String(r6e.data?.error ?? "")),
     JSON.stringify({ status: r6e.status, error: String(r6e.data?.error ?? "").slice(0, 140) }));
+
+  // (QA-603) ...and a refusal must LEAVE A MARK. It threw before writing the document, so the
+  // source row still read last_status "OK" from its previous clean run - and on the Daily schedule
+  // the throw is swallowed into a console line, so the screen said the sync was fine while it had
+  // not run at all. Every other refusal in runSync saves first.
+  const after6e = (await req("GET", `/api/sync-sources/${src6e._id}`)).data.item;
+  ok("QA-603: a refused run is RECORDED on the source - it does not keep reporting the last clean run",
+    after6e?.last_status === "Failed" && /would write that one programme for every row/i.test(String(after6e?.last_error ?? "")),
+    JSON.stringify({ last_status: after6e?.last_status, last_error: String(after6e?.last_error ?? "").slice(0, 80) }));
+
+  // (QA-602) A duplicated mapped header. `colIdx` is last-wins, so before this the sync read the
+  // SECOND "Job role" column, decided the programme from it, wrote the government's verdict to that
+  // programme's target row, and reported a clean OK. Measured by a checker on -188.
+  const fd6f = new FormData();
+  fd6f.append("file", new File([`TC ID,Job role,Job role,TC Status\n${TC},Drone Service Technician ${s6},Solar Panel Installation Technician ${s6},Approved\n`], "duphdr.csv", { type: "text/csv" }));
+  const u6f = (await req("POST", "/api/upload", fd6f, 200)).data;
+  const src6f = (await req("POST", "/api/sync-sources", {
+    name: "Long sheet duplicate header " + s6, source_url: new URL(u6f.url, BASE).href,
+    field_mappings: { "TC ID": "external_id", "Job role": "job_role", "TC Status": "tc_status" },
+  }, 201)).data.item;
+  const r6f = await req("POST", `/api/sync-sources/${src6f._id}/run`, undefined, 400);
+  const after6f = (await req("GET", `/api/sync-sources/${src6f._id}`)).data.item;
+  ok("QA-602: two mapped columns with the SAME header refuse the run - a value read from the wrong one of two is worse than no sync",
+    r6f.status === 400 && /more than one column headed/i.test(String(r6f.data?.error ?? "")) && after6f?.last_status === "Failed",
+    JSON.stringify({ status: r6f.status, last_status: after6f?.last_status, error: String(r6f.data?.error ?? "").slice(0, 110) }));
+
+  // (QA-604) The merged Partial shipped in -188 with NO pin, and it was merged for two of the THREE
+  // reasons - `ambiguous` stayed in front and swallowed the others. One sheet, two faults, both
+  // must be named.
+  const s7 = "K" + Date.now().toString().slice(-6);
+  const p7 = (await req("POST", "/api/programs", { code: s7, name: "Clash Prog " + s7, trainer_skill: "CL" + s7 }, 201)).data.item;
+  const TCX = "TCCLASH" + s7;
+  const l7a = (await req("POST", "/api/locations", { code: "KA" + s7, name: "Clash A " + s7, external_id: "KCA" + s7, approval_status: "Approved", city: "Agra" }, 201)).data.item;
+  const l7b = (await req("POST", "/api/locations", { code: "KB" + s7, name: "Clash B " + s7, external_id: "KCB" + s7, approval_status: "Approved", city: "Agra" }, 201)).data.item;
+  // The SAME registration number on two different centres -> `ambiguous`.
+  await req("PUT", `/api/locations/${l7a._id}/targets`, { program: p7._id, approved_target: 100, tc_id: TCX }, 200);
+  await req("PUT", `/api/locations/${l7b._id}/targets`, { program: p7._id, approved_target: 100, tc_id: TCX }, 200);
+  const fd7 = new FormData();
+  // Row 1: the ambiguous TC ID. Row 2: physically short, so it is `truncated`. Two faults, one sheet.
+  fd7.append("file", new File([`TC ID,Job role,TC Status,City\n${TCX},Clash Prog ${s7},Approved,Agra\nKCA${s7},Clash Prog ${s7}\n`], "twofaults.csv", { type: "text/csv" }));
+  const u7 = (await req("POST", "/api/upload", fd7, 200)).data;
+  const src7 = (await req("POST", "/api/sync-sources", {
+    name: "Two faults " + s7, source_url: new URL(u7.url, BASE).href,
+    field_mappings: { "TC ID": "external_id", "Job role": "job_role", "TC Status": "tc_status", "City": "city" },
+  }, 201)).data.item;
+  const r7 = (await req("POST", `/api/sync-sources/${src7._id}/run`, undefined, 200)).data;
+  ok("QA-604: a sheet with TWO reasons to be Partial reports BOTH - merging two of three reasons left the same defect in a smaller coat",
+    r7.status === "Partial" && /more than one centre/i.test(String(r7.error ?? "")) && /missing one or more mapped columns/i.test(String(r7.error ?? "")),
+    JSON.stringify({ status: r7.status, error: String(r7.error ?? "").slice(0, 200) }));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -191,11 +191,39 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
   // MAPPING rather than per row, so every one of a centre's rows writes that same programme -
   // the silent last-row-wins this change exists to prevent. A configuration error, so it is
   // refused at the start of the run rather than half-applied and explained afterwards.
+  //
+  // QA-603: a refusal that throws without writing the document leaves the source row still reading
+  // `last_status: "OK"` from its last clean run - and on the Daily schedule the throw is swallowed
+  // into a console line, so the screen says the sync is fine while it has not run for days. Every
+  // other refusal in here saves first, and so do these.
+  const refuse = async (message: string): Promise<never> => {
+    src.last_status = "Failed";
+    src.last_error = message;
+    src.last_synced_at = new Date();
+    await src.save();
+    throw new HttpError(400, message);
+  };
+
+  // QA-602: `colIdx` is built from the header row and LAST duplicate wins (`:175`). That has always
+  // been true, but until a column decided WHICH programme's target row a government verdict lands
+  // on, the worst it could do was read the wrong value into the right field. Now a repeated
+  // `Job role` header silently chooses the row - measured by a checker: header
+  // `TC ID,Job role,Job role,TC Status` wrote against the SECOND column, never consulted the first,
+  // and reported a clean OK.
+  //
+  // We cannot know which of two identically-named columns was meant, and this file's own standard
+  // for that is written a few lines down: "A sheet cell we cannot read confidently is a question
+  // for a human, not a guess." So any DUPLICATED mapped header refuses the run and names itself.
+  // Scoped to mapped columns on purpose: an unmapped duplicate is none of our business.
+  const dupHeaders = mappedCols.filter((c) => header.filter((h) => h === c).length > 1);
+  if (dupHeaders.length) {
+    await refuse(`The sheet has more than one column headed ${dupHeaders.map((c) => `"${c}"`).join(", ")}, and that column is mapped, so there is no way to tell which one this source means. Rename or remove the duplicate; a value read from the wrong column of two with the same name is worse than no sync.`);
+  }
+
   if (roleCol) {
     const coded = mappedCols.filter((c) => targetRowField(mappings[c]));
     if (coded.length) {
-      throw new HttpError(400,
-        `This source maps "${roleCol}" to job_role, so its rows are one per centre and job role. Column(s) ${coded.map((c) => `"${c}"`).join(", ")} still name a programme (${coded.map((c) => mappings[c]).join(", ")}), which would write that one programme for every row of a centre. Drop the ":CODE" suffix from them, or remove the job_role mapping.`);
+      await refuse(`This source maps "${roleCol}" to job_role, so its rows are one per centre and job role. Column(s) ${coded.map((c) => `"${c}"`).join(", ")} still name a programme (${coded.map((c) => mappings[c]).join(", ")}), which would write that one programme for every row of a centre. Drop the ":CODE" suffix from them, or remove the job_role mapping.`);
     }
   }
   // Resolve WITHIN THE TC ID'S OWN TARGET ROWS, never by programme name alone: measured on live
@@ -337,23 +365,23 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
       created++;
     }
   }
+  // THREE reasons a run is not clean, and each one used to be its own early return, so a sheet
+  // with more than one fault reported only the first and the rest vanished - on precisely the
+  // signal whose whole job is to say the run was not clean.
+  //
+  // QA-604: -188 merged two of the three and left `ambiguous` in front of both, which fixed the
+  // symptom for one pair and kept it for every pair involving the first. Merging two of three is
+  // the same defect wearing a smaller coat. All three now report together.
+  const partialReasons: string[] = [];
   // QA-520: a run that skipped rows because their registration number is claimed twice is NOT a
   // clean run, and reporting it as one is how the last of these stayed invisible for a month.
   if (ambiguous.length) {
-    src.last_status = "Partial";
-    src.last_error = `${ambiguous.length} TC ID(s) are carried by more than one centre, so those sheet rows were skipped rather than guessed: ${ambiguous.slice(0, 5).join("; ")}${ambiguous.length > 5 ? "; …" : ""}. One government registration number belongs to one centre — correct it on the location screen.`;
-    src.last_synced_at = new Date();
-    await src.save();
-    return { created, status: "Partial", error: src.last_error };
+    partialReasons.push(`${ambiguous.length} TC ID(s) are carried by more than one centre, so those sheet rows were skipped entirely rather than guessed: ${ambiguous.slice(0, 5).join("; ")}${ambiguous.length > 5 ? "; …" : ""}. One government registration number belongs to one centre — correct it on the location screen.`);
   }
   // QA-440: the same standard as the ambiguous TC IDs above. A row whose job role matched no target
   // row - or matched more than one - was NOT written, and a run that skipped rows is not a clean
   // run. Both halves of the client's problem were invisible for weeks behind a `last_status: OK`,
   // so silence here would rebuild the exact thing being fixed.
-  // Two Partial reasons used to be two early returns, so a sheet with both reported only the first
-  // and the second vanished - an information regression on exactly the signal that says a run was
-  // not clean. They are collected and reported together now.
-  const partialReasons: string[] = [];
   if (unresolvedRoles.length) {
     partialReasons.push(`${unresolvedRoles.length} row(s) named a job role that could not be matched to a target row, so THAT ROW'S PER-JOB-ROLE FIELDS were skipped rather than guessed (the row's centre-level fields were still read): ${unresolvedRoles.slice(0, 5).join("; ")}${unresolvedRoles.length > 5 ? "; …" : ""}. Set that job role's approved target on the centre first, or correct the job role in the sheet.`);
   }
