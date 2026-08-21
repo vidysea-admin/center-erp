@@ -895,8 +895,15 @@ for (const file of walk(root)) {
   // renders `{c.label}` - not merely somewhere in a file that already uses `whitespace-nowrap` in
   // four other components. A membership test would have stayed green if the class landed on the
   // Button primitive or a nav tab instead.
-  const labelBtn = tableSrc.match(/<button className="flex items-center gap-1[^"]*"[\s\S]{0,240}?\{c\.label\}/);
-  const labelNoWrap = !!labelBtn && labelBtn[0].includes("whitespace-nowrap");
+  // -184 (QA-587): the cycle-3 checker proved this pin did NOT test what the comment above claims.
+  // `.includes()` ran against the WHOLE 240-char match - the button's attributes plus any child
+  // before `{c.label}` - so two mutations kept it green with the button carrying no nowrap at all:
+  // a hidden sibling `<span className="hidden whitespace-nowrap">`, and the class name appearing
+  // only inside `title="Sort by this column (whitespace-nowrap)"`. Both leave the heading free to
+  // wrap. Capture the className and test THAT, as a token rather than a substring, so neither a
+  // neighbouring element nor prose in an attribute can stand in for the class.
+  const labelBtn = tableSrc.match(/<button className="(flex items-center gap-1[^"]*)"[\s\S]{0,240}?\{c\.label\}/);
+  const labelNoWrap = !!labelBtn && labelBtn[1].split(/\s+/).includes("whitespace-nowrap");
   if (labelNoWrap) passed++;
   else { failed++; pushStructural("components/ui.tsx: the sortable header label can still wrap - the button that renders {c.label} does not carry whitespace-nowrap (found the button: " + !!labelBtn + ") - QA-584. Widths cannot hold this: the filter funnel adds 16px only once a column has 2-25 distinct values, so a width that fits today breaks when the data grows. Umesh has now reported this heading wrapping twice."); }
 
@@ -920,7 +927,18 @@ for (const file of walk(root)) {
   const cardStart = reportSrc.indexOf("Where these numbers come from");
   const openTag = cardStart < 0 ? "" : reportSrc.slice(reportSrc.lastIndexOf("<details", cardStart), cardStart);
   const cardEnd = cardStart < 0 ? -1 : reportSrc.indexOf("</details>", cardStart);
-  const caveatAt = reportSrc.search(/\{s\??\.?caveat\}|s\?\.caveat &&/);
+  // -184 (QA-567, the remainder): this used to accept the GUARD (`s?.caveat &&`) as an anchor, and
+  // the guard is not the caveat - it sits one line above the thing that actually renders. `search`
+  // returns the FIRST match, so the anchor landed on the guard every time, and the depth count
+  // below then measured the nesting at the guard rather than at the text. Split them and the pin
+  // goes green on a caveat that is plainly hidden:
+  //     {s?.caveat && (              <- depth 0 here, so the pin was satisfied
+  //       <details><p>{s.caveat}</p></details>   <- and the warning is behind a click anyway
+  //     )}
+  // Anchor on what is RENDERED. Both spellings of the rendered expression are accepted, because
+  // this pin has already once failed correct code over a spelling (`m.label === c.label`); the dot
+  // is now required, so `{scaveat}` no longer counts as a caveat.
+  const caveatAt = reportSrc.search(/\{s\??\.caveat\}/);
   const hasCard = cardStart >= 0 && openTag.startsWith("<details");
   // Written carefully: the first attempt put a real 0x08 byte here - a regex word-boundary
   // that collapsed into a backspace on the way through a shell heredoc - and THIS FILE's own

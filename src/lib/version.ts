@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-183";
+export const RELEASE = "2026.08.14-184";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,16 +17,24 @@ export const RELEASE = "2026.08.14-183";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-184 changes nothing you can see. It repairs two of the automated checks that are supposed to " +
+  "stop earlier problems coming back, both of which could be satisfied without the thing they " +
+  "check being true. One guarded the report heading against breaking onto two lines and could be " +
+  "contented by the words appearing anywhere nearby rather than on the heading itself. The other " +
+  "guarded the warning line above the report, which must stay visible rather than folding away " +
+  "behind a click, and it was reading the position of the test that decides whether to draw the " +
+  "warning instead of the position of the warning. Each repair was demonstrated by first breaking " +
+  "the screen in the exact way the old check allowed and confirming the new one refuses it.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-183 stops the report headings breaking onto two lines, which is where this started. The " +
   "last two attempts widened the columns, and the widths were measured against a heading with " +
   "no filter control on it - the control takes sixteen pixels, so the longer names still wrapped. " +
   "Adding a few more pixels would have worked until the data grew, because that control only " +
   "appears once a column has more than one value in it. Headings simply refuse to wrap now, " +
   "whatever width they are given, and a column can still be dragged narrower if you want it that " +
-  "way.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "way." +
   "-182 finishes two things the last release only appeared to do. The wider column names were " +
   "set but never reached the screen - the table was sharing its space equally between columns " +
   "and ignoring them - so headings like In training and Not approved still broke onto two " +
