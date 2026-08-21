@@ -2572,7 +2572,25 @@ export async function planTrackerRows(scope: Record<string, unknown> = {}) {
 // went quietly short - so a reviewer who checks Approved, sees it reconcile, and concludes the
 // report is sound is precisely the person it fools. Summing costs one character and removes the
 // whole class.
-export type ReportCell = { target: number; approved: number; mobilised: number; in_training: number; certified: number };
+// QA-527 (-175): `approved` alone cannot answer the question people actually ask of this report.
+// Umesh, reading the shipped report: "ye approved location ka hai ya not approved ka, vo pata nahi
+// chal raha." He is right, and the data says why. Measured on production 2026-08-21, all 55 rows:
+//
+//     Approved         31 rows    7,315
+//     (blank)          24 rows    4,775
+//     "Unapproved"      0 rows        0
+//
+// So the 4,775 the screen renders as "0 approved" is not a refusal by anybody. NOBODY HAS FILLED
+// THOSE ROWS IN. Collapsing the two into one zero is what Karunn sir is complaining about at 13:08
+// when he says leaving them blank means "koi reporting kabhi fix ho hi nahi sakti", and what he is
+// asking for at 17:09: "ab usme ye bhi aa sakta hai ki approve kitne hain, NOT APPROVED kitne hain."
+//
+// Three buckets, and they sum back to `target` by construction - so the row can always be read as
+// "of this much target, this much is approved, this much is refused, and this much nobody has said."
+export type ReportCell = {
+  target: number; approved: number; not_approved: number; unknown: number;
+  mobilised: number; in_training: number; certified: number;
+};
 export type ReportRow = {
   location: { _id: string; name: string; code?: string };
   cells: Record<string, ReportCell>;   // job role -> figures
@@ -2582,11 +2600,27 @@ export type ReportRow = {
   breaks: string[];
 };
 
-const emptyCell = (): ReportCell => ({ target: 0, approved: 0, mobilised: 0, in_training: 0, certified: 0 });
+const emptyCell = (): ReportCell => ({
+  target: 0, approved: 0, not_approved: 0, unknown: 0, mobilised: 0, in_training: 0, certified: 0,
+});
 const addInto = (a: ReportCell, b: ReportCell) => {
-  a.target += b.target; a.approved += b.approved; a.mobilised += b.mobilised;
+  a.target += b.target; a.approved += b.approved; a.not_approved += b.not_approved;
+  a.unknown += b.unknown; a.mobilised += b.mobilised;
   a.in_training += b.in_training; a.certified += b.certified;
 };
+
+// QA-527: the sheet's verdict on one (centre x job role) row, in three states rather than two.
+// A single trimmed, case-insensitive comparison so "approved", "Approved " and "APPROVED" are the
+// same answer - the value arrives from a spreadsheet a human types into, and the old strict `===`
+// would have read a trailing space as "not approved". Anything that is neither of the two known
+// words is `unknown`, INCLUDING a value nobody recognises: inventing a fourth bucket for it would
+// hide it, and calling it "not approved" would put words in the client's mouth.
+export function tcVerdict(tc_status: unknown): "approved" | "not_approved" | "unknown" {
+  const s = String(tc_status ?? "").trim().toLowerCase();
+  if (s === "approved") return "approved";
+  if (s === "unapproved" || s === "not approved" || s === "rejected") return "not_approved";
+  return "unknown";
+}
 
 export async function reportRollup(scope: Record<string, unknown> = {}) {
   // find() + populate, not an aggregation over the scope filter: authz.ts builds `$in` from
@@ -2649,11 +2683,16 @@ export async function reportRollup(scope: Record<string, unknown> = {}) {
 
     const c = candBy.get(key(t.location._id, t.program._id));
     const p = passBy.get(key(t.location._id, t.program._id));
+    // QA-527: the sheet's own verdict, per (centre x job role) row, split three ways instead of
+    // two. The target lands in exactly ONE of the three, so approved + not_approved + unknown is
+    // always target and a reader can check the row adds up without being told to.
+    const tgt = t.approved_target ?? 0;
+    const verdict = tcVerdict(t.tc_status);
     const one: ReportCell = {
-      target: t.approved_target ?? 0,
-      // The sheet's own verdict, per (centre x job role) row. Anything other than an exact
-      // "Approved" is not approved - blank included, which is what four of the disputed rows say.
-      approved: t.tc_status === "Approved" ? (t.approved_target ?? 0) : 0,
+      target: tgt,
+      approved: verdict === "approved" ? tgt : 0,
+      not_approved: verdict === "not_approved" ? tgt : 0,
+      unknown: verdict === "unknown" ? tgt : 0,
       mobilised: c?.mobilised ?? 0,
       in_training: c?.in_training ?? 0,
       certified: p?.certified ?? 0,
@@ -2680,6 +2719,11 @@ export async function reportRollup(scope: Record<string, unknown> = {}) {
 export const SOURCES = {
   target: "Client sheet - the approved target on this centre x job role row",
   approved: "Client sheet - the same target, counted only where its TC Status reads Approved",
+  // QA-527. These two exist because a single Approved figure cannot distinguish a refusal from a
+  // blank, and on this data the blank is a THIRD of the target. Saying so on the screen matters
+  // more than usual here: the two look identical in every export anyone has made so far.
+  not_approved: "Client sheet - target on rows whose TC Status says Unapproved / Not approved / Rejected",
+  unknown: "Client sheet - target on rows where TC Status is BLANK. Nobody has refused these; nobody has approved them either. On 2026-08-21 this was 24 of 55 rows and 4,775 of the target.",
   mobilised: "Our records - every candidate entered for this centre x job role, at any stage",
   in_training: "Our records - candidates whose enrolment is complete",
   certified: "Our records - candidates with a Pass assessment result (a certificate being issued is a further step)",

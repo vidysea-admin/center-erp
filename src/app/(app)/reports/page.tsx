@@ -45,6 +45,19 @@ export default function ReportsPage() {
       render: (r: any) => (
         <span className="font-medium">
           {r.location.name}
+          {/* QA-527: Umesh, reading this report: "ye approved location ka hai ya not approved ka,
+              vo pata nahi chal raha." The Appr. figures could not answer it, because a refusal and
+              a blank both render as 0. The verdict belongs HERE, on the centre, because that is the
+              level the question is asked at - and it costs no width in the numeric groups. */}
+          {(() => {
+            const c = r.total ?? {};
+            if (c.target && c.approved === c.target) return <span className="ml-2 rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-semibold text-green-800" title="Every job role at this centre reads Approved on the client sheet">approved</span>;
+            if (c.target && c.not_approved === c.target) return <span className="ml-2 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-800" title="Every job role at this centre is marked Unapproved on the client sheet">not approved</span>;
+            if (c.target && c.unknown === c.target) return <span className="ml-2 rounded bg-gray-200 px-1.5 py-0.5 text-[10px] font-semibold text-gray-700" title="The client sheet has NOT filled in TC Status for any job role here. Nobody has refused this centre - nobody has approved it either.">no verdict yet</span>;
+            if (c.target) return <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800"
+              title={`Mixed on the client sheet - approved ${c.approved}, not approved ${c.not_approved}, no verdict ${c.unknown}, of ${c.target}`}>mixed</span>;
+            return null;
+          })()}
           {r.breaks?.length > 0 && (
             // criterion 3: a row that cannot be true says so, here, instead of being rendered
             // straight-faced. Hiding it would teach people to distrust the whole table.
@@ -67,6 +80,12 @@ export default function ReportsPage() {
   columns.push(
     { key: "gt", group: "Grand Total", label: "Target", minWidth: 80, sortable: true, sortValue: (r: any) => r.total.target, render: (r: any) => <b>{num(r.total.target)}</b>, total: grandTotal("target") },
     { key: "ga", group: "Grand Total", label: "Appr.", minWidth: 80, sortable: true, sortValue: (r: any) => r.total.approved, render: (r: any) => <b>{num(r.total.approved)}</b>, total: grandTotal("approved") },
+    // QA-527: the two columns that make Target readable. They sit in the Grand Total group ONLY -
+    // adding them under every job role would widen the table by 40% to answer a question that is
+    // asked of the centre, not of the cell. The per-role split IS in the Excel export, which is
+    // where the pivoting happens and where width costs nothing.
+    { key: "gn", group: "Grand Total", label: "Not appr.", minWidth: 88, sortable: true, sortValue: (r: any) => r.total.not_approved, render: (r: any) => num(r.total.not_approved), total: grandTotal("not_approved") },
+    { key: "gu", group: "Grand Total", label: "No verdict", minWidth: 92, sortable: true, sortValue: (r: any) => r.total.unknown, render: (r: any) => num(r.total.unknown), total: grandTotal("unknown") },
     { key: "gm", group: "Grand Total", label: "Mob.", minWidth: 80, sortable: true, sortValue: (r: any) => r.total.mobilised, render: (r: any) => <b>{num(r.total.mobilised)}</b>, total: grandTotal("mobilised") },
     { key: "gi", group: "Grand Total", label: "In trg", minWidth: 80, sortable: true, sortValue: (r: any) => r.total.in_training, render: (r: any) => <b>{num(r.total.in_training)}</b>, total: grandTotal("in_training") },
     { key: "gc", group: "Grand Total", label: "Passed", minWidth: 84, sortable: true, sortValue: (r: any) => r.total.certified, render: (r: any) => <b>{num(r.total.certified)}</b>, total: grandTotal("certified") },
@@ -94,6 +113,12 @@ export default function ReportsPage() {
           {[
             ["Target", t.target, "Client sheet"],
             ["Approved", t.approved, "Client sheet"],
+            // QA-527 / his own words at 17:09: "approve kitne hain, NOT APPROVED kitne hain."
+            // These two are the answer, and the third one is the honest part - on 2026-08-21 the
+            // blanks were 4,775 of 12,090, so reporting them as "not approved" would have been a
+            // number nobody said.
+            ["Not approved", t.not_approved, "Client sheet"],
+            ["No verdict yet", t.unknown, "TC Status is blank"],
             ["Mobilised", t.mobilised, `${pct(t.mobilised)}% of approved`],
             ["In training", t.in_training, `${pct(t.in_training)}% of approved`],
             ["Passed", t.certified, `${pct(t.certified)}% of approved`],
@@ -113,6 +138,8 @@ export default function ReportsPage() {
         <div className="space-y-1 rounded-xl border border-gray-100 bg-gray-50 px-4 py-3 text-[11px] leading-relaxed text-gray-600">
           <div><b>Target</b> — {s.target}</div>
           <div><b>Approved</b> — {s.approved}</div>
+          <div><b>Not approved</b> — {s.not_approved}</div>
+          <div><b>No verdict yet</b> — {s.unknown}</div>
           <div><b>Mobilised</b> — {s.mobilised}</div>
           <div><b>In training</b> — {s.in_training}</div>
           <div><b>Passed</b> — {s.certified}</div>

@@ -2269,6 +2269,112 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
     // that eventually disagrees, and then nobody can say which one is the report.
     const xl = await fetch(BASE + "/api/reports/rollup/export", { headers: { cookie } });
     const xlBuf = Buffer.from(await xl.arrayBuffer());
+    // ---- -175 (QA-527): a blank verdict is not a refusal ----
+    // Umesh, reading the shipped report: "ye approved location ka hai ya not approved ka, vo pata
+    // nahi chal raha." He was right, and the production data says why - measured 2026-08-21 over
+    // all 55 rows: 31 Approved (7,315), 24 BLANK (4,775), and ZERO rows saying Unapproved. So the
+    // figure the screen rendered as "0 approved" was, for a third of the target, nobody's decision
+    // at all. Karunn sir asks for the split in his own words at 17:09 - "approve kitne hain, NOT
+    // APPROVED kitne hain" - and at 13:08 says the blanks are why "koi reporting kabhi fix ho hi
+    // nahi sakti".
+    //
+    // The fixture already above this block is exactly the shape: rpA is Approved 180 and rpB is
+    // BLANK 280. A third programme is added under a DIFFERENT role name on purpose - putting it on
+    // ROLE would change the 460 the sum-not-assign pin above asserts, and a pin that quietly moves
+    // another pin's fixture is how a suite starts agreeing with itself instead of with the product.
+    {
+      const ROLE_U = "Report Role U " + stamp;
+      const rpC = (await req("POST", "/api/programs", { code: "RPC" + stamp, name: ROLE_U, scheme: "RPL-AVPL", trainer_skill: "RPSkillC" + stamp }, 201)).data.item;
+      ok("-175 fixture guard: the third programme exists before anything is asserted about it",
+        !!rpC?._id, JSON.stringify({ c: rpC?._id ?? null }));
+      if (rpC?._id) {
+        await req("PUT", `/api/locations/${rpLoc._id}/targets`, { program: rpC._id, approved_target: 120, tc_status: "Unapproved" }, 200);
+      }
+
+      const rp3 = (await req("GET", "/api/reports/rollup", undefined, 200)).data;
+      const row3 = (rp3.rows ?? []).find((r) => String(r.location._id) === String(rpLoc._id));
+      const cellA = row3?.cells?.[ROLE] ?? {};
+      const cellU = row3?.cells?.[ROLE_U] ?? {};
+
+      // THE pin. rpB carries a blank TC Status, and blank must land in `unknown` - never in
+      // not_approved, which would put a refusal in the client's mouth that nobody made.
+      ok("QA-527 (-175): a BLANK TC Status counts as no verdict, not as a refusal",
+        cellA.unknown === 280 && cellA.not_approved === 0,
+        JSON.stringify({ unknown: cellA.unknown ?? null, not_approved: cellA.not_approved ?? null, approved: cellA.approved ?? null }));
+
+      ok("QA-527 (-175): a row that really does say Unapproved counts as not approved",
+        cellU.not_approved === 120 && cellU.unknown === 0 && cellU.approved === 0,
+        JSON.stringify({ not_approved: cellU.not_approved ?? null, unknown: cellU.unknown ?? null }));
+
+      // The three buckets must ADD BACK to target, on every row and on the grand total. Without
+      // this a reader cannot check the split without a calculator, and a split nobody can check
+      // is a split nobody trusts.
+      const bad = (rp3.rows ?? []).filter((r) => {
+        const t = r.total ?? {};
+        return (t.approved ?? 0) + (t.not_approved ?? 0) + (t.unknown ?? 0) !== (t.target ?? 0);
+      });
+      ok("QA-527 (-175): approved + not approved + no verdict equals Target on EVERY row",
+        bad.length === 0,
+        JSON.stringify({ offenders: bad.slice(0, 3).map((r) => ({ n: r.location?.name, t: r.total })) }));
+
+      const g = rp3.total ?? {};
+      ok("QA-527 (-175): ...and on the grand total too",
+        (g.approved ?? 0) + (g.not_approved ?? 0) + (g.unknown ?? 0) === (g.target ?? 0) && (g.target ?? 0) > 0,
+        JSON.stringify({ grand: g }));
+
+      // The two new figures say where they came from, on the payload, like every other column.
+      ok("QA-527 (-175): both new columns carry a stated source",
+        typeof rp3.sources?.not_approved === "string" && /BLANK/i.test(rp3.sources?.unknown ?? ""),
+        JSON.stringify({ na: rp3.sources?.not_approved ?? null, un: rp3.sources?.unknown ?? null }));
+
+      // ---- -175 (QA-528): the planner may only offer what is approved ----
+      // Karunn sir, 08:21: "ek batch ki plan, and that is to be ONLY FOR APPROVE LOCATION AND
+      // APPROVE COURSES", and 08:49: "approve location aur wo sab to DROPDOWN se aa jaayegi."
+      // -174 shipped the centre select with every centre in it.
+      const locsRes = (await req("GET", "/api/locations?limit=2000", undefined, 200)).data;
+      const rpLocRow = (locsRes.items ?? []).find((l) => String(l._id) === String(rpLoc._id));
+      const jr = rpLocRow?.job_roles ?? [];
+      const byRole = Object.fromEntries(jr.map((r) => [r.program, r]));
+      ok("QA-528 (-175): every job role on a centre carries its programme id, so a screen never has to match on the NAME",
+        jr.length > 0 && jr.every((r) => !!r.program_id),
+        JSON.stringify({ n: jr.length, missing: jr.filter((r) => !r.program_id).map((r) => r.program) }));
+
+      // ONE definition of 'approved', decided on the server. A client re-testing the string would
+      // be the second copy ARCHITECTURE section 3 exists to prevent.
+      ok("QA-528 (-175): the server states the verdict - approved / not_approved / unknown - instead of leaving the caller to re-decide it",
+        byRole[ROLE_U]?.tc_verdict === "not_approved" && jr.every((r) => ["approved", "not_approved", "unknown"].includes(r.tc_verdict)),
+        JSON.stringify({ u: byRole[ROLE_U]?.tc_verdict ?? null, all: jr.map((r) => r.tc_verdict) }));
+
+      // The value is typed by a human into a spreadsheet, so the comparison has to survive a
+      // trailing space and a capital letter. A strict === would read "Approved " as not approved.
+      if (rpC?._id) {
+        await req("PUT", `/api/locations/${rpLoc._id}/targets`, { program: rpC._id, approved_target: 120, tc_status: "  approved " }, 200);
+        const locs2 = (await req("GET", "/api/locations?limit=2000", undefined, 200)).data;
+        const jr2 = (locs2.items ?? []).find((l) => String(l._id) === String(rpLoc._id))?.job_roles ?? [];
+        ok("QA-528 (-175): \"  approved \" typed into a spreadsheet is still approved - the verdict trims and lowercases",
+          (jr2.find((r) => r.program === ROLE_U) ?? {}).tc_verdict === "approved",
+          JSON.stringify({ v: (jr2.find((r) => r.program === ROLE_U) ?? {}).tc_verdict ?? null }));
+        // put it back so nothing after this block inherits a changed fixture
+        await req("PUT", `/api/locations/${rpLoc._id}/targets`, { program: rpC._id, approved_target: 120, tc_status: "Unapproved" }, 200);
+      }
+
+      // A SOURCE-LEVEL pin, and it is labelled as one. The filtering itself is client-side, so no
+      // HTTP assertion can see it - and the checker's -174 verdict made exactly this point: the
+      // repo already runs source scans (check-user-copy, check-home-structure), a markup pin was
+      // available, and a screenshot is not machine-repeatable. This is that pin.
+      {
+        const src = (await import("node:fs")).readFileSync("src/app/(app)/batches/page.tsx", "utf8");
+        // `[^)]*` was wrong here on the first attempt and the wall caught it: the filter's own
+        // arrow head `(l: any) =>` contains a `)`, so the class stopped before it ever reached
+        // approval_status and the pin failed against code that was correct. A pin that fails for
+        // its own reasons is worse than no pin - it teaches you to read past a FAIL.
+        const derives = /plannerLocations\s*=\s*locations\.filter\([\s\S]{0,120}?approval_status/.test(src);
+        const usesFiltered = /{plannerLocations\.map\(/.test(src) && !/<option value="">Not a specific centre<\/option>[\s\S]{0,120}\{locations\.map\(/.test(src);
+        ok("QA-528 (-175) [source pin]: the planner centre list is derived by filtering on approval_status, and the drawer renders THAT list - not the full one",
+          derives && usesFiltered, JSON.stringify({ derives, usesFiltered }));
+      }
+    }
+
     ok("QA-441 (-170): the report downloads as a real xlsx",
       xl.status === 200 && xlBuf.slice(0, 2).toString() === "PK" && /spreadsheetml/.test(xl.headers.get("content-type") ?? ""),
       `status=${xl.status} ct=${xl.headers.get("content-type")} len=${xlBuf.length}`);

@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-174";
+export const RELEASE = "2026.08.14-175";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,20 @@ export const RELEASE = "2026.08.14-174";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-175 makes the report say what a blank actually means. It used to report how much of the " +
+  "target was approved, and everything else read as zero - which quietly merged two completely " +
+  "different things: a centre the government has refused, and a centre nobody has decided about " +
+  "yet. On the current data that second group is a third of the whole target and not one row " +
+  "anywhere says refused, so almost all of what looked like nothing approved was in fact nobody " +
+  "having filled the sheet in. The report now separates the three - approved, not approved, and " +
+  "no verdict yet - and the three always add back to the target, so any row can be checked by " +
+  "eye. Each centre also carries its own verdict beside its name, because that is the level the " +
+  "question gets asked at. The full split per job role is in the Excel download, where pivoting " +
+  "happens. Separately, planning a batch now offers only centres and courses that are actually " +
+  "approved, and says how many were left out rather than quietly showing a shorter list.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-174 finishes the batch planner. The Plan a batch drawer used to ask for a date and nothing " +
   "else, so it could not know WHICH CENTRE you meant - and everything the last three releases " +
   "taught the system stayed out of reach of the one screen a person opens to plan. It now asks " +
@@ -25,10 +39,7 @@ export const RELEASE_NOTE_CURRENT =
   "certification steps when the trainer teaching there is already certified. Naming a centre is " +
   "optional - without one the plan is exactly what it always was, because people share a plan " +
   "before a centre is picked. The planning table also downloads as Excel now, the same way the " +
-  "report does, carrying the same rows the screen shows.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "report does, carrying the same rows the screen shows." +
   "-173 stops a save from pretending. Each screen has a list of the fields it is allowed to " +
   "write, which is right - it is what keeps a request from setting something nobody meant to " +
   "expose. What was wrong is that it did this in silence: send a field the screen does not " +

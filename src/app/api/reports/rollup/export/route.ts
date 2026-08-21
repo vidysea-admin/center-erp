@@ -20,12 +20,20 @@ export const GET = apiHandler(async (_req: NextRequest) => {
       const c = r.cells[role];
       out[`${role} — Target`] = c?.target ?? 0;
       out[`${role} — Approved`] = c?.approved ?? 0;
+      // QA-527: the split is PER JOB ROLE here, unlike the screen. The screen keeps five columns
+      // per role because it has a width to live within; a spreadsheet does not, and this file is
+      // exactly where Karunn sir pivots — 17:00, "solar panel installation ke liye ACROSS ALL
+      // LOCATIONS target itna tha… approve kitne hain, not approved kitne hain."
+      out[`${role} — Not approved`] = c?.not_approved ?? 0;
+      out[`${role} — No verdict`] = c?.unknown ?? 0;
       out[`${role} — Mobilised`] = c?.mobilised ?? 0;
       out[`${role} — In training`] = c?.in_training ?? 0;
       out[`${role} — Passed`] = c?.certified ?? 0;
     }
     out["Grand Total — Target"] = r.total.target;
     out["Grand Total — Approved"] = r.total.approved;
+    out["Grand Total — Not approved"] = r.total.not_approved;
+    out["Grand Total — No verdict"] = r.total.unknown;
     out["Grand Total — Mobilised"] = r.total.mobilised;
     out["Grand Total — In training"] = r.total.in_training;
     out["Grand Total — Passed"] = r.total.certified;
@@ -39,18 +47,23 @@ export const GET = apiHandler(async (_req: NextRequest) => {
       const c = r.cells[role];
       return {
         target: a.target + (c?.target ?? 0), approved: a.approved + (c?.approved ?? 0),
+        not_approved: a.not_approved + (c?.not_approved ?? 0), unknown: a.unknown + (c?.unknown ?? 0),
         mobilised: a.mobilised + (c?.mobilised ?? 0), in_training: a.in_training + (c?.in_training ?? 0),
         certified: a.certified + (c?.certified ?? 0),
       };
-    }, { target: 0, approved: 0, mobilised: 0, in_training: 0, certified: 0 });
+    }, { target: 0, approved: 0, not_approved: 0, unknown: 0, mobilised: 0, in_training: 0, certified: 0 });
     totalRow[`${role} — Target`] = sum.target;
     totalRow[`${role} — Approved`] = sum.approved;
+    totalRow[`${role} — Not approved`] = sum.not_approved;
+    totalRow[`${role} — No verdict`] = sum.unknown;
     totalRow[`${role} — Mobilised`] = sum.mobilised;
     totalRow[`${role} — In training`] = sum.in_training;
     totalRow[`${role} — Passed`] = sum.certified;
   }
   totalRow["Grand Total — Target"] = total.target;
   totalRow["Grand Total — Approved"] = total.approved;
+  totalRow["Grand Total — Not approved"] = total.not_approved;
+  totalRow["Grand Total — No verdict"] = total.unknown;
   totalRow["Grand Total — Mobilised"] = total.mobilised;
   totalRow["Grand Total — In training"] = total.in_training;
   totalRow["Grand Total — Passed"] = total.certified;
@@ -62,6 +75,8 @@ export const GET = apiHandler(async (_req: NextRequest) => {
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([
     { Column: "Target", "Where it comes from": sources.target },
     { Column: "Approved", "Where it comes from": sources.approved },
+    { Column: "Not approved", "Where it comes from": sources.not_approved },
+    { Column: "No verdict", "Where it comes from": sources.unknown },
     { Column: "Mobilised", "Where it comes from": sources.mobilised },
     { Column: "In training", "Where it comes from": sources.in_training },
     { Column: "Passed", "Where it comes from": sources.certified },

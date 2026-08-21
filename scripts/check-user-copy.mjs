@@ -711,7 +711,11 @@ for (const file of walk(root)) {
   else { failed++; for (const t of [...new Set(tipFaults)]) pushCopy(t); }
 }
 
-for (const h of hits) console.log("  ✗ " + h);
+// -175: this loop used to sit HERE, and every check below it pushed findings that were counted
+// and never printed. The wall then reported "check-user-copy: 217 passed, 1 failed" with no line
+// saying what failed, and the summary underneath said the finding was "above" when nothing was.
+// It cost real minutes to bisect, and a checker reading only the suite output could not have done
+// it at all. The printing belongs after the LAST check, which is where it is now.
 // ---- -172 (QA-524): the report's total row has to be ON THE PAGE ----
 // A checker measured the live report: tfoot 0 rows, and the only "Grand Total" in the table was a
 // column-group header - while GET /api/reports/rollup had been returning the totals all along. The
@@ -729,8 +733,14 @@ for (const h of hits) console.log("  ✗ " + h);
   }
   const roleN = (reportSrc.match(/total: roleTotal\(/g) || []).length;
   const grandN = (reportSrc.match(/total: grandTotal\(/g) || []).length;
-  if (roleN < 5 || grandN !== 5) {
-    failed++; pushStructural("app/(app)/reports/page.tsx: the report does not ask for a totals row per job role AND a grand total (roleTotal x" + roleN + ", grandTotal x" + grandN + ") - QA-524. The tiles at the top only total across ALL job roles; his row 15 totals each one.");
+  // -175: this read `grandN !== 5` and went stale the moment the Grand Total group gained the
+  // approved/not-approved split (QA-527) - it failed a report that had MORE totals than before,
+  // which is the opposite of what it exists to catch. Counting the declared columns instead means
+  // the rule is "every Grand Total column carries a total", and it cannot go stale again by
+  // someone adding a column.
+  const grandCols = (reportSrc.match(/group: "Grand Total"/g) || []).length;
+  if (roleN < 5 || grandN < 5 || grandN !== grandCols) {
+    failed++; pushStructural("app/(app)/reports/page.tsx: the report does not ask for a totals row per job role AND a total on every Grand Total column (roleTotal x" + roleN + ", grandTotal x" + grandN + ", Grand Total columns " + grandCols + ") - QA-524. The tiles at the top only total across ALL job roles; his row 15 totals each one.");
   }
   if (!/c\.total\(view\)/.test(tableSrc)) {
     failed++; pushStructural("components/ui.tsx: the totals row is computed from something other than the filtered rows - QA-524. A total that ignores the filter describes something the reader is not looking at.");
@@ -755,6 +765,9 @@ for (const h of hits) console.log("  ✗ " + h);
       structuralIdx.add(hits.length - 1);
     }
   }
+  // -175: every finding, printed once, AFTER every check has had its say. See the note where this
+  // loop used to live.
+  for (const h of hits) console.log("  ✗ " + h);
   const copyHits = hits.filter((h, n) => copyIdx.has(n));
   const structural = hits.length - copyHits.length;
   // no escape sequences in these template literals on purpose: the last two attempts at this file

@@ -227,6 +227,19 @@ function BatchesInner() {
   // The centre stays OPTIONAL. People use this before a centre is picked ("main jab chahun ek
   // batch planning nikaal ke kisi ko bhi share kar sakun"), and there the full plan is the honest
   // answer. Name a centre and it gets sharper, which is the point.
+  // QA-528: the planner's own lists, narrowed to what the government has actually approved.
+  // Derived here rather than fetched again — the page already holds `locations`, and the server
+  // already decided what "approved" means (rules.ts tcVerdict, surfaced as job_roles[].tc_verdict).
+  // Re-testing the string in this file would be the second copy the anti-drift map warns about.
+  const plannerLocations = locations.filter((l: any) => l.approval_status === "Approved");
+  const plannerHidden = locations.length - plannerLocations.length;
+  const plannerRoles = (() => {
+    const loc = locations.find((l: any) => String(l._id) === String(planner.location));
+    return (loc?.job_roles ?? [])
+      .filter((r: any) => r.tc_verdict === "approved" && r.program_id)
+      .map((r: any) => ({ _id: String(r.program_id), name: r.program ?? r.code }));
+  })();
+
   async function runPlanner(next: { start?: string; location?: string; program?: string }) {
     const s = { ...planner, ...next };
     setPlanner(s);
@@ -637,18 +650,33 @@ function BatchesInner() {
               <input type="date" className={inputCls} value={planner.start ?? ""} onChange={(e) => runPlanner({ start: e.target.value })} />
             </Field>
             <Field label="Centre (optional)">
-              <select className={inputCls} value={planner.location ?? ""} onChange={(e) => runPlanner({ location: e.target.value })}>
+              <select className={inputCls} value={planner.location ?? ""} onChange={(e) => runPlanner({ location: e.target.value, program: "" })}>
                 <option value="">Not a specific centre</option>
-                {locations.map((l: any) => <option key={l._id} value={l._id}>{l.name}</option>)}
+                {plannerLocations.map((l: any) => <option key={l._id} value={l._id}>{l.name}</option>)}
               </select>
             </Field>
           </div>
+          {/* QA-528: Karunn sir's word was ONLY - "ek batch ki plan, and that is to be ONLY FOR
+              APPROVE LOCATION AND APPROVE COURSES" (20/08, 08:21). -174 shipped this select with
+              every centre in it. What is left out is COUNTED here rather than quietly dropped: a
+              list that silently shrinks is how somebody concludes a centre was deleted. */}
+          {plannerHidden > 0 && (
+            <p className="text-xs text-gray-500">
+              {plannerHidden} of {locations.length} centres are not offered here because the government has not approved them yet.
+              A batch can still be created for them from <b>New Batch</b> — this is the planner, and planning an unapproved centre is planning something that cannot run.
+            </p>
+          )}
           {planner.location && (
             <Field label="Job role (optional)">
               <select className={inputCls} value={planner.program ?? ""} onChange={(e) => runPlanner({ program: e.target.value })}>
-                <option value="">Any job role at this centre</option>
-                {programs.map((p: any) => <option key={p._id} value={p._id}>{p.name}</option>)}
+                <option value="">Any approved job role at this centre</option>
+                {plannerRoles.map((p: any) => <option key={p._id} value={p._id}>{p.name}</option>)}
               </select>
+              {plannerRoles.length === 0 && (
+                <p className="mt-1 text-xs text-amber-800">
+                  This centre has no job role approved on the client sheet yet, so there is nothing to plan against here.
+                </p>
+              )}
             </Field>
           )}
           {planner.eps && (

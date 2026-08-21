@@ -1,6 +1,6 @@
 import { collectionRoutes } from "@/lib/crud";
 import { Location, LocationTarget, Trainer } from "@/models";
-import { NOMINATED_STATES } from "@/lib/rules";
+import { NOMINATED_STATES, tcVerdict } from "@/lib/rules";
 
 // 2026-08-12: tc_password is a LIVE government portal credential — "us location ke TC ID aur
 // password se login karunga". QA-088 (checker, 14/08): the gate used to be
@@ -63,6 +63,13 @@ export const { GET, POST } = collectionRoutes({
       const ours = tcounts.get(`${k}|${String(t.program?._id)}`);
       byLoc.set(k, [...(byLoc.get(k) ?? []), {
         program: t.program?.name ?? null, code: t.program?.code ?? null, scheme: t.program?.scheme ?? null,
+        // QA-528: two additive fields, both so a CALLER never has to re-decide something the
+        // server already knows. `program_id` because every screen that wants to act on a job role
+        // needs its id and was otherwise matching on the name; `tc_verdict` because "is this row
+        // approved" now has exactly one definition (rules.ts tcVerdict), and a client re-testing
+        // `=== "Approved"` would be the second copy that ARCHITECTURE section 3 exists to prevent.
+        program_id: t.program?._id ?? null,
+        tc_verdict: tcVerdict(t.tc_status),
         tc_id: t.tc_id ?? null, tc_status: t.tc_status ?? null, approved_target: t.approved_target ?? null,
         trainers_required: t.trainers_required ?? null,
         enrolled_reported: t.enrolled_reported ?? null, pending_reported: t.pending_reported ?? null,

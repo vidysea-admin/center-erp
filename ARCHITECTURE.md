@@ -145,6 +145,21 @@ Structural pins that exist because a fix regressed while the wall stayed green:
 Suites: `e2e` · `e2e-roles` · `e2e-sync` · `e2e-blindspot` · `e2e-govt` · `e2e-trainer-pipeline` ·
 `e2e-rpl-blindspot` · `e2e-flows-blindspot` · `e2e-eval-{home,notifications,trainers-ui,candidates,enrollment,locations-admin,data}`.
 
+**THREE local databases, and they are not interchangeable** (`-175`, QA-530):
+
+| Database | Whose | Never |
+|---|---|---|
+| `center_erp_ci` | the wall. Fixtures, dropped and rebuilt every run — CI parity depends on it holding exactly those | never point the mirror here |
+| `center_erp_local` | **`scripts/mirror-prod.mjs`** — a copy of production for LOOKING at real screens, with one local-only login password | never the wall's |
+| `center_erp` | production | read here, written never |
+
+`mirror-prod.mjs` takes **two Mongo clients** and refuses when the target host equals the source
+host. That guard exists because the first draft used one client, so `client.db("center_erp_local")`
+was created ON THE PRODUCTION HOST — a database is not local because its NAME says local, it is
+local because of the URL it was opened on. It also **redacts by field name** (`locations.tc_password`
+— ten live government-portal logins — and `users.password_hash`) and prints how many it removed;
+skipping whole collections was not enough, because the worst secret here is a field (QA-536).
+
 ---
 
 ## 2. Data flow
