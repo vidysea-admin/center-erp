@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-186";
+export const RELEASE = "2026.08.14-187";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,18 @@ export const RELEASE = "2026.08.14-186";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-187 lets the centre sheet say something about one job role at a time. The client master lists " +
+  "one line per centre and job role with a single status column, but a sheet could only ever be " +
+  "connected the other way round - one column per job role - so that master could not be connected " +
+  "at all. Connecting it anyway would have been worse than leaving it: every line for a centre " +
+  "would have written the same job role, the last one silently winning. A sheet can now name its " +
+  "job-role column, and each line is matched to that centre registration number own row for that " +
+  "job role, so the scheme is settled by the number rather than guessed from a name - two job roles " +
+  "here share a name and differ only by scheme. A line naming a job role the centre has no target " +
+  "for is left alone and reported, instead of being written somewhere plausible.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-186 changes nothing you can see. It is the third attempt at one check - the one that keeps the " +
   "report headings on a single line - and this time the check finds the heading by the only fact " +
   "that actually matters: the heading sits inside that box, so that box is where it could wrap. " +
@@ -24,10 +36,7 @@ export const RELEASE_NOTE_CURRENT =
   "styling was spelled, then by which handler it happened to call - and each time the check could " +
   "be satisfied by a decoy while the real heading was left unprotected, or could report a fault on " +
   "a heading that was perfectly fine. Every check written here was also run against the three " +
-  "earlier versions of itself, so each one is shown catching something those versions let past.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "earlier versions of itself, so each one is shown catching something those versions let past." +
   "-185 changes nothing you can see. The check added two releases ago to stop the report headings " +
   "breaking onto two lines was itself wrong in both directions, and this repairs both. It read only " +
   "the first button it found in the file, so another button written earlier could stand in for the " +

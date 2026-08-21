@@ -730,5 +730,82 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
   ok("QA-520: ...and nothing was written while it was ambiguous",
     (await rowOf5())?.tc_status === "Unapproved", JSON.stringify({ tc_status: (await rowOf5())?.tc_status }));
 }
+// QA-440 / QA-497 (the half that was left): a LONG sheet - one row per centre x job role, ONE
+// "TC Status" column - is the shape the client's master actually has, and until now the mappings
+// could only express WIDE (a column per job role, naming its programme as ":CODE"). Pointing that
+// one column at one programme code makes BOTH of a centre's job-role rows write that programme's
+// target, last row winning, silently - which is why it was never configured and why the 1,000 in
+// QA-440 had to be corrected by hand.
+//
+// Measured on live 2026-08-22 and the reason the resolution is anchored on the TC ID rather than on
+// the job-role NAME: two programmes carry the identical name "Drone Service Technician"
+// (RPLAVP-DST and PMKVYB-DST), differing only by scheme. The TC ID pins the scheme, so inside one
+// TC ID a job-role name appears once - live: 55 target rows, 48 with a tc_id, zero duplicate
+// (tc_id + job role) pairs among them.
+{
+  const s6 = "J" + Date.now().toString().slice(-6);
+  const pA = (await req("POST", "/api/programs", { code: s6 + "A", name: "Drone Service Technician " + s6, trainer_skill: "JR" + s6 + "A" }, 201)).data.item;
+  const pB = (await req("POST", "/api/programs", { code: s6 + "B", name: "Solar Panel Installation Technician " + s6, trainer_skill: "JR" + s6 + "B" }, 201)).data.item;
+  const l6 = (await req("POST", "/api/locations", { code: "JL" + s6, name: "Long Sheet Loc " + s6, external_id: "JCENTRE" + s6, approval_status: "Approved", city: "Bhadohi" }, 201)).data.item;
+  // ONE registration number across BOTH job-role rows - the live shape.
+  const TC = "TCLONG" + s6;
+  // The two rows must DIFFER from what the sheet says, or there is legitimately nothing to report:
+  // A is Approved in the ERP and blank in the sheet (the QA-440 shape), B is the mirror image.
+  await req("PUT", `/api/locations/${l6._id}/targets`, { program: pA._id, approved_target: 120, tc_id: TC, tc_status: "Approved" }, 200);
+  await req("PUT", `/api/locations/${l6._id}/targets`, { program: pB._id, approved_target: 315, tc_id: TC, tc_status: "Unapproved" }, 200);
+  const rowsOf6 = async () => ((await req("GET", `/api/locations/${l6._id}/targets`)).data.items ?? []);
+  const rowOf6 = async (p) => (await rowsOf6()).find((t) => String(t.program?._id ?? t.program) === String(p._id));
+
+  const fd6 = new FormData();
+  // One row per job role, ONE status column, and the two rows disagree - which is the whole point:
+  // a centre-level field physically cannot carry two different answers.
+  fd6.append("file", new File([[
+    `TC ID,Job role,TC Status`,
+    `${TC},Drone Service Technician ${s6},`,
+    `${TC},Solar Panel Installation Technician ${s6},Approved`,
+    ``,
+  ].join("\n")], "long.csv", { type: "text/csv" }));
+  const u6 = (await req("POST", "/api/upload", fd6, 200)).data;
+  const src6 = (await req("POST", "/api/sync-sources", {
+    name: "Long sheet " + s6, source_url: new URL(u6.url, BASE).href,
+    field_mappings: { "TC ID": "external_id", "Job role": "job_role", "TC Status": "tc_status" },
+  }, 201)).data.item;
+
+  const r6 = (await req("POST", `/api/sync-sources/${src6._id}/run`, undefined, 200)).data;
+  const mine6 = ((await req("GET", "/api/sheet-changes?status=Open")).data.items ?? [])
+    .filter((c) => String(c.location?._id ?? c.location) === String(l6._id));
+  const nameOf = (code) => mine6.find((c) => String(c.field_name) === `tc_status:${code}`);
+  // PRE-FIX this is 1 change named plain "tc_status" (LOCATION_FIELDS, centre-level) and the two
+  // rows fight over it. POST-FIX it is 2, each naming its own job role.
+  ok("QA-440: a sheet with ONE ROW PER JOB ROLE addresses each job role separately - two rows, two changes, each naming its own programme",
+    r6.created === 2 && !!nameOf(pA.code) && !!nameOf(pB.code) && !mine6.some((c) => String(c.field_name) === "tc_status"),
+    JSON.stringify({ created: r6.created, status: r6.status, fields: mine6.map((c) => c.field_name) }));
+  // The blank is a real value here - it is exactly what the client's master says for the five rows
+  // QA-440 exists for, and a diff that cannot see blank-vs-value cannot report them.
+  ok("QA-440: ...and a BLANK cell is carried as a real change, not skipped as missing",
+    String(nameOf(pA.code)?.new_value ?? "?") === "" && String(nameOf(pA.code)?.old_value) === "Approved",
+    JSON.stringify({ old: nameOf(pA.code)?.old_value, new: nameOf(pA.code)?.new_value }));
+
+  // Applying them must land on the right rows, which is the fact the report's Approved count reads.
+  for (const c of mine6) await req("POST", `/api/sheet-changes/${c._id}/apply`, { action: "Update target" }, 200);
+  ok("QA-440: applying writes each job role's OWN target row - one is cleared to blank, the other becomes Approved",
+    (await rowOf6(pA))?.tc_status === "" && (await rowOf6(pB))?.tc_status === "Approved",
+    JSON.stringify({ A: (await rowOf6(pA))?.tc_status, B: (await rowOf6(pB))?.tc_status }));
+
+  // A job role the centre has no target row for is a QUESTION, not a write - the same standard
+  // QA-520 holds for a registration number two centres claim.
+  const fd6b = new FormData();
+  fd6b.append("file", new File([`TC ID,Job role,TC Status\n${TC},Battery System Repair Technician ${s6},Approved\n`], "long2.csv", { type: "text/csv" }));
+  const u6b = (await req("POST", "/api/upload", fd6b, 200)).data;
+  const src6b = (await req("POST", "/api/sync-sources", {
+    name: "Long sheet unknown role " + s6, source_url: new URL(u6b.url, BASE).href,
+    field_mappings: { "TC ID": "external_id", "Job role": "job_role", "TC Status": "tc_status" },
+  }, 201)).data.item;
+  const r6b = (await req("POST", `/api/sync-sources/${src6b._id}/run`, undefined, 200)).data;
+  ok("QA-440: a job role with no target row on that centre is refused and the run says Partial, never a clean OK",
+    r6b.created === 0 && r6b.status === "Partial" && /could not be matched to a target row/i.test(String(r6b.error ?? "")),
+    JSON.stringify(r6b));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

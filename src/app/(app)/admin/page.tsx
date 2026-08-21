@@ -568,7 +568,7 @@ function SyncSources({ error, setError }: any) {
   function open(s?: any) {
     setEdit(s ?? null);
     setForm(s ?? { frequency: "Manual only" });
-    setMapping(s ? JSON.stringify(s.field_mappings ?? {}, null, 2) : '{\n  "Center ID": "external_id",\n  "Status": "approval_status",\n  "Target": "approved_target:PROG1",\n  "TC Status": "tc_status:PROG1"\n}');
+    setMapping(s ? JSON.stringify(s.field_mappings ?? {}, null, 2) : '{\n  "Center ID": "external_id",\n  "Job role": "job_role",\n  "Status": "approval_status",\n  "Target": "approved_target",\n  "TC Status": "tc_status"\n}');
   }
   async function save() {
     try {
@@ -649,7 +649,7 @@ function SyncSources({ error, setError }: any) {
                 </select>
               </Field>
             </div>
-            <Field label='Field mappings (JSON: "Sheet Column" → erp_field; one column must map to external_id; per job role: "approved_target:<PROGRAM_CODE>", "tc_status:<PROGRAM_CODE>", "tc_id:<PROGRAM_CODE>")'>
+            <Field label='Field mappings (JSON: "Sheet Column" → erp_field; one column must map to external_id. Per job role there are two shapes. If the sheet has ONE ROW PER JOB ROLE, map its job-role column to "job_role" and then write "approved_target", "tc_status", "tc_id" bare — each row is matched to that TC ID&apos;s own target row. If the sheet has A COLUMN PER JOB ROLE, name the programme in the mapping instead: "approved_target:<PROGRAM_CODE>". Never point one column at one programme code when the sheet is one row per job role — every one of a centre&apos;s rows would write that same programme.)'>
               <textarea className={inputCls + " mt-1 h-40 font-mono text-xs"} value={mapping} onChange={(e) => setMapping(e.target.value)} />
             </Field>
           </>

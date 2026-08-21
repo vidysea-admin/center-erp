@@ -174,6 +174,26 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
   if (!idCol) throw new HttpError(400, "field_mappings must map one column to external_id.");
   const colIdx = new Map(header.map((h, i) => [h, i]));
 
+  // QA-440 / QA-497 (the half that was left): a sheet may be LONG - one row per centre x job role,
+  // with a single "TC Status" column - and until now the mappings could only express WIDE, because
+  // a row field had to name its programme in the mapping itself ("tc_status:PMKVYB-DSWT"). The
+  // client's master is long, so mapping it at all was impossible: point that one column at one
+  // programme code and BOTH of a centre's job-role rows write that programme's target, last row
+  // winning, silently. That is worse than not syncing, so it was never configured, and the 1,000
+  // in QA-440 had to be corrected by hand.
+  //
+  // A source may now map one column to `job_role`. When it does, a BARE row field ("tc_status",
+  // "tc_id", "approved_target" with no ":CODE") is resolved per row from that column instead.
+  // Sources that do not map it are untouched - `:CODE` still means exactly what it meant.
+  const roleCol = mappedCols.find((c) => mappings[c] === "job_role");
+  // Resolve WITHIN THE TC ID'S OWN TARGET ROWS, never by programme name alone: measured on live
+  // 2026-08-22, two programmes carry the identical name "Drone Service Technician" (RPLAVP-DST and
+  // PMKVYB-DST) and differ only by scheme. The TC ID already pins the scheme - the government
+  // registers each (centre x scheme x job role) separately - so inside one TC ID a job-role name
+  // appears once. Live: 55 target rows, 48 carrying a tc_id, 35 distinct ids, and zero duplicate
+  // (tc_id + job role) pairs among them.
+  const unresolvedRoles: string[] = [];
+
   // 2026-08-12 audit (sync S1-2): Rule 2 guarded the HEADER only. A truncated data row returned
   // undefined for its missing cells, which became "" — indistinguishable from "the client
   // cleared this field" — so a half-written row proposed wiping a location's real values. Rule 2
@@ -215,12 +235,33 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
       continue;
     }
     const anchorLoc = anchorLocs.length === 1 ? anchors[0].location : null;
+
+    // QA-440: which job role is THIS row about? Answered from the target rows this TC ID carries,
+    // so the scheme comes along for free. Nothing is guessed - a name that matches none of them, or
+    // more than one, makes the row a question and it is reported, not written.
+    let rowCode: string | null = null;
+    if (roleCol) {
+      const roleText = (raw[colIdx.get(roleCol)!] ?? "").trim();
+      if (roleText) {
+        const own = await LocationTarget.find({ tc_id: externalId }).populate("program", "code name").lean<any[]>();
+        const hits = own.filter((r) => String(r.program?.name ?? "").trim().toLowerCase() === roleText.toLowerCase());
+        const codes = [...new Set(hits.map((h) => String(h.program?.code ?? "")).filter(Boolean))];
+        if (codes.length === 1) rowCode = codes[0];
+        else unresolvedRoles.push(`${externalId} / "${roleText}"${codes.length > 1 ? ` (${codes.length} programmes match)` : " (no target row for that job role)"}`);
+      }
+    }
+
     for (const col of mappedCols) {
       const field = mappings[col];
-      if (field === "external_id") continue;
+      if (field === "external_id" || field === "job_role") continue;
       const incoming = (raw[colIdx.get(col)!] ?? "").trim();
       let stored: string;
-      const rowField = targetRowField(field);
+      // A bare row field on a job_role-mapped source resolves per row. If the row's job role could
+      // not be resolved, the field is SKIPPED rather than falling through to LOCATION_FIELDS -
+      // that fall-through is exactly the centre-level write this change exists to stop.
+      const bareRowField = !!roleCol && !field.includes(":") && TARGET_ROW_FIELDS.has(field);
+      if (bareRowField && !rowCode) continue;
+      const rowField = targetRowField(field) ?? (bareRowField ? { base: field, code: rowCode! } : null);
       if (rowField) {
         const program = await Program.findOne({ code: rowField.code }).lean<any>();
         if (!program) continue;
@@ -250,12 +291,18 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
       // keeps the sheet key's centre. Same value used for the duplicate check and the write, or a
       // re-run would raise a second row for the same fact.
       const changeLoc = (rowField ? anchorLoc : null) ?? loc?._id ?? null;
-      const dup = await SheetChange.findOne({ sync_source: src._id, location: changeLoc, field_name: field, new_value: incoming, status: { $in: ["Open", "Actioned", "Ignored"] } });
+      // QA-440: a per-row change is STORED in the canonical "<base>:<CODE>" form even when the
+      // mapping wrote it bare. That is deliberate and it is what keeps this change to one function:
+      // the apply switch (targetRowField), the Apply-value guard, and the revert route's
+      // `startsWith("approved_target:")` all read this string, and all three keep working untouched.
+      // Same value for the duplicate check and the write, or a re-run raises a second row.
+      const storedField = rowField ? `${rowField.base}:${rowField.code}` : field;
+      const dup = await SheetChange.findOne({ sync_source: src._id, location: changeLoc, field_name: storedField, new_value: incoming, status: { $in: ["Open", "Actioned", "Ignored"] } });
       if (dup) continue;
       await SheetChange.create({
         sync_source: src._id,
         location: changeLoc,
-        field_name: field,
+        field_name: storedField,
         old_value: stored,
         new_value: incoming,
         impact_snapshot: loc ? await impactSnapshot(loc._id) : null, // Rule 3
@@ -268,6 +315,17 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
   if (ambiguous.length) {
     src.last_status = "Partial";
     src.last_error = `${ambiguous.length} TC ID(s) are carried by more than one centre, so those sheet rows were skipped rather than guessed: ${ambiguous.slice(0, 5).join("; ")}${ambiguous.length > 5 ? "; …" : ""}. One government registration number belongs to one centre — correct it on the location screen.`;
+    src.last_synced_at = new Date();
+    await src.save();
+    return { created, status: "Partial", error: src.last_error };
+  }
+  // QA-440: the same standard as the ambiguous TC IDs above. A row whose job role matched no target
+  // row - or matched more than one - was NOT written, and a run that skipped rows is not a clean
+  // run. Both halves of the client's problem were invisible for weeks behind a `last_status: OK`,
+  // so silence here would rebuild the exact thing being fixed.
+  if (unresolvedRoles.length) {
+    src.last_status = "Partial";
+    src.last_error = `${unresolvedRoles.length} row(s) named a job role that could not be matched to a target row, so they were skipped rather than guessed: ${unresolvedRoles.slice(0, 5).join("; ")}${unresolvedRoles.length > 5 ? "; …" : ""}. Set that job role's approved target on the centre first, or correct the job role in the sheet.`;
     src.last_synced_at = new Date();
     await src.save();
     return { created, status: "Partial", error: src.last_error };
