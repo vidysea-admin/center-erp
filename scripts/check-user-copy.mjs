@@ -821,10 +821,14 @@ for (const file of walk(root)) {
   // job role. Two things are asserted, and the second is the one that would rot: the picker reads
   // the group, AND the group carries its own toggle - a section header with no toggle is just a
   // relabelling of the same unusable list.
-  const pickerSections = tableSrc.includes("sections.push({ group") && tableSrc.includes("Visible columns");
-  const pickerGroupToggle = tableSrc.includes("s.cols.forEach((c) => setColVisible");
-  if (pickerSections && pickerGroupToggle) passed++;
-  else { failed++; pushStructural("components/ui.tsx: the Columns picker does not section a grouped table (sections " + pickerSections + ", group toggle " + pickerGroupToggle + ") - QA-555. On the report it lists five identical labels per job role with nothing naming the role, so no entry can be told from another."); }
+  // -179 (QA-538): sectioning was NOT what Umesh asked for - "bas unique ones hi aani chaiye" - and
+  // a checker measured what -176 actually shipped: 34 entries, 20 exact repeats. The list is now
+  // built so each entry appears once: ungrouped columns as themselves, each MEASURE once (toggling
+  // every column with that label), each GROUP once. The assertion moved with it.
+  const pickerUnique = tableSrc.includes("measures.find((m) => m.label === c.label)") && tableSrc.includes("Visible columns");
+  const pickerGroupToggle = tableSrc.includes("cols.forEach((c) => setColVisible");
+  if (pickerUnique && pickerGroupToggle) passed++;
+  else { failed++; pushStructural("components/ui.tsx: the Columns picker still repeats a label once per group instead of listing it ONCE (unique " + pickerUnique + ", group toggle " + pickerGroupToggle + ") - QA-538. Umesh asked for unique entries only; -176 grouped them, which made the repeats legible without removing them - 34 entries, 20 exact repeats."); }
 
   // QA-564 (-178): the column definitions fold into a disclosure card - Umesh, "ye definations wala
   // dropdown type card hoga" - but the WARNINGS stay outside it. REQ-367 puts these sources "on the
@@ -836,6 +840,15 @@ for (const file of walk(root)) {
   const caveatOutside = reportSrc.includes("s?.caveat") && !detailsBlock.includes("s.caveat");
   if (hasCard && caveatOutside) passed++;
   else { failed++; pushStructural("app/(app)/reports/page.tsx: the definitions are not a disclosure card with the caveat left OUTSIDE it (card " + hasCard + ", caveat outside " + caveatOutside + ") - QA-564. Folding the warning behind a click hides the one line that changes how the figures beside it should be read."); }
+
+  // QA-565 (-179): the screen must call a column what the DOWNLOAD calls it. The report read
+  // APPR. / MOB. / IN TRG while rollup/export writes Approved / Mobilised / In training, so one
+  // column had two names and downloading silently renamed every one of them. Umesh: "column name
+  // kya complete rakhna chaiye, abhi ye 2-3-4 letters hai" - and his own argument settles the width
+  // objection, because the table already offers resize, hide and horizontal scroll.
+  const abbrev = ['label: "Appr."', 'label: "Mob."', 'label: "In trg"', 'label: "Not appr."'].filter((a) => reportSrc.includes(a));
+  if (!abbrev.length) passed++;
+  else { failed++; pushStructural("app/(app)/reports/page.tsx: column labels are still abbreviated on screen while the Excel export spells them out - QA-565. One column, two names: " + abbrev.join(", ")); }
 
   // QA-552: the report must SURFACE a status value it does not recognise. `unknown` is a default
   // bucket, so without this it silently absorbs any new word the client's sheet grows.

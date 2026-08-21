@@ -583,29 +583,60 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
           possible: hide a whole job role at once, rather than un-ticking five identical rows and
           hoping they were the right five. Ungrouped tables render exactly as before. */}
       {(() => {
-        const sections: { group?: string; cols: Col[] }[] = [];
-        for (const c of pickable) {
-          const last = sections[sections.length - 1];
-          if (last && last.group === c.group) last.cols.push(c);
-          else sections.push({ group: c.group, cols: [c] });
+        // QA-538 (-179): -176 SECTIONED this list by group and that was not what Umesh asked for.
+        // His words were "isme bahut saari duplicate entries hai, bas UNIQUE ones hi aani chaiye",
+        // and a checker measured what shipped: 34 entries with 20 exact repeats. Grouping made the
+        // repeats legible; it did not remove them. Reading "Mobilised" five times still means
+        // reading it five times.
+        //
+        // So the list is now built from what a person actually wants to switch off, and each thing
+        // appears ONCE:
+        //   - the ungrouped columns as themselves (Batch Location, Status)
+        //   - each MEASURE once, toggling every column that carries that label
+        //   - each GROUP once, toggling that whole job role
+        // Nine plus five instead of thirty-four, no entry repeated, and both actions still
+        // available - "hide Mobilised everywhere" and "hide this job role" are different jobs and
+        // the old list could do neither without hunting.
+        const ungrouped = pickable.filter((c) => !c.group);
+        const grouped = pickable.filter((c) => c.group);
+        const measures: { label: string; cols: Col[] }[] = [];
+        for (const c of grouped) {
+          const hit = measures.find((m) => m.label === c.label);
+          if (hit) hit.cols.push(c); else measures.push({ label: c.label, cols: [c] });
         }
-        const row = (c: Col) => (
-          <label key={c.key} className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 hover:bg-gray-50">
-            <input type="checkbox" checked={colChoice[c.key] ?? !c.hidden} onChange={(e) => setColVisible(c.key, e.target.checked)} />
-            <span className="min-w-0 flex-1 truncate text-gray-700" title={c.group ? `${c.group} — ${c.label}` : c.label}>{c.label}</span>
+        const groups: { group: string; cols: Col[] }[] = [];
+        for (const c of grouped) {
+          const hit = groups.find((g) => g.group === c.group);
+          if (hit) hit.cols.push(c); else groups.push({ group: c.group!, cols: [c] });
+        }
+        // A set is ON when ANY of its columns is on, and clicking sets them all - the only rule
+        // that behaves the same whether the set is one column or twenty.
+        const setRow = (key: string, label: string, cols: Col[], strong?: boolean) => (
+          <label key={key} className={"flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 hover:bg-gray-50 " + (strong ? "font-semibold text-gray-600" : "text-gray-700")}>
+            <input type="checkbox"
+              checked={cols.some((c) => colChoice[c.key] ?? !c.hidden)}
+              onChange={(e) => cols.forEach((c) => setColVisible(c.key, e.target.checked))} />
+            <span className="min-w-0 flex-1 truncate" title={cols.length > 1 ? `${label} — ${cols.length} columns` : label}>
+              {label}{cols.length > 1 && <span className="ml-1 font-normal text-gray-400">×{cols.length}</span>}
+            </span>
           </label>
         );
-        return sections.map((s, i) => s.group ? (
-          <div key={s.group + i} className="mt-1 border-t border-gray-100 pt-1">
-            <label className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 font-semibold text-gray-600 hover:bg-gray-50">
-              <input type="checkbox"
-                checked={s.cols.some((c) => colChoice[c.key] ?? !c.hidden)}
-                onChange={(e) => s.cols.forEach((c) => setColVisible(c.key, e.target.checked))} />
-              <span className="min-w-0 flex-1 truncate" title={s.group}>{s.group}</span>
-            </label>
-            <div className="pl-4">{s.cols.map(row)}</div>
-          </div>
-        ) : <div key={"_" + i}>{s.cols.map(row)}</div>);
+        return (
+          <>
+            {ungrouped.map((c) => setRow(c.key, c.label, [c]))}
+            {measures.length > 0 && (
+              <div className="mt-1 border-t border-gray-100 pt-1">
+                {measures.map((m) => setRow("m:" + m.label, m.label, m.cols))}
+              </div>
+            )}
+            {groups.length > 0 && (
+              <div className="mt-1 border-t border-gray-100 pt-1">
+                <div className="px-1.5 pb-1 text-[10px] uppercase tracking-wider text-gray-400">By job role</div>
+                {groups.map((g) => setRow("g:" + g.group, g.group, g.cols, true))}
+              </div>
+            )}
+          </>
+        );
       })()}
       <button className="mt-1 w-full rounded border px-2 py-1 font-medium text-gray-600 hover:bg-gray-50" onClick={resetCols}>
         Reset to default
