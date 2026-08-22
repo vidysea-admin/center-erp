@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-194";
+export const RELEASE = "2026.08.14-195";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,18 @@ export const RELEASE = "2026.08.14-194";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-195 stops the product guessing who a shared plan link belongs to. Four earlier attempts worked " +
+  "it out from something about the person - the batch, then the phone number, then their position " +
+  "in the centre list, then their name and role - and each one either merged two people or split " +
+  "one. The last was the clearest: two different people who happen to share a name and a role were " +
+  "treated as one, so sending to either cancelled the other link. There is no detail about a person " +
+  "that is safe to use as their identity. So a plan is now sent by choosing one of the centre " +
+  "recorded people, the choice travels with the link, and a link that does not say which person it " +
+  "is for is refused rather than guessed at. Editing the centre contact list also used to renumber " +
+  "everybody, which quietly detached links from the people they were sent to; it no longer does.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-194 fixes, for the third time, who a shared plan link belongs to - and this time the answer is " +
   "the person rather than something about them that the product lets change. A contact was " +
   "identified by its POSITION in the centre list, so removing one contact moved everybody below it " +
@@ -27,10 +39,7 @@ export const RELEASE_NOTE_CURRENT =
   "people. A link created before this identity existed can now be replaced properly instead of " +
   "living on beside its replacement. And the rule deciding who may see the centre staff list is now " +
   "the same rule that decides who may send - it disagreed in both directions, showing the list with " +
-  "phone numbers to somebody who could not send, and hiding it from somebody who could.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "phone numbers to somebody who could not send, and hiding it from somebody who could." +
   "-193 carries two things. The planning table now uses the same column names as the planning " +
   "sheet: every one of the sheet columns was already there, but the screen had shortened them, and " +
   "two read the same - Starts and Ends each appeared twice, once for the trainer training and once " +

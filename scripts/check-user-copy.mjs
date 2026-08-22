@@ -811,6 +811,27 @@ for (const file of walk(root)) {
   else { failed++; pushStructural("app/(app)/batches: the planning table has no collapsed card mapping each column to the client's sheet heading - QA-607. Without it the verbatim headings are stored and never shown, which is the same as not having them."); }
 }
 
+// QA-622 (-195): the Locations screen must send each contact's `_id` back when it saves the list.
+// Mongoose replaces a document array wholesale on assign, so an entry arriving WITHOUT an id is
+// given a new one - and this screen stripped ids, so adding one contact silently renewed the
+// identity of every contact at that centre. Nothing on this screen showed it. What it broke was the
+// plan share, which names its recipient by that id: after any contact edit a person's link stopped
+// being theirs, re-sending added a second live link instead of replacing one, and the screen listed
+// them as never sent to.
+//
+// Pinned HERE and not in e2e on purpose, and the reason is worth stating because it caught me: an
+// e2e pin drives the API directly, so it supplies `_id` itself and passes whether or not the SCREEN
+// does - it cannot fail for the thing that actually broke. I wrote exactly that pin first and the
+// pre-fix run showed it green on the broken build. The wall has no browser harness (the same limit
+// disclosed on qa-178), so the honest instrument for a screen's request shape is its source.
+{
+  const locPageSrc = stripComments(fs.readFileSync(path.join(root, "app/(app)/locations/[id]/page.tsx"), "utf8"));
+  const saveCall = locPageSrc.match(/api\(`\/api\/locations\/\$\{loc\._id\}`,[\s\S]{0,320}?contacts:[\s\S]{0,240}?\}\)/);
+  const sendsId = !!saveCall && /\{\s*_id\s*,/.test(saveCall[0]) && /\(\{\s*_id\s*,/.test(saveCall[0]);
+  if (sendsId) passed++;
+  else { failed++; pushStructural("app/(app)/locations/[id]/page.tsx: the contacts save does not send each contact's `_id` back (found the call: " + !!saveCall + ") - QA-622. Mongoose mints a fresh id for every entry that arrives without one, so one added contact renews the identity of all of them, and every plan link sent to those people quietly stops being theirs."); }
+}
+
 // stripComments runs first, so writing the promise in a comment cannot satisfy it.
 {
   const reportSrc = stripComments(fs.readFileSync(path.join(root, "app/(app)/reports/page.tsx"), "utf8"));

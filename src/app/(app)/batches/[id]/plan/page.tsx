@@ -47,6 +47,18 @@ export default function BatchPlanPage({ params }: { params: Promise<{ id: string
     catch (e: any) { setError(e.message); }
     finally { setBusy(false); }
   }
+  // QA-623: a link that belongs to nobody the centre still lists has to be removable, or it simply
+  // lives on. The endpoint that does this already exists and takes {active:false}.
+  async function revoke(token: string) {
+    const s = (data?.shares ?? []).find((x: any) => x.token === token);
+    if (!s?._id) return;
+    setBusy(true);
+    try {
+      await api(`/api/public-tokens/${s._id}`, { method: "PATCH", json: { active: false } });
+      await load();
+    } catch (e: any) { setError(e.message); }
+    finally { setBusy(false); }
+  }
   const linkFor = (t: string) => `${typeof window !== "undefined" ? window.location.origin : ""}${BASE_PATH}/p/plan/${t}`;
   const shareUrl = data?.share ? `${typeof window !== "undefined" ? window.location.origin : ""}${BASE_PATH}/p/plan/${data.share.token}` : "";
   async function copy(text: string, what: string) {
@@ -180,7 +192,7 @@ export default function BatchPlanPage({ params }: { params: Promise<{ id: string
                     ) : (
                       <ul className="space-y-2">
                         {data.shares.map((s: any) => (
-                          <li key={s.token} className="rounded-lg border border-gray-200 p-2">
+                          <li key={s.token} className={`rounded-lg border p-2 ${s.recipient_key ? "border-gray-200" : "border-amber-200 bg-amber-50"}`}>
                             <div className="flex flex-wrap items-center gap-2">
                               <span className="font-medium">{s.recipient_name ?? "(no recipient recorded)"}</span>
                               <Chip value={s.recipient_role_label ?? "Contact"} />
@@ -192,7 +204,17 @@ export default function BatchPlanPage({ params }: { params: Promise<{ id: string
                               <Btn small onClick={() => copy(linkFor(s.token), s.token)}>{copied === s.token ? "Copied ✓" : "Copy link"}</Btn>
                               <a className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium hover:bg-gray-50" target="_blank" rel="noreferrer" href={`https://wa.me/${(s.recipient_phone ?? "").replace(/\D/g, "")}?text=${encodeURIComponent(`Batch plan ${b.code}: ${linkFor(s.token)}`)}`}>WhatsApp</a>
                               <Link className="text-xs text-blue-700 underline" href={`/p/plan/${s.token}`} target="_blank">open ↗</Link>
+                              {data.may_share && <Btn small kind="ghost" disabled={busy} onClick={() => revoke(s.token)}>Revoke</Btn>}
                             </div>
+                            {/* QA-621/623: a link minted before a share had to name a centre slot cannot be
+                                matched to anybody, and guessing was what produced four separate defects.
+                                So it is shown, said plainly, and revoked by hand - never silently replaced. */}
+                            {!s.recipient_key && (
+                              <p className="mt-1 text-[11px] text-amber-800">
+                                This link was sent before shares recorded which of the centre&apos;s people they were for, so it cannot be
+                                matched to anyone in the list below. Sending to that person again adds a new link — revoke this one when it is no longer needed.
+                              </p>
+                            )}
                           </li>
                         ))}
                       </ul>

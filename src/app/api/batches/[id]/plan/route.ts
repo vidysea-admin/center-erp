@@ -47,7 +47,7 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
       if (!n) return;
       const role = String(role_label ?? "Contact").trim() || "Contact";
       const phoneStr = String(phone ?? "").trim();
-      recipients.push({ ref, key: recipientKey({ recipient_ref: ref, recipient_phone: phoneStr, recipient_name: n, recipient_role_label: role }), name: n, phone: phoneStr, role_label: role });
+      recipients.push({ ref, key: recipientKey({ recipient_ref: ref }), name: n, phone: phoneStr, role_label: role });
     };
     add("spoc", loc?.spoc_name, loc?.spoc_phone, "SPOC");
     add("principal", loc?.principal_name, loc?.principal_phone, "Principal");
@@ -63,7 +63,7 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     // Kept so nothing that already reads `share` breaks; it is the most recent active link.
     share: links[0] ? { token: links[0].token, allow_updates: !!links[0].allow_updates, created_at: links[0].createdAt } : null,
     shares: links.map((l) => ({
-      token: l.token, allow_updates: !!l.allow_updates, created_at: l.createdAt,
+      _id: String(l._id), token: l.token, allow_updates: !!l.allow_updates, created_at: l.createdAt,
       recipient_name: l.recipient_name ?? null,
       // Same reason as the list above: a phone number is shown to whoever may send to it.
       recipient_phone: mayShare ? (l.recipient_phone ?? null) : null,

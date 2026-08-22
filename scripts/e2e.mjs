@@ -48,7 +48,7 @@ const stamp = Date.now().toString().slice(-6);
 
 // ---- masters ----
 const prog = (await req("POST", "/api/programs", { code: "PROG" + stamp, name: "Test Program " + stamp, trainer_skill: "TestSkill" + stamp, duration_days: 15, buffer_days: 5, default_batch_size: 30, completion_deadline_days: 90 }, 201)).data.item;
-const loc = (await req("POST", "/api/locations", { code: "LOC" + stamp, name: "Test Location " + stamp, external_id: "EXT" + stamp, approval_status: "Approved", spoc_name: "Test SPOC" }, 201)).data.item;
+const loc = (await req("POST", "/api/locations", { code: "LOC" + stamp, name: "Test Location " + stamp, external_id: "EXT" + stamp, approval_status: "Approved", spoc_name: "Test SPOC", principal_name: "Test Principal", contacts: [{ name: "Shared Line One", role_label: "SPOC" }, { name: "Shared Line Two", role_label: "Principal" }] }, 201)).data.item;
 const room = (await req("POST", `/api/locations/${loc._id}/rooms`, { name: "Classroom 1", type: "Classroom", capacity: 30 }, 201)).data.item;
 const trainer = (await req("POST", "/api/trainers", { name: "Trainer " + stamp, phone: "99999" + stamp.slice(0, 5), skills: ["TestSkill" + stamp] }, 201)).data.item;
 
@@ -2674,10 +2674,24 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
   // centre recording ONE landline for its SPOC and its Principal had them cutting each other off,
   // exactly as before. Nothing prevents that: Location phone fields take any string at all.
   const shared = "9" + Date.now().toString().slice(-9);
-  const twoOnOneNumber = [
-    { recipient_name: "Shared Line SPOC " + rs, recipient_phone: shared, recipient_role_label: "SPOC", recipient_ref: "contact:91" },
-    { recipient_name: "Shared Line Principal " + rs, recipient_phone: shared, recipient_role_label: "Principal", recipient_ref: "contact:92" },
-  ];
+  // Two REAL contacts on this centre who happen to share one landline - the shape that broke -191,
+  // and the shape a slot-based identity has to keep apart. Invented refs would simply be refused now.
+  // Created HERE, not 2,500 lines earlier: the first version relied on two contacts added at the
+  // location's creation and something between had replaced that array, so the pair came back empty
+  // and the block crashed on `undefined.token` before testing anything. A fixture that depends on
+  // distant state is a fixture that fails for reasons unrelated to what it checks. Appended rather
+  // than replacing, so nothing else on this centre is disturbed.
+  const locBefore = (await req("GET", `/api/locations/${loc._id}`)).data.item;
+  await req("PATCH", `/api/locations/${loc._id}`, { contacts: [
+    ...(locBefore.contacts ?? []).map((c) => ({ _id: c._id, name: c.name, phone: c.phone, role_label: c.role_label })),
+    { name: "Shared Line One " + rs, role_label: "SPOC" },
+    { name: "Shared Line Two " + rs, role_label: "Principal" },
+  ] }, 200);
+  const planLocNow = (await req("GET", `/api/locations/${loc._id}`)).data.item;
+  const sharedPair = (planLocNow.contacts ?? []).filter((c) => String(c.name).startsWith("Shared Line"));
+  ok("QA-621 fixture: the two same-phone contacts really exist on this centre before they are used",
+    sharedPair.length === 2, JSON.stringify({ n: sharedPair.length }));
+  const twoOnOneNumber = sharedPair.map((c) => ({ recipient_name: c.name, recipient_phone: shared, recipient_role_label: c.role_label, recipient_ref: `contact:${c._id}` }));
   const tokA = (await req("POST", "/api/public-tokens", { purpose: "plan", batch: planBatch._id, ...twoOnOneNumber[0] }, 201)).data.item;
   const tokB = (await req("POST", "/api/public-tokens", { purpose: "plan", batch: planBatch._id, ...twoOnOneNumber[1] }, 201)).data.item;
   const sharedA = (await fetch(BASE + `/api/public/plan/${tokA.token}`)).status;
@@ -2685,21 +2699,20 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
   ok("QA-611: two people who share ONE phone number are two people - sending to the second does not cut off the first",
     sharedA === 200 && sharedB === 200, JSON.stringify({ spoc: sharedA, principal: sharedB }));
 
-  // QA-612 / QA-618 — the same person written differently is still the same person. This is the
-  // TYPED path: no `recipient_ref`, so it exercises the name arm, which is what identifies someone
-  // nobody picked from a list. The first version of this pin passed the SAME ref twice and so never
-  // reached this arm at all - it proved the ref worked and called it proof of everything.
-  //
-  // The fourth case (QA-618) is the one -193 got wrong: shared once with NO phone, then with one.
-  // While the phone was part of the key those were two people; now it is not part of the key at all.
-  const drift = "9" + Date.now().toString().slice(-9);
-  const t1 = (await req("POST", "/api/public-tokens", { purpose: "plan", batch: planBatch._id, recipient_name: "Drift Person " + rs, recipient_role_label: "Contact" }, 201)).data.item;
-  const t2 = (await req("POST", "/api/public-tokens", { purpose: "plan", batch: planBatch._id, recipient_name: "  DRIFT   PERSON " + rs + "  ", recipient_phone: "+91 " + drift, recipient_role_label: "contact" }, 201)).data.item;
-  const driftFirst = (await fetch(BASE + `/api/public/plan/${t1.token}`)).status;
-  const driftSecond = (await fetch(BASE + `/api/public/plan/${t2.token}`)).status;
-  ok("QA-612 / QA-618: a typed recipient written differently - case, spacing, and a phone added the second time - is still one person, so the earlier link is replaced rather than left live beside the new one",
-    driftFirst === 404 && driftSecond === 200,
-    JSON.stringify({ first: driftFirst, second: driftSecond }));
+  // QA-612 / QA-618 / QA-621 — a TYPED recipient is now refused outright, and that is the point.
+  // Four releases tried to work out who a typed name meant: -191 by phone, -193 by slot number,
+  // -194 by name+role. The last created a NEW S1 - two different people who share a name and a role
+  // label cut each other's links off - which a checker proved by running one script against a -193
+  // server and a -194 server. There is no attribute of a person that is safe to use as their
+  // identity, so the product asks WHICH of the centre's people this is, and refuses to guess.
+  const typed = await req("POST", "/api/public-tokens", { purpose: "plan", batch: planBatch._id, recipient_name: "Typed Person " + rs, recipient_role_label: "Contact" }, 400);
+  ok("QA-621: a plan link that does not say WHICH of the centre's people it is for is refused, not guessed at",
+    typed.status === 400 && /name WHICH of the centre's people/i.test(String(typed.data?.error ?? "")),
+    JSON.stringify({ status: typed.status, error: String(typed.data?.error ?? "").slice(0, 90) }));
+  const stale = await req("POST", "/api/public-tokens", { purpose: "plan", batch: planBatch._id, recipient_name: "Gone Person " + rs, recipient_role_label: "Contact", recipient_ref: "contact:6a00000000000000000000ff" }, 400);
+  ok("QA-621: ...and a slot that centre no longer has is refused too, rather than pointing at whoever is there now",
+    stale.status === 400 && /not one of this centre's contacts/i.test(String(stale.data?.error ?? "")),
+    JSON.stringify({ status: stale.status }));
 
   // QA-615 — the S1's THIRD shape, and the checker's own reproduction, run through the product's
   // API exactly as it did: share with someone, let an admin REMOVE an earlier contact so everyone
@@ -2714,7 +2727,11 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
   const carol = offered1.find((r) => String(r.name).startsWith("Carol"));
   const carolTok = (await req("POST", "/api/public-tokens", { purpose: "plan", batch: shiftBatch._id, recipient_name: carol.name, recipient_phone: carol.phone, recipient_role_label: carol.role_label, recipient_ref: carol.ref }, 201)).data.item;
   // The admin removes Bob. Everyone below him slides up one slot.
-  await req("PATCH", `/api/locations/${shiftLoc._id}`, { contacts: (shiftLoc.contacts ?? []).filter((c) => !String(c.name).startsWith("Bob")).map((c) => ({ name: c.name, phone: c.phone, role_label: c.role_label })) }, 200);
+  // QA-624: this used to strip `_id` here, which regenerated every contact id and so made the two
+  // keys unable to collide - the pin could not fail for the property it claims to test. It now sends
+  // `_id` back, exactly as the Locations screen does since QA-622, so the ids really are stable and
+  // the collision really is possible.
+  await req("PATCH", `/api/locations/${shiftLoc._id}`, { contacts: (shiftLoc.contacts ?? []).filter((c) => !String(c.name).startsWith("Bob")).map((c) => ({ _id: c._id, name: c.name, phone: c.phone, role_label: c.role_label })) }, 200);
   const offered2 = (await req("GET", `/api/batches/${shiftBatch._id}/plan`)).data.recipients ?? [];
   const dave = offered2.find((r) => String(r.name).startsWith("Dave"));
   const daveTok = (await req("POST", "/api/public-tokens", { purpose: "plan", batch: shiftBatch._id, recipient_name: dave.name, recipient_phone: dave.phone, recipient_role_label: dave.role_label, recipient_ref: dave.ref }, 201)).data.item;
@@ -2724,27 +2741,52 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
     carolLive === 200 && daveLive === 200,
     JSON.stringify({ carol: carolLive, dave: daveLive }));
 
-  // QA-616 — a token minted before `recipient_key` existed could never be revoked, while the screen
-  // recomputed the key and offered "Re-send" for it. Simulated by clearing the field, which is
-  // exactly what those rows look like.
-  const legacyTok = (await req("POST", "/api/public-tokens", { purpose: "plan", batch: shiftBatch._id, recipient_name: "Legacy Person " + cs, recipient_role_label: "Contact" }, 201)).data.item;
-  // Unset the field in the DATABASE, the way a row minted before -193 actually looks. The first
-  // draft PATCHed the token instead - and that route only ever writes `active`, from `!!body.active`,
-  // so it would have DEACTIVATED the link and the pin would have passed for entirely the wrong
-  // reason. The suite already talks to mongo directly for exactly this kind of setup (:197, :233).
+  // QA-622 — the half the QA-615 pin never asked, and the half that was still broken: after that
+  // edit, is Carol still HERSELF? Her id has to survive the save, or her own key matches nothing and
+  // re-sending to her ADDS a second live link instead of replacing hers, while the screen shows her
+  // as never sent to. That is what a maker found by reading, and a checker then measured.
+  const offered3 = (await req("GET", `/api/batches/${shiftBatch._id}/plan`)).data.recipients ?? [];
+  const carolAfter = offered3.find((r) => String(r.name).startsWith("Carol"));
+  ok("QA-622: a contact keeps its identity across an unrelated edit to the centre's contact list",
+    !!carolAfter && carolAfter.ref === carol.ref,
+    JSON.stringify({ before: carol.ref, after: carolAfter?.ref }));
+  const carolAgain = (await req("POST", "/api/public-tokens", { purpose: "plan", batch: shiftBatch._id, recipient_name: carolAfter.name, recipient_phone: carolAfter.phone, recipient_role_label: carolAfter.role_label, recipient_ref: carolAfter.ref }, 201)).data.item;
+  const carolOld = (await fetch(BASE + `/api/public/plan/${carolTok.token}`)).status;
+  const carolNew = (await fetch(BASE + `/api/public/plan/${carolAgain.token}`)).status;
+  ok("QA-622: ...so re-sending to her after that edit REPLACES her link rather than leaving two live",
+    carolOld === 404 && carolNew === 200,
+    JSON.stringify({ old: carolOld, fresh: carolNew }));
+
+  // QA-616 / QA-623 — a token minted before shares had to name a slot carries no key. -194 tried to
+  // INVENT one from the name, and a checker showed that could revoke a different same-named person.
+  // Nothing is invented now: such a link is listed, marked as belonging to nobody the centre still
+  // lists, and revoked by hand. What must NOT happen is it being silently matched to somebody.
+  const alice = offered3.find((r) => String(r.name).startsWith("Alice"));
+  const legacyTok = (await req("POST", "/api/public-tokens", { purpose: "plan", batch: shiftBatch._id, recipient_name: alice.name, recipient_phone: alice.phone, recipient_role_label: alice.role_label, recipient_ref: alice.ref }, 201)).data.item;
   {
     const { MongoClient, ObjectId } = await import("mongodb");
     const mc = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
     await mc.connect();
+    // Exactly what a pre-rule row looks like: a recipient name, and no way to say which slot.
     await mc.db(process.env.MONGODB_DB).collection("publictokens")
-      .updateOne({ _id: new ObjectId(String(legacyTok._id)) }, { $unset: { recipient_key: "" } });
+      .updateOne({ _id: new ObjectId(String(legacyTok._id)) }, { $unset: { recipient_key: "", recipient_ref: "" } });
     await mc.close();
   }
-  const replacesLegacy = (await req("POST", "/api/public-tokens", { purpose: "plan", batch: shiftBatch._id, recipient_name: "Legacy Person " + cs, recipient_role_label: "Contact" }, 201)).data.item;
-  ok("QA-616: a share minted before the key existed is still replaced when that person is re-sent to, not left live beside the new link",
-    (await fetch(BASE + `/api/public/plan/${legacyTok.token}`)).status === 404
-    && (await fetch(BASE + `/api/public/plan/${replacesLegacy.token}`)).status === 200,
-    JSON.stringify({ legacy: (await fetch(BASE + `/api/public/plan/${legacyTok.token}`)).status, fresh: (await fetch(BASE + `/api/public/plan/${replacesLegacy.token}`)).status }));
+  const afterLegacy = (await req("GET", `/api/batches/${shiftBatch._id}/plan`)).data;
+  const legacyRow = (afterLegacy.shares ?? []).find((x) => x.token === legacyTok.token);
+  ok("QA-623: a link that cannot say which of the centre's people it is for is shown as exactly that, not matched to somebody",
+    !!legacyRow && !legacyRow.recipient_key,
+    JSON.stringify({ found: !!legacyRow, key: legacyRow?.recipient_key ?? null }));
+  const aliceFresh = (await req("POST", "/api/public-tokens", { purpose: "plan", batch: shiftBatch._id, recipient_name: alice.name, recipient_phone: alice.phone, recipient_role_label: alice.role_label, recipient_ref: alice.ref }, 201)).data.item;
+  ok("QA-623: ...and sending to that person again leaves the unmatched link ALONE rather than guessing it was theirs",
+    (await fetch(BASE + `/api/public/plan/${legacyTok.token}`)).status === 200
+    && (await fetch(BASE + `/api/public/plan/${aliceFresh.token}`)).status === 200,
+    JSON.stringify({ unmatched: (await fetch(BASE + `/api/public/plan/${legacyTok.token}`)).status, fresh: (await fetch(BASE + `/api/public/plan/${aliceFresh.token}`)).status }));
+  // ...and it can be got rid of, or it simply lives on.
+  await req("PATCH", `/api/public-tokens/${legacyRow._id}`, { active: false }, 200);
+  ok("QA-623: ...and it can be revoked by hand",
+    (await fetch(BASE + `/api/public/plan/${legacyTok.token}`)).status === 404,
+    String((await fetch(BASE + `/api/public/plan/${legacyTok.token}`)).status));
 
   // QA-617 — "may this user share?" was asked in two places that disagreed in BOTH directions. The
   // direction pinned here is the one my own first fix got wrong: an Admin with `can_edit: false` -
@@ -2755,8 +2797,16 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
   const roCookie = await loginAs(roEmail, "Test@12345");
   const roPlan = await fetch(BASE + `/api/batches/${planBatch._id}/plan`, { headers: { cookie: roCookie } });
   const roPlanJ = roPlan.status === 200 ? await roPlan.json() : null;
+  // Its OWN contact, so proving the GATE does not revoke somebody else's link on the way past. A
+  // plan share must now name a slot that exists (QA-621), so this probe creates one first.
+  const gateBefore = (await req("GET", `/api/locations/${loc._id}`)).data.item;
+  await req("PATCH", `/api/locations/${loc._id}`, { contacts: [
+    ...(gateBefore.contacts ?? []).map((c) => ({ _id: c._id, name: c.name, phone: c.phone, role_label: c.role_label })),
+    { name: "Gate Probe " + rs, role_label: "Contact" },
+  ] }, 200);
+  const gateContact = ((await req("GET", `/api/locations/${loc._id}`)).data.item.contacts ?? []).find((c) => String(c.name).startsWith("Gate Probe"));
   const roMint = await fetch(BASE + "/api/public-tokens", { method: "POST", headers: { "Content-Type": "application/json", cookie: roCookie },
-    body: JSON.stringify({ purpose: "plan", batch: planBatch._id, recipient_name: "Gate Probe " + rs, recipient_role_label: "Contact" }) });
+    body: JSON.stringify({ purpose: "plan", batch: planBatch._id, recipient_name: gateContact.name, recipient_role_label: gateContact.role_label, recipient_ref: `contact:${gateContact._id}` }) });
   ok("QA-617: whoever may SEND a plan is shown who to send it to - the two gates are one rule, not two statements of it",
     roPlan.status === 200 && roMint.status === 201 && roPlanJ?.may_share === true,
     JSON.stringify({ plan: roPlan.status, may_share: roPlanJ?.may_share, mint: roMint.status }));

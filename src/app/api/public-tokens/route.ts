@@ -3,7 +3,7 @@ import crypto from "crypto";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireRole, requireEdit, assertLocationInScope, isScoped, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
-import { Batch, BatchMember, PublicToken } from "@/models";
+import { Batch, BatchMember, Location, PublicToken } from "@/models";
 import { assertBatchInScope, recipientKey } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
@@ -93,15 +93,15 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // the product able to explain why. So the revocation is scoped to the same recipient on the same
   // batch - re-sharing to a person still rotates THAT person's old link off, and nobody else's.
   //
-  // WHO a recipient is, is `recipientKey()` in lib/rules.ts and nowhere else. -191 answered that
-  // question here, inline, with the phone string - and a checker put the S1 straight back through
-  // it. This comment used to explain that phone-based rule; it is left corrected rather than
-  // deleted, because a comment describing a rule the code no longer has is worse than no comment
-  // (QA-606, learned two units ago on the same afternoon).
+  // WHO a recipient is, is `recipientKey()` in lib/rules.ts and nowhere else - and after four wrong
+  // answers it no longer DERIVES that from anything. The caller names the centre slot, this route
+  // checks the slot still exists on that centre, and the key is that slot. Nothing falls back.
+  // This comment has been corrected twice rather than deleted, because a comment describing a rule
+  // the code no longer has is worse than no comment (QA-606).
   if (purpose === "plan") {
     if (!body.batch) throw new HttpError(400, "batch is required for a plan link");
     await assertBatchInScope(user, String(body.batch));
-    const b = await Batch.findById(body.batch).select("plan_enabled code").lean<any>();
+    const b = await Batch.findById(body.batch).select("plan_enabled code location").lean<any>();
     if (!b) throw new HttpError(404, "Batch not found");
     if (!b.plan_enabled) throw new HttpError(409, "This batch has no plan yet — create one first.");
 
@@ -111,14 +111,29 @@ export const POST = apiHandler(async (req: NextRequest) => {
     if (!rName) {
       throw new HttpError(400, "recipient_name is required — a plan link records who it was sent to, so it can be listed and revoked for that person alone.");
     }
+
+    // QA-621: the recipient must be one of THIS centre's people, named by their slot. Four
+    // releases derived the identity instead (batch, phone, array index, name) and every one of
+    // them merged two people or split one. The caller supplies the slot and it is checked here;
+    // there is no fallback, because a fallback is a guess and every guess has been wrong.
+    const rRef = String(body.recipient_ref ?? "").trim();
+    const planLoc = await Location.findById(b.location)
+      .select("spoc_name principal_name cluster_head_name contacts").lean<any>();
+    const offered = new Set<string>();
+    if (String(planLoc?.spoc_name ?? "").trim()) offered.add("spoc");
+    if (String(planLoc?.principal_name ?? "").trim()) offered.add("principal");
+    if (String(planLoc?.cluster_head_name ?? "").trim()) offered.add("cluster_head");
+    for (const c of planLoc?.contacts ?? []) if (c?._id && String(c?.name ?? "").trim()) offered.add(`contact:${String(c._id)}`);
+    if (!rRef || !offered.has(rRef)) {
+      throw new HttpError(400, rRef
+        ? `"${rName}" is not one of this centre's contacts any more, so there is no way to tell which person this link belongs to. Pick them from the list on the plan screen, or add them to the centre first.`
+        : "A plan link has to name WHICH of the centre's people it is for — pick them from the list rather than typing a name, so re-sending later replaces their link instead of adding a second one.");
+    }
     // QA-611: the key is WHO, computed once by recipientKey() and stored, so the revocation is an
     // exact match on an indexed field. -191 matched on the phone string and a centre recording one
     // landline for its SPOC and its Principal had them cutting each other off - the S1 this unit
     // exists to close, alive again through the line written to close it.
-    const rKey = recipientKey({
-      recipient_ref: body.recipient_ref, recipient_phone: rPhone,
-      recipient_name: rName, recipient_role_label: rRole,
-    });
+    const rKey = recipientKey({ recipient_ref: rRef });
 
     // QA-616: `recipient_key` is stored, so a token minted before it existed carries none - and the
     // revocation, which matches on the key, could never touch it. Meanwhile the screen recomputes
@@ -128,8 +143,13 @@ export const POST = apiHandler(async (req: NextRequest) => {
     //
     // Backfilled here rather than on the GET, because a read that writes is a surprise, and this is
     // bounded - a handful of tokens on one batch, at the moment somebody is already writing.
-    const unkeyed = await PublicToken.find({ purpose: "plan", batch: body.batch, recipient_key: { $in: [null, ""] } })
-      .select("recipient_ref recipient_phone recipient_name recipient_role_label").lean<any[]>();
+    // QA-623: the backfill used to INVENT a key for a keyless row from its name, and a checker
+    // showed that could revoke a different same-named person. With no fallback there is nothing to
+    // invent: a row that carries a ref gets its key, and a row that does not is left alone. Those
+    // are listed on the plan screen as links that belong to nobody the centre still lists, and are
+    // revoked by hand rather than silently matched.
+    const unkeyed = await PublicToken.find({ purpose: "plan", batch: body.batch, recipient_key: { $in: [null, ""] }, recipient_ref: { $nin: [null, ""] } })
+      .select("recipient_ref").lean<any[]>();
     for (const t of unkeyed) {
       await PublicToken.updateOne({ _id: t._id }, { $set: { recipient_key: recipientKey(t) } });
     }
@@ -140,7 +160,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
       token: crypto.randomBytes(16).toString("hex"),
       purpose, batch: body.batch, allow_updates: !!body.allow_updates, created_by: user.id,
       recipient_name: rName, recipient_phone: rPhone || undefined,
-      recipient_role_label: rRole, recipient_ref: body.recipient_ref || undefined,
+      recipient_role_label: rRole, recipient_ref: rRef,
       recipient_key: rKey,
     });
     await audit({ entity: "Batch", entityId: body.batch, field: "plan_link", newValue: `shared with ${rName} (${rRole})${body.allow_updates ? " — link may tick status" : " — read-only"}`, actor: user.id });

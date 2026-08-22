@@ -134,7 +134,12 @@ function ContactsNotes({ loc, onSaved, setError }: any) {
 
   async function saveContacts(next: any[]) {
     try {
-      await api(`/api/locations/${loc._id}`, { method: "PATCH", json: { contacts: next.map(({ name, phone, role_label, user }) => ({ name, phone, role_label, user })) } });
+      // QA-622: `_id` travels back. Mongoose replaces a document array wholesale on assign, so an
+      // entry arriving without one is given a NEW id - which meant adding a single contact silently
+      // renamed every contact in the list. Nothing on this screen showed it; what it broke was the
+      // plan share, which identifies a recipient by that id, so after any edit a person's own link
+      // stopped being theirs and re-sending to them left two live links instead of replacing one.
+      await api(`/api/locations/${loc._id}`, { method: "PATCH", json: { contacts: next.map(({ _id, name, phone, role_label, user }) => ({ _id, name, phone, role_label, user })) } });
       setContacts(next); onSaved();
     } catch (e: any) { setError(e.message); }
   }

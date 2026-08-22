@@ -1757,13 +1757,28 @@ export function canonicalPhone(v: unknown): string {
   const digits = String(v ?? "").replace(/\D/g, "");
   return digits.length >= 10 ? digits.slice(-10) : digits;
 }
-export function recipientKey(r: { recipient_ref?: unknown; recipient_phone?: unknown; recipient_name?: unknown; recipient_role_label?: unknown }): string {
+// QA-621 (-195) — the fifth answer, and the first that does not GUESS.
+//
+// Four keys, four defects, one family: every one of them DERIVED the identity from something the
+// product lets change, and each fix moved the guess rather than removing it.
+//
+//   -190  the batch          -> sending to one killed everyone's link
+//   -191  the phone string   -> one landline shared by two people (QA-611)
+//   -193  the array index    -> remove a contact and everyone below shifts up (QA-615)
+//   -194  the name + role    -> two DIFFERENT people with one name cut each other off (QA-621)
+//
+// The last is the sharpest lesson, because it was introduced by the fix for the one before it: I
+// removed the phone from the identity and left the name carrying it, and a name is no more unique
+// than a phone number. There is no attribute of a person that is safe to use as their identity.
+//
+// So the identity is no longer derived at all. A plan share must NAME THE SLOT it was sent to, the
+// caller must supply it, and the route validates it against that centre's current contacts before
+// minting. Nothing falls back, because a fallback IS a guess, and every guess here has been wrong.
+// A token that carries no ref - only the ones minted before this rule - can be read and revoked by
+// hand, and is never silently matched to anybody.
+export function recipientKey(r: { recipient_ref?: unknown }): string {
   const ref = String(r.recipient_ref ?? "").trim();
-  // A positional ref is refused rather than trusted. `contact:2` is what -193 minted and what
-  // QA-615 broke; anything still carrying that shape is a slot, not a person, so it falls through
-  // to the name - which is stable - instead of silently pointing at whoever occupies the slot now.
-  if (ref && !/^contact:\d+$/.test(ref)) return `ref:${ref}`;
-  return `named:${String(r.recipient_name ?? "").trim().replace(/\s+/g, " ").toLowerCase()}|${String(r.recipient_role_label ?? "Contact").trim().toLowerCase()}`;
+  return ref ? `ref:${ref}` : "";
 }
 
 export async function planArtifact(batchId: string) {
