@@ -120,6 +120,9 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
   async function saveCard() {
     if (!card) return;
     setBusy(true); setErr(""); setWarns([]);
+    // Declared out here on purpose: the catch below has to know whether the first door already
+    // wrote, and a flag scoped inside the try is invisible to it.
+    let profileSaved = false;
     try {
       const profile: Record<string, unknown> = {};
       if (card.location !== (t.nominated_for_location?._id ?? "")) profile.nominated_for_location = card.location || null;
@@ -128,7 +131,10 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
       if (String(card.eligibility_payment_amount) !== String(t.eligibility_payment_amount ?? "")) {
         profile.eligibility_payment_amount = card.eligibility_payment_amount === "" ? null : Number(card.eligibility_payment_amount);
       }
-      if (Object.keys(profile).length) await api(`/api/trainers/${id}`, { method: "PATCH", json: profile });
+      if (Object.keys(profile).length) {
+        await api(`/api/trainers/${id}`, { method: "PATCH", json: profile });
+        profileSaved = true;
+      }
 
       // All six every time: a field left blank IS the instruction to clear it, so sending only the
       // ones that look changed would make clearing impossible. The server compares on the calendar
@@ -140,7 +146,17 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
       setCard(null);
       setWarns(res?.warnings ?? []);
       await load();
-    } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+    } catch (e: any) {
+      // QA-686 (checker on qa-202): one Save, two doors - and when the second was refused the first
+      // had ALREADY landed. The card stayed open showing the values the user typed, the page still
+      // held the record from before the edit, and nothing on screen said half of it was saved. Two
+      // things wrong at once: a silent partial write, and a screen disagreeing with the database.
+      // Reload so what is shown is what is stored, and name which half got through.
+      setErr(profileSaved
+        ? `The nomination, amount and TR ID were saved. The dates were not: ${e?.message ?? e}`
+        : String(e?.message ?? e));
+      await load();
+    } finally { setBusy(false); }
   }
 
   // -128 (QA-266): what the button can know without asking the server. Rule T3 refuses

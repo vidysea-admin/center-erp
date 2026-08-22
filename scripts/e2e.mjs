@@ -743,11 +743,27 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   }
   const doneRes = (await req("POST", `/api/batches/${d4._id}/complete`, { reason: "-113 pin: batch finished on site months ago" }, 200)).data;
   ok("-113: THE ASK — the Admin press completes the batch", (await statusOf(d4._id)) === "Completed", await statusOf(d4._id));
-  ok("-113: …and reports exactly what it settled", doneRes.settled?.absent === 2 && doneRes.settled?.not_issued === 0, JSON.stringify(doneRes.settled));
+  ok("-113: …and reports exactly what it settled", doneRes.settled?.failed === 2 && doneRes.settled?.not_issued === 0, JSON.stringify(doneRes.settled));
   {
     const rows4 = await rowsOf(d4._id);
-    const absent = rows4.filter((i) => i.result?.result === "Absent").length;
-    ok("-113: the unmarked students are recorded ABSENT — a real state, not a blank", absent === 2, String(absent));
+    // -204: this asserted ABSENT until Umesh chose otherwise on 22/08, looking at the Gurugram batch:
+    // "jitne bachche remaining hain jinke certificate nahi hai, woh bachche fail ho gaye". He was
+    // shown that a student who never sat the assessment is Absent rather than Fail, and offered an
+    // attendance-driven split; he chose one word for all of them. Both halves are asserted, because
+    // "some are Fail" would still pass if the rest were silently left Pending.
+    const failed = rows4.filter((i) => i.result?.result === "Fail").length;
+    const stillAbsent = rows4.filter((i) => i.result?.result === "Absent").length;
+    const stillPending = rows4.filter((i) => !i.result || i.result?.result === "Pending").length;
+    ok("-204: the unmarked students are recorded FAIL — Umesh's ruling, not Absent",
+      failed === 2 && stillAbsent === 0 && stillPending === 0,
+      JSON.stringify({ failed, stillAbsent, stillPending }));
+    // Rule 44 refuses a Fail with no reason, and the first run of this change hit it eight times.
+    // So the reason is part of the behaviour, not an implementation detail: every forced Fail has to
+    // carry one, and it has to say the true thing - that nobody marked them - not a placeholder.
+    const reasons = rows4.filter((i) => i.result?.result === "Fail").map((i) => String(i.result?.failure_reason ?? ""));
+    ok("-204: …and each forced Fail carries a failure reason naming why it was written",
+      reasons.length === 2 && reasons.every((r) => /No result was recorded before .* completed by an Admin/.test(r)),
+      JSON.stringify(reasons));
     const cl4 = await closureOf(d4._id);
     ok("-113: the closure signs off from those rows, and the figures are the rows' own",
       cl4?.assessment_status === "Completed" && cl4?.certification_status === "Completed" && cl4?.passed === 1 && cl4?.certificates_issued === 1,

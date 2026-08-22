@@ -2393,14 +2393,20 @@ export async function correctTrainerDates(
     const entry = cat ? await CostEntry.findOne({ trainer: t._id, category: cat._id }) : null;
     if (!entry) {
       warnings.push(`There is no eligibility-fee entry in Costs for ${t.name} - a trainer moved by bypass never books one. This records the payment on the profile only.`);
-    } else if (opts.canMoveCost && t.paid_on) {
+    } else if (!t.paid_on) {
+      // QA-687 (checker on qa-202): this arm used to fall through to "someone with cost rights has
+      // to move it", which told a Costs-right holder they lacked a right they were holding. Clearing
+      // the date is not a permission problem at all - there is simply no date left to move the
+      // entry to, and deleting money because a profile field was blanked is not this door's call.
+      warnings.push(`The payment date was cleared, so there is nothing to move the Costs entry to. It still carries ${asDay(entry.entry_date)} - change or remove it in Costs if the payment did not happen.`);
+    } else if (opts.canMoveCost) {
       const wasOn = entry.entry_date;
       entry.entry_date = t.paid_on;
       await entry.save();
       await audit({ entity: "CostEntry", entityId: entry._id, field: "entry_date", oldValue: wasOn, newValue: entry.entry_date });
       warnings.push(`The eligibility-fee entry in Costs was moved to ${asDay(t.paid_on)} as well.`);
     } else {
-      warnings.push(`The eligibility-fee entry in Costs still carries ${asDay(entry.entry_date)}. Someone with cost rights has to move it.`);
+      warnings.push(`The eligibility-fee entry in Costs still carries ${asDay(entry.entry_date)}. Moving it is a Costs change and needs that right - ask an Admin, or have someone who has it re-date the entry.`);
     }
   }
 

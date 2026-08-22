@@ -362,63 +362,72 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
             <span className="text-[10px] text-gray-400">not part of the count above</span>
           </li>
         </ul>
-        {canTransition ? (
-          <div className="mt-4 flex flex-wrap gap-2">
-            {b.status === "Planning" && <Btn onClick={() => transition("Ready")} disabled={!r.ready}>Mark Ready</Btn>}
-            {b.status === "Ready" && !beganAlready && <Btn onClick={() => transition("Active")}>Start Batch</Btn>}
-            {b.status === "Ready" && beganAlready && (
-              <span className="inline-flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1">
-                <label className="text-xs text-amber-800">Batch already began on</label>
-                <input type="date" className="rounded-lg border border-gray-300 px-2 py-1 text-xs" value={startDate} max={todayKey} onChange={(e) => setStartDate(e.target.value)} />
-                <Btn onClick={() => transition("Active", { actual_start: startDate || undefined })} disabled={!startDate}>Start Batch from that date</Btn>
-              </span>
-            )}
-            {b.status === "Ready" && <Btn kind="ghost" onClick={() => transition("Planning")}>Back to Planning</Btn>}
-            {/* -102: the client's words for these two steps. Targets stay the stored enum. */}
-            {b.status === "Active" && <Btn onClick={() => transition("Closing")}>Assessment done → Result Awaited</Btn>}
-            {/* -113: the Admin's own door, on Active as well as Result Awaited. It is offered whether
-                or not the rules are already satisfied — when they are, it simply completes; when they
-                are not, the panel below says what it will settle first. */}
-            {isAdmin && ["Active", "Closing"].includes(b.status) && (
-              <Btn kind={b.status === "Closing" ? "ghost" : "primary"} onClick={() => setCompleteOpen((v) => !v)}>Mark Completed (Admin)</Btn>
-            )}
-            {/* -112 (QA-219 / Manish M4-01 "status aayega certification done"): when every result is
-                final and every pass has its certificate, the two closure halves derive themselves and
-                the batch walks to Result Awaited on its own. The one press left is the freeze, and it
-                says so — it used to bounce off Rule 18 with nothing on screen explaining why. */}
-            {b.status === "Closing" && (
-              <span className="inline-flex flex-col gap-0.5">
-                <Btn onClick={() => transition("Completed")}>{money?.closure?.certification_status === "Completed" ? "Certification done → Complete Batch" : "Complete Batch"}</Btn>
-                <span className="text-[10px] font-medium text-gray-500">
-                  {money?.closure?.certification_status === "Completed"
-                    ? "Every certificate is settled. Completing freezes the results and figures."
-                    : "Waiting on certificates — each passed candidate needs one attached (or marked Not Issued)."}
-                </span>
-              </span>
-            )}
-            {/* -113: completing is one press now, so it needs an undo. Admin only, reason required,
-                audited — and never offered on a CLOSED batch, which is a settlement, not a record. */}
-            {isAdmin && b.status === "Completed" && (
-              <Btn kind="ghost" onClick={() => {
-                const why = window.prompt("Reopen this completed batch? Results and certificates become editable again. Reason:");
-                if (why && why.trim()) transition("Closing", { reason: why.trim() });
-              }}>Reopen (Admin)</Btn>
-            )}
-            {/* Rule 52: Completed = training over; Closed = money over (cert + invoice PAID + no dues). */}
-            {b.status === "Completed" && (
-              <span title={closeBlockers.length ? `Still needed before the batch can close: ${closeBlockers.join("; ")}` : "All dues settled — the batch can close"} className="inline-flex flex-col gap-0.5">
-                <Btn onClick={() => transition("Closed")} disabled={money !== null && closeBlockers.length > 0}>Close Batch (no dues)</Btn>
-                {money !== null && closeBlockers.length > 0 && (
-                  <span className="text-[10px] font-medium text-amber-700">needs: {closeBlockers.join(" · ")}</span>
-                )}
-              </span>
-            )}
-            {["Planning", "Ready", "Active"].includes(b.status) && <Btn kind="danger" onClick={() => setConfirmCancel(true)}>Cancel Batch</Btn>}
-          </div>
-        ) : (
-          <p className="mt-4 text-xs text-gray-400">Batch status is moved by Operations/Admin.</p>
-        )}
       </Section>
+      )}
+      {/* -204 (Umesh, 22/08: "button hi nahi aa raha hai abhi, unko complete mark karne ka... pehle
+          toh aa raha tha, ye hil kyu gaya?"). It had not moved - it had FALLEN OUT. -112 collapsed
+          the readiness checklist once a batch is running, which was right, and -134 filled the hole
+          with the "Right now" card, which was also right. But every status control lived INSIDE the
+          collapsed half and nobody moved it out, so from -112 onward a batch that had started could
+          not be completed, reopened, closed or cancelled from this screen AT ALL. Measured on live:
+          AVP-GURU-RPLAVP-DST-02 sat at Result Awaited rendering no status button of any kind.
+          These controls belong to the BATCH, not to the preparation checklist, so they sit outside
+          the ternary now - one copy, every status, and each button keeps its own gate. */}
+      {canTransition ? (
+        <div className="mt-4 flex flex-wrap gap-2">
+          {b.status === "Planning" && <Btn onClick={() => transition("Ready")} disabled={!r.ready}>Mark Ready</Btn>}
+          {b.status === "Ready" && !beganAlready && <Btn onClick={() => transition("Active")}>Start Batch</Btn>}
+          {b.status === "Ready" && beganAlready && (
+            <span className="inline-flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1">
+              <label className="text-xs text-amber-800">Batch already began on</label>
+              <input type="date" className="rounded-lg border border-gray-300 px-2 py-1 text-xs" value={startDate} max={todayKey} onChange={(e) => setStartDate(e.target.value)} />
+              <Btn onClick={() => transition("Active", { actual_start: startDate || undefined })} disabled={!startDate}>Start Batch from that date</Btn>
+            </span>
+          )}
+          {b.status === "Ready" && <Btn kind="ghost" onClick={() => transition("Planning")}>Back to Planning</Btn>}
+          {/* -102: the client's words for these two steps. Targets stay the stored enum. */}
+          {b.status === "Active" && <Btn onClick={() => transition("Closing")}>Assessment done → Result Awaited</Btn>}
+          {/* -113: the Admin's own door, on Active as well as Result Awaited. It is offered whether
+              or not the rules are already satisfied — when they are, it simply completes; when they
+              are not, the panel below says what it will settle first. */}
+          {isAdmin && ["Active", "Closing"].includes(b.status) && (
+            <Btn kind={b.status === "Closing" ? "ghost" : "primary"} onClick={() => setCompleteOpen((v) => !v)}>Mark Completed (Admin)</Btn>
+          )}
+          {/* -112 (QA-219 / Manish M4-01 "status aayega certification done"): when every result is
+              final and every pass has its certificate, the two closure halves derive themselves and
+              the batch walks to Result Awaited on its own. The one press left is the freeze, and it
+              says so — it used to bounce off Rule 18 with nothing on screen explaining why. */}
+          {b.status === "Closing" && (
+            <span className="inline-flex flex-col gap-0.5">
+              <Btn onClick={() => transition("Completed")}>{money?.closure?.certification_status === "Completed" ? "Certification done → Complete Batch" : "Complete Batch"}</Btn>
+              <span className="text-[10px] font-medium text-gray-500">
+                {money?.closure?.certification_status === "Completed"
+                  ? "Every certificate is settled. Completing freezes the results and figures."
+                  : "Waiting on certificates — each passed candidate needs one attached (or marked Not Issued)."}
+              </span>
+            </span>
+          )}
+          {/* -113: completing is one press now, so it needs an undo. Admin only, reason required,
+              audited — and never offered on a CLOSED batch, which is a settlement, not a record. */}
+          {isAdmin && b.status === "Completed" && (
+            <Btn kind="ghost" onClick={() => {
+              const why = window.prompt("Reopen this completed batch? Results and certificates become editable again. Reason:");
+              if (why && why.trim()) transition("Closing", { reason: why.trim() });
+            }}>Reopen (Admin)</Btn>
+          )}
+          {/* Rule 52: Completed = training over; Closed = money over (cert + invoice PAID + no dues). */}
+          {b.status === "Completed" && (
+            <span title={closeBlockers.length ? `Still needed before the batch can close: ${closeBlockers.join("; ")}` : "All dues settled — the batch can close"} className="inline-flex flex-col gap-0.5">
+              <Btn onClick={() => transition("Closed")} disabled={money !== null && closeBlockers.length > 0}>Close Batch (no dues)</Btn>
+              {money !== null && closeBlockers.length > 0 && (
+                <span className="text-[10px] font-medium text-amber-700">needs: {closeBlockers.join(" · ")}</span>
+              )}
+            </span>
+          )}
+          {["Planning", "Ready", "Active"].includes(b.status) && <Btn kind="danger" onClick={() => setConfirmCancel(true)}>Cancel Batch</Btn>}
+        </div>
+      ) : (
+        <p className="mt-4 text-xs text-gray-400">Batch status is moved by Operations/Admin.</p>
       )}
       {completeOpen && isAdmin && ["Active", "Closing"].includes(b.status) && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm">
@@ -430,7 +439,7 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
               <p>This batch still has rows nobody finished. Completing now records them the honest way:</p>
               <ul className="ml-4 list-disc">
                 {(completePlan?.unmarked?.length ?? 0) > 0 && (
-                  <li><b>{completePlan.unmarked.length} student(s) with no result → Absent</b>
+                  <li><b>{completePlan.unmarked.length} student(s) with no result → Fail</b>
                     <span className="text-amber-700"> ({personList(completePlan.unmarked.slice(0, 4))}{completePlan.unmarked.length > 4 ? ` +${completePlan.unmarked.length - 4}` : ""})</span></li>
                 )}
                 {(completePlan?.unsettled?.length ?? 0) > 0 && (
@@ -2019,7 +2028,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
             {(blockers.unmarked?.length ?? 0) > 0 && <>{blockers.unmarked.length} student(s) have no result</>}
             {(blockers.unmarked?.length ?? 0) > 0 && (blockers.unsettled?.length ?? 0) > 0 && " · "}
             {(blockers.unsettled?.length ?? 0) > 0 && <>{blockers.unsettled.length} passed candidate(s) have no certificate</>}
-            . As Admin you can finish it anyway — the missing rows are recorded Absent / Not Issued, audited with your reason.
+            . As Admin you can finish it anyway — the missing rows are recorded Fail / Not Issued, audited with your reason.
           </span>
           <Btn small onClick={completeAsAdmin} disabled={adminBusy}>{adminBusy ? "Completing…" : "Mark Completed (Admin)"}</Btn>
         </div>

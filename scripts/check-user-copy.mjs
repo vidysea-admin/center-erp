@@ -45,6 +45,60 @@ function stripComments(src) {
   return s;
 }
 
+// QA-681 / QA-685 (-204, two checkers on the same day): every pin in this file that wanted to look
+// inside one function did `src.slice(src.indexOf("function NAME"))` — which runs to the END OF FILE.
+// So anything declared BELOW the function satisfies a check aimed at its body. Both findings are
+// that one bug: on qa-198 a checker deleted the trainer spread from `PlanningCreate.save()`, put the
+// same expression in an UNCALLED helper underneath, and every pin stayed green; on qa-202 the same
+// slice shape meant the Nomination card's Save could lose its whole date half unnoticed.
+//
+// blankStrings keeps the length identical (string bodies become spaces, newlines survive) so the
+// brace scan cannot be thrown by a `{` or `}` inside a literal, and the index it finds still points
+// at the right place in the ORIGINAL text.
+function blankStrings(s) {
+  let out = "", q = null;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (q) {
+      if (c === "\\") { out += "  "; i++; continue; }
+      if (c === q) { q = null; out += c; continue; }
+      out += (c === "\n" ? "\n" : " ");
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") { q = c; out += c; continue; }
+    out += c;
+  }
+  return out;
+}
+
+// The body of `function NAME(...) { ... }`, bounded by its own braces. Empty string when absent —
+// callers must treat that as a failure, not as "nothing to check".
+function fnBody(src, name) {
+  const start = src.indexOf("function " + name);
+  if (start < 0) return "";
+  const scan = blankStrings(src);
+  // Step over the PARAMETER LIST first. The first version of this brace-matched from the first `{`
+  // after the name, which on `function PlanningCreate({ a, b }: { a: X, b: Y }) {` is the
+  // DESTRUCTURING brace - so it returned the parameter object and four pins failed on correct code.
+  // Paren-match the arguments, then the next `{` is the body.
+  const paren = scan.indexOf("(", start);
+  if (paren < 0) return "";
+  let pd = 0, afterParams = -1;
+  for (let i = paren; i < scan.length; i++) {
+    if (scan[i] === "(") pd++;
+    else if (scan[i] === ")") { pd--; if (pd === 0) { afterParams = i + 1; break; } }
+  }
+  if (afterParams < 0) return "";
+  const open = scan.indexOf("{", afterParams);
+  if (open < 0) return "";
+  let depth = 0;
+  for (let i = open; i < scan.length; i++) {
+    if (scan[i] === "{") depth++;
+    else if (scan[i] === "}") { depth--; if (depth === 0) return src.slice(start, i + 1); }
+  }
+  return "";
+}
+
 let passed = 0, failed = 0;
 const hits = [];
 // -153 (QA-372): the structural/copy split used to be a REGEX over the rendered message, so every
@@ -1238,7 +1292,8 @@ for (const file of walk(root)) {
   else { failed++; pushStructural('app/(app)/batches/page.tsx: the one "Plan a batch" control must be the header\'s, UNCONDITIONAL, and open the Planning tab AND the form (opensBoth=' + opensBoth + ', guard=' + JSON.stringify(guard ? guard[1] : null) + ') - QA-656/QA-662. Making it conditional is how -198 kept the wrong one of the two, and re-spelling that guard as a ternary is how the first version of this check was walked past.'); }
   // and the strip renders NOTHING when it is closed - a prompt row with no button is still the
   // duplicate surface he asked to be removed, and would pass both checks above.
-  const createBlk = src.slice(src.indexOf("function PlanningCreate"));
+  // QA-681: this used to slice to end of file. See fnBody's note.
+  const createBlk = fnBody(src, "PlanningCreate");
   if (/if \(!open\) return null;/.test(createBlk)) passed++;
   else { failed++; pushStructural('app/(app)/batches/page.tsx: PlanningCreate still renders something when it is closed - QA-656. Closed means gone; a collapsed prompt repeating "Plan a batch" is the second surface, whether or not it carries a <Btn>.'); }
 
@@ -1246,8 +1301,11 @@ for (const file of walk(root)) {
   //    facts: his new target-candidates input, the POST that makes the batch, and the PATCH that
   //    attaches the plan to it. A strip with the input and no POST is the old calculator with a
   //    new field.
-  const create = src.slice(src.indexOf("function PlanningCreate"));
-  if (/function PlanningCreate/.test(src)) passed++;
+  // QA-681: bounded to PlanningCreate's own braces. An uncalled helper below it used to satisfy
+  // every check in this block, which is exactly how a checker disconnected the strip's Save while
+  // the whole wall stayed green.
+  const create = fnBody(src, "PlanningCreate");
+  if (create && /function PlanningCreate/.test(src)) passed++;
   else { failed++; pushStructural("app/(app)/batches/page.tsx: there is no PlanningCreate strip above the Planning table - the drawer's inputs went nowhere."); }
   if (/target_size/.test(create)) passed++;
   else { failed++; pushStructural('app/(app)/batches/page.tsx: the Planning create strip does not carry target_size - Umesh 22/08: "batch mein kitne target persons lena chahte ho, n number of candidates".'); }
@@ -1472,6 +1530,30 @@ for (const file of walk(root)) {
     bad++;
     pushStructural(pageRel + ': no TR ID input on this page, while the Certified banner says "Record it here (Edit -> TR ID)".');
   }
+
+  // ---- QA-685 (-204): the four checks above prove the Edit mode EXISTS. None proved it is WIRED ----
+  // The qa-202 checker deleted the whole date half of saveCard(): all six inputs still rendered,
+  // Save still closed the card, nothing was written - and this file returned a byte-identical
+  // 255/1. The unit's entire reason for existing could be disconnected without one assertion going
+  // red, because `check-user-copy.mjs` is the only script in scripts/ that reads this page and no
+  // e2e suite fetches an HTML route.
+  //
+  // This closes the mutation that was demonstrated: Save must reach BOTH doors from inside its own
+  // body. It does NOT close the general case - a source scan cannot prove a React handler runs, and
+  // saying otherwise is how the last four of these were written. The general case is answered by
+  // driving the built app in a browser, which this cycle does once by hand and records; making that
+  // a standing 18th suite is a real proposal, not something to slip in under a pin.
+  const saveBody = fnBody(pageSrc, "saveCard");
+  const hitsDates = /\/transition/.test(saveBody) && /PIPELINE_DATES/.test(saveBody);
+  const hitsProfile = /nominated_for_location|tr_id/.test(saveBody);
+  const wired = /onClick=\{saveCard\}/.test(pageSrc);
+  if (saveBody && hitsDates && hitsProfile && wired) passed++;
+  else {
+    bad++;
+    pushStructural(pageRel + ": the Nomination & TOT Save is not wired to both doors (saveCard found=" + !!saveBody
+      + ", reaches /transition with PIPELINE_DATES=" + hitsDates + ", reaches the profile fields=" + hitsProfile
+      + ", a Save button calls it=" + wired + ") - QA-685. Dropping the date half leaves every input on screen and writes nothing.");
+  }
   // And the read-only half must stay read-only: every input on this card lives behind the edit
   // state, never in the <dl>.
   const dlBlock = (pageSrc.split('<dl className="grid grid-cols-2 gap-y-2 text-sm">')[1] ?? "").split("</dl>")[0];
@@ -1481,6 +1563,42 @@ for (const file of walk(root)) {
   }
 
   if (bad) failed++; else passed++;
+}
+
+// ---- -204: a running batch must still have its status controls ----
+// Umesh, 22/08, on AVP-GURU-RPLAVP-DST-02: "button hi nahi aa raha hai abhi, unko complete mark
+// karne ka... pehle toh aa raha tha, ye hil kyu gaya?" It had not moved - it had fallen out. -112
+// collapsed the readiness checklist once a batch is running and -134 filled the hole with the
+// "Right now" card; every status control lived inside the collapsed half and nobody carried it
+// across. From -112 onward, a batch that had started could not be completed, reopened, closed or
+// cancelled from this screen at all. Measured on live before the fix: that batch rendered no status
+// button of any kind.
+//
+// This is NOT a text match on the buttons - all of them were present in the source the whole time,
+// which is exactly why nothing caught it. It measures NESTING: the control row must sit OUTSIDE the
+// `running ? … : …` ternary, so that neither branch can take it away again.
+{
+  const rel = "app/(app)/batches/[id]/page.tsx";
+  const src = stripComments(fs.readFileSync(path.join(root, rel), "utf-8"));
+  const scan = blankStrings(src);
+  const runIdx = scan.indexOf("{running ? (");
+  const actIdx = scan.indexOf("{canTransition ? (");
+  let closeIdx = -1;
+  if (runIdx >= 0) {
+    let depth = 0;
+    for (let i = runIdx; i < scan.length; i++) {
+      if (scan[i] === "{") depth++;
+      else if (scan[i] === "}") { depth--; if (depth === 0) { closeIdx = i; break; } }
+    }
+  }
+  if (runIdx >= 0 && actIdx >= 0 && closeIdx > runIdx && actIdx > closeIdx) passed++;
+  else {
+    failed++;
+    pushStructural(rel + ": the batch status controls are nested inside the `running` ternary"
+      + " (running@" + runIdx + ", its close@" + closeIdx + ", controls@" + actIdx + ")"
+      + " - a batch that has started then has NO way to be completed, reopened, closed or cancelled"
+      + " from this screen. That is what -112 shipped and nobody noticed for 92 releases.");
+  }
 }
 
 {
