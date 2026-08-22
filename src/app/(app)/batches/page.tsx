@@ -848,7 +848,17 @@ function PlanningCreate({ locations, planner, runPlanner, plannerLocations, plan
   return (
     <div className="space-y-3 rounded-xl border border-blue-200 bg-blue-50/40 px-4 py-3">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-gray-800">Plan a batch</h2>
+        {/* QA-663 (-200): -199 deleted the collapsed prompt, and the one sentence that said what
+            this DOES went with it - the replacement pointer lives in the table's `empty=` prop,
+            which only renders at zero rows, so anybody with batches on screen never saw either.
+            It belongs here, where the form is, and it is now the only place it needs to be. */}
+        <div>
+          <h2 className="text-sm font-semibold text-gray-800">Plan a batch</h2>
+          <p className="text-xs text-gray-500">
+            Pick the centre and job role and choose the start date — the backward plan is counted for
+            you, and saving creates the batch with that plan on it as a tick-off checklist.
+          </p>
+        </div>
         <button className="text-xs font-medium text-gray-500 hover:text-gray-800" onClick={() => setOpen(false)}>Close</button>
       </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -875,6 +885,19 @@ function PlanningCreate({ locations, planner, runPlanner, plannerLocations, plan
             value={planner.target ?? ""} onChange={(e) => runPlanner({ target: e.target.value })} />
         </Field>
       </div>
+
+      {/* QA-664 (-200): a Trainer sees the one Plan-a-batch button, presses it, and lands on a
+          Centre select whose only option is "Select…" - a dead end with nothing said. The answer is
+          NOT to hide the button from them (that would put a role gate back on the single control),
+          it is for the form to say why it is empty. Their scope is the batches they teach, not a
+          centre they can plan against, and that sentence is the whole explanation. */}
+      {plannerLocations.length === 0 && (
+        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          There is no centre here you can plan a batch for. Planning is offered for centres the
+          government has approved and that your login covers — if you teach at a centre rather than
+          running one, your batches are on the <b>Batches</b> tab.
+        </p>
+      )}
 
       {/* QA-528: Karunn sir's word was ONLY - "ek batch ki plan, and that is to be ONLY FOR
           APPROVE LOCATION AND APPROVE COURSES" (20/08, 08:21). What is left out is COUNTED here

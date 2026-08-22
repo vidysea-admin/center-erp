@@ -1189,16 +1189,31 @@ for (const file of walk(root)) {
   // Umesh's answer was the other one: "agar tujhe header wala hi rakhna hai toh header wala rakh.
   // Uske baad koi dousra wala create hi mat kar ... ek remove krr" (QA-656). Three assertions,
   // because each of the first two survives a plausible half-fix on its own.
-  // NOTE the regex shape: a <Btn ...> opening tag contains `=>` inside its onClick, so `[^>]*`
-  // stops at the arrow and matches nothing. Count the CLOSING pattern instead - it is unambiguous.
-  const planBtns = (src.match(/>Plan a batch<\/Btn>/g) || []).length;
-  if (planBtns === 1) passed++;
-  else { failed++; pushStructural('app/(app)/batches/page.tsx: ' + planBtns + ' buttons are labelled "Plan a batch" - QA-656, and exactly one is right. (The strip\'s own <h2> says the same words and is not a button; this counts <Btn> only.)'); }
-  // and that one is the header's: unconditional, and it opens BOTH the tab and the form.
-  const headerBtn = src.match(/onClick=\{\(\) => \{([^}]*)\}\}>Plan a batch<\/Btn>/);
-  if (headerBtn && /setTab\("Planning"\)/.test(headerBtn[1]) && /setPlanOpen\(true\)/.test(headerBtn[1])
-      && !/\{tab === "\w+" && <Btn[\s\S]{0,200}?>Plan a batch<\/Btn>/.test(src)) passed++;
-  else { failed++; pushStructural('app/(app)/batches/page.tsx: the one "Plan a batch" button must be the header\'s, unconditional, and open the Planning tab AND the form (found ' + JSON.stringify(headerBtn ? headerBtn[1] : null) + ') - QA-656. Guarding it by tab is how -198 ended up keeping the wrong one of the two.'); }
+  // QA-662 (-200): a checker evaded the first version of these NINE ways and the wall stayed 254/0.
+  // Two of the evasions were not even adversarial - the same <Btn> with prettier-style multi-line
+  // children slipped the count, and the exact -198 defect re-spelled as a TERNARY slipped the very
+  // check whose failure message names that defect. So:
+  //   - count CONTROLS, not one byte sequence: <Btn> and plain <button>, children on any number of
+  //     lines, whitespace tolerated.
+  //   - forbid ANY conditional near that control rather than one hand-written shape.
+  //
+  // NOTE the regex shape: an opening tag contains `=>` inside its onClick, so `[^>]*` stops at the
+  // arrow and matches nothing at all - that is how an earlier version reported "0 buttons" on
+  // correct code. These match across the tag with a bounded [\s\S].
+  const CTRL = /<(?:Btn|button)\b[\s\S]{0,400}?>\s*Plan a batch\s*<\//g;
+  const ctrls = [...src.matchAll(CTRL)];
+  if (ctrls.length === 1) passed++;
+  else { failed++; pushStructural('app/(app)/batches/page.tsx: ' + ctrls.length + ' controls are labelled "Plan a batch" - QA-656, and exactly one is right. (The strip\'s own <h2> says the same words and is not a control; this counts <Btn> and <button>, children on any number of lines.)'); }
+  // that one is the header's: it opens BOTH the tab and the form...
+  const headerBtn = src.match(/onClick=\{\(\) => \{([^}]*)\}\}>\s*Plan a batch\s*</);
+  const opensBoth = !!headerBtn && /setTab\("Planning"\)/.test(headerBtn[1]) && /setPlanOpen\(true\)/.test(headerBtn[1]);
+  // ...and NOTHING makes it conditional. Looking at the 150 characters in front of the control
+  // catches `&&`, a ternary, a parenthesised guard and a role gate alike - the previous version
+  // named one syntax and three others walked past it.
+  const before = ctrls.length === 1 ? src.slice(Math.max(0, ctrls[0].index - 150), ctrls[0].index) : "";
+  const guard = before.match(/(tab === |role ===|\?\s*<|&&\s*<)/);
+  if (opensBoth && !guard) passed++;
+  else { failed++; pushStructural('app/(app)/batches/page.tsx: the one "Plan a batch" control must be the header\'s, UNCONDITIONAL, and open the Planning tab AND the form (opensBoth=' + opensBoth + ', guard=' + JSON.stringify(guard ? guard[1] : null) + ') - QA-656/QA-662. Making it conditional is how -198 kept the wrong one of the two, and re-spelling that guard as a ternary is how the first version of this check was walked past.'); }
   // and the strip renders NOTHING when it is closed - a prompt row with no button is still the
   // duplicate surface he asked to be removed, and would pass both checks above.
   const createBlk = src.slice(src.indexOf("function PlanningCreate"));
@@ -1219,8 +1234,21 @@ for (const file of walk(root)) {
   // centre, correctly dropped the TOT steps for an already-certified trainer and showed SIX
   // milestones - and the save sent no trainer, so the plan attached to the batch was rebuilt with
   // trainer null and came back with EIGHT. The checklist a person approves has to be the one stored.
+  // QA-658 (-200): the version of this check that shipped in -198 asserted ONLY that the client
+  // source contains `scopedTo?.trainer?._id ? { trainer: ... }`. It was red pre-fix and green
+  // post-fix while the behaviour did not change by one byte, because the API never put an `_id` in
+  // `scoped_to.trainer` and the guard was always false. A pin that matches the text of a fix cannot
+  // prove the fix. The BEHAVIOUR is now pinned in scripts/e2e.mjs (QA-657: preview keys vs stored
+  // keys, driven through the strip's own call order); what stays here is the other half of the
+  // contract, which a source scan CAN see - that the API still sends the id the client reads.
   if (/scopedTo\?\.trainer\?\._id \? \{ trainer:/.test(create)) passed++;
   else { failed++; pushStructural("app/(app)/batches/page.tsx: the Planning strip creates the batch WITHOUT the trainer its preview scoped the plan to - QA-654. /api/plan-batch drops the TOT steps for an already-certified trainer; a batch created with no trainer gets them back, so the saved checklist differs from the one that was approved."); }
+  {
+    const planApi = stripComments(fs.readFileSync(path.join(root, "app/api/plan-batch/route.ts"), "utf8"));
+    const scopedLit = planApi.match(/trainer: trainer \? \{([^}]*)\}/);
+    if (scopedLit && /_id:/.test(scopedLit[1])) passed++;
+    else { failed++; pushStructural("app/api/plan-batch/route.ts: `scoped_to.trainer` does not carry an `_id` (found " + JSON.stringify(scopedLit ? scopedLit[1].trim().slice(0, 80) : null) + ") - QA-657. The Planning strip creates the batch with `scoped_to.trainer?._id`; without it that guard is always false, the batch is created with no trainer, and the stored plan silently disagrees with the preview. This is the half of the pair a source scan can see - the round trip itself is pinned in e2e.mjs."); }
+  }
   if (/"\/api\/batches"/.test(create) && /method: "POST"/.test(create) && /milestones`/.test(create) && /create: true/.test(create)) passed++;
   else { failed++; pushStructural("app/(app)/batches/page.tsx: the Planning strip does not create the batch AND attach its plan (POST /api/batches then PATCH .../milestones {create:true}) - a plan that cannot become a batch is the calculator this replaced."); }
 
@@ -1296,10 +1324,14 @@ for (const file of walk(root)) {
   const ptc = comps.find((c) => c.name === "PlanningTable");
   if (ptc) {
     const body = compBody(ptc);
-    for (const m of body.matchAll(/\n  const (\w+) = (?:async )?\(/g)) {
+    // QA-659 (-200): this scanned only `const NAME = (` helpers, so a `function NAME(` helper
+    // declared inside PlanningTable was invisible to BOTH halves of the check - a checker beat it on
+    // the first attempt and the wall stayed 253/0. Both declaration forms now.
+    for (const m of body.matchAll(/\n  (?:const (\w+) = (?:async )?\(|function (\w+)\s*\()/g)) {
+      const name = m[1] ?? m[2];
       const nextRel = body.slice(m.index + m[0].length).search(/\n  (?:const|function) \w+/);
       const h = nextRel < 0 ? body.slice(m.index) : body.slice(m.index, m.index + m[0].length + nextRel);
-      if (/<input type="date"/.test(h)) editors.push({ name: `PlanningTable.${m[1]}`, gated: gatesBeforeFirstInput(h) });
+      if (/<input type="date"/.test(h)) editors.push({ name: `PlanningTable.${name}`, gated: gatesBeforeFirstInput(h) });
     }
   }
   const ungated = editors.filter((e) => !e.gated).map((e) => e.name);

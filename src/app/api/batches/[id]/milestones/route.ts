@@ -100,10 +100,17 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
     // a wrong one. An explicit done_on is honoured; a bare tick still means now.
     // `undefined` means "no date given, so now". An empty STRING is a cleared input the caller
     // sent by accident, and -197 let it fall through to now (QA-650) - it is refused instead.
-    if (body.done_on !== undefined && String(body.done_on).trim() === "") {
-      throw new HttpError(400, "done_on was sent empty. Leave it out to record today, or send a date.");
+    // QA-660 (-200): -198 refused the empty STRING and left `0` and `null` falling through to now,
+    // because the guard tested one shape and the next line tested truthiness. One rule: `undefined`
+    // (or absent) means "no date given, so today". Anything else present must be a real date.
+    if (body.done_on !== undefined && (typeof body.done_on !== "string" || !body.done_on.trim())) {
+      // My first attempt at this listed the shapes to REFUSE - null, "", boolean - and `0` walked
+      // straight through it into `new Date(0)`, which is a perfectly valid 1 Jan 1970 and stored as
+      // a fact. Listing what is allowed is the only version of this that cannot be outgrown: a
+      // date here is a non-empty STRING, and absence is the one way to mean "today".
+      throw new HttpError(400, "done_on must be a date like 2026-08-22. Leave it out to record today.");
     }
-    const on = body.done_on ? new Date(body.done_on) : new Date();
+    const on = body.done_on === undefined ? new Date() : new Date(body.done_on);
     if (isNaN(on.getTime())) throw new HttpError(400, "done_on is not a valid date.");
     // QA-644: -196 validated only that the string parsed. done_on means "this happened", and every
     // other happened-date in this codebase refuses the future - Rule 25 on left_on, Rule 53 on

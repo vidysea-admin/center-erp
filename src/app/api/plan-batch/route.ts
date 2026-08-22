@@ -60,7 +60,12 @@ export const GET = apiHandler(async (req: NextRequest) => {
     // Named rather than merged into the milestone list: a milestone is a deadline the plan
     // creates, and this is a constraint the world imposes. Fusing them is how a screen ends up
     // showing a due date nobody owes.
-    scoped_to: location ? { location, program: program ?? null, trainer: trainer ? { name: trainer.name, pipeline_status: trainer.pipeline_status ?? null, tot_done_on: trainer.tot_done_on ?? null } : null } : null,
+    // QA-657 (-200): `_id` was missing from this literal, and that alone made -198's headline fix a
+    // no-op. The Planning strip creates the batch with `scoped_to.trainer?._id`, so with no id the
+    // guard was always false, the batch was created with NO trainer, and the plan attached to it was
+    // rebuilt without the trainer this preview was scoped to - five milestones on screen, eight in
+    // the batch. The caller cannot act on a trainer it cannot name.
+    scoped_to: location ? { location, program: program ?? null, trainer: trainer ? { _id: String(trainer._id), name: trainer.name, pipeline_status: trainer.pipeline_status ?? null, tot_done_on: trainer.tot_done_on ?? null } : null } : null,
     tot_skipped: !!trainer && (trainer.pipeline_status === "Certified" || !!trainer.tot_done_on),
     earliest_possible_start: earliest ? { date: earliest.date, blocked: earliest.blocked, basis: earliest.basis, note: earliestStartNote(earliest) } : null,
     // QA-506: blocked means a constraint cannot be met at all (no room at this centre), so ANY

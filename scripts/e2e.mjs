@@ -1863,6 +1863,26 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
   const empty = await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { key: "enrollment_done", done: true, done_on: "" });
   ok("-198: an empty done_on is refused rather than silently meaning now", empty.status === 400 && /done_on/.test(empty.data?.error ?? ""),
     `status=${empty.status} error=${JSON.stringify(empty.data?.error ?? null)}`);
+  // QA-660 (-200): -198 guarded the empty STRING and then tested truthiness on the next line, so
+  // `0`, `null` and `false` still fell through to today. One rule now: absent means today, anything
+  // present must be a real date. Each shape is its own assertion - a single "falsy" test would let
+  // the next one through the way "" got through the last check.
+  // `0` is the one that proves the rule has to be an allow-list: it is not empty, not null and not
+  // a boolean, so a refuse-list waved it through into `new Date(0)` - a valid 1 Jan 1970, stored as
+  // a fact. This wall caught that on the -200 run before it shipped.
+  for (const [label, value] of [["null", null], ["zero", 0], ["false", false], ["whitespace", "   "], ["an object", { d: 1 }]]) {
+    const r = await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { key: "enrollment_done", done: true, done_on: value });
+    ok(`-200: done_on sent as ${label} is refused`, r.status === 400,
+      `status=${r.status} error=${JSON.stringify(r.data?.error ?? null)}`);
+  }
+  const stored1970 = (await req("GET", `/api/batches/${planBatch._id}`)).data.item.milestones.find((m) => m.key === "enrollment_done")?.done_on;
+  ok("-200: none of those refusals left an epoch date on the milestone",
+    String(stored1970).slice(0, 4) !== "1970", `done_on=${stored1970}`);
+  // and absent still means today, which is the behaviour all of that is protecting
+  const absent = (await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { key: "trainer_mapped_sidh", done: true }, 200)).data.item;
+  ok("-200: with done_on absent it still records today",
+    String(absent.milestones.find((m) => m.key === "trainer_mapped_sidh")?.done_on ?? "").slice(0, 10) === new Date().toISOString().slice(0, 10),
+    JSON.stringify(absent.milestones.find((m) => m.key === "trainer_mapped_sidh")?.done_on ?? null));
   // Today must still be accepted - the boundary is "not the future", not "not today".
   const today = new Date().toISOString().slice(0, 10);
   const now2 = await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { key: "enrollment_done", done: true, done_on: today }, 200);
@@ -1969,6 +1989,38 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
   ok("QA-461 (-164): ?location= changes the answer - the centre's certified trainer removes the TOT rows",
     scoped.tot_skipped === true && scoped.milestones.length === 5 && !scoped.milestones.some((m) => m.key === "tot_done") && scoped.scoped_to?.trainer?.name === certTrainer.name,
     JSON.stringify({ skipped: scoped.tot_skipped, n: scoped.milestones.length, trainer: scoped.scoped_to?.trainer?.name }));
+  // ---- QA-657 / QA-658 (-200): the ROUND TRIP, because the source-text pin certified a no-op ----
+  // -198 claimed to fix "the plan you approve is not the plan that gets saved" by sending
+  // `scoped_to.trainer?._id` from the Planning strip. `scoped_to.trainer` had no `_id`, so the guard
+  // was always false and nothing changed - and the structural pin that certified it matched the new
+  // source TEXT, went green, and a 3,151-assertion wall shipped with the S2 live. That is the sixth
+  // pin in this project that could not fail for the defect it names, and the first to certify its
+  // own release's headline item.
+  //
+  // So this pin drives what the SCREEN does, in the screen's own order, and compares the two plans.
+  // It is written with the client's exact optional-chain (`?._id`) on purpose: if the API stops
+  // sending the id, this pin reproduces the defect instead of stepping around it.
+  {
+    ok("QA-657: the preview names its trainer with an id the caller can act on",
+      !!scoped.scoped_to?.trainer?._id, JSON.stringify(scoped.scoped_to?.trainer ?? null));
+    const previewKeys = scoped.milestones.map((m) => m.key).sort();
+    // exactly what PlanningCreate.save() does, in order
+    const stripBatch = (await req("POST", "/api/batches", {
+      location: loc._id, program: prog._id, planned_start: "2028-06-01", session: "Full Day",
+      ...(scoped.scoped_to?.trainer?._id ? { trainer: scoped.scoped_to.trainer._id } : {}),
+      target_size: 7,
+    }, 201)).data.item;
+    const stripPlan = (await req("PATCH", `/api/batches/${stripBatch._id}/milestones`, { create: true }, 200)).data.item;
+    const storedKeys = (stripPlan.milestones ?? []).map((m) => m.key).sort();
+    ok("QA-657: the plan STORED on the batch is the plan the preview showed - same milestones, no TOT rows added back",
+      JSON.stringify(storedKeys) === JSON.stringify(previewKeys),
+      `preview=${JSON.stringify(previewKeys)} stored=${JSON.stringify(storedKeys)}`);
+    ok("QA-657: and the batch really carries the trainer the preview was scoped to",
+      String(stripBatch.trainer?._id ?? stripBatch.trainer ?? "") === String(certTrainer._id),
+      `trainer=${JSON.stringify(stripBatch.trainer ?? null)} expected=${certTrainer._id}`);
+    await req("POST", `/api/batches/${stripBatch._id}/transition`, { target: "Cancelled", reason: "QA-657 pin cleanup" }, 200);
+  }
+
   const eps = scoped.earliest_possible_start;
   const epsKeys = (eps?.basis ?? []).map((b) => b.key);
   ok("QA-461 (-164): earliest_possible_start comes back WITH its basis - all three constraints named",

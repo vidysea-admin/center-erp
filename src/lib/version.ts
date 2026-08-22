@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-199";
+export const RELEASE = "2026.08.14-200";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,15 +17,25 @@ export const RELEASE = "2026.08.14-199";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-200 makes the previous release's headline fix actually work. -198 said it had stopped the " +
+  "planning form saving a different checklist from the one it had just shown you, when a centre " +
+  "already has a certified trainer and the training steps are correctly left out. It had not: the " +
+  "form asked the server for that trainer's record, the server never included the trainer's " +
+  "identifier in its answer, so the form had nothing to send and the batch was still created " +
+  "without a trainer - and the plan attached to it came back with the training steps in it. Five " +
+  "steps on screen, eight on the batch. The server now returns the identifier, and the check that " +
+  "guards this no longer looks at whether the code was written a certain way; it plans a batch the " +
+  "way the screen does and compares the two lists. Also: a completion date sent as empty, zero or " +
+  "null was still being read as today for two of those three; all of them are refused now."
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-199 leaves one button where there were two. Planning a batch was offered twice on the same " +
   "screen - once in the page header and once again in a panel a few rows below it, both reading " +
   "Plan a batch. The one in the header is the one that stays: it opens the planning view and the " +
   "form together, in a single click, from the same place as New Batch. The panel below no longer " +
   "appears at all until that button is pressed, so the planning view is the table and nothing " +
-  "else until you ask to plan something."
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "else until you ask to plan something." +
   "-198 comes from actually using the new planning screen on the live site rather than reading it. " +
   "Planning a batch showed a plan with the trainer-training steps correctly left out, because the " +
   "centre already has a certified trainer - and then saved a batch with those steps back in, " +
