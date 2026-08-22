@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-197";
+export const RELEASE = "2026.08.14-198";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,21 @@ export const RELEASE = "2026.08.14-197";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-198 comes from actually using the new planning screen on the live site rather than reading it. " +
+  "Planning a batch showed a plan with the trainer-training steps correctly left out, because the " +
+  "centre already has a certified trainer - and then saved a batch with those steps back in, " +
+  "because the plan was worked out for that trainer and the batch was created without one. The " +
+  "checklist you approve is now the checklist that gets stored, and the screen says which trainer " +
+  "it is about to put on the batch. Two buttons reading Plan a batch were stacked on the same " +
+  "screen; the one in the page header now appears only where it is a way in, and it opens the form " +
+  "instead of leaving you at a prompt asking for the same words again. A date recorded as already " +
+  "done was refused a year out but accepted for tomorrow, and an empty one quietly became today - " +
+  "both are refused now, on the same calendar-day footing the rest of the system uses. And the " +
+  "planning-column work has carried a wrong internal reference since it shipped, in twelve places " +
+  "including two test names, so every test run printed the wrong one; it now carries its own."
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-197 repairs three things -196 broke or left behind, all found by review rather than by use. The " +
   "planning screen lost its Preparation tab last release, and five links on the home page still " +
   "pointed at it - including a button reading Preparation board - so asking for the centre and " +
@@ -30,10 +45,7 @@ export const RELEASE_NOTE_CURRENT =
   "with the screen. A date recorded as already done can no longer be set in the future, which the " +
   "rest of the system has always refused. And the readiness line inside the planning form used to " +
   "go silent whenever the page filter named a different centre from the one being planned - it " +
-  "asks about its own centre now, and says so when there is nothing recorded."
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "asks about its own centre now, and says so when there is nothing recorded." +
   "-196 makes batch planning one screen instead of three. Planning a batch used to open a panel " +
   "that could work out the dates and could not create the batch, so the plan was worked out once " +
   "and then typed in again somewhere else; a separate Preparation tab listed what was blocking " +

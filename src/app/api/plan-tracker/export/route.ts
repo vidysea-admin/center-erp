@@ -32,7 +32,7 @@ export const GET = apiHandler(async (_req: NextRequest) => {
   // His column order, his headings. A download that renames his columns is a download he has to
   // translate before he can use it.
   //
-  // QA-607: these headings and the SCREEN's headings must be the same words. They were not - the
+  // QA-640: these headings and the SCREEN's headings must be the same words. They were not - the
   // download said "TOT starts" while the screen said "Starts", and "Available & ready for TOT"
   // while the screen said "Ready for TOT". One column with two names depending on which surface
   // you looked at is precisely the defect QA-565 closed on the report; it was alive here too.

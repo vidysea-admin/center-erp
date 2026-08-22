@@ -755,7 +755,7 @@ for (const file of walk(root)) {
 // Without it a reader adds twenty rows by eye, which is the habit this report exists to end.
 //
 // A STRUCTURE check, not an API one: no request can tell you whether a number reached the screen.
-// QA-607 (-192) — Umesh, 2026-08-22, with the client's "Back-dated Planning" tab open beside the
+// QA-640 (-192) — Umesh, 2026-08-22, with the client's "Back-dated Planning" tab open beside the
 // Planning table: "yeh saare column hone chahiye". All eighteen were already there; his NAMES were
 // not. The screen said `Submitted` / `Approved` / `Fee paid`, and `Starts` and `Ends` each appeared
 // TWICE - once for TOT and once for the batch - so two different dates answered to one word and a
@@ -792,7 +792,7 @@ for (const file of walk(root)) {
   ];
   const missingHeadings = SHEET_HEADINGS.filter((h) => !planSrc.includes(h));
   if (!missingHeadings.length) passed++;
-  else { failed++; pushStructural("app/(app)/batches: the planning table no longer carries " + missingHeadings.length + " of the client's own column headings verbatim, so the card cannot prove which column is which: " + JSON.stringify(missingHeadings.slice(0, 3)) + " - QA-607. His sheet's typos are part of the quote."); }
+  else { failed++; pushStructural("app/(app)/batches: the planning table no longer carries " + missingHeadings.length + " of the client's own column headings verbatim, so the card cannot prove which column is which: " + JSON.stringify(missingHeadings.slice(0, 3)) + " - QA-640. His sheet's typos are part of the quote."); }
 
   // The labels of the plan-tracker column list. Scoped to the block between `const columns` and its
   // close, so the tab's OTHER tables cannot lend it a label or steal one.
@@ -801,19 +801,19 @@ for (const file of walk(root)) {
   const planLabels = [...planColBlock.matchAll(/label: "([^"]+)"/g)].map((m) => m[1]);
   const dupLabels = planLabels.filter((l, i) => planLabels.indexOf(l) !== i);
   if (planLabels.length >= 18 && !dupLabels.length) passed++;
-  else { failed++; pushStructural("app/(app)/batches: the planning table has " + planLabels.length + " columns and these labels repeat: " + JSON.stringify([...new Set(dupLabels)]) + " - QA-607. Two different dates answering to one word is what sent Umesh back to his spreadsheet; `Starts` used to mean the TOT's and the batch's."); }
+  else { failed++; pushStructural("app/(app)/batches: the planning table has " + planLabels.length + " columns and these labels repeat: " + JSON.stringify([...new Set(dupLabels)]) + " - QA-640. Two different dates answering to one word is what sent Umesh back to his spreadsheet; `Starts` used to mean the TOT's and the batch's."); }
 
   // One column, one name, on both surfaces.
   const exportOnly = planLabels.filter((l) => l !== "Batch" && l !== "SL#" && !planExportSrc.includes(`"${l}"`));
   if (!exportOnly.length) passed++;
-  else { failed++; pushStructural("app/api/plan-tracker/export: " + exportOnly.length + " screen column(s) are named differently in the download: " + JSON.stringify(exportOnly.slice(0, 4)) + " - QA-607 / QA-565. Downloading the table should not rename its columns."); }
+  else { failed++; pushStructural("app/api/plan-tracker/export: " + exportOnly.length + " screen column(s) are named differently in the download: " + JSON.stringify(exportOnly.slice(0, 4)) + " - QA-640 / QA-565. Downloading the table should not rename its columns."); }
 
   // The card itself, closed by default - it is reference, consulted once, not a warning.
   const planCard = /<details[^>]*>[\s\S]{0,400}?Which column of the planning sheet is which/.test(planSrc)
     && /PLAN_COLUMN_SOURCE\[c\.key\]/.test(planSrc)
     && !/<details open[\s\S]{0,400}?Which column of the planning sheet/.test(planSrc);
   if (planCard) passed++;
-  else { failed++; pushStructural("app/(app)/batches: the planning table has no collapsed card mapping each column to the client's sheet heading - QA-607. Without it the verbatim headings are stored and never shown, which is the same as not having them."); }
+  else { failed++; pushStructural("app/(app)/batches: the planning table has no collapsed card mapping each column to the client's sheet heading - QA-640. Without it the verbatim headings are stored and never shown, which is the same as not having them."); }
 }
 
 // QA-622 (-195): the Locations screen must send each contact's `_id` back when it saves the list.
@@ -1179,11 +1179,18 @@ for (const file of walk(root)) {
   if (!/"Backward batch plan"/.test(src) && !/planner\.open/.test(src)) passed++;
   else { failed++; pushStructural('app/(app)/batches/page.tsx: the "Backward batch plan" drawer is still in the page - "shutter wala hta hi do". Its inputs belong inline above the Planning table, not behind a drawer that cannot create the batch it plans.'); }
 
-  // 3. "Plan a batch" must land ON the Planning tab. A button that opens nothing would pass a
-  //    naive "no drawer" check, so this asserts where it DOES go.
-  const planBtn = src.match(/onClick=\{\(\) => ([^}]*)\}>Plan a batch</);
-  if (planBtn && /setTab\("Planning"\)/.test(planBtn[1])) passed++;
-  else { failed++; pushStructural('app/(app)/batches/page.tsx: the "Plan a batch" button does not open the Planning tab (found ' + JSON.stringify(planBtn ? planBtn[1] : null) + ') - "plan a batch pr sidha planning wala hi tab open ho".'); }
+  // 3. "Plan a batch" must land ON the Planning tab with the form already open, and there must be
+  //    only ONE such control on screen at a time. -196 shipped the header button unconditionally,
+  //    so on the Planning tab it stacked directly above the strip's identical one (Umesh, with a
+  //    screenshot: "plan a batch k 2 buttons aa rhee hai, keep only one" - QA-655). Two assertions,
+  //    because either alone can be faked: the header button is guarded by the tab, and it opens.
+  const headerBtn = src.match(/\{tab === "Batches" && <Btn[^>]*onClick=\{\(\) => \{([^}]*)\}\}>Plan a batch<\/Btn>\}/);
+  if (headerBtn && /setTab\("Planning"\)/.test(headerBtn[1]) && /setPlanOpen\(true\)/.test(headerBtn[1])) passed++;
+  else { failed++; pushStructural('app/(app)/batches/page.tsx: the header "Plan a batch" button is not guarded by `tab === "Batches"` and opening the Planning form (found ' + JSON.stringify(headerBtn ? headerBtn[1] : null) + ') - QA-655: on the Planning tab it stacks above the strip button of the same name, and -196 landed the reader on a collapsed prompt asking them to press the same words again.'); }
+  // CONTROLS only - the strip's own <h2> says the same words and is not a third button.
+  const planBtns = (src.match(/<Btn[^>]*>Plan a batch<\/Btn>/g) || []).length;
+  if (planBtns <= 2) passed++;
+  else { failed++; pushStructural('app/(app)/batches/page.tsx: ' + planBtns + ' BUTTONS are labelled "Plan a batch" - QA-655. Two is the most that can be right (the header way-in and the strip itself), and only one of those may render at a time.'); }
 
   // 4. The strip has to CREATE, not just calculate - that was the drawer's whole failing. Three
   //    facts: his new target-candidates input, the POST that makes the batch, and the PATCH that
@@ -1194,6 +1201,13 @@ for (const file of walk(root)) {
   else { failed++; pushStructural("app/(app)/batches/page.tsx: there is no PlanningCreate strip above the Planning table - the drawer's inputs went nowhere."); }
   if (/target_size/.test(create)) passed++;
   else { failed++; pushStructural('app/(app)/batches/page.tsx: the Planning create strip does not carry target_size - Umesh 22/08: "batch mein kitne target persons lena chahte ho, n number of candidates".'); }
+  // QA-654 (-198): the batch must be created WITH the trainer the preview counted the plan for.
+  // Found by running this on live: /api/plan-batch scopes the preview to whoever teaches at that
+  // centre, correctly dropped the TOT steps for an already-certified trainer and showed SIX
+  // milestones - and the save sent no trainer, so the plan attached to the batch was rebuilt with
+  // trainer null and came back with EIGHT. The checklist a person approves has to be the one stored.
+  if (/scopedTo\?\.trainer\?\._id \? \{ trainer:/.test(create)) passed++;
+  else { failed++; pushStructural("app/(app)/batches/page.tsx: the Planning strip creates the batch WITHOUT the trainer its preview scoped the plan to - QA-654. /api/plan-batch drops the TOT steps for an already-certified trainer; a batch created with no trainer gets them back, so the saved checklist differs from the one that was approved."); }
   if (/"\/api\/batches"/.test(create) && /method: "POST"/.test(create) && /milestones`/.test(create) && /create: true/.test(create)) passed++;
   else { failed++; pushStructural("app/(app)/batches/page.tsx: the Planning strip does not create the batch AND attach its plan (POST /api/batches then PATCH .../milestones {create:true}) - a plan that cannot become a batch is the calculator this replaced."); }
 
@@ -1225,34 +1239,54 @@ for (const file of walk(root)) {
   // `PlanningCreate` is the form for making a batch, and `BatchesInner` holds the New Batch drawer.
   // Any OTHER owner of a date input in this file - including a cell component extracted to module
   // level, which is what beat the previous version - has to gate.
-  const EXEMPT = new Set(["PlanningCreate", "BatchesInner"]);
-  // COMPONENTS are column-0 declarations. Anchoring on those (not on every nested helper) is what
-  // makes the owner of a date input the thing a reader would call its owner - the first attempt
-  // blamed `planText`, a clipboard helper that merely happened to be declared above the strip's JSX.
+  // QA-651 (-198): the by-name exemptions were too wide and the gate test too weak, and a checker
+  // proved both. `BatchesInner` was exempt WHOLESALE, so any ungated date editor anywhere in the
+  // page shell was invisible; and `gated` was a substring test over the helper's whole body, so an
+  // input placed BEFORE the early return still counted as gated. Both are narrowed here:
+  //   - inside the exempt components, a date input is only allowed if it is bound to that
+  //     component's own form state (`form.` for the New Batch drawer, `planner.` for the strip).
+  //     Anything else there has to gate like everything else.
+  //   - the gate must appear BEFORE the first date input in the helper, because an early return
+  //     only guards what comes after it.
+  const FORM_OWNERS = { PlanningCreate: /\bplanner\./, BatchesInner: /\bform\./ };
   const comps = [...src.matchAll(/\n(?:export )?(?:function (\w+)\s*\(|const (\w+) = (?:async )?\()/g)]
     .map((m) => ({ name: m[1] ?? m[2], start: m.index }));
   const compAt = (idx) => { let c = null; for (const d of comps) { if (d.start < idx) c = d; else break; } return c; };
   const compBody = (c) => src.slice(c.start, comps.find((d) => d.start > c.start)?.start ?? src.length);
+  const gatesBeforeFirstInput = (body) => {
+    const inp = body.indexOf('<input type="date"');
+    const gate = body.indexOf("!editMode");
+    return inp >= 0 && gate >= 0 && gate < inp;
+  };
 
   const editors = [];
   const seen = new Set();
-  // (a) component level - catches a cell extracted to its own component, the refactor that beat the
-  //     previous version of this pin (an ungated `function TargetCell()` above PlanningTable).
+  // (a) component level - catches a cell extracted to its own component, the refactor that beat an
+  //     earlier version of this pin (an ungated `function TargetCell()` above PlanningTable).
   for (const m of src.matchAll(/<input type="date"/g)) {
     const c = compAt(m.index);
-    if (!c || EXEMPT.has(c.name) || seen.has(c.name)) continue;
+    if (!c) continue;
+    const ownForm = FORM_OWNERS[c.name];
+    if (ownForm) {
+      // allowed only if THIS input reads the component's own form state, within its own tag
+      const tag = src.slice(m.index, src.indexOf(">", m.index) + 1);
+      if (ownForm.test(tag)) continue;
+      editors.push({ name: `${c.name} (a date input that is not its own form field)`, gated: gatesBeforeFirstInput(compBody(c)) });
+      continue;
+    }
+    if (seen.has(c.name)) continue;
     seen.add(c.name);
-    editors.push({ name: c.name, gated: /!editMode/.test(compBody(c)) });
+    editors.push({ name: c.name, gated: gatesBeforeFirstInput(compBody(c)) });
   }
-  // (b) helper level INSIDE PlanningTable - the original rule, kept: it is not enough that the
-  //     component mentions editMode somewhere, each cell renderer has to gate for itself.
+  // (b) helper level INSIDE PlanningTable - it is not enough that the component mentions editMode
+  //     somewhere; each cell renderer has to gate for itself, BEFORE it renders an input.
   const ptc = comps.find((c) => c.name === "PlanningTable");
   if (ptc) {
     const body = compBody(ptc);
     for (const m of body.matchAll(/\n  const (\w+) = (?:async )?\(/g)) {
       const nextRel = body.slice(m.index + m[0].length).search(/\n  (?:const|function) \w+/);
       const h = nextRel < 0 ? body.slice(m.index) : body.slice(m.index, m.index + m[0].length + nextRel);
-      if (/<input type="date"/.test(h)) editors.push({ name: `PlanningTable.${m[1]}`, gated: /!editMode/.test(h) });
+      if (/<input type="date"/.test(h)) editors.push({ name: `PlanningTable.${m[1]}`, gated: gatesBeforeFirstInput(h) });
     }
   }
   const ungated = editors.filter((e) => !e.gated).map((e) => e.name);

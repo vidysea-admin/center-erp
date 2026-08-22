@@ -1850,6 +1850,19 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
   const far = await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { key: "enrollment_done", done: true, done_on: future });
   ok("-197: a done_on in the future is refused", far.status === 400 && /future/i.test(far.data?.error ?? ""),
     `status=${far.status} error=${JSON.stringify(far.data?.error ?? null)}`);
+  // QA-650 (-198): -197 compared raw milliseconds with 24h of slack, so TOMORROW was accepted as
+  // already done while the message said "cannot be a future date". The rules it cites all compare
+  // CALENDAR dates on the IST footing. This is the pin that catches the slack, not the year-away
+  // one above - that one passed on -197 too.
+  const istNow = new Date(Date.now() + 330 * 60 * 1000);
+  const tomorrow = new Date(istNow.getTime() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const tm = await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { key: "enrollment_done", done: true, done_on: tomorrow });
+  ok("-198: TOMORROW is refused too, not just a date a year out", tm.status === 400 && /future/i.test(tm.data?.error ?? ""),
+    `done_on=${tomorrow} status=${tm.status} error=${JSON.stringify(tm.data?.error ?? null)}`);
+  // An empty string is a cleared input, not "no date given" - -197 let it fall through to now.
+  const empty = await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { key: "enrollment_done", done: true, done_on: "" });
+  ok("-198: an empty done_on is refused rather than silently meaning now", empty.status === 400 && /done_on/.test(empty.data?.error ?? ""),
+    `status=${empty.status} error=${JSON.stringify(empty.data?.error ?? null)}`);
   // Today must still be accepted - the boundary is "not the future", not "not today".
   const today = new Date().toISOString().slice(0, 10);
   const now2 = await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { key: "enrollment_done", done: true, done_on: today }, 200);
@@ -2210,19 +2223,19 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
 
       // His column order, his headings. A download that renames his columns is a download he has
       // to translate before he can use it.
-      // QA-607 (-192): the expected names moved with the screen. They are now the same words on
+      // QA-640 (-192): the expected names moved with the screen. They are now the same words on
       // both surfaces - the download used to say "TOT starts" where the screen said "Starts", which
       // is one column with two names depending on where you looked (QA-565's defect, alive here).
       // This pin reads the DOWNLOADED FILE, so it is the stronger of the two: the source scan in
       // check-user-copy can only see what was written, this sees what arrives.
-      ok("QA-526 (-174) / QA-607: his own headings are on the file, not the API field names",
+      ok("QA-526 (-174) / QA-640: his own headings are on the file, not the API field names",
         !!exCols && ["SL#", "Location", "Job Role", "Batch", "Trainer Name", "TR ID",
           "TOT start date", "Expected batch start date", "Trainer available & ready for TOT",
           "Registration & enrolment done on SIDH"].every((h) => exCols.includes(h)),
         JSON.stringify({ cols: (exCols ?? []).slice(0, 8) }));
       // ...and no two of them are the same word. `Starts` and `Ends` each appeared twice on the
       // screen for two different dates; a download that did the same would be unusable as a sheet.
-      ok("QA-607: no two columns of the download share a heading",
+      ok("QA-640: no two columns of the download share a heading",
         !!exCols && new Set(exCols).size === exCols.length,
         JSON.stringify({ n: exCols?.length ?? null, unique: exCols ? new Set(exCols).size : null }));
 

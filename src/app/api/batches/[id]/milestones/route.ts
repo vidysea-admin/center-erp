@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, Trainer } from "@/models";
-import { assertBatchInScope, mergePlan, planBatchBackward } from "@/lib/rules";
+import { assertBatchInScope, dayKey, istToday, mergePlan, planBatchBackward } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
 
@@ -98,14 +98,25 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
     // A tick meant "done, now" — but the Planning grid is filled from a sheet days after the fact,
     // so the date the operator types IS the fact and stamping today's date would overwrite it with
     // a wrong one. An explicit done_on is honoured; a bare tick still means now.
+    // `undefined` means "no date given, so now". An empty STRING is a cleared input the caller
+    // sent by accident, and -197 let it fall through to now (QA-650) - it is refused instead.
+    if (body.done_on !== undefined && String(body.done_on).trim() === "") {
+      throw new HttpError(400, "done_on was sent empty. Leave it out to record today, or send a date.");
+    }
     const on = body.done_on ? new Date(body.done_on) : new Date();
     if (isNaN(on.getTime())) throw new HttpError(400, "done_on is not a valid date.");
     // QA-644: -196 validated only that the string parsed. done_on means "this happened", and every
     // other happened-date in this codebase refuses the future - Rule 25 on left_on, Rule 53 on
     // attendance, the daily log, actual_start. It is load-bearing twice over: `overdue` is computed
-    // as `!done_on && due_date < today`, so a milestone ticked into 2087 stops being overdue for
-    // sixty years, and the planning grid prints done_on ?? due_date, so it would read as a fact.
-    if (on.getTime() > Date.now() + 24 * 60 * 60 * 1000) {
+    // as `!done_on && due_date < today`, so a milestone ticked into the future stops being overdue,
+    // and the planning grid prints done_on ?? due_date, so it would read as a fact.
+    //
+    // QA-650 (-198): -197 cited those rules and then did not follow them - it compared raw
+    // milliseconds with 24h of slack, so TOMORROW'S DATE was accepted as already done while the
+    // message said "cannot be a future date". Every one of the rules it cites compares CALENDAR
+    // dates on the IST footing (QA-081: dayKey vs istToday), and so does this now. An empty string
+    // is also no longer treated as "no date given" further up - see the parse above.
+    if (dayKey(on).getTime() > istToday().getTime()) {
       throw new HttpError(400, "done_on cannot be a future date — it records something that has already happened. To record a target instead, edit the milestone's due date.");
     }
     (m as any).done_on = on;

@@ -105,6 +105,10 @@ function BatchesInner() {
     location?: string; program?: string; eps?: any; tooSoon?: boolean | null; scopedTo?: any;
   }>({});
   const { copied: planCopied, copy: copyPlan } = useCopied();
+  // -198: the strip's open/closed state lives here, not inside PlanningCreate, so the header's
+  // "Plan a batch" on the Batches tab can switch tab AND open the form in one click instead of
+  // landing the reader on a collapsed prompt that asks them to press the same words again.
+  const [planOpen, setPlanOpen] = useState(false);
   const [info, setInfo] = useState("");
 
   // Status is filtered CLIENT-side now so the pill counts always show the whole picture.
@@ -278,8 +282,11 @@ function BatchesInner() {
             {locations.map((l) => <option key={l._id} value={l._id}>{l.name}</option>)}
           </select>
           <Btn kind="ghost" onClick={() => setImp({})}>Import (Excel)</Btn>
-          {/* -196: "plan a batch pr sidha planning wala hi tab open ho" — no drawer in between. */}
-          <Btn kind="ghost" onClick={() => setTab("Planning")}>Plan a batch</Btn>
+          {/* -196: "plan a batch pr sidha planning wala hi tab open ho" — no drawer in between.
+              -198 (Umesh, screenshot): on the Planning tab this button sat directly above an
+              identical one in the strip. Two buttons with one name is the same complaint as the two
+              tables, so the header keeps it only where it is a way IN - on the Batches tab. */}
+          {tab === "Batches" && <Btn kind="ghost" onClick={() => { setTab("Planning"); setPlanOpen(true); }}>Plan a batch</Btn>}
           <Btn onClick={() => setDrawer(true)}>New Batch</Btn>
         </div>
       </div>
@@ -302,9 +309,9 @@ function BatchesInner() {
           <PlanningCreate
             locations={locations} planner={planner} runPlanner={runPlanner}
             plannerLocations={plannerLocations} plannerHidden={plannerHidden} plannerRoles={plannerRoles}
-            planCopied={planCopied} copyPlan={copyPlan}
+            planCopied={planCopied} copyPlan={copyPlan} open={planOpen} setOpen={setPlanOpen}
             onError={setError} onInfo={setInfo}
-            onCreated={() => { loadTrack(); load(); }} />
+            onCreated={() => { setPlanOpen(false); loadTrack(); load(); }} />
           <PlanningTable rows={track} role={role} onSaved={loadTrack} onError={setError} />
         </>
       )}
@@ -762,13 +769,13 @@ function BatchesInner() {
 //
 // The preview is a list, NOT a table. His words were "usme bhi proper only 1 table only", and a
 // second bordered grid above the grid is the thing he was pointing at.
-function PlanningCreate({ locations, planner, runPlanner, plannerLocations, plannerHidden, plannerRoles, planCopied, copyPlan, onError, onInfo, onCreated }: {
+function PlanningCreate({ locations, planner, runPlanner, plannerLocations, plannerHidden, plannerRoles, planCopied, copyPlan, open, setOpen, onError, onInfo, onCreated }: {
   locations: any[]; planner: any; runPlanner: (n: any) => void;
   plannerLocations: any[]; plannerHidden: number; plannerRoles: any[];
   planCopied: boolean; copyPlan: (t: string) => void;
+  open: boolean; setOpen: (v: boolean) => void;
   onError: (m: string) => void; onInfo: (m: string) => void; onCreated: () => void;
 }) {
-  const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const canSave = !!(planner.location && planner.program && planner.start) && !saving;
 
@@ -802,11 +809,20 @@ function PlanningCreate({ locations, planner, runPlanner, plannerLocations, plan
   async function save() {
     setSaving(true);
     try {
+      // QA-654 (-198): the batch is created WITH the trainer the preview counted the plan for.
+      // Found by running this on live: /api/plan-batch scopes the preview to whoever teaches at the
+      // centre now, so it correctly dropped the TOT steps for an already-certified trainer and
+      // showed six milestones - and then Save sent no trainer at all, so the plan attached to the
+      // batch was rebuilt with trainer null and came back with eight, TOT included. The plan a
+      // person approves has to be the plan that gets stored. This path is already guarded: the POST
+      // runs assertTrainerAvailableForBatch and trainerBookingWarnings, so a trainer who is not
+      // free is refused or warned rather than quietly attached.
       const res = await api("/api/batches", {
         method: "POST",
         json: {
           location: planner.location, program: planner.program, planned_start: planner.start,
           session: "Full Day",
+          ...(planner.scopedTo?.trainer?._id ? { trainer: planner.scopedTo.trainer._id } : {}),
           ...(planner.target ? { target_size: Number(planner.target) } : {}),
         },
       });
@@ -816,8 +832,7 @@ function PlanningCreate({ locations, planner, runPlanner, plannerLocations, plan
       if (id) await api(`/api/batches/${id}/milestones`, { method: "PATCH", json: { create: true } });
       onInfo(`${res?.item?.code ?? "Batch"} planned${res?.warning ? ` — ${res.warning}` : ""}`);
       runPlanner({ start: undefined, location: undefined, program: undefined, target: undefined });
-      setOpen(false);
-      onCreated();
+      onCreated();   // the page closes the strip - see setPlanOpen(false) at the call site
     } catch (e: any) { onError(String(e?.message ?? e)); }
     finally { setSaving(false); }
   }
@@ -911,7 +926,11 @@ function PlanningCreate({ locations, planner, runPlanner, plannerLocations, plan
       )}
       {planner.scopedTo?.trainer && (
         <p className="text-xs text-gray-500">
-          Using <b>{planner.scopedTo.trainer.name}</b>, who teaches here now.
+          Using <b>{planner.scopedTo.trainer.name}</b>, who teaches here now
+          {/* QA-654: this sentence used to describe only the CALCULATION while the saved batch got
+              nobody, so the stored checklist disagreed with the one on screen. It now describes the
+              result too, because that is what the save does. */}
+          {" "}— they will be assigned to this batch.
           {(planner.scopedTo.trainer.pipeline_status === "Certified" || planner.scopedTo.trainer.tot_done_on)
             && " They are already certified, so the TOT steps are not in this plan."}
         </p>
@@ -955,7 +974,12 @@ function PlanningCreate({ locations, planner, runPlanner, plannerLocations, plan
 // rows — it is the same date, not two copies of it. "Not needed" is his own word for a batch whose
 // trainer is already certified; the cell says it rather than sitting blank, because blank reads as
 // "nobody has done this yet".
-// QA-607: the client's "Back-dated Planning" headings, VERBATIM. The typos are his sheet's
+// QA-640: the client's "Back-dated Planning" headings, VERBATIM.
+// (These comments said QA-607 until -198. Ledger QA-607 is a DIFFERENT, still-open issue - plan
+//  sharing cannot be used on any batch that exists today - and the column work had no row of its
+//  own at all. A checker caught the mislabel as QA-619; the id was written from memory instead of
+//  read from the ledger. QA-653 is the row for the fact that the wrong id survived in twelve
+//  places, two of them e2e assertion names, so every wall run printed it.) The typos are his sheet's
 // ("verificaiton", "experiene") and they are kept deliberately - this map exists so a reader can
 // match a column here to a column there without wondering whether a tidier wording means the same
 // thing. Tidying it is exactly the edit that would put the doubt back.
@@ -1100,7 +1124,7 @@ function PlanningTable({ rows, role, onSaved, onError }: { rows: any[] | null; r
     } catch (e: any) { onError(String(e?.message ?? e)); }
   };
 
-  // QA-607 — Umesh, 2026-08-22, holding the "Back-dated Planning" tab of the client workbook next to
+  // QA-640 — Umesh, 2026-08-22, holding the "Back-dated Planning" tab of the client workbook next to
   // this screen: "yeh saare column hone chahiye". Every one of his eighteen columns was already
   // here; what was not here were his NAMES. The screen showed `Submitted`, `Approved`, `Fee paid`,
   // and `Starts`/`Ends` TWICE - once under TOT and once under Batch - so a person with the sheet in
@@ -1197,7 +1221,7 @@ function PlanningTable({ rows, role, onSaved, onError }: { rows: any[] | null; r
         {editMode && <> Dates on a dashed outline are yours to edit here; a greyed one is written where its
         gate is — open the trainer, and recording the stage there fills this in.</>}
       </p>
-      {/* QA-607: the same disclosure card the report uses (reports/page.tsx, and the pattern at
+      {/* QA-640: the same disclosure card the report uses (reports/page.tsx, and the pattern at
           admin/page.tsx:430). Its job is narrow and worth stating: a reader with the client's
           "Back-dated Planning" tab open should be able to match every column here to a column there
           with no doubt. So it quotes that sheet's headings VERBATIM — including their typos — rather
