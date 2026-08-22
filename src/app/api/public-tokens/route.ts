@@ -4,7 +4,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireRole, requireEdit, assertLocationInScope, isScoped, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, BatchMember, PublicToken } from "@/models";
-import { assertBatchInScope } from "@/lib/rules";
+import { assertBatchInScope, recipientKey } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
 // Admin/Ops management of public capability links (2026-08-11):
@@ -93,9 +93,11 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // the product able to explain why. So the revocation is scoped to the same recipient on the same
   // batch - re-sharing to a person still rotates THAT person's old link off, and nobody else's.
   //
-  // A recipient is identified by phone where there is one, and by name+role otherwise: contacts
-  // carry `phone`, not `email` (the contract's own measurement), but `phone` is optional on the
-  // schema and a centre may well have a named Owner with no number recorded.
+  // WHO a recipient is, is `recipientKey()` in lib/rules.ts and nowhere else. -191 answered that
+  // question here, inline, with the phone string - and a checker put the S1 straight back through
+  // it. This comment used to explain that phone-based rule; it is left corrected rather than
+  // deleted, because a comment describing a rule the code no longer has is worse than no comment
+  // (QA-606, learned two units ago on the same afternoon).
   if (purpose === "plan") {
     if (!body.batch) throw new HttpError(400, "batch is required for a plan link");
     await assertBatchInScope(user, String(body.batch));
@@ -109,18 +111,22 @@ export const POST = apiHandler(async (req: NextRequest) => {
     if (!rName) {
       throw new HttpError(400, "recipient_name is required — a plan link records who it was sent to, so it can be listed and revoked for that person alone.");
     }
-    // The scope key, used for BOTH the revocation and the duplicate check, because two different
-    // keys is how one of them ends up matching a row the other missed.
-    const scope: Record<string, unknown> = rPhone
-      ? { purpose: "plan", batch: body.batch, recipient_phone: rPhone }
-      : { purpose: "plan", batch: body.batch, recipient_name: rName, recipient_role_label: rRole };
-    await PublicToken.updateMany({ ...scope, active: true }, { $set: { active: false } });
+    // QA-611: the key is WHO, computed once by recipientKey() and stored, so the revocation is an
+    // exact match on an indexed field. -191 matched on the phone string and a centre recording one
+    // landline for its SPOC and its Principal had them cutting each other off - the S1 this unit
+    // exists to close, alive again through the line written to close it.
+    const rKey = recipientKey({
+      recipient_ref: body.recipient_ref, recipient_phone: rPhone,
+      recipient_name: rName, recipient_role_label: rRole,
+    });
+    await PublicToken.updateMany({ purpose: "plan", batch: body.batch, recipient_key: rKey, active: true }, { $set: { active: false } });
 
     const doc = await PublicToken.create({
       token: crypto.randomBytes(16).toString("hex"),
       purpose, batch: body.batch, allow_updates: !!body.allow_updates, created_by: user.id,
       recipient_name: rName, recipient_phone: rPhone || undefined,
       recipient_role_label: rRole, recipient_ref: body.recipient_ref || undefined,
+      recipient_key: rKey,
     });
     await audit({ entity: "Batch", entityId: body.batch, field: "plan_link", newValue: `shared with ${rName} (${rRole})${body.allow_updates ? " — link may tick status" : " — read-only"}`, actor: user.id });
     return NextResponse.json({ item: doc }, { status: 201 });

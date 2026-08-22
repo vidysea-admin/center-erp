@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser } from "@/lib/authz";
 import { Batch, Location, PublicToken } from "@/models";
-import { assertBatchInScope, planArtifact } from "@/lib/rules";
+import { assertBatchInScope, planArtifact, recipientKey } from "@/lib/rules";
+import { hasPermission } from "@/lib/permissions";
 
 // QA-152 part 2 (-82): the signed-in plan view. Read for anyone who can see the batch
 // (Rule 38 scope is the gate); editing goes through PATCH /api/batches/[id]/milestones.
@@ -22,21 +23,35 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   const art = await planArtifact(id);
 
   const links = await PublicToken.find({ purpose: "plan", batch: id, active: true })
-    .select("token allow_updates createdAt recipient_name recipient_phone recipient_role_label recipient_ref")
+    .select("token allow_updates createdAt recipient_name recipient_phone recipient_role_label recipient_ref recipient_key")
     .sort({ createdAt: -1 }).lean<any[]>();
 
-  const b = await Batch.findById(id).select("location").lean<any>();
-  const loc = b?.location ? await Location.findById(b.location)
-    .select("spoc_name spoc_phone principal_name principal_phone cluster_head_name cluster_head_phone contacts").lean<any>() : null;
-  const recipients: { ref: string; name: string; phone: string; role_label: string }[] = [];
-  const add = (ref: string, name?: string, phone?: string, role_label?: string) => {
-    const n = String(name ?? "").trim();
-    if (n) recipients.push({ ref, name: n, phone: String(phone ?? "").trim(), role_label: String(role_label ?? "Contact").trim() || "Contact" });
-  };
-  add("spoc", loc?.spoc_name, loc?.spoc_phone, "SPOC");
-  add("principal", loc?.principal_name, loc?.principal_phone, "Principal");
-  add("cluster_head", loc?.cluster_head_name, loc?.cluster_head_phone, "Cluster Head");
-  (loc?.contacts ?? []).forEach((c: any, i: number) => add(`contact:${i}`, c?.name, c?.phone, c?.role_label));
+  // QA-614: this endpoint is readable by anyone who passes assertBatchInScope - which includes a
+  // Trainer, for every batch they run. Centre staff names and personal phone numbers are not theirs
+  // to have, and the "Send to" list was gated in the UI only, which is not a gate. The right to see
+  // WHO COULD BE SENT the plan follows the right to send it: the same check POST /api/public-tokens
+  // makes before minting a link. Everyone else still gets the plan and their own share list.
+  const mayShare = ["Admin", "Operations", "Location"].includes(String(user.role))
+    && (user as any).can_edit !== false
+    && await hasPermission(user, "feedback.links");
+
+  const recipients: { ref: string; key: string; name: string; phone: string; role_label: string }[] = [];
+  if (mayShare) {
+    const b = await Batch.findById(id).select("location").lean<any>();
+    const loc = b?.location ? await Location.findById(b.location)
+      .select("spoc_name spoc_phone principal_name principal_phone cluster_head_name cluster_head_phone contacts").lean<any>() : null;
+    const add = (ref: string, name?: string, phone?: string, role_label?: string) => {
+      const n = String(name ?? "").trim();
+      if (!n) return;
+      const role = String(role_label ?? "Contact").trim() || "Contact";
+      const phoneStr = String(phone ?? "").trim();
+      recipients.push({ ref, key: recipientKey({ recipient_ref: ref, recipient_phone: phoneStr, recipient_name: n, recipient_role_label: role }), name: n, phone: phoneStr, role_label: role });
+    };
+    add("spoc", loc?.spoc_name, loc?.spoc_phone, "SPOC");
+    add("principal", loc?.principal_name, loc?.principal_phone, "Principal");
+    add("cluster_head", loc?.cluster_head_name, loc?.cluster_head_phone, "Cluster Head");
+    (loc?.contacts ?? []).forEach((c: any, i: number) => add(`contact:${i}`, c?.name, c?.phone, c?.role_label));
+  }
 
   return NextResponse.json({
     ...art,
@@ -44,9 +59,14 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     share: links[0] ? { token: links[0].token, allow_updates: !!links[0].allow_updates, created_at: links[0].createdAt } : null,
     shares: links.map((l) => ({
       token: l.token, allow_updates: !!l.allow_updates, created_at: l.createdAt,
-      recipient_name: l.recipient_name ?? null, recipient_phone: l.recipient_phone ?? null,
+      recipient_name: l.recipient_name ?? null,
+      // Same reason as the list above: a phone number is shown to whoever may send to it.
+      recipient_phone: mayShare ? (l.recipient_phone ?? null) : null,
       recipient_role_label: l.recipient_role_label ?? null, recipient_ref: l.recipient_ref ?? null,
+      // QA-611: the identity the screen compares on, so it never re-derives its own answer.
+      recipient_key: l.recipient_key ?? recipientKey(l),
     })),
     recipients,
+    may_share: mayShare,
   });
 });

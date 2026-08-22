@@ -199,7 +199,11 @@ export default function BatchPlanPage({ params }: { params: Promise<{ id: string
                     )}
                   </div>
 
-                  {canEdit && (
+                  {/* QA-614: `may_share` comes from the API, which applies the same check the mint
+                      endpoint does. The old gate was `canEdit` in this file only — and a gate that
+                      lives in the browser is not a gate: the endpoint was handing centre staff
+                      names and phone numbers to anyone who could see the batch, Trainers included. */}
+                  {data.may_share && (
                     <div>
                       <p className="mb-2 font-medium text-gray-700">Send to</p>
                       {(data.recipients ?? []).length === 0 ? (
@@ -207,7 +211,11 @@ export default function BatchPlanPage({ params }: { params: Promise<{ id: string
                       ) : (
                         <ul className="space-y-2">
                           {data.recipients.map((r: any) => {
-                            const has = (data.shares ?? []).find((s: any) => (r.phone && s.recipient_phone === r.phone) || (!r.phone && s.recipient_name === r.name && s.recipient_role_label === r.role_label));
+                            // QA-611: one identity, computed once on the server. This used to compare
+                            // phone strings here, which is how two people sharing a centre landline
+                            // read as one person - and how the same person with `+91 98…` on one
+                            // share and `098…` on the next read as two.
+                            const has = (data.shares ?? []).find((s: any) => s.recipient_key === r.key);
                             return (
                               <li key={r.ref} className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 p-2">
                                 <span className="font-medium">{r.name}</span>

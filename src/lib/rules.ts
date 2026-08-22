@@ -1719,6 +1719,38 @@ export type Basis = { key: string; label: string; date: Date | null; blocking?: 
 // download; the planner edits, the link holder reads (and ticks status only if the link was
 // minted with allow_updates). One shape for the signed-in page, the public page and the
 // export, built here so all three say the same thing.
+// QA-611 / QA-612 (-193): who a plan link belongs to, as ONE value, defined once.
+//
+// -191 scoped the revocation to the recipient's PHONE, and a checker put the S1 straight back
+// through it: a centre that records one landline for its SPOC and its Principal - which nothing in
+// the product prevents, since the Location phone fields take any string at all - had those two
+// people cutting each other's link off exactly as before. `{"spoc":404,"principal":200}`, the same
+// shape as this unit's own pre-fix evidence. It also missed the SAME person's earlier link four
+// ways: `+91 98…` against `098…` against bare digits, letter case in a name, and a phone filled in
+// after the first share.
+//
+// A phone number is not a person. `recipient_ref` IS one: it names the slot on the centre the
+// recipient was picked from ("spoc", "principal", "cluster_head", "contact:3"), it is unique per
+// centre, and it is already on the token. So it leads. The phone is a fallback for a recipient
+// typed rather than picked, canonicalised to its last ten digits so formatting cannot fork it; the
+// name+role is the last resort.
+//
+// The KEY IS STORED on the token, not recomputed at query time, so the revocation is an exact match
+// on an indexed field rather than an $or of shapes - and one definition is read by the route that
+// mints links, the endpoint that lists them, and the screen that decides whether someone already
+// has one. Three readers of "the same person" is how they start disagreeing (ARCHITECTURE §3).
+export function canonicalPhone(v: unknown): string {
+  const digits = String(v ?? "").replace(/\D/g, "");
+  return digits.length >= 10 ? digits.slice(-10) : digits;
+}
+export function recipientKey(r: { recipient_ref?: unknown; recipient_phone?: unknown; recipient_name?: unknown; recipient_role_label?: unknown }): string {
+  const ref = String(r.recipient_ref ?? "").trim();
+  if (ref) return `ref:${ref}`;
+  const phone = canonicalPhone(r.recipient_phone);
+  if (phone) return `phone:${phone}`;
+  return `named:${String(r.recipient_name ?? "").trim().toLowerCase()}|${String(r.recipient_role_label ?? "Contact").trim().toLowerCase()}`;
+}
+
 export async function planArtifact(batchId: string) {
   const batch = await Batch.findById(batchId)
     .populate("program", "name code")

@@ -1016,12 +1016,16 @@ const PublicTokenSchema = new Schema({
   recipient_phone: String,
   recipient_role_label: String,
   recipient_ref: String,        // "spoc" | "principal" | "cluster_head" | "contact:<index>"
+  // QA-611: WHO this link belongs to, as one stored value - see recipientKey() in lib/rules.ts.
+  // -191 revoked on the phone string and a centre with one landline for two people put the S1
+  // straight back; a phone number is not a person.
+  recipient_key: String,
   created_by: oid("User"),
 }, { timestamps: true });
 PublicTokenSchema.index({ purpose: 1, location: 1 });
 PublicTokenSchema.index({ purpose: 1, batch_member: 1 });
 // REQ-393: revocation is scoped to (batch, recipient), never to the batch alone.
-PublicTokenSchema.index({ purpose: 1, batch: 1, recipient_phone: 1 });
+PublicTokenSchema.index({ purpose: 1, batch: 1, recipient_key: 1 });
 
 // ---------- Feedback (2026-08-11: "हर बच्चा… feedback दे पाए") ----------
 const FeedbackSchema = new Schema({

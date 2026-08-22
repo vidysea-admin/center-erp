@@ -2164,9 +2164,21 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
 
       // His column order, his headings. A download that renames his columns is a download he has
       // to translate before he can use it.
-      ok("QA-526 (-174): his own headings are on the file, not the API field names",
-        !!exCols && ["SL#", "Location", "Job Role", "Batch", "Trainer Name", "TR ID", "Expected batch start"].every((h) => exCols.includes(h)),
+      // QA-607 (-192): the expected names moved with the screen. They are now the same words on
+      // both surfaces - the download used to say "TOT starts" where the screen said "Starts", which
+      // is one column with two names depending on where you looked (QA-565's defect, alive here).
+      // This pin reads the DOWNLOADED FILE, so it is the stronger of the two: the source scan in
+      // check-user-copy can only see what was written, this sees what arrives.
+      ok("QA-526 (-174) / QA-607: his own headings are on the file, not the API field names",
+        !!exCols && ["SL#", "Location", "Job Role", "Batch", "Trainer Name", "TR ID",
+          "TOT start date", "Expected batch start date", "Trainer available & ready for TOT",
+          "Registration & enrolment done on SIDH"].every((h) => exCols.includes(h)),
         JSON.stringify({ cols: (exCols ?? []).slice(0, 8) }));
+      // ...and no two of them are the same word. `Starts` and `Ends` each appeared twice on the
+      // screen for two different dates; a download that did the same would be unusable as a sheet.
+      ok("QA-607: no two columns of the download share a heading",
+        !!exCols && new Set(exCols).size === exCols.length,
+        JSON.stringify({ n: exCols?.length ?? null, unique: exCols ? new Set(exCols).size : null }));
 
       // The scoping landmine, measured from the scoped login itself. authz builds its $in from
       // .map(String) and mongoose does not cast inside a pipeline - four live defects came from
@@ -2643,9 +2655,66 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
     && planGet.shares.some((s) => s.recipient_name === rcpA.recipient_name && s.recipient_role_label === "SPOC")
     && planGet.shares.some((s) => s.recipient_name === rcpB.recipient_name && s.recipient_role_label === "Principal"),
     JSON.stringify((planGet.shares ?? []).map((s) => `${s.recipient_name}/${s.recipient_role_label}`)));
-  ok("REQ-392: ...and offers the centre's own people as recipients, so the admin picks rather than types",
-    Array.isArray(planGet.recipients),
-    JSON.stringify({ n: (planGet.recipients ?? []).length, sample: (planGet.recipients ?? [])[0] }));
+  // QA-613: this used to be `Array.isArray(...)` alone, which passes on an empty list - so the
+  // contract's recipient ORDER (SPOC, Principal, Cluster Head, then contacts[]) had no assertion at
+  // all. A pin that cannot fail is not a pin.
+  ok("REQ-392: ...and offers the centre's own people as recipients, in the contract's order, so the admin picks rather than types",
+    Array.isArray(planGet.recipients) && planGet.recipients.length > 0
+    && planGet.recipients.every((r) => r.name && r.role_label && r.ref && r.key)
+    && planGet.recipients.map((r) => r.ref).join(",") === planGet.recipients.map((r) => r.ref).sort((a, b) => {
+      const order = (x) => (x === "spoc" ? 0 : x === "principal" ? 1 : x === "cluster_head" ? 2 : 3 + Number(String(x).split(":")[1] ?? 0));
+      return order(a) - order(b);
+    }).join(","),
+    JSON.stringify({ n: (planGet.recipients ?? []).length, refs: (planGet.recipients ?? []).map((r) => r.ref) }));
+
+  // The suffix these three pins share. `s6` lives in e2e-sync.mjs, not here - I replaced one
+  // undefined name with another and the suite crashed before a single one of them ran.
+  const rs = "R" + Date.now().toString().slice(-6);
+  // QA-611 — the S1 SURVIVED -191 and a checker proved it: -191 revoked on the phone STRING, so a
+  // centre recording ONE landline for its SPOC and its Principal had them cutting each other off,
+  // exactly as before. Nothing prevents that: Location phone fields take any string at all.
+  const shared = "9" + Date.now().toString().slice(-9);
+  const twoOnOneNumber = [
+    { recipient_name: "Shared Line SPOC " + rs, recipient_phone: shared, recipient_role_label: "SPOC", recipient_ref: "contact:91" },
+    { recipient_name: "Shared Line Principal " + rs, recipient_phone: shared, recipient_role_label: "Principal", recipient_ref: "contact:92" },
+  ];
+  const tokA = (await req("POST", "/api/public-tokens", { purpose: "plan", batch: planBatch._id, ...twoOnOneNumber[0] }, 201)).data.item;
+  const tokB = (await req("POST", "/api/public-tokens", { purpose: "plan", batch: planBatch._id, ...twoOnOneNumber[1] }, 201)).data.item;
+  const sharedA = (await fetch(BASE + `/api/public/plan/${tokA.token}`)).status;
+  const sharedB = (await fetch(BASE + `/api/public/plan/${tokB.token}`)).status;
+  ok("QA-611: two people who share ONE phone number are two people - sending to the second does not cut off the first",
+    sharedA === 200 && sharedB === 200, JSON.stringify({ spoc: sharedA, principal: sharedB }));
+
+  // QA-612 — and the same person must still be recognised across the four ways a number drifts:
+  // +91 / leading 0 / bare digits, and a name typed in a different case.
+  const drift = "9" + Date.now().toString().slice(-9);
+  const t1 = (await req("POST", "/api/public-tokens", { purpose: "plan", batch: planBatch._id, recipient_name: "Drift Person " + rs, recipient_phone: drift, recipient_role_label: "Contact", recipient_ref: "contact:93" }, 201)).data.item;
+  const t2 = (await req("POST", "/api/public-tokens", { purpose: "plan", batch: planBatch._id, recipient_name: "DRIFT PERSON " + rs, recipient_phone: "+91 " + drift, recipient_role_label: "contact", recipient_ref: "contact:93" }, 201)).data.item;
+  ok("QA-612: the same person written differently is still the same person - the earlier link is replaced, not left live beside the new one",
+    (await fetch(BASE + `/api/public/plan/${t1.token}`)).status === 404
+    && (await fetch(BASE + `/api/public/plan/${t2.token}`)).status === 200,
+    JSON.stringify({ first: (await fetch(BASE + `/api/public/plan/${t1.token}`)).status, second: (await fetch(BASE + `/api/public/plan/${t2.token}`)).status }));
+
+  // QA-614 — centre staff names and personal phone numbers were handed to anyone who could see the
+  // batch, Trainers included; the picker was gated in the browser only, which is not a gate.
+  // The first draft of this pin let a non-200 satisfy it - and `planBatch` has no trainer, so on
+  // pre-fix code the Trainer simply could not see it and the pin PASSED without testing anything.
+  // A pin that passes before the fix is not a pin (QA-598, learned on this same file). So it now
+  // uses a batch the Trainer genuinely CAN see, and a 200 is required, not tolerated.
+  const planTrainerCookie = await loginAs("trainer.jpr03@vidysea.com", "CiOnly@123");
+  const trOwn = ((await (await fetch(BASE + "/api/batches", { headers: { cookie: planTrainerCookie } })).json()).items ?? [])[0];
+  // No plan is created here on purpose. The first attempt PATCHed one into existence and hit
+  // "A backward plan is made while the batch is in Planning" - a 409 the suite counts as a failure,
+  // for a step this pin never needed: the endpoint answers `may_share` and `recipients` whether or
+  // not the batch has a plan, and those two are the whole question.
+  const planAsTrainer = trOwn ? await fetch(BASE + `/api/batches/${trOwn._id}/plan`, { headers: { cookie: planTrainerCookie } }) : null;
+  const planAsTrainerJ = planAsTrainer?.status === 200 ? await planAsTrainer.json() : null;
+  ok("QA-614: a Trainer looking at a batch THEY run does not get the centre's staff list or their phone numbers",
+    !!trOwn && planAsTrainer?.status === 200
+    && planAsTrainerJ?.may_share === false
+    && (planAsTrainerJ?.recipients ?? []).length === 0
+    && (planAsTrainerJ?.shares ?? []).every((s) => s.recipient_phone === null),
+    JSON.stringify({ own: !!trOwn, status: planAsTrainer?.status, may_share: planAsTrainerJ?.may_share, n: (planAsTrainerJ?.recipients ?? []).length }));
   const tick2 = await fetch(BASE + `/api/public/plan/${linkRW.token}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: "trainer_found", done: true }) });
   const tick2J = await tick2.json();
   const tf = (tick2J.milestones ?? []).find((m) => m.key === "trainer_found");

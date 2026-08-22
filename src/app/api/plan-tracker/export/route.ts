@@ -31,6 +31,13 @@ export const GET = apiHandler(async (_req: NextRequest) => {
   const d = (v: unknown) => (v == null ? "" : v === "Not needed" ? "Not needed" : String(v).slice(0, 10));
   // His column order, his headings. A download that renames his columns is a download he has to
   // translate before he can use it.
+  //
+  // QA-607: these headings and the SCREEN's headings must be the same words. They were not - the
+  // download said "TOT starts" while the screen said "Starts", and "Available & ready for TOT"
+  // while the screen said "Ready for TOT". One column with two names depending on which surface
+  // you looked at is precisely the defect QA-565 closed on the report; it was alive here too.
+  // Anything below that has no screen column (Scheme, TR ID, NSDC remarks, Mobilised count) is an
+  // extra the download carries on purpose, not a renaming.
   const flat = rows.map((r: any) => ({
     "SL#": r.sl,
     "Location": r.location?.name ?? "",
@@ -39,22 +46,22 @@ export const GET = apiHandler(async (_req: NextRequest) => {
     "Batch": r.batch?.code ?? "",
     "Trainer Name": r.trainer?.name ?? "",
     "TR ID": r.trainer?.tr_id ?? "",
-    "Profile verified on SIDH": d(r.sidh_profile_verified_on),
+    "Trainer profile verified on SIDH": d(r.sidh_profile_verified_on),
     "Trainer eligibility check": d(r.eligibility_checked_on),
-    "Available & ready for TOT": d(r.ready_for_tot),
-    "Submitted to SSC/NSDC": d(r.nsdc_submitted_on),
-    "SSC/NSDC approved": d(r.nsdc_result_on),
+    "Trainer available & ready for TOT": d(r.ready_for_tot),
+    "Profile submitted to SSC/NSDC": d(r.nsdc_submitted_on),
+    "SSC/NSDC approved the profile": d(r.nsdc_result_on),
     "NSDC remarks": r.nsdc_remarks ?? "",
-    "TOT fee paid": d(r.paid_on),
-    "TOT starts": d(r.tot_start),
-    "TOT ends": d(r.tot_done_on),
-    "TOT result expected": d(r.tot_result_expected_on),
-    "Trainer mapped on SIDH": d(r.trainer_mapped_sidh),
-    "Mobilisation": r.mobilization?.status ?? "",
+    "TOT fee paid to SSC/NSDC": d(r.paid_on),
+    "TOT start date": d(r.tot_start),
+    "TOT end date": d(r.tot_done_on),
+    "TOT result & certificate expected": d(r.tot_result_expected_on),
+    "Trainer mapped on SIDH portal": d(r.trainer_mapped_sidh),
+    "Mobilisation done for this batch": r.mobilization?.status ?? "",
     "Mobilised count": r.mobilization?.count ?? 0,
-    "Registration & enrolment done": d(r.enrollment_done),
-    "Expected batch start": d(r.planned_start),
-    "Expected batch end": d(r.planned_end),
+    "Registration & enrolment done on SIDH": d(r.enrollment_done),
+    "Expected batch start date": d(r.planned_start),
+    "Expected batch end date": d(r.planned_end),
   }));
 
   const wb = XLSX.utils.book_new();

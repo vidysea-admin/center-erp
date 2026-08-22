@@ -859,6 +859,34 @@ function BatchesInner() {
 // rows — it is the same date, not two copies of it. "Not needed" is his own word for a batch whose
 // trainer is already certified; the cell says it rather than sitting blank, because blank reads as
 // "nobody has done this yet".
+// QA-607: the client's "Back-dated Planning" headings, VERBATIM. The typos are his sheet's
+// ("verificaiton", "experiene") and they are kept deliberately - this map exists so a reader can
+// match a column here to a column there without wondering whether a tidier wording means the same
+// thing. Tidying it is exactly the edit that would put the doubt back.
+// Source: AVPL - RPL (Recognition of Prior Learning) Project · tab "Back-dated Planning", row 1.
+const PLAN_COLUMN_SOURCE: Record<string, string> = {
+  sl: "SL#",
+  location: "Location",
+  job_role: "Job Role",
+  trainer: "Trainer Name",
+  sidh_profile_verified_on: "Trainer Profile/documents etc verificaiton and Generate TR ID and experiene letter (Industry + Teaching) on SIDH portal.",
+  eligibility_checked_on: "Trainer Eligibility Check? Yes/No",
+  ready_for_tot: "Trainer Available & Ready for TOT?",
+  nsdc_submitted_on: "Trainer profile submitted Date to SSC/NSDC?",
+  nsdc_result_on: "Is SSC/NSDC approved the trainer profile for TOT?",
+  paid_on: "Approved candidate TOT fee paid to SSC/NSDC?",
+  tot_start: "Start date for TOT?",
+  tot_done_on: "End date for TOT?",
+  tot_result_expected_on: "Expected date of TOT result and certificate?",
+  trainer_mapped_sidh: "Date for Trainer Mapping on SIDH Portal?",
+  mobilization: "Is Mobilization done for this batch?",
+  enrollment_done: "Dates for candidates registration & enrollment done on SIDH portal?",
+  planned_start: "Expected Batch Start date",
+  planned_end: "Expected Batch End Date",
+  // `batch` has no counterpart: the sheet identifies a row by centre + job role and never names the
+  // batch. It is ours, and saying so is more honest than inventing a heading for it.
+};
+
 function PlanningTable({ rows, onSaved, onError }: { rows: any[] | null; onSaved: () => void; onError: (m: string) => void }) {
   const [editing, setEditing] = useState<{ id: string; field: string } | null>(null);
   const [value, setValue] = useState("");
@@ -889,26 +917,45 @@ function PlanningTable({ rows, onSaved, onError }: { rows: any[] | null; onSaved
     );
   };
 
+  // QA-607 — Umesh, 2026-08-22, holding the "Back-dated Planning" tab of the client workbook next to
+  // this screen: "yeh saare column hone chahiye". Every one of his eighteen columns was already
+  // here; what was not here were his NAMES. The screen showed `Submitted`, `Approved`, `Fee paid`,
+  // and `Starts`/`Ends` TWICE - once under TOT and once under Batch - so a person with the sheet in
+  // hand could not find their own columns, and two different dates answered to the same word.
+  //
+  // This is QA-565 again, on a second table. There it was `APPR.` for `Approved` and his own
+  // argument settled it: the table already offers resize, hide and horizontal scroll, so the width
+  // an abbreviation saves was always the reader's to spend. And there, as here, the EXPORT already
+  // wrote the full names - so one column had two names depending on which surface you looked at.
+  //
+  // PLAN_COLUMN_SOURCE below carries his sheet's heading VERBATIM for each column, typos and all
+  // ("verificaiton", "experiene"), because its job is to let a reader match this screen to that
+  // sheet with no doubt at all. It is rendered in the disclosure card under the table.
+  //
+  // The `group:` row is gone on purpose. Groups existed to give the short labels their meaning
+  // ("Starts" under "TOT"); once each label says what it is, a grouping row is decoration that
+  // his sheet does not have - and it was groups plus repeated labels that let one Columns-picker
+  // entry weld two different dates together (QA-580).
   const columns: any[] = [
     { key: "sl", label: "SL#", minWidth: 52, render: (r: any) => r.sl },
     { key: "location", label: "Location", minWidth: 200, sortable: true, sortValue: (r: any) => r.location?.name ?? "", filterText: (r: any) => r.location?.name ?? "", render: (r: any) => r.location?.name ?? "—" },
     { key: "job_role", label: "Job Role", minWidth: 170, sortable: true, filterText: (r: any) => `${r.job_role ?? ""} ${r.scheme ?? ""}`, render: (r: any) => <>{r.job_role ?? "—"}{r.scheme && <span className="block text-[10px] text-gray-400">{r.scheme}</span>}</> },
     { key: "batch", label: "Batch", minWidth: 150, filterText: (r: any) => r.batch?.code ?? "", render: (r: any) => <Link className="text-blue-700 hover:underline" href={`/batches/${r.batch._id}`}>{r.batch.code}</Link> },
-    { key: "trainer", label: "Trainer", minWidth: 160, sortable: true, sortValue: (r: any) => r.trainer?.name ?? "", filterText: (r: any) => `${r.trainer?.name ?? ""} ${r.trainer?.tr_id ?? ""}`, render: (r: any) => r.trainer ? <>{r.trainer.name}{r.trainer.tr_id && <span className="block text-[10px] text-gray-400">{r.trainer.tr_id}</span>}</> : <span className="text-amber-700">no trainer</span> },
-    { key: "sidh_profile_verified_on", group: "Trainer preparation", label: "Profile on SIDH", minWidth: 132, render: (r: any) => cell(r, "sidh_profile_verified_on") },
-    { key: "eligibility_checked_on", group: "Trainer preparation", label: "Eligibility check", minWidth: 132, render: (r: any) => cell(r, "eligibility_checked_on") },
-    { key: "ready_for_tot", group: "Trainer preparation", label: "Ready for TOT", minWidth: 124, render: (r: any) => d(r.ready_for_tot) },
-    { key: "nsdc_submitted_on", group: "SSC / NSDC", label: "Submitted", minWidth: 118, render: (r: any) => d(r.nsdc_submitted_on) },
-    { key: "nsdc_result_on", group: "SSC / NSDC", label: "Approved", minWidth: 118, render: (r: any) => <>{d(r.nsdc_result_on)}{r.nsdc_remarks && <span className="block text-[10px] text-amber-700" title={r.nsdc_remarks}>remarks</span>}</> },
-    { key: "paid_on", group: "SSC / NSDC", label: "Fee paid", minWidth: 112, render: (r: any) => d(r.paid_on) },
-    { key: "tot_start", group: "TOT", label: "Starts", minWidth: 112, render: (r: any) => d(r.tot_start) },
-    { key: "tot_done_on", group: "TOT", label: "Ends", minWidth: 112, render: (r: any) => d(r.tot_done_on) },
-    { key: "tot_result_expected_on", group: "TOT", label: "Result expected", minWidth: 136, render: (r: any) => cell(r, "tot_result_expected_on") },
-    { key: "trainer_mapped_sidh", group: "Batch", label: "Mapped on SIDH", minWidth: 132, render: (r: any) => d(r.trainer_mapped_sidh) },
-    { key: "mobilization", group: "Batch", label: "Mobilisation", minWidth: 132, filterText: (r: any) => r.mobilization?.status ?? "", render: (r: any) => <>{r.mobilization.status}{r.mobilization.count > 0 && <span className="text-gray-400"> · {r.mobilization.count}</span>}</> },
-    { key: "enrollment_done", group: "Batch", label: "Enrolment done", minWidth: 132, render: (r: any) => d(r.enrollment_done) },
-    { key: "planned_start", group: "Batch", label: "Starts", minWidth: 112, sortable: true, sortValue: (r: any) => r.planned_start ?? "", render: (r: any) => d(r.planned_start) },
-    { key: "planned_end", group: "Batch", label: "Ends", minWidth: 112, render: (r: any) => d(r.planned_end) },
+    { key: "trainer", label: "Trainer Name", minWidth: 160, sortable: true, sortValue: (r: any) => r.trainer?.name ?? "", filterText: (r: any) => `${r.trainer?.name ?? ""} ${r.trainer?.tr_id ?? ""}`, render: (r: any) => r.trainer ? <>{r.trainer.name}{r.trainer.tr_id && <span className="block text-[10px] text-gray-400">{r.trainer.tr_id}</span>}</> : <span className="text-amber-700">no trainer</span> },
+    { key: "sidh_profile_verified_on", label: "Trainer profile verified on SIDH", minWidth: 210, render: (r: any) => cell(r, "sidh_profile_verified_on") },
+    { key: "eligibility_checked_on", label: "Trainer eligibility check", minWidth: 170, render: (r: any) => cell(r, "eligibility_checked_on") },
+    { key: "ready_for_tot", label: "Trainer available & ready for TOT", minWidth: 218, render: (r: any) => d(r.ready_for_tot) },
+    { key: "nsdc_submitted_on", label: "Profile submitted to SSC/NSDC", minWidth: 202, render: (r: any) => d(r.nsdc_submitted_on) },
+    { key: "nsdc_result_on", label: "SSC/NSDC approved the profile", minWidth: 202, render: (r: any) => <>{d(r.nsdc_result_on)}{r.nsdc_remarks && <span className="block text-[10px] text-amber-700" title={r.nsdc_remarks}>remarks</span>}</> },
+    { key: "paid_on", label: "TOT fee paid to SSC/NSDC", minWidth: 176, render: (r: any) => d(r.paid_on) },
+    { key: "tot_start", label: "TOT start date", minWidth: 122, render: (r: any) => d(r.tot_start) },
+    { key: "tot_done_on", label: "TOT end date", minWidth: 118, render: (r: any) => d(r.tot_done_on) },
+    { key: "tot_result_expected_on", label: "TOT result & certificate expected", minWidth: 216, render: (r: any) => cell(r, "tot_result_expected_on") },
+    { key: "trainer_mapped_sidh", label: "Trainer mapped on SIDH portal", minWidth: 202, render: (r: any) => d(r.trainer_mapped_sidh) },
+    { key: "mobilization", label: "Mobilisation done for this batch", minWidth: 206, filterText: (r: any) => r.mobilization?.status ?? "", render: (r: any) => <>{r.mobilization.status}{r.mobilization.count > 0 && <span className="text-gray-400"> · {r.mobilization.count}</span>}</> },
+    { key: "enrollment_done", label: "Registration & enrolment done on SIDH", minWidth: 250, render: (r: any) => d(r.enrollment_done) },
+    { key: "planned_start", label: "Expected batch start date", minWidth: 176, sortable: true, sortValue: (r: any) => r.planned_start ?? "", render: (r: any) => d(r.planned_start) },
+    { key: "planned_end", label: "Expected batch end date", minWidth: 170, render: (r: any) => d(r.planned_end) },
   ];
 
   return (
@@ -923,6 +970,21 @@ function PlanningTable({ rows, onSaved, onError }: { rows: any[] | null; onSaved
         trainer&apos;s own — they are stored once on the trainer, so a trainer running two batches shows
         the same date on both rows rather than two copies that can drift apart.
       </p>
+      {/* QA-607: the same disclosure card the report uses (reports/page.tsx, and the pattern at
+          admin/page.tsx:430). Its job is narrow and worth stating: a reader with the client's
+          "Back-dated Planning" tab open should be able to match every column here to a column there
+          with no doubt. So it quotes that sheet's headings VERBATIM — including their typos — rather
+          than a tidied paraphrase, which is the one thing that would put the doubt back. */}
+      <details className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
+        <summary className="cursor-pointer text-[11px] font-semibold uppercase tracking-wider text-gray-500">
+          Which column of the planning sheet is which
+        </summary>
+        <div className="mt-2 space-y-1 text-[11px] leading-relaxed text-gray-600">
+          {columns.filter((c: any) => PLAN_COLUMN_SOURCE[c.key]).map((c: any) => (
+            <div key={c.key}><b>{c.label}</b> — {PLAN_COLUMN_SOURCE[c.key]}</div>
+          ))}
+        </div>
+      </details>
       <DataTable storageKey="plan-tracker" rows={rows ?? []} loading={rows === null} columns={columns}
         cardTitle={(r: any) => <>{r.batch.code} <span className="text-xs text-gray-400">· {r.location?.name}</span></>} />
     </div>

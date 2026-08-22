@@ -750,6 +750,67 @@ for (const file of walk(root)) {
 // Without it a reader adds twenty rows by eye, which is the habit this report exists to end.
 //
 // A STRUCTURE check, not an API one: no request can tell you whether a number reached the screen.
+// QA-607 (-192) — Umesh, 2026-08-22, with the client's "Back-dated Planning" tab open beside the
+// Planning table: "yeh saare column hone chahiye". All eighteen were already there; his NAMES were
+// not. The screen said `Submitted` / `Approved` / `Fee paid`, and `Starts` and `Ends` each appeared
+// TWICE - once for TOT and once for the batch - so two different dates answered to one word and a
+// reader holding the sheet could not find their own columns.
+//
+// Three things are pinned, because all three could come back quietly:
+//   (a) every one of his eighteen headings is carried VERBATIM, so the disclosure card can prove
+//       which column is which. Typos included - his sheet says "verificaiton" and "experiene", and
+//       tidying them is the edit that puts the doubt back;
+//   (b) no two columns share a label - that is the condition that made `Starts` ambiguous, and it
+//       is also what let one Columns-picker entry weld two dates together (QA-580);
+//   (c) the SCREEN label and the EXPORT heading are the same words for every column. They were not:
+//       the download said "TOT starts" where the screen said "Starts". One column with two names
+//       depending on the surface is exactly QA-565, which was closed on the report and was still
+//       alive here.
+{
+  const planSrc = stripComments(fs.readFileSync(path.join(root, "app/(app)/batches/page.tsx"), "utf8"));
+  const planExportSrc = stripComments(fs.readFileSync(path.join(root, "app/api/plan-tracker/export/route.ts"), "utf8"));
+
+  const SHEET_HEADINGS = [
+    "SL#", "Location", "Job Role", "Trainer Name",
+    "Trainer Profile/documents etc verificaiton and Generate TR ID and experiene letter (Industry + Teaching) on SIDH portal.",
+    "Trainer Eligibility Check? Yes/No",
+    "Trainer Available & Ready for TOT?",
+    "Trainer profile submitted Date to SSC/NSDC?",
+    "Is SSC/NSDC approved the trainer profile for TOT?",
+    "Approved candidate TOT fee paid to SSC/NSDC?",
+    "Start date for TOT?", "End date for TOT?",
+    "Expected date of TOT result and certificate?",
+    "Date for Trainer Mapping on SIDH Portal?",
+    "Is Mobilization done for this batch?",
+    "Dates for candidates registration & enrollment done on SIDH portal?",
+    "Expected Batch Start date", "Expected Batch End Date",
+  ];
+  const missingHeadings = SHEET_HEADINGS.filter((h) => !planSrc.includes(h));
+  if (!missingHeadings.length) passed++;
+  else { failed++; pushStructural("app/(app)/batches: the planning table no longer carries " + missingHeadings.length + " of the client's own column headings verbatim, so the card cannot prove which column is which: " + JSON.stringify(missingHeadings.slice(0, 3)) + " - QA-607. His sheet's typos are part of the quote."); }
+
+  // The labels of the plan-tracker column list. Scoped to the block between `const columns` and its
+  // close, so the tab's OTHER tables cannot lend it a label or steal one.
+  const planCols = planSrc.slice(planSrc.indexOf("const columns: any[] = ["));
+  const planColBlock = planCols.slice(0, planCols.indexOf(String.fromCharCode(10) + "  ];"));
+  const planLabels = [...planColBlock.matchAll(/label: "([^"]+)"/g)].map((m) => m[1]);
+  const dupLabels = planLabels.filter((l, i) => planLabels.indexOf(l) !== i);
+  if (planLabels.length >= 18 && !dupLabels.length) passed++;
+  else { failed++; pushStructural("app/(app)/batches: the planning table has " + planLabels.length + " columns and these labels repeat: " + JSON.stringify([...new Set(dupLabels)]) + " - QA-607. Two different dates answering to one word is what sent Umesh back to his spreadsheet; `Starts` used to mean the TOT's and the batch's."); }
+
+  // One column, one name, on both surfaces.
+  const exportOnly = planLabels.filter((l) => l !== "Batch" && l !== "SL#" && !planExportSrc.includes(`"${l}"`));
+  if (!exportOnly.length) passed++;
+  else { failed++; pushStructural("app/api/plan-tracker/export: " + exportOnly.length + " screen column(s) are named differently in the download: " + JSON.stringify(exportOnly.slice(0, 4)) + " - QA-607 / QA-565. Downloading the table should not rename its columns."); }
+
+  // The card itself, closed by default - it is reference, consulted once, not a warning.
+  const planCard = /<details[^>]*>[\s\S]{0,400}?Which column of the planning sheet is which/.test(planSrc)
+    && /PLAN_COLUMN_SOURCE\[c\.key\]/.test(planSrc)
+    && !/<details open[\s\S]{0,400}?Which column of the planning sheet/.test(planSrc);
+  if (planCard) passed++;
+  else { failed++; pushStructural("app/(app)/batches: the planning table has no collapsed card mapping each column to the client's sheet heading - QA-607. Without it the verbatim headings are stored and never shown, which is the same as not having them."); }
+}
+
 // stripComments runs first, so writing the promise in a comment cannot satisfy it.
 {
   const reportSrc = stripComments(fs.readFileSync(path.join(root, "app/(app)/reports/page.tsx"), "utf8"));
