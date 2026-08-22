@@ -2594,7 +2594,14 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
   const xlBuf = Buffer.from(await xl.arrayBuffer());
   ok("-82: Excel export is a real xlsx (PK zip header, xlsx content-type, filename carries the batch code)", xl.status === 200 && xlBuf.slice(0, 2).toString() === "PK" && /spreadsheetml/.test(xl.headers.get("content-type") ?? "") && (xl.headers.get("content-disposition") ?? "").includes(planBatch.code), `status=${xl.status} ct=${xl.headers.get("content-type")} len=${xlBuf.length}`);
   // share: read-only link
-  const linkRO = (await req("POST", "/api/public-tokens", { purpose: "plan", batch: planBatch._id }, 201)).data.item;
+  // REQ-392: a plan share records WHO it went to. These two named people carry the -82 assertions
+  // below unchanged - re-sharing to the SAME person still rotates that person's old link off - and
+  // then QA-558 uses them to prove the thing that used to be broken: sending to one must not cut
+  // off the other.
+  const rcpA = { recipient_name: "Plan SPOC A", recipient_phone: "9" + Date.now().toString().slice(-9), recipient_role_label: "SPOC", recipient_ref: "spoc" };
+  const rcpB = { recipient_name: "Plan Principal B", recipient_phone: "8" + Date.now().toString().slice(-9), recipient_role_label: "Principal", recipient_ref: "principal" };
+  await req("POST", "/api/public-tokens", { purpose: "plan", batch: planBatch._id, ...rcpA, recipient_name: "" }, 400); // REQ-392: a share needs a person
+  const linkRO = (await req("POST", "/api/public-tokens", { purpose: "plan", batch: planBatch._id, ...rcpA }, 201)).data.item;
   ok("-82: a plan link is minted (32-hex, purpose plan, read-only by default)", /^[a-f0-9]{32}$/.test(linkRO.token) && linkRO.purpose === "plan" && linkRO.allow_updates === false, JSON.stringify({ t: linkRO.token?.length, p: linkRO.purpose, u: linkRO.allow_updates }));
   const pub = await fetch(BASE + `/api/public/plan/${linkRO.token}`);
   const pubJ = await pub.json();
@@ -2605,8 +2612,40 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
   ok("-82: the public link also downloads the Excel", pubXl.status === 200 && /spreadsheetml/.test(pubXl.headers.get("content-type") ?? ""), `status=${pubXl.status}`);
   ok("-82: GET /plan now shows the active share link", (await req("GET", `/api/batches/${planBatch._id}/plan`)).data.share?.token === linkRO.token);
   // re-share as status-updatable: old link dies, new one ticks
-  const linkRW = (await req("POST", "/api/public-tokens", { purpose: "plan", batch: planBatch._id, allow_updates: true }, 201)).data.item;
-  ok("-82: re-sharing switches the old link off", (await fetch(BASE + `/api/public/plan/${linkRO.token}`)).status === 404);
+  const linkRW = (await req("POST", "/api/public-tokens", { purpose: "plan", batch: planBatch._id, allow_updates: true, ...rcpA }, 201)).data.item;
+  ok("-82: re-sharing to the SAME person switches that person's old link off", (await fetch(BASE + `/api/public/plan/${linkRO.token}`)).status === 404);
+
+  // QA-558 / REQ-393 — the sharpest rule in the sharing contract, and the pin the contract itself
+  // specified: "a test that shares to two different recipients and asserts both links stay active
+  // fails now and passes after". Before this, public-tokens/route.ts revoked by BATCH, so sending
+  // the Principal their plan silently killed the SPOC's working link and told neither of them. The
+  // first symptom would have been a centre-side person reporting a dead link days later.
+  const linkB = (await req("POST", "/api/public-tokens", { purpose: "plan", batch: planBatch._id, allow_updates: true, ...rcpB }, 201)).data.item;
+  const aStillUp = await fetch(BASE + `/api/public/plan/${linkRW.token}`);
+  const bUp = await fetch(BASE + `/api/public/plan/${linkB.token}`);
+  ok("QA-558: sharing with a SECOND person leaves the first person's link working",
+    aStillUp.status === 200 && bUp.status === 200,
+    JSON.stringify({ first: aStillUp.status, second: bUp.status }));
+  // ...and revocation is still real, scoped to the one person it belongs to. Re-shared to B rather
+  // than to A on purpose: A's link is what the -82 assertions below go on to tick, and a pin that
+  // quietly breaks the tests after it is a pin that will be deleted rather than understood.
+  const linkB2 = (await req("POST", "/api/public-tokens", { purpose: "plan", batch: planBatch._id, allow_updates: true, ...rcpB }, 201)).data.item;
+  const bOld = (await fetch(BASE + `/api/public/plan/${linkB.token}`)).status;
+  const bNew = (await fetch(BASE + `/api/public/plan/${linkB2.token}`)).status;
+  const aAfter = (await fetch(BASE + `/api/public/plan/${linkRW.token}`)).status;
+  ok("QA-558: re-sharing to the second person kills ONLY that person's old link — the first person's is untouched",
+    bOld === 404 && bNew === 200 && aAfter === 200,
+    JSON.stringify({ oldB: bOld, newB: bNew, A: aAfter }));
+  // REQ-392: the screen can now answer "who has what" before anything is sent.
+  const planGet = (await req("GET", `/api/batches/${planBatch._id}/plan`)).data;
+  ok("REQ-392: the plan lists every live share WITH the person it went to",
+    (planGet.shares ?? []).length === 2
+    && planGet.shares.some((s) => s.recipient_name === rcpA.recipient_name && s.recipient_role_label === "SPOC")
+    && planGet.shares.some((s) => s.recipient_name === rcpB.recipient_name && s.recipient_role_label === "Principal"),
+    JSON.stringify((planGet.shares ?? []).map((s) => `${s.recipient_name}/${s.recipient_role_label}`)));
+  ok("REQ-392: ...and offers the centre's own people as recipients, so the admin picks rather than types",
+    Array.isArray(planGet.recipients),
+    JSON.stringify({ n: (planGet.recipients ?? []).length, sample: (planGet.recipients ?? [])[0] }));
   const tick2 = await fetch(BASE + `/api/public/plan/${linkRW.token}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: "trainer_found", done: true }) });
   const tick2J = await tick2.json();
   const tf = (tick2J.milestones ?? []).find((m) => m.key === "trainer_found");

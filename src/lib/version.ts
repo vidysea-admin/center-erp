@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-190";
+export const RELEASE = "2026.08.14-191";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,18 @@ export const RELEASE = "2026.08.14-190";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-191 makes a shared plan belong to a PERSON. The batch plan screen now shows who already has " +
+  "the plan - their name, their role at the centre, their number and their own link - and, beside " +
+  "it, the people that centre records, so a plan is sent by picking a person rather than by typing " +
+  "one. That answers the question the product could not answer before: who is this going to, seen " +
+  "before it goes. It also closes something that would have gone wrong quietly the day plans were " +
+  "sent to more than one person: a link was cancelled for the whole batch, so sending the plan to " +
+  "the Principal would have killed the SPOC working link and told neither of them - the first sign " +
+  "would have been someone reporting a dead link days later. Re-sending now replaces only that " +
+  "person link and leaves everyone else untouched.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-190 makes two more refusals leave a mark, and puts a guard on a word. If a sheet source was " +
   "set up with no column mapping at all, or with none of its columns marked as the identifier, the " +
   "run was correctly refused but nothing was written down - so the source went on displaying the " +
@@ -25,10 +37,7 @@ export const RELEASE_NOTE_CURRENT =
   "line whose registration number is claimed by two centres is skipped ENTIRELY, while a line whose " +
   "job role cannot be placed keeps its centre details and loses only its job-role figures. That " +
   "distinction was written last release and nothing was checking it, so it could have been reworded " +
-  "away without anything failing.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "away without anything failing." +
   "-189 fixes three edges of the last two releases, all found by an independent check. If a sheet " +
   "had TWO columns with the same heading and that heading was in use, the sync quietly read the " +
   "second one and reported success - so a government approval could land against the wrong job " +

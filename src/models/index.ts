@@ -1003,10 +1003,25 @@ const PublicTokenSchema = new Schema({
   otp_attempts: { type: Number, default: 0 },
   otp_verified: { type: Boolean, default: false },
   active: { type: Boolean, default: true },
+  // REQ-392 (QA-557): a plan share belongs to a PERSON, not only to a batch. Without this the
+  // system cannot answer "who has what", because it never recorded who it was for - and worse,
+  // it cannot tell one recipient's link from another's when revoking (REQ-393 / QA-558).
+  //
+  // The recipient is COPIED, not referenced. `Location.contacts[]` is an editable free-text array;
+  // if the admin later renames or removes a contact, a link already in someone's hands must still
+  // say who it was sent to. `recipient_ref` records where it came from for the UI's benefit only.
+  // `role_label` is free text by design (the 2026-08-11 meeting made it so) and REQ-394 requires an
+  // unrecognised label to degrade to read-only-everything, never to an empty page.
+  recipient_name: String,
+  recipient_phone: String,
+  recipient_role_label: String,
+  recipient_ref: String,        // "spoc" | "principal" | "cluster_head" | "contact:<index>"
   created_by: oid("User"),
 }, { timestamps: true });
 PublicTokenSchema.index({ purpose: 1, location: 1 });
 PublicTokenSchema.index({ purpose: 1, batch_member: 1 });
+// REQ-393: revocation is scoped to (batch, recipient), never to the batch alone.
+PublicTokenSchema.index({ purpose: 1, batch: 1, recipient_phone: 1 });
 
 // ---------- Feedback (2026-08-11: "हर बच्चा… feedback दे पाए") ----------
 const FeedbackSchema = new Schema({

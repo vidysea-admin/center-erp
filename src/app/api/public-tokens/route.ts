@@ -85,18 +85,44 @@ export const POST = apiHandler(async (req: NextRequest) => {
   }
 
   // QA-152 part 2 (-82): one link per batch plan; re-minting rotates the old one off.
+  //
+  // REQ-392 / REQ-393 (QA-557, QA-558): that rotation was correct while a plan had exactly one
+  // link. Once a plan is shared PERSON-WISE it becomes a defect, and a quiet one: sending the
+  // Principal their plan would deactivate the SPOC's working link, with nothing telling either of
+  // them. The first symptom is a centre-side person reporting a dead link days later and nothing in
+  // the product able to explain why. So the revocation is scoped to the same recipient on the same
+  // batch - re-sharing to a person still rotates THAT person's old link off, and nobody else's.
+  //
+  // A recipient is identified by phone where there is one, and by name+role otherwise: contacts
+  // carry `phone`, not `email` (the contract's own measurement), but `phone` is optional on the
+  // schema and a centre may well have a named Owner with no number recorded.
   if (purpose === "plan") {
     if (!body.batch) throw new HttpError(400, "batch is required for a plan link");
     await assertBatchInScope(user, String(body.batch));
     const b = await Batch.findById(body.batch).select("plan_enabled code").lean<any>();
     if (!b) throw new HttpError(404, "Batch not found");
     if (!b.plan_enabled) throw new HttpError(409, "This batch has no plan yet — create one first.");
-    await PublicToken.updateMany({ purpose: "plan", batch: body.batch, active: true }, { $set: { active: false } });
+
+    const rName = String(body.recipient_name ?? "").trim();
+    const rPhone = String(body.recipient_phone ?? "").trim();
+    const rRole = String(body.recipient_role_label ?? "").trim() || "Contact";
+    if (!rName) {
+      throw new HttpError(400, "recipient_name is required — a plan link records who it was sent to, so it can be listed and revoked for that person alone.");
+    }
+    // The scope key, used for BOTH the revocation and the duplicate check, because two different
+    // keys is how one of them ends up matching a row the other missed.
+    const scope: Record<string, unknown> = rPhone
+      ? { purpose: "plan", batch: body.batch, recipient_phone: rPhone }
+      : { purpose: "plan", batch: body.batch, recipient_name: rName, recipient_role_label: rRole };
+    await PublicToken.updateMany({ ...scope, active: true }, { $set: { active: false } });
+
     const doc = await PublicToken.create({
       token: crypto.randomBytes(16).toString("hex"),
       purpose, batch: body.batch, allow_updates: !!body.allow_updates, created_by: user.id,
+      recipient_name: rName, recipient_phone: rPhone || undefined,
+      recipient_role_label: rRole, recipient_ref: body.recipient_ref || undefined,
     });
-    await audit({ entity: "Batch", entityId: body.batch, field: "plan_link", newValue: `shared${body.allow_updates ? " (link may tick status)" : " (read-only)"}`, actor: user.id });
+    await audit({ entity: "Batch", entityId: body.batch, field: "plan_link", newValue: `shared with ${rName} (${rRole})${body.allow_updates ? " — link may tick status" : " — read-only"}`, actor: user.id });
     return NextResponse.json({ item: doc }, { status: 201 });
   }
 

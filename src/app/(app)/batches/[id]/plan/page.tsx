@@ -32,12 +32,22 @@ export default function BatchPlanPage({ params }: { params: Promise<{ id: string
     catch (e: any) { setError(e.message); }
     finally { setBusy(false); }
   }
-  async function share(allow_updates: boolean) {
+  // REQ-392: a share is to a PERSON now, so the recipient travels with the request. Re-sharing to
+  // the same person rotates only THAT person's link (REQ-393) - the old code rotated every link on
+  // the batch, which under person-wise sharing would silently kill someone else's working link.
+  async function share(allow_updates: boolean, r: { ref: string; name: string; phone: string; role_label: string }) {
     setBusy(true);
-    try { await api(`/api/public-tokens`, { method: "POST", json: { purpose: "plan", batch: id, allow_updates } }); await load(); }
+    try {
+      await api(`/api/public-tokens`, { method: "POST", json: {
+        purpose: "plan", batch: id, allow_updates,
+        recipient_name: r.name, recipient_phone: r.phone, recipient_role_label: r.role_label, recipient_ref: r.ref,
+      } });
+      await load();
+    }
     catch (e: any) { setError(e.message); }
     finally { setBusy(false); }
   }
+  const linkFor = (t: string) => `${typeof window !== "undefined" ? window.location.origin : ""}${BASE_PATH}/p/plan/${t}`;
   const shareUrl = data?.share ? `${typeof window !== "undefined" ? window.location.origin : ""}${BASE_PATH}/p/plan/${data.share.token}` : "";
   async function copy(text: string, what: string) {
     try { await navigator.clipboard.writeText(text); setCopied(what); setTimeout(() => setCopied(""), 1500); } catch { setError("Could not copy — select and copy by hand."); }
@@ -157,29 +167,64 @@ export default function BatchPlanPage({ params }: { params: Promise<{ id: string
                 </div>
               </Section>
 
+              {/* REQ-392: the two questions the product could not answer before — who HAS this plan,
+                  and who could be sent it. Both are on one screen so the admin can see the answer
+                  before sending anything, which is what Umesh asked for: "kis-kis person ko kya
+                  jaane wala hai? Kya ye admin ko dikhta hai jaane se pehle?" */}
               <Section title="Share">
-                {data.share ? (
-                  <div className="space-y-2 text-sm">
-                    <p className="text-gray-600">Anyone with this link sees the plan — no login. {data.share.allow_updates ? <b>They can tick milestones done.</b> : <>Read-only.</>}</p>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <code className="break-all rounded bg-gray-100 px-2 py-1 text-xs">{shareUrl}</code>
-                      <Btn small onClick={() => copy(shareUrl, "link")}>{copied === "link" ? "Copied ✓" : "Copy link"}</Btn>
-                      <a className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium hover:bg-gray-50" target="_blank" rel="noreferrer" href={`https://wa.me/?text=${encodeURIComponent(`Batch plan ${b.code}: ${shareUrl}`)}`}>WhatsApp</a>
-                      <Link className="text-xs text-blue-700 underline" href={`/p/plan/${data.share.token}`} target="_blank">open ↗</Link>
-                    </div>
-                    {canEdit && (
-                      <p className="text-xs text-gray-500">
-                        Need the other kind of link? <button className="underline" disabled={busy} onClick={() => share(!data.share.allow_updates)}>Re-share as {data.share.allow_updates ? "read-only" : "status-updatable"}</button> — the old link stops working.
-                      </p>
+                <div className="space-y-4 text-sm">
+                  <div>
+                    <p className="mb-2 font-medium text-gray-700">Who has this plan</p>
+                    {(data.shares ?? []).length === 0 ? (
+                      <p className="text-gray-500">Nobody yet.</p>
+                    ) : (
+                      <ul className="space-y-2">
+                        {data.shares.map((s: any) => (
+                          <li key={s.token} className="rounded-lg border border-gray-200 p-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-medium">{s.recipient_name ?? "(no recipient recorded)"}</span>
+                              <Chip value={s.recipient_role_label ?? "Contact"} />
+                              {s.recipient_phone && <span className="text-xs text-gray-500">{s.recipient_phone}</span>}
+                              <span className="text-xs text-gray-500">{s.allow_updates ? "can tick milestones" : "read-only"}</span>
+                            </div>
+                            <div className="mt-1 flex flex-wrap items-center gap-2">
+                              <code className="break-all rounded bg-gray-100 px-2 py-1 text-xs">{linkFor(s.token)}</code>
+                              <Btn small onClick={() => copy(linkFor(s.token), s.token)}>{copied === s.token ? "Copied ✓" : "Copy link"}</Btn>
+                              <a className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium hover:bg-gray-50" target="_blank" rel="noreferrer" href={`https://wa.me/${(s.recipient_phone ?? "").replace(/\D/g, "")}?text=${encodeURIComponent(`Batch plan ${b.code}: ${linkFor(s.token)}`)}`}>WhatsApp</a>
+                              <Link className="text-xs text-blue-700 underline" href={`/p/plan/${s.token}`} target="_blank">open ↗</Link>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
                     )}
                   </div>
-                ) : canEdit ? (
-                  <div className="flex flex-wrap items-center gap-2 text-sm">
-                    <span className="text-gray-600">Share this plan with someone outside the system:</span>
-                    <Btn small disabled={busy} onClick={() => share(false)}>Share (read-only)</Btn>
-                    <Btn small kind="ghost" disabled={busy} onClick={() => share(true)}>Share — they can update status</Btn>
-                  </div>
-                ) : <p className="text-sm text-gray-500">Not shared yet.</p>}
+
+                  {canEdit && (
+                    <div>
+                      <p className="mb-2 font-medium text-gray-700">Send to</p>
+                      {(data.recipients ?? []).length === 0 ? (
+                        <p className="text-gray-500">This centre has no contacts recorded — add a SPOC, Principal or contact on the centre first, so the link can be sent to a named person.</p>
+                      ) : (
+                        <ul className="space-y-2">
+                          {data.recipients.map((r: any) => {
+                            const has = (data.shares ?? []).find((s: any) => (r.phone && s.recipient_phone === r.phone) || (!r.phone && s.recipient_name === r.name && s.recipient_role_label === r.role_label));
+                            return (
+                              <li key={r.ref} className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-200 p-2">
+                                <span className="font-medium">{r.name}</span>
+                                <Chip value={r.role_label} />
+                                {r.phone ? <span className="text-xs text-gray-500">{r.phone}</span> : <span className="text-xs text-amber-700">no phone on record</span>}
+                                <span className="grow" />
+                                <Btn small disabled={busy} onClick={() => share(false, r)}>{has ? "Re-send (read-only)" : "Send (read-only)"}</Btn>
+                                <Btn small kind="ghost" disabled={busy} onClick={() => share(true, r)}>{has ? "Re-send — can update" : "Send — they can update status"}</Btn>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                      <p className="mt-2 text-xs text-gray-500">Re-sending to the same person replaces only <b>their</b> link. Everyone else&apos;s keeps working.</p>
+                    </div>
+                  )}
+                </div>
               </Section>
             </>
           )}
