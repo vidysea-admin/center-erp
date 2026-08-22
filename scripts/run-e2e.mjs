@@ -3,6 +3,7 @@
 // the other seven passed, and the suite list was hand-duplicated between package.json and
 // ci.yml. This file is now the single place the list lives.
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -31,6 +32,45 @@ const SUITES = [
   "e2e-eval-locations-admin.mjs",
   "e2e-eval-data.mjs",
 ];
+
+// QA-638 / QA-645 (-197): BEFORE any suite runs, prove the server at BASE_URL is the build in this
+// working tree. On 2026-08-22 a wall reported "45 failed, 2 crashed" about a build it never started:
+// a `next start` from an earlier session held the port, `npm start` died with EADDRINUSE into a log
+// nobody read, and the readiness curl was answered by the PREVIOUS release with a different
+// database. Every number in that run described somebody else's server. The guard that caught it
+// afterwards lived in a throwaway scratch file, so the next session would have inherited the defect
+// and not the fix - which is why it is here, in the runner every wall and CI already go through.
+//
+// It is a WARNING, not a refusal: this runner is also used against a deliberately older or remote
+// server, and a hard stop would break that. What it must never do is stay silent.
+{
+  const base = process.env.BASE_URL || "http://localhost:3000/erp";
+  let want = null;
+  try {
+    const v = fs.readFileSync(path.join(dir, "..", "src", "lib", "version.ts"), "utf-8");
+    want = v.match(/RELEASE = "([^"]+)"/)?.[1] ?? null;
+  } catch { /* no version file - nothing to compare against */ }
+  if (want) {
+    let got = "(no answer)";
+    try {
+      const res = await fetch(`${base}/api/public/version`, { signal: AbortSignal.timeout(15000) });
+      got = (await res.json())?.release ?? "(no release field)";
+    } catch (e) { got = `(unreachable: ${String(e?.message ?? e).slice(0, 60)})`; }
+    if (got === want) {
+      console.log(`server at ${base} is running ${got} — matches this tree`);
+    } else {
+      console.log("");
+      console.log("################################################################");
+      console.log(`##  WALL WARNING: ${base}`);
+      console.log(`##  is serving   ${got}`);
+      console.log(`##  this tree is ${want}`);
+      console.log("##  Every result below describes the server, NOT this tree.");
+      console.log("##  Check nothing else is holding the port (QA-638).");
+      console.log("################################################################");
+      console.log("");
+    }
+  }
+}
 
 const results = [];
 for (const suite of SUITES) {

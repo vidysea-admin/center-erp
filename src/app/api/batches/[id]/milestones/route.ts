@@ -100,6 +100,14 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
     // a wrong one. An explicit done_on is honoured; a bare tick still means now.
     const on = body.done_on ? new Date(body.done_on) : new Date();
     if (isNaN(on.getTime())) throw new HttpError(400, "done_on is not a valid date.");
+    // QA-644: -196 validated only that the string parsed. done_on means "this happened", and every
+    // other happened-date in this codebase refuses the future - Rule 25 on left_on, Rule 53 on
+    // attendance, the daily log, actual_start. It is load-bearing twice over: `overdue` is computed
+    // as `!done_on && due_date < today`, so a milestone ticked into 2087 stops being overdue for
+    // sixty years, and the planning grid prints done_on ?? due_date, so it would read as a fact.
+    if (on.getTime() > Date.now() + 24 * 60 * 60 * 1000) {
+      throw new HttpError(400, "done_on cannot be a future date — it records something that has already happened. To record a target instead, edit the milestone's due date.");
+    }
     (m as any).done_on = on;
     (m as any).done_by = user.id;
     (m as any).done_via = "user";

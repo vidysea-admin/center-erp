@@ -1207,14 +1207,53 @@ for (const file of walk(root)) {
   // days that could not fail for the defect it names (QA-598 / QA-613 / QA-624 / QA-628), so this
   // one is written the other way round - find EVERY helper that renders a date input, and require
   // each one, individually, to gate. A new editor added later without a gate fails this too.
-  const planTableSrc = src.slice(src.indexOf("function PlanningTable"));
+  // QA-646: the second version of this pin sliced from `function PlanningTable` to end of file and
+  // was blind to anything defined ABOVE that line - so extracting a cell into its own module-level
+  // component, which is the ordinary React refactor, hid an ungated date input from it. A checker
+  // proved it: an ungated `function TargetCell()` inserted just above PlanningTable, and the wall
+  // still read 247 passed, 0 failed. It scans the WHOLE file now, and both declaration forms
+  // (`const X = (` and `function X(`), because the mutation that beat it used the second one.
+  //
+  // The create strip's own inputs are exempt BY NAME rather than by position: PlanningCreate is the
+  // form for making a batch, its date field is always meant to be typeable, and there is no edit
+  // switch there to gate on. Everything else that renders a date input in this file must gate.
+  // The scan is anchored on the DATE INPUTS, not on declarations - a span that runs from one
+  // declaration to the next is wrong wherever declarations are sparse, and the first attempt at
+  // this rewrite blamed `plannerRoles` and `lines` for JSX that merely followed them.
+  //
+  // Two owners are exempt BY NAME, and the reason is that neither has an edit switch to gate on:
+  // `PlanningCreate` is the form for making a batch, and `BatchesInner` holds the New Batch drawer.
+  // Any OTHER owner of a date input in this file - including a cell component extracted to module
+  // level, which is what beat the previous version - has to gate.
+  const EXEMPT = new Set(["PlanningCreate", "BatchesInner"]);
+  // COMPONENTS are column-0 declarations. Anchoring on those (not on every nested helper) is what
+  // makes the owner of a date input the thing a reader would call its owner - the first attempt
+  // blamed `planText`, a clipboard helper that merely happened to be declared above the strip's JSX.
+  const comps = [...src.matchAll(/\n(?:export )?(?:function (\w+)\s*\(|const (\w+) = (?:async )?\()/g)]
+    .map((m) => ({ name: m[1] ?? m[2], start: m.index }));
+  const compAt = (idx) => { let c = null; for (const d of comps) { if (d.start < idx) c = d; else break; } return c; };
+  const compBody = (c) => src.slice(c.start, comps.find((d) => d.start > c.start)?.start ?? src.length);
+
   const editors = [];
-  for (const m of planTableSrc.matchAll(/const (\w+) = (?:async )?\(/g)) {
-    // body = from this helper's start to the next top-level `const <name> = ` at the same indent
-    const start = m.index;
-    const nextRel = planTableSrc.slice(start + m[0].length).search(/\n  const \w+ = /);
-    const body = nextRel < 0 ? planTableSrc.slice(start) : planTableSrc.slice(start, start + m[0].length + nextRel);
-    if (/<input type="date"/.test(body)) editors.push({ name: m[1], gated: /!editMode/.test(body) });
+  const seen = new Set();
+  // (a) component level - catches a cell extracted to its own component, the refactor that beat the
+  //     previous version of this pin (an ungated `function TargetCell()` above PlanningTable).
+  for (const m of src.matchAll(/<input type="date"/g)) {
+    const c = compAt(m.index);
+    if (!c || EXEMPT.has(c.name) || seen.has(c.name)) continue;
+    seen.add(c.name);
+    editors.push({ name: c.name, gated: /!editMode/.test(compBody(c)) });
+  }
+  // (b) helper level INSIDE PlanningTable - the original rule, kept: it is not enough that the
+  //     component mentions editMode somewhere, each cell renderer has to gate for itself.
+  const ptc = comps.find((c) => c.name === "PlanningTable");
+  if (ptc) {
+    const body = compBody(ptc);
+    for (const m of body.matchAll(/\n  const (\w+) = (?:async )?\(/g)) {
+      const nextRel = body.slice(m.index + m[0].length).search(/\n  (?:const|function) \w+/);
+      const h = nextRel < 0 ? body.slice(m.index) : body.slice(m.index, m.index + m[0].length + nextRel);
+      if (/<input type="date"/.test(h)) editors.push({ name: `PlanningTable.${m[1]}`, gated: /!editMode/.test(h) });
+    }
   }
   const ungated = editors.filter((e) => !e.gated).map((e) => e.name);
   if (editors.length >= 2 && !ungated.length) passed++;
@@ -1224,6 +1263,46 @@ for (const file of walk(root)) {
   //    refuses a non-Admin; showing the button anyway teaches people to click into a 403.
   if (/method: "DELETE"/.test(src) && /role === "Admin"/.test(src) && /editMode && role === "Admin"/.test(src)) passed++;
   else { failed++; pushStructural('app/(app)/batches/page.tsx: the Planning table has no Admin-only delete on the row, gated by Edit mode - "batch ko delete krne k liye kuch nhi hai".'); }
+
+  // ---- -197: the three things the -196 checker found that no pin above could have caught ----
+
+  // QA-641: a tab removed is a tab whose CALLERS move with it. -196 deleted the Preparation tab and
+  // left five links to it on Home, one of them a button labelled "Preparation board", so a reader
+  // asking for centre x job-role positions was handed a grid of batches. A redirect is not an
+  // answer. Scanned across all of src/ - the point is precisely that the defect was in a file this
+  // unit never opened.
+  {
+    const strays = [];
+    for (const f of walk(root)) {
+      const rel = path.relative(root, f).split(path.sep).join("/");
+      if (rel === "app/(app)/batches/page.tsx") continue; // its own redirect comment names the string
+      if (/tab=Preparation/.test(stripComments(fs.readFileSync(f, "utf8")))) strays.push(rel);
+    }
+    if (!strays.length) passed++;
+    else { failed++; pushStructural("these files still link to the deleted Preparation tab: " + JSON.stringify(strays) + " - QA-641. The tab was removed in -196 and its callers were not, so a link promising the centre x job-role board lands on a table of batches."); }
+  }
+
+  // QA-642: the Planning table's refetch must be something a caller can CALL. -196 signalled
+  // "reload" by setting the rows to null, which is not a dependency of the effect that loads them,
+  // so React never re-ran it and the table sat on its loading skeleton after every single write.
+  // Two halves, because either alone can be faked: a named loader, and nobody blanking state.
+  {
+    if (/const loadTrack = /.test(src) && /onSaved=\{loadTrack\}/.test(src) && /loadTrack\(\)/.test(src)) passed++;
+    else { failed++; pushStructural("app/(app)/batches/page.tsx: the Planning table has no callable refetch wired to its save/create callbacks - QA-642. A screen that signals 'reload' by blanking its own rows leaves itself on a skeleton, because the effect that loads them does not depend on them."); }
+    if (!/setTrack\(null\)/.test(src)) passed++;
+    else { failed++; pushStructural("app/(app)/batches/page.tsx: setTrack(null) is back - QA-642. That is the signal that never reloaded anything; call the loader instead."); }
+  }
+
+  // QA-643: the download sitting on top of a narrowed table carries rows the table just said had
+  // left. It is not narrowed to match on purpose (the sheet it mirrors is the whole live picture),
+  // so the button has to SAY so - a bare "Download Excel" over a filtered table is the disagreement.
+  {
+    const table = src.slice(src.indexOf("function PlanningTable"));
+    const narrowed = /NOT_STARTED = \[/.test(table);
+    const btn = table.match(/>Download Excel[^<]*</);
+    if (!narrowed || (btn && /all live batches/i.test(btn[0]))) passed++;
+    else { failed++; pushStructural("app/(app)/batches/page.tsx: the Planning table is narrowed to the batches that have not started, but its Download button (" + JSON.stringify(btn ? btn[0].slice(1, -1) : null) + ") does not say that the file carries the started ones too - QA-643. The export reads all four live statuses and cannot be told otherwise from here."); }
+  }
 
   // 7. The row leaves Planning when the batch starts. planTrackerRows returns all four live
   //    statuses (that is right - the export and the Batches tab both want them), so the view is

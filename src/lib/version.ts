@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-196";
+export const RELEASE = "2026.08.14-197";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,23 @@ export const RELEASE = "2026.08.14-196";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-197 repairs three things -196 broke or left behind, all found by review rather than by use. The " +
+  "planning screen lost its Preparation tab last release, and five links on the home page still " +
+  "pointed at it - including a button reading Preparation board - so asking for the centre and " +
+  "job-role readiness list handed you a table of batches instead. That list now lives on the home " +
+  "page itself, complete rather than the first eight rows, and the links say what they open. The " +
+  "bigger one: every save on the new planning screen left the table stuck on Loading, because the " +
+  "screen asked for fresh rows by emptying the ones it had, which is not something it was watching " +
+  "for. Editing a date, deleting a batch or creating one now shows the result immediately. The " +
+  "Excel download sitting above that table still carries every live batch, including the started " +
+  "ones the table no longer lists, and it now says so on the button instead of quietly disagreeing " +
+  "with the screen. A date recorded as already done can no longer be set in the future, which the " +
+  "rest of the system has always refused. And the readiness line inside the planning form used to " +
+  "go silent whenever the page filter named a different centre from the one being planned - it " +
+  "asks about its own centre now, and says so when there is nothing recorded."
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-196 makes batch planning one screen instead of three. Planning a batch used to open a panel " +
   "that could work out the dates and could not create the batch, so the plan was worked out once " +
   "and then typed in again somewhere else; a separate Preparation tab listed what was blocking " +
@@ -31,10 +48,7 @@ export const RELEASE_NOTE_CURRENT =
   "editable, an Admin can delete a batch from its row, and the dates this screen does not own are " +
   "greyed with a link to where they are recorded. A date typed for a step that is already done is " +
   "now stored as typed - it used to be silently replaced with today, so a sheet copied in a week " +
-  "late recorded the wrong week."
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "late recorded the wrong week." +
   "-195 stops the product guessing who a shared plan link belongs to. Four earlier attempts worked " +
   "it out from something about the person - the batch, then the phone number, then their position " +
   "in the centre list, then their name and role - and each one either merged two people or split " +

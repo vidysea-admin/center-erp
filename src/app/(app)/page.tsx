@@ -149,7 +149,7 @@ export default function HomePage() {
         {/* 2026-08-14 (Umesh: "31 vs 13 — blunder?"): both countings, both NAMED — the
             headline is job-role ROWS (the sheet's 31), the sub says centres explicitly. */}
         {!leanHome && (
-          <KPI label="Approved (centre × job role)" value={data.kpis.approved_targets ?? 0} tone="blue" icon={<IconPin size={19} />} href="/batches?tab=Preparation"
+          <KPI label="Approved (centre × job role)" value={data.kpis.approved_targets ?? 0} tone="blue" icon={<IconPin size={19} />} href="/reports"
             sub={`of ${data.kpis.targets_total ?? 0} job-role rows · centres: ${data.kpis.approved_locations} approved`} />
         )}
         {!leanHome && (
@@ -208,15 +208,21 @@ export default function HomePage() {
 
       {/* Manish, 2026-08-12: "location, trainer aur candidate — ye teeno map ho gaye to batch form
           ho jaata hai." This queue answers exactly that, and names the one thing still missing. */}
+      {/* QA-641 (-197): this card used to show 8 rows and send the rest to the Preparation tab on
+          /batches. -196 removed that tab, and the links went with the tab's ANSWER but not with the
+          tab - a button reading "Preparation board" and a line reading "N more centre/job-role
+          pairs" landed on a grid of BATCHES, which cannot answer either sentence.
+          The readiness board is not lost: this card already fetches EVERY row (/api/mapping/
+          readiness, unscoped, page.tsx:29) and was throwing all but 8 away. It shows them all now
+          and scrolls, so the board has a home again - this one - and there is nothing left to link
+          "the full board" to. */}
       {!leanHome && mapping && mapping.total > 0 && (
         <Section
-          maxRows={5}
+          maxRows={8}
           title={`Centres Ready to Start (${mapping.ready_count} of ${mapping.total})`}
-          titleHref="/batches?tab=Preparation"
-          actions={<Link href="/batches?tab=Preparation"><Btn kind="ghost" small>Preparation board</Btn></Link>}
         >
           <ul className="divide-y divide-gray-100 text-sm">
-            {mapping.items.slice(0, 8).map((r: any) => (
+            {mapping.items.map((r: any) => (
               <Row key={`${r.location._id}-${r.program._id}`}
                 href={`/batches?location=${r.location._id}`}
                 left={<>
@@ -230,11 +236,10 @@ export default function HomePage() {
               />
             ))}
           </ul>
-          {mapping.total > 8 && (
-            <p className="mt-2 text-xs">
-              <Link className="font-medium text-blue-700 hover:underline" href="/batches?tab=Preparation">
-                {mapping.total - 8} more centre/job-role pairs — see the full Preparation board →
-              </Link>
+          {mapping.total > mapping.ready_count && (
+            <p className="mt-2 text-xs text-gray-500">
+              All {mapping.total} centre/job-role pairs are listed above — scroll the card.
+              {" "}{mapping.total - mapping.ready_count} of them cannot start yet; each row names what it still needs.
             </p>
           )}
         </Section>

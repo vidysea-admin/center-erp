@@ -52,9 +52,18 @@ function BatchesInner() {
     sp.get("tab") === "Planning" || sp.get("tab") === "Preparation" ? "Planning" : "Batches",
   );
   const [track, setTrack] = useState<any[] | null>(null);
+  // QA-642: this used to be an effect keyed on [tab] with `if (track) return`, and the only way to
+  // ask for fresh rows was setTrack(null) - which changes state the effect does not depend on, so
+  // React never re-ran it. The table went to its loading skeleton and stayed there until a tab
+  // round-trip. Every write this screen makes went through that path, so -196 shipped an Edit mode
+  // whose first save emptied the table it was editing. Refetching is now a FUNCTION anyone can
+  // call; nothing signals "reload" by blanking state any more.
+  const loadTrack = () => api("/api/plan-tracker")
+    .then((d) => setTrack(d.rows ?? []))
+    .catch((e) => setError(String(e?.message ?? e)));
   useEffect(() => {
     if (tab !== "Planning" || track) return;
-    api("/api/plan-tracker").then((d) => setTrack(d.rows ?? [])).catch((e) => setError(String(e?.message ?? e)));
+    loadTrack();
   }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
   const [prep, setPrep] = useState<any>(null);
   const [error, setError] = useState("");
@@ -291,12 +300,12 @@ function BatchesInner() {
       {tab === "Planning" && (
         <>
           <PlanningCreate
-            locations={locations} prep={prep} planner={planner} runPlanner={runPlanner}
+            locations={locations} planner={planner} runPlanner={runPlanner}
             plannerLocations={plannerLocations} plannerHidden={plannerHidden} plannerRoles={plannerRoles}
             planCopied={planCopied} copyPlan={copyPlan}
             onError={setError} onInfo={setInfo}
-            onCreated={() => { setTrack(null); load(); }} />
-          <PlanningTable rows={track} role={role} onSaved={() => setTrack(null)} onError={setError} />
+            onCreated={() => { loadTrack(); load(); }} />
+          <PlanningTable rows={track} role={role} onSaved={loadTrack} onError={setError} />
         </>
       )}
 
@@ -753,8 +762,8 @@ function BatchesInner() {
 //
 // The preview is a list, NOT a table. His words were "usme bhi proper only 1 table only", and a
 // second bordered grid above the grid is the thing he was pointing at.
-function PlanningCreate({ locations, prep, planner, runPlanner, plannerLocations, plannerHidden, plannerRoles, planCopied, copyPlan, onError, onInfo, onCreated }: {
-  locations: any[]; prep: any; planner: any; runPlanner: (n: any) => void;
+function PlanningCreate({ locations, planner, runPlanner, plannerLocations, plannerHidden, plannerRoles, planCopied, copyPlan, onError, onInfo, onCreated }: {
+  locations: any[]; planner: any; runPlanner: (n: any) => void;
   plannerLocations: any[]; plannerHidden: number; plannerRoles: any[];
   planCopied: boolean; copyPlan: (t: string) => void;
   onError: (m: string) => void; onInfo: (m: string) => void; onCreated: () => void;
@@ -764,10 +773,26 @@ function PlanningCreate({ locations, prep, planner, runPlanner, plannerLocations
   const canSave = !!(planner.location && planner.program && planner.start) && !saving;
 
   // What the removed Preparation tab used to answer, asked at the moment it matters: this centre,
-  // this job role, what is still missing. Same endpoint, same row, read where the decision is made.
-  const prepRow = (prep?.items ?? []).find((r: any) =>
-    String(r.location?._id ?? r.location) === String(planner.location)
-    && String(r.program?._id ?? r.program) === String(planner.program));
+  // this job role, what is still missing.
+  //
+  // QA-647: -196 read this off the PAGE's `prep`, which is fetched with ?location=<the header
+  // filter>. The strip's own centre dropdown is not filtered, so the moment the two named different
+  // centres the sentence simply vanished - no blockers, no "nothing is blocking", nothing - and a
+  // silent line reads as "there is nothing to say" rather than "I did not look". The strip asks for
+  // its OWN centre now, so the answer belongs to the row being planned and to nothing else.
+  const [prepRow, setPrepRow] = useState<any>(null);
+  const [prepLoading, setPrepLoading] = useState(false);
+  useEffect(() => {
+    if (!planner.location || !planner.program) { setPrepRow(null); setPrepLoading(false); return; }
+    let live = true;
+    setPrepLoading(true);
+    api(`/api/mapping/readiness?location=${planner.location}`)
+      .then((d) => { if (!live) return;
+        setPrepRow((d.items ?? []).find((r: any) => String(r.program?._id ?? r.program) === String(planner.program)) ?? null);
+        setPrepLoading(false); })
+      .catch(() => { if (live) { setPrepRow(null); setPrepLoading(false); } });
+    return () => { live = false; };
+  }, [planner.location, planner.program]);
 
   const planText = () => {
     const lines = (planner.plan ?? []).map((m: any) => `${fmtDate(m.due_date)} — ${m.label}`);
@@ -855,6 +880,11 @@ function PlanningCreate({ locations, prep, planner, runPlanner, plannerLocations
       )}
 
       {/* The old Preparation tab, in one line, about the row you are actually planning. */}
+      {planner.location && planner.program && !prepLoading && !prepRow && (
+        <p className="text-xs text-gray-500">
+          No readiness row exists for this centre and job role yet, so there is nothing recorded about what it still needs.
+        </p>
+      )}
       {prepRow && (
         prepRow.ready
           ? <p className="text-xs text-green-700">Nothing is blocking this centre × job role — {prepRow.trainers?.certified ?? 0}/{prepRow.trainers?.required ?? 1} trainers certified, {prepRow.candidates?.registered ?? 0}/{prepRow.candidates?.needed ?? 0} candidates registered.</p>
@@ -1150,13 +1180,20 @@ function PlanningTable({ rows, role, onSaved, onError }: { rows: any[] | null; r
           <span className="text-xs text-gray-500">{editMode ? "click any outlined date to change it" : "turn on to change dates"}</span>
         </label>
         {/* QA-526: the man this table was built for keeps it in a spreadsheet today. Without a
-            download he reads it once and goes back to Excel, which is the whole thing this replaces. */}
-        <Btn kind="ghost" onClick={() => { window.location.href = `${BASE_PATH}/api/plan-tracker/export`; }}>Download Excel</Btn>
+            download he reads it once and goes back to Excel, which is the whole thing this replaces.
+            QA-643: the export reads all four live statuses; this table shows the two that have not
+            started. The download is NOT narrowed to match - the sheet it mirrors is his whole live
+            picture, and quietly dropping the running batches out of it would be a worse surprise
+            than a longer file. So the button says which of the two it is, in the same breath as the
+            line beside it that says how many are missing from the screen. */}
+        <span title="The download carries every live batch, including the ones that have started and are no longer listed here.">
+          <Btn kind="ghost" onClick={() => { window.location.href = `${BASE_PATH}/api/plan-tracker/export`; }}>Download Excel (all live batches)</Btn>
+        </span>
       </div>
       <p className="rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-800">
         The batches that have not started yet, the way the planning sheet reads it. Each date shows what
         actually happened, and until it has, the backward plan&apos;s target for that step.
-        {started > 0 && <> {started} batch{started === 1 ? " has" : "es have"} already started and moved to the <b>Batches</b> tab.</>}
+        {started > 0 && <> {started} batch{started === 1 ? " has" : "es have"} already started and moved to the <b>Batches</b> tab — the Excel download above still carries {started === 1 ? "it" : "them"}.</>}
         {editMode && <> Dates on a dashed outline are yours to edit here; a greyed one is written where its
         gate is — open the trainer, and recording the stage there fills this in.</>}
       </p>

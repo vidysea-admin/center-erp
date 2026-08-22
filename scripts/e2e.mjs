@@ -1822,7 +1822,10 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
 // with the sheet it was copied from. The pin is the DATE, not the presence of a date: the old
 // behaviour also produced a truthy done_on, so "records done_on" above cannot catch this.
 {
-  const backdated = "2027-03-09";
+  // A PAST date - the grid is filled from a sheet days late, which is the whole case for this
+  // argument. (QA-644 now refuses a future done_on, and the first version of this pin used 2027,
+  // which would have been refused by the fix that followed it.)
+  const backdated = "2026-03-09";
   const bd = (await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { key: "enrollment_done", done: true, done_on: backdated }, 200)).data.item;
   const got = bd.milestones.find((m) => m.key === "enrollment_done")?.done_on;
   ok("-196: an explicit done_on is stored as typed, not overwritten with today",
@@ -1840,6 +1843,20 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
   const junk = await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { key: "enrollment_done", done: true, done_on: "not-a-date" });
   ok("-196: an unparseable done_on is refused", junk.status === 400 && /done_on/.test(junk.data?.error ?? ""),
     `status=${junk.status} error=${JSON.stringify(junk.data?.error ?? null)}`);
+  // QA-644 (-197): done_on says something HAPPENED, so the future is refused the way Rule 25
+  // refuses a future left_on. It is load-bearing: `overdue` is `!done_on && due_date < today`, so a
+  // milestone ticked into 2087 would stop being overdue for sixty years.
+  const future = new Date(Date.now() + 400 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const far = await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { key: "enrollment_done", done: true, done_on: future });
+  ok("-197: a done_on in the future is refused", far.status === 400 && /future/i.test(far.data?.error ?? ""),
+    `status=${far.status} error=${JSON.stringify(far.data?.error ?? null)}`);
+  // Today must still be accepted - the boundary is "not the future", not "not today".
+  const today = new Date().toISOString().slice(0, 10);
+  const now2 = await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { key: "enrollment_done", done: true, done_on: today }, 200);
+  ok("-197: today is still accepted", String(now2.data?.item?.milestones?.find((m) => m.key === "enrollment_done")?.done_on ?? "").slice(0, 10) === today,
+    JSON.stringify(now2.data?.item?.milestones?.find((m) => m.key === "enrollment_done")?.done_on ?? null));
+  // put the backdated value back so the assertion below still describes what it says it does
+  await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { key: "enrollment_done", done: true, done_on: backdated }, 200);
   const still = (await req("GET", `/api/batches/${planBatch._id}`)).data.item.milestones.find((m) => m.key === "enrollment_done")?.done_on;
   ok("-196: the refused write left the stored date alone", String(still).slice(0, 10) === backdated, `done_on=${still}`);
 }
