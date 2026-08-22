@@ -30,6 +30,25 @@ const DOC_TYPES = ["Aadhaar", "PAN", "Photo", "CV", "Educational Qualification",
 
 const fmt = (d?: string | null) => (d ? fmtDate(d) : "—");
 
+// -202: the six dates the pipeline stamps, in the order the journey runs. Kept as a literal for the
+// same reason DOC_TYPES above is one — importing CORRECTABLE_TRAINER_DATES from @/lib/rules would
+// pull mongoose into a client component. A wall pin asserts the two lists match exactly, so the
+// second copy is guarded rather than hoped about (the -129 / QA-268 precedent).
+const PIPELINE_DATES: [string, string][] = [
+  ["nomination_sent_on", "Nomination sent"],
+  ["nsdc_submitted_on", "Sent to NSDC"],
+  ["nsdc_result_on", "NSDC result"],
+  ["paid_on", "Eligibility payment"],
+  ["tot_scheduled_on", "TOT scheduled"],
+  ["tot_done_on", "TOT completed"],
+];
+
+// What a <input type="date"> wants, and the latest day it may offer. IST, because that is the day
+// the server compares against (istToday) — an hour either side of midnight the browser's own date
+// and the server's disagree, and the refusal would look arbitrary.
+const dayInput = (d?: string | null) => (d ? new Date(d).toISOString().slice(0, 10) : "");
+const istTodayInput = () => new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10);
+
 export default function TrainerDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   // Rule T8 (Umesh 15/08): the direct-status control renders for the Admin; a non-Admin
@@ -49,7 +68,22 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
   // F-A1 (2026-08-13): the nomination TARGET (which centre × job role this trainer is being
   // hired FOR) finally gets an input. Rule T3 requires both before "Documents Completed", and
   // the readiness engine counts trainers by exactly this pair — yet no screen could set it.
-  const [nom, setNom] = useState<{ location: string; program: string } | null>(null);
+  //
+  // -202 (Umesh 22/08, "edit ka button bhi de bhai"): this used to be the ONLY writable thing on the
+  // card, behind a button labelled "Set nomination" that nobody read as an edit, while the six dates
+  // and the TR ID had no input on this page at all. It is now one edit mode over the whole card.
+  const [card, setCard] = useState<any>(null);
+  const [warns, setWarns] = useState<string[]>([]);
+  const openCard = () => {
+    setWarns([]);
+    setCard({
+      location: t?.nominated_for_location?._id ?? "",
+      program: t?.nominated_for_program?._id ?? "",
+      tr_id: t?.tr_id ?? "",
+      eligibility_payment_amount: t?.eligibility_payment_amount ?? "",
+      ...Object.fromEntries(PIPELINE_DATES.map(([f]) => [f, dayInput(t?.[f])])),
+    });
+  };
   // QA-149: the missing bridge between a trainer and a login — one click here.
   const [loginRes, setLoginRes] = useState<any>(null);
   const role = (session?.user as any)?.role;
@@ -79,15 +113,33 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
   }
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [id]);
 
-  async function saveNomination() {
-    if (!nom) return;
-    setBusy(true);
+  // One Save for the whole card. Two requests, because the fields genuinely live behind two doors
+  // and that split is deliberate: the profile fields go through the ordinary trainer PATCH, the six
+  // stamped dates through the pipeline door, which is the only thing allowed to write them. The
+  // profile half goes first — if the dates are refused, the user still keeps the rest of their edit.
+  async function saveCard() {
+    if (!card) return;
+    setBusy(true); setErr(""); setWarns([]);
     try {
-      await api(`/api/trainers/${id}`, {
+      const profile: Record<string, unknown> = {};
+      if (card.location !== (t.nominated_for_location?._id ?? "")) profile.nominated_for_location = card.location || null;
+      if (card.program !== (t.nominated_for_program?._id ?? "")) profile.nominated_for_program = card.program || null;
+      if (card.tr_id !== (t.tr_id ?? "")) profile.tr_id = card.tr_id.trim() || null;
+      if (String(card.eligibility_payment_amount) !== String(t.eligibility_payment_amount ?? "")) {
+        profile.eligibility_payment_amount = card.eligibility_payment_amount === "" ? null : Number(card.eligibility_payment_amount);
+      }
+      if (Object.keys(profile).length) await api(`/api/trainers/${id}`, { method: "PATCH", json: profile });
+
+      // All six every time: a field left blank IS the instruction to clear it, so sending only the
+      // ones that look changed would make clearing impossible. The server compares on the calendar
+      // day and no-ops the rest.
+      const res = await api(`/api/trainers/${id}/transition`, {
         method: "PATCH",
-        json: { nominated_for_location: nom.location || null, nominated_for_program: nom.program || null },
+        json: Object.fromEntries(PIPELINE_DATES.map(([f]) => [f, card[f] || null])),
       });
-      setNom(null); await load();
+      setCard(null);
+      setWarns(res?.warnings ?? []);
+      await load();
     } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
   }
 
@@ -281,37 +333,66 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
           </Section>
 
           <Section title="Nomination & TOT" actions={
-            <Btn small kind="ghost" onClick={() => setNom({
-              location: t.nominated_for_location?._id ?? "",
-              program: t.nominated_for_program?._id ?? "",
-            })}>Set nomination</Btn>
+            card ? (
+              <span className="flex items-center gap-2">
+                <Btn small onClick={saveCard} disabled={busy}>{busy ? "Saving…" : "Save"}</Btn>
+                <Btn small kind="ghost" onClick={() => setCard(null)}>Cancel</Btn>
+              </span>
+            ) : <Btn small kind="ghost" onClick={openCard}>Edit</Btn>
           }>
-            {nom && (
-              <div className="mb-3 space-y-2 rounded-lg border border-blue-200 bg-blue-50 p-3">
+            {/* The server answers a correction with what else it moved — the plan lateness flags, the
+                cost entry, "Available from". None of it blocks the save; all of it would otherwise be
+                invisible, which is the whole complaint one level up. */}
+            {warns.length > 0 && (
+              <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                <div className="font-semibold">Saved — and this moved with it:</div>
+                <ul className="mt-1 list-disc space-y-1 pl-4">{warns.map((w, i) => <li key={i}>{w}</li>)}</ul>
+                <button type="button" className="mt-2 font-semibold underline" onClick={() => setWarns([])}>Dismiss</button>
+              </div>
+            )}
+            {card ? (
+              <div className="space-y-3 rounded-lg border border-blue-200 bg-blue-50 p-3">
                 {/* -128 (QA-272): this said "(Rule T3 — required before …)" on screen. plain() guards thrown
                     messages and rendered banners, never literal JSX, so a code written here reaches the
                     user whatever the strippers do. Same fact, none of our shorthand. */}
                 <p className="text-xs text-blue-800">Which centre × job role is this trainer being hired for? Required before the trainer can move to Documents Completed — and the Preparation board counts trainers by this pair.</p>
+                <p className="text-xs text-blue-800">
+                  The dates below are normally stamped as the trainer moves through the journey. Correct
+                  any that were recorded wrong; clear one and save to remove it. None of them can be in
+                  the future — they record what has already happened.
+                </p>
                 <div className="grid grid-cols-2 gap-2">
                   <Field label="Centre" required>
-                    <select className={inputCls} value={nom.location} onChange={(e) => setNom({ ...nom, location: e.target.value })}>
+                    <select className={inputCls} value={card.location} onChange={(e) => setCard({ ...card, location: e.target.value })}>
                       <option value="">—</option>
-                      {offerable(locations, nom.location).map((l: any) => <option key={l._id} value={l._id}>{l.name}</option>)}
+                      {offerable(locations, card.location).map((l: any) => <option key={l._id} value={l._id}>{l.name}</option>)}
                     </select>
                   </Field>
                   <Field label="Job role" required>
-                    <select className={inputCls} value={nom.program} onChange={(e) => setNom({ ...nom, program: e.target.value })}>
+                    <select className={inputCls} value={card.program} onChange={(e) => setCard({ ...card, program: e.target.value })}>
                       <option value="">—</option>
                       {programs.map((p: any) => <option key={p._id} value={p._id}>{p.name}{p.scheme ? ` (${p.scheme})` : ""}</option>)}
                     </select>
                   </Field>
-                </div>
-                <div className="flex gap-2">
-                  <Btn small onClick={saveNomination} disabled={busy}>{busy ? "Saving…" : "Save nomination"}</Btn>
-                  <Btn small kind="ghost" onClick={() => setNom(null)}>Cancel</Btn>
+                  {PIPELINE_DATES.map(([f, label]) => (
+                    <Field key={f} label={label}>
+                      <input type="date" max={istTodayInput()} className={inputCls} value={card[f] ?? ""}
+                        onChange={(e) => setCard({ ...card, [f]: e.target.value })} />
+                    </Field>
+                  ))}
+                  <Field label="Eligibility payment amount">
+                    <input type="number" className={inputCls} value={card.eligibility_payment_amount ?? ""}
+                      onChange={(e) => setCard({ ...card, eligibility_payment_amount: e.target.value })} />
+                  </Field>
+                  {/* The Certified banner has been saying "Record it here (Edit → TR ID)" on a page that
+                      had no Edit and no TR ID input. This is the input it was naming. */}
+                  <Field label="TR ID">
+                    <input className={inputCls} value={card.tr_id ?? ""}
+                      onChange={(e) => setCard({ ...card, tr_id: e.target.value })} />
+                  </Field>
                 </div>
               </div>
-            )}
+            ) : (
             <dl className="grid grid-cols-2 gap-y-2 text-sm">
               <dt className="text-gray-500">Nominated for</dt>
               <dd>{t.nominated_for_program?.name ?? "—"}{t.nominated_for_location?.name ? ` at ${t.nominated_for_location.name}` : ""}</dd>
@@ -324,6 +405,7 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
               <dt className="text-gray-500">TOT completed</dt><dd>{fmt(t.tot_done_on)}</dd>
               <dt className="text-gray-500">TR ID</dt><dd>{t.tr_id || "—"}</dd>
             </dl>
+            )}
           </Section>
         </div>
       )}
@@ -443,14 +525,14 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
             <input type="date" className={inputCls} value={move.date ?? ""} onChange={(e) => setMove({ ...move, date: e.target.value })} />
           </Field>
           {/* -128 (QA-266): the refusal Divya hit, said BEFORE the round trip and next to the
-              thing that fixes it. The "Set nomination" control is on this same page, but it sits
+              thing that fixes it. The card's Edit control is on this same page, but it sits
               behind this drawer's own scrim, which is why the refusal read as a dead end. */}
           {needsNomination && (
             <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
               This trainer has no nomination yet, and Documents Completed needs one: a nomination is
               always against a specific vacancy, so it has to name a centre and a job role.
               <button type="button" className="ml-1 font-semibold underline"
-                onClick={() => { setMove(null); setNom({ location: t.nominated_for_location?._id ?? "", program: t.nominated_for_program?._id ?? "" }); }}>
+                onClick={() => { setMove(null); openCard(); }}>
                 Set the nomination first
               </button>
               — this drawer will close and take you to it.

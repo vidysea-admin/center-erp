@@ -1398,6 +1398,69 @@ for (const file of walk(root)) {
 // string(s) still carry a Rule/DEC/QA code", so a scope leak was reported as a copy problem and
 // the suggested fix was to rewrite a sentence. A summary that misnames what it found sends the
 // reader to the wrong place, which is the same defect this file exists to catch.
+// ---- -202: the trainer's Nomination & TOT card, and the allow-list it must NOT be bolted onto ----
+// Umesh, 22/08: "agar koi wrong value set ho gayi toh baad me edit nahi kar pa raha hai - edit ka
+// button bhi de bhai." The correction door is PATCH on /api/trainers/[id]/transition. Three ways
+// that could regress into looking right while being wrong, so three checks.
+{
+  const rulesSrc = fs.readFileSync(path.join(root, "lib/rules.ts"), "utf-8");
+  const pageRel = "app/(app)/trainers/[id]/page.tsx";
+  const pageSrc = fs.readFileSync(path.join(root, pageRel), "utf-8");
+  let bad = 0;
+
+  // (a) The client cannot import CORRECTABLE_TRAINER_DATES (lib/rules.ts pulls mongoose), so the
+  // screen hand-copies the six names — the same situation as DOC_TYPES above, answered the same
+  // way: the copy is allowed, drifting is not. Drift here means the card offers a field the door
+  // refuses, or hides one it accepts, and neither says anything out loud.
+  const serverBlock = (rulesSrc.split("export const CORRECTABLE_TRAINER_DATES = [")[1] ?? "").split("] as const;")[0];
+  const serverNames = [...serverBlock.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
+  const clientBlock = (pageSrc.split("const PIPELINE_DATES")[1] ?? "").split("];")[0];
+  const clientNames = [...clientBlock.matchAll(/\["([a-z_]+)"/g)].map((m) => m[1]);
+  if (serverNames.length !== 6 || clientNames.join(",") !== serverNames.join(",")) {
+    bad++;
+    pushStructural(pageRel + ": PIPELINE_DATES has drifted from CORRECTABLE_TRAINER_DATES in lib/rules.ts - screen [" + clientNames.join(",") + "] vs door [" + serverNames.join(",") + "]");
+  }
+
+  // (b) The six must stay OFF the plain trainer PATCH allow-list. That absence is what qa-196's
+  // ratified invariant rests on, and widening the list is the shortcut a future change would most
+  // plausibly take - it is one line and it would make every pin above still pass.
+  const trainerRouteRel = "app/api/trainers/[id]/route.ts";
+  const trainerRoute = fs.readFileSync(path.join(root, trainerRouteRel), "utf-8");
+  const allowBlock = (trainerRoute.split("fields: [")[1] ?? "").split("]")[0];
+  const leaked = serverNames.filter((n) => allowBlock.includes('"' + n + '"'));
+  if (leaked.length) {
+    bad++;
+    pushStructural(trainerRouteRel + ": " + leaked.join(", ") + " reached the plain PATCH allow-list. These are written only through the pipeline door; on that list a hand-made request bypasses every TRAINER_FLOW guard.");
+  }
+
+  // (c) The card's affordance must read as an edit and be single. The old label was "Set nomination",
+  // which is why nobody found the one editable row on the card for six weeks; and a TR ID input must
+  // exist on this page, because the Certified banner has always told people to record it "here".
+  // stripComments, because the history of this label belongs in the comments and only the LABEL
+  // itself is the finding — the first run of this pin failed on its own explanatory comment.
+  if (/Set nomination/.test(stripComments(pageSrc))) {
+    bad++;
+    pushStructural(pageRel + ': the card action still reads "Set nomination" - it is an edit over the whole card now, and the old label is what hid it.');
+  }
+  if (!/onClick=\{openCard\}/.test(pageSrc) || (pageSrc.match(/onClick=\{openCard\}/g) ?? []).length !== 1) {
+    bad++;
+    pushStructural(pageRel + ": expected exactly one Edit control opening the Nomination & TOT card (onClick={openCard}), found " + ((pageSrc.match(/onClick=\{openCard\}/g) ?? []).length));
+  }
+  if (!/card\.tr_id/.test(pageSrc)) {
+    bad++;
+    pushStructural(pageRel + ': no TR ID input on this page, while the Certified banner says "Record it here (Edit -> TR ID)".');
+  }
+  // And the read-only half must stay read-only: every input on this card lives behind the edit
+  // state, never in the <dl>.
+  const dlBlock = (pageSrc.split('<dl className="grid grid-cols-2 gap-y-2 text-sm">')[1] ?? "").split("</dl>")[0];
+  if (/<input|<select/.test(dlBlock)) {
+    bad++;
+    pushStructural(pageRel + ": the read-only Nomination & TOT list carries an input - the edit mode is supposed to replace it, not sit inside it.");
+  }
+
+  if (bad) failed++; else passed++;
+}
+
 {
   // QA-377: the registers must ACCOUNT FOR EVERY HIT. A raise site that forgets to classify is
   // exactly how this check misfiled twice; now it cannot be forgotten silently, because an

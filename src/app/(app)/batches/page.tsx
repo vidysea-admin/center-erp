@@ -1124,6 +1124,13 @@ function PlanningTable({ rows, role, onSaved, onError }: { rows: any[] | null; r
   // case: `totNeeded()` treats a trainer with that date as TOT-complete, so a typed date here would
   // silently drop the TOT steps out of every future plan. The date is real work with a gate in
   // front of it; the grid points at the gate rather than going round it.
+  //
+  // -202: this link's title has always said "open the trainer to record it there" — and until now
+  // there was nothing there to record it WITH, which is the hole Umesh hit on a bypassed trainer.
+  // The trainer's Nomination & TOT card now has an Edit mode over all six dates (PATCH on the same
+  // /transition door, never on the plain trainer allow-list). The cell stays read-only HERE on
+  // purpose: the correction belongs next to the stage that stamped it, where the screen can say
+  // what else the change moves. Only the destination changed, not this decision.
   const gated = (r: any, field: string, where: string) => {
     if (r[field] === "Not needed") return d(r[field]);
     if (!editMode || !r.trainer) return d(r[field]);

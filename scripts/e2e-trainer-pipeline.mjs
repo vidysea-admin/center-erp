@@ -346,5 +346,140 @@ ok("a dropped trainer can be re-opened if they come back", reopened.data.item.pi
     JSON.stringify({ town: back.home_location_other, centre: back.home_location }));
 }
 
+// ---- -202 (Umesh 22/08): correcting what the pipeline already stamped ----
+// "ek baar values kuch bhi fill ho jaati hai toh edit nahi kar pa raha hai... agar koi wrong value
+// set ho gayi toh baad me edit nahi kar pa raha hai. Edit ka button bhi de bhai."
+// He was looking at a trainer bypassed straight to Certified: TOT completed and TR ID filled, the
+// five NSDC/payment/schedule dates permanently blank, and nothing in the product able to write them.
+// These pins are behaviour, not source text — each one creates the state and reads it back. On the
+// pre-fix tree every one of them fails, and the failure IS the defect he reported.
+{
+  const istDay = (offset) => new Date(Date.now() + 330 * 60_000 + offset * 86_400_000).toISOString().slice(0, 10);
+  const TOMORROW = istDay(1), TODAY = istDay(0);
+
+  const ct = (await req("POST", "/api/trainers", {
+    name: "Correct Dates " + stamp, phone: "6" + Date.now().toString().slice(-9),
+    skills: ["DST" + stamp], nominated_for_location: loc._id, nominated_for_program: prog._id,
+  }, 201)).data.item;
+  const CT = `/api/trainers/${ct._id}/transition`;
+
+  // Reproduce his exact starting state: bypass to Certified stamps tot_done_on and NOTHING else.
+  // "TRC", not "TR" + stamp: the certify block above already claimed that one, and tr_id carries a
+  // unique partial index — the first run of this block collided with it and the 409 cascaded into
+  // the next assertion. The wall caught it before it shipped, which is what the wall is for.
+  await req("POST", CT, { target: "Certified", bypass: true, date: "2026-08-14", payload: { tr_id: "TRC" + stamp } }, 200);
+  const stranded = (await req("GET", `/api/trainers/${ct._id}`, undefined, 200)).data.item;
+  ok("-202: a bypass to Certified leaves the five NSDC/payment/schedule dates blank - the state Umesh hit",
+    !stranded.nomination_sent_on && !stranded.nsdc_submitted_on && !stranded.nsdc_result_on
+    && !stranded.paid_on && !stranded.tot_scheduled_on && !!stranded.tot_done_on,
+    JSON.stringify({ n: stranded.nomination_sent_on, s: stranded.nsdc_submitted_on, r: stranded.nsdc_result_on, p: stranded.paid_on, ts: stranded.tot_scheduled_on }));
+
+  // THE headline pin: the five blanks can now be filled, and they read back.
+  await req("PATCH", CT, {
+    nomination_sent_on: "2026-06-01", nsdc_submitted_on: "2026-06-10", nsdc_result_on: "2026-06-20",
+    paid_on: "2026-06-25", tot_scheduled_on: "2026-08-01",
+  }, 200);
+  const readBack = (await req("GET", `/api/trainers/${ct._id}`, undefined, 200)).data.item;
+  ok("-202: the five stranded dates are filled and READ BACK - not a 200 that wrote nothing (the QA-523 shape)",
+    readBack.nomination_sent_on?.slice(0, 10) === "2026-06-01" && readBack.nsdc_submitted_on?.slice(0, 10) === "2026-06-10"
+    && readBack.nsdc_result_on?.slice(0, 10) === "2026-06-20" && readBack.paid_on?.slice(0, 10) === "2026-06-25"
+    && readBack.tot_scheduled_on?.slice(0, 10) === "2026-08-01",
+    JSON.stringify({ n: readBack.nomination_sent_on, s: readBack.nsdc_submitted_on, r: readBack.nsdc_result_on, p: readBack.paid_on, ts: readBack.tot_scheduled_on }));
+
+  // The plain trainer door must STILL refuse them — that is qa-196's invariant I2, and this fix
+  // deliberately did not widen it. A 200 here with the value changed would mean the correction had
+  // been bolted onto the allow-list instead of the pipeline door.
+  await req("PATCH", `/api/trainers/${ct._id}`, { nsdc_submitted_on: "2020-01-01" }, 200);
+  const untouched = (await req("GET", `/api/trainers/${ct._id}`, undefined, 200)).data.item;
+  ok("-202: the plain trainer PATCH still cannot write these - the allow-list was not widened",
+    untouched.nsdc_submitted_on?.slice(0, 10) === "2026-06-10", JSON.stringify(untouched.nsdc_submitted_on));
+
+  // A wrong value is CHANGEABLE, which is the actual complaint. And clearing works.
+  await req("PATCH", CT, { tot_done_on: "2026-01-14" }, 200);
+  const moved = (await req("GET", `/api/trainers/${ct._id}`, undefined, 200)).data.item;
+  ok("-202: a wrong TOT date can be corrected, not just filled once",
+    moved.tot_done_on?.slice(0, 10) === "2026-01-14", JSON.stringify(moved.tot_done_on));
+  // Written out rather than folded into the ok() call: the first draft of this line carried
+  // `(filled.data.warnings ?? []).length >= 0` as one of its conjuncts, which is true of every
+  // array that has ever existed. A clause that cannot be false inside a pin is the same disease
+  // this project has now found seven times, just smaller.
+  const movedAgain = await req("PATCH", CT, { tot_done_on: "2026-01-15" }, 200);
+  ok("-202: correcting the TOT date SAYS that 'Available from' did not move with it",
+    /Available from/.test(JSON.stringify(movedAgain.data.warnings ?? [])),
+    JSON.stringify(movedAgain.data.warnings ?? []).slice(0, 200));
+  // Asserts the value was THERE first. Without that half this pin passes on pre-fix code, where the
+  // date was never written at all and "it is now absent" is trivially true - which is a pin that
+  // cannot fail wearing a different hat. Caught by running the baseline, not by reading it.
+  const beforeClear = (await req("GET", `/api/trainers/${ct._id}`, undefined, 200)).data.item;
+  await req("PATCH", CT, { nsdc_result_on: null }, 200);
+  const cleared = (await req("GET", `/api/trainers/${ct._id}`, undefined, 200)).data.item;
+  ok("-202: a date that WAS set can be CLEARED, so a value typed into the wrong row is recoverable",
+    !!beforeClear.nsdc_result_on && !cleared.nsdc_result_on,
+    JSON.stringify({ before: beforeClear.nsdc_result_on, after: cleared.nsdc_result_on }));
+
+  // No future dates — the -197 rule, which the trainer doors never got. BOTH doors, because two
+  // doors in one file disagreeing about tomorrow is the shape -198 shipped once already.
+  await req("PATCH", CT, { tot_scheduled_on: TOMORROW }, 400);
+  await req("POST", CT, { target: "TOT Scheduled", bypass: true, date: TOMORROW }, 400);
+  ok("-202: today is still accepted - the check is 'future', not 'past only'",
+    (await req("PATCH", CT, { tot_scheduled_on: TODAY })).status === 200, "today refused");
+
+  // QA-660's lesson one door over: an ALLOW-list, so 0 cannot walk into new Date(0) = 1 Jan 1970.
+  for (const junk of [0, false, true, 123, {}, []]) {
+    await req("PATCH", CT, { paid_on: junk }, 400);
+  }
+  const noEpoch = (await req("GET", `/api/trainers/${ct._id}`, undefined, 200)).data.item;
+  ok("-202: no 1970 was left behind by any of the refused shapes",
+    !String(noEpoch.paid_on ?? "").startsWith("1970"), JSON.stringify(noEpoch.paid_on));
+
+  // The stage the trainer is at NOW must not gate the correction. This is the pin against the
+  // rank-based guard I designed and dropped: the NSDC round-trip (Rejected → Shortlisted) and the
+  // Dropped → Fresh Lead re-open both leave a trainer standing BEHIND dates that are correctly on
+  // their record, and a rank test would have refused to fix exactly those.
+  await req("POST", CT, { target: "Dropped", bypass: true, reason: "test reopen" }, 200);
+  await req("POST", CT, { target: "Fresh Lead", bypass: true }, 200);
+  const reopened = (await req("GET", `/api/trainers/${ct._id}`, undefined, 200)).data.item;
+  ok("-202: re-opening a dropped trainer leaves the TOT date on the record",
+    !!reopened.tot_done_on && reopened.pipeline_status === "Fresh Lead", JSON.stringify({ d: reopened.tot_done_on, s: reopened.pipeline_status }));
+  const clearAtFresh = await req("PATCH", CT, { tot_done_on: null }, 200);
+  const afterClear = (await req("GET", `/api/trainers/${ct._id}`, undefined, 200)).data.item;
+  ok("-202: that stale TOT date can be cleared at Fresh Lead - the one correction the product most needed",
+    !afterClear.tot_done_on, JSON.stringify(afterClear.tot_done_on));
+  ok("-202: ...and clearing it SAYS the three TOT steps come back into future plans, instead of doing it silently",
+    /TOT steps/.test(JSON.stringify(clearAtFresh.data.warnings ?? [])), JSON.stringify(clearAtFresh.data.warnings ?? []).slice(0, 200));
+
+  // Money: the fee entry is never created by this door, and the mismatch is reported.
+  const costsBefore = (await req("GET", "/api/costs?limit=1000", undefined, 200)).data.items?.length ?? 0;
+  const paidFix = await req("PATCH", CT, { paid_on: "2026-05-05" }, 200);
+  const costsAfter = (await req("GET", "/api/costs?limit=1000", undefined, 200)).data.items?.length ?? 0;
+  // Both halves, for the same reason as the clear pin above: on pre-fix code no cost row is minted
+  // because NOTHING happens at all, so "the count did not move" alone is not evidence of restraint.
+  const paidBack = (await req("GET", `/api/trainers/${ct._id}`, undefined, 200)).data.item;
+  ok("-202: the payment date MOVES and no cost row is minted - posting a cost has its own approval gate",
+    paidBack.paid_on?.slice(0, 10) === "2026-05-05" && costsAfter === costsBefore,
+    JSON.stringify({ paid_on: paidBack.paid_on, costs: `${costsBefore} -> ${costsAfter}` }));
+  ok("-202: ...and it says so, rather than leaving the profile and the cost ledger quietly disagreeing",
+    /Costs/.test(JSON.stringify(paidFix.data.warnings ?? [])), JSON.stringify(paidFix.data.warnings ?? []).slice(0, 200));
+
+  // Umesh's ruling on who: "Admin, Ops aur centre". Operations does NOT hold pipeline.bypass, so a
+  // 200 here proves the correction sits on trainers.manage and was not accidentally fenced behind
+  // the bypass right — which is what my first design would have done.
+  const oCsrfRes = await fetch(BASE + "/api/auth/csrf");
+  const { csrfToken: oTok } = await oCsrfRes.json();
+  const oCsrf = oCsrfRes.headers.get("set-cookie").split(";")[0];
+  const oLogin = await fetch(BASE + "/api/auth/callback/credentials", {
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", cookie: oCsrf },
+    body: new URLSearchParams({ csrfToken: oTok, email: "ops@vidysea.com", password: "CiOnly@123" }), redirect: "manual",
+  });
+  const oSession = (oLogin.headers.getSetCookie?.() ?? [oLogin.headers.get("set-cookie")]).flat().filter(Boolean).map((c) => c.split(";")[0]).find((c) => c.includes("session-token"));
+  const oCookie = [oCsrf, oSession].join("; ");
+  const opsFix = await fetch(BASE + CT, { method: "PATCH", headers: { "Content-Type": "application/json", cookie: oCookie }, body: JSON.stringify({ nomination_sent_on: "2026-05-02" }) });
+  ok("-202: Operations can correct a date without holding pipeline.bypass (Umesh: 'Admin, Ops aur centre')",
+    opsFix.status === 200, `got ${opsFix.status}`);
+  const opsBypass = await fetch(BASE + CT, { method: "POST", headers: { "Content-Type": "application/json", cookie: oCookie }, body: JSON.stringify({ target: "Certified", bypass: true }) });
+  ok("-202: ...while the bypass right itself is still denied to them - correcting a date is not setting a status",
+    opsBypass.status === 403, `got ${opsBypass.status}`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

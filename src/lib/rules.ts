@@ -2109,6 +2109,21 @@ export async function trainerDocSummary(trainerId: string) {
 
 // Mirrors transitionBatch: an explicit edge table, each edge naming its own precondition, and a
 // 409 that says what is actually missing rather than "invalid transition".
+// -202: every date this pipeline stamps records something that has ALREADY happened, so it cannot
+// be in the future — the same rule the batch milestones got in -197. It was missing on BOTH doors
+// in this file: the bypass branch and the ordinary path each took opts.date verbatim, so the admin
+// dropdown could write "TOT completed 2030" and nothing anywhere would argue. One helper, both
+// paths, and correctTrainerDates below uses the same one — two doors in one file disagreeing about
+// tomorrow is the shape -198 already shipped once.
+function stampDate(d?: Date | string): Date {
+  const on = d ? new Date(d) : new Date();
+  if (isNaN(on.getTime())) throw new HttpError(400, "That is not a valid date.");
+  if (dayKey(on).getTime() > istToday().getTime()) {
+    throw new HttpError(400, "That date is in the future - it records something that has already happened.");
+  }
+  return on;
+}
+
 export async function transitionTrainer(
   trainerId: string,
   target: string,
@@ -2118,6 +2133,9 @@ export async function transitionTrainer(
   if (!t) throw new HttpError(404, "Trainer not found");
   const from = t.pipeline_status ?? "Fresh Lead";
   if (from === target) throw new HttpError(409, `${t.name} is already at "${target}".`);
+  // Computed once, before the bypass branch, so the bypass cannot skip the check the way it skips
+  // the gates. Skipping GATES is what a bypass is for; writing a date from next year is not.
+  const when = stampDate(opts.date);
 
   // Rule T8 (Umesh 15/08): a pipeline.bypass holder may set ANY status directly — the
   // use-case is a trainer who already works with us (batch live or done) whose paperwork
@@ -2132,7 +2150,7 @@ export async function transitionTrainer(
     if (target === "Certified") {
       const trId = (opts.payload?.tr_id as string) ?? t.tr_id;
       if (trId) t.tr_id = trId; // recorded when given; NOT demanded — that is the point
-      t.tot_done_on = opts.date ? new Date(opts.date) : new Date();
+      t.tot_done_on = when;
       if (!t.available_from) t.available_from = t.tot_done_on;
     }
     if (target === "Dropped") { t.dropped_from_stage = from; t.dropped_reason = opts.reason; t.active = false; }
@@ -2149,8 +2167,6 @@ export async function transitionTrainer(
     throw new HttpError(409,
       `A trainer at "${from}" can only move to ${allowed.map((a) => `"${a}"`).join(" or ")} - not "${target}".`);
   }
-
-  const when = opts.date ? new Date(opts.date) : new Date();
 
   switch (target) {
     case "Documents Completed": {
@@ -2252,6 +2268,148 @@ export async function transitionTrainer(
   if (opts.reason && target !== "Dropped") t.pipeline_note = opts.reason;
   await t.save();
   return t;
+}
+
+// ---------- Correcting what the pipeline already stamped (-202) ----------
+// Umesh, 2026-08-22, on a trainer bypassed straight to Certified: "ek baar values kuch bhi fill ho
+// jaati hai toh edit nahi kar pa raha hai... agar koi wrong value set ho gayi toh baad me edit nahi
+// kar pa raha hai. Edit ka button bhi de bhai."
+//
+// He is describing a real hole, not a missing button. The bypass above writes ONLY tot_done_on, so
+// the five NSDC/payment/schedule dates were never written and NOTHING in the product could write
+// them afterwards: they are deliberately absent from the plain PATCH allow-list, and that door
+// answers 200 while writing nothing (QA-523). Meanwhile the Planning grid's gated() cell has been
+// telling people "open the trainer to record it there" at a page with nothing to record it with.
+//
+// So the correction lives HERE, behind the pipeline door, not on the plain allow-list. The
+// invariant qa-196 ratified — these fields are not writable through PATCH /api/trainers/:id — stays
+// literally true, and gets stronger: they are still written only through this file.
+//
+// Asked how open it should be, Umesh struck the one gate proposed to him ("team chaahe toh kisi bhi
+// trainer ka data edit kar sakti hai — issue yahi hai ki wrong daal di aur theek nahi kar paa rahe").
+// So all six are set / change / clear. The ONLY hard refusal is a future date. Every other hazard is
+// a warning that names what moved, because refusing would rebuild the trap this door exists to open:
+// on a trainer with five dates already filled, correcting the wrong one would mean clearing four
+// right ones first, in order.
+export const CORRECTABLE_TRAINER_DATES = [
+  "nomination_sent_on", "nsdc_submitted_on", "nsdc_result_on", "paid_on", "tot_scheduled_on", "tot_done_on",
+] as const;
+
+// The screen's own words for each one, so a refusal or a warning names the row the user is looking
+// at rather than the column in the database.
+const CORRECTABLE_TRAINER_DATE_LABEL: Record<string, string> = {
+  nomination_sent_on: "Nomination sent",
+  nsdc_submitted_on: "Sent to NSDC",
+  nsdc_result_on: "NSDC result",
+  paid_on: "Eligibility payment",
+  tot_scheduled_on: "TOT scheduled",
+  tot_done_on: "TOT completed",
+};
+
+const asDay = (d: any) => new Date(d).toISOString().slice(0, 10);
+
+export async function correctTrainerDates(
+  trainerId: string,
+  patch: Record<string, unknown>,
+  opts: { canMoveCost?: boolean } = {},
+) {
+  const t = await Trainer.findById(trainerId);
+  if (!t) throw new HttpError(404, "Trainer not found");
+
+  // ALLOW-list, never a refuse-list. QA-660 (-200) was exactly this shape one door over: a guard
+  // that listed the shapes to REJECT let 0 walk through into new Date(0) and stored 1 Jan 1970.
+  // Here: undefined = not touched · null or blank = clear it · a non-empty string = a date ·
+  // everything else is refused by name, including 0, false, [] and {}.
+  const wanted: Record<string, Date | null> = {};
+  for (const field of CORRECTABLE_TRAINER_DATES) {
+    const raw = patch[field];
+    if (raw === undefined) continue;
+    const label = CORRECTABLE_TRAINER_DATE_LABEL[field];
+    if (raw === null || (typeof raw === "string" && !raw.trim())) { wanted[field] = null; continue; }
+    if (typeof raw !== "string") {
+      throw new HttpError(400, `${label} must be a date like 2026-08-14. Leave it blank to clear it.`);
+    }
+    const on = new Date(raw);
+    if (isNaN(on.getTime())) throw new HttpError(400, `${label} is not a valid date.`);
+    if (dayKey(on).getTime() > istToday().getTime()) {
+      throw new HttpError(400, `${label} cannot be a future date - it records something that has already happened.`);
+    }
+    wanted[field] = on;
+  }
+
+  // Compare on the calendar day, not the millisecond: a date read back from Mongo and re-sent by a
+  // form is the same fact even when the clock time differs, and auditing that as a change would
+  // fill the Activity tab with edits nobody made (the QA-081 day-vs-instant rule).
+  const changed = Object.keys(wanted).filter((f) => {
+    const cur = (t as any)[f] ? dayKey((t as any)[f]).getTime() : null;
+    const next = wanted[f] ? dayKey(wanted[f]!).getTime() : null;
+    return cur !== next;
+  });
+  if (!changed.length) return { item: t, before: {}, warnings: [] as string[] };
+
+  const before: Record<string, unknown> = {};
+  for (const f of changed) { before[f] = (t as any)[f] ?? null; (t as any)[f] = wanted[f] ?? undefined; }
+
+  const warnings: string[] = [];
+  const stage = t.pipeline_status ?? "Fresh Lead";
+  const live = await Batch.find({ trainer: t._id, status: { $in: ACTIVE_BATCH_STATUSES } })
+    .select("code").lean<any[]>();
+  const codes = live.map((b) => b.code).join(", ");
+
+  if (changed.includes("tot_done_on")) {
+    // available_from is SEEDED from tot_done_on (both Certified arms above) and never re-derived,
+    // and it is one of the four gates on Mark Ready. Correcting the TOT date does not move it, so
+    // say what it still holds rather than leaving two screens quietly disagreeing.
+    warnings.push(t.available_from
+      ? `"Available from" still reads ${asDay(t.available_from)}. It was set from the old TOT date and is not recalculated - change it on the trainer's profile if it should move too.`
+      : `"Available from" is not set on this trainer, so nothing else moved with it.`);
+    // tot_lead_ok compares this date to each batch's TOT deadline and never consults the stage, so
+    // this one moves whatever the trainer's status is.
+    if (codes) warnings.push(`The plan lateness flag on ${codes} is recomputed from this date.`);
+    // The plan SHAPE only moves when this date is the sole TOT signal. A Certified trainer skips the
+    // TOT steps on the status alone, so nothing there changes shape - which is why this is gated on
+    // the stage rather than announced every time.
+    if (stage !== "Certified" && !!before.tot_done_on !== !!t.tot_done_on) {
+      warnings.push(t.tot_done_on
+        ? `${t.name} is at "${stage}", not Certified, so this date alone now marks the TOT as done: the three TOT steps will DROP OUT of every plan regenerated from here${codes ? ` (${codes})` : ""}.`
+        : `${t.name} is at "${stage}", so clearing this date brings the three TOT steps BACK into every plan regenerated from here${codes ? ` (${codes})` : ""}.`);
+    }
+  }
+
+  if (changed.includes("paid_on")) {
+    // The fee is a real per-trainer spend that lives in the cost model, and it carries its own
+    // entry_date. This door NEVER creates one: posting a cost goes through an approval gate that
+    // trainers.manage does not stand in for, and a second, quieter money door is worse than a
+    // mismatched date somebody can see.
+    const cat = await CostCategory.findOne({ name: "Trainer eligibility fee" }).lean<any>();
+    const entry = cat ? await CostEntry.findOne({ trainer: t._id, category: cat._id }) : null;
+    if (!entry) {
+      warnings.push(`There is no eligibility-fee entry in Costs for ${t.name} - a trainer moved by bypass never books one. This records the payment on the profile only.`);
+    } else if (opts.canMoveCost && t.paid_on) {
+      const wasOn = entry.entry_date;
+      entry.entry_date = t.paid_on;
+      await entry.save();
+      await audit({ entity: "CostEntry", entityId: entry._id, field: "entry_date", oldValue: wasOn, newValue: entry.entry_date });
+      warnings.push(`The eligibility-fee entry in Costs was moved to ${asDay(t.paid_on)} as well.`);
+    } else {
+      warnings.push(`The eligibility-fee entry in Costs still carries ${asDay(entry.entry_date)}. Someone with cost rights has to move it.`);
+    }
+  }
+
+  // Order is a data-quality nicety here, not a computation - nothing in this product reads these six
+  // against each other. So it is SAID and never refused. Centres do pay the fee before the NSDC
+  // verdict lands, and TOT sometimes starts before the money clears, so a strict version would
+  // refuse arrangements that are simply true.
+  const filled = CORRECTABLE_TRAINER_DATES.filter((f) => !!(t as any)[f]);
+  for (let i = 1; i < filled.length; i++) {
+    const prev = filled[i - 1], cur = filled[i];
+    if (dayKey((t as any)[cur]).getTime() < dayKey((t as any)[prev]).getTime()) {
+      warnings.push(`${CORRECTABLE_TRAINER_DATE_LABEL[cur]} is earlier than ${CORRECTABLE_TRAINER_DATE_LABEL[prev]}. Saved as typed - worth a look.`);
+    }
+  }
+
+  await t.save();
+  return { item: t, before, warnings };
 }
 
 // ---------- Attendance-in-hours (R-D, CEO 14/08 [33:35, 42:15]) ----------

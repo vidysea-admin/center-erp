@@ -362,7 +362,27 @@ stages otherwise move only through `/transition`). **Divergent by omission:** `b
 **The one place this is done right:** `trainers/route.ts:21` exports `SENSITIVE_FIELDS` +
 `maskTrainerSecrets` and `[id]/route.ts:10` imports them, with a comment saying they had drifted before.
 
+### 3.9b `CORRECTABLE_TRAINER_DATES` — 2 copies, one of them guarded (added -202)
+`rules.ts` (**SoT**, exported) · `trainers/[id]/page.tsx` `PIPELINE_DATES` (labels + order for the
+card's Edit mode). The screen cannot import the SoT — `rules.ts` pulls mongoose and that page is a
+client component, the same wall `DOC_TYPES` hits in 3.7. **The copy is pinned**:
+`check-user-copy.mjs` fails if the two lists differ in members or order, and separately if any of
+the six ever reaches the plain `PATCH /api/trainers/[id]` allow-list (3.9), which is what qa-196's
+ratified invariant I2 rests on. These six are written **only** through
+`/api/trainers/[id]/transition` — `POST` stamps them on a stage move, `PATCH` corrects them after.
+
 ### 3.10 Other predicates with more than one copy
+**`totNeeded` — 4 copies of "does this trainer still need a TOT"**: `rules.ts:1865`
+(`planBatchBackward`) · `rules.ts:2587` (`planTrackerRows`, flips six of the 18 columns to
+"Not needed") · `api/plan-batch/route.ts:69` (`tot_skipped`) · `batches/page.tsx:953` (the planner's
+"TOT skipped" note). All four read `pipeline_status === "Certified" || tot_done_on` — **either
+signal alone is enough**, which is why writing `tot_done_on` on a non-Certified trainer silently
+removes three milestones from every future plan.
+**`tot_lead_ok` — 2 copies**: `rules.ts:567` (`batchReadiness.plan_flags`) · `rules.ts:1806`
+(`planArtifact`). Neither consults `pipeline_status`, so this one moves for **any** trainer — and
+`planArtifact` is served through the **public plan-token door**, so a correction changes the payload
+of a link already sent outside the company.
+
 `nameKey` for match normalisation (×4: `govt-attendance.ts:207`, the row-match route, `locations/page.tsx:53`,
 inline in `trainers/page.tsx:140`) · `offerable()` retired-programme filter declared **three times**
 (`batches/page.tsx:16`, `candidates/page.tsx:18`, `locations/[id]/page.tsx:12`) · the ledger-code

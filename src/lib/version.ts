@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-201";
+export const RELEASE = "2026.08.14-202";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,22 @@ export const RELEASE = "2026.08.14-201";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-202 gives a trainer's hiring record a way to be corrected. The dates on a trainer's Nomination " +
+  "and TOT card - when the nomination went out, when it went to NSDC, when NSDC answered, when the " +
+  "eligibility fee was paid, when the TOT was scheduled and when it finished - were written only as " +
+  "the trainer moved through the hiring steps, and no screen anywhere could change one afterwards. " +
+  "A trainer whose status had been set directly, which is what happens when someone joins us before " +
+  "their paperwork catches up, ended with five of those six permanently blank and no way to fill " +
+  "them in. The same card now has an Edit mode covering all of them, plus the NSDC TR ID, which the " +
+  "page had been telling people to record there while offering nowhere to do it. Corrections are " +
+  "open to the same people who move a trainer along - an administrator, the operations team, and " +
+  "the centre - and each one is recorded on the trainer's Activity tab with the name of whoever " +
+  "made it. A date that records something already done can no longer be set in the future, on this " +
+  "screen or on the one that sets a status directly, which until now accepted any date at all. And " +
+  "where a correction changes something else - the availability date, a batch's lateness flag, or " +
+  "the fee already entered in Costs - the screen says so instead of letting the two quietly differ.";
+
+const RELEASE_NOTE_ARCHIVE_HEAD =
   "-201 stops the sheet sync dropping rows without telling anyone. The client's team cleared the " +
   "TC Status on five centres that had been Approved, and only one of the five reached the review " +
   "queue. The sync finds a row's centre by its registration number, but it only ever looked at the " +
@@ -26,10 +42,11 @@ export const RELEASE_NOTE_CURRENT =
   "the row disappeared and the run reported success. Where the cell was not empty the same gap " +
   "filed a change belonging to no centre, which nobody can act on. The sync now finds the centre " +
   "either way, and a row whose number no centre carries is refused out loud and named in the run's " +
-  "own result, instead of being counted as agreement.";
+  "own result, instead of being counted as agreement. ";
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
+  RELEASE_NOTE_ARCHIVE_HEAD +
   "-200 makes the previous release's headline fix actually work. -198 said it had stopped the " +
   "planning form saving a different checklist from the one it had just shown you, when a centre " +
   "already has a certified trainer and the training steps are correctly left out. It had not: the " +
