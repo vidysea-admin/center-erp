@@ -947,6 +947,66 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
   ok("QA-606: a source with no external_id column is refused AND the refusal is recorded on the row",
     r9.status === 400 && after9?.last_status === "Failed" && /must map one column to external_id/i.test(String(after9?.last_error ?? "")),
     JSON.stringify({ status: r9.status, last_status: after9?.last_status }));
+
+  // ---------------------------------------------------------------------------------------------
+  // QA-666 (Umesh, 2026-08-22). The team blanked TC Status on FIVE previously-Approved rows of the
+  // client workbook and exactly ONE reached the Sync Inbox. Measured on live that day: 20 of the
+  // sheet's 35 TC IDs are not any location's `external_id`, and of those five rows exactly one was
+  // - TC351180 - which is precisely the one that appeared. The other four were not refused and not
+  // reported. They were read as AGREEING, because `loc` was null, a centre-level `stored` fell to
+  // "", and a blank sheet cell equals "". The run returned `status: "OK", created: 1`.
+  //
+  // These three pins are written on the QUESTION ("can a row be dropped without anyone being told"),
+  // not on the route, per the standard this project learned in -130.
+  const s10 = "U" + Date.now().toString().slice(-6);
+  const p10 = (await req("POST", "/api/programs", { code: s10, name: "Unreach Prog " + s10, trainer_skill: "UR" + s10 }, 201)).data.item;
+  const TCA = "TCANCH" + s10;   // carried on a target ROW, and NOT the centre's external_id
+  const TCN = "TCNONE" + s10;   // carried by nobody at all
+
+  // The centre is findable ONLY through the target row's tc_id — exactly the four rows Umesh lost.
+  const l10 = (await req("POST", "/api/locations", {
+    code: "UL" + s10, name: "Unreach Loc " + s10, external_id: "DIFFERENT" + s10,
+    approval_status: "Approved", city: "Mau", tc_status: "Approved",
+  }, 201)).data.item;
+  await req("PUT", `/api/locations/${l10._id}/targets`, { program: p10._id, approved_target: 280, tc_id: TCA, tc_status: "Approved" }, 200);
+
+  // (1) THE HEADLINE, and it is Umesh's bug in one row: TC Status was Approved and the sheet now
+  // says blank. No `job_role` mapping, so `tc_status` is centre-level — the live configuration at
+  // the moment the four rows vanished. Pre-fix `stored` is "" (loc is null), incoming is "", they
+  // compare EQUAL and the run reports a clean OK with nothing created.
+  const uA = await mkUpload(`TC ID,TC Status\n${TCA},\n`, "anchoronly.csv");
+  const srcA = (await req("POST", "/api/sync-sources", {
+    name: "Anchor only " + s10, source_url: new URL(uA.url, BASE).href,
+    field_mappings: { "TC ID": "external_id", "TC Status": "tc_status" },
+  }, 201)).data.item;
+  const rA = (await req("POST", `/api/sync-sources/${srcA._id}/run`, undefined, 200)).data;
+  const chA = (await req("GET", `/api/sheet-changes?status=Open&limit=200`)).data;
+  const listA = Array.isArray(chA) ? chA : (chA.items ?? chA.changes ?? chA.data ?? []);
+  const hitA = listA.find((c) => String(c.field_name) === "tc_status" && String(c.location?._id ?? c.location) === String(l10._id));
+  ok("QA-666: clearing a TC Status the ERP holds is DETECTED even when the sheet's TC ID is only on a target row - the four rows that silently agreed with a void",
+    rA.created >= 1 && !!hitA && hitA.old_value === "Approved" && hitA.new_value === "",
+    JSON.stringify({ created: rA.created, status: rA.status, found: !!hitA, old: hitA?.old_value, new: hitA?.new_value }));
+
+  // (2) No centre at all -> the row is REFUSED and NAMED, the same standard the ambiguous-TC-ID
+  // branch has held since QA-520. Pre-fix this row produced a SheetChange carrying `location: null`
+  // - live held 74 of those, every one Ignored, and the dup check counts Ignored, so not one of
+  // them can ever be raised again. An unactionable row is worse than a refused one.
+  const uN = await mkUpload(`TC ID,TC Status\n${TCN},Approved\n`, "nocentre.csv");
+  const srcN = (await req("POST", "/api/sync-sources", {
+    name: "No centre " + s10, source_url: new URL(uN.url, BASE).href,
+    field_mappings: { "TC ID": "external_id", "TC Status": "tc_status" },
+  }, 201)).data.item;
+  const rN = (await req("POST", `/api/sync-sources/${srcN._id}/run`, undefined, 200)).data;
+  ok("QA-666: a TC ID NO centre carries makes the run Partial and names the id - it used to return a clean OK",
+    rN.status === "Partial" && new RegExp(TCN).test(String(rN.error ?? "")) && /NO centre carries/i.test(String(rN.error ?? "")),
+    JSON.stringify({ status: rN.status, created: rN.created, error: String(rN.error ?? "").slice(0, 180) }));
+
+  const chN = (await req("GET", `/api/sheet-changes?limit=500`)).data;
+  const listN = Array.isArray(chN) ? chN : (chN.items ?? chN.changes ?? chN.data ?? []);
+  const orphans = listN.filter((c) => String(c.sync_source?._id ?? c.sync_source) === String(srcN._id) && !c.location);
+  ok("QA-666: that row creates NO change belonging to no centre - the shape that produced 74 unactionable rows on live",
+    rN.created === 0 && orphans.length === 0,
+    JSON.stringify({ created: rN.created, orphans: orphans.length }));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

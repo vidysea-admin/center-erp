@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-200";
+export const RELEASE = "2026.08.14-201";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,19 @@ export const RELEASE = "2026.08.14-200";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-201 stops the sheet sync dropping rows without telling anyone. The client's team cleared the " +
+  "TC Status on five centres that had been Approved, and only one of the five reached the review " +
+  "queue. The sync finds a row's centre by its registration number, but it only ever looked at the " +
+  "number recorded on the centre itself, and most of the sheet's numbers are recorded on the " +
+  "centre's individual job-role rows instead. When it could not find the centre it did not say so " +
+  "- it compared the sheet against nothing, and a cleared cell matched that nothing exactly, so " +
+  "the row disappeared and the run reported success. Where the cell was not empty the same gap " +
+  "filed a change belonging to no centre, which nobody can act on. The sync now finds the centre " +
+  "either way, and a row whose number no centre carries is refused out loud and named in the run's " +
+  "own result, instead of being counted as agreement.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-200 makes the previous release's headline fix actually work. -198 said it had stopped the " +
   "planning form saving a different checklist from the one it had just shown you, when a centre " +
   "already has a certified trainer and the training steps are correctly left out. It had not: the " +
@@ -26,10 +39,7 @@ export const RELEASE_NOTE_CURRENT =
   "steps on screen, eight on the batch. The server now returns the identifier, and the check that " +
   "guards this no longer looks at whether the code was written a certain way; it plans a batch the " +
   "way the screen does and compares the two lists. Also: a completion date sent as empty, zero or " +
-  "null was still being read as today for two of those three; all of them are refused now."
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "null was still being read as today for two of those three; all of them are refused now. " +
   "-199 leaves one button where there were two. Planning a batch was offered twice on the same " +
   "screen - once in the page header and once again in a panel a few rows below it, both reading " +
   "Plan a batch. The one in the header is the one that stays: it opens the planning view and the " +

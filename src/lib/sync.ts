@@ -254,6 +254,10 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
   // QA-520: registration numbers that more than one CENTRE claims. Never resolved by write
   // order - reported, like a truncated row, so a partial read never reads as a clean one.
   const ambiguous: string[] = [];
+  // QA-666: registration numbers NO centre claims - not as its `external_id`, not on any of its
+  // job-role rows. Nothing on such a row can be written anywhere, and the silence about it is what
+  // let four of the five rows Umesh asked about disappear behind a clean run.
+  const unreachable: string[] = [];
 
   let created = 0;
   for (const [rowNo, raw] of rows.slice(1).entries()) {
@@ -285,6 +289,26 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
       continue;
     }
     const anchorLoc = anchorLocs.length === 1 ? anchors[0].location : null;
+
+    // QA-666 (Umesh, 2026-08-22): the team blanked TC Status on FIVE previously-Approved sheet rows
+    // and exactly ONE reached the inbox. The other four were neither refused nor reported - they
+    // were read as AGREEING. `loc` is null whenever the sheet's TC ID is not the centre's
+    // `external_id`, which on live is 20 of 35, so a centre-level field's `stored` fell to "" below,
+    // the sheet cell was blank too, `incoming === stored` matched, and the row vanished into a
+    // `status: "OK"`. When the cell was NOT blank the same null produced a change carrying
+    // `location: null` - live held 74 of those, every one Ignored, and the duplicate check counts
+    // Ignored, so not one of them can ever be raised again.
+    //
+    // So the row's centre is resolved ONCE, here, and a row that has none is refused outright like
+    // an ambiguous TC ID instead of being compared against a void. The anchor is a FALLBACK, never
+    // a replacement: wherever the sheet key resolves, `loc` still wins and every source that has
+    // always keyed on a centre behaves exactly as it did. QA-520's rule is intact - "everything
+    // else keeps the sheet key's centre" cannot mean "keeps nothing" when there is no such centre.
+    const centre = loc ?? (anchorLoc ? await Location.findById(anchorLoc).lean<any>() : null);
+    if (!centre) {
+      unreachable.push(externalId);
+      continue;
+    }
 
     // QA-440: which job role is THIS row about? Answered from the target rows this TC ID carries,
     // so the scheme comes along for free. Nothing is guessed - a name that matches none of them, or
@@ -340,7 +364,11 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
         // blank-vs-value is a diff that cannot report them.
         stored = (lt as any)?.[rowField.base] != null ? String((lt as any)[rowField.base]) : "";
       } else if (LOCATION_FIELDS.has(field)) {
-        stored = loc?.[field] != null ? String(loc[field]) : "";
+        // QA-666: read from the RESOLVED centre, not from `loc` alone. Identical wherever the sheet
+        // key resolved; where only the anchor did, this is the whole difference between comparing
+        // against the centre's real value and comparing against "" - and a blank sheet cell against
+        // "" compares EQUAL, which is how a cleared TC Status became "nothing changed".
+        stored = centre?.[field] != null ? String(centre[field]) : "";
       } else {
         continue; // Rule 1: unmapped/unknown → ignored, not stored
       }
@@ -355,7 +383,9 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
       // QA-520: a row-level change belongs to the centre that carries the number; everything else
       // keeps the sheet key's centre. Same value used for the duplicate check and the write, or a
       // re-run would raise a second row for the same fact.
-      const changeLoc = (rowField ? anchorLoc : null) ?? loc?._id ?? null;
+      // QA-666: `centre` is non-null by construction above, so this can no longer fall to `null` -
+      // that null is what produced 74 unactionable changes belonging to no centre at all.
+      const changeLoc = (rowField ? anchorLoc : null) ?? centre._id;
       // QA-440: a per-row change is STORED in the canonical "<base>:<CODE>" form even when the
       // mapping wrote it bare. That is deliberate and it is what keeps this change to one function:
       // the apply switch (targetRowField), the Apply-value guard, and the revert route's
@@ -370,18 +400,18 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
         field_name: storedField,
         old_value: stored,
         new_value: incoming,
-        impact_snapshot: loc ? await impactSnapshot(loc._id) : null, // Rule 3
+        impact_snapshot: await impactSnapshot(centre._id), // Rule 3 (QA-666: always a real centre now)
       });
       created++;
     }
   }
-  // THREE reasons a run is not clean, and each one used to be its own early return, so a sheet
-  // with more than one fault reported only the first and the rest vanished - on precisely the
-  // signal whose whole job is to say the run was not clean.
+  // FOUR reasons a run is not clean (QA-666 added the fourth), and each one used to be its own
+  // early return, so a sheet with more than one fault reported only the first and the rest vanished
+  // - on precisely the signal whose whole job is to say the run was not clean.
   //
   // QA-604: -188 merged two of the three and left `ambiguous` in front of both, which fixed the
   // symptom for one pair and kept it for every pair involving the first. Merging two of three is
-  // the same defect wearing a smaller coat. All three now report together.
+  // the same defect wearing a smaller coat. All of them now report together.
   const partialReasons: string[] = [];
   // QA-520: a run that skipped rows because their registration number is claimed twice is NOT a
   // clean run, and reporting it as one is how the last of these stayed invisible for a month.
@@ -394,6 +424,14 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
   // so silence here would rebuild the exact thing being fixed.
   if (unresolvedRoles.length) {
     partialReasons.push(`${unresolvedRoles.length} row(s) named a job role that could not be matched to a target row, so THAT ROW'S PER-JOB-ROLE FIELDS were skipped rather than guessed (the row's centre-level fields were still read): ${unresolvedRoles.slice(0, 5).join("; ")}${unresolvedRoles.length > 5 ? "; …" : ""}. Set that job role's approved target on the centre first, or correct the job role in the sheet.`);
+  }
+  // QA-666: the fourth reason, and the one whose absence cost the most. The other three describe
+  // rows the run REFUSED; this one describes rows the run could not even ask a question about,
+  // because no centre in the ERP carries the row's registration number. Those rows used to be
+  // compared against a void - blank sheet cell versus an absent centre's "" reads as AGREEMENT -
+  // so the run reported OK while dropping them. There is no sense in which that is a clean run.
+  if (unreachable.length) {
+    partialReasons.push(`${unreachable.length} sheet row(s) name a TC ID that NO centre carries — neither as its registration number nor on any of its job-role rows — so those rows were skipped entirely rather than compared against nothing: ${unreachable.slice(0, 5).join("; ")}${unreachable.length > 5 ? "; …" : ""}. Put that TC ID on the centre it belongs to (Locations → the centre → TC per job role), or correct it in the sheet.`);
   }
   // Rule 2 at row level: say so plainly rather than reporting a clean run over a partial read.
   if (truncated.length) {
