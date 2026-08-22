@@ -1581,8 +1581,13 @@ for (const file of walk(root)) {
   const rel = "app/(app)/batches/[id]/page.tsx";
   const src = stripComments(fs.readFileSync(path.join(root, rel), "utf-8"));
   const scan = blankStrings(src);
+  // -205 changed what this measures, and the new statement is Umesh's own: "overview mai jo Complete
+  // Batch button hai, that must be come beside these above buttons in the same card, not anywhere
+  // else." -204 satisfied "not inside the ternary" by making the row a sibling of the card. That
+  // cleared the S1 but it is not where he wants it. The controls are now ONE declared value rendered
+  // in BOTH branches - inside the "Right now" card while the batch runs, and inside the readiness
+  // Section before it starts - so the invariant worth holding is that NEITHER branch can lose it.
   const runIdx = scan.indexOf("{running ? (");
-  const actIdx = scan.indexOf("{canTransition ? (");
   let closeIdx = -1;
   if (runIdx >= 0) {
     let depth = 0;
@@ -1591,13 +1596,19 @@ for (const file of walk(root)) {
       else if (scan[i] === "}") { depth--; if (depth === 0) { closeIdx = i; break; } }
     }
   }
-  if (runIdx >= 0 && actIdx >= 0 && closeIdx > runIdx && actIdx > closeIdx) passed++;
+  const span = closeIdx > runIdx ? scan.slice(runIdx, closeIdx + 1) : "";
+  const split = span.search(/\r?\n\s{6}\) : \(/);
+  const hasDecl = /const statusActions = canTransition \? \(/.test(scan);
+  const inRunning = split > 0 && /\{statusActions\}/.test(span.slice(0, split));
+  const inReadiness = split > 0 && /\{statusActions\}/.test(span.slice(split));
+  if (hasDecl && inRunning && inReadiness) passed++;
   else {
     failed++;
-    pushStructural(rel + ": the batch status controls are nested inside the `running` ternary"
-      + " (running@" + runIdx + ", its close@" + closeIdx + ", controls@" + actIdx + ")"
-      + " - a batch that has started then has NO way to be completed, reopened, closed or cancelled"
-      + " from this screen. That is what -112 shipped and nobody noticed for 92 releases.");
+    pushStructural(rel + ": the batch status controls do not render in both states"
+      + " (declared=" + hasDecl + ", in the \"Right now\" card=" + inRunning + ", in the readiness Section=" + inReadiness + ")"
+      + " - whichever branch is missing it, a batch in that state has NO way to be completed, reopened,"
+      + " closed or cancelled from this screen. That is what -112 shipped and nobody noticed for 92"
+      + " releases; Umesh asked for the control to sit in the card, not merely to exist.");
   }
 }
 

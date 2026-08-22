@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, requireRole, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, BatchMember, CandidateResult, Closure } from "@/models";
-import { assertBatchInScope, activeRoster, recomputeClosureAggregates, transitionBatch, upsertCandidateResult } from "@/lib/rules";
+import { assertBatchInScope, activeRoster, enrolledWithoutCan, recomputeClosureAggregates, transitionBatch, upsertCandidateResult } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
 // -113 (Umesh, 18/08: "admin ke paas mark completed ka button aaye, aur wo press kar paye — jaise
@@ -62,11 +62,18 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   if (!batch) throw new HttpError(404, "Batch not found");
   const o = await outstanding(id);
   const closure = await Closure.findOne({ batch: id }).select("assessment_status certification_status").lean<any>();
+  // -205 (QA-676): the caption on the Overview said "Waiting on certificates" whenever certification
+  // was Pending, and on the Gurugram batch that sentence was FALSE - zero certificates outstanding,
+  // 17 of 17 Issued. The real hold was the portal ID, which the caption never mentions and this
+  // payload never carried. Umesh went looking for a certificate problem because the screen sent him
+  // there. A screen that names the wrong cause is worse than one that says nothing.
+  const noCan = await enrolledWithoutCan(id);
   return NextResponse.json({
     status: batch.status,
     can_complete_cleanly: o.unmarked.length === 0 && o.unsettled.length === 0,
     admin_only: true,
     ...o,
+    no_portal_id: noCan,
     closure: { assessment_status: closure?.assessment_status ?? "Pending", certification_status: closure?.certification_status ?? "Pending" },
   });
 });

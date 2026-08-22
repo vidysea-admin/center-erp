@@ -1735,5 +1735,53 @@ const stillOk = await req(admin, "POST", "/api/sync-sources/test", {
 });
 ok("SSRF guard does not block the real client workbook", stillOk.data.ok === true, JSON.stringify(stillOk.data).slice(0, 200));
 
+// ---- -205 (Umesh, 23/08): "ye jo 10 students remaining hai, ye 10 hai kaun se?" ----
+// The panel printed a COUNT and told him to "map by hand below" with nothing below it. He could not
+// find out which students, and neither could the centre: "team ko kya, mujhe bhi nahi pata chala ki
+// wo 10 bachche hain kaun se, jinki candidate id nahi hai." And there was nowhere to type one in
+// from the batch that is blocked by its absence — "individual candidate card me candidate id bharne
+// wala koi form input value type hi nahi hai."
+//
+// These are behaviour pins: they build a roster where some ids are missing, read the payload the
+// screen reads, and then type an id in the way the screen types it — through the ordinary candidate
+// door — and watch the counts move.
+{
+  const nb = (await req(admin, "POST", "/api/batches", { location: loc._id, program: program._id, target_size: 2, planned_start: localDate() })).data.item;
+  const c1 = (await req(admin, "POST", "/api/candidates", { name: `${NAME} NoId One`, phone: "9556" + STAMP, location: loc._id, program: program._id })).data.item;
+  const c2 = (await req(admin, "POST", "/api/candidates", { name: `${NAME} NoId Two`, phone: "9557" + STAMP, location: loc._id, program: program._id, sidh_candidate_id: `CAN_${STAMP}8888` })).data.item;
+  await req(admin, "POST", `/api/batches/${nb._id}/members`, { candidate: c1._id });
+  await req(admin, "POST", `/api/batches/${nb._id}/members`, { candidate: c2._id });
+
+  const p0 = (await req(admin, "GET", `/api/batches/${nb._id}/link-portal-ids`)).data;
+  ok("-205: the payload NAMES the students with no portal ID — a count alone is not actionable",
+    Array.isArray(p0.missing) && p0.missing.length === 1 && p0.missing[0].name === `${NAME} NoId One`,
+    JSON.stringify({ without: p0.without_portal_id, missing: (p0.missing ?? []).map((m) => m.name) }));
+  ok("-205: …and the list length agrees with the count the screen prints beside it",
+    p0.missing.length === p0.without_portal_id && p0.with_portal_id === 1 && p0.roster === 2,
+    JSON.stringify({ n: p0.missing?.length, without: p0.without_portal_id, with: p0.with_portal_id }));
+  // His second question, answered on the row: "inke certificate to nahi honge na, matlab jo fail
+  // wale bachche hain, unhi me se 10 hain, ya kaun se hain".
+  ok("-205: …each named student carries their RESULT and phone, so the row identifies a person",
+    p0.missing[0].result === "Pending" && String(p0.missing[0].phone ?? "").endsWith(STAMP)
+    && typeof p0.missing[0].candidate === "string",
+    JSON.stringify(p0.missing[0]));
+
+  // The hand-typed path — the one he asked for. Same door the screen uses.
+  const typed = await req(admin, "PATCH", `/api/candidates/${c1._id}`, { sidh_candidate_id: `CAN_${STAMP}9999` });
+  ok("-205: an id typed by hand is accepted on the ordinary candidate door", typed.status === 200,
+    JSON.stringify(typed.data).slice(0, 120));
+  const p1 = (await req(admin, "GET", `/api/batches/${nb._id}/link-portal-ids`)).data;
+  ok("-205: THE ASK — after typing it, that student leaves the list and the counts move",
+    (p1.missing ?? []).length === 0 && p1.without_portal_id === 0 && p1.with_portal_id === 2,
+    JSON.stringify({ missing: p1.missing?.length, without: p1.without_portal_id, with: p1.with_portal_id }));
+
+  // QA-676: the Overview caption said "Waiting on certificates" whenever certification was Pending,
+  // which on the Gurugram batch was false — nothing was outstanding but the portal IDs. The payload
+  // the caption reads must carry that fact, or the screen can only guess again.
+  const cp = (await req(admin, "GET", `/api/batches/${nb._id}/complete`)).data;
+  ok("-205 (QA-676): the completion payload carries the portal-ID gap, so the caption can name it",
+    Array.isArray(cp.no_portal_id), JSON.stringify({ keys: Object.keys(cp).slice(0, 10) }));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

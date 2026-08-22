@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
-import { BatchMember, Candidate, GovtAttendanceRow } from "@/models";
+import { BatchMember, Candidate, CandidateResult, GovtAttendanceRow } from "@/models";
 import { assertBatchInScope } from "@/lib/rules";
 import { normalizeCan } from "@/lib/govt-attendance";
 import { audit } from "@/lib/audit";
@@ -83,10 +83,39 @@ async function plan(batchId: string) {
   }
 
   const withId = members.filter((m) => canOf(m.candidate?.sidh_candidate_id)).length;
+
+  // -205 (Umesh, 23/08): "ye jo 10 students remaining hai, ye 10 hai kaun se? ... team ko kya, mujhe
+  // bhi nahi pata chala ki wo 10 bachche hain kaun se, jinki candidate id nahi hai."
+  //
+  // `without_portal_id` has always been a COUNT, and the screen that prints it says "map by hand
+  // below" while naming nobody. A count is not actionable: it tells a centre that ten people are
+  // missing an id and gives them no way to find out which ten. So the list rides along, with the
+  // phone (REQ-389 — two students on this very roster share a name) and with the RESULT, because
+  // his next question was whether the ten are the ones who failed.
+  const missingIds = members.filter((m) => m.candidate && !canOf(m.candidate.sidh_candidate_id));
+  const resultRows = missingIds.length
+    ? await CandidateResult.find({ batch: batchId, batch_member: { $in: missingIds.map((m) => m._id) } })
+      .select("batch_member result certificate_status").lean<any[]>()
+    : [];
+  const resultByMember = new Map(resultRows.map((r) => [String(r.batch_member), r]));
+  const missing = missingIds.map((m) => {
+    const r = resultByMember.get(String(m._id));
+    return {
+      candidate: String(m.candidate._id),
+      member: String(m._id),
+      name: m.candidate.name,
+      phone: m.candidate.phone ?? null,
+      result: r?.result ?? "Pending",
+      certificate_status: r?.certificate_status ?? null,
+      left: !!m.left_on,
+    };
+  });
+
   return {
     roster: members.length,
     with_portal_id: withId,
     without_portal_id: members.length - withId,
+    missing,
     linkable, already, conflicts,
   };
 }

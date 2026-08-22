@@ -164,7 +164,12 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
   const [completing, setCompleting] = useState(false);
   const isAdmin = role === "Admin";
   useEffect(() => {
-    if (!isAdmin || !["Active", "Closing"].includes(b.status)) { setCompletePlan(null); return; }
+    // -205: the `isAdmin` guard was here because only the Admin panel read this payload. The caption
+    // above reads it too now, and Operations and the centre look at that caption — with the guard in
+    // place they would have read "Checking what is still outstanding…" for ever. The endpoint has its
+    // own gate (`batches.manage`); a caller without it gets a refusal and the state stays null,
+    // which is the same as before for them.
+    if (!["Active", "Closing"].includes(b.status)) { setCompletePlan(null); return; }
     api(`/api/batches/${b._id}/complete`).then(setCompletePlan).catch(() => setCompletePlan(null));
   }, [b._id, b.status, isAdmin]);
   async function completeAsAdmin() {
@@ -238,6 +243,86 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
   const [roomPick, setRoomPick] = useState("");
   const [newRoom, setNewRoom] = useState<{ name: string; type: string } | null>(null);
   const [roomBusy, setRoomBusy] = useState(false);
+  // -205 (Umesh, 23/08): "overview mai jo Complete Batch button hai, that must be come beside
+  // these above buttons in the same card, not anywhere else. am i really clear ?" He is clear.
+  // -204 put these controls back on the screen by lifting them out of the collapsed readiness
+  // ternary, which fixed the S1 - but it left them as their own row, and he wants them IN the
+  // "Right now" card, beside Attendance / Daily log / Roster / Certificates. So the row is ONE
+  // value declared here and rendered in both places the batch can be in: inside that card while
+  // it is running, and inside the readiness Section before it starts. One copy, two homes - a
+  // second literal would be the drift this repo's ARCHITECTURE.md section 3 is a list of.
+  const statusActions = canTransition ? (
+    <div className="mt-4 flex flex-wrap gap-2">
+      {b.status === "Planning" && <Btn onClick={() => transition("Ready")} disabled={!r.ready}>Mark Ready</Btn>}
+      {b.status === "Ready" && !beganAlready && <Btn onClick={() => transition("Active")}>Start Batch</Btn>}
+      {b.status === "Ready" && beganAlready && (
+        <span className="inline-flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1">
+          <label className="text-xs text-amber-800">Batch already began on</label>
+          <input type="date" className="rounded-lg border border-gray-300 px-2 py-1 text-xs" value={startDate} max={todayKey} onChange={(e) => setStartDate(e.target.value)} />
+          <Btn onClick={() => transition("Active", { actual_start: startDate || undefined })} disabled={!startDate}>Start Batch from that date</Btn>
+        </span>
+      )}
+      {b.status === "Ready" && <Btn kind="ghost" onClick={() => transition("Planning")}>Back to Planning</Btn>}
+      {/* -102: the client's words for these two steps. Targets stay the stored enum. */}
+      {b.status === "Active" && <Btn onClick={() => transition("Closing")}>Assessment done → Result Awaited</Btn>}
+      {/* -113: the Admin's own door, on Active as well as Result Awaited. It is offered whether
+          or not the rules are already satisfied — when they are, it simply completes; when they
+          are not, the panel below says what it will settle first. */}
+      {isAdmin && ["Active", "Closing"].includes(b.status) && (
+        <Btn kind={b.status === "Closing" ? "ghost" : "primary"} onClick={() => setCompleteOpen((v) => !v)}>Mark Completed (Admin)</Btn>
+      )}
+      {/* -112 (QA-219 / Manish M4-01 "status aayega certification done"): when every result is
+          final and every pass has its certificate, the two closure halves derive themselves and
+          the batch walks to Result Awaited on its own. The one press left is the freeze, and it
+          says so — it used to bounce off Rule 18 with nothing on screen explaining why. */}
+      {b.status === "Closing" && (
+        <span className="inline-flex flex-col gap-0.5">
+          <Btn onClick={() => transition("Completed")}>{money?.closure?.certification_status === "Completed" ? "Certification done → Complete Batch" : "Complete Batch"}</Btn>
+          {/* -205 (QA-676): this said "Waiting on certificates" whenever certification was Pending,
+              and on the Gurugram batch that was FALSE - every one of its 17 passes held an Issued
+              certificate and nothing was outstanding. The hold was the portal Candidate ID, which
+              this line never mentioned. Umesh went hunting for a certificate problem because the
+              screen sent him there, and a screen that names the wrong cause costs more than one that
+              says nothing. It reads `completePlan` now - the same payload the Admin door already
+              fetches for Active and Closing - and names whatever is actually outstanding.
+              `money` was never even loaded here: it is fetched only when the batch is Completed, so
+              on a Closing batch this ternary always took its false branch. */}
+          <span className="text-[10px] font-medium text-gray-500">
+            {!completePlan ? "Checking what is still outstanding…" : (() => {
+              const bits: string[] = [];
+              if (completePlan.unmarked?.length) bits.push(`${completePlan.unmarked.length} student${completePlan.unmarked.length === 1 ? "" : "s"} with no result`);
+              if (completePlan.unsettled?.length) bits.push(`${completePlan.unsettled.length} pass${completePlan.unsettled.length === 1 ? "" : "es"} with no certificate settled`);
+              if (completePlan.no_portal_id?.length) bits.push(`${completePlan.no_portal_id.length} without a portal Candidate ID`);
+              return bits.length
+                ? `Still outstanding: ${bits.join(" · ")}. The Certificates tab names them.`
+                : "Nothing outstanding. Completing freezes the results and figures.";
+            })()}
+          </span>
+        </span>
+      )}
+      {/* -113: completing is one press now, so it needs an undo. Admin only, reason required,
+          audited — and never offered on a CLOSED batch, which is a settlement, not a record. */}
+      {isAdmin && b.status === "Completed" && (
+        <Btn kind="ghost" onClick={() => {
+          const why = window.prompt("Reopen this completed batch? Results and certificates become editable again. Reason:");
+          if (why && why.trim()) transition("Closing", { reason: why.trim() });
+        }}>Reopen (Admin)</Btn>
+      )}
+      {/* Rule 52: Completed = training over; Closed = money over (cert + invoice PAID + no dues). */}
+      {b.status === "Completed" && (
+        <span title={closeBlockers.length ? `Still needed before the batch can close: ${closeBlockers.join("; ")}` : "All dues settled — the batch can close"} className="inline-flex flex-col gap-0.5">
+          <Btn onClick={() => transition("Closed")} disabled={money !== null && closeBlockers.length > 0}>Close Batch (no dues)</Btn>
+          {money !== null && closeBlockers.length > 0 && (
+            <span className="text-[10px] font-medium text-amber-700">needs: {closeBlockers.join(" · ")}</span>
+          )}
+        </span>
+      )}
+      {["Planning", "Ready", "Active"].includes(b.status) && <Btn kind="danger" onClick={() => setConfirmCancel(true)}>Cancel Batch</Btn>}
+    </div>
+  ) : (
+    <p className="mt-4 text-xs text-gray-400">Batch status is moved by Operations/Admin.</p>
+  );
+
   const canAssignRoom = canTransition && !r.checks.room_assigned && ["Planning", "Ready"].includes(b.status);
   useEffect(() => {
     if (!canAssignRoom || !locId) return;
@@ -306,6 +391,8 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
             <Btn small kind="ghost" onClick={() => onGo("Daily Execution")}>Daily log</Btn>
             <Btn small kind="ghost" onClick={() => onGo("Candidates")}>Roster</Btn>
             <Btn small kind="ghost" onClick={() => onGo("Closure")}>Certificates</Btn>
+            {/* -205: his ask, literally - the status controls beside these four, in this card. */}
+            {statusActions}
           </div>
         </Section>
         <details className="rounded-xl border border-gray-200/80 bg-white px-4 py-2 text-sm">
@@ -362,72 +449,8 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
             <span className="text-[10px] text-gray-400">not part of the count above</span>
           </li>
         </ul>
+        {statusActions}
       </Section>
-      )}
-      {/* -204 (Umesh, 22/08: "button hi nahi aa raha hai abhi, unko complete mark karne ka... pehle
-          toh aa raha tha, ye hil kyu gaya?"). It had not moved - it had FALLEN OUT. -112 collapsed
-          the readiness checklist once a batch is running, which was right, and -134 filled the hole
-          with the "Right now" card, which was also right. But every status control lived INSIDE the
-          collapsed half and nobody moved it out, so from -112 onward a batch that had started could
-          not be completed, reopened, closed or cancelled from this screen AT ALL. Measured on live:
-          AVP-GURU-RPLAVP-DST-02 sat at Result Awaited rendering no status button of any kind.
-          These controls belong to the BATCH, not to the preparation checklist, so they sit outside
-          the ternary now - one copy, every status, and each button keeps its own gate. */}
-      {canTransition ? (
-        <div className="mt-4 flex flex-wrap gap-2">
-          {b.status === "Planning" && <Btn onClick={() => transition("Ready")} disabled={!r.ready}>Mark Ready</Btn>}
-          {b.status === "Ready" && !beganAlready && <Btn onClick={() => transition("Active")}>Start Batch</Btn>}
-          {b.status === "Ready" && beganAlready && (
-            <span className="inline-flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1">
-              <label className="text-xs text-amber-800">Batch already began on</label>
-              <input type="date" className="rounded-lg border border-gray-300 px-2 py-1 text-xs" value={startDate} max={todayKey} onChange={(e) => setStartDate(e.target.value)} />
-              <Btn onClick={() => transition("Active", { actual_start: startDate || undefined })} disabled={!startDate}>Start Batch from that date</Btn>
-            </span>
-          )}
-          {b.status === "Ready" && <Btn kind="ghost" onClick={() => transition("Planning")}>Back to Planning</Btn>}
-          {/* -102: the client's words for these two steps. Targets stay the stored enum. */}
-          {b.status === "Active" && <Btn onClick={() => transition("Closing")}>Assessment done → Result Awaited</Btn>}
-          {/* -113: the Admin's own door, on Active as well as Result Awaited. It is offered whether
-              or not the rules are already satisfied — when they are, it simply completes; when they
-              are not, the panel below says what it will settle first. */}
-          {isAdmin && ["Active", "Closing"].includes(b.status) && (
-            <Btn kind={b.status === "Closing" ? "ghost" : "primary"} onClick={() => setCompleteOpen((v) => !v)}>Mark Completed (Admin)</Btn>
-          )}
-          {/* -112 (QA-219 / Manish M4-01 "status aayega certification done"): when every result is
-              final and every pass has its certificate, the two closure halves derive themselves and
-              the batch walks to Result Awaited on its own. The one press left is the freeze, and it
-              says so — it used to bounce off Rule 18 with nothing on screen explaining why. */}
-          {b.status === "Closing" && (
-            <span className="inline-flex flex-col gap-0.5">
-              <Btn onClick={() => transition("Completed")}>{money?.closure?.certification_status === "Completed" ? "Certification done → Complete Batch" : "Complete Batch"}</Btn>
-              <span className="text-[10px] font-medium text-gray-500">
-                {money?.closure?.certification_status === "Completed"
-                  ? "Every certificate is settled. Completing freezes the results and figures."
-                  : "Waiting on certificates — each passed candidate needs one attached (or marked Not Issued)."}
-              </span>
-            </span>
-          )}
-          {/* -113: completing is one press now, so it needs an undo. Admin only, reason required,
-              audited — and never offered on a CLOSED batch, which is a settlement, not a record. */}
-          {isAdmin && b.status === "Completed" && (
-            <Btn kind="ghost" onClick={() => {
-              const why = window.prompt("Reopen this completed batch? Results and certificates become editable again. Reason:");
-              if (why && why.trim()) transition("Closing", { reason: why.trim() });
-            }}>Reopen (Admin)</Btn>
-          )}
-          {/* Rule 52: Completed = training over; Closed = money over (cert + invoice PAID + no dues). */}
-          {b.status === "Completed" && (
-            <span title={closeBlockers.length ? `Still needed before the batch can close: ${closeBlockers.join("; ")}` : "All dues settled — the batch can close"} className="inline-flex flex-col gap-0.5">
-              <Btn onClick={() => transition("Closed")} disabled={money !== null && closeBlockers.length > 0}>Close Batch (no dues)</Btn>
-              {money !== null && closeBlockers.length > 0 && (
-                <span className="text-[10px] font-medium text-amber-700">needs: {closeBlockers.join(" · ")}</span>
-              )}
-            </span>
-          )}
-          {["Planning", "Ready", "Active"].includes(b.status) && <Btn kind="danger" onClick={() => setConfirmCancel(true)}>Cancel Batch</Btn>}
-        </div>
-      ) : (
-        <p className="mt-4 text-xs text-gray-400">Batch status is moved by Operations/Admin.</p>
       )}
       {completeOpen && isAdmin && ["Active", "Closing"].includes(b.status) && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm">
@@ -2247,6 +2270,12 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
   const [mapping, setMapping] = useState<any>(null);
   const [linkPlan, setLinkPlan] = useState<any>(null); // portal-id readiness for the pre-flight panel
   const [linking, setLinking] = useState(false);
+  // -205 (Umesh, 23/08): "ye jo 10 students remaining hai, ye 10 hai kaun se? ... team ko kya, mujhe
+  // bhi nahi pata chala." The count was printed and the names never were, next to a sentence telling
+  // him to "map by hand below" with nothing below to map. Open the list, and type the id right there.
+  const [showMissing, setShowMissing] = useState(false);
+  const [canDraft, setCanDraft] = useState<Record<string, string>>({});
+  const [savingCan, setSavingCan] = useState<string | null>(null);
   const [certBusy, setCertBusy] = useState<string | null>(null); // per-candidate upload in flight
 
   // 2026-08-14 (CEO 49:33): "sare certificate ek folder mein ID ke saath — upload hote
@@ -2337,6 +2366,24 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
         : "Nothing to link — the portal attendance imported so far names no new IDs for this roster.");
     } catch (e: any) { setError(e.message); }
     finally { setLinking(false); }
+  }
+
+  // -205: the id typed by hand, on the row of the student it belongs to. `sidh_candidate_id` has been
+  // on the candidate PATCH allow-list since -116; what was missing was anywhere to type it from the
+  // batch that is blocked by its absence. Umesh: "individual candidate card me candidate id bharne
+  // wala koi form input value type hi nahi hai... wahin par value fill karein aur wahin par show ho
+  // jaaye." One save, then the panel recounts itself, so the number he is watching moves as the team
+  // works down the list.
+  async function saveCan(candidateId: string, raw: string) {
+    const v = String(raw ?? "").trim();
+    if (!v) return;
+    setSavingCan(candidateId);
+    try {
+      await api(`/api/candidates/${candidateId}`, { method: "PATCH", json: { sidh_candidate_id: v } });
+      setCanDraft((d) => { const n = { ...d }; delete n[candidateId]; return n; });
+      await load(); await loadLinkPlan();
+    } catch (e: any) { setError(e.message); }
+    finally { setSavingCan(null); }
   }
 
   const [loaded, setLoaded] = useState(false);
@@ -2608,7 +2655,45 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
                 </span>
               )}
               {!linkPlan.linkable?.length && linkPlan.without_portal_id > 0 && (
-                <span className="ml-1">Nothing to link from the imports so far — map by hand below, or upload from each candidate&apos;s own card.</span>
+                <span className="ml-1">Nothing to link from the imports so far — these have to be typed in from the portal.</span>
+              )}
+              {/* -205: the count, opened. It used to say "map by hand below" with nothing below it. */}
+              {linkPlan.missing?.length > 0 && (
+                <button type="button" onClick={() => setShowMissing((v) => !v)}
+                  className="ml-1 font-semibold underline">
+                  {showMissing ? "hide the list" : `show which ${linkPlan.missing.length}`}
+                </button>
+              )}
+              {showMissing && linkPlan.missing?.length > 0 && (
+                <div className="mt-2 space-y-1 rounded-lg border border-gray-200 bg-white p-2">
+                  {/* His second question, answered on the row rather than made him ask again: "inke
+                      certificate to nahi honge na, matlab jo fail wale bachche hain, unhi me se 10
+                      hain, ya kaun se hain". The result rides beside every name. */}
+                  <div className="text-[11px] text-gray-500">
+                    Type the portal Candidate ID from SIDH and press Save. The count above recounts itself.
+                  </div>
+                  {linkPlan.missing.map((m: any) => (
+                    <div key={m.candidate} className="flex flex-wrap items-center gap-2 border-t border-gray-100 pt-1 text-xs first:border-t-0">
+                      <span className="min-w-[9rem] font-medium text-gray-800">{m.name}</span>
+                      <span className="text-gray-500">{m.phone ?? "no phone"}</span>
+                      <span className={m.result === "Pass" ? "text-green-700" : m.result === "Pending" ? "text-amber-700" : "text-gray-500"}>{m.result}</span>
+                      {m.left && <span className="text-gray-400">left the batch</span>}
+                      <input
+                        className="w-40 rounded-lg border border-gray-300 px-2 py-1 text-xs"
+                        placeholder="CAN_…"
+                        value={canDraft[m.candidate] ?? ""}
+                        onChange={(e) => setCanDraft({ ...canDraft, [m.candidate]: e.target.value })}
+                        onKeyDown={(e) => { if (e.key === "Enter") saveCan(m.candidate, canDraft[m.candidate] ?? ""); }}
+                      />
+                      <button type="button"
+                        onClick={() => saveCan(m.candidate, canDraft[m.candidate] ?? "")}
+                        disabled={savingCan === m.candidate || !(canDraft[m.candidate] ?? "").trim()}
+                        className="rounded-lg bg-blue-600 px-2.5 py-1 font-medium text-white hover:bg-blue-700 disabled:bg-blue-300">
+                        {savingCan === m.candidate ? "Saving…" : "Save"}
+                      </button>
+                    </div>
+                  ))}
+                </div>
               )}
               {linkPlan.conflicts?.length > 0 && (
                 <div className="mt-1 text-amber-800">

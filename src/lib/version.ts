@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-204";
+export const RELEASE = "2026.08.14-205";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,19 @@ export const RELEASE = "2026.08.14-204";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-205 answers a question the screen was refusing to answer. A batch cannot be certified until " +
+  "every enrolled student carries their government portal Candidate ID, and one screen said how " +
+  "many were missing without ever saying WHO - it printed a count beside the words \"map by hand " +
+  "below\" with nothing below it to map. The list is there now: open it and every student without " +
+  "an ID is named, with their phone and their result, and a box beside each name takes the ID " +
+  "typed straight from the portal. Saving one recounts the batch immediately, so a centre can work " +
+  "down the list and watch the number fall. A second screen was worse than silent: while " +
+  "certification was pending it always said the batch was waiting on certificates, even when every " +
+  "certificate was already attached and settled - it now names whatever is genuinely outstanding, " +
+  "which on the batch that prompted this was the portal IDs and nothing else. That line is also " +
+  "read by the operations team and the centres now, not only by an administrator.";
+
+const RELEASE_NOTE_ARCHIVE_204 =
   "-204 puts the batch status buttons back. Since -112 a batch that had started could not be " +
   "completed, reopened, closed or cancelled from its own screen at all - the buttons were still " +
   "written in the code, but they sat inside the preparation checklist, and that checklist is " +
@@ -26,7 +39,7 @@ export const RELEASE_NOTE_CURRENT =
   "students nobody marked, those students are now recorded as having failed rather than as absent. " +
   "That is a deliberate choice by the person whose records they are: a student with no certificate " +
   "is not certified, and one word is wanted for all of them. Every such row is still written under " +
-  "the reason the administrator types and is named individually in the history.";
+  "the reason the administrator types and is named individually in the history. ";
 
 const RELEASE_NOTE_ARCHIVE_203 =
   "-203 began as a repair to the checks guarding the planning table and turned up two real faults " +
@@ -74,6 +87,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
+  RELEASE_NOTE_ARCHIVE_204 +
   RELEASE_NOTE_ARCHIVE_203 +
   RELEASE_NOTE_ARCHIVE_202 +
   RELEASE_NOTE_ARCHIVE_HEAD +
