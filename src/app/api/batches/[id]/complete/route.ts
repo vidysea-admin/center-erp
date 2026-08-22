@@ -98,6 +98,38 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   if (!["Active", "Closing"].includes(batch.status)) throw new HttpError(409, `A batch in ${batch.status} has not started yet — start it before completing it.`);
 
   const o = await outstanding(id);
+
+  // QA-697 (-206, checker on qa-204): this used to write every unmarked student to Fail, derive the
+  // sign-offs, walk the batch Active -> Closing, and only THEN meet Rule 18 on the final step and
+  // throw 409. The Fail rows were permanent, the batch had already moved, and the caller saw an
+  // error that named none of it. The checker reproduced it twice, at 10 and 12 rows; 166 students
+  // across four live batches were standing in front of that button. Nothing is written now until
+  // the whole press is known to be able to finish.
+  //
+  // The shape is Umesh's, 23/08: "2 time confirmation kindaa... ek popup aana chaiye like list of
+  // critical issues in the batch remaining... and their navigation button to respective tab so that
+  // they can fix those issues and vha prr neeche button of complete batch forcefully."
+  // So the FIRST press never writes: without `force`, this refuses and names what is open. The
+  // screen turns that into the list with a way to go and fix each one. Only a second, deliberate
+  // press carries `force: true`.
+  const force = body.force === true;
+  const noCan = await enrolledWithoutCan(id);
+  const blockers = [
+    ...o.unmarked.map((u) => ({ kind: "no result recorded", who: u.name ?? "(unnamed)", phone: u.phone ?? null, tab: "Candidates" })),
+    ...o.unsettled.map((c) => ({ kind: "passed, certificate not settled", who: c.name ?? "(unnamed)", phone: c.phone ?? null, tab: "Closure" })),
+    ...noCan.map((n) => ({ kind: "no portal Candidate ID", who: n.name || "(unnamed)", phone: n.phone ?? null, tab: "Closure" })),
+  ];
+  if (blockers.length && !force) {
+    const counts = [
+      o.unmarked.length ? `${o.unmarked.length} with no result` : null,
+      o.unsettled.length ? `${o.unsettled.length} passed with no certificate settled` : null,
+      noCan.length ? `${noCan.length} with no portal Candidate ID` : null,
+    ].filter(Boolean).join(", ");
+    throw new HttpError(409,
+      `This batch still has ${counts}. Nothing has been changed. Fix them, or complete the batch `
+      + `forcefully - which records the reason and every one of these against the batch.`);
+  }
+
   const today = new Date();
 
   // 1. A student left unmarked when the Admin closes the batch is FAILED. Written through the
@@ -142,12 +174,54 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // 3. Now the ordinary rules can fire on their own: the sign-offs derive from the rows, and the
   //    batch walks its own ladder through the same doors the buttons use. Nothing is bypassed here.
   await recomputeClosureAggregates(id, user.id);
+
+  // 3b. The portal Candidate ID is the one blocker the rows above cannot settle: it is a fact that
+  //     lives on the government's side, and no amount of marking produces it. Rule 18 therefore
+  //     holds certification shut, which is why this door used to reach its last step and 409.
+  //     Umesh, 22/08: "Admin apne naam par band kar sake" - the rule stays, and an Admin may sign
+  //     past it under their own name with a reason. `certification_derived` is set FALSE on purpose:
+  //     a derived tick is a statement about the rows, and this one is not - it is a person's
+  //     decision, and the audit row says so.
+  if (noCan.length) {
+    const closureDoc = await Closure.findOne({ batch: id });
+    if (closureDoc && closureDoc.certification_status !== "Completed") {
+      closureDoc.certification_status = "Completed";
+      (closureDoc as any).certification_derived = false;
+      if (!closureDoc.certification_date) closureDoc.certification_date = new Date();
+      await closureDoc.save();
+      await audit({ entity: "Closure", entityId: closureDoc._id, field: "certification_status",
+        oldValue: "Pending",
+        newValue: `Completed - signed by an Admin completing ${batch.code} while ${noCan.length} enrolled student(s) still had no portal Candidate ID: ${reason}`,
+        actor: user.id, actorType: "USER" });
+    }
+  }
+
   const fresh = await Batch.findById(id).select("status").lean<any>();
   if (fresh?.status === "Active") await transitionBatch(id, "Closing", { isAdmin: true, reason, actor: user.id });
   const done = await transitionBatch(id, "Completed", { isAdmin: true, reason, actor: user.id });
 
+  // 4. The record Umesh asked for: "logs and all proper bnte rahe ki batch complete kab kab hua and
+  //    what all where the pending issues if the user had forcefully completed the batch along with
+  //    date time... these date and time must should be in indian time zone IST".
+  //    So the audit row carries WHAT was open at the moment of the press, not just how many, and the
+  //    wall-clock in IST rather than the UTC instant the row is stored with - a completion time read
+  //    off a server clock is the wrong time in every conversation anyone will have about it.
+  const istStamp = new Date().toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric",
+    hour: "2-digit", minute: "2-digit", hour12: true,
+  });
+  const pendingSummary = blockers.length
+    ? blockers.map((b) => `${b.who} (${b.kind})`).join("; ")
+    : "nothing was outstanding";
   await audit({ entity: "Batch", entityId: id, field: "completed_by_admin",
-    newValue: `Completed by Admin — ${o.unmarked.length} student(s) recorded Fail, ${o.unsettled.length} certificate(s) Not Issued — ${reason}`,
+    newValue: `Completed by Admin at ${istStamp} IST - ${o.unmarked.length} student(s) recorded Fail, `
+      + `${o.unsettled.length} certificate(s) Not Issued, ${noCan.length} without a portal Candidate ID. `
+      + `Reason: ${reason}. Open at the time of the press: ${pendingSummary}`,
     actor: user.id, actorType: "USER" });
-  return NextResponse.json({ item: done, settled: { failed: o.unmarked.length, not_issued: o.unsettled.length } });
+  return NextResponse.json({
+    item: done,
+    settled: { failed: o.unmarked.length, not_issued: o.unsettled.length, no_portal_id: noCan.length },
+    forced: blockers.length > 0,
+    completed_at_ist: istStamp,
+  });
 });

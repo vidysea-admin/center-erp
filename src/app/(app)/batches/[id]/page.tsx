@@ -176,11 +176,22 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
     if (!completeReason.trim()) { setError("Say why this batch is being completed — it is recorded against every row it settles."); return; }
     setCompleting(true);
     try {
-      const res = await api(`/api/batches/${b._id}/complete`, { method: "POST", json: { reason: completeReason.trim() } });
+      // -206: `force` is what makes this the SECOND press. The door refuses a bare press whenever
+      // anything is open and writes nothing (QA-697) — the panel the user is looking at IS the first
+      // press, and it listed every one of those things with a way to go and fix it. Pressing here is
+      // the deliberate one.
+      const res = await api(`/api/batches/${b._id}/complete`, { method: "POST", json: { reason: completeReason.trim(), force: true } });
       setCompleteOpen(false); setCompleteReason("");
       onChanged();
       if (res?.settled) setError("");
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) {
+      // QA-697: a refused press used to leave the screen showing the state from before it, because
+      // nothing reloaded on the error path. That is the same shape as QA-686 on the trainer card,
+      // fixed in -204 and repeated here. Reload whatever the refusal did or did not do, so what is
+      // on screen is what is in the database.
+      setError(e.message);
+      onChanged();
+    }
     finally { setCompleting(false); }
   }
   // QA-004 (checker): "Close Batch" was an enabled primary button on batches that provably
@@ -458,27 +469,55 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
           {completePlan?.can_complete_cleanly ? (
             <p className="mt-1 text-amber-800">Every student is marked and every certificate is settled — this just completes the batch.</p>
           ) : (
-            <div className="mt-1 space-y-1 text-amber-800">
-              <p>This batch still has rows nobody finished. Completing now records them the honest way:</p>
-              <ul className="ml-4 list-disc">
+            /* -206 (Umesh, 23/08): "2 time confirmation kindaa... ek popup aana chaiye like list of
+               critical issues in the batch remaining... and their navigation button to respective
+               tab so that they can fix those issues and vha prr neeche button of complete batch
+               forcefully." Every open thing is named, each with the way to go and fix it, and the
+               forceful press sits below them rather than beside a count. */
+            <div className="mt-1 space-y-2 text-amber-800">
+              <p className="font-medium">Still open on this batch — fix them, or complete it forcefully and they are recorded as they stand:</p>
+              <ul className="space-y-1.5">
                 {(completePlan?.unmarked?.length ?? 0) > 0 && (
-                  <li><b>{completePlan.unmarked.length} student(s) with no result → Fail</b>
-                    <span className="text-amber-700"> ({personList(completePlan.unmarked.slice(0, 4))}{completePlan.unmarked.length > 4 ? ` +${completePlan.unmarked.length - 4}` : ""})</span></li>
+                  <li className="flex flex-wrap items-center gap-2">
+                    <span><b>{completePlan.unmarked.length} student{completePlan.unmarked.length === 1 ? "" : "s"} with no result</b> → recorded <b>Fail</b>
+                      <span className="text-amber-700"> ({personList(completePlan.unmarked.slice(0, 4))}{completePlan.unmarked.length > 4 ? ` +${completePlan.unmarked.length - 4}` : ""})</span></span>
+                    <Btn small kind="ghost" onClick={() => { setCompleteOpen(false); onGo("Candidates"); }}>Mark them →</Btn>
+                  </li>
                 )}
                 {(completePlan?.unsettled?.length ?? 0) > 0 && (
-                  <li><b>{completePlan.unsettled.length} passed candidate(s) with no certificate → Not Issued</b>
+                  <li className="flex flex-wrap items-center gap-2">
                     {/* -159 cycle 2 (QA-476): four lines below the one -159 fixed, on a payload that
                         already carried the phone. Counting by hand missed it twice. */}
-                    <span className="text-amber-700"> ({personList(completePlan.unsettled.slice(0, 4))})</span></li>
+                    <span><b>{completePlan.unsettled.length} passed candidate{completePlan.unsettled.length === 1 ? "" : "s"} with no certificate</b> → recorded <b>Not Issued</b>
+                      <span className="text-amber-700"> ({personList(completePlan.unsettled.slice(0, 4))})</span></span>
+                    <Btn small kind="ghost" onClick={() => { setCompleteOpen(false); onGo("Closure"); }}>Attach certificates →</Btn>
+                  </li>
+                )}
+                {(completePlan?.no_portal_id?.length ?? 0) > 0 && (
+                  <li className="flex flex-wrap items-center gap-2">
+                    {/* The one blocker no amount of marking settles: it is the government's number.
+                        Rule 18 holds certification shut on it, which is what used to make this door
+                        reach its last step and 409 after writing everything above (QA-697). */}
+                    <span><b>{completePlan.no_portal_id.length} enrolled student{completePlan.no_portal_id.length === 1 ? "" : "s"} with no portal Candidate ID</b> → certification signed by you, not derived
+                      <span className="text-amber-700"> ({personList(completePlan.no_portal_id.slice(0, 4))}{completePlan.no_portal_id.length > 4 ? ` +${completePlan.no_portal_id.length - 4}` : ""})</span></span>
+                    <Btn small kind="ghost" onClick={() => { setCompleteOpen(false); onGo("Closure"); }}>Enter the IDs →</Btn>
+                  </li>
                 )}
               </ul>
-              <p className="text-xs">Every one of those rows is audited with your reason. If a student really passed, mark them first — this is the door for a batch that is over, not a shortcut through data entry.</p>
+              <p className="text-xs">Every one of these is written to the batch history with your reason and the time in IST. If a student really passed, mark them first — this is the door for a batch that is over, not a shortcut through data entry.</p>
             </div>
           )}
           <p className="mt-2 text-xs text-amber-800">Completing freezes the results and figures. You can reopen it later (Admin, with a reason).</p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <input className={inputCls + " max-w-md"} placeholder="Reason (recorded on every row this settles)" value={completeReason} onChange={(e) => setCompleteReason(e.target.value)} />
-            <Btn onClick={completeAsAdmin} disabled={completing || !completeReason.trim()}>{completing ? "Completing…" : "Complete batch"}</Btn>
+            {/* -206: the second press, and it says what it is. On a batch with nothing open it is an
+                ordinary completion; on one with rows still standing it is the forceful one, and the
+                label must not hide that from the person pressing it. */}
+            <Btn onClick={completeAsAdmin} disabled={completing || !completeReason.trim()}>
+              {completing ? "Completing…" : completePlan?.can_complete_cleanly && !(completePlan?.no_portal_id?.length ?? 0)
+                ? "Complete batch"
+                : "Complete batch forcefully"}
+            </Btn>
             <Btn kind="ghost" onClick={() => setCompleteOpen(false)}>Cancel</Btn>
           </div>
         </div>
@@ -2044,7 +2083,15 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
       </div>
       {/* -116: the door Umesh asked for, ON THIS TAB. It is only offered when the ordinary buttons
           CANNOT fire — when they can, the honest path is to press them. */}
-      {isAdmin && !closed && blockers && blockers.can_complete_cleanly === false && ["Active", "Closing"].includes(batch?.status) && (
+      {/* -206 (QA-678): this hid the Admin door exactly when everything the flag knows about was
+          done. `can_complete_cleanly` answers "are the results and certificates settled" and says
+          nothing at all about the portal Candidate ID — so on the Gurugram batch, where those were
+          settled and 45 students had no ID, the ordinary buttons were disabled AND this box was
+          gone. A flag was being asked a question it does not answer. The condition is now "is
+          anything at all still open", portal IDs included. Umesh: "dono jagah dikhein." */}
+      {isAdmin && !closed && blockers
+        && (blockers.can_complete_cleanly === false || (blockers.no_portal_id?.length ?? 0) > 0)
+        && ["Active", "Closing"].includes(batch?.status) && (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
           <span>
             <b>This batch cannot be completed the ordinary way yet.</b>{" "}

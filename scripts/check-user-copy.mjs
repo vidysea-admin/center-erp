@@ -1601,14 +1601,25 @@ for (const file of walk(root)) {
   const hasDecl = /const statusActions = canTransition \? \(/.test(scan);
   const inRunning = split > 0 && /\{statusActions\}/.test(span.slice(0, split));
   const inReadiness = split > 0 && /\{statusActions\}/.test(span.slice(split));
-  if (hasDecl && inRunning && inReadiness) passed++;
+  // QA-696 (-206, checker on qa-204): both of the above stay TRUE if you append `&& !running` to
+  // canTransition. The value is still declared, still referenced in both branches — and it renders
+  // the "moved by Operations/Admin" note instead of the controls, which is QA-693 restored exactly.
+  // The checker did it in one token, with tsc rc=0 and this file at 259 passed / 0 failed. So the
+  // GUARD itself is pinned: whatever canTransition is, it must be about the ROLE, and must not
+  // consult whether the batch is running or what status it is at.
+  const decl = /const canTransition = ([^;]*);/.exec(scan);
+  const guardSrc = decl ? decl[1] : "";
+  const guardClean = !!guardSrc && !/\brunning\b/.test(guardSrc) && !/\bb\.status\b/.test(guardSrc) && !/\bstatus\b/.test(guardSrc);
+  if (hasDecl && inRunning && inReadiness && guardClean) passed++;
   else {
     failed++;
     pushStructural(rel + ": the batch status controls do not render in both states"
-      + " (declared=" + hasDecl + ", in the \"Right now\" card=" + inRunning + ", in the readiness Section=" + inReadiness + ")"
-      + " - whichever branch is missing it, a batch in that state has NO way to be completed, reopened,"
+      + " (declared=" + hasDecl + ", in the \"Right now\" card=" + inRunning + ", in the readiness Section=" + inReadiness
+      + ", canTransition is role-only=" + guardClean + (guardClean ? "" : " -> " + JSON.stringify(guardSrc.trim().slice(0, 90))) + ")"
+      + " - whichever of those is false, a batch in that state has NO way to be completed, reopened,"
       + " closed or cancelled from this screen. That is what -112 shipped and nobody noticed for 92"
-      + " releases; Umesh asked for the control to sit in the card, not merely to exist.");
+      + " releases; Umesh asked for the control to sit in the card, not merely to exist, and one"
+      + " appended token on the guard puts it all back.");
   }
 }
 

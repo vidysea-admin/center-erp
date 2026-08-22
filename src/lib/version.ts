@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-205";
+export const RELEASE = "2026.08.14-206";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,18 @@ export const RELEASE = "2026.08.14-205";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-206 stops a button from half-finishing a batch. When an administrator completed a batch that " +
+  "still had students nobody had marked, the system recorded every one of them as failed, signed " +
+  "off the assessment, moved the batch a step forward - and only then discovered it could not " +
+  "finish, because certification needs every student to carry their government portal ID. It then " +
+  "returned an error that mentioned none of what it had just done. The records were permanent and " +
+  "the screen still showed the state from before the press. That check now happens before anything " +
+  "is written: the batch is refused up front, the refusal says which thing is missing and that " +
+  "nothing was changed, and the screen reloads so what is shown is what is stored. Separately, the " +
+  "check that protects the status buttons restored last release could itself be switched off by " +
+  "one word added to the line deciding who may move a batch; it now watches that line too.";
+
+const RELEASE_NOTE_ARCHIVE_205 =
   "-205 answers a question the screen was refusing to answer. A batch cannot be certified until " +
   "every enrolled student carries their government portal Candidate ID, and one screen said how " +
   "many were missing without ever saying WHO - it printed a count beside the words \"map by hand " +
@@ -27,7 +39,7 @@ export const RELEASE_NOTE_CURRENT =
   "certification was pending it always said the batch was waiting on certificates, even when every " +
   "certificate was already attached and settled - it now names whatever is genuinely outstanding, " +
   "which on the batch that prompted this was the portal IDs and nothing else. That line is also " +
-  "read by the operations team and the centres now, not only by an administrator.";
+  "read by the operations team and the centres now, not only by an administrator. ";
 
 const RELEASE_NOTE_ARCHIVE_204 =
   "-204 puts the batch status buttons back. Since -112 a batch that had started could not be " +
@@ -87,6 +99,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
+  RELEASE_NOTE_ARCHIVE_205 +
   RELEASE_NOTE_ARCHIVE_204 +
   RELEASE_NOTE_ARCHIVE_203 +
   RELEASE_NOTE_ARCHIVE_202 +

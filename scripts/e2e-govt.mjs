@@ -1756,15 +1756,21 @@ ok("SSRF guard does not block the real client workbook", stillOk.data.ok === tru
   ok("-205: the payload NAMES the students with no portal ID — a count alone is not actionable",
     Array.isArray(p0.missing) && p0.missing.length === 1 && p0.missing[0].name === `${NAME} NoId One`,
     JSON.stringify({ without: p0.without_portal_id, missing: (p0.missing ?? []).map((m) => m.name) }));
+  // Every read below is guarded. The first baseline run of this block proved pin 1 red and then
+  // CRASHED on `p0.missing.length` — pre-fix there is no `missing` at all — which killed every
+  // assertion after it and turned a suite into an exception. A pin must FAIL, not fall over: a
+  // crash and a red are not the same evidence, and a non-zero exit from a crash is exactly the
+  // "EXHAUSTED reported as a result" trap this project has a rule about.
+  const m0 = p0.missing ?? [];
   ok("-205: …and the list length agrees with the count the screen prints beside it",
-    p0.missing.length === p0.without_portal_id && p0.with_portal_id === 1 && p0.roster === 2,
-    JSON.stringify({ n: p0.missing?.length, without: p0.without_portal_id, with: p0.with_portal_id }));
+    m0.length === p0.without_portal_id && p0.with_portal_id === 1 && p0.roster === 2,
+    JSON.stringify({ n: m0.length, without: p0.without_portal_id, with: p0.with_portal_id }));
   // His second question, answered on the row: "inke certificate to nahi honge na, matlab jo fail
   // wale bachche hain, unhi me se 10 hain, ya kaun se hain".
   ok("-205: …each named student carries their RESULT and phone, so the row identifies a person",
-    p0.missing[0].result === "Pending" && String(p0.missing[0].phone ?? "").endsWith(STAMP)
-    && typeof p0.missing[0].candidate === "string",
-    JSON.stringify(p0.missing[0]));
+    m0[0]?.result === "Pending" && String(m0[0]?.phone ?? "").endsWith(STAMP)
+    && typeof m0[0]?.candidate === "string",
+    JSON.stringify(m0[0] ?? null));
 
   // The hand-typed path — the one he asked for. Same door the screen uses.
   const typed = await req(admin, "PATCH", `/api/candidates/${c1._id}`, { sidh_candidate_id: `CAN_${STAMP}9999` });

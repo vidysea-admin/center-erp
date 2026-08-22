@@ -741,7 +741,12 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
     const anon = await fetch(BASE + `/api/batches/${d4._id}/complete`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason: "nope" }) });
     ok("-113: ADMIN only — Enrollment 403, anonymous 401", notAdmin.status === 403 && anon.status === 401, `${notAdmin.status} ${anon.status}`);
   }
-  const doneRes = (await req("POST", `/api/batches/${d4._id}/complete`, { reason: "-113 pin: batch finished on site months ago" }, 200)).data;
+  // -206: `force` is the SECOND press. The contract changed deliberately and this line records the
+  // change rather than working around it: a bare press on a batch with anything outstanding is now
+  // REFUSED and writes nothing (QA-697 — it used to write every unmarked student to Fail and then
+  // 409). The refusal is pinned separately below; this is the confirmed press the screen sends after
+  // showing the Admin every open row and a way to go and fix each one.
+  const doneRes = (await req("POST", `/api/batches/${d4._id}/complete`, { reason: "-113 pin: batch finished on site months ago", force: true }, 200)).data;
   ok("-113: THE ASK — the Admin press completes the batch", (await statusOf(d4._id)) === "Completed", await statusOf(d4._id));
   ok("-113: …and reports exactly what it settled", doneRes.settled?.failed === 2 && doneRes.settled?.not_issued === 0, JSON.stringify(doneRes.settled));
   {
@@ -789,6 +794,32 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   // A batch with nothing outstanding needs no settling at all — the door just completes it.
   ok("-113: a clean batch reports nothing to settle",
     (await req("GET", `/api/batches/${d1._id}/complete`, undefined, 200)).data.status === "Completed");
+
+  // ---- QA-697 (-206, checker on qa-204): a REFUSED press must change nothing ----
+  // The door wrote every unmarked student to Fail, derived the sign-offs, walked the batch
+  // Active -> Closing, and only then met Rule 18 and threw 409. Permanent rows, a moved batch, and
+  // an error naming none of it. Reproduced by the checker twice, at 10 and 12 rows. The refusal
+  // path was never exercised by any suite, which is why it survived: every existing pin presses the
+  // door on a batch that CAN complete.
+  {
+    // `noCan: true` builds the roster WITHOUT portal Candidate IDs — the exact shape of the live
+    // batches this defect was standing in front of.
+    const { b: rb } = await mkBatch(2, 9, { noCan: true });
+    const before = (await req("GET", `/api/batches/${rb._id}`)).data.item.status;
+
+    const refused = await req("POST", `/api/batches/${rb._id}/complete`, { reason: "QA-697 pin: this press must change nothing" });
+    ok("QA-697: the door REFUSES when the portal IDs are missing, instead of half-doing it",
+      refused.status === 409, `status=${refused.status}`);
+    ok("QA-697: …and the refusal names the portal Candidate ID and says nothing changed",
+      /portal Candidate ID/i.test(String(refused.data?.error ?? "")) && /nothing has been changed/i.test(String(refused.data?.error ?? "")),
+      JSON.stringify(refused.data?.error ?? null).slice(0, 200));
+    const after = (await req("GET", `/api/batches/${rb._id}`)).data.item.status;
+    ok("QA-697: …the batch did NOT move", after === before, `${before} -> ${after}`);
+    const rrows = (await req("GET", `/api/batches/${rb._id}/results`)).data.items ?? [];
+    const anyFail = rrows.filter((i) => i.result?.result === "Fail").length;
+    ok("QA-697: …and NOT ONE student was written to Fail by a press that then failed",
+      anyFail === 0, JSON.stringify({ failed: anyFail, rows: rrows.length }));
+  }
 
   // ---- -126 (S18-02 / S18-03 / S18-04): the PUBLIC self-registration door ----
   // Shivshakti, 18/08: "jab hum self register ki link bhejte hain toh wo saare column yahan bhi show
