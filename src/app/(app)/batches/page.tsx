@@ -105,9 +105,9 @@ function BatchesInner() {
     location?: string; program?: string; eps?: any; tooSoon?: boolean | null; scopedTo?: any;
   }>({});
   const { copied: planCopied, copy: copyPlan } = useCopied();
-  // -198: the strip's open/closed state lives here, not inside PlanningCreate, so the header's
-  // "Plan a batch" on the Batches tab can switch tab AND open the form in one click instead of
-  // landing the reader on a collapsed prompt that asks them to press the same words again.
+  // -198/-199: the strip's open/closed state lives here, not inside PlanningCreate, so the header's
+  // single "Plan a batch" can switch tab AND open the form in one click. That is what lets the
+  // strip render NOTHING when it is closed, which is how there came to be only one such button.
   const [planOpen, setPlanOpen] = useState(false);
   const [info, setInfo] = useState("");
 
@@ -283,10 +283,12 @@ function BatchesInner() {
           </select>
           <Btn kind="ghost" onClick={() => setImp({})}>Import (Excel)</Btn>
           {/* -196: "plan a batch pr sidha planning wala hi tab open ho" — no drawer in between.
-              -198 (Umesh, screenshot): on the Planning tab this button sat directly above an
-              identical one in the strip. Two buttons with one name is the same complaint as the two
-              tables, so the header keeps it only where it is a way IN - on the Batches tab. */}
-          {tab === "Batches" && <Btn kind="ghost" onClick={() => { setTab("Planning"); setPlanOpen(true); }}>Plan a batch</Btn>}
+              -199 (Umesh, second screenshot): "agar tujhe header wala hi rakhna hai toh header wala
+              rakh. Uske baad koi dousra wala create hi mat kar ... ek remove krr". THIS is the one
+              button. -198 had kept the strip's copy and hidden this one on the Planning tab, which
+              is the opposite of what he asked for. It renders on both tabs, and one click both
+              opens the Planning tab and opens the form — there is no second control to press. */}
+          <Btn kind="ghost" onClick={() => { setTab("Planning"); setPlanOpen(true); }}>Plan a batch</Btn>
           <Btn onClick={() => setDrawer(true)}>New Batch</Btn>
         </div>
       </div>
@@ -837,17 +839,11 @@ function PlanningCreate({ locations, planner, runPlanner, plannerLocations, plan
     finally { setSaving(false); }
   }
 
-  if (!open) {
-    return (
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
-        <p className="text-sm text-gray-600">
-          Plan a batch: pick the centre and job role, choose the start date, and the backward plan is
-          counted for you — then saved onto the batch as a tick-off checklist.
-        </p>
-        <Btn onClick={() => setOpen(true)}>Plan a batch</Btn>
-      </div>
-    );
-  }
+  // -199: closed means GONE, not a prompt. This used to render a slate strip repeating the words
+  // "Plan a batch" with a button of the same name a few rows under the header's — "do button eek
+  // jighe kya kama karenge ... ek remove krr". The header button is the way in; when the form is
+  // closed there is nothing here at all, so the Planning tab is the table and only the table.
+  if (!open) return null;
 
   return (
     <div className="space-y-3 rounded-xl border border-blue-200 bg-blue-50/40 px-4 py-3">
@@ -1237,7 +1233,7 @@ function PlanningTable({ rows, role, onSaved, onError }: { rows: any[] | null; r
         </div>
       </details>
       <DataTable storageKey="plan-tracker" rows={shown} loading={rows === null} columns={columns}
-        empty="No batch is being planned right now — use “Plan a batch” above to start one."
+        empty="No batch is being planned right now — use “Plan a batch” at the top of this page to start one."
         cardTitle={(r: any) => <>{r.batch.code} <span className="text-xs text-gray-400">· {r.location?.name}</span></>} />
     </div>
   );

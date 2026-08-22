@@ -1184,13 +1184,26 @@ for (const file of walk(root)) {
   //    so on the Planning tab it stacked directly above the strip's identical one (Umesh, with a
   //    screenshot: "plan a batch k 2 buttons aa rhee hai, keep only one" - QA-655). Two assertions,
   //    because either alone can be faked: the header button is guarded by the tab, and it opens.
-  const headerBtn = src.match(/\{tab === "Batches" && <Btn[^>]*onClick=\{\(\) => \{([^}]*)\}\}>Plan a batch<\/Btn>\}/);
-  if (headerBtn && /setTab\("Planning"\)/.test(headerBtn[1]) && /setPlanOpen\(true\)/.test(headerBtn[1])) passed++;
-  else { failed++; pushStructural('app/(app)/batches/page.tsx: the header "Plan a batch" button is not guarded by `tab === "Batches"` and opening the Planning form (found ' + JSON.stringify(headerBtn ? headerBtn[1] : null) + ') - QA-655: on the Planning tab it stacks above the strip button of the same name, and -196 landed the reader on a collapsed prompt asking them to press the same words again.'); }
-  // CONTROLS only - the strip's own <h2> says the same words and is not a third button.
-  const planBtns = (src.match(/<Btn[^>]*>Plan a batch<\/Btn>/g) || []).length;
-  if (planBtns <= 2) passed++;
-  else { failed++; pushStructural('app/(app)/batches/page.tsx: ' + planBtns + ' BUTTONS are labelled "Plan a batch" - QA-655. Two is the most that can be right (the header way-in and the strip itself), and only one of those may render at a time.'); }
+  // ONE. Not "one per tab", not "two that never render together" - one control in the file.
+  // -198 answered this by hiding the HEADER button on the Planning tab and keeping the strip's;
+  // Umesh's answer was the other one: "agar tujhe header wala hi rakhna hai toh header wala rakh.
+  // Uske baad koi dousra wala create hi mat kar ... ek remove krr" (QA-656). Three assertions,
+  // because each of the first two survives a plausible half-fix on its own.
+  // NOTE the regex shape: a <Btn ...> opening tag contains `=>` inside its onClick, so `[^>]*`
+  // stops at the arrow and matches nothing. Count the CLOSING pattern instead - it is unambiguous.
+  const planBtns = (src.match(/>Plan a batch<\/Btn>/g) || []).length;
+  if (planBtns === 1) passed++;
+  else { failed++; pushStructural('app/(app)/batches/page.tsx: ' + planBtns + ' buttons are labelled "Plan a batch" - QA-656, and exactly one is right. (The strip\'s own <h2> says the same words and is not a button; this counts <Btn> only.)'); }
+  // and that one is the header's: unconditional, and it opens BOTH the tab and the form.
+  const headerBtn = src.match(/onClick=\{\(\) => \{([^}]*)\}\}>Plan a batch<\/Btn>/);
+  if (headerBtn && /setTab\("Planning"\)/.test(headerBtn[1]) && /setPlanOpen\(true\)/.test(headerBtn[1])
+      && !/\{tab === "\w+" && <Btn[\s\S]{0,200}?>Plan a batch<\/Btn>/.test(src)) passed++;
+  else { failed++; pushStructural('app/(app)/batches/page.tsx: the one "Plan a batch" button must be the header\'s, unconditional, and open the Planning tab AND the form (found ' + JSON.stringify(headerBtn ? headerBtn[1] : null) + ') - QA-656. Guarding it by tab is how -198 ended up keeping the wrong one of the two.'); }
+  // and the strip renders NOTHING when it is closed - a prompt row with no button is still the
+  // duplicate surface he asked to be removed, and would pass both checks above.
+  const createBlk = src.slice(src.indexOf("function PlanningCreate"));
+  if (/if \(!open\) return null;/.test(createBlk)) passed++;
+  else { failed++; pushStructural('app/(app)/batches/page.tsx: PlanningCreate still renders something when it is closed - QA-656. Closed means gone; a collapsed prompt repeating "Plan a batch" is the second surface, whether or not it carries a <Btn>.'); }
 
   // 4. The strip has to CREATE, not just calculate - that was the drawer's whole failing. Three
   //    facts: his new target-candidates input, the POST that makes the batch, and the PATCH that
