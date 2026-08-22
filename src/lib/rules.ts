@@ -1729,11 +1729,25 @@ export type Basis = { key: string; label: string; date: Date | null; blocking?: 
 // ways: `+91 98…` against `098…` against bare digits, letter case in a name, and a phone filled in
 // after the first share.
 //
-// A phone number is not a person. `recipient_ref` IS one: it names the slot on the centre the
-// recipient was picked from ("spoc", "principal", "cluster_head", "contact:3"), it is unique per
-// centre, and it is already on the token. So it leads. The phone is a fallback for a recipient
-// typed rather than picked, canonicalised to its last ten digits so formatting cannot fork it; the
-// name+role is the last resort.
+// A phone number is not a person. `recipient_ref` IS one - but only if it survives an edit, and
+// -193's did not. QA-615, reproduced by a checker through the product's own API on the shipped
+// build: contacts were [Alice, Bob, Carol, Dave]; Carol was sent the plan at her offered slot
+// `contact:2`; an admin then removed Bob; the endpoint re-offered Dave at `contact:2`; sending to
+// DAVE revoked CAROL's live link. `{carol:404, dave:200}` - the same shape as `{spoc:404,
+// principal:200}` which failed -191 and `{first:404, second:200}` which failed -190.
+//
+// **A slot number is no more a person than a phone number is.** -190 keyed on the batch, -191 on
+// the phone string, -193 on an array index. The three are one mistake wearing three coats: each
+// time the key was something ABOUT the recipient that the product lets change, rather than the
+// recipient. So a contact's ref is now its own subdocument `_id` - mongoose mints one per entry, it
+// does not move when the array is edited, and it dies with the contact rather than being inherited
+// by whoever slides into that position.
+//
+// And the phone is gone from the key entirely (QA-618). Keeping it as a "fallback identity" was the
+// same error in miniature: a recipient shared once without a number and once with one produced two
+// keys and two live links. For a typed recipient the identity is the name and role a human typed to
+// name them; the phone stays on the token as DATA about that person, for the WhatsApp link and the
+// screen, and is never asked who they are.
 //
 // The KEY IS STORED on the token, not recomputed at query time, so the revocation is an exact match
 // on an indexed field rather than an $or of shapes - and one definition is read by the route that
@@ -1745,10 +1759,11 @@ export function canonicalPhone(v: unknown): string {
 }
 export function recipientKey(r: { recipient_ref?: unknown; recipient_phone?: unknown; recipient_name?: unknown; recipient_role_label?: unknown }): string {
   const ref = String(r.recipient_ref ?? "").trim();
-  if (ref) return `ref:${ref}`;
-  const phone = canonicalPhone(r.recipient_phone);
-  if (phone) return `phone:${phone}`;
-  return `named:${String(r.recipient_name ?? "").trim().toLowerCase()}|${String(r.recipient_role_label ?? "Contact").trim().toLowerCase()}`;
+  // A positional ref is refused rather than trusted. `contact:2` is what -193 minted and what
+  // QA-615 broke; anything still carrying that shape is a slot, not a person, so it falls through
+  // to the name - which is stable - instead of silently pointing at whoever occupies the slot now.
+  if (ref && !/^contact:\d+$/.test(ref)) return `ref:${ref}`;
+  return `named:${String(r.recipient_name ?? "").trim().replace(/\s+/g, " ").toLowerCase()}|${String(r.recipient_role_label ?? "Contact").trim().toLowerCase()}`;
 }
 
 export async function planArtifact(batchId: string) {

@@ -119,6 +119,21 @@ export const POST = apiHandler(async (req: NextRequest) => {
       recipient_ref: body.recipient_ref, recipient_phone: rPhone,
       recipient_name: rName, recipient_role_label: rRole,
     });
+
+    // QA-616: `recipient_key` is stored, so a token minted before it existed carries none - and the
+    // revocation, which matches on the key, could never touch it. Meanwhile the screen recomputes
+    // the key when it LISTS shares, so it happily offered "Re-send" for a link that sending could
+    // not replace: the display reader fell back and the revocation reader did not. Two readers of
+    // one fact, disagreeing, again.
+    //
+    // Backfilled here rather than on the GET, because a read that writes is a surprise, and this is
+    // bounded - a handful of tokens on one batch, at the moment somebody is already writing.
+    const unkeyed = await PublicToken.find({ purpose: "plan", batch: body.batch, recipient_key: { $in: [null, ""] } })
+      .select("recipient_ref recipient_phone recipient_name recipient_role_label").lean<any[]>();
+    for (const t of unkeyed) {
+      await PublicToken.updateOne({ _id: t._id }, { $set: { recipient_key: recipientKey(t) } });
+    }
+
     await PublicToken.updateMany({ purpose: "plan", batch: body.batch, recipient_key: rKey, active: true }, { $set: { active: false } });
 
     const doc = await PublicToken.create({

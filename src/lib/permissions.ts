@@ -6,7 +6,7 @@
 // baseline role check, and requirePerm() additionally lets a granted permission open a gate
 // the role alone would not. Revoking a default from a role closes the gate for that role.
 import { RolePermission, User } from "@/models";
-import { HttpError } from "@/lib/authz";
+import { HttpError, requireEdit } from "@/lib/authz";
 import type { SessionUser } from "@/auth";
 
 // The catalog — every togglable feature-right, grouped for the Admin UI.
@@ -151,4 +151,23 @@ export async function requirePerm(user: SessionUser, perm: string): Promise<void
   throw new HttpError(403, level === "view"
     ? `Your "${label}" right is view-only. Ask an Admin for the edit level.`
     : `You do not have the "${label}" right. Ask an Admin to grant it.`);
+}
+
+// QA-617 (-194): "may this user share a plan link?" — asked in two places that disagreed in BOTH
+// directions. `GET /api/batches/[id]/plan` used `hasPermission` (level >= view) plus its own
+// `can_edit !== false`, while `POST /api/public-tokens` uses `requireRole` + `requireEdit` +
+// `requirePerm` (level must be EDIT, and requireEdit exempts Admin and Operations). So a view-only
+// holder of `feedback.links` was shown the centre's staff list WITH their phone numbers and then
+// 403'd on sending, and an Admin with `can_edit: false` — the schema's own default — could send but
+// was shown nobody to send to.
+//
+// This runs the mint gate ITSELF and reports whether it would pass, rather than restating it. Two
+// statements of one rule is how they drift, and this pair had already drifted before anyone looked.
+export async function canShareLinks(user: SessionUser): Promise<boolean> {
+  try {
+    if (!["Admin", "Operations", "Location"].includes(String(user.role))) return false;
+    requireEdit(user);
+    await requirePerm(user, "feedback.links");
+    return true;
+  } catch { return false; }
 }

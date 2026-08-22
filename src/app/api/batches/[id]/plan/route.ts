@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser } from "@/lib/authz";
 import { Batch, Location, PublicToken } from "@/models";
 import { assertBatchInScope, planArtifact, recipientKey } from "@/lib/rules";
-import { hasPermission } from "@/lib/permissions";
+import { canShareLinks } from "@/lib/permissions";
 
 // QA-152 part 2 (-82): the signed-in plan view. Read for anyone who can see the batch
 // (Rule 38 scope is the gate); editing goes through PATCH /api/batches/[id]/milestones.
@@ -31,9 +31,11 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   // to have, and the "Send to" list was gated in the UI only, which is not a gate. The right to see
   // WHO COULD BE SENT the plan follows the right to send it: the same check POST /api/public-tokens
   // makes before minting a link. Everyone else still gets the plan and their own share list.
-  const mayShare = ["Admin", "Operations", "Location"].includes(String(user.role))
-    && (user as any).can_edit !== false
-    && await hasPermission(user, "feedback.links");
+  // QA-617: one predicate, and it runs the mint gate itself rather than restating it. The first
+  // version restated it and got it wrong in BOTH directions - a view-only holder was shown the
+  // staff list and their phone numbers but could not send, and an Admin with `can_edit: false`
+  // (the schema default) could send but was shown nobody.
+  const mayShare = await canShareLinks(user);
 
   const recipients: { ref: string; key: string; name: string; phone: string; role_label: string }[] = [];
   if (mayShare) {
@@ -50,7 +52,10 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     add("spoc", loc?.spoc_name, loc?.spoc_phone, "SPOC");
     add("principal", loc?.principal_name, loc?.principal_phone, "Principal");
     add("cluster_head", loc?.cluster_head_name, loc?.cluster_head_phone, "Cluster Head");
-    (loc?.contacts ?? []).forEach((c: any, i: number) => add(`contact:${i}`, c?.name, c?.phone, c?.role_label));
+    // QA-615: the contact's OWN id, not its position. `contact:<index>` moved when the admin
+    // removed an earlier contact, and sending to whoever slid into that slot revoked the previous
+    // occupant's live link. An `_id` does not slide.
+    (loc?.contacts ?? []).forEach((c: any) => add(c?._id ? `contact:${String(c._id)}` : "", c?.name, c?.phone, c?.role_label));
   }
 
   return NextResponse.json({

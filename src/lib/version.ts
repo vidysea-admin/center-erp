@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-193";
+export const RELEASE = "2026.08.14-194";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,20 @@ export const RELEASE = "2026.08.14-193";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-194 fixes, for the third time, who a shared plan link belongs to - and this time the answer is " +
+  "the person rather than something about them that the product lets change. A contact was " +
+  "identified by its POSITION in the centre list, so removing one contact moved everybody below it " +
+  "up a place, and sending the plan to whoever had moved into a freed place cancelled the previous " +
+  "occupant link. A contact is now identified by its own record, which does not move when the list " +
+  "is edited. The phone number has been dropped from that identity entirely: keeping it as a " +
+  "fallback meant somebody shared with once without a number and once with one counted as two " +
+  "people. A link created before this identity existed can now be replaced properly instead of " +
+  "living on beside its replacement. And the rule deciding who may see the centre staff list is now " +
+  "the same rule that decides who may send - it disagreed in both directions, showing the list with " +
+  "phone numbers to somebody who could not send, and hiding it from somebody who could.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-193 carries two things. The planning table now uses the same column names as the planning " +
   "sheet: every one of the sheet columns was already there, but the screen had shortened them, and " +
   "two read the same - Starts and Ends each appeared twice, once for the trainer training and once " +
@@ -26,10 +40,7 @@ export const RELEASE_NOTE_CURRENT =
   "was tied to a phone number rather than to a person, so a centre that records one landline for " +
   "two of its people had them cancelling each other links - the very thing the last release set out " +
   "to stop. A link now belongs to the person it was sent to. The same page also stopped handing " +
-  "centre staff names and phone numbers to anyone who could merely view the batch.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "centre staff names and phone numbers to anyone who could merely view the batch." +
   "-192 gives the planning table the same column names the planning sheet uses. Every one of the " +
   "sheet column was already there, but the screen had shortened the names to a word or two, and " +
   "two of them read the same - Starts and Ends each appeared twice, once for the trainer training " +
