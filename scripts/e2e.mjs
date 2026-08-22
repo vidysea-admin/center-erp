@@ -1815,6 +1815,35 @@ await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { regenerate: tru
 const regen = (await req("GET", `/api/batches/${planBatch._id}`)).data.item;
 ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.key === "mobilization")?.done_on);
 
+// ---- -196 (Umesh 22/08): "jaise dates aate rahengi woh usi values mein fill hote rahengi" ----
+// The Planning grid is filled from a sheet DAYS after the fact, so the date the operator types is
+// the fact. Before this release a tick always stamped `new Date()`, which meant every date typed
+// into that grid was silently replaced by today's - the grid would agree with itself and disagree
+// with the sheet it was copied from. The pin is the DATE, not the presence of a date: the old
+// behaviour also produced a truthy done_on, so "records done_on" above cannot catch this.
+{
+  const backdated = "2027-03-09";
+  const bd = (await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { key: "enrollment_done", done: true, done_on: backdated }, 200)).data.item;
+  const got = bd.milestones.find((m) => m.key === "enrollment_done")?.done_on;
+  ok("-196: an explicit done_on is stored as typed, not overwritten with today",
+    !!got && String(got).slice(0, 10) === backdated, `done_on=${got} expected=${backdated}`);
+  // A bare tick still means now - the new argument must not change what the old callers do.
+  const now = (await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { key: "trainer_mapped_sidh", done: true }, 200)).data.item;
+  const nowOn = now.milestones.find((m) => m.key === "trainer_mapped_sidh")?.done_on;
+  ok("-196: a tick with no date still means today",
+    !!nowOn && String(nowOn).slice(0, 10) === new Date().toISOString().slice(0, 10), `done_on=${nowOn}`);
+  // Garbage is refused rather than quietly becoming an Invalid Date on the document.
+  // This assertion reads the RESPONSE. Its first form passed `true` and let req()'s own status
+  // line do the detecting - which made it a pin that could not fail (QA-598 / QA-613 / QA-624 /
+  // QA-628 / QA-639), and the REQ-388 trap is what caught it: it stayed green on the pre-fix route
+  // while the behaviour it names was absent.
+  const junk = await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { key: "enrollment_done", done: true, done_on: "not-a-date" });
+  ok("-196: an unparseable done_on is refused", junk.status === 400 && /done_on/.test(junk.data?.error ?? ""),
+    `status=${junk.status} error=${JSON.stringify(junk.data?.error ?? null)}`);
+  const still = (await req("GET", `/api/batches/${planBatch._id}`)).data.item.milestones.find((m) => m.key === "enrollment_done")?.done_on;
+  ok("-196: the refused write left the stored date alone", String(still).slice(0, 10) === backdated, `done_on=${still}`);
+}
+
 // ---- -164: the planner stops being one shape for every batch ----
 // REQ-388: every assertion in this block FAILS on pre-fix code. planBatchBackward was a
 // hard-coded seven-element array with ZERO conditionals, and /api/plan-batch read only ?start=.

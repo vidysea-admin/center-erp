@@ -298,7 +298,12 @@ for (const file of walk(root)) {
         for (const c of src.matchAll(new RegExp(set + "\\(", "g"))) args.push(argOf(src, c.index + set.length));
         const truthy = args.some((a) => a && !/^(null|false|undefined|""|''|\[\]|\{\})$/.test(a));
         const clears = args.some((a) => /^(null|false|undefined|""|''|\[\])$/.test(a)
-          || /=>\s*!/.test(a) || /^!/.test(a) || /\?\s*null\s*:/.test(a) || /:\s*null\s*$/.test(a));
+          || /=>\s*!/.test(a) || /^!/.test(a) || /\?\s*null\s*:/.test(a) || /:\s*null\s*$/.test(a)
+          // -196: a value taken from a checkbox's own `checked` is two-way by construction - the
+          // same control that turns the surface on turns it off. Without this the check reads a
+          // toggle as a one-way door and asks for an exit that is already there, which is a false
+          // positive that costs the next person a real finding's worth of attention.
+          || /\.checked\b/.test(a));
         if (truthy && !clears) openable.push(rel + " · " + get);
       }
     }
@@ -1143,6 +1148,91 @@ for (const file of walk(root)) {
   // bucket, so without this it silently absorbs any new word the client's sheet grows.
   if (/unrecognised_status/.test(reportSrc)) passed++;
   else { failed++; pushStructural("app/(app)/reports/page.tsx: an unrecognised TC Status is not surfaced on the screen - QA-552. The no-verdict bucket is a DEFAULT, so anything nobody taught the report lands there under a label saying the cell is blank."); }
+}
+
+// ---- -196 (QA-634): one Planning tab, one table, and an edit switch that actually gates ----
+// Umesh, 2026-08-22, with the "Backward batch plan" drawer open: "tho 2 hai kyu, plan a batch pr
+// sidha planning wala hi tab open ho shutter wala hta hi do ... ek hi planning tab aaye aur usme
+// bhi proper only 1 table only ... abhi manually kisi ko edit krna hai tho edit ka button nhi aa
+// rhaa yhaa prr".
+//
+// Structural, because none of it is reachable over HTTP: the tab set, which control opens what,
+// and whether a switch GATES the editors are all decided in the browser bundle. Each check below
+// is written to fail against a plausible half-fix, not only against the previous release - a tab
+// hidden while its branch survives, a switch added beside editors it does not control, a delete
+// button shown to everyone (QA-598 / QA-624 / QA-628, three pins in one day that could not fail).
+{
+  const raw = fs.readFileSync(path.join(root, "app/(app)/batches/page.tsx"), "utf8");
+  const src = stripComments(raw);
+
+  // 1. Two tabs, and the third one's BRANCH is gone too. Hiding a label while `tab === "Preparation"`
+  //    still renders a second table is exactly the half-fix he would still be looking at.
+  const tabsCall = src.match(/<Tabs\s+tabs=\{\[([^\]]*)\]\}/);
+  const tabNames = tabsCall ? (tabsCall[1].match(/"[^"]*"|`[^`]*`/g) || []) : [];
+  if (tabsCall && tabNames.length === 2 && /"Batches"/.test(tabsCall[1]) && /"Planning"/.test(tabsCall[1])) passed++;
+  else { failed++; pushStructural('app/(app)/batches/page.tsx: the Batches screen does not offer exactly two tabs ("Batches", "Planning") - found ' + JSON.stringify(tabNames) + '. -196: "ek hi planning tab aaye".'); }
+  if (!/tab === "Preparation"/.test(src)) passed++;
+  else { failed++; pushStructural('app/(app)/batches/page.tsx: a `tab === "Preparation"` branch is still rendered - the tab was taken off the strip but its table is still in the page, which is the same two-tables screen with one door hidden.'); }
+
+  // 2. The shutter. Its title is the string he pointed at, and `planner.open` is the state that
+  //    made it a drawer at all - both must be gone, or it was moved rather than removed.
+  if (!/"Backward batch plan"/.test(src) && !/planner\.open/.test(src)) passed++;
+  else { failed++; pushStructural('app/(app)/batches/page.tsx: the "Backward batch plan" drawer is still in the page - "shutter wala hta hi do". Its inputs belong inline above the Planning table, not behind a drawer that cannot create the batch it plans.'); }
+
+  // 3. "Plan a batch" must land ON the Planning tab. A button that opens nothing would pass a
+  //    naive "no drawer" check, so this asserts where it DOES go.
+  const planBtn = src.match(/onClick=\{\(\) => ([^}]*)\}>Plan a batch</);
+  if (planBtn && /setTab\("Planning"\)/.test(planBtn[1])) passed++;
+  else { failed++; pushStructural('app/(app)/batches/page.tsx: the "Plan a batch" button does not open the Planning tab (found ' + JSON.stringify(planBtn ? planBtn[1] : null) + ') - "plan a batch pr sidha planning wala hi tab open ho".'); }
+
+  // 4. The strip has to CREATE, not just calculate - that was the drawer's whole failing. Three
+  //    facts: his new target-candidates input, the POST that makes the batch, and the PATCH that
+  //    attaches the plan to it. A strip with the input and no POST is the old calculator with a
+  //    new field.
+  const create = src.slice(src.indexOf("function PlanningCreate"));
+  if (/function PlanningCreate/.test(src)) passed++;
+  else { failed++; pushStructural("app/(app)/batches/page.tsx: there is no PlanningCreate strip above the Planning table - the drawer's inputs went nowhere."); }
+  if (/target_size/.test(create)) passed++;
+  else { failed++; pushStructural('app/(app)/batches/page.tsx: the Planning create strip does not carry target_size - Umesh 22/08: "batch mein kitne target persons lena chahte ho, n number of candidates".'); }
+  if (/"\/api\/batches"/.test(create) && /method: "POST"/.test(create) && /milestones`/.test(create) && /create: true/.test(create)) passed++;
+  else { failed++; pushStructural("app/(app)/batches/page.tsx: the Planning strip does not create the batch AND attach its plan (POST /api/batches then PATCH .../milestones {create:true}) - a plan that cannot become a batch is the calculator this replaced."); }
+
+  // 5. The switch, and that it GATES. `editMode` merely existing proves nothing; the editor helper
+  //    must refuse to render an input while it is off.
+  if (/setEditMode\(/.test(src) && /Edit mode/.test(src)) passed++;
+  else { failed++; pushStructural('app/(app)/batches/page.tsx: the Planning table has no "Edit mode" switch - Umesh 22/08: "edit ka button nhi aa rhaa yhaa prr", and three cells have been silently clickable since -171.'); }
+  // The first version of this pin sliced from `const editable =` to `const del =` and asked whether
+  // "!editMode" appeared ANYWHERE in that span. It could not fail: the span also contains `mcell`,
+  // whose own gate satisfied the regex after `editable`'s was deleted. That is the fourth pin in two
+  // days that could not fail for the defect it names (QA-598 / QA-613 / QA-624 / QA-628), so this
+  // one is written the other way round - find EVERY helper that renders a date input, and require
+  // each one, individually, to gate. A new editor added later without a gate fails this too.
+  const planTableSrc = src.slice(src.indexOf("function PlanningTable"));
+  const editors = [];
+  for (const m of planTableSrc.matchAll(/const (\w+) = (?:async )?\(/g)) {
+    // body = from this helper's start to the next top-level `const <name> = ` at the same indent
+    const start = m.index;
+    const nextRel = planTableSrc.slice(start + m[0].length).search(/\n  const \w+ = /);
+    const body = nextRel < 0 ? planTableSrc.slice(start) : planTableSrc.slice(start, start + m[0].length + nextRel);
+    if (/<input type="date"/.test(body)) editors.push({ name: m[1], gated: /!editMode/.test(body) });
+  }
+  const ungated = editors.filter((e) => !e.gated).map((e) => e.name);
+  if (editors.length >= 2 && !ungated.length) passed++;
+  else { failed++; pushStructural("app/(app)/batches/page.tsx: " + (editors.length < 2 ? "the Planning table has fewer date editors than the two it needs (trainer dates and milestone dates) - found " + editors.length : "these Planning-table cell editors offer an input without checking editMode: " + JSON.stringify(ungated)) + " - a switch that does not gate every editor is a decoration, and those cells stay editable with it off."); }
+
+  // 6. Delete on the row, Admin only, and only in Edit mode. DELETE /api/batches/:id already
+  //    refuses a non-Admin; showing the button anyway teaches people to click into a 403.
+  if (/method: "DELETE"/.test(src) && /role === "Admin"/.test(src) && /editMode && role === "Admin"/.test(src)) passed++;
+  else { failed++; pushStructural('app/(app)/batches/page.tsx: the Planning table has no Admin-only delete on the row, gated by Edit mode - "batch ko delete krne k liye kuch nhi hai".'); }
+
+  // 7. The row leaves Planning when the batch starts. planTrackerRows returns all four live
+  //    statuses (that is right - the export and the Batches tab both want them), so the view is
+  //    what narrows, and it must narrow to the two that have not started.
+  const table = src.slice(src.indexOf("function PlanningTable"));
+  const notStarted = table.match(/NOT_STARTED = \[([^\]]*)\]/);
+  const listed = notStarted ? (notStarted[1].match(/"[^"]*"/g) || []).map((s) => s.slice(1, -1)) : [];
+  if (listed.length === 2 && listed.includes("Planning") && listed.includes("Ready") && /rows \?\? \[\]\)\.filter\(/.test(table)) passed++;
+  else { failed++; pushStructural('app/(app)/batches/page.tsx: the Planning table does not narrow to the batches that have not started (found ' + JSON.stringify(listed) + ') - Umesh 22/08: "jaise batch start ho jayega planning wale se, woh batch wale tab mein shift ho jayega".'); }
 }
 
 // -149 (QA-324): this file started as one check and now carries several - the ASI trap, the

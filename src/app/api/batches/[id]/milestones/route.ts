@@ -94,7 +94,13 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   const m = (batch.milestones ?? []).find((x: any) => x.key === key);
   if (!m) throw new HttpError(404, "Milestone not found");
   if (body.done) {
-    (m as any).done_on = new Date();
+    // -196 (Umesh, 2026-08-22): "jaise dates aate rahengi woh usi values mein fill hote rahengi".
+    // A tick meant "done, now" — but the Planning grid is filled from a sheet days after the fact,
+    // so the date the operator types IS the fact and stamping today's date would overwrite it with
+    // a wrong one. An explicit done_on is honoured; a bare tick still means now.
+    const on = body.done_on ? new Date(body.done_on) : new Date();
+    if (isNaN(on.getTime())) throw new HttpError(400, "done_on is not a valid date.");
+    (m as any).done_on = on;
     (m as any).done_by = user.id;
     (m as any).done_via = "user";
   } else {
@@ -104,6 +110,6 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   }
   batch.markModified("milestones");
   await batch.save();
-  await audit({ entity: "Batch", entityId: batch._id, field: `milestone:${key}`, newValue: body.done ? "done" : "reopened", actor: user.id });
+  await audit({ entity: "Batch", entityId: batch._id, field: `milestone:${key}`, newValue: body.done ? `done ${new Date((m as any).done_on).toISOString().slice(0, 10)}` : "reopened", actor: user.id });
   return NextResponse.json({ item: batch });
 });

@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-195";
+export const RELEASE = "2026.08.14-196";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,24 @@ export const RELEASE = "2026.08.14-195";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-196 makes batch planning one screen instead of three. Planning a batch used to open a panel " +
+  "that could work out the dates and could not create the batch, so the plan was worked out once " +
+  "and then typed in again somewhere else; a separate Preparation tab listed what was blocking " +
+  "each centre, away from the moment anyone could act on it. There is now a single Planning tab: " +
+  "pick the centre, the job role, the start date and how many candidates the batch is for, and " +
+  "saving creates the batch AND keeps the backward plan on it as a tick-off checklist. What is " +
+  "still blocking that centre is shown right there while the date is being chosen. The table below " +
+  "is the planning sheet, one row per batch, and it now holds only the batches that have not " +
+  "started - once a batch starts, its row moves to the Batches tab by itself. An Edit switch turns " +
+  "the table from a report into a form: dates were already changeable on three columns and nothing " +
+  "said so, so nobody found them. With it on, every date this screen owns is outlined and " +
+  "editable, an Admin can delete a batch from its row, and the dates this screen does not own are " +
+  "greyed with a link to where they are recorded. A date typed for a step that is already done is " +
+  "now stored as typed - it used to be silently replaced with today, so a sheet copied in a week " +
+  "late recorded the wrong week."
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-195 stops the product guessing who a shared plan link belongs to. Four earlier attempts worked " +
   "it out from something about the person - the batch, then the phone number, then their position " +
   "in the centre list, then their name and role - and each one either merged two people or split " +
@@ -25,10 +43,7 @@ export const RELEASE_NOTE_CURRENT =
   "that is safe to use as their identity. So a plan is now sent by choosing one of the centre " +
   "recorded people, the choice travels with the link, and a link that does not say which person it " +
   "is for is refused rather than guessed at. Editing the centre contact list also used to renumber " +
-  "everybody, which quietly detached links from the people they were sent to; it no longer does.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "everybody, which quietly detached links from the people they were sent to; it no longer does." +
   "-194 fixes, for the third time, who a shared plan link belongs to - and this time the answer is " +
   "the person rather than something about them that the product lets change. A contact was " +
   "identified by its POSITION in the centre list, so removing one contact moved everybody below it " +

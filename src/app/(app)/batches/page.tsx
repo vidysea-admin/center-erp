@@ -45,8 +45,11 @@ function BatchesInner() {
   // planning view (every location×program target with its readiness gaps).
   // -171 (QA-399): a third tab, not a third route. Karunn sir's Back-dated Planning table lives
   // beside the batches it describes, because it IS those batches read the other way round.
+  // -196: two tabs, not three. A deep link that still says ?tab=Preparation lands on Planning -
+  // that tab's job (what is blocking this centre x job role) is now answered inside Planning's
+  // create strip, so the old link goes where its answer went rather than 404-ing into Batches.
   const [tab, setTab] = useState(
-    sp.get("tab") === "Preparation" ? "Preparation" : sp.get("tab") === "Planning" ? "Planning" : "Batches",
+    sp.get("tab") === "Planning" || sp.get("tab") === "Preparation" ? "Planning" : "Batches",
   );
   const [track, setTrack] = useState<any[] | null>(null);
   useEffect(() => {
@@ -54,7 +57,6 @@ function BatchesInner() {
     api("/api/plan-tracker").then((d) => setTrack(d.rows ?? [])).catch((e) => setError(String(e?.message ?? e)));
   }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
   const [prep, setPrep] = useState<any>(null);
-  const [prepFilter, setPrepFilter] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [drawer, setDrawer] = useState(false);
@@ -86,10 +88,13 @@ function BatchesInner() {
   // 2026-08-11: standalone backward-plan calculator — the shareable "इस-इस date तक ये काम" sheet
   // -174 (QA-501): the drawer now carries WHICH CENTRE, and what that centre can actually do -
   // the earliest it could start, whether any date works at all, and whose trainer the plan used.
+  // -196: no `open` any more — the planner is not a drawer, it is the strip at the top of the
+  // Planning tab. `target` is his new input: "batch mein kitne target persons lena chahte ho,
+  // n number of candidates" — the one thing the old calculator could not carry into the batch.
   const [planner, setPlanner] = useState<{
-    open: boolean; start?: string; plan?: any[];
+    start?: string; plan?: any[]; target?: string;
     location?: string; program?: string; eps?: any; tooSoon?: boolean | null; scopedTo?: any;
-  }>({ open: false });
+  }>({});
   const { copied: planCopied, copy: copyPlan } = useCopied();
   const [info, setInfo] = useState("");
 
@@ -240,7 +245,7 @@ function BatchesInner() {
       .map((r: any) => ({ _id: String(r.program_id), name: r.program ?? r.code }));
   })();
 
-  async function runPlanner(next: { start?: string; location?: string; program?: string }) {
+  async function runPlanner(next: { start?: string; location?: string; program?: string; target?: string }) {
     const s = { ...planner, ...next };
     setPlanner(s);
     if (!s.start) return;
@@ -264,7 +269,8 @@ function BatchesInner() {
             {locations.map((l) => <option key={l._id} value={l._id}>{l.name}</option>)}
           </select>
           <Btn kind="ghost" onClick={() => setImp({})}>Import (Excel)</Btn>
-          <Btn kind="ghost" onClick={() => setPlanner({ open: true })}>Plan a batch</Btn>
+          {/* -196: "plan a batch pr sidha planning wala hi tab open ho" — no drawer in between. */}
+          <Btn kind="ghost" onClick={() => setTab("Planning")}>Plan a batch</Btn>
           <Btn onClick={() => setDrawer(true)}>New Batch</Btn>
         </div>
       </div>
@@ -274,17 +280,30 @@ function BatchesInner() {
           ⚠ {info} <button className="ml-2 font-bold" onClick={() => setInfo("")}>×</button>
         </div>
       )}
-      <Tabs tabs={["Batches", `Preparation${prep ? ` (${prep.blocked_count ?? 0} blocked)` : ""}`, "Planning"]}
-        active={tab === "Preparation" ? `Preparation${prep ? ` (${prep.blocked_count ?? 0} blocked)` : ""}` : tab}
-        onChange={(t) => setTab(t.startsWith("Preparation") ? "Preparation" : t === "Planning" ? "Planning" : "Batches")} />
+      {/* -196 (Umesh, 2026-08-22): "ek hi planning tab aaye aur usme bhi proper only 1 table only".
+          The `Preparation` tab is gone. It answered "what is blocking this centre × job role", which
+          is a question you ask WHILE planning a batch — so that answer moved into the Planning
+          tab's create strip, where it is read at the moment it changes a decision. The endpoint
+          (/api/mapping/readiness) stays: Home reads it, and so does the strip. */}
+      <Tabs tabs={["Batches", "Planning"]} active={tab}
+        onChange={(t) => setTab(t === "Planning" ? "Planning" : "Batches")} />
 
       {tab === "Planning" && (
-        <PlanningTable rows={track} onSaved={() => setTrack(null)} onError={setError} />
+        <>
+          <PlanningCreate
+            locations={locations} prep={prep} planner={planner} runPlanner={runPlanner}
+            plannerLocations={plannerLocations} plannerHidden={plannerHidden} plannerRoles={plannerRoles}
+            planCopied={planCopied} copyPlan={copyPlan}
+            onError={setError} onInfo={setInfo}
+            onCreated={() => { setTrack(null); load(); }} />
+          <PlanningTable rows={track} role={role} onSaved={() => setTrack(null)} onError={setError} />
+        </>
       )}
 
-      {tab === "Batches" ? (
+      {tab === "Batches" && (
         <>
-          {/* QA-030: the main list says out loud what Preparation is holding back. */}
+          {/* QA-030: the main list says out loud what is holding centres back. -196: the click now
+              lands on Planning — the tab that both explains a blocker and lets you act on it. */}
           {(prep?.blocked_count ?? 0) > 0 && (() => {
             // QA-030: name the REASONS on the main screen, not just the count — post-reset
             // every position is blocked and a bare number reads as noise, not a stall.
@@ -297,9 +316,9 @@ function BatchesInner() {
             }
             const parts = [...why.entries()].map(([k, n]) => `${k} ${n}`).join(" · ");
             return (
-              <button onClick={() => setTab("Preparation")}
+              <button onClick={() => setTab("Planning")}
                 className="w-full rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-left text-sm text-amber-800 hover:border-amber-300">
-                ⚑ <b>{prep.blocked_count}</b> of {(prep.items ?? []).length} centre × job-role position{prep.blocked_count === 1 ? " is" : "s are"} blocked in Preparation{parts ? ` — ${parts}` : ""} — click to see what each one needs.
+                ⚑ <b>{prep.blocked_count}</b> of {(prep.items ?? []).length} centre × job-role position{prep.blocked_count === 1 ? " is" : "s are"} blocked{parts ? ` — ${parts}` : ""} — open Planning and pick the centre to see what it needs.
               </button>
             );
           })()}
@@ -407,46 +426,6 @@ function BatchesInner() {
                 sortValue: (r: any) => r.created_by?.name ?? "", filterText: (r: any) => r.created_by?.name ?? "(seed/import)",
                 render: (r: any) => r.created_by?.name ?? <span className="text-gray-400">(seed/import)</span> },
             ]} empty="No batches — plan the first one." />
-        </>
-      ) : (
-        <>
-          {/* 2026-08-13 (Umesh): the full backward-planning view — every location×program
-              target with what is still missing before a batch can start ("sirf location ready
-              hai, ya sirf trainer ready" — ab yahan dikhta hai). Home shows 8 rows; this is all. */}
-          <FilterPills active={prepFilter} onChange={(v) => setPrepFilter(v === prepFilter ? "" : v)}
-            options={[
-              { value: "", label: "All", count: prep?.items?.length ?? 0 },
-              { value: "ready", label: "Ready to start", count: prep?.ready_count ?? 0 },
-              { value: "blocked", label: "Blocked", count: prep?.blocked_count ?? 0 },
-            ]} />
-          <DataTable
-            rows={(prep?.items ?? []).filter((r: any) => prepFilter === "ready" ? r.ready : prepFilter === "blocked" ? !r.ready : true)}
-            loading={loading}
-            cardTitle={(r: any) => `${r.location?.name} · ${r.program?.name}`}
-            columns={[
-              { key: "location", label: "Location", sortable: true, sortValue: (r: any) => r.location?.name, render: (r: any) => r.location?.name },
-              { key: "program", label: "Job role", sortable: true, filterable: true, sortValue: (r: any) => r.program?.name, render: (r: any) => <span>{r.program?.name}{r.program?.scheme ? <span className="text-xs text-gray-400"> ({r.program.scheme})</span> : null}</span> },
-              { key: "ready", label: "Ready?", sortable: true, sortValue: (r: any) => (r.ready ? 1 : 0), render: (r: any) => <Chip value={r.ready ? "Ready" : "Not Ready"} /> },
-              {
-                key: "blockers", label: "Missing before start", render: (r: any) => r.ready
-                  ? <span className="text-xs text-green-700">nothing — plan the batch</span>
-                  : <span className="flex flex-wrap gap-1">{(r.blockers ?? []).map((b: string, i: number) => (
-                      <span key={i} className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] text-amber-800">{b}</span>
-                    ))}</span>,
-              },
-              { key: "trainers", label: "Trainers", mobile: false, render: (r: any) => <span className="text-xs tabular-nums">{r.trainers?.certified ?? 0}/{r.trainers?.required ?? 1} certified{(r.trainers?.in_pipeline ?? 0) > 0 ? ` · ${r.trainers.in_pipeline} in pipeline` : ""}</span> },
-              { key: "candidates", label: "Candidates", mobile: false, render: (r: any) => <span className="text-xs tabular-nums">{r.candidates?.registered ?? 0}/{r.candidates?.needed ?? 0} registered · pool {r.candidates?.pool ?? 0}</span> },
-              { key: "approved_target", label: "Target", mobile: false, render: (r: any) => r.approved_target ?? "—" },
-              {
-                key: "_act", label: "", render: (r: any) => (
-                  <span onClick={(e) => e.stopPropagation()}>
-                    {r.ready
-                      ? <Btn small onClick={() => { setForm({ session: "Full Day", location: r.location?._id, program: r.program?._id }); setDrawer(true); }}>Plan batch</Btn>
-                      : <Link className="text-xs font-medium text-blue-700 hover:underline" href={`/locations/${r.location?._id}`}>Fix at centre →</Link>}
-                  </span>
-                ),
-              },
-            ]} empty="No location×programme targets yet — set targets on the locations." />
         </>
       )}
 
@@ -631,110 +610,24 @@ function BatchesInner() {
           )}
           <p className="text-xs text-gray-500">Planned end = start + duration + buffer. A trainer or room already booked for these dates blocks the save.</p>
           {/* 2026-08-13 (Umesh): "2 buttons — create batch AND create plan" — the backward plan
-              ("itti date tak ye sab ho jana chahiye") straight from the same form, shareable. */}
+              ("itti date tak ye sab ho jana chahiye") straight from the same form, shareable.
+              -196: the second button now carries what this form already knows into the Planning
+              strip, which is the one place that both plans and creates. */}
           <div className="flex gap-2">
             <Btn onClick={save} disabled={!form.location || !form.program || !form.planned_start}>Create Batch</Btn>
             <Btn kind="ghost" disabled={!form.planned_start}
-              onClick={() => { setDrawer(false); setPlanner({ open: true, start: form.planned_start }); runPlanner(form.planned_start); }}>
+              onClick={() => { setDrawer(false); setTab("Planning"); runPlanner({ start: form.planned_start, location: form.location, program: form.program }); }}>
               Create backward plan
             </Btn>
           </div>
         </div>
       </Drawer>
 
-      {/* 2026-08-11: backward-plan calculator — printable, shareable, no batch needed */}
-      <Drawer error={error} open={planner.open} onClose={() => setPlanner({ open: false })} title="Backward batch plan">
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Batch start date" required>
-              <input type="date" className={inputCls} value={planner.start ?? ""} onChange={(e) => runPlanner({ start: e.target.value })} />
-            </Field>
-            <Field label="Centre (optional)">
-              <select className={inputCls} value={planner.location ?? ""} onChange={(e) => runPlanner({ location: e.target.value, program: "" })}>
-                <option value="">Not a specific centre</option>
-                {plannerLocations.map((l: any) => <option key={l._id} value={l._id}>{l.name}</option>)}
-              </select>
-            </Field>
-          </div>
-          {/* QA-528: Karunn sir's word was ONLY - "ek batch ki plan, and that is to be ONLY FOR
-              APPROVE LOCATION AND APPROVE COURSES" (20/08, 08:21). -174 shipped this select with
-              every centre in it. What is left out is COUNTED here rather than quietly dropped: a
-              list that silently shrinks is how somebody concludes a centre was deleted. */}
-          {plannerHidden > 0 && (
-            <p className="text-xs text-gray-500">
-              {plannerHidden} of {locations.length} centres are not offered here because the government has not approved them yet.
-              A batch can still be created for them from <b>New Batch</b> — this is the planner, and planning an unapproved centre is planning something that cannot run.
-            </p>
-          )}
-          {planner.location && (
-            <Field label="Job role (optional)">
-              <select className={inputCls} value={planner.program ?? ""} onChange={(e) => runPlanner({ program: e.target.value })}>
-                <option value="">Any approved job role at this centre</option>
-                {plannerRoles.map((p: any) => <option key={p._id} value={p._id}>{p.name}</option>)}
-              </select>
-              {plannerRoles.length === 0 && (
-                <p className="mt-1 text-xs text-amber-800">
-                  This centre has no job role approved on the client sheet yet, so there is nothing to plan against here.
-                </p>
-              )}
-            </Field>
-          )}
-          {planner.eps && (
-            // -168 wrote this sentence once so every screen says it the same way. The planner and
-            // the batch form now read the SAME note off the SAME calculation.
-            <p className={"rounded-lg px-3 py-2 text-xs " + (planner.tooSoon ? "border border-amber-200 bg-amber-50 font-medium text-amber-800" : "bg-blue-50 text-blue-700")}>
-              {planner.eps.blocked
-                ? <>⚠ This centre cannot start a batch yet ({planner.eps.note}). Any date you pick here will miss.</>
-                : planner.tooSoon
-                  ? <>⚠ {fmtDate(planner.start!)} is before the earliest this centre could start — <b>{fmtDate(planner.eps.date)}</b> ({planner.eps.note}). The dates below are still counted back from your date, so they have already passed.</>
-                  : <>Earliest this centre could start: <b>{fmtDate(planner.eps.date)}</b> ({planner.eps.note})</>}
-            </p>
-          )}
-          {planner.scopedTo?.trainer && (
-            <p className="text-xs text-gray-500">
-              Using <b>{planner.scopedTo.trainer.name}</b>, who teaches here now.
-              {(planner.scopedTo.trainer.pipeline_status === "Certified" || planner.scopedTo.trainer.tot_done_on)
-                && " They are already certified, so the TOT steps are not in this plan."}
-            </p>
-          )}
-          {planner.plan && (
-            <>
-              <div className="overflow-hidden rounded-lg border">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 text-left text-xs text-gray-500">
-                    <tr><th className="px-3 py-2">Due date</th><th className="px-3 py-2">Milestone</th></tr>
-                  </thead>
-                  <tbody>
-                    {planner.plan.map((m: any) => (
-                      <tr key={m.key} className="border-t">
-                        <td className="px-3 py-2 font-medium">{fmtDate(m.due_date)}</td>
-                        <td className="px-3 py-2">{m.label}</td>
-                      </tr>
-                    ))}
-                    <tr className="border-t bg-blue-50">
-                      <td className="px-3 py-2 font-semibold">{fmtDate(planner.start!)}</td>
-                      <td className="px-3 py-2 font-semibold">Batch starts</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-              <div className="flex items-center gap-2">
-                <Btn kind="ghost" onClick={() => {
-                  const lines = planner.plan!.map((m: any) => `${fmtDate(m.due_date)} — ${m.label}`);
-                  copyPlan(`Batch plan (start ${fmtDate(planner.start!)}):\n${lines.join("\n")}\n${fmtDate(planner.start!)} — Batch starts`);
-                }}>{planCopied ? "Copied ✓" : "Copy as text"}</Btn>
-                {/* Shareable = it reaches the team where they talk, not just the clipboard. */}
-                <a className="rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-medium text-green-700 hover:bg-green-50" target="_blank" rel="noreferrer"
-                  href={`https://wa.me/?text=${encodeURIComponent(`Batch plan (start ${fmtDate(planner.start!)}):\n${planner.plan!.map((m: any) => `${fmtDate(m.due_date)} — ${m.label}`).join("\n")}\n${fmtDate(planner.start!)} — Batch starts`)}`}>
-                  WhatsApp
-                </a>
-                <Btn kind="ghost" onClick={() => window.print()}>Print</Btn>
-              </div>
-              <p className="text-xs text-gray-500">Lead times are configurable in Admin → Defaults. Creating a batch stores this checklist on the batch, tick-off-able.</p>
-            </>
-          )}
-        </div>
-      </Drawer>
+      {/* -196 (Umesh, 2026-08-22): the "Backward batch plan" drawer that stood here is GONE.
+          "tho 2 hai kyu ... shutter wala hta hi do" - it was a calculator that could not create
+          the batch it planned, so a person planned twice: once in the drawer, once in New Batch.
+          Its inputs, its earliest-start warning and its milestone preview now live inline above
+          the Planning table (PlanningCreate), where Save makes the batch AND attaches the plan. */}
 
       {/* QA-028: batch bulk import — same contract as the candidate/trainer importers. */}
       <Drawer error={error} open={!!imp} onClose={() => setImp(null)} title="Import batches (Excel)" wide>
@@ -849,6 +742,179 @@ function BatchesInner() {
   );
 }
 
+// -196 (Umesh, 2026-08-22) — the create strip that replaced the "Backward batch plan" drawer.
+//
+// The drawer could compute a plan and could not create the batch it planned, so the plan and the
+// batch were two separate acts and the plan was thrown away between them. This asks the same four
+// questions (centre · job role · start date · how many candidates), shows the same backward plan,
+// and its Save does BOTH: POST /api/batches makes the batch in `Planning` status, then
+// PATCH …/milestones {create:true} attaches the plan to it. The new row appears in the table below
+// immediately, because that table shows exactly the batches that have not started yet.
+//
+// The preview is a list, NOT a table. His words were "usme bhi proper only 1 table only", and a
+// second bordered grid above the grid is the thing he was pointing at.
+function PlanningCreate({ locations, prep, planner, runPlanner, plannerLocations, plannerHidden, plannerRoles, planCopied, copyPlan, onError, onInfo, onCreated }: {
+  locations: any[]; prep: any; planner: any; runPlanner: (n: any) => void;
+  plannerLocations: any[]; plannerHidden: number; plannerRoles: any[];
+  planCopied: boolean; copyPlan: (t: string) => void;
+  onError: (m: string) => void; onInfo: (m: string) => void; onCreated: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const canSave = !!(planner.location && planner.program && planner.start) && !saving;
+
+  // What the removed Preparation tab used to answer, asked at the moment it matters: this centre,
+  // this job role, what is still missing. Same endpoint, same row, read where the decision is made.
+  const prepRow = (prep?.items ?? []).find((r: any) =>
+    String(r.location?._id ?? r.location) === String(planner.location)
+    && String(r.program?._id ?? r.program) === String(planner.program));
+
+  const planText = () => {
+    const lines = (planner.plan ?? []).map((m: any) => `${fmtDate(m.due_date)} — ${m.label}`);
+    return `Batch plan (start ${fmtDate(planner.start)}):\n${lines.join("\n")}\n${fmtDate(planner.start)} — Batch starts`;
+  };
+
+  async function save() {
+    setSaving(true);
+    try {
+      const res = await api("/api/batches", {
+        method: "POST",
+        json: {
+          location: planner.location, program: planner.program, planned_start: planner.start,
+          session: "Full Day",
+          ...(planner.target ? { target_size: Number(planner.target) } : {}),
+        },
+      });
+      const id = res?.item?._id ?? res?._id;
+      // QA-152: {create:true} is the ONE way a batch gets its plan. The batch is born in Planning,
+      // which is the status that route requires, so this is the moment it can be attached at all.
+      if (id) await api(`/api/batches/${id}/milestones`, { method: "PATCH", json: { create: true } });
+      onInfo(`${res?.item?.code ?? "Batch"} planned${res?.warning ? ` — ${res.warning}` : ""}`);
+      runPlanner({ start: undefined, location: undefined, program: undefined, target: undefined });
+      setOpen(false);
+      onCreated();
+    } catch (e: any) { onError(String(e?.message ?? e)); }
+    finally { setSaving(false); }
+  }
+
+  if (!open) {
+    return (
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
+        <p className="text-sm text-gray-600">
+          Plan a batch: pick the centre and job role, choose the start date, and the backward plan is
+          counted for you — then saved onto the batch as a tick-off checklist.
+        </p>
+        <Btn onClick={() => setOpen(true)}>Plan a batch</Btn>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3 rounded-xl border border-blue-200 bg-blue-50/40 px-4 py-3">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-gray-800">Plan a batch</h2>
+        <button className="text-xs font-medium text-gray-500 hover:text-gray-800" onClick={() => setOpen(false)}>Close</button>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <Field label="Centre" required>
+          <select className={inputCls} value={planner.location ?? ""} onChange={(e) => runPlanner({ location: e.target.value, program: "" })}>
+            <option value="">Select…</option>
+            {plannerLocations.map((l: any) => <option key={l._id} value={l._id}>{l.name}</option>)}
+          </select>
+        </Field>
+        <Field label="Job role" required>
+          <select className={inputCls} value={planner.program ?? ""} disabled={!planner.location} onChange={(e) => runPlanner({ program: e.target.value })}>
+            <option value="">{planner.location ? "Select…" : "Pick a centre first"}</option>
+            {plannerRoles.map((p: any) => <option key={p._id} value={p._id}>{p.name}</option>)}
+          </select>
+        </Field>
+        <Field label="Batch start date" required>
+          <input type="date" className={inputCls} value={planner.start ?? ""} onChange={(e) => runPlanner({ start: e.target.value })} />
+        </Field>
+        {/* Umesh, 2026-08-22: "batch mein kitne target persons lena chahte ho, n number of
+            candidates". Left blank it falls back to the job role's default batch size, which is
+            what the server does today — so the field adds a choice, never a new requirement. */}
+        <Field label="Target candidates">
+          <input type="number" min={1} className={inputCls} placeholder="job role default"
+            value={planner.target ?? ""} onChange={(e) => runPlanner({ target: e.target.value })} />
+        </Field>
+      </div>
+
+      {/* QA-528: Karunn sir's word was ONLY - "ek batch ki plan, and that is to be ONLY FOR
+          APPROVE LOCATION AND APPROVE COURSES" (20/08, 08:21). What is left out is COUNTED here
+          rather than quietly dropped: a list that silently shrinks is how somebody concludes a
+          centre was deleted. */}
+      {plannerHidden > 0 && (
+        <p className="text-xs text-gray-500">
+          {plannerHidden} of {locations.length} centres are not offered here because the government has not approved them yet.
+          A batch can still be created for them from <b>New Batch</b> — planning an unapproved centre is planning something that cannot run.
+        </p>
+      )}
+      {planner.location && plannerRoles.length === 0 && (
+        <p className="text-xs text-amber-800">This centre has no job role approved on the client sheet yet, so there is nothing to plan against here.</p>
+      )}
+
+      {/* The old Preparation tab, in one line, about the row you are actually planning. */}
+      {prepRow && (
+        prepRow.ready
+          ? <p className="text-xs text-green-700">Nothing is blocking this centre × job role — {prepRow.trainers?.certified ?? 0}/{prepRow.trainers?.required ?? 1} trainers certified, {prepRow.candidates?.registered ?? 0}/{prepRow.candidates?.needed ?? 0} candidates registered.</p>
+          : (
+            <p className="flex flex-wrap items-center gap-1 text-xs text-amber-800">
+              Still missing before this can start:
+              {(prepRow.blockers ?? []).map((b: string, i: number) => (
+                <span key={i} className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5">{b}</span>
+              ))}
+              <Link className="font-medium text-blue-700 hover:underline" href={`/locations/${prepRow.location?._id}`}>Fix at centre →</Link>
+            </p>
+          )
+      )}
+
+      {planner.eps && (
+        // -168 wrote this sentence once so every screen says it the same way.
+        <p className={"rounded-lg px-3 py-2 text-xs " + (planner.tooSoon ? "border border-amber-200 bg-amber-50 font-medium text-amber-800" : "bg-blue-50 text-blue-700")}>
+          {planner.eps.blocked
+            ? <>⚠ This centre cannot start a batch yet ({planner.eps.note}). Any date you pick here will miss.</>
+            : planner.tooSoon
+              ? <>⚠ {fmtDate(planner.start)} is before the earliest this centre could start — <b>{fmtDate(planner.eps.date)}</b> ({planner.eps.note}). The dates below are still counted back from your date, so they have already passed.</>
+              : <>Earliest this centre could start: <b>{fmtDate(planner.eps.date)}</b> ({planner.eps.note})</>}
+        </p>
+      )}
+      {planner.scopedTo?.trainer && (
+        <p className="text-xs text-gray-500">
+          Using <b>{planner.scopedTo.trainer.name}</b>, who teaches here now.
+          {(planner.scopedTo.trainer.pipeline_status === "Certified" || planner.scopedTo.trainer.tot_done_on)
+            && " They are already certified, so the TOT steps are not in this plan."}
+        </p>
+      )}
+
+      {planner.plan && (
+        <>
+          <div className="flex flex-wrap gap-1.5">
+            {planner.plan.map((m: any) => (
+              <span key={m.key} className="rounded-lg border border-gray-200 bg-white px-2 py-1 text-[11px] leading-tight">
+                <b className="tabular-nums">{fmtDate(m.due_date)}</b> <span className="text-gray-600">{m.label}</span>
+              </span>
+            ))}
+            <span className="rounded-lg border border-blue-300 bg-blue-100 px-2 py-1 text-[11px] font-semibold leading-tight">
+              <span className="tabular-nums">{fmtDate(planner.start)}</span> Batch starts
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Btn onClick={save} disabled={!canSave}>{saving ? "Saving…" : "Save plan & create batch"}</Btn>
+            <Btn kind="ghost" onClick={() => copyPlan(planText())}>{planCopied ? "Copied ✓" : "Copy as text"}</Btn>
+            {/* Shareable = it reaches the team where they talk, not just the clipboard. */}
+            <a className="rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-medium text-green-700 hover:bg-green-50" target="_blank" rel="noreferrer"
+              href={`https://wa.me/?text=${encodeURIComponent(planText())}`}>WhatsApp</a>
+            <Btn kind="ghost" onClick={() => window.print()}>Print</Btn>
+          </div>
+          {!planner.program && <p className="text-xs text-gray-500">Pick a job role to save this as a batch — the plan above is already correct without one.</p>}
+          <p className="text-xs text-gray-500">Lead times are configurable in Admin → Defaults. Saving stores this checklist on the batch, tick-off-able, and the batch appears in the table below.</p>
+        </>
+      )}
+    </div>
+  );
+}
+
 // -171 (QA-399) — Karunn sir's Back-dated Planning table, all 18 of his columns.
 //
 // The three trainer dates (his columns 5, 6 and 13) are editable RIGHT HERE, because this is where
@@ -887,34 +953,121 @@ const PLAN_COLUMN_SOURCE: Record<string, string> = {
   // batch. It is ours, and saying so is more honest than inventing a heading for it.
 };
 
-function PlanningTable({ rows, onSaved, onError }: { rows: any[] | null; onSaved: () => void; onError: (m: string) => void }) {
+function PlanningTable({ rows, role, onSaved, onError }: { rows: any[] | null; role?: string; onSaved: () => void; onError: (m: string) => void }) {
   const [editing, setEditing] = useState<{ id: string; field: string } | null>(null);
   const [value, setValue] = useState("");
+  // -196 (Umesh, 2026-08-22): "edit ka button nhi aa rha yaha par". Three cells have been clickable
+  // since -171 and nothing on screen said so, so nobody found them. The switch is the whole answer:
+  // OFF the table reads like a report, ON every writable cell is visibly writable. It is shown to
+  // everyone — the API decides who may actually save, and a save that is refused says why, which is
+  // more honest than a control that quietly is not there.
+  const [editMode, setEditMode] = useState(false);
   const d = (v: any) => (v == null || v === "" ? <span className="text-gray-300">·</span> : v === "Not needed" ? <span className="text-[10px] uppercase tracking-wide text-gray-400">Not needed</span> : fmtDate(v));
 
   const save = async (trainerId: string, field: string) => {
     try {
       await api(`/api/trainers/${trainerId}`, { method: "PATCH", body: JSON.stringify({ [field]: value || null }) });
       setEditing(null); setValue(""); onSaved();
-    } catch (e: any) { onError(String(e?.message ?? e)); }
+    } catch (e: any) { setEditing(null); onError(String(e?.message ?? e)); }
   };
-  const cell = (r: any, field: string) => {
-    if (!r.trainer) return <span className="text-gray-300">·</span>;
-    const on = editing?.id === r.trainer._id && editing?.field === field;
+  // The batch's own two dates. Rule 15 lives on the server: change the start and the end is
+  // recomputed there, so this never does that arithmetic itself (that would be the second copy).
+  const saveBatch = async (batchId: string, field: string) => {
+    // A batch without a start or an end is not a batch - every readiness, conflict and settlement
+    // calculation reads both. The PATCH route writes whatever it is handed, so the refusal belongs
+    // here: clearing is not an edit, it is a hole.
+    if (!value) {
+      setEditing(null);
+      onError("A batch must keep both of its dates. Type the correct one rather than clearing it — to remove the batch entirely, use Delete on the row.");
+      return;
+    }
+    try {
+      await api(`/api/batches/${batchId}`, { method: "PATCH", json: { [field]: value } });
+      setEditing(null); setValue(""); onSaved();
+    } catch (e: any) { setEditing(null); onError(String(e?.message ?? e)); }
+  };
+
+  const editable = (id: string | undefined, field: string, shown: any, current: any, commit: (id: string, field: string) => void) => {
+    if (!id) return <span className="text-gray-300">·</span>;
+    if (!editMode) return shown;
+    const on = editing?.id === id && editing?.field === field;
     if (on) {
       return (
         <input type="date" autoFocus className="w-[130px] rounded border border-blue-300 px-1 py-0.5 text-xs"
           value={value} onChange={(e) => setValue(e.target.value)}
-          onBlur={() => save(r.trainer._id, field)}
-          onKeyDown={(e) => { if (e.key === "Enter") save(r.trainer._id, field); if (e.key === "Escape") setEditing(null); }} />
+          onBlur={() => commit(id, field)}
+          onKeyDown={(e) => { if (e.key === "Enter") commit(id, field); if (e.key === "Escape") setEditing(null); }} />
       );
     }
     return (
-      <button className="w-full text-left hover:underline"
-        onClick={() => { setEditing({ id: r.trainer._id, field }); setValue(r[field] ? String(r[field]).slice(0, 10) : ""); }}>
-        {d(r[field])}
+      <button className="w-full rounded border border-dashed border-blue-300 px-1 text-left hover:bg-blue-50"
+        onClick={() => { setEditing({ id, field }); setValue(current ? String(current).slice(0, 10) : ""); }}>
+        {shown}
       </button>
     );
+  };
+  // A trainer date: stored once on the trainer, so one trainer on two batches shows one date twice
+  // rather than two copies that can drift.
+  const cell = (r: any, field: string) => {
+    if (!r.trainer) return <span className="text-gray-300">·</span>;
+    if (r[field] === "Not needed") return d(r[field]);
+    return editable(r.trainer._id, field, d(r[field]), r[field], save);
+  };
+  const bcell = (r: any, field: string) => editable(r.batch?._id, field, d(r[field]), r[field], saveBatch);
+
+  // A batch milestone's own date. The grid shows `done_on ?? due_date` — what happened, else what
+  // was planned — so typing here means "this happened, on this day", which is `done` with a date.
+  const saveMilestone = async (batchId: string, key: string) => {
+    try {
+      await api(`/api/batches/${batchId}/milestones`, {
+        method: "PATCH",
+        json: value ? { key, done: true, done_on: value } : { key, done: false },
+      });
+      setEditing(null); setValue(""); onSaved();
+    } catch (e: any) { setEditing(null); onError(String(e?.message ?? e)); }
+  };
+  const mcell = (r: any, col: string, key: string) => {
+    if (r[col] === "Not needed") return d(r[col]);
+    if (!editMode) return d(r[col]);
+    const on = editing?.id === r.batch?._id && editing?.field === key;
+    if (on) {
+      return (
+        <input type="date" autoFocus className="w-[130px] rounded border border-blue-300 px-1 py-0.5 text-xs"
+          value={value} onChange={(e) => setValue(e.target.value)}
+          onBlur={() => saveMilestone(r.batch._id, key)}
+          onKeyDown={(e) => { if (e.key === "Enter") saveMilestone(r.batch._id, key); if (e.key === "Escape") setEditing(null); }} />
+      );
+    }
+    return (
+      <button className="w-full rounded border border-dashed border-blue-300 px-1 text-left hover:bg-blue-50"
+        onClick={() => { setEditing({ id: r.batch._id, field: key }); setValue(r[col] ? String(r[col]).slice(0, 10) : ""); }}>
+        {d(r[col])}
+      </button>
+    );
+  };
+  // Five of the eighteen columns are NOT editable here, and the switch says so instead of leaving
+  // a dead cell. They are stamped by the trainer's stage transition (/transition), which enforces
+  // TRAINER_FLOW — its document gates, the NSDC round-trip, Rule T7. `tot_done_on` is the sharpest
+  // case: `totNeeded()` treats a trainer with that date as TOT-complete, so a typed date here would
+  // silently drop the TOT steps out of every future plan. The date is real work with a gate in
+  // front of it; the grid points at the gate rather than going round it.
+  const gated = (r: any, field: string, where: string) => {
+    if (r[field] === "Not needed") return d(r[field]);
+    if (!editMode || !r.trainer) return d(r[field]);
+    return (
+      <Link href={`/trainers/${r.trainer._id}`} title={`Written when the trainer moves to "${where}" — open the trainer to record it there.`}
+        className="block w-full rounded border border-dashed border-gray-300 px-1 text-gray-500 hover:bg-gray-50">
+        {d(r[field])}
+      </Link>
+    );
+  };
+
+  const del = async (r: any) => {
+    if (!window.confirm(`Delete ${r.batch.code}? Everything recorded against it — members, daily logs, attendance, costs — goes with it. This cannot be undone.`)) return;
+    try {
+      await api(`/api/batches/${r.batch._id}`, { method: "DELETE" });
+      onSaved();
+    } catch (e: any) { onError(String(e?.message ?? e)); }
   };
 
   // QA-607 — Umesh, 2026-08-22, holding the "Back-dated Planning" tab of the client workbook next to
@@ -944,31 +1097,68 @@ function PlanningTable({ rows, onSaved, onError }: { rows: any[] | null; onSaved
     { key: "trainer", label: "Trainer Name", minWidth: 160, sortable: true, sortValue: (r: any) => r.trainer?.name ?? "", filterText: (r: any) => `${r.trainer?.name ?? ""} ${r.trainer?.tr_id ?? ""}`, render: (r: any) => r.trainer ? <>{r.trainer.name}{r.trainer.tr_id && <span className="block text-[10px] text-gray-400">{r.trainer.tr_id}</span>}</> : <span className="text-amber-700">no trainer</span> },
     { key: "sidh_profile_verified_on", label: "Trainer profile verified on SIDH", minWidth: 210, render: (r: any) => cell(r, "sidh_profile_verified_on") },
     { key: "eligibility_checked_on", label: "Trainer eligibility check", minWidth: 170, render: (r: any) => cell(r, "eligibility_checked_on") },
-    { key: "ready_for_tot", label: "Trainer available & ready for TOT", minWidth: 218, render: (r: any) => d(r.ready_for_tot) },
-    { key: "nsdc_submitted_on", label: "Profile submitted to SSC/NSDC", minWidth: 202, render: (r: any) => d(r.nsdc_submitted_on) },
-    { key: "nsdc_result_on", label: "SSC/NSDC approved the profile", minWidth: 202, render: (r: any) => <>{d(r.nsdc_result_on)}{r.nsdc_remarks && <span className="block text-[10px] text-amber-700" title={r.nsdc_remarks}>remarks</span>}</> },
-    { key: "paid_on", label: "TOT fee paid to SSC/NSDC", minWidth: 176, render: (r: any) => d(r.paid_on) },
-    { key: "tot_start", label: "TOT start date", minWidth: 122, render: (r: any) => d(r.tot_start) },
-    { key: "tot_done_on", label: "TOT end date", minWidth: 118, render: (r: any) => d(r.tot_done_on) },
+    { key: "ready_for_tot", label: "Trainer available & ready for TOT", minWidth: 218, render: (r: any) => mcell(r, "ready_for_tot", "trainer_ready_for_tot") },
+    { key: "nsdc_submitted_on", label: "Profile submitted to SSC/NSDC", minWidth: 202, render: (r: any) => gated(r, "nsdc_submitted_on", "Sent to NSDC") },
+    { key: "nsdc_result_on", label: "SSC/NSDC approved the profile", minWidth: 202, render: (r: any) => <>{gated(r, "nsdc_result_on", "NSDC Approved")}{r.nsdc_remarks && <span className="block text-[10px] text-amber-700" title={r.nsdc_remarks}>remarks</span>}</> },
+    { key: "paid_on", label: "TOT fee paid to SSC/NSDC", minWidth: 176, render: (r: any) => gated(r, "paid_on", "Fee Paid") },
+    { key: "tot_start", label: "TOT start date", minWidth: 122, render: (r: any) => gated(r, "tot_start", "TOT Scheduled") },
+    { key: "tot_done_on", label: "TOT end date", minWidth: 118, render: (r: any) => gated(r, "tot_done_on", "TOT Done") },
     { key: "tot_result_expected_on", label: "TOT result & certificate expected", minWidth: 216, render: (r: any) => cell(r, "tot_result_expected_on") },
-    { key: "trainer_mapped_sidh", label: "Trainer mapped on SIDH portal", minWidth: 202, render: (r: any) => d(r.trainer_mapped_sidh) },
-    { key: "mobilization", label: "Mobilisation done for this batch", minWidth: 206, filterText: (r: any) => r.mobilization?.status ?? "", render: (r: any) => <>{r.mobilization.status}{r.mobilization.count > 0 && <span className="text-gray-400"> · {r.mobilization.count}</span>}</> },
-    { key: "enrollment_done", label: "Registration & enrolment done on SIDH", minWidth: 250, render: (r: any) => d(r.enrollment_done) },
-    { key: "planned_start", label: "Expected batch start date", minWidth: 176, sortable: true, sortValue: (r: any) => r.planned_start ?? "", render: (r: any) => d(r.planned_start) },
-    { key: "planned_end", label: "Expected batch end date", minWidth: 170, render: (r: any) => d(r.planned_end) },
+    { key: "trainer_mapped_sidh", label: "Trainer mapped on SIDH portal", minWidth: 202, render: (r: any) => mcell(r, "trainer_mapped_sidh", "trainer_mapped_sidh") },
+    // Derived from the roster and never typed — `trainers_required` already carries the comment
+    // explaining why a count kept in two places is a count that disagrees with itself.
+    { key: "mobilization", label: "Mobilisation done for this batch", minWidth: 206, filterText: (r: any) => r.mobilization?.status ?? "",
+      render: (r: any) => (
+        <span title={editMode ? "Counted from the batch roster — enrol candidates onto the batch and this fills itself." : undefined}
+          className={editMode ? "text-gray-500" : undefined}>
+          {r.mobilization.status}{r.mobilization.count > 0 && <span className="text-gray-400"> · {r.mobilization.count}</span>}
+        </span>
+      ) },
+    { key: "enrollment_done", label: "Registration & enrolment done on SIDH", minWidth: 250, render: (r: any) => mcell(r, "enrollment_done", "enrollment_done") },
+    { key: "planned_start", label: "Expected batch start date", minWidth: 176, sortable: true, sortValue: (r: any) => r.planned_start ?? "", render: (r: any) => bcell(r, "planned_start") },
+    // Rule 15 recomputes this on the server when the start moves, so a start edit refreshes both.
+    { key: "planned_end", label: "Expected batch end date", minWidth: 170, render: (r: any) => bcell(r, "planned_end") },
   ];
+  // -196: "batch ko delete krne k liye kuch nhi hai". DELETE /api/batches/:id is Admin-only and
+  // counts everything hanging off the batch before it goes; the column only appears in Edit mode,
+  // so nobody meets a delete button while reading.
+  if (editMode && role === "Admin") {
+    columns.push({
+      key: "_act", label: "", minWidth: 74,
+      render: (r: any) => (
+        <button className="rounded border border-red-200 px-2 py-0.5 text-[11px] font-medium text-red-700 hover:bg-red-50"
+          onClick={(e: any) => { e.stopPropagation(); del(r); }}>Delete</button>
+      ),
+    });
+  }
+
+  // -196 (Umesh): "jaise batch start ho jayega planning wale se, woh batch wale tab mein shift ho
+  // jayega". A batch that has started is no longer being planned, so it leaves this table — the row
+  // moves by itself, because its status is what moved. The Batches tab stays the full register of
+  // every batch at every status, so nothing disappears from the system, only from this view.
+  const NOT_STARTED = ["Planning", "Ready"];
+  const shown = (rows ?? []).filter((r: any) => NOT_STARTED.includes(r.batch?.status));
+  const started = (rows ?? []).length - shown.length;
 
   return (
     <div className="space-y-3">
-      <div className="flex justify-end">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <label className="flex cursor-pointer items-center gap-2 text-sm">
+          <input type="checkbox" className="h-4 w-4 accent-blue-600" checked={editMode}
+            onChange={(e) => { setEditMode(e.target.checked); setEditing(null); }} />
+          <span className="font-medium text-gray-800">Edit mode</span>
+          <span className="text-xs text-gray-500">{editMode ? "click any outlined date to change it" : "turn on to change dates"}</span>
+        </label>
         {/* QA-526: the man this table was built for keeps it in a spreadsheet today. Without a
             download he reads it once and goes back to Excel, which is the whole thing this replaces. */}
         <Btn kind="ghost" onClick={() => { window.location.href = `${BASE_PATH}/api/plan-tracker/export`; }}>Download Excel</Btn>
       </div>
       <p className="rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-800">
-        Every live batch, the way the planning sheet reads it. The three dates you can click are the
-        trainer&apos;s own — they are stored once on the trainer, so a trainer running two batches shows
-        the same date on both rows rather than two copies that can drift apart.
+        The batches that have not started yet, the way the planning sheet reads it. Each date shows what
+        actually happened, and until it has, the backward plan&apos;s target for that step.
+        {started > 0 && <> {started} batch{started === 1 ? " has" : "es have"} already started and moved to the <b>Batches</b> tab.</>}
+        {editMode && <> Dates on a dashed outline are yours to edit here; a greyed one is written where its
+        gate is — open the trainer, and recording the stage there fills this in.</>}
       </p>
       {/* QA-607: the same disclosure card the report uses (reports/page.tsx, and the pattern at
           admin/page.tsx:430). Its job is narrow and worth stating: a reader with the client's
@@ -985,7 +1175,8 @@ function PlanningTable({ rows, onSaved, onError }: { rows: any[] | null; onSaved
           ))}
         </div>
       </details>
-      <DataTable storageKey="plan-tracker" rows={rows ?? []} loading={rows === null} columns={columns}
+      <DataTable storageKey="plan-tracker" rows={shown} loading={rows === null} columns={columns}
+        empty="No batch is being planned right now — use “Plan a batch” above to start one."
         cardTitle={(r: any) => <>{r.batch.code} <span className="text-xs text-gray-400">· {r.location?.name}</span></>} />
     </div>
   );
