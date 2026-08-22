@@ -2116,6 +2116,12 @@ export async function trainerDocSummary(trainerId: string) {
 // paths, and correctTrainerDates below uses the same one — two doors in one file disagreeing about
 // tomorrow is the shape -198 already shipped once.
 function stampDate(d?: Date | string): Date {
+  // QA-683 (-203, checker on qa-198): "not empty" is not "is a date". new Date("0") is 1 Jan 2000
+  // and new Date("1") is 2001 - both real dates, both in the past, so every downstream guard waves
+  // them through. The SHAPE has to be checked, not just the emptiness.
+  if (typeof d === "string" && !/^\d{4}-\d{2}-\d{2}/.test(d.trim())) {
+    throw new HttpError(400, "That is not a date - write it as 2026-08-14.");
+  }
   const on = d ? new Date(d) : new Date();
   if (isNaN(on.getTime())) throw new HttpError(400, "That is not a valid date.");
   if (dayKey(on).getTime() > istToday().getTime()) {
@@ -2326,7 +2332,9 @@ export async function correctTrainerDates(
     if (raw === undefined) continue;
     const label = CORRECTABLE_TRAINER_DATE_LABEL[field];
     if (raw === null || (typeof raw === "string" && !raw.trim())) { wanted[field] = null; continue; }
-    if (typeof raw !== "string") {
+    // QA-683: the shape, not just the type. "0" is a non-empty string that new Date reads as
+    // 1 Jan 2000 - a real date, safely in the past, accepted by every check below it.
+    if (typeof raw !== "string" || !/^\d{4}-\d{2}-\d{2}/.test(raw.trim())) {
       throw new HttpError(400, `${label} must be a date like 2026-08-14. Leave it blank to clear it.`);
     }
     const on = new Date(raw);

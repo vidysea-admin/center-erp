@@ -1875,9 +1875,20 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
     ok(`-200: done_on sent as ${label} is refused`, r.status === 400,
       `status=${r.status} error=${JSON.stringify(r.data?.error ?? null)}`);
   }
+  // QA-683 (-203, checker on qa-198): the allow-list above was on EMPTINESS, not on being a date,
+  // and the string "0" is not empty. new Date("0") is 1 Jan 2000 and new Date("1") is 2001 - real
+  // dates, comfortably in the past, so the future check waved them through and stored them as fact
+  // exactly the way 1970 was. Same defect as the row above it, one type narrower. The strings a
+  // person actually types are here too: a date written the Indian way must be refused rather than
+  // half-read.
+  for (const junk of ["0", "1", "2026", "yesterday", "14-08-2026", "2026/08/14"]) {
+    const r = await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { key: "enrollment_done", done: true, done_on: junk });
+    ok(`-203/QA-683: done_on sent as the string "${junk}" is refused`, r.status === 400,
+      `status=${r.status} error=${JSON.stringify(r.data?.error ?? null)}`);
+  }
   const stored1970 = (await req("GET", `/api/batches/${planBatch._id}`)).data.item.milestones.find((m) => m.key === "enrollment_done")?.done_on;
-  ok("-200: none of those refusals left an epoch date on the milestone",
-    String(stored1970).slice(0, 4) !== "1970", `done_on=${stored1970}`);
+  ok("-200/-203: none of those refusals left an epoch or a Y2K date on the milestone",
+    !["1970", "2000", "2001"].includes(String(stored1970).slice(0, 4)), `done_on=${stored1970}`);
   // and absent still means today, which is the behaviour all of that is protecting
   const absent = (await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { key: "trainer_mapped_sidh", done: true }, 200)).data.item;
   ok("-200: with done_on absent it still records today",
@@ -2257,11 +2268,12 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
 
       // Same rows as the screen. An export that recomputes is an export that eventually
       // disagrees, and then nobody can say which one is the plan.
-      let exCodes = null, exCols = null;
+      let exCodes = null, exCols = null, exRows = null;
       if (isXlsx) {
         try {
           const wb = XLSX.read(exBuf, { type: "buffer" });
           const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+          exRows = rows;
           exCodes = rows.map((r) => String(r.Batch ?? "")).filter(Boolean);
           exCols = Object.keys(rows[0] ?? {});
         } catch { /* left null - the assertions below fail loudly rather than crash the suite */ }
@@ -2290,6 +2302,51 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
       ok("QA-640: no two columns of the download share a heading",
         !!exCols && new Set(exCols).size === exCols.length,
         JSON.stringify({ n: exCols?.length ?? null, unique: exCols ? new Set(exCols).size : null }));
+
+      // ---- QA-672 (-203): the headings being RIGHT says nothing about what is UNDER them ----
+      // The qa-192 checker swapped two value expressions in the export route so the file printed the
+      // TOT END date under "TOT start date". Every heading pin above stayed green, because every
+      // heading was still there and still unique. A column with the wrong data under a correct name
+      // is worse than a renamed column: the reader has no way to notice.
+      const dCell = (v) => (v == null ? "" : v === "Not needed" ? "Not needed" : String(v).slice(0, 10));
+      const PAIRS = [
+        ["Trainer profile verified on SIDH", "sidh_profile_verified_on"],
+        ["Trainer eligibility check", "eligibility_checked_on"],
+        ["Trainer available & ready for TOT", "ready_for_tot"],
+        ["Profile submitted to SSC/NSDC", "nsdc_submitted_on"],
+        ["SSC/NSDC approved the profile", "nsdc_result_on"],
+        ["TOT fee paid to SSC/NSDC", "paid_on"],
+        ["TOT start date", "tot_start"],
+        ["TOT end date", "tot_done_on"],
+        ["TOT result & certificate expected", "tot_result_expected_on"],
+        ["Trainer mapped on SIDH portal", "trainer_mapped_sidh"],
+        ["Registration & enrolment done on SIDH", "enrollment_done"],
+        ["Expected batch start date", "planned_start"],
+        ["Expected batch end date", "planned_end"],
+      ];
+      const byCode = new Map((screen.rows ?? []).map((r) => [String(r.batch?.code ?? ""), r]));
+      const mismatches = [];
+      for (const fileRow of exRows ?? []) {
+        const src = byCode.get(String(fileRow.Batch ?? ""));
+        if (!src) continue;
+        for (const [heading, field] of PAIRS) {
+          const want = dCell(src[field]);
+          const got = String(fileRow[heading] ?? "");
+          if (want !== got) mismatches.push({ batch: fileRow.Batch, heading, want, got });
+        }
+      }
+      ok("QA-672: every column of the download carries the value the screen has under that same name",
+        !!exRows && byCode.size > 0 && mismatches.length === 0,
+        JSON.stringify({ checked: byCode.size, bad: mismatches.slice(0, 3) }));
+
+      // ...and the fixture must actually be able to catch a SWAP. If every mapped column holds the
+      // same value on every row, the pin above passes whatever order they are printed in - which is
+      // the "cannot fail" shape this whole block exists to close, one level deeper.
+      const distinctPerCol = PAIRS.map(([h]) => new Set((exRows ?? []).map((r) => String(r[h] ?? ""))).size);
+      const discriminating = distinctPerCol.filter((n) => n > 1).length;
+      ok("QA-672: ...and the fixture varies enough for that check to notice a swap",
+        discriminating >= 2,
+        JSON.stringify({ columnsWithMoreThanOneValue: discriminating, perColumn: distinctPerCol }));
 
       // The scoping landmine, measured from the scoped login itself. authz builds its $in from
       // .map(String) and mongoose does not cast inside a pipeline - four live defects came from

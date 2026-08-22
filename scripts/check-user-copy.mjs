@@ -814,6 +814,28 @@ for (const file of walk(root)) {
     && !/<details open[\s\S]{0,400}?Which column of the planning sheet/.test(planSrc);
   if (planCard) passed++;
   else { failed++; pushStructural("app/(app)/batches: the planning table has no collapsed card mapping each column to the client's sheet heading - QA-640. Without it the verbatim headings are stored and never shown, which is the same as not having them."); }
+
+  // ---- QA-672 (-203): the four pins above verify SOURCE TEXT, and the card is a KEY JOIN ----
+  // The checker on qa-192 cycle 1 broke this screen three ways and left all four green. The worst:
+  // prefix the `columns[]` keys in a refactor and leave PLAN_COLUMN_SOURCE behind, and the card
+  // renders ZERO rows while every pin above still passes - the card pin's own failure message
+  // ("the verbatim headings are stored and never shown") coming true while it reports success.
+  //
+  // The card is `columns.filter(c => PLAN_COLUMN_SOURCE[c.key])`. Nothing above ever evaluates that
+  // join. This does: every heading Umesh gave must be reachable from a column that actually exists.
+  const srcTail = planSrc.slice(planSrc.indexOf("const PLAN_COLUMN_SOURCE"));
+  const srcBlock = srcTail.slice(0, srcTail.indexOf(String.fromCharCode(10) + "};"));
+  const sourceKeys = [...srcBlock.matchAll(/^\s{2}([A-Za-z_][A-Za-z_0-9]*):\s*"/gm)].map((m) => m[1]);
+  const colKeys = [...planColBlock.matchAll(/key: "([^"]+)"/g)].map((m) => m[1]);
+  const orphanKeys = sourceKeys.filter((k) => !colKeys.includes(k));
+  const cardRows = sourceKeys.length - orphanKeys.length;
+  if (sourceKeys.length === 18 && !orphanKeys.length) passed++;
+  else {
+    failed++;
+    pushStructural("app/(app)/batches: the sheet-heading card would render " + cardRows + " of 18 rows - PLAN_COLUMN_SOURCE has " + sourceKeys.length
+      + " headings and " + orphanKeys.length + " of them match no column key: " + JSON.stringify(orphanKeys.slice(0, 4))
+      + " - QA-672. The card is a JOIN on c.key; renaming either side silently empties it while every heading is still present in the source.");
+  }
 }
 
 // QA-622 (-195): the Locations screen must send each contact's `_id` back when it saves the list.

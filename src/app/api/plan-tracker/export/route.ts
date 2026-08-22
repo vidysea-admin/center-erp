@@ -28,7 +28,18 @@ export const GET = apiHandler(async (_req: NextRequest) => {
   }
 
   const rows = await planTrackerRows(scope);
-  const d = (v: unknown) => (v == null ? "" : v === "Not needed" ? "Not needed" : String(v).slice(0, 10));
+  // QA-684 (-203), found by the new value-comparison pin the moment it existed: this took the first
+  // ten characters of String(v), which is an ISO prefix for a string but "Mon Aug 17" for a Date -
+  // and planTrackerRows hands back real Date objects, because nothing JSON-serialises them on this
+  // path the way the API response does. So the SCREEN read 17 Aug 2026 and the DOWNLOADED FILE read
+  // "Mon Aug 17", with no year, in a column the client sorts and filters on. Four pins had checked
+  // that this file's HEADINGS matched the screen's and not one had looked underneath them.
+  const d = (v: unknown) => {
+    if (v == null) return "";
+    if (v === "Not needed") return "Not needed";
+    if (v instanceof Date) return isNaN(v.getTime()) ? "" : v.toISOString().slice(0, 10);
+    return String(v).slice(0, 10);
+  };
   // His column order, his headings. A download that renames his columns is a download he has to
   // translate before he can use it.
   //

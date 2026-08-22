@@ -103,11 +103,16 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
     // QA-660 (-200): -198 refused the empty STRING and left `0` and `null` falling through to now,
     // because the guard tested one shape and the next line tested truthiness. One rule: `undefined`
     // (or absent) means "no date given, so today". Anything else present must be a real date.
-    if (body.done_on !== undefined && (typeof body.done_on !== "string" || !body.done_on.trim())) {
+    if (body.done_on !== undefined && (typeof body.done_on !== "string" || !/^\d{4}-\d{2}-\d{2}/.test(body.done_on.trim()))) {
       // My first attempt at this listed the shapes to REFUSE - null, "", boolean - and `0` walked
       // straight through it into `new Date(0)`, which is a perfectly valid 1 Jan 1970 and stored as
       // a fact. Listing what is allowed is the only version of this that cannot be outgrown: a
       // date here is a non-empty STRING, and absence is the one way to mean "today".
+      //
+      // QA-683 (-203, checker on qa-198): an allow-list on EMPTINESS is still not an allow-list on
+      // being a date. The string "0" is non-empty, and new Date("0") is 1 Jan 2000 - a real date,
+      // comfortably in the past, waved through by the future check below and stored as a fact just
+      // like 1970 was. The shape is the allow-list; nothing weaker survives contact.
       throw new HttpError(400, "done_on must be a date like 2026-08-22. Leave it out to record today.");
     }
     const on = body.done_on === undefined ? new Date() : new Date(body.done_on);

@@ -428,6 +428,22 @@ ok("a dropped trainer can be re-opened if they come back", reopened.data.item.pi
   for (const junk of [0, false, true, 123, {}, []]) {
     await req("PATCH", CT, { paid_on: junk }, 400);
   }
+  // QA-683 (checker on qa-198, -203): the STRING "0" is the one that walks past a non-empty check -
+  // new Date("0") is 1 Jan 2000 and new Date("1") is 2001, both real and both safely in the past, so
+  // the future-date guard and everything after it wave them through. Same shape one door over; the
+  // fix is to require the shape, and these are the pins for it. "14-08-2026" is here because it is
+  // what a person types, and accepting it silently would store 14 Aug 2026 or nothing at all
+  // depending on the runtime's mood.
+  for (const junkStr of ["0", "1", "2026", "yesterday", "14-08-2026", "2026/08/14"]) {
+    await req("PATCH", CT, { paid_on: junkStr }, 400);
+  }
+  const noY2K = (await req("GET", `/api/trainers/${ct._id}`, undefined, 200)).data.item;
+  ok("-202/QA-683: no 2000-01-01 was left behind by the string shapes either",
+    !String(noY2K.paid_on ?? "").startsWith("2000") && !String(noY2K.paid_on ?? "").startsWith("2001"),
+    JSON.stringify(noY2K.paid_on));
+  // ...and the same shape check guards the OTHER door on this file, which takes its date from an
+  // admin prompt rather than a date input.
+  await req("POST", CT, { target: "TOT Scheduled", bypass: true, date: "0" }, 400);
   const noEpoch = (await req("GET", `/api/trainers/${ct._id}`, undefined, 200)).data.item;
   ok("-202: no 1970 was left behind by any of the refused shapes",
     !String(noEpoch.paid_on ?? "").startsWith("1970"), JSON.stringify(noEpoch.paid_on));
