@@ -119,7 +119,29 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
   if (!src) throw new HttpError(404, "Sync source not found");
   const mappings: Record<string, string> = src.field_mappings || {};
   const mappedCols = Object.keys(mappings);
-  if (!mappedCols.length) throw new HttpError(400, "No field mappings configured.");
+  // QA-603: a refusal that throws without writing the document leaves the source row still reading
+  // `last_status: "OK"` from its last clean run - and on the Daily schedule the throw is swallowed
+  // into a console line, so the screen says the sync is fine while it has not run for days.
+  //
+  // QA-606: -189's version of this comment claimed "every other refusal in here saves first", and
+  // that was simply not true - the two configuration throws below recorded nothing, and neither is
+  // unreachable, because `assertSyncSourceAllowed` never validates the mappings at all. A comment
+  // asserting a property the code does not have is worse than no comment: it is the reason nobody
+  // looks. The helper moved up here so the claim is true by construction rather than by assertion.
+  // Returns the error for the caller to `throw` rather than throwing itself: `await refuse(...)`
+  // reads as a statement, so TypeScript does not treat it as terminating and every guard below it
+  // lost its narrowing (`idCol` went back to `string | undefined` and the build failed). `throw
+  // await refuse(...)` is terminating, and it also reads correctly - the refusal is recorded, then
+  // raised.
+  const refuse = async (message: string): Promise<HttpError> => {
+    src.last_status = "Failed";
+    src.last_error = message;
+    src.last_synced_at = new Date();
+    await src.save();
+    return new HttpError(400, message);
+  };
+
+  if (!mappedCols.length) throw await refuse("No field mappings configured.");
 
   // 2026-08-13: mapped mode only understood CSV text with the header on row 1, so pasting the
   // client's OneDrive/Google-Sheets link — the thing the Admin screen invites, and exactly what
@@ -171,7 +193,7 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
   const header = rows[0].map((h) => String(h).trim());
 
   const idCol = mappedCols.find((c) => mappings[c] === "external_id");
-  if (!idCol) throw new HttpError(400, "field_mappings must map one column to external_id.");
+  if (!idCol) throw await refuse("field_mappings must map one column to external_id.");
   const colIdx = new Map(header.map((h, i) => [h, i]));
 
   // QA-440 / QA-497 (the half that was left): a sheet may be LONG - one row per centre x job role,
@@ -192,18 +214,6 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
   // the silent last-row-wins this change exists to prevent. A configuration error, so it is
   // refused at the start of the run rather than half-applied and explained afterwards.
   //
-  // QA-603: a refusal that throws without writing the document leaves the source row still reading
-  // `last_status: "OK"` from its last clean run - and on the Daily schedule the throw is swallowed
-  // into a console line, so the screen says the sync is fine while it has not run for days. Every
-  // other refusal in here saves first, and so do these.
-  const refuse = async (message: string): Promise<never> => {
-    src.last_status = "Failed";
-    src.last_error = message;
-    src.last_synced_at = new Date();
-    await src.save();
-    throw new HttpError(400, message);
-  };
-
   // QA-602: `colIdx` is built from the header row and LAST duplicate wins (`:175`). That has always
   // been true, but until a column decided WHICH programme's target row a government verdict lands
   // on, the worst it could do was read the wrong value into the right field. Now a repeated
@@ -217,13 +227,13 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
   // Scoped to mapped columns on purpose: an unmapped duplicate is none of our business.
   const dupHeaders = mappedCols.filter((c) => header.filter((h) => h === c).length > 1);
   if (dupHeaders.length) {
-    await refuse(`The sheet has more than one column headed ${dupHeaders.map((c) => `"${c}"`).join(", ")}, and that column is mapped, so there is no way to tell which one this source means. Rename or remove the duplicate; a value read from the wrong column of two with the same name is worse than no sync.`);
+    throw await refuse(`The sheet has more than one column headed ${dupHeaders.map((c) => `"${c}"`).join(", ")}, and that column is mapped, so there is no way to tell which one this source means. Rename or remove the duplicate; a value read from the wrong column of two with the same name is worse than no sync.`);
   }
 
   if (roleCol) {
     const coded = mappedCols.filter((c) => targetRowField(mappings[c]));
     if (coded.length) {
-      await refuse(`This source maps "${roleCol}" to job_role, so its rows are one per centre and job role. Column(s) ${coded.map((c) => `"${c}"`).join(", ")} still name a programme (${coded.map((c) => mappings[c]).join(", ")}), which would write that one programme for every row of a centre. Drop the ":CODE" suffix from them, or remove the job_role mapping.`);
+      throw await refuse(`This source maps "${roleCol}" to job_role, so its rows are one per centre and job role. Column(s) ${coded.map((c) => `"${c}"`).join(", ")} still name a programme (${coded.map((c) => mappings[c]).join(", ")}), which would write that one programme for every row of a centre. Drop the ":CODE" suffix from them, or remove the job_role mapping.`);
     }
   }
   // Resolve WITHIN THE TC ID'S OWN TARGET ROWS, never by programme name alone: measured on live

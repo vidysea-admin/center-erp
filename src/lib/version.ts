@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-189";
+export const RELEASE = "2026.08.14-190";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,18 @@ export const RELEASE = "2026.08.14-189";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-190 makes two more refusals leave a mark, and puts a guard on a word. If a sheet source was " +
+  "set up with no column mapping at all, or with none of its columns marked as the identifier, the " +
+  "run was correctly refused but nothing was written down - so the source went on displaying the " +
+  "result of its last good run while it had in fact stopped working. Both now record the refusal, " +
+  "the same way every other refusal here does. The word is in the message about incomplete runs: a " +
+  "line whose registration number is claimed by two centres is skipped ENTIRELY, while a line whose " +
+  "job role cannot be placed keeps its centre details and loses only its job-role figures. That " +
+  "distinction was written last release and nothing was checking it, so it could have been reworded " +
+  "away without anything failing.";
+
+// The archive. Everything this product has shipped, newest first.
+const RELEASE_NOTE_ARCHIVE =
   "-189 fixes three edges of the last two releases, all found by an independent check. If a sheet " +
   "had TWO columns with the same heading and that heading was in use, the sync quietly read the " +
   "second one and reported success - so a government approval could land against the wrong job " +
@@ -26,10 +38,7 @@ export const RELEASE_NOTE_CURRENT =
   "screen said all was well while nothing had run for days. A refusal is now recorded before it is " +
   "raised. Third, a run can be incomplete for three different reasons and only one was ever " +
   "reported; the last release merged two of the three, which left the same problem for every pair " +
-  "involving the third. All three are reported together now.";
-
-// The archive. Everything this product has shipped, newest first.
-const RELEASE_NOTE_ARCHIVE =
+  "involving the third. All three are reported together now." +
   "-188 closes three gaps in the change the last release made, all of them found by reading it " +
   "rather than by anything going wrong. A sheet line that left the job role EMPTY was quietly " +
   "passed over while the run still reported success - which is the very thing the last release set " +

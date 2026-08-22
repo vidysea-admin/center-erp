@@ -906,6 +906,47 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
   ok("QA-604: a sheet with TWO reasons to be Partial reports BOTH - merging two of three reasons left the same defect in a smaller coat",
     r7.status === "Partial" && /more than one centre/i.test(String(r7.error ?? "")) && /missing one or more mapped columns/i.test(String(r7.error ?? "")),
     JSON.stringify({ status: r7.status, error: String(r7.error ?? "").slice(0, 200) }));
+
+  // QA-605: -189 reworded this message ("skipped rather than guessed" -> "skipped ENTIRELY rather
+  // than guessed") and shipped the rewording with NO pin. The word carries the distinction the whole
+  // -188 correction was about: an ambiguous TC ID abandons the WHOLE row because the centre itself
+  // is in doubt, while an unresolvable job role skips only that row's per-job-role fields. Losing
+  // "entirely" would quietly re-blur the two, and nothing would have failed.
+  ok("QA-605: the ambiguous-TC-ID reason says the row was skipped ENTIRELY - the word that separates it from a job-role skip",
+    /skipped entirely rather than guessed/i.test(String(r7.error ?? "")),
+    String(r7.error ?? "").slice(0, 160));
+
+  // QA-606: two configuration refusals recorded NOTHING, and -189's comment claimed the opposite
+  // ("every other refusal in here saves first"). Both are reachable - assertSyncSourceAllowed never
+  // validates mappings - so a source could be refused every night while its row still showed the
+  // last clean run. Pinned so the comment cannot become false again without something failing.
+  // Its OWN upload: the same workbook cannot be registered twice in mapped mode (the -100 guard),
+  // and reusing u7's URL made this block die on a 400 that was entirely correct.
+  const mkUpload = async (csv, name) => {
+    const f = new FormData();
+    f.append("file", new File([csv], name, { type: "text/csv" }));
+    return (await req("POST", "/api/upload", f, 200)).data;
+  };
+  const u8 = await mkUpload(`TC ID,TC Status\n${TCX},Approved\n`, "nomap.csv");
+  const src8 = (await req("POST", "/api/sync-sources", {
+    name: "No mappings " + s7, source_url: new URL(u8.url, BASE).href, field_mappings: {},
+  }, 201)).data.item;
+  const r8 = await req("POST", `/api/sync-sources/${src8._id}/run`, undefined, 400);
+  const after8 = (await req("GET", `/api/sync-sources/${src8._id}`)).data.item;
+  ok("QA-606: a source with NO field mappings is refused AND the refusal is recorded on the row",
+    r8.status === 400 && after8?.last_status === "Failed" && /No field mappings configured/i.test(String(after8?.last_error ?? "")),
+    JSON.stringify({ status: r8.status, last_status: after8?.last_status }));
+
+  const u9 = await mkUpload(`TC ID,TC Status\n${TCX},Unapproved\n`, "noext.csv");
+  const src9 = (await req("POST", "/api/sync-sources", {
+    name: "No external_id " + s7, source_url: new URL(u9.url, BASE).href,
+    field_mappings: { "TC Status": "tc_status" },
+  }, 201)).data.item;
+  const r9 = await req("POST", `/api/sync-sources/${src9._id}/run`, undefined, 400);
+  const after9 = (await req("GET", `/api/sync-sources/${src9._id}`)).data.item;
+  ok("QA-606: a source with no external_id column is refused AND the refusal is recorded on the row",
+    r9.status === 400 && after9?.last_status === "Failed" && /must map one column to external_id/i.test(String(after9?.last_error ?? "")),
+    JSON.stringify({ status: r9.status, last_status: after9?.last_status }));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
