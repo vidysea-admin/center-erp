@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-217";
+export const RELEASE = "2026.08.14-218";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,19 @@ export const RELEASE = "2026.08.14-217";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-218 makes the sheet-sync inbox a two-way street. A change that was dismissed could not be " +
+  "brought back: the row would not open, it could not be selected, and there was no way at all on " +
+  "the server to move it out of that state - so one wrong press of Bulk Ignore was permanent, and " +
+  "undoing an applied change dropped it into the same dead end. Any settled change can now be " +
+  "re-opened onto the review queue, and any open one closed, with a confirmation that says what " +
+  "that particular change will do - a dismissed one simply comes back, but one that was already " +
+  "applied warns that re-opening puts it in line to be applied a second time. Every move records " +
+  "who made it and why. Changes still holding outstanding follow-up work cannot be closed this way " +
+  "either, exactly as before. Settled rows can also now be opened and read, which they could not " +
+  "be. And the inbox has its own Sync now button, so the sheet can be pulled immediately instead " +
+  "of waiting for the next scheduled run.";
+
+const RELEASE_NOTE_ARCHIVE_217 =
   "-217 finishes two repairs the release before it left half-done. The controls on a batch's " +
   "closure screen are now all disabled for an account that is not allowed to mark results - the " +
   "previous release disabled the ones on each student's card but left the tab's own buttons live, " +
@@ -225,6 +238,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
+  RELEASE_NOTE_ARCHIVE_217 + " " +
   RELEASE_NOTE_ARCHIVE_216 + " " +
   RELEASE_NOTE_ARCHIVE_215 + " " +
   RELEASE_NOTE_ARCHIVE_214 + " " +

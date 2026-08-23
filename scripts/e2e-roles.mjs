@@ -67,6 +67,24 @@ const spocWrite = await req(spoc, "PATCH", `/api/locations/${jpr._id}`, { spoc_p
 ok("SPOC with can_edit can write own location", spocWrite.status === 200, `got ${spocWrite.status}`);
 
 // Rule 40: role gates
+// -218 (Umesh, 23/08): the new status door is gated on `sheet.approve`, the SAME key bulk-ignore and
+// apply use — a permission, never a role literal. The screen hides the control behind that same key,
+// because six times in eight releases a control was gated on one thing while its door checked
+// another (QA-712, QA-723, QA-754, QA-775, QA-785, QA-791) and every one was a button someone could
+// see and not press. Enrollment does not hold sheet.approve.
+{
+  const anyChange = (await req(admin, "GET", "/api/sheet-changes?status=all")).data?.items?.[0];
+  if (anyChange) {
+    const r = await req(enroll, "PATCH", `/api/sheet-changes/${anyChange._id}/status`, { status: "Ignored" });
+    ok("-218: a login without sheet.approve cannot change a sync change's status", r.status === 403, `status=${r.status}`);
+    const v = await req(viewer, "PATCH", `/api/sheet-changes/${anyChange._id}/status`, { status: "Open" });
+    ok("-218: …and a view-only login cannot either", v.status === 403, `status=${v.status}`);
+    const after = (await req(admin, "GET", "/api/sheet-changes?status=all")).data?.items?.find((c) => c._id === anyChange._id);
+    ok("-218: …and neither refusal moved the row", after?.status === anyChange.status,
+      `${anyChange.status} -> ${after?.status}`);
+  }
+}
+
 const enrollChanges = await req(enroll, "GET", "/api/sheet-changes");
 ok("Rule 40: Enrollment role blocked from Sync Inbox (403)", enrollChanges.status === 403, `got ${enrollChanges.status}`);
 const spocCosts = await req(spoc, "GET", "/api/costs");

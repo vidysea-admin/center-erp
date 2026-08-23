@@ -97,6 +97,45 @@ ok("Rule 4: approved_target written from sheet", targets[0]?.approved_target ===
     /Reverted to/.test(reverted.data.item?.note ?? ""), reverted.data.item?.note);
   // A status action is NOT a value swap — the button must refuse, not guess.
   await req("POST", `/api/sheet-changes/${tChange._id}/revert`, {}, 400); // already reverted (status no longer Actioned)
+  // ---- -218 (Umesh, 23/08): `Ignored` was a ONE-WAY DOOR, at both layers ----
+  //
+  // "there is still no edit button to ignored status of sync messages… ek baar jo admin ne mark kar
+  // diya status, woh baad me chahe toh edit kar sakta hai, with confirmation."
+  //
+  // The comment two lines above says it plainly and was written before anyone noticed it was a
+  // defect: "the change is Ignored now; apply requires Open — set the target back BY HAND instead."
+  // Three routes existed and every one of them pushed a row forward; nothing brought one back. A
+  // wrong press of "Bulk Ignore (No action)" was permanent, and `revert` landed in the same state.
+  //
+  // `tChange` is Ignored at this point, and it got there through `revert` - so it is the "applied,
+  // then undone" shape, and re-opening it must KEEP its action_taken, because that action really
+  // happened. Only the "No action" label an ignore invents is cleared on re-open.
+  {
+    const before = (await req("GET", "/api/sheet-changes?status=Ignored")).data.items.find((c) => c._id === tChange._id);
+    ok("-218: the change really is Ignored before we start", !!before, JSON.stringify(before?.status ?? null));
+
+    ok("-218: a status this door does not set by hand is refused, and says why",
+      (await req("PATCH", `/api/sheet-changes/${tChange._id}/status`, { status: "Actioned" })).status === 400,
+      "Actioned is what applying records - it is not typed in");
+
+    const back = await req("PATCH", `/api/sheet-changes/${tChange._id}/status`, { status: "Open", reason: "-218 pin: put it back" }, 200);
+    ok("-218: THE ASK — an Ignored change can be re-opened", back.data.item?.status === "Open",
+      JSON.stringify(back.data.item ?? null));
+    ok("-218: …and a REAL action it carried is kept, because that action actually happened",
+      back.data.item?.action_taken === "Apply value" || back.data.item?.action_taken === "Update target",
+      String(back.data.item?.action_taken));
+    ok("-218: …and the change records who moved it and why",
+      /Status Ignored -> Open/.test(((await req("GET", "/api/sheet-changes?status=Open")).data.items.find((c) => c._id === tChange._id) ?? {}).note ?? ""),
+      String(((await req("GET", "/api/sheet-changes?status=Open")).data.items.find((c) => c._id === tChange._id) ?? {}).note ?? "").slice(0, 120));
+    ok("-218: …and moving it to where it already is is refused rather than written twice",
+      (await req("PATCH", `/api/sheet-changes/${tChange._id}/status`, { status: "Open" })).status === 400, "already Open");
+
+    // …and back to Ignored, which is the other half of "status change kar sakta hai".
+    const closed = await req("PATCH", `/api/sheet-changes/${tChange._id}/status`, { status: "Ignored", reason: "-218 pin: close it again" }, 200);
+    ok("-218: …and an Open change can be closed the same way", closed.data.item?.status === "Ignored",
+      JSON.stringify(closed.data.item ?? null));
+  }
+
   // Re-apply so the rest of the suite continues against the sheet's value.
   // (the change is Ignored now; apply requires Open — set the target back by hand instead)
   await req("PUT", `/api/locations/${loc._id}/targets`, { program: (targets[0].program?._id ?? targets[0].program), approved_target: 210 }, 200);
@@ -109,6 +148,17 @@ const applied = (await req("POST", `/api/sheet-changes/${sChange._id}/apply`, { 
 ok("Rule 8: follow-ups generated (stop batch + release trainer + return candidates)", applied.followUps === 3, `got ${applied.followUps}`);
 const after = (await req("GET", "/api/sheet-changes?status=Open")).data.items.find((c) => c._id === sChange._id);
 ok("Rule 7: change stays Open while follow-ups pending", !!after && after.pending_followups === 3, JSON.stringify(after?.pending_followups));
+// -218: the new status door must honour Rule 7 exactly as the Ignore door does, or it becomes a way
+// AROUND that rule instead of a way to correct a mistake. This row has 3 outstanding follow-ups.
+{
+  const blocked = await req("PATCH", `/api/sheet-changes/${sChange._id}/status`, { status: "Ignored", reason: "-218 pin: must be refused" });
+  ok("-218: Rule 7 holds on the status door too — a change with follow-ups cannot be closed by hand",
+    blocked.status === 409 && /follow-up/i.test(String(blocked.data?.error ?? "")),
+    `status=${blocked.status} error=${JSON.stringify(blocked.data?.error ?? null).slice(0, 130)}`);
+  const stillOpen = (await req("GET", "/api/sheet-changes?status=Open")).data.items.find((c) => c._id === sChange._id);
+  ok("-218: …and the refused row is untouched", stillOpen?.status === "Open" || !stillOpen?.status,
+    JSON.stringify(stillOpen?.status ?? null));
+}
 const locAfter = (await req("GET", `/api/locations/${loc._id}`)).data.item;
 // UPDATED 2026-08-12 (audit sync S1-3). This used to assert the centre was Closed the instant
 // the action was applied — which is precisely the defect: Rule 1 then refused daily logs for the
