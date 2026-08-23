@@ -1775,6 +1775,32 @@ ok("SSRF guard does not block the real client workbook", stillOk.data.ok === tru
     && typeof m0[0]?.candidate === "string",
     JSON.stringify(m0[0] ?? null));
 
+  // QA-714 (-210, checker on qa-208): the hand-typed id was written with NO validation while every
+  // reader of it counts through `normalizeCan`. "CAN_CHK208A" and "40918461" both SAVED, both audited
+  // as a real change, and the student stayed on the blocked list with nothing on screen to say why -
+  // the operator could not tell a working id from a broken one. And the junk then permanently blocked
+  // the automatic linker for that candidate, because it only ever fills an EMPTY id.
+  for (const junk of ["40918461", "CANDIDATE", "CAN_", "12345678", "can-abc"]) {
+    const r = await req(admin, "PATCH", `/api/candidates/${c1._id}`, { sidh_candidate_id: junk });
+    ok(`-210 (QA-714): "${junk}" is refused at the door instead of being stored in silence`,
+      r.status === 400 && /portal Candidate ID/i.test(String(r.data?.error ?? "")),
+      `status=${r.status} error=${JSON.stringify(r.data?.error ?? null).slice(0, 110)}`);
+  }
+  // ...and the other half, which is the one the wall taught me. My first version of this guard used
+  // `normalizeCan` as the format. It is the MATCHER - it reads only digits after CAN - so it refused
+  // `CAN_ED0711202`, a shape this product stores and every suite uses, and eleven assertions went
+  // red before it could ship. A validator stricter than the data is a defect wearing a fix's clothes.
+  for (const real of ["CAN_ED0711202", "CAN_21663167"]) {
+    const r = await req(admin, "PATCH", `/api/candidates/${c1._id}`, { sidh_candidate_id: real });
+    ok(`-210 (QA-714): "${real}" is ACCEPTED - the guard must not be stricter than the data`,
+      r.status === 200, `status=${r.status} error=${JSON.stringify(r.data?.error ?? null).slice(0, 90)}`);
+  }
+  await req(admin, "PATCH", `/api/candidates/${c1._id}`, { sidh_candidate_id: null }, 200);
+  const stillBlocked = (await req(admin, "GET", `/api/batches/${nb._id}/link-portal-ids`)).data;
+  ok("-210 (QA-714): …and not one of them landed - the student is still on the list, unchanged",
+    (stillBlocked.missing ?? []).some((m) => m.name === `${NAME} NoId One`),
+    JSON.stringify((stillBlocked.missing ?? []).map((m) => m.name)));
+
   // The hand-typed path — the one he asked for. Same door the screen uses.
   const typed = await req(admin, "PATCH", `/api/candidates/${c1._id}`, { sidh_candidate_id: `CAN_${STAMP}9999` });
   ok("-205: an id typed by hand is accepted on the ordinary candidate door", typed.status === 200,

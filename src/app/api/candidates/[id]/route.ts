@@ -8,6 +8,13 @@ import { dbConnect } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { emailError, canonicalPhone, phoneError } from "@/lib/validate";
 
+// QA-714 / QA-719 (-210): what a portal Candidate ID has to LOOK like at a hand-typed door.
+// Deliberately NOT `normalizeCan` - that is the MATCHER (/CAN[\s_-]*(\d+)/i) and it reads only
+// digits after CAN, so using it as a format refused `CAN_ED0711202`, a shape this product stores
+// and every suite uses. The wall caught that in eleven assertions before it shipped. The rule is
+// the one the data actually obeys: begins with CAN, and carries at least one digit.
+const looksLikeCan = (s: unknown) => /^\s*CAN[\s_-]?[A-Za-z0-9-]*\d[A-Za-z0-9-]*\s*$/i.test(String(s ?? ""));
+
 export const { GET, PATCH } = itemRoutes({
   model: Candidate, entity: "Candidate",
   fields: ["name", "phone", "alt_phone", "email", "gender", "dob", "id_reference", "location", "program", "source", "education", "last_training_date", "interested_programs", "interested_locations", "sidh_status", "sidh_link_sent_at", "sidh_registered_on", "sidh_candidate_id", "sidh_failure_reason", "fee_amount", "fee_paid_on", "fee_reference",
@@ -29,6 +36,18 @@ export const { GET, PATCH } = itemRoutes({
     // -156 (QA-450): null, not "" - clearing the field has to stay possible, and the QA-417 partial
     // index does not index null. Same reasoning as the create door one file over.
     if (typeof body.sidh_candidate_id === "string" && !body.sidh_candidate_id.trim()) body.sidh_candidate_id = null;
+    // QA-714 (-210, checker on qa-208): this field was written with NO validation while every reader
+    // of it counts through `normalizeCan` (/CAN[\s_-]*(\d+)/i). So "CAN_CHK208A" and "40918461" both
+    // saved, both audited as a real change, and the student stayed on the blocked list with nothing
+    // on screen to say why - the operator cannot tell a working id from a broken one. Worse, the
+    // junk then PERMANENTLY blocks the automatic linker for that candidate, because
+    // POST /link-portal-ids only ever fills an EMPTY id. -208 put this input on the tab a centre uses
+    // every day, and Umesh's team is about to type ten of them.
+    // Refused at the door rather than in the widget, so every caller is covered - the Candidates
+    // drawer has had this input since -116.
+    if (typeof body.sidh_candidate_id === "string" && body.sidh_candidate_id.trim() && !looksLikeCan(body.sidh_candidate_id)) {
+      throw new HttpError(400, `"${body.sidh_candidate_id.trim()}" is not a portal Candidate ID. It reads like CAN_12345678 — the letters CAN followed by the number. Copy it from SIDH exactly as it appears there.`);
+    }
     // -135 (QA-283): the caller may say "these documents were done on SIDH". It does NOT get to say
     // WHO confirmed it or WHEN — the server stamps both from the session, because a mark whose
     // provenance the client can write is not evidence, it is a field. Clearing it clears them too,

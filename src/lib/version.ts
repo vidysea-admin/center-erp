@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-209";
+export const RELEASE = "2026.08.14-210";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,17 @@ export const RELEASE = "2026.08.14-209";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-210 stops a mistyped government Candidate ID from being accepted in silence. The box that takes " +
+  "that number saved whatever was typed into it, and everything that reads the number expects it in " +
+  "one shape - the letters CAN followed by the digits. So a number pasted without its prefix, or a " +
+  "letter typed where a digit belonged, was stored, recorded in the history as a real change, and " +
+  "the student stayed on the list of people still blocking the batch with nothing on screen to " +
+  "explain it. Worse, once a value like that was on the record, the automatic matcher could never " +
+  "fill it in later, because it only ever fills an empty one. Both doors that take this number by " +
+  "hand now refuse what cannot be read, and say what the number should look like and where to copy " +
+  "it from.";
+
+const RELEASE_NOTE_ARCHIVE_209 =
   "-209 repairs a button that had stopped working two releases ago and nobody had pressed. The " +
   "certificates screen offers an administrator a way to finish a batch that still has loose ends; " +
   "since the release that made finishing safer, that button only appeared in exactly the situation " +
@@ -27,7 +38,7 @@ export const RELEASE_NOTE_CURRENT =
   "is an administrator action, when the ordinary route has always been open to the operations team " +
   "and still is - they get that route back - and one sentence counted two different groups of " +
   "students as though they were one. And the door that finishes a batch now goes through the same " +
-  "approval setting as the one it replaced, which it had been skipping.";
+  "approval setting as the one it replaced, which it had been skipping. ";
 
 const RELEASE_NOTE_ARCHIVE_208 =
   "-208 puts the list of students missing their government portal ID on the attendance screen too, " +
@@ -133,6 +144,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
+  RELEASE_NOTE_ARCHIVE_209 +
   RELEASE_NOTE_ARCHIVE_208 +
   RELEASE_NOTE_ARCHIVE_207 +
   RELEASE_NOTE_ARCHIVE_206 +
