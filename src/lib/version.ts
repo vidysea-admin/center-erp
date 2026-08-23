@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-210";
+export const RELEASE = "2026.08.14-211";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,18 @@ export const RELEASE = "2026.08.14-210";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-211 takes three sentences off the batch screen that were not true, and one button away from " +
+  "people it could never work for. The button to finish a batch was being offered on batches that " +
+  "have not reached the stage where finishing is possible, so for anyone other than an " +
+  "administrator every press could only fail. Beside it sat a line saying that finishing over " +
+  "unfinished work is an administrator action; it is not, and the operations team could do it. And " +
+  "on the certificates panel, a line telling the reader that certain students IDs have to be typed " +
+  "in from the government portal had lost the sentence naming which students, so it appeared to be " +
+  "about the ones who already have theirs, above an empty list. The screen now says what a press " +
+  "will do and lets the rules answer for themselves, rather than describing permissions it does " +
+  "not decide.";
+
+const RELEASE_NOTE_ARCHIVE_210 =
   "-210 stops a mistyped government Candidate ID from being accepted in silence. The box that takes " +
   "that number saved whatever was typed into it, and everything that reads the number expects it in " +
   "one shape - the letters CAN followed by the digits. So a number pasted without its prefix, or a " +
@@ -144,6 +156,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
+  RELEASE_NOTE_ARCHIVE_210 +
   RELEASE_NOTE_ARCHIVE_209 +
   RELEASE_NOTE_ARCHIVE_208 +
   RELEASE_NOTE_ARCHIVE_207 +

@@ -303,7 +303,14 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
           Active and Closing both, so an Admin never has to walk a finished batch through an extra
           status first. The caption that used to hang under the old button moved into the
           confirmation, where the decision is actually made. */}
-      {["Active", "Closing"].includes(b.status) && (
+      {/* QA-723 (-211, checker on qa-209): -207 offered this for Active and Closing, and -209 made it
+          pressable by a non-Admin. There is no Active -> Completed arm in transitionBatch at all -
+          the only one is Closing -> Completed - so for a non-Admin on an Active batch every press
+          could only 409, and on a clean Active batch nothing even rendered to say why. I fixed a
+          dead button in -209 and shipped another one in the same release.
+          The Admin's force door walks Active -> Closing -> Completed itself, so it is honest on both.
+          A non-Admin gets it only where their door exists. */}
+      {(isAdmin ? ["Active", "Closing"] : ["Closing"]).includes(b.status) && (
         <Btn small onClick={() => setCompleteOpen(true)}>Complete Batch</Btn>
       )}
       {/* -113: completing is one press now, so it needs an undo. Admin only, reason required,
@@ -537,9 +544,16 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
                   : "Complete batch forcefully"}
             </Btn>
             <Btn kind="ghost" onClick={() => setCompleteOpen(false)}>Cancel</Btn>
-            {!isAdmin && (completePlan?.can_complete_cleanly === false || (completePlan?.no_portal_id?.length ?? 0) > 0) && (
+            {/* QA-721 (-211, checker on qa-209): -207 said "Completing a batch is an Admin action",
+                which the server contradicted; -209 replaced it with "completing over it is an Admin
+                action", which the server ALSO contradicts - the checker pressed this as Operations on
+                a Closing batch with a portal-ID gap and it completed, 200. Two releases, two invented
+                permission rules. The screen does not know what the door will allow, so it stops
+                claiming to: it says what this press WILL DO, and lets the rule answer for itself. */}
+            {!isAdmin && (
               <span className="text-xs text-gray-500">
-                Anything still open above has to be settled first — completing over it is an Admin action.
+                This is the ordinary completion. Anything the rules still hold open will be refused, and
+                the refusal will say what it is.
               </span>
             )}
           </div>
@@ -2802,8 +2816,14 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
                   </button>
                 </span>
               )}
-              {!linkPlan.linkable?.length && linkPlan.without_portal_id > 0 && (
-                <span className="ml-1">Nothing to link from the imports so far — these have to be typed in from the portal.</span>
+              {/* QA-720 (-211, checker on qa-209): "these" had nothing left to point at. -209 removed
+                  the sentence that used to sit between, so on a roster where nobody is blocking, this
+                  line bound straight to "X of Y candidates carry a portal ID" — telling the reader that
+                  the students who HAVE an id have to be typed in from the portal, above an empty list.
+                  It names its own subject now, and does not render at all when nothing is blocking.
+                  Third correction to one paragraph in three releases. */}
+              {!linkPlan.linkable?.length && (linkPlan.blocking ?? 0) > 0 && (
+                <span className="ml-1">The imports name none of those {linkPlan.blocking}, so their IDs have to be typed in from the portal.</span>
               )}
               {/* -208 (Umesh, 23/08): "even attendance wale tab me bhi vo kar de, yeh closer wale
                   me kar dhe". The list of students with no portal ID is ONE component now, mounted

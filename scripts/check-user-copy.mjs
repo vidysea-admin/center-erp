@@ -1660,15 +1660,31 @@ for (const file of walk(root)) {
   // blockers exist, and -206 refuses a press without `force` whenever blockers exist — the same
   // condition that shows it. Every press returned "Nothing has been changed". No suite presses that
   // door, which is why the wall stayed green over it for two releases.
-  const closureBody = fnBody(page, "completeAsAdmin");            // the Closure tab's copy
-  const allBodies = [...page.matchAll(/async function completeAsAdmin\(\)/g)].length;
-  const pressesForce = (page.match(/\/complete`, \{ method: "POST", json: \{ reason: [^}]*force: true/g) ?? []).length;
-  if (allBodies >= 1 && pressesForce >= allBodies) passed++;
+  // QA-722 (-211, checker on qa-209): the first version of this counted force-carrying POSTs against
+  // the number of functions NAMED `completeAsAdmin`. The checker beat it twice in a minute - a third
+  // sender under any other name is invisible to it, and so is a rename-plus-drop, which is the exact
+  // shape QA-712 was. It counts by SHAPE now: every POST to /complete on this page, whatever the
+  // function around it is called, must carry `force`.
+  const posts = [...page.matchAll(/\/complete`\s*,\s*\{[\s\S]{0,240}?\}\s*\)/g)].map((m) => m[0]);
+  const withoutForce = posts.filter((p) => !/force:\s*true/.test(p));
+  if (posts.length >= 1 && withoutForce.length === 0) passed++;
   else {
     bad++;
-    pushStructural(pageRel + ": a completion press does not send `force` (" + pressesForce + " of " + allBodies
-      + " senders) - the door refuses a bare press whenever anything is open, which is exactly when the"
-      + " button that sends it is on screen, so every press fails with \"Nothing has been changed\" - QA-712.");
+    pushStructural(pageRel + ": " + (posts.length ? withoutForce.length + " of " + posts.length + " POSTs to /complete do not send `force`" : "no POST to /complete found at all")
+      + " - the door refuses a bare press whenever anything is open, which is exactly when the button"
+      + " that sends it is on screen, so every such press fails with \"Nothing has been changed\" - QA-712/QA-722.");
+  }
+
+  // QA-723: -209 offered the Complete control to a non-Admin on an ACTIVE batch, where the only arm
+  // into Completed is Closing -> Completed, so every press could only 409. The visibility has to know
+  // the difference between the two doors.
+  if (/isAdmin \? \["Active", "Closing"\] : \["Closing"\]/.test(page)) passed++;
+  else {
+    bad++;
+    pushStructural(pageRel + ": the Complete Batch control does not distinguish the Admin force door"
+      + " (Active or Closing) from the ordinary one (Closing only) - transitionBatch has no"
+      + " Active -> Completed arm, so offering it there gives a non-Admin a button that can only 409"
+      + " - QA-723.");
   }
 
   // ...and it promised the wrong outcome while it was at it: ABSENT, which -204 changed to Fail on
