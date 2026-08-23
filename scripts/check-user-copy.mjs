@@ -1660,13 +1660,21 @@ for (const file of walk(root)) {
   const decls = (src.match(/function PortalIdChip\(/g) ?? []).length;
   const mounts = (src.match(/<PortalIdChip\b/g) ?? []).length;
   const inlineRegex = /\/CAN\[/.test(src);   // any near-copy of the matcher living on this screen
-  if (decls === 1 && mounts >= 3 && !inlineRegex) passed++;
+  // QA-754 (-213): counting mounts was NOT enough and the checker proved it by opening the app.
+  // -212 had three mounts and every one of them was on a tab Umesh did not name - the chip was on
+  // Enrollment and Daily Execution while the tabs he asked for, `Candidates` and `Attendance`,
+  // showed nothing. A count cannot tell you WHERE. So the two components that render those two tabs
+  // are named, and each must contain a mount.
+  const inRoster = /<PortalIdChip\b/.test(fnBody(src, "Roster"));
+  const inAttendance = /<PortalIdChip\b/.test(fnBody(src, "AttendanceTab"));
+  if (decls === 1 && mounts >= 3 && inRoster && inAttendance && !inlineRegex) passed++;
   else {
     failed++;
-    pushStructural(rel + ": the portal-ID chip is not one component on every candidate row"
-      + " (declarations=" + decls + ", mounts=" + mounts + ", page still carries its own CAN regex=" + inlineRegex + ")"
-      + " - Umesh asked for it on the candidate card AND the attendance tab; a screen that spells the"
-      + " CAN test itself can disagree with the server about which file matches which student.");
+    pushStructural(rel + ": the portal-ID chip is not on the tabs Umesh named"
+      + " (declarations=" + decls + ", mounts=" + mounts + ", inside Roster (the Candidates tab)=" + inRoster
+      + ", inside AttendanceTab=" + inAttendance + ", page still carries its own CAN regex=" + inlineRegex + ")"
+      + " - he said \"candidate card\" and \"attendance wale tab\"; -212 mounted three copies and not"
+      + " one was on either of those tabs. A mount COUNT cannot tell you where a thing renders.");
   }
 }
 

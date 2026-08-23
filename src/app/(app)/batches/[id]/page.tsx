@@ -926,6 +926,10 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
           cardTitle={(r: any) => r.candidate?.name}
           columns={[
             { key: "candidate", label: "Candidate", render: (r: any) => r.candidate?.name },
+            // QA-754 (-213): the roster tab is the "candidate card" Umesh named first, and it showed
+            // no portal ID at all. Its own column, so it survives the mobile card collapse and can be
+            // read down the list rather than hunted for inside a name cell.
+            { key: "portal_id", label: "Portal ID", render: (r: any) => <PortalIdChip candidate={r.candidate} /> },
             { key: "phone", label: "Phone", render: (r: any) => r.candidate?.phone, mobile: false },
             { key: "joined_on", label: "Joined", render: (r: any) => fmtDate(r.joined_on) },
             { key: "enrollment_status", label: "Enrollment", render: (r: any) => <Chip value={r.enrollment_status} /> },
@@ -1055,8 +1059,16 @@ function EnrolStepToggle({ m, field, label, onUpdate }: any) {
 //                               is decided this is a real state a person has to be told about,
 //                               because the row otherwise looks identical to the next one.
 //   has none                 -> amber. This is what blocks the batch.
-function PortalIdChip({ candidate, className = "" }: { candidate: any; className?: string }) {
-  const raw = String(candidate?.sidh_candidate_id ?? "").trim();
+//
+// QA-754 (-213, checker on qa-212): -212 mounted this in three places and NOT ONE of them was a tab
+// Umesh named. He said "candidate card" and "attendance wale tab"; the mounts landed on Enrollment
+// and Daily Execution, because I grepped for rows rendering `m.candidate?.name` and never checked
+// which tab each one belonged to. The checker found it by OPENING THE APP after 3,335 green
+// assertions - the fifth broken screen behind a green wall in two days. The two tabs he actually
+// named are `Candidates` (the roster table) and `Attendance`, and both take flat rows, so this
+// accepts a bare value as well as a candidate object.
+function PortalIdChip({ candidate, value, className = "" }: { candidate?: any; value?: unknown; className?: string }) {
+  const raw = String(value ?? candidate?.sidh_candidate_id ?? "").trim();
   const unreadable = storedCanIsUnreadable(raw);
   if (raw && !unreadable) {
     return <span className={`rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[11px] text-gray-700 ${className}`}
@@ -1506,7 +1518,19 @@ function AttendanceTab({ batchId, batch, role, error, setError }: any) {
           // with no portal ID got nothing beneath their name, so two students of one name rendered
           // identically on the one screen that shows hours per person. The separator falls back the
           // way the requirement says: portal ID, otherwise phone.
-          { key: "name", label: "Name", sortable: true, render: (r: any) => <NameCell name={r.name} sub={personSeparator(r) || undefined} /> },
+          // QA-754: "even attendance wale tab me bhi wo kar de". `personSeparator` falls back to the
+          // PHONE when there is no portal ID, so this column showed a phone for a student with no id
+          // and showed an unreadable id exactly like a good one - the two states this whole thread is
+          // about were the two it could not tell apart. The chip says which.
+          {
+            key: "name", label: "Name", sortable: true,
+            render: (r: any) => (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <NameCell name={r.name} sub={personSeparator(r) || undefined} />
+                <PortalIdChip value={r.sidh_candidate_id} className="shrink-0" />
+              </div>
+            ),
+          },
           { key: "internal_days", label: "Our days", sortable: true, render: (r: any) => `${r.internal_days} / ${data.days_held}` },
           {
             // QA-086: our own hours get their own column, on the same footing as the

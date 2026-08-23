@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-212";
+export const RELEASE = "2026.08.14-213";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,17 @@ export const RELEASE = "2026.08.14-212";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-213 answers a review of the previous release. Finishing a batch whose students had all been " +
+  "removed from the roster could record a sign-off in the administrator's name and then still " +
+  "refuse to finish, leaving the batch stuck; and the same batch, finished the ordinary way, moved " +
+  "on before refusing, which it had promised not to do. Both are fixed, and the safety check that " +
+  "was supposed to catch exactly this could not actually trigger - it now reads both sign-offs " +
+  "rather than the one that was already guaranteed. The government Candidate ID a student holds is " +
+  "now shown on the two screens it was asked for - the batch's Candidates list and its Attendance " +
+  "tab - where before it appeared on neither, and where a student with no ID looked the same as a " +
+  "student whose ID cannot be read.";
+
+const RELEASE_NOTE_ARCHIVE_212 =
   "-212 repairs two ways the previous two releases could strand real work. Finishing a batch in " +
   "which nobody passed used to fail at the very last step, but only AFTER it had recorded every " +
   "unmarked student as failed and moved the batch on - leaving it impossible to finish and looking " +
@@ -169,6 +180,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
+  RELEASE_NOTE_ARCHIVE_212 + " " +
   RELEASE_NOTE_ARCHIVE_211 + " " +
   RELEASE_NOTE_ARCHIVE_210 +
   RELEASE_NOTE_ARCHIVE_209 +

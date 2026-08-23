@@ -6,6 +6,7 @@ import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { BASE_PATH } from "@/lib/base-path";
 import { Batch, BatchMember, CandidateResult, Closure, StoredFile } from "@/models";
+import { normalizeCan } from "@/lib/validate";
 import { putFile, removeStoredFile } from "@/lib/storage";
 import { assertBatchInScope, recomputeClosureAggregates, upsertCandidateCertificate } from "@/lib/rules";
 import { audit } from "@/lib/audit";
@@ -16,10 +17,12 @@ import { audit } from "@/lib/audit";
 // roster candidate, matches ambiguously, or hits a rule gate goes to unmatched[] WITH
 // its reason and is reported, never guessed at.
 const ALLOWED = new Set([".jpg", ".jpeg", ".png", ".webp", ".pdf"]);
-const canOf = (s: string | null | undefined) => {
-  const m = /CAN[\s_-]*(\d+)/i.exec(String(s ?? ""));
-  return m ? "CAN" + m[1] : null;
-};
+// QA-755 (-213, checker on qa-212): this was a byte-copy of `normalizeCan` living in the
+// CERTIFICATE MATCHER - the very door ARCHITECTURE.md section 3 named as going through the shared
+// one. The sixth spelling of one concept, found in the release that rewrote that section to say
+// there were three. It is the shared matcher now; a file's name and the id it must join to cannot
+// drift apart any more.
+const canOf = normalizeCan;
 
 // -108 (Umesh 17/08): this route is now TWO-STEP, the same preview → confirm shape the portal
 // importer uses, because auto-matching on a filename is a guess and a guess needs looking at.

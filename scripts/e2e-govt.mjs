@@ -1809,17 +1809,18 @@ ok("SSRF guard does not block the real client workbook", stillOk.data.ok === tru
   // bulk importer, which still had no guard at all - became UNEDITABLE. Not the ID: the NAME, the
   // PHONE, the EMAIL, the CENTRE. The one record you most need to correct was the one you could not
   // touch. Written the way saveCandidate builds the request, or it would not reproduce.
-  // The junk cannot be planted through this door any more - that is the -210 fix working. It can
-  // still be planted through the BULK IMPORTER, which is where real ones come from and which -210
-  // left unguarded (QA-727). That reproduction lives in e2e-flows-blindspot, which owns that door;
-  // here we pin the half that is reachable over HTTP: an UNCHANGED value must never be re-validated.
-  await req(admin, "PATCH", `/api/candidates/${c1._id}`, { sidh_candidate_id: "CAN_CHK208A" }, 200);
-  const unrelated = await req(admin, "PATCH", `/api/candidates/${c1._id}`,
-    { email: `noid.${STAMP}@example.com`, sidh_candidate_id: "CAN_CHK208A" });
-  ok("-212 (QA-726): re-sending the UNCHANGED stored id with an unrelated edit does not refuse the save",
-    unrelated.status === 200, `status=${unrelated.status} error=${JSON.stringify(unrelated.data?.error ?? null).slice(0, 130)}`);
+  // QA-757 (-213, checker on qa-212): the QA-726 pin that USED to sit here is deleted, not moved
+  // twice. It planted `CAN_CHK208A`, which `looksLikeCan` ACCEPTS, so the guard never fired and it
+  // stayed green against a pre-fix build - I wrote about that failure in the -212 manifest and then
+  // left the broken copy in this suite anyway. A pin that cannot fail is worse than no pin: it
+  // spends a line of the wall asserting nothing while reading as coverage. The real reproduction
+  // needs a value the guard REFUSES already sitting on the record, and the bulk importer is the only
+  // door that can still put one there - so it lives in e2e-flows-blindspot, once.
+  //
+  // What is still worth pinning here is the OTHER half, and only because it is genuinely reachable:
+  // a NEW junk value must still be refused at this door.
   const stillNew = await req(admin, "PATCH", `/api/candidates/${c1._id}`, { sidh_candidate_id: "40918461" });
-  ok("-212 (QA-726): …and a genuinely NEW junk value is still refused - the guard did not go soft",
+  ok("-212 (QA-726): a genuinely NEW junk value is still refused - the guard did not go soft",
     stillNew.status === 400, `status=${stillNew.status}`);
   // QA-730: the guard blessed padded values and stored them untrimmed. The QA-417 partial unique
   // index is built on the RAW string, so a padded copy of an id someone else holds does not collide,
@@ -1847,11 +1848,11 @@ ok("SSRF guard does not block the real client workbook", stillOk.data.ok === tru
     .find((m) => m.name === `${NAME} NoId One`);
   ok("-212 (QA-725): a student genuinely holding nothing is reported as holding nothing",
     emptyBefore?.on_record === null && emptyBefore?.unreadable === false, JSON.stringify(emptyBefore ?? null));
-  await req(admin, "PATCH", `/api/candidates/${c1._id}`, { sidh_candidate_id: "CAN_CHK208A" }, 200);
+  await req(admin, "PATCH", `/api/candidates/${c1._id}`, { sidh_candidate_id: `CAN_A${STAMP}` }, 200);
   const echoed = (await req(admin, "GET", `/api/batches/${nb._id}/link-portal-ids`)).data;
   const row = (echoed.missing ?? []).find((m) => m.name === `${NAME} NoId One`);
   ok("-212 (QA-725): …and once they hold an id the gate cannot read, the row is NOT blank any more",
-    row?.unreadable === true && row?.on_record === "CAN_CHK208A", JSON.stringify(row ?? null));
+    row?.unreadable === true && row?.on_record === `CAN_A${STAMP}`, JSON.stringify(row ?? null));
   ok("-212 (QA-725): …and they are STILL blocking — naming the id does not excuse it",
     Boolean(row) && echoed.blocking === (echoed.missing ?? []).length,
     JSON.stringify({ blocking: echoed.blocking, listed: (echoed.missing ?? []).length }));
@@ -1870,8 +1871,14 @@ ok("SSRF guard does not block the real client workbook", stillOk.data.ok === tru
     JSON.stringify(carried?.candidate ?? null).slice(0, 160));
   // The attendance payload flattens the candidate onto the row, so the field is `sidh_candidate_id`
   // directly - reading it under `.candidate` returned nulls and would have pinned nothing.
+  //
+  // QA-758 (-213, checker on qa-212): stated honestly, this one is a REGRESSION GUARD, not evidence
+  // of new work - `/attendance` already carried this field before -212 (it has since -161/QA-430),
+  // so it passes on pre-fix code and always would have. The -212 manifest listed it beside the
+  // /members pin as though both proved the same thing. Only the /members pin does; this one exists
+  // so the field cannot be dropped from the payload the Attendance tab reads.
   const att = (await req(admin, "GET", `/api/batches/${nb._id}/attendance`)).data;
-  ok("-212: …and so does the attendance payload, which is the other tab he named",
+  ok("-212 [regression guard, green pre-fix]: the attendance payload still carries the portal ID",
     (att.members ?? []).some((r) => r.sidh_candidate_id === `CAN_${STAMP}5`),
     JSON.stringify((att.members ?? []).slice(0, 3).map((r) => [r.name, r.sidh_candidate_id ?? null])));
 

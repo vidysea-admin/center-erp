@@ -215,8 +215,12 @@ invalid recipient) and **always** write a MailLog row. Bounces: SNS → `public/
   definition; readers = the -154 import guard, the portal-id-health screen, the ID-re-match.
 - **CAN normalisation:** `normalizeCan()` in `lib/govt-attendance.ts`; `link-portal-ids` aliases
   its old local `canOf` to it. Never write a near-copy of that regex.
-  **There are now THREE named tests on this one concept, all in `lib/govt-attendance.ts`, and they
-  are not interchangeable — importing the wrong one is a shipped bug both ways:**
+  **THREE named tests on this one concept. Their home is `lib/validate.ts` — the PURE module, which
+  imports nothing, because the CLIENT screens need them too and `lib/govt-attendance.ts` imports the
+  mongoose models. `govt-attendance` re-exports all three, so server callers may import from either.
+  Keeping `lib/validate.ts` import-free is load-bearing: one added import there breaks every client
+  screen that now depends on it. They are not interchangeable — importing the wrong one is a shipped
+  bug both ways:**
   - `normalizeCan(s)` — the **matcher**. Reads only the DIGITS after CAN, returns `CAN<digits>` or
     null. Everything that decides *who matches whom* uses this: the certification gate
     (`enrolledWithoutCan`), the certificate matcher, the health screen, `link-portal-ids`.
@@ -228,8 +232,15 @@ invalid recipient) and **always** write a MailLog row. Bounces: SNS → `public/
   **They disagree by design** (`looksLikeCan("CAN_CHK208A")` is true, `normalizeCan` of it is null)
   and that disagreement is **QA-719, an open decision of Umesh's** — widening the matcher changes
   who matches whom across imports, health and certificates. Do not close it in passing.
-  A fourth spelling still exists and is NOT collapsed: `CAN_SHAPE` (`/CAN/i`) in
-  `api/candidates/portal-id-health/route.ts:33`.
+  **Collapsed in `-213` after the qa-212 checker found them (QA-755):** `canOf` in
+  `api/batches/[id]/certificates/route.ts` was a byte-copy of the matcher, **inside the certificate
+  matcher this very entry claimed used the shared one** — the sixth spelling, found in the release
+  that rewrote this section to say there were three. It now aliases `normalizeCan`, as
+  `link-portal-ids` already did.
+  A remaining spelling is NOT collapsed and is deliberately listed: `CAN_SHAPE` (`/CAN/i`) in
+  `api/candidates/portal-id-health/route.ts:33`. **Before adding any new test of "does this look
+  like a CAN", grep this entry — six copies of it have been written by people who had read this
+  file.**
 - **New door:** `api/candidates/portal-id-health` (GET plan / POST selected fixes, audited,
   never overwrites) — the link-portal-ids contract one level up. UI: the Candidates page
   "Portal ID health" drawer.

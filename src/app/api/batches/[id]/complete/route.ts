@@ -160,6 +160,19 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
       + `forcefully - which records the reason and every one of these against the batch.`);
   }
 
+  // QA-752 (-213, checker on qa-212): the blocker list above is built from the ACTIVE roster, so on
+  // a batch where every member has been dropped it is EMPTY - no unmarked, no unsettled, no missing
+  // portal ID - and an unforced press sailed past this refusal, wrote, moved the batch, and only
+  // then met Rule 18, which needs a roster to derive assessment from. The comment three paragraphs
+  // up promises "the FIRST press never writes"; on this shape it wrote. An empty list of blockers is
+  // not the same fact as a batch that is ready, and this is the difference between the two.
+  if (!force && (await activeRoster(id)).length === 0) {
+    throw new HttpError(409,
+      `Every student has been dropped from ${batch.code}, so there are no results to settle and `
+      + `nothing has been changed. A batch in this state can only be completed forcefully, which `
+      + `records who decided that and why.`);
+  }
+
   const today = new Date();
 
   // 1. A student left unmarked when the Admin closes the batch is FAILED. Written through the
@@ -227,35 +240,93 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   //     So the condition is now the true one: on a FORCED press, if certification is still not
   //     Completed by this point, the Admin signs it - whatever the reason it did not derive - and
   //     the audit row names that actual reason rather than assuming the portal ID.
+  //     QA-751 (-213, checker on qa-212): and it was still wrong, because certification is not the
+  //     only arm. Rule 18 gates Active -> Closing on ASSESSMENT, and `deriveCompletion` signs
+  //     assessment only when `total > 0` - so a roster where every member has been DROPPED never
+  //     derives it either. On that shape -212 signed certification in the Admin's name, audit row
+  //     and all, and then 409'd on the way out of Active: a batch stranded with a sign-off nobody
+  //     could derive, the drawer calling it clean, and a second press repeating it forever. Third
+  //     time this class has shipped. So BOTH arms are signed, by one rule, stated once.
   if (force) {
-    const closureDoc = await Closure.findOne({ batch: id });
-    if (closureDoc && closureDoc.certification_status !== "Completed") {
-      const why = noCan.length
-        ? `${noCan.length} enrolled student(s) still had no portal Candidate ID`
-        : `no candidate passed, so certification never derived on its own`;
-      const was = closureDoc.certification_status ?? "Pending";
-      closureDoc.certification_status = "Completed";
-      (closureDoc as any).certification_derived = false;
-      if (!closureDoc.certification_date) closureDoc.certification_date = new Date();
-      await closureDoc.save();
-      await audit({ entity: "Closure", entityId: closureDoc._id, field: "certification_status",
-        oldValue: was,
-        newValue: `Completed - signed by an Admin completing ${batch.code} while ${why}: ${reason}`,
-        actor: user.id, actorType: "USER" });
+    //     QA-751 rider: on the all-dropped shape there may be NO closure document at all.
+    //     `recomputeClosureAggregates` returns early with `legacy: true` when there are no result
+    //     rows (rules.ts) - and on an empty active roster step 1 writes none - so nothing ever
+    //     creates it. The wall caught this the moment the fixture actually dropped the members:
+    //     my own QA-753 assertion fired with "no closure record exists for this batch", which is
+    //     the guard doing its job and the fix being incomplete. Same idiom rules.ts already uses
+    //     in two places, rather than a third spelling of "get or make the closure".
+    const closureDoc = (await Closure.findOne({ batch: id })) ?? new Closure({ batch: id });
+    {
+      const rosterNow = await activeRoster(id);
+      for (const arm of ["assessment", "certification"] as const) {
+        const statusKey = `${arm}_status` as "assessment_status" | "certification_status";
+        const derivedKey = `${arm}_derived`;
+        const dateKey = `${arm}_date`;
+        if ((closureDoc as any)[statusKey] === "Completed") continue;
+        const why = arm === "assessment"
+          ? (rosterNow.length === 0
+            ? `no student remained on the roster, so assessment never derived on its own`
+            : `assessment never derived on its own`)
+          : (noCan.length
+            ? `${noCan.length} enrolled student(s) still had no portal Candidate ID`
+            : `no candidate passed, so certification never derived on its own`);
+        const was = (closureDoc as any)[statusKey] ?? "Pending";
+        (closureDoc as any)[statusKey] = "Completed";
+        (closureDoc as any)[derivedKey] = false;
+        if (!(closureDoc as any)[dateKey]) (closureDoc as any)[dateKey] = new Date();
+        await closureDoc.save();
+        await audit({ entity: "Closure", entityId: closureDoc._id, field: statusKey,
+          oldValue: was,
+          newValue: `Completed - signed by an Admin completing ${batch.code} while ${why}: ${reason}`,
+          actor: user.id, actorType: "USER" });
+      }
     }
   }
 
-  // QA-736: the writes above are IRREVERSIBLE - permanent Fail rows and a status move. Before the
-  // ladder can refuse and strand the batch half-settled, assert that the one gate this door is
-  // responsible for opening is actually open. If this ever fires, the message says what was already
-  // written instead of a bare 409 that reads like nothing happened.
+  // QA-736 / QA-753: the writes above are IRREVERSIBLE - permanent Fail rows and a status move.
+  // Before the ladder can refuse and strand the batch half-settled, assert that the gates this door
+  // is responsible for opening are actually open.
+  //
+  // QA-753 (-213, checker on qa-212): the -212 version of this assertion COULD NOT FIRE. It looked
+  // only at certification - the one arm the block two lines above had just guaranteed - and its own
+  // `signed &&` skipped it entirely when no Closure document existed. It guarded the only case that
+  // was already safe, which is a guard-shaped version of the pin-that-cannot-fail. It reads BOTH
+  // arms now, and a MISSING Closure is the loudest failure, not a silent pass.
   if (force) {
-    const signed = await Closure.findOne({ batch: id }).select("certification_status").lean<any>();
-    if (signed && signed.certification_status !== "Completed") {
+    const signed = await Closure.findOne({ batch: id }).select("assessment_status certification_status").lean<any>();
+    const open = !signed
+      ? ["no closure record exists for this batch"]
+      : (["assessment", "certification"] as const)
+        .filter((arm) => signed[`${arm}_status`] !== "Completed")
+        .map((arm) => `${arm} is still ${signed[`${arm}_status`] ?? "Pending"}`);
+    if (open.length) {
       throw new HttpError(500,
-        `${batch.code}: results were settled and certification could not be signed off, so the batch `
-        + `was NOT completed. The result rows written by this press stand - reopen the batch and `
-        + `check the Closure tab before pressing again.`);
+        `${batch.code}: the results were settled but the batch could NOT be completed - ${open.join(" and ")}. `
+        + `The result rows written by this press stand. Reopen the batch and check the Closure tab `
+        + `before pressing again.`);
+    }
+  }
+
+  // QA-752 proper (-213, checker on qa-212): an UNFORCED press must not walk a ladder it cannot
+  // finish. The shape: every student marked, NOBODY passed, no portal-ID gap. The blocker list is
+  // EMPTY, so the refusal at the top of this door never fires. The press then settles nothing,
+  // assessment derives on its own from the rows, the batch MOVES Active -> Closing, and only there
+  // does Rule 18 refuse - because `deriveCompletion` signs certification only when pass_count > 0.
+  // The batch is left one rung up from where the operator left it, by a press whose own comment
+  // three paragraphs above promises "the FIRST press never writes". Measured against a rebuilt
+  // -212: `Active -> Closing`, with the bare rule name as the message.
+  //
+  // An empty blocker list is not the same fact as a batch that can finish. So the arms are read
+  // BEFORE the ladder, and a press that cannot reach Completed says so while nothing has moved.
+  if (!force) {
+    const arms = await Closure.findOne({ batch: id }).select("assessment_status certification_status").lean<any>();
+    const open = (["assessment", "certification"] as const)
+      .filter((arm) => (arms?.[`${arm}_status`] ?? "Pending") !== "Completed");
+    if (open.length) {
+      throw new HttpError(409,
+        `${batch.code} cannot be completed yet - ${open.join(" and ")} ${open.length > 1 ? "are" : "is"} `
+        + `not signed off, and nothing this press settles would change that. The batch has NOT been `
+        + `moved. Complete it forcefully to sign off under your own name with a reason.`);
     }
   }
 

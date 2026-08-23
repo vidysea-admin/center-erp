@@ -861,6 +861,90 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
       JSON.stringify(zAudit.map((a) => nv(a).slice(0, 70))));
   }
 
+  // ---- QA-751 / QA-752 / QA-753 (-213, checker on qa-212): the THIRD write-then-refuse shape ----
+  //
+  // -212 fixed the 0-pass batch and was charged with hunting a third. There was one, and the checker
+  // found it: a roster where EVERY member has been dropped. `deriveCompletion` signs assessment only
+  // when `total > 0`, so it never derives; -212 signed CERTIFICATION in the Admin's name, audit row
+  // and all, its new assertion waved the press through because certification was the only arm it
+  // looked at, and the ladder then refused on the way OUT of Active. Batch stranded with a sign-off
+  // nobody could derive, drawer calling it clean, and a second press repeating it forever.
+  //
+  // Unforced, the same shape sailed past the blocker refusal entirely - an empty active roster has
+  // no unmarked, no unsettled and no missing portal ID, so the list was EMPTY and the door treated
+  // "nothing is blocking" as "ready", wrote, and moved the batch. Its own comment promises the first
+  // press never writes.
+  {
+    const { b: db_, mems: dm } = await mkBatch(2, 12);
+    // The drop door is POST /api/members/:id/drop with a REASON (Rule 25) - not a PATCH. My first
+    // version of this pin PATCHed `left_on` onto the member route, which does not accept that field:
+    // it returned 200, dropped nobody, and the pin then exercised the QA-736 shape all over again
+    // while claiming to be the all-dropped one. It passed. That is the same fail-proof-pin fault the
+    // -212 checker charged (QA-757), caught here only because the assertion on `assessment_derived`
+    // was specific enough to notice the sign-off had been DERIVED rather than signed.
+    for (const m of dm) await req("POST", `/api/members/${m._id}/drop`, { left_on: today, drop_reason: "Other" }, 200);
+    ok("QA-751 precondition: the roster really is empty before the press",
+      ((await req("GET", `/api/batches/${db_._id}/complete`)).data.roster_count ?? -1) === 0,
+      JSON.stringify((await req("GET", `/api/batches/${db_._id}/complete`)).data.roster_count ?? null));
+
+    // QA-752 note: an unforced press on THIS (all-dropped) shape already refused before -213 and
+    // already left the batch alone, so asserting it here proves nothing - I checked against a
+    // rebuilt -212 and both assertions were green on both sides. The shape that actually moved the
+    // batch is pinned separately below; keeping a green-both-ways assertion here would be the
+    // third fail-proof pin of the day.
+    const beforeStatus = await statusOf(db_._id);
+    const soft = await req("POST", `/api/batches/${db_._id}/complete`, { reason: "QA-752 pin: this press must change nothing" });
+    ok("QA-752 [regression guard, green pre-fix]: an unforced press on an all-dropped roster refuses",
+      soft.status === 409, `status=${soft.status}`);
+    ok("QA-752 [regression guard, green pre-fix]: …and does not move the batch",
+      (await statusOf(db_._id)) === beforeStatus, `${beforeStatus} -> ${await statusOf(db_._id)}`);
+
+    // QA-751: forced must actually finish, signing BOTH arms rather than one.
+    const hard = await req("POST", `/api/batches/${db_._id}/complete`,
+      { reason: "QA-751 pin: everyone left, close it", force: true });
+    ok("QA-751: a forced press on an all-dropped roster completes instead of stranding the batch",
+      hard.status === 200, `status=${hard.status} error=${JSON.stringify(hard.data?.error ?? null).slice(0, 200)}`);
+    ok("QA-751: …and the batch really reaches Completed, not Active with a sign-off on it",
+      (await statusOf(db_._id)) === "Completed", await statusOf(db_._id));
+    const dc = await closureOf(db_._id);
+    ok("QA-751: …BOTH arms are signed, and both say a person signed them, not the rows",
+      dc?.assessment_status === "Completed" && dc?.certification_status === "Completed"
+      && dc?.assessment_derived === false && dc?.certification_derived === false,
+      JSON.stringify({ a: dc?.assessment_status, ad: dc?.assessment_derived, c: dc?.certification_status, cd: dc?.certification_derived }));
+    // guard: when the fix is incomplete `dc` is null, and reading `dc._id` CRASHES the suite -
+    // which the wall then refuses to count at all rather than reporting three honest failures.
+    const dAudit = dc?._id ? ((await req("GET", `/api/audit/Closure/${dc._id}`)).data.items ?? []) : [];
+    ok("QA-751: …and the assessment audit row names the real reason - nobody was left on the roster",
+      dAudit.some((a) => /no student remained on the roster/i.test(String(a.new_value ?? a.newValue ?? ""))),
+      JSON.stringify(dAudit.slice(0, 4).map((a) => String(a.new_value ?? a.newValue ?? "").slice(0, 80))));
+  }
+
+  // ---- QA-752 proper (-213): the shape where an unforced press really DID move the batch ----
+  //
+  // Every student marked, NOBODY passed, no portal-ID gap. The blocker list is empty, so the
+  // refusal at the top of the door never fires. Before -213 the press then settled nothing,
+  // assessment derived on its own, the batch MOVED Active -> Closing, and Rule 18 refused only
+  // there - because certification never derives when pass_count is 0. One rung up from where the
+  // operator left it, by a press whose own comment promises the first press never writes.
+  {
+    const { b: mb, mems: mm } = await mkBatch(2, 13);
+    await req("PUT", `/api/batches/${mb._id}/results`, {
+      rows: mm.map((m) => ({ member: String(m._id), result: "Fail", failure_reason: "Below cut-off", assessed_on: today })),
+    }, 200);
+    const pre = (await req("GET", `/api/batches/${mb._id}/complete`)).data;
+    ok("QA-752: the precondition - nothing is blocking, so the top refusal cannot fire",
+      (pre.unmarked ?? []).length === 0 && (pre.unsettled ?? []).length === 0 && (pre.no_portal_id ?? []).length === 0,
+      JSON.stringify({ unmarked: (pre.unmarked ?? []).length, unsettled: (pre.unsettled ?? []).length, noCan: (pre.no_portal_id ?? []).length }));
+    const was = await statusOf(mb._id);
+    const soft2 = await req("POST", `/api/batches/${mb._id}/complete`, { reason: "QA-752 pin: must not move the batch" });
+    ok("QA-752: the press refuses…", soft2.status === 409, `status=${soft2.status}`);
+    ok("QA-752: THE DEFECT — …and the batch is still where the operator left it",
+      (await statusOf(mb._id)) === was, `${was} -> ${await statusOf(mb._id)}`);
+    ok("QA-752: …and the refusal says the batch was not moved, instead of a bare rule name",
+      /has NOT been moved/i.test(String(soft2.data?.error ?? "")),
+      JSON.stringify(soft2.data?.error ?? null).slice(0, 200));
+  }
+
   // ---- QA-737 (-212, checker on qa-211): the drawer's list and the server's door must agree ----
   // A portal-ID gap only blocks while certification is UNSIGNED. Once it is Completed — derived or
   // signed — the gap is a data-quality fact, not a door, and the ordinary transition passes. The
