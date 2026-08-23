@@ -414,7 +414,11 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
             <div className="mt-3 border-t border-gray-100 pt-3">
               <div className="mb-1.5 text-xs text-gray-500">Results recorded so far — this is the exam, not the attendance bar above</div>
               <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
-                <div><div className="text-xs text-gray-500">Marked</div><div className="text-lg font-semibold">{resSummary.appeared ?? 0}<span className="text-sm font-normal text-gray-500"> of {data.readiness?.roster_count ?? 0}</span></div></div>
+                {/* QA-782 (-216, checker on qa-214): this printed `summary.appeared`, which is not
+                    "how many were marked" - it is a CONTRACT TOGGLE (`absent_counts_as_appeared`).
+                    With that setting off, the card read "Marked 3" directly above "1 marked Absent."
+                    The label now counts what it says: every student carrying a settled result. */}
+                <div><div className="text-xs text-gray-500">Marked</div><div className="text-lg font-semibold">{(resSummary.passed ?? 0) + (resSummary.failed ?? 0) + (resSummary.absent ?? 0)}<span className="text-sm font-normal text-gray-500"> of {data.readiness?.roster_count ?? 0}</span></div></div>
                 <div><div className="text-xs text-gray-500">Passed</div><div className="text-lg font-semibold text-green-700">{resSummary.passed ?? 0}</div></div>
                 <div><div className="text-xs text-gray-500">Failed</div><div className="text-lg font-semibold text-red-600">{resSummary.failed ?? 0}</div></div>
                 <div><div className="text-xs text-gray-500">Certificates issued</div><div className="text-lg font-semibold">{resSummary.certificates_issued ?? 0}<span className="text-sm font-normal text-gray-500"> of {resSummary.passed ?? 0}</span></div></div>
@@ -1259,9 +1263,19 @@ function PortalIdGaps({ batchId, onChanged }: any) {
   // refused rather than overwritten.
   const [health, setHealth] = useState<any>(null);
   const [moving, setMoving] = useState(false);
+  // QA-775 (-216, checker on qa-215): the apply needs `candidates.manage` at EDIT. Both GETs behind
+  // this panel need only read, so a Location or Operations login whose edit right has been revoked
+  // saw the banner and the button and got 403 on press - the fourth outing of the dead-button class
+  // (QA-712, QA-723, QA-754). Same pattern as `canImport` a hundred lines up this file: while the
+  // rights are still loading assume yes, so the control does not flicker away from someone who has it.
+  const { can: canPerm, loaded: permsReady } = usePerms();
+  const canMove = !permsReady || canPerm("candidates.manage", "edit");
   const load = () => Promise.all([
     api(`/api/batches/${batchId}/link-portal-ids`).then(setPlan).catch(() => setPlan(null)),
-    api("/api/candidates/portal-id-health").then(setHealth).catch(() => setHealth(null)),
+    // QA-776: narrowed by the SERVER now (`?batch=`), not by an intersection in the browser. The
+    // client-side filter below stays as a second belt, but the thing that decides whose students
+    // these are is a query this suite can actually test.
+    api(`/api/candidates/portal-id-health?batch=${batchId}`).then(setHealth).catch(() => setHealth(null)),
   ]);
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [batchId]);
 
@@ -1274,9 +1288,20 @@ function PortalIdGaps({ batchId, onChanged }: any) {
     if (moving || !recoverable.length) return;
     setMoving(true); setErr("");
     try {
+      const asked = recoverable.length;
       const res = await api("/api/candidates/portal-id-health", { method: "POST", json: { copy: recoverable.map((m) => String(m.candidate)) } });
-      const refused = (res?.results?.refused ?? []) as string[];
-      if (refused.length) setErr(`${refused.length} left untouched: ${refused[0]}`);
+      // QA-774 (-216, checker on qa-215, S2): this read `res?.results?.refused`. The endpoint returns
+      // `{set_null, copied, rematched, refused}` UNWRAPPED (`route.ts:219`), so the branch below was
+      // unreachable code: the checker pressed "Move 5" against a stale plan, the server correctly
+      // moved 4 and refused 1, and THE SCREEN SAID NOTHING - the banner simply vanished. A partial
+      // refusal reaching the operator as silence is the same defect as a sentence that is not true.
+      const refused = (res?.refused ?? res?.results?.refused ?? []) as string[];
+      const copied = Number(res?.copied ?? res?.results?.copied ?? 0);
+      if (refused.length) {
+        setErr(`${copied} of ${asked} moved. ${refused.length} left untouched — ${refused[0]}`);
+      } else if (copied < asked) {
+        setErr(`${copied} of ${asked} moved. The rest already had an ID by the time this ran.`);
+      }
       await load(); onChanged?.();
     } catch (e: any) { setErr(e.message); }
     setMoving(false);
@@ -1307,7 +1332,7 @@ function PortalIdGaps({ batchId, onChanged }: any) {
       </button>
       {err && <div className="mt-1 text-red-700">{err}</div>}
       {/* QA-770: the good news first, because it changes what the person does next. */}
-      {recoverable.length > 0 && (
+      {recoverable.length > 0 && canMove && (
         <div className="mt-2 rounded-lg border border-green-300 bg-green-50 px-2.5 py-2 text-green-900">
           <b>{recoverable.length} of them already have an ID — it is filed in the wrong place.</b>{" "}
           The value is sitting in that candidate&rsquo;s <span className="font-mono">ID reference</span> field,
@@ -2599,7 +2624,16 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
   const [compressNote, setCompressNote] = useState<string | null>(null); // -123 (QA-157): say what compression did
   const [linkNote, setLinkNote] = useState<string | null>(null); // -111: link success, auto-hides
   const [uploading, setUploading] = useState(false);
-  const closed = ["Completed", "Cancelled"].includes(batch?.status);
+  // QA-777 (-216, checker on qa-214): `closed` was the ONLY thing disabling these controls, and it
+  // is about the BATCH, not the person. `page.tsx:35` gates only the Costs tab and `GET /results`
+  // carries no permission check at all - so a Trainer or an Enrollment user could open Closure, see
+  // an ENABLED Candidate ID box, type into it and be told on save that they lack the right. The
+  // checker did exactly that in a browser. My -214 manifest defended this door with the sentence
+  // "everyone who can see this card can fill the box"; that sentence was false and this is what it
+  // cost - the FOURTH outing of the dead-control class (QA-712, QA-723, QA-754, QA-775).
+  const { can: canClose, loaded: closePermsReady } = usePerms();
+  const mayMark = !closePermsReady || canClose("closure.manage", "edit");
+  const closed = ["Completed", "Cancelled"].includes(batch?.status) || !mayMark;
   // -108: bulk upload is preview-first — the staged files and their proposed mapping, editable
   // before anything is written. Umesh: "agar koi wrong auto map hua ya nahi map ho paye toh preview
   // me map kar sakte hain, har certificate ke aligned."
@@ -2768,7 +2802,14 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
     { value: "Absent", label: "Absent", title: "Marked Absent", test: (i) => i.result?.result === "Absent" },
     { value: "pending", label: "Not marked", title: "No result recorded yet", test: (i) => !i.result || i.result.result === "Pending" },
     // his own example, and the one this whole week has been about
-    { value: "nocan", label: "No portal ID", title: "No portal Candidate ID on record, or one the certification gate cannot read", test: (i) => portalIdState(i.candidate?.sidh_candidate_id) !== "ok" },
+    // QA-778 (-216, checker on qa-214): this pill counted EVERY row on the roster, including students
+    // who have left, while the panel on the same screen counts only the ENROLLED ones the gate
+    // actually blocks on (`enrolledWithoutCan`). Drop one member and the screen shows "No portal ID
+    // 10" beside "9 enrolled students have no portal Candidate ID" - QA-704 again, one question with
+    // two numbers, in a release whose own job was to stop that. The pill is not re-pointed at the
+    // gate (a filter that hides a student you can still see on the card would be worse); it NAMES its
+    // own population instead, so the two numbers read as the two different facts they are.
+    { value: "nocan", label: "No portal ID (all rows)", title: "Every row on this roster with no portal Candidate ID, or one the certification gate cannot read - including students who have left. The panel below counts only the ENROLLED students certification is actually held up on, so these two numbers can differ and both be right.", test: (i) => portalIdState(i.candidate?.sidh_candidate_id) !== "ok" },
     { value: "nocert", label: "Passed, no certificate", title: "Passed but the certificate is not settled yet", test: (i) => i.result?.result === "Pass" && !["Issued", "Not Issued"].includes(i.result?.certificate_status) },
     { value: "mock", label: "Mock: not qualified", title: "Sat the mock test and did not clear it", test: (i) => i.result?.mock_appeared === true && i.result?.mock_qualified !== true },
   ];
@@ -2776,6 +2817,9 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
   const matchesSearch = (i: any) => !q || [i.candidate?.name, i.candidate?.phone, i.candidate?.sidh_candidate_id]
     .some((v) => String(v ?? "").toLowerCase().includes(q));
   const shown = items.filter((i) => (CARD_FILTERS.find((f) => f.value === cardFilter)?.test ?? (() => true))(i) && matchesSearch(i));
+  // QA-779: narrowing the list must put the pager back at the start, or the phone view opens on
+  // whatever index the previous filter happened to be sitting at.
+  useEffect(() => { setIdx(0); }, [cardFilter, cardSearch]);
   const passes = items.filter((i) => i.result?.result === "Pass");
   // -108: the pre-flight numbers, in the words the panel says them in.
   const certReady = passes.filter((i) => !i.result?.certificate_file);
@@ -3204,10 +3248,14 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
           </div>
           <div className="md:hidden">
             {shown.length > 0 && <Card i={shown[Math.min(idx, shown.length - 1)]} />}
+            {shown.length === 0 && null}
             <div className="mt-3 flex items-center justify-between">
+              {/* QA-779 (-216, checker on qa-214): this was bound to `items` while the card beside it
+                  renders `shown`, so a filter with one result read "1 / 12" and Next walked the
+                  counter while the card never changed. The pager belongs to the list on screen. */}
               <Btn kind="ghost" onClick={() => setIdx((v) => Math.max(0, v - 1))} disabled={idx === 0}>← Prev</Btn>
-              <span className="text-sm text-gray-500">{idx + 1} / {items.length}</span>
-              <Btn kind="ghost" onClick={() => setIdx((v) => Math.min(items.length - 1, v + 1))} disabled={idx >= items.length - 1}>Next →</Btn>
+              <span className="text-sm text-gray-500">{Math.min(idx + 1, Math.max(shown.length, 1))} / {shown.length}</span>
+              <Btn kind="ghost" onClick={() => setIdx((v) => Math.min(shown.length - 1, v + 1))} disabled={idx >= shown.length - 1}>Next →</Btn>
             </div>
           </div>
         </>

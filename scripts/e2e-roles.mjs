@@ -184,6 +184,25 @@ if (ownActive) {
         { rows: [{ member: String(target.member), sidh_candidate_id: `CAN_${stamp}1` }] });
       ok(`QA-747: …and ${who} cannot write one either`, r.status === 403, `status=${r.status}`);
     }
+    // QA-780 (-216, checker on qa-214): the id must NOT be written by a request that then refuses.
+    // -214 wrote it, then let the result-marking throw 400 and a duplicate id throw 409 mid-loop -
+    // so a response whose own message says "Nothing has been saved" had already saved and audited an
+    // identity field. Two probes, because the two refusals came from different places.
+    const readId = async () => ((await req(spoc, "GET", `/api/batches/${ownActive._id}/results`)).data?.items ?? [])
+      .find((r) => String(r.member) === String(target.member))?.candidate?.sidh_candidate_id ?? null;
+    const before780 = await readId();
+    const badResult = await req(spoc, "PUT", `/api/batches/${ownActive._id}/results`,
+      { rows: [{ member: String(target.member), sidh_candidate_id: `CAN_${stamp}780`, result: "NotAResult" }] });
+    ok("QA-780: a row whose RESULT is refused does not leave the Candidate ID written behind it",
+      badResult.status >= 400 && (await readId()) === before780,
+      `status=${badResult.status} stored=${await readId()} (was ${before780})`);
+    // …and a DUPLICATE id is refused before anything is written, not by the index mid-loop
+    const dup = await req(spoc, "PUT", `/api/batches/${ownActive._id}/results`,
+      { rows: [{ member: String(target.member), sidh_candidate_id: `CAN_${stamp}` }] });
+    ok("QA-780: …and re-using an id that belongs to someone else is refused, saying nothing was saved",
+      dup.status === 200 || (dup.status === 409 && /Nothing has been saved/i.test(String(dup.data?.error ?? ""))),
+      `status=${dup.status} error=${JSON.stringify(dup.data?.error ?? null).slice(0, 120)}`);
+
     ok("QA-747: …the stored id is untouched after both refusals",
       idOf((await req(spoc, "GET", `/api/batches/${ownActive._id}/results`)).data?.items ?? []) === `CAN_${stamp}`,
       String(idOf((await req(spoc, "GET", `/api/batches/${ownActive._id}/results`)).data?.items ?? [])));

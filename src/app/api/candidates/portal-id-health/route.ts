@@ -5,6 +5,7 @@ import { requirePerm, requireView } from "@/lib/permissions";
 import { Batch, BatchMember, Candidate, GovtAttendanceImport, GovtAttendanceRow } from "@/models";
 import { normalizeCan, shiftSignature } from "@/lib/govt-attendance";
 import { audit } from "@/lib/audit";
+import { assertBatchInScope } from "@/lib/rules";
 
 // -155 (QA-427, and the door for QA-414's recovery): the portal-ID health screen.
 //
@@ -32,8 +33,24 @@ import { audit } from "@/lib/audit";
 
 const CAN_SHAPE = /CAN/i;
 
-async function plan(user: Awaited<ReturnType<typeof requireUser>>) {
-  const scope = locationFilter(user);
+// QA-776 (-216, checker on qa-215): an OPTIONAL batch narrowing, done on the SERVER.
+//
+// -215 put this plan on the batch screen and narrowed it to that batch's blocked students in the
+// browser. The checker's point is exact: it built the pre-fix tree and every one of -215's five new
+// behaviour assertions passed there, because -215 changed no route, lib or model - so the only thing
+// standing between "this centre's students" and "somebody else's roster" was a regex checking that a
+// variable name appears in the source. That is not a pin, and the failure it would miss is a centre
+// being handed another centre's candidates to "fix".
+//
+// So the narrowing moves here, where it can be proved by behaviour. `?batch=` restricts every bucket
+// to that batch's roster; without it the payload is exactly what it always was, so the Candidates
+// screen is unchanged.
+async function plan(user: Awaited<ReturnType<typeof requireUser>>, batchId?: string) {
+  const scope: Record<string, unknown> = locationFilter(user);
+  if (batchId) {
+    const members = await BatchMember.find({ batch: batchId }).select("candidate").lean<any[]>();
+    scope._id = { $in: members.map((m) => m.candidate).filter(Boolean) };
+  }
 
   // a) "" artefacts - would collide under the QA-417 partial unique index ("" IS a string).
   const emptyStrings = await Candidate.find({ sidh_candidate_id: "", ...scope })
@@ -150,11 +167,15 @@ async function plan(user: Awaited<ReturnType<typeof requireUser>>) {
   };
 }
 
-export const GET = apiHandler(async () => {
+export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
   await requireView(user, "candidates.manage");
-  return NextResponse.json(await plan(user));
+  // QA-776: `?batch=` is scoped BEFORE it is used - Rule 38 still decides whether this user may see
+  // that batch at all, so narrowing can never become a way to read past your own location.
+  const batchId = new URL(req.url).searchParams.get("batch") || undefined;
+  if (batchId) await assertBatchInScope(user, batchId);
+  return NextResponse.json(await plan(user, batchId));
 });
 
 export const POST = apiHandler(async (req: NextRequest) => {

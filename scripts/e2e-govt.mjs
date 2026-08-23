@@ -1891,8 +1891,26 @@ ok("SSRF guard does not block the real client workbook", stillOk.data.ok === tru
     ok("-215 (QA-770): a student whose ID sits in id_reference is counted as BLOCKING the batch",
       Boolean(row) && row.on_record === null, JSON.stringify(row ?? null));
 
-    const health = (await req(admin, "GET", "/api/candidates/portal-id-health")).data;
+    // QA-776 (-216, checker on qa-215): the narrowing is the SERVER's job now, so it can be proved.
+    // -215 did it in the browser and the checker showed every one of these assertions passed against
+    // the pre-fix tree - the only thing guarding "whose students are these" was a regex looking for a
+    // variable name. The failure that would have slipped through is a centre being handed another
+    // centre's roster to "fix", which is not a cosmetic risk.
+    const health = (await req(admin, "GET", `/api/candidates/portal-id-health?batch=${rb._id}`)).data;
     const mis = (health.misfiled ?? []).find((m) => String(m.candidate) === String(cRef._id));
+    ok("-216 (QA-776): asking for ONE batch returns only that batch's students",
+      (health.misfiled ?? []).every((m) => String(m.candidate) === String(cRef._id)),
+      JSON.stringify({ n: (health.misfiled ?? []).length }));
+    // …and the un-narrowed call still answers for everyone, so the Candidates screen is unchanged.
+    const wide = (await req(admin, "GET", "/api/candidates/portal-id-health")).data;
+    ok("-216 (QA-776): …and without ?batch= the plan is still system-wide",
+      (wide.misfiled ?? []).length >= (health.misfiled ?? []).length,
+      JSON.stringify({ wide: (wide.misfiled ?? []).length, narrowed: (health.misfiled ?? []).length }));
+    // a DIFFERENT batch must not be offered this student at all - the whole point
+    const other = (await req(admin, "GET", `/api/candidates/portal-id-health?batch=${nb._id}`)).data;
+    ok("-216 (QA-776): THE POINT — another batch is never offered this batch's student",
+      !(other.misfiled ?? []).some((m) => String(m.candidate) === String(cRef._id)),
+      JSON.stringify((other.misfiled ?? []).map((m) => m.name)));
     ok("-215 (QA-770): …and the health plan already knows the id is there, one column over",
       Boolean(mis) && mis.can === ref, JSON.stringify(mis ?? null));
 

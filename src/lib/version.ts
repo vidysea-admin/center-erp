@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-215";
+export const RELEASE = "2026.08.14-216";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,15 @@ export const RELEASE = "2026.08.14-215";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-216 fixes three things a review found in the release before it. When the batch screen moves " +
+  "government Candidate IDs that were filed in the wrong place, and some of them turn out to have " +
+  "been filled in by someone else in the meantime, it now says so - it moved the ones it could and " +
+  "reported the rest, where before it moved them silently and the panel simply disappeared. The " +
+  "offer to move them is no longer shown to anyone whose account cannot actually carry it out. And " +
+  "the list of students offered for a batch is now narrowed on the server rather than in the " +
+  "browser, so one centre can never be shown another centre's candidates.";
+
+const RELEASE_NOTE_ARCHIVE_215 =
   "-215 is about students who were never missing anything. On the batch screen, the panel that " +
   "lists everyone holding up certification now checks whether the government Candidate ID is " +
   "already in the system under a different field - it very often is, because an older version of " +
@@ -205,6 +214,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
+  RELEASE_NOTE_ARCHIVE_215 + " " +
   RELEASE_NOTE_ARCHIVE_214 + " " +
   RELEASE_NOTE_ARCHIVE_213 + " " +
   RELEASE_NOTE_ARCHIVE_212 + " " +

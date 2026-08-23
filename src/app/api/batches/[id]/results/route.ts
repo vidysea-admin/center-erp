@@ -79,24 +79,42 @@ export const PUT = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
     }
   }
 
-  const res = await bulkMarkResults(id, rows, user.id);
-
-  // Only now, and only where the value actually CHANGED (QA-726: re-validating an unchanged value is
-  // what made records holding an old bad id uneditable). Trimmed on the way in (QA-730) - the QA-417
-  // partial unique index is built on the raw string.
+  // QA-780 (-216, checker on qa-214): resolve and PRE-CHECK every id write before anything is
+  // written. -214 wrote the ids and then let the result-marking throw 400, and let a duplicate id
+  // throw 409 mid-loop - so a request whose own message says "Nothing has been saved" had already
+  // saved and audited an identity field. That is the same write-then-refuse class as QA-697 and
+  // QA-751, on a smaller surface but the same shape, and the door had just been given a THIRD
+  // caller. Resolve, check uniqueness, then write - and let the result errors fire first.
+  const planned: { cand: any; was: string; raw: string | null }[] = [];
   for (const c of canRows) {
     const m = await BatchMember.findOne({ _id: c.member, batch: id }).select("candidate").lean<any>();
     if (!m?.candidate) continue;
     const cand = await Candidate.findById(m.candidate);
     if (!cand) continue;
     const was = String(cand.sidh_candidate_id ?? "").trim();
+    // QA-726: only where the value actually CHANGED. Re-validating an unchanged value is what made
+    // records already holding a bad id uneditable in every other field.
     if (was === String(c.raw ?? "")) continue;
-    cand.sidh_candidate_id = c.raw as any;
-    await cand.save();
-    await audit({ entity: "Candidate", entityId: cand._id, field: "sidh_candidate_id",
-      oldValue: was || null, newValue: c.raw ?? null, actor: user.id, actorType: "USER" });
+    if (c.raw) {
+      // QA-417's partial unique index would throw E11000 halfway through the loop, after earlier
+      // rows had already been written. Asked here instead, so the refusal costs nothing.
+      const clash = await Candidate.findOne({ sidh_candidate_id: c.raw, _id: { $ne: cand._id } }).select("name").lean<any>();
+      if (clash) {
+        throw new HttpError(409, `"${c.raw}" is already the portal Candidate ID of ${clash.name ?? "another candidate"}. Nothing has been saved.`);
+      }
+    }
+    planned.push({ cand, was, raw: c.raw });
   }
+
+  const res = await bulkMarkResults(id, rows, user.id);
   if (res.updated === 0 && res.errors.length) throw new HttpError(400, res.errors[0].error);
+
+  for (const w of planned) {
+    w.cand.sidh_candidate_id = w.raw as any;
+    await w.cand.save();
+    await audit({ entity: "Candidate", entityId: w.cand._id, field: "sidh_candidate_id",
+      oldValue: w.was || null, newValue: w.raw ?? null, actor: user.id, actorType: "USER" });
+  }
   const after = await CandidateResult.find({ batch: id }).lean<any[]>();
   return NextResponse.json({ ...res, summary: await summarizeBatchResults(id, after) });
 });
