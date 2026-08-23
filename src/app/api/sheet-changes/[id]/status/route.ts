@@ -67,6 +67,12 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
     if (invented) change.action_taken = null;
     change.actioned_at = undefined as any;
   } else {
+    // QA-803 (-220, checker on qa-218): the round trip was LOSSY. Re-opening clears the "No action"
+    // label (correctly - the ignore invented it), but closing again never wrote it back, so
+    // Ignored -> Open -> Ignored left a settled row with NO action recorded at all, which is a
+    // shape `bulkIgnore` never produces. Same rule as that door: a change nobody acted on is
+    // settled as "No action".
+    if (!change.action_taken) change.action_taken = "No action" as any;
     change.actioned_at = new Date();
   }
   change.status = next as any;

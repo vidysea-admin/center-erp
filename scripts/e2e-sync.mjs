@@ -140,6 +140,27 @@ ok("Rule 4: approved_target written from sheet", targets[0]?.approved_target ===
     // this" was told it HAD been reverted, which deleted the one warning that mattered: that
     // re-opening an applied change puts an already-written value in line to be written again.
     // The fact is recorded now, so the FACT is what is pinned.
+    // QA-803 (-220, checker on qa-218): the round trip must not lose the label. Ignored -> Open ->
+    // Ignored used to leave a settled row with NO action recorded at all - a shape `bulkIgnore`
+    // never produces - because re-open clears "No action" (right) and closing never wrote it back
+    // (wrong). It needs a change NOBODY acted on, so it takes one the fixture has not touched and
+    // dismisses it through the ordinary Ignore door first.
+    {
+      const untouched = changes.find((c) => c._id !== tChange._id && c.field_name !== "approval_status");
+      if (untouched) {
+        await req("POST", "/api/sheet-changes/bulk-ignore", { ids: [untouched._id] }, 200);
+        const dismissed = (await req("GET", "/api/sheet-changes?status=Ignored")).data.items.find((c) => c._id === untouched._id);
+        ok("-220 (QA-803): the precondition - an untouched change is dismissed as 'No action'",
+          dismissed?.action_taken === "No action", JSON.stringify(dismissed?.action_taken ?? null));
+        const reopened = await req("PATCH", `/api/sheet-changes/${untouched._id}/status`, { status: "Open" }, 200);
+        ok("-220 (QA-803): …re-opening clears that invented label, because nobody had acted",
+          reopened.data.item?.action_taken === null, JSON.stringify(reopened.data.item ?? null));
+        const closedAgain = await req("PATCH", `/api/sheet-changes/${untouched._id}/status`, { status: "Ignored" }, 200);
+        ok("-220 (QA-803): …and closing it again writes the label back - the round trip is lossless",
+          closedAgain.data.item?.action_taken === "No action", JSON.stringify(closedAgain.data.item ?? null));
+      }
+    }
+
     const rev = (await req("GET", "/api/sheet-changes?status=all")).data.items.find((c) => c._id === tChange._id);
     ok("-219 (QA-805): a change that was really reverted carries reverted_at, not just a word in a note",
       !!rev?.reverted_at, JSON.stringify({ reverted_at: rev?.reverted_at ?? null, note: String(rev?.note ?? "").slice(0, 60) }));

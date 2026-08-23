@@ -1646,7 +1646,36 @@ for (const file of walk(root)) {
   }
 }
 
-// ---- -217 (QA-785): EVERY component on the Closure tab asks whether this person may mark ----
+// ---- -220 (QA-806/QA-813): a ROUTE_RULES perm that can never be read is dead text ----
+// `routeAllowed` returns true for Admin BEFORE it looks at `perm`. So a rule whose `roles` ceiling
+// is only ["Admin"] can never reach its permission check - and every in-screen gate written behind
+// that route is unreachable code with it. -218 shipped exactly that on /sync and I wrote a manifest
+// section boasting about the gates; -219 fixed that one line and left the IDENTICAL fault on
+// /sheet-watch, one line above it. Twice is a shape, not a slip, so the SHAPE is pinned: no rule may
+// carry a `perm` that only Admin can reach. (A rule with no `perm` is fine - /admin is role-only on
+// purpose.)
+{
+  const rel = "components/shell.tsx";
+  const src = stripComments(fs.readFileSync(path.join(root, rel), "utf-8"));
+  const block = src.slice(src.indexOf("const ROUTE_RULES"), src.indexOf("export function routeAllowed"));
+  const rules = [...block.matchAll(/\{\s*prefix:\s*"([^"]+)"[^}]*\}/g)].map((m) => m[0]);
+  const dead = rules.filter((r) => /perm:/.test(r) && /roles:\s*\[\s*"Admin"\s*\]/.test(r))
+    .map((r) => (/prefix:\s*"([^"]+)"/.exec(r) ?? [])[1]);
+  // …and routeAllowed must still short-circuit Admin, or this pin is measuring the wrong thing.
+  const adminShortCircuits = /perms\.role === "Admin"\s*\)\s*return true/.test(src);
+  if (rules.length >= 5 && adminShortCircuits && dead.length === 0) passed++;
+  else {
+    failed++;
+    pushStructural(rel + ": a ROUTE_RULES entry carries a permission only an Admin can reach"
+      + " (rules parsed=" + rules.length + ", Admin short-circuits=" + adminShortCircuits
+      + ", unreachable=" + JSON.stringify(dead) + ")"
+      + " - routeAllowed returns true for Admin before it reads `perm`, so that permission is dead"
+      + " text and every gate written behind that screen is unreachable with it. QA-806 shipped this"
+      + " on /sync and QA-813 found it still standing on /sheet-watch one line above the fix.");
+  }
+}
+
+// ---- -217 (QA-785): EVERY component on the Closure tab asks whether this person may mark ----// ---- -217 (QA-785): EVERY component on the Closure tab asks whether this person may mark ----
 // The class has now shipped five times (QA-712, QA-723, QA-754, QA-775, QA-785) and the last two
 // were the SAME TAB: -216 gated the card component and left its parent, 250 lines up, on a
 // status-only `closed`. A Trainer pressed an enabled "Mark Completed" and was refused. Counting

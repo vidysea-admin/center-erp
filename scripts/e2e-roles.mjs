@@ -90,8 +90,17 @@ ok("SPOC with can_edit can write own location", spocWrite.status === 200, `got $
     // fault the /govt-attendance rule was written to fix: "every gate read the ROLE while the API
     // read the PERMISSION". Operations is on the ceiling now, so the matrix actually decides - and
     // that is what this pins, because a gate nobody can fail is not a gate.
-    const opsSetNow = (await req(admin, "GET", "/api/permissions")).data?.matrix?.Operations ?? [];
-    if (!opsSetNow.includes("sheet.approve")) {
+    // QA-814 (-220, checker on qa-219): this read `data?.matrix?.Operations`, a key
+    // /api/permissions NEVER returns (it returns `{catalog, roles:[{role, permissions}]}`). So
+    // `opsSetNow` was ALWAYS `[]`, and the PUT below then WIPED the Operations permission set and
+    // failed five neighbouring assertions. A pin that destroys the state it is measuring is worse
+    // than no pin. Read the shape the API actually has, and refuse to run at all if it looks wrong.
+    const permsNow = (await req(admin, "GET", "/api/permissions")).data;
+    const opsRow = (permsNow?.roles ?? []).find((r) => r.role === "Operations");
+    ok("-220 (QA-814): the permissions payload has the shape this pin reads", Array.isArray(opsRow?.permissions),
+      JSON.stringify(Object.keys(permsNow ?? {})));
+    const opsSetNow = opsRow?.permissions ?? null;
+    if (Array.isArray(opsSetNow) && !opsSetNow.includes("sheet.approve")) {
       const denied = await req(ops, "PATCH", `/api/sheet-changes/${anyChange._id}/status`, { status: "Open" });
       ok("-218/QA-806: Operations WITHOUT sheet.approve is refused by the door", denied.status === 403, `status=${denied.status}`);
       await req(admin, "PUT", "/api/permissions", { role: "Operations", permissions: [...opsSetNow, "sheet.approve"] }, 200);

@@ -71,10 +71,20 @@ export default function SyncInboxPage() {
   // row also carries a real `action_taken`.
   function reopenWarning(r: any): string {
     const who = rowLabel(r) ?? "this record";
-    if (r.reverted_at) {
+    // QA-812 (-220, checker on qa-219): `reverted_at` only exists on rows reverted since -219. There
+    // is no backfill (that is a production write, and Umesh's call), so for every OLDER reverted row
+    // -219 said "the record already carries that value" - the exact opposite of the truth, on a row
+    // -218's loose grep had classified CORRECTLY. Fixed forward, regressed backward.
+    //
+    // The fallback is the literal the REVERT ROUTE itself writes, not the loose /Revert/i that made
+    // QA-805: someone typing "do NOT revert this" does not match it. Disclosed limit - a person who
+    // types that exact phrase by hand would still fool it, which is why the field is checked first
+    // and a backfill is proposed rather than assumed.
+    const wasReverted = Boolean(r.reverted_at) || /Reverted to "/.test(String(r.note ?? ""));
+    if (wasReverted) {
       return `Re-open this change for ${who}?
 
-This one was applied and then REVERTED on ${fmtDate(r.reverted_at)}. The record does NOT carry the value now. Re-opening puts it back on the review queue as a change waiting to be applied again.`;
+This one was applied and then REVERTED${r.reverted_at ? ` on ${fmtDate(r.reverted_at)}` : ""}. The record does NOT carry the value now. Re-opening puts it back on the review queue as a change waiting to be applied again.`;
     }
     if (!r.action_taken || r.action_taken === "No action") {
       return `Re-open this change for ${who}?
@@ -126,11 +136,22 @@ It leaves the review queue. You can re-open it later from the Ignored list.`;
           // a dead source as "0 new changes" in the GREEN banner. The Admin screen has read
           // `status` and `error` since it was written (admin/page.tsx:591-593); I had the working
           // pattern one file away and used my own.
+          // QA-811 (-220, checker on qa-219): -219 compared `status !== "Success"` and NOTHING in
+          // this codebase ever returns "Success" - the word existed in exactly one place, that
+          // comparison. So every healthy source was reported as a FAILURE, in red, with its count
+          // thrown away. Fixing QA-804's false green, I shipped a universal false red.
+          //
+          // The real vocabulary, from lib/sync.ts and lib/workbook.ts, written down so nobody
+          // invents one again: "OK" - "Partial" - "Failed".
           const n = r?.tabs !== undefined ? (r?.changes ?? 0) : (r?.created ?? 0);
           const unit = r?.tabs !== undefined ? `cell change${n === 1 ? "" : "s"} across ${r.tabs} tab${r.tabs === 1 ? "" : "s"}` : `new change${n === 1 ? "" : "s"}`;
-          if (r?.status && r.status !== "Success") {
+          if (r?.status === "Failed") {
             failedAny = true;
-            lines.push(`${src.name}: ${r.status}${r.error ? ` — ${r.error}` : ""}`);
+            lines.push(`${src.name}: failed${r.error ? ` - ${r.error}` : ""}`);
+          } else if (r?.status === "Partial") {
+            // partial is neither success nor silence: it moved something AND hit something.
+            failedAny = true;
+            lines.push(`${src.name}: ${n} ${unit}, but the run was incomplete${r.error ? ` - ${r.error}` : ""}`);
           } else {
             lines.push(`${src.name}: ${n} ${unit}`);
           }
@@ -219,10 +240,13 @@ It leaves the review queue. You can re-open it later from the Ignored list.`;
                     {busyRow === String(r._id) ? "…" : "Re-open"}
                   </button>
                 )}
+                {/* QA-810 (-220, checker on qa-218): this rendered ENABLED next to the screen's own
+                    "3 follow-ups", and the door refuses exactly that row (Rule 7). Seventh outing of
+                    the dead-control class, and mine, in the release whose subject was that class. */}
                 {canApprove && r.status === "Open" && (
                   <button className="text-[11px] font-medium text-gray-600 hover:underline disabled:text-gray-400"
-                    disabled={busyRow === String(r._id)}
-                    title="Close this change without acting on it"
+                    title={r.pending_followups > 0 ? `${r.pending_followups} follow-up(s) still outstanding - finish or cancel them first` : "Close this change without acting on it"}
+                    disabled={busyRow === String(r._id) || r.pending_followups > 0}
                     onClick={(e) => { e.stopPropagation(); changeStatus(r, "Ignored"); }}>
                     {busyRow === String(r._id) ? "…" : "Ignore"}
                   </button>

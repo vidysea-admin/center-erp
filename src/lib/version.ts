@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-219";
+export const RELEASE = "2026.08.14-220";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,19 @@ export const RELEASE = "2026.08.14-219";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-220 repairs the release before it, which fixed two faults by introducing two more. Sync now " +
+  "was reporting every healthy source as a failure, in red, because the previous fix compared the " +
+  "result against a word this system never produces; it reads the real outcomes now, and a run " +
+  "that half-succeeded says so rather than passing as either. The warning before re-opening a sync " +
+  "change was telling every change reverted before that release the opposite of the truth, because " +
+  "it relied on a marker only newer records carry; it falls back to the record the revert itself " +
+  "writes. The permission that guards the workbook-watch screen could never be read, the same " +
+  "fault as the one repaired last time and on the line directly above it, and there is now a check " +
+  "that refuses this shape for every screen. Dismissing a change, re-opening it and dismissing it " +
+  "again no longer loses the note that nobody acted on it, and the Ignore control is no longer " +
+  "offered on a change the rules will refuse to close.";
+
+const RELEASE_NOTE_ARCHIVE_219 =
   "-219 corrects three faults in the release before it. The warning shown before re-opening a sync " +
   "change was chosen by searching the change's own note for the word revert - so a change whose " +
   "note happened to mention it was described wrongly, and the important warning, that re-opening " +
@@ -251,6 +264,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
+  RELEASE_NOTE_ARCHIVE_219 + " " +
   RELEASE_NOTE_ARCHIVE_218 + " " +
   RELEASE_NOTE_ARCHIVE_217 + " " +
   RELEASE_NOTE_ARCHIVE_216 + " " +

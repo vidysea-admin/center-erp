@@ -34,7 +34,13 @@ export function usePerms() {
 // R-I still says a Trainer's doors are Home and Batches); `perm` = the togglable right that
 // can CLOSE a door within that ceiling when an Admin revokes it.
 const ROUTE_RULES: { prefix: string; roles?: string[]; perm?: string }[] = [
-  { prefix: "/sheet-watch", roles: ["Admin"], perm: "sheet.sources" },
+  // QA-813 (-220, checker on qa-219): the SAME unreachable-permission fault, still standing on the
+  // line directly ABOVE the one -219 fixed - on the sibling screen /sync links to. `routeAllowed`
+  // returns true for Admin before it reads `perm`, so a ceiling of ["Admin"] makes any `perm` on
+  // that row dead text. -219 fixed the row the verdict quoted and did not read the row above it,
+  // which is word for word the lesson QA-785 was raised for. There is a pin for the SHAPE now, so
+  // the next screen cannot repeat it.
+  { prefix: "/sheet-watch", roles: ["Admin", "Operations"], perm: "sheet.sources" },
   // QA-806 (-219, checker on qa-218): this ceiling was `["Admin"]`, and `routeAllowed` returns true
   // for Admin before it looks at anything - so the ONLY login that could reach /sync was one for
   // which `can()` is unconditionally true. Every permission gate -218 added on that screen
