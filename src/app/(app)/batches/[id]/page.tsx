@@ -172,6 +172,22 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
     if (!["Active", "Closing"].includes(b.status)) { setCompletePlan(null); return; }
     api(`/api/batches/${b._id}/complete`).then(setCompletePlan).catch(() => setCompletePlan(null));
   }, [b._id, b.status, isAdmin]);
+  // QA-708 (-209): the ordinary completion, for the roles the server already allows. It goes through
+  // /transition, which enforces Rule 18 and RPL M24s approval matrix - so a batch with anything still
+  // open is refused THERE, by the rule, rather than by a sentence this screen invented. -207 had
+  // disabled the only control Operations had and written "Completing a batch is an Admin action"
+  // beside it, which the server contradicts: POST /transition {target:"Completed"} succeeds for them
+  // today. Only the FORCE door is Admin-only.
+  async function completeOrdinary() {
+    if (!completeReason.trim()) { setError("Say why this batch is being completed - it is recorded on the batch."); return; }
+    setCompleting(true); setError("");
+    try {
+      await transition("Completed", { reason: completeReason.trim() });
+      setCompleteOpen(false); setCompleteReason("");
+    } catch (e: any) { setError(e?.message ?? String(e)); onChanged(); }
+    finally { setCompleting(false); }
+  }
+
   async function completeAsAdmin() {
     if (!completeReason.trim()) { setError("Say why this batch is being completed — it is recorded against every row it settles."); return; }
     setCompleting(true);
@@ -505,15 +521,27 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
             {/* -206: the second press, and it says what it is. On a batch with nothing open it is an
                 ordinary completion; on one with rows still standing it is the forceful one, and the
                 label must not hide that from the person pressing it. */}
-            <Btn onClick={completeAsAdmin} disabled={!isAdmin || completing || !completeReason.trim()}>
-              {completing ? "Completing…" : completePlan?.can_complete_cleanly && !(completePlan?.no_portal_id?.length ?? 0)
+            {/* QA-708 (-209, checker on qa-207): -207 disabled this for a non-Admin and wrote
+                "Completing a batch is an Admin action" beside it. The server does not say that.
+                POST /transition {target:"Completed"} succeeds for Operations today - it is only the
+                FORCE door that is Admin-only - so -207 deleted the one Overview control they had and
+                replaced it with a sentence the server contradicts. A screen that invents a
+                permission rule is worse than one that offers nothing, because the person believes it.
+                Non-Admins get the ordinary door, which enforces Rule 18 and the approval matrix; the
+                override stays Admin-only and the label says which of the two this press is. */}
+            <Btn onClick={isAdmin ? completeAsAdmin : completeOrdinary} disabled={completing || !completeReason.trim()}>
+              {completing ? "Completing…" : !isAdmin
                 ? "Complete batch"
-                : "Complete batch forcefully"}
+                : completePlan?.can_complete_cleanly && !(completePlan?.no_portal_id?.length ?? 0)
+                  ? "Complete batch"
+                  : "Complete batch forcefully"}
             </Btn>
             <Btn kind="ghost" onClick={() => setCompleteOpen(false)}>Cancel</Btn>
-            {/* -207: the button is offered to anyone who may move a batch, so the panel has to say
-                plainly who may press this one, instead of the control silently not being there. */}
-            {!isAdmin && <span className="text-xs text-gray-500">Completing a batch is an Admin action. Everything above is what an Admin would settle.</span>}
+            {!isAdmin && (completePlan?.can_complete_cleanly === false || (completePlan?.no_portal_id?.length ?? 0) > 0) && (
+              <span className="text-xs text-gray-500">
+                Anything still open above has to be settled first — completing over it is an Admin action.
+              </span>
+            )}
           </div>
         </div>
       </Drawer>
@@ -1161,8 +1189,16 @@ function PortalIdGaps({ batchId, onChanged }: any) {
               <span className="min-w-[9rem] font-medium text-gray-800">{m.name}</span>
               <span className="text-gray-500">{m.phone ?? "no phone"}</span>
               <span className={m.result === "Pass" ? "text-green-700" : m.result === "Pending" ? "text-amber-700" : "text-gray-500"}>{m.result}</span>
+              {/* QA-710 (-209, checker on qa-207): this branch was UNREACHABLE and I claimed it as
+                  delivered in a manifest and a commit message. `enrolledWithoutCan` filters
+                  `m.candidate &&`, so a roster row whose candidate record is gone never enters this
+                  list at all — which is also why it cannot block the gate, and why the count it was
+                  written to explain (QA-701) stopped being possible the moment the list started
+                  coming from that function. It is kept, narrowed to a guard rather than a promise:
+                  if the payload ever does carry such a row, this says so instead of rendering a box
+                  that would save nowhere. The claim that it was a delivered feature is withdrawn. */}
               {!m.candidate ? (
-                <span className="text-amber-700">candidate record missing — this row cannot take an ID</span>
+                <span className="text-amber-700">no candidate record on this row — nothing to write an ID onto</span>
               ) : (<>
                 <input className="w-40 rounded-lg border border-gray-300 px-2 py-1 text-xs" placeholder="CAN_…"
                   value={draft[m.candidate] ?? ""}
@@ -2071,15 +2107,24 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
   const isAdmin = role === "Admin";
   const loadBlockers = () => api(`/api/batches/${batchId}/complete`).then(setBlockers).catch(() => setBlockers(null));
   useEffect(() => { loadBlockers(); }, [batchId, batch?.status]);
+  // QA-712 (-209, checker on qa-207): this button was DEAD from the moment -206 shipped. It renders
+  // only when blockers exist, and -206 made a press without `force` refuse 409 whenever blockers
+  // exist - the same condition that shows it. Every press returned "Nothing has been changed".
+  // Nothing in the wall touched it, because no suite presses the Closure tab's own door.
+  // Its prompt was wrong too: it promised the unmarked students would be recorded ABSENT, and -204
+  // changed that to Fail on Umesh's ruling. Two lines above it the banner already said "Fail". A
+  // screen that describes a write in two ways is worse than one that describes it in none.
   async function completeAsAdmin() {
+    const noId = blockers?.no_portal_id?.length ?? 0;
     const why = window.prompt(
-      `Complete this batch now?\n\n${(blockers?.unmarked?.length ?? 0)} student(s) with no result will be recorded ABSENT.\n`
-      + `${(blockers?.unsettled?.length ?? 0)} passed candidate(s) with no certificate will be recorded NOT ISSUED.\n\n`
-      + "Every row is audited with your reason. Completing freezes the results and figures (an Admin can reopen it).\n\nReason:");
+      `Complete this batch now?\n\n${(blockers?.unmarked?.length ?? 0)} student(s) with no result will be recorded FAIL.\n`
+      + `${(blockers?.unsettled?.length ?? 0)} passed candidate(s) with no certificate will be recorded NOT ISSUED.\n`
+      + (noId ? `${noId} student(s) have no portal Candidate ID — certification will be signed by you, not derived.\n` : "")
+      + "\nEvery row is audited with your reason and the time in IST. Completing freezes the results and figures (an Admin can reopen it).\n\nReason:");
     if (!why || !why.trim()) return;
     setAdminBusy(true);
     try {
-      await api(`/api/batches/${batchId}/complete`, { method: "POST", json: { reason: why.trim() } });
+      await api(`/api/batches/${batchId}/complete`, { method: "POST", json: { reason: why.trim(), force: true } });
       load(); onChanged(); loadBlockers();
     } catch (e: any) { setError(e.message); }
     finally { setAdminBusy(false); }
@@ -2736,7 +2781,18 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
               <b>{linkPlan.with_portal_id} of {linkPlan.roster} candidates carry a portal ID.</b>{" "}
               {linkPlan.with_portal_id === 0
                 ? "Automatic matching by filename cannot work at all until at least one does — a correctly named file will still be reported as “matches no candidate”."
-                : `${linkPlan.blocking ?? linkPlan.missing?.length ?? 0} of them are blocking certification and can only be mapped by hand.`}
+                : ""}
+              {/* QA-709 (-209, checker on qa-207): -207 wrote "N of them are blocking certification"
+                  straight after "X of Y candidates carry a portal ID" — and "them" pointed at the
+                  wrong set while N came from the other one, so a roster with two students missing an
+                  ID could read "2 of 4 candidates carry a portal ID. 0 of them are blocking…". The
+                  route comment in the same commit promises these two sets are never mixed; this
+                  sentence mixed them one screen away. Each set now states itself, or says nothing. */}
+              {(linkPlan.blocking ?? 0) > 0 && (
+                <span className="ml-1">
+                  Separately, <b>{linkPlan.blocking} enrolled student{linkPlan.blocking === 1 ? "" : "s"}</b> {linkPlan.blocking === 1 ? "has" : "have"} no portal Candidate ID, and certification cannot complete until {linkPlan.blocking === 1 ? "they do" : "they all do"}.
+                </span>
+              )}
               {linkPlan.linkable?.length > 0 && (
                 <span className="ml-1">
                   The portal attendance already imported names <b>{linkPlan.linkable.length}</b> of them.

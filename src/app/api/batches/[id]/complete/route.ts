@@ -4,6 +4,7 @@ import { apiHandler, requireUser, requireEdit, requireRole, HttpError } from "@/
 import { requirePerm } from "@/lib/permissions";
 import { Batch, BatchMember, CandidateResult, Closure } from "@/models";
 import { assertBatchInScope, activeRoster, enrolledWithoutCan, recomputeClosureAggregates, transitionBatch, upsertCandidateResult } from "@/lib/rules";
+import { requireApproval } from "@/lib/approvals";
 import { audit } from "@/lib/audit";
 
 // -113 (Umesh, 18/08: "admin ke paas mark completed ka button aaye, aur wo press kar paye — jaise
@@ -91,8 +92,25 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   const reason = String(body.reason ?? "").trim();
   if (!reason) throw new HttpError(400, "Say why this batch is being completed with rows still outstanding — it is recorded against every row this settles.");
 
-  const batch = await Batch.findById(id).select("status code").lean<any>();
+  const batch = await Batch.findById(id).select("status code location").lean<any>();
   if (!batch) throw new HttpError(404, "Batch not found");
+
+  // QA-708 (-209, checker on qa-207): RPL M24's approval matrix gates `batch.complete`, and the
+  // /transition door has always honoured it. This door did not - which did not matter while it was
+  // the Admin's side entrance, and mattered the moment -207 made it the ONLY completion control on
+  // the Overview: the matrix could be switched on and this button would walk straight past it.
+  // Same call, same shape, same 202 as the door it replaced.
+  {
+    const gate = await requireApproval("batch.complete", user, {
+      entity: "Batch", entity_id: id, location: batch.location,
+      summary: `Complete batch ${batch.code}${body.reason ? ` — ${String(body.reason).trim()}` : ""}`,
+      payload: { reason: body.reason, force: body.force === true },
+    });
+    if (gate) {
+      return NextResponse.json({ pending_approval: true, request: gate.request, message: "Sent for approval." }, { status: 202 });
+    }
+  }
+
   if (["Completed", "Closed"].includes(batch.status)) return NextResponse.json({ item: batch, settled: { failed: 0, not_issued: 0 }, already: true });
   if (batch.status === "Cancelled") throw new HttpError(409, "A cancelled batch cannot be completed.");
   if (!["Active", "Closing"].includes(batch.status)) throw new HttpError(409, `A batch in ${batch.status} has not started yet — start it before completing it.`);

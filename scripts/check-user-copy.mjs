@@ -1646,6 +1646,55 @@ for (const file of walk(root)) {
   }
 }
 
+// ---- -209: the three ways completing a batch was quietly broken or lying ----
+// All three came from the qa-207 checker, and all three are the same species: a screen or a door
+// that says one thing while the system does another.
+{
+  const pageRel = "app/(app)/batches/[id]/page.tsx";
+  const routeRel = "app/api/batches/[id]/complete/route.ts";
+  const page = stripComments(fs.readFileSync(path.join(root, pageRel), "utf-8"));
+  const route = stripComments(fs.readFileSync(path.join(root, routeRel), "utf-8"));
+  let bad = 0;
+
+  // QA-712: the Closure tab's own button was DEAD from the moment -206 shipped. It renders only when
+  // blockers exist, and -206 refuses a press without `force` whenever blockers exist — the same
+  // condition that shows it. Every press returned "Nothing has been changed". No suite presses that
+  // door, which is why the wall stayed green over it for two releases.
+  const closureBody = fnBody(page, "completeAsAdmin");            // the Closure tab's copy
+  const allBodies = [...page.matchAll(/async function completeAsAdmin\(\)/g)].length;
+  const pressesForce = (page.match(/\/complete`, \{ method: "POST", json: \{ reason: [^}]*force: true/g) ?? []).length;
+  if (allBodies >= 1 && pressesForce >= allBodies) passed++;
+  else {
+    bad++;
+    pushStructural(pageRel + ": a completion press does not send `force` (" + pressesForce + " of " + allBodies
+      + " senders) - the door refuses a bare press whenever anything is open, which is exactly when the"
+      + " button that sends it is on screen, so every press fails with \"Nothing has been changed\" - QA-712.");
+  }
+
+  // ...and it promised the wrong outcome while it was at it: ABSENT, which -204 changed to Fail on
+  // Umesh's ruling, with the banner two lines above already saying Fail.
+  if (!/recorded ABSENT|will be recorded ABSENT/i.test(page)) passed++;
+  else {
+    bad++;
+    pushStructural(pageRel + ": a completion prompt still promises the unmarked students are recorded ABSENT."
+      + " -204 changed that to Fail because Umesh chose Fail, and the banner beside it already says Fail."
+      + " One write described two ways is worse than one described none - QA-712.");
+  }
+
+  // QA-708: RPL M24 gates `batch.complete`, /transition has always honoured it, and this door did
+  // not - which stopped being harmless the moment -207 made it the only completion control on the
+  // Overview.
+  if (/requireApproval\("batch\.complete"/.test(route)) passed++;
+  else {
+    bad++;
+    pushStructural(routeRel + ": the completion door does not call requireApproval(\"batch.complete\")"
+      + " while the /transition door it replaced does - so with the approval matrix switched on, the"
+      + " Overview's completion button walks straight past it - QA-708.");
+  }
+
+  if (bad) failed++;
+}
+
 {
   // QA-377: the registers must ACCOUNT FOR EVERY HIT. A raise site that forgets to classify is
   // exactly how this check misfiled twice; now it cannot be forgotten silently, because an

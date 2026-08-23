@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-208";
+export const RELEASE = "2026.08.14-209";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,12 +17,25 @@ export const RELEASE = "2026.08.14-208";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-209 repairs a button that had stopped working two releases ago and nobody had pressed. The " +
+  "certificates screen offers an administrator a way to finish a batch that still has loose ends; " +
+  "since the release that made finishing safer, that button only appeared in exactly the situation " +
+  "the door behind it had begun refusing, so every press came back with an error and changed " +
+  "nothing. It also promised that unmarked students would be recorded absent, which stopped being " +
+  "true when they started being recorded as failed. Both corrected. Two other things the screen was " +
+  "saying were not true either: it told anyone who was not an administrator that finishing a batch " +
+  "is an administrator action, when the ordinary route has always been open to the operations team " +
+  "and still is - they get that route back - and one sentence counted two different groups of " +
+  "students as though they were one. And the door that finishes a batch now goes through the same " +
+  "approval setting as the one it replaced, which it had been skipping.";
+
+const RELEASE_NOTE_ARCHIVE_208 =
   "-208 puts the list of students missing their government portal ID on the attendance screen too, " +
   "not only on the certificates one. That number is what stops a batch being certified, and until " +
   "now a centre had to know to go looking for it on a tab they may not open for weeks. It is the " +
   "same list in both places - the same names, the same box to type the ID into, and saving one " +
   "updates both - rather than a second copy built to look alike. Where a batch has no missing IDs " +
-  "it shows nothing at all.";
+  "it shows nothing at all. ";
 
 const RELEASE_NOTE_ARCHIVE_207 =
   "-207 leaves one button where there were two, and makes three numbers agree. The batch screen " +
@@ -120,6 +133,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
+  RELEASE_NOTE_ARCHIVE_208 +
   RELEASE_NOTE_ARCHIVE_207 +
   RELEASE_NOTE_ARCHIVE_206 +
   RELEASE_NOTE_ARCHIVE_205 +
