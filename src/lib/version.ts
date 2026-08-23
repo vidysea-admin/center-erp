@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-216";
+export const RELEASE = "2026.08.14-217";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,17 @@ export const RELEASE = "2026.08.14-216";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-217 finishes two repairs the release before it left half-done. The controls on a batch's " +
+  "closure screen are now all disabled for an account that is not allowed to mark results - the " +
+  "previous release disabled the ones on each student's card but left the tab's own buttons live, " +
+  "so a trainer could press Mark Completed and only then be told they lack the right. The " +
+  "certificate upload control had the same problem in reverse and appeared for those accounts more " +
+  "often, not less. And saving results now refuses, before writing anything at all, a government " +
+  "Candidate ID that has been given to two different students in the same save - previously the " +
+  "first was written and the second refused, on a request whose own message said nothing had been " +
+  "saved.";
+
+const RELEASE_NOTE_ARCHIVE_216 =
   "-216 fixes three things a review found in the release before it. When the batch screen moves " +
   "government Candidate IDs that were filed in the wrong place, and some of them turn out to have " +
   "been filled in by someone else in the meantime, it now says so - it moved the ones it could and " +
@@ -214,6 +225,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
+  RELEASE_NOTE_ARCHIVE_216 + " " +
   RELEASE_NOTE_ARCHIVE_215 + " " +
   RELEASE_NOTE_ARCHIVE_214 + " " +
   RELEASE_NOTE_ARCHIVE_213 + " " +

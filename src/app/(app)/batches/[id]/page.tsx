@@ -2368,7 +2368,13 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
     } catch (err: any) { setError(err.message); }
   }
 
-  const closed = ["Completed", "Cancelled"].includes(batch?.status);
+  // QA-785 (-217): -216 put `mayMark` on the CHILD component and left this one, 250 lines above it,
+  // on a status-only `closed`. A Trainer pressed an ENABLED "Mark Completed" here and was told they
+  // lack the right - the FIFTH outing of this class, on the same tab as the fourth. The lesson is
+  // not the line: I fixed exactly the line the verdict quoted and never looked one level out.
+  const { can: canCloseTab, loaded: closeTabReady } = usePerms();
+  const mayMarkTab = !closeTabReady || canCloseTab("closure.manage", "edit");
+  const closed = ["Completed", "Cancelled"].includes(batch?.status) || !mayMarkTab;
 
   // QA-044: legacy batch with per-candidate rows but NO closure record — the cards below
   // would read 0 while the rows hold real passes/certificates. One click derives.
@@ -2633,7 +2639,13 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
   // cost - the FOURTH outing of the dead-control class (QA-712, QA-723, QA-754, QA-775).
   const { can: canClose, loaded: closePermsReady } = usePerms();
   const mayMark = !closePermsReady || canClose("closure.manage", "edit");
-  const closed = ["Completed", "Cancelled"].includes(batch?.status) || !mayMark;
+  // QA-785 (-217, checker on qa-216): two DIFFERENT questions, named apart. -216 collapsed them into
+  // one `closed`, and the collapse is what made an upload control render for the very people who
+  // cannot use it (the condition below reads `!closed || !file`).
+  //   batchClosedByStatus - is this BATCH finished?
+  //   mayMark             - may THIS PERSON mark?
+  const batchClosedByStatus = ["Completed", "Cancelled"].includes(batch?.status);
+  const closed = batchClosedByStatus || !mayMark;
   // -108: bulk upload is preview-first — the staged files and their proposed mapping, editable
   // before anything is written. Umesh: "agar koi wrong auto map hua ya nahi map ho paye toh preview
   // me map kar sakte hain, har certificate ke aligned."
@@ -2981,7 +2993,11 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
                 )}
               </>
             ) : <span className="text-gray-400">none</span>}
-            {!closed || !i.result?.certificate_file ? (
+            {/* QA-785: this reads `!closed || !file`, so widening `closed` to mean "or this person
+                may not mark" made the upload control render MORE often, not less - and both
+                certificate paths push the file to STORAGE before the server's 403. The permission is
+                asked on its own; the status condition keeps the meaning it always had. */}
+            {mayMark && (!batchClosedByStatus || !i.result?.certificate_file) ? (
               <label className="cursor-pointer rounded-lg border border-blue-600 px-2 py-0.5 font-medium text-blue-700 hover:bg-blue-50">
                 {certBusy === String(i.result?._id) ? "Uploading…" : i.result?.certificate_file ? "Replace" : "⬆ Upload"}
                 <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden"

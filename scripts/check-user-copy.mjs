@@ -1646,7 +1646,38 @@ for (const file of walk(root)) {
   }
 }
 
-// ---- -215 (QA-770): the blocked-student panel must offer the ids that are already here ----
+// ---- -217 (QA-785): EVERY component on the Closure tab asks whether this person may mark ----
+// The class has now shipped five times (QA-712, QA-723, QA-754, QA-775, QA-785) and the last two
+// were the SAME TAB: -216 gated the card component and left its parent, 250 lines up, on a
+// status-only `closed`. A Trainer pressed an enabled "Mark Completed" and was refused. Counting
+// gates is not enough either - what matters is that no component on this tab decides "disabled"
+// from the batch status ALONE. So: both components must derive their disable term from a
+// permission, and the certificate control must not be gated on the collapsed `closed` (widening it
+// made that control render MORE often, because its condition is inverted).
+{
+  const rel = "app/(app)/batches/[id]/page.tsx";
+  const src = stripComments(fs.readFileSync(path.join(root, rel), "utf-8"));
+  const tab = fnBody(src, "ClosureTab");
+  const gated = (b) => /closure\.manage/.test(b) && /const closed =[^;]*mayMark/.test(b);
+  const tabGated = gated(tab);
+  // the card component is not a top-level function in every refactor, so look at what is left
+  const outsideTab = src.split(tab).join("");
+  const cardGated = gated(outsideTab);
+  // the inverted certificate condition must no longer read the collapsed term
+  const certSafe = !/\{!closed \|\| !i\.result\?\.certificate_file/.test(src);
+  if (tabGated && cardGated && certSafe) passed++;
+  else {
+    failed++;
+    pushStructural(rel + ": a Closure control is still disabled by batch status alone"
+      + " (ClosureTab asks the permission=" + tabGated + ", the card component asks it=" + cardGated
+      + ", the certificate control is off the collapsed term=" + certSafe + ")"
+      + " - QA-785: a Trainer pressed an ENABLED \"Mark Completed\" and was told they lack the right,"
+      + " the fifth outing of this class and the second on this tab. `closed` is about the BATCH;"
+      + " whether a person may mark is a different question and both components have to ask it.");
+  }
+}
+
+// ---- -215 (QA-770): the blocked-student panel must offer the ids that are already here ----// ---- -215 (QA-770): the blocked-student panel must offer the ids that are already here ----
 // 57 candidates on live hold a CAN-shaped value in `id_reference` with `sidh_candidate_id` empty,
 // ten of them on the batch Umesh has been chasing all week. The remedy was built and never run
 // because it lives on a different screen. If this panel ever stops offering it, a centre is back to

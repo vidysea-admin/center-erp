@@ -197,11 +197,43 @@ if (ownActive) {
       badResult.status >= 400 && (await readId()) === before780,
       `status=${badResult.status} stored=${await readId()} (was ${before780})`);
     // …and a DUPLICATE id is refused before anything is written, not by the index mid-loop
-    const dup = await req(spoc, "PUT", `/api/batches/${ownActive._id}/results`,
-      { rows: [{ member: String(target.member), sidh_candidate_id: `CAN_${stamp}` }] });
-    ok("QA-780: …and re-using an id that belongs to someone else is refused, saying nothing was saved",
-      dup.status === 200 || (dup.status === 409 && /Nothing has been saved/i.test(String(dup.data?.error ?? ""))),
-      `status=${dup.status} error=${JSON.stringify(dup.data?.error ?? null).slice(0, 120)}`);
+    // QA-786 (-217, checker on qa-216): the version of this pin in -216 accepted `200 ||  409`, so it
+    // could not fail - it passed whatever the door did. Charged, and rewritten to require the refusal.
+    // Two students are needed for a real duplicate, so it takes the SECOND row on the batch.
+    const rows2 = (await req(spoc, "GET", `/api/batches/${ownActive._id}/results`)).data?.items ?? [];
+    const other = rows2.find((r) => r.candidate?._id && !r.left_on && String(r.member) !== String(target.member));
+    if (other) {
+      const held = `CAN_${stamp}`;                       // already on `target` from the pin above
+      const beforeOther = other.candidate?.sidh_candidate_id ?? null;
+      const dup = await req(spoc, "PUT", `/api/batches/${ownActive._id}/results`,
+        { rows: [{ member: String(other.member), sidh_candidate_id: held }] });
+      ok("QA-780: an id that already belongs to someone else is REFUSED, and says nothing was saved",
+        dup.status === 409 && /Nothing has been saved/i.test(String(dup.data?.error ?? "")),
+        `status=${dup.status} error=${JSON.stringify(dup.data?.error ?? null).slice(0, 140)}`);
+      const otherAfter = ((await req(spoc, "GET", `/api/batches/${ownActive._id}/results`)).data?.items ?? [])
+        .find((r) => String(r.member) === String(other.member))?.candidate?.sidh_candidate_id ?? null;
+      ok("QA-780: …and that student's id is exactly what it was", otherAfter === beforeOther,
+        `${beforeOther} -> ${otherAfter}`);
+
+      // QA-786: the same id twice in ONE request. The DB pre-check cannot see this - the conflict
+      // does not exist yet - so -216 wrote the first row, audited it, and let the unique index throw
+      // 409 on the second. A request that refuses must not have written.
+      const fresh = `CAN_${stamp}786`;
+      const twin = await req(spoc, "PUT", `/api/batches/${ownActive._id}/results`, {
+        rows: [
+          { member: String(target.member), sidh_candidate_id: fresh },
+          { member: String(other.member), sidh_candidate_id: fresh },
+        ],
+      });
+      ok("QA-786: one id given to two students in ONE save is refused before anything is written",
+        twin.status === 409 && /Nothing has been saved/i.test(String(twin.data?.error ?? "")),
+        `status=${twin.status} error=${JSON.stringify(twin.data?.error ?? null).slice(0, 140)}`);
+      const both = (await req(spoc, "GET", `/api/batches/${ownActive._id}/results`)).data?.items ?? [];
+      const idFor = (m) => both.find((r) => String(r.member) === String(m))?.candidate?.sidh_candidate_id ?? null;
+      ok("QA-786: …and NEITHER student carries the id that request tried to hand out",
+        idFor(target.member) !== fresh && idFor(other.member) !== fresh,
+        JSON.stringify({ target: idFor(target.member), other: idFor(other.member), tried: fresh }));
+    }
 
     ok("QA-747: …the stored id is untouched after both refusals",
       idOf((await req(spoc, "GET", `/api/batches/${ownActive._id}/results`)).data?.items ?? []) === `CAN_${stamp}`,

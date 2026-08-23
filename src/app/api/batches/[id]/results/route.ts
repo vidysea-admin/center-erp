@@ -86,6 +86,11 @@ export const PUT = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   // QA-751, on a smaller surface but the same shape, and the door had just been given a THIRD
   // caller. Resolve, check uniqueness, then write - and let the result errors fire first.
   const planned: { cand: any; was: string; raw: string | null }[] = [];
+  // QA-786 (-217, checker on qa-216): the pre-check asked only the DATABASE, so two rows in ONE
+  // request naming the same new id both passed it - the first was written and audited, and the
+  // partial unique index then threw 409 on the second. The id was saved by a request that refused.
+  // QA-780 survived exactly one path, and it was the path where the conflict does not exist yet.
+  const claimedHere = new Map<string, string>();
   for (const c of canRows) {
     const m = await BatchMember.findOne({ _id: c.member, batch: id }).select("candidate").lean<any>();
     if (!m?.candidate) continue;
@@ -102,6 +107,12 @@ export const PUT = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
       if (clash) {
         throw new HttpError(409, `"${c.raw}" is already the portal Candidate ID of ${clash.name ?? "another candidate"}. Nothing has been saved.`);
       }
+      // …and against the ids this same request is about to claim.
+      const twin = claimedHere.get(c.raw);
+      if (twin && twin !== String(cand._id)) {
+        throw new HttpError(409, `"${c.raw}" was given to two different students in the same save. A portal Candidate ID belongs to one person. Nothing has been saved.`);
+      }
+      claimedHere.set(c.raw, String(cand._id));
     }
     planned.push({ cand, was, raw: c.raw });
   }
