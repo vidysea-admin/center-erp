@@ -134,6 +134,21 @@ ok("Rule 4: approved_target written from sheet", targets[0]?.approved_target ===
     const closed = await req("PATCH", `/api/sheet-changes/${tChange._id}/status`, { status: "Ignored", reason: "-218 pin: close it again" }, 200);
     ok("-218: …and an Open change can be closed the same way", closed.data.item?.status === "Ignored",
       JSON.stringify(closed.data.item ?? null));
+
+    // QA-805 (-219, checker on qa-218): the re-open confirmation used to pick its warning by running
+    // /Revert/i over `note` - and `note` is FREE TEXT a person typed. A row noted "do NOT revert
+    // this" was told it HAD been reverted, which deleted the one warning that mattered: that
+    // re-opening an applied change puts an already-written value in line to be written again.
+    // The fact is recorded now, so the FACT is what is pinned.
+    const rev = (await req("GET", "/api/sheet-changes?status=all")).data.items.find((c) => c._id === tChange._id);
+    ok("-219 (QA-805): a change that was really reverted carries reverted_at, not just a word in a note",
+      !!rev?.reverted_at, JSON.stringify({ reverted_at: rev?.reverted_at ?? null, note: String(rev?.note ?? "").slice(0, 60) }));
+    const neverReverted = (await req("GET", "/api/sheet-changes?status=all")).data.items
+      .find((c) => String(c._id) !== String(tChange._id) && c.action_taken && c.action_taken !== "No action" && !c.reverted_at);
+    if (neverReverted) {
+      ok("-219 (QA-805): …and an applied-but-never-reverted change does NOT carry it, whatever its note says",
+        !neverReverted.reverted_at, JSON.stringify({ action: neverReverted.action_taken, note: String(neverReverted.note ?? "").slice(0, 50) }));
+    }
   }
 
   // Re-apply so the rest of the suite continues against the sheet's value.

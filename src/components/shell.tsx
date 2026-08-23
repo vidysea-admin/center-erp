@@ -35,7 +35,23 @@ export function usePerms() {
 // can CLOSE a door within that ceiling when an Admin revokes it.
 const ROUTE_RULES: { prefix: string; roles?: string[]; perm?: string }[] = [
   { prefix: "/sheet-watch", roles: ["Admin"], perm: "sheet.sources" },
-  { prefix: "/sync", roles: ["Admin"], perm: "sheet.sources" },
+  // QA-806 (-219, checker on qa-218): this ceiling was `["Admin"]`, and `routeAllowed` returns true
+  // for Admin before it looks at anything - so the ONLY login that could reach /sync was one for
+  // which `can()` is unconditionally true. Every permission gate -218 added on that screen
+  // (`canApprove`, `canRunSources`) was therefore UNREACHABLE CODE: the release's whole defence
+  // against the class that has shipped six times could never evaluate false.
+  //
+  // This is the identical fault the /govt-attendance line four rows down was written to fix, in its
+  // own words: "the grant was DEAD... because every gate read the ROLE while the API read the
+  // PERMISSION." The sheet doors read `sheet.approve` and `sheet.sources`, and Operations can hold
+  // both - so Operations joins the CEILING and the matrix still decides. Nobody gains anything
+  // today: `sheet.approve` is deliberately OUT of the Operations defaults (QA-083), so this opens
+  // the screen only for someone Umesh actually grants it to.
+  //
+  // The route gate is `sheet.approve` - the reviewing right, which is what this inbox IS. `Sync now`
+  // inside it stays on `sheet.sources`, and can now genuinely be false for a login that reviews but
+  // does not run sources.
+  { prefix: "/sync", roles: ["Admin", "Operations"], perm: "sheet.approve" },
   { prefix: "/locations", roles: ["Admin", "Operations", "Location", "Enrollment"] },
   { prefix: "/trainers", roles: ["Admin", "Operations", "Location"] },
   { prefix: "/candidates", roles: ["Admin", "Operations", "Location", "Enrollment"] },

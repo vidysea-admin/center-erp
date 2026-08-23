@@ -775,6 +775,13 @@ const SheetChangeSchema = new Schema({
   impact_snapshot: Schema.Types.Mixed,
   action_taken: { type: String, enum: [...SHEET_CHANGE_ACTION, null], default: null },
   note: String,
+  // QA-805 (-219, checker on qa-218): "was this applied change REVERTED?" as a fact, not as prose.
+  // -218's re-open confirmation decided which warning to show by running /Revert/i over `note` - and
+  // `note` carries free text a person typed. A row noted "do NOT revert this" was therefore told it
+  // had been reverted, which DELETED the true warning ("this is already applied; re-opening puts it
+  // in line to be written a second time"). A safety sentence chosen by grepping someone's sentence
+  // is not a safety sentence.
+  reverted_at: Date,
   actor: oid("User"), actioned_at: Date,
 }, { timestamps: true });
 

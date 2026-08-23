@@ -37,6 +37,7 @@ export const POST = apiHandler(async (_req: NextRequest, ctx: { params: Promise<
     doc.set(change.field_name, restore === "" ? undefined : restore);
     await doc.save({ validateModifiedOnly: true });
     change.note = `${change.note ? change.note + " | " : ""}Reverted to "${change.old_value ?? ""}" by ${user.email ?? user.id}`;
+    change.reverted_at = new Date(); // QA-805: the fact, so no screen has to grep a note for it
     change.status = "Ignored";
     await change.save();
     await audit({
@@ -69,6 +70,7 @@ export const POST = apiHandler(async (_req: NextRequest, ctx: { params: Promise<
   );
 
   change.note = `${change.note ? change.note + " | " : ""}Reverted to "${change.old_value ?? ""}" by ${user.email ?? user.id}`;
+  change.reverted_at = new Date(); // QA-805: recorded as a fact, not inferred from prose
   change.status = "Ignored"; // the applied action stands undone; the row stays as history
   await change.save();
 

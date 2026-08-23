@@ -62,17 +62,24 @@ export default function SyncInboxPage() {
 
   // Why a row is in Ignored decides what re-opening MEANS, so the confirmation says the true thing
   // for that row rather than one generic warning.
+  // QA-805 (-219, checker on qa-218): this used to decide the warning by running /Revert/i over
+  // `note` — and `note` carries FREE TEXT a person typed. An applied row noted "do NOT revert this"
+  // was told it had been reverted, which deleted the one warning that mattered: that re-opening it
+  // puts an already-written value in line to be written again. A safety sentence chosen by grepping
+  // somebody's sentence is not a safety sentence. It reads FACTS now — `reverted_at` and
+  // `action_taken` — and the ordering is deliberate: reverted is checked first, because a reverted
+  // row also carries a real `action_taken`.
   function reopenWarning(r: any): string {
     const who = rowLabel(r) ?? "this record";
-    if (r.status === "Ignored" && (r.action_taken === "No action" || !r.action_taken)) {
+    if (r.reverted_at) {
+      return `Re-open this change for ${who}?
+
+This one was applied and then REVERTED on ${fmtDate(r.reverted_at)}. The record does NOT carry the value now. Re-opening puts it back on the review queue as a change waiting to be applied again.`;
+    }
+    if (!r.action_taken || r.action_taken === "No action") {
       return `Re-open this change for ${who}?
 
 Nobody acted on it — it was dismissed. It goes back to the review queue exactly as it arrived.`;
-    }
-    if (/Revert/i.test(String(r.note ?? ""))) {
-      return `Re-open this change for ${who}?
-
-This one was applied and then REVERTED. Re-opening puts it back on the review queue as a change waiting to be applied again.`;
     }
     return `Re-open this change for ${who}?
 
@@ -110,17 +117,31 @@ It leaves the review queue. You can re-open it later from the Ignored list.`;
       const srcs = ((await api("/api/sync-sources")).items ?? []).filter((x: any) => x.active !== false);
       if (!srcs.length) { setInfo("No active sync source is configured."); return; }
       const lines: string[] = [];
+      let failedAny = false;   // QA-804: a run that failed must not land in the green banner
       for (const src of srcs) {
         try {
           const r = await api(`/api/sync-sources/${src._id}/run`, { method: "POST" });
-          const n = r?.changes ?? r?.created ?? r?.new_changes ?? 0;
-          lines.push(`${src.name}: ${n} new change${n === 1 ? "" : "s"}`);
+          // QA-804 (-219, checker on qa-218): a FAILED run comes back INSIDE a 200 —
+          // `{created: 0, status: "Failed", error: "HTTP 400"}` — so reading only the count printed
+          // a dead source as "0 new changes" in the GREEN banner. The Admin screen has read
+          // `status` and `error` since it was written (admin/page.tsx:591-593); I had the working
+          // pattern one file away and used my own.
+          const n = r?.tabs !== undefined ? (r?.changes ?? 0) : (r?.created ?? 0);
+          const unit = r?.tabs !== undefined ? `cell change${n === 1 ? "" : "s"} across ${r.tabs} tab${r.tabs === 1 ? "" : "s"}` : `new change${n === 1 ? "" : "s"}`;
+          if (r?.status && r.status !== "Success") {
+            failedAny = true;
+            lines.push(`${src.name}: ${r.status}${r.error ? ` — ${r.error}` : ""}`);
+          } else {
+            lines.push(`${src.name}: ${n} ${unit}`);
+          }
         } catch (e: any) {
           // Named per source, because "sync failed" over four sources tells nobody which one.
+          failedAny = true;
           lines.push(`${src.name}: ${e.message}`);
         }
       }
-      setInfo(lines.join(" · "));
+      // QA-804: green says "this worked". Anything that did not goes to the error banner.
+      if (failedAny) setError(lines.join(" · ")); else setInfo(lines.join(" · "));
       load();
     } catch (e: any) { setError(e.message); }
     finally { setSyncing(false); }

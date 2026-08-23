@@ -82,6 +82,27 @@ ok("SPOC with can_edit can write own location", spocWrite.status === 200, `got $
     const after = (await req(admin, "GET", "/api/sheet-changes?status=all")).data?.items?.find((c) => c._id === anyChange._id);
     ok("-218: …and neither refusal moved the row", after?.status === anyChange.status,
       `${anyChange.status} -> ${after?.status}`);
+
+    // QA-806 (-219, checker on qa-218): the gates -218 put on that SCREEN were unreachable code.
+    // `/sync`'s ceiling was ["Admin"], and routeAllowed returns true for Admin before it reads any
+    // permission - so the only login that could reach the screen was one for which `can()` is
+    // unconditionally true, and `canApprove`/`canRunSources` could never evaluate false. Exactly the
+    // fault the /govt-attendance rule was written to fix: "every gate read the ROLE while the API
+    // read the PERMISSION". Operations is on the ceiling now, so the matrix actually decides - and
+    // that is what this pins, because a gate nobody can fail is not a gate.
+    const opsSetNow = (await req(admin, "GET", "/api/permissions")).data?.matrix?.Operations ?? [];
+    if (!opsSetNow.includes("sheet.approve")) {
+      const denied = await req(ops, "PATCH", `/api/sheet-changes/${anyChange._id}/status`, { status: "Open" });
+      ok("-218/QA-806: Operations WITHOUT sheet.approve is refused by the door", denied.status === 403, `status=${denied.status}`);
+      await req(admin, "PUT", "/api/permissions", { role: "Operations", permissions: [...opsSetNow, "sheet.approve"] }, 200);
+      const allowed = await req(ops, "PATCH", `/api/sheet-changes/${anyChange._id}/status`, { status: anyChange.status === "Open" ? "Ignored" : "Open" });
+      ok("-218/QA-806: …and WITH it the same login is accepted - so the RIGHT decides, not the role",
+        allowed.status === 200 || allowed.status === 409,
+        `status=${allowed.status} error=${JSON.stringify(allowed.data?.error ?? null).slice(0, 110)}`);
+      await req(admin, "PUT", "/api/permissions", { role: "Operations", permissions: opsSetNow }, 200);
+      const deniedAgain = await req(ops, "PATCH", `/api/sheet-changes/${anyChange._id}/status`, { status: "Open" });
+      ok("-218/QA-806: …and revoking it closes the door again", deniedAgain.status === 403, `status=${deniedAgain.status}`);
+    }
   }
 }
 

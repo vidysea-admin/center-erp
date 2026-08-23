@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-218";
+export const RELEASE = "2026.08.14-219";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,19 @@ export const RELEASE = "2026.08.14-218";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-219 corrects three faults in the release before it. The warning shown before re-opening a sync " +
+  "change was chosen by searching the change's own note for the word revert - so a change whose " +
+  "note happened to mention it was described wrongly, and the important warning, that re-opening " +
+  "an already-applied change puts it in line to be written a second time, was replaced by the " +
+  "wrong one. Whether a change was reverted is now recorded as a fact and the warning reads that. " +
+  "The Sync now button reported a source that had failed as \"0 new changes\" in a green banner, " +
+  "because a failed run is returned as an ordinary response with the failure inside it; failures " +
+  "are now named and shown as failures. And the sheet-sync screen itself was reachable only by an " +
+  "administrator, for whom every permission check passes automatically, so the permission checks " +
+  "added to that screen could never actually apply to anyone; the screen is now open to the " +
+  "operations role as well, where the granted right decides.";
+
+const RELEASE_NOTE_ARCHIVE_218 =
   "-218 makes the sheet-sync inbox a two-way street. A change that was dismissed could not be " +
   "brought back: the row would not open, it could not be selected, and there was no way at all on " +
   "the server to move it out of that state - so one wrong press of Bulk Ignore was permanent, and " +
@@ -238,6 +251,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
+  RELEASE_NOTE_ARCHIVE_218 + " " +
   RELEASE_NOTE_ARCHIVE_217 + " " +
   RELEASE_NOTE_ARCHIVE_216 + " " +
   RELEASE_NOTE_ARCHIVE_215 + " " +
