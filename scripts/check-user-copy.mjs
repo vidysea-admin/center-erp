@@ -1646,6 +1646,77 @@ for (const file of walk(root)) {
   }
 }
 
+// ---- -212 (Umesh 23/08): the portal ID on EVERY candidate row, from ONE chip ----
+// "jo candidate card hai, usme har kisi ki portal id bhi properly highlight karke dikha ... even
+// attendance wale tab me bhi wo kar de". -208 had put the portal ID on this screen but only as a
+// list of the students MISSING one, so the ID a student DOES hold was invisible outside the edit
+// drawer. Three mounts, because he named three places: the roster card and both attendance
+// pickers. One declaration, for the same reason PortalIdGaps has one - and here the page must not
+// keep its own copy of the CAN regex either, which is what it had before this release.
+{
+  const rel = "app/(app)/batches/[id]/page.tsx";
+  const raw = fs.readFileSync(path.join(root, rel), "utf-8");
+  const src = stripComments(raw);
+  const decls = (src.match(/function PortalIdChip\(/g) ?? []).length;
+  const mounts = (src.match(/<PortalIdChip\b/g) ?? []).length;
+  const inlineRegex = /\/CAN\[/.test(src);   // any near-copy of the matcher living on this screen
+  if (decls === 1 && mounts >= 3 && !inlineRegex) passed++;
+  else {
+    failed++;
+    pushStructural(rel + ": the portal-ID chip is not one component on every candidate row"
+      + " (declarations=" + decls + ", mounts=" + mounts + ", page still carries its own CAN regex=" + inlineRegex + ")"
+      + " - Umesh asked for it on the candidate card AND the attendance tab; a screen that spells the"
+      + " CAN test itself can disagree with the server about which file matches which student.");
+  }
+}
+
+// ---- -212 (QA-728/QA-729, checker on qa-210): ONE spelling of "what a portal CAN looks like" ----
+// The line for this concept in ARCHITECTURE.md section 3 reads, in as many words, "Never write a
+// near-copy of that regex" - and -210 pasted `looksLikeCan` into BOTH candidate route files. They
+// had already drifted inside their own commit: one 400 message used an em dash, the other a hyphen,
+// so the same refusal read differently depending on which door you hit. It also left behind an
+// import of `normalizeCan` that is never called - the leftover of the abandoned first attempt, and
+// a false signal that this door normalises through the shared matcher, which is exactly the
+// misreading the release's own comment spends five lines warning against.
+{
+  const files = ["app/api/candidates/route.ts", "app/api/candidates/[id]/route.ts"];
+  const defs = [];
+  const deadImports = [];
+  for (const rel of files) {
+    const raw = fs.readFileSync(path.join(root, rel), "utf-8");
+    const src = stripComments(raw);
+    if (/const\s+looksLikeCan\s*=/.test(src)) defs.push(rel);
+    // imported and never used: the name appears in the import line and nowhere else in live code
+    for (const sym of ["normalizeCan", "looksLikeCan"]) {
+      const imported = new RegExp("import\\s*\\{[^}]*\\b" + sym + "\\b[^}]*\\}").test(src);
+      const calls = (src.match(new RegExp("\\b" + sym + "\\s*\\(", "g")) ?? []).length;
+      if (imported && calls === 0) deadImports.push(rel + ":" + sym);
+    }
+  }
+  // The home is lib/validate.ts - the PURE module, importing nothing - because the client screens
+  // need these too and lib/govt-attendance imports the mongoose models. govt-attendance re-exports
+  // them so every existing server caller keeps working; both halves are pinned.
+  const pure = stripComments(fs.readFileSync(path.join(root, "lib/validate.ts"), "utf-8"));
+  const defined = /export const looksLikeCan\s*=/.test(pure) && /export const normalizeCan\s*=/.test(pure)
+    && /export const storedCanIsUnreadable\s*=/.test(pure);
+  const pureIsPure = !/^\s*import\s/m.test(pure);   // the property that makes it client-reachable
+  const reexported = /export\s*\{[^}]*looksLikeCan[^}]*\}\s*from\s*"@\/lib\/validate"/.test(
+    stripComments(fs.readFileSync(path.join(root, "lib/govt-attendance.ts"), "utf-8")));
+  const exported = defined && pureIsPure && reexported;
+  if (defs.length === 0 && exported && deadImports.length === 0) passed++;
+  else {
+    failed++;
+    pushStructural("the portal-CAN shape test is not one exported definition in the pure module"
+      + " (local re-definitions=" + JSON.stringify(defs) + ", defined in lib/validate.ts=" + defined
+      + ", lib/validate.ts still imports nothing=" + pureIsPure + ", re-exported from govt-attendance=" + reexported
+      + ", imported-but-never-called=" + JSON.stringify(deadImports) + ")"
+      + " - ARCHITECTURE.md section 3 says of this exact concept \"Never write a near-copy of that"
+      + " regex\", and the two copies -210 shipped had already drifted in their error text. A dead"
+      + " import of normalizeCan beside it falsely signals that the door normalises through the"
+      + " matcher - QA-728/QA-729.");
+  }
+}
+
 // ---- -209: the three ways completing a batch was quietly broken or lying ----
 // All three came from the qa-207 checker, and all three are the same species: a screen or a door
 // that says one thing while the system does another.

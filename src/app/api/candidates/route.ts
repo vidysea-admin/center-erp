@@ -1,19 +1,12 @@
 import { collectionRoutes } from "@/lib/crud";
 import { BatchMember, Candidate, CandidateResult, Location, Program } from "@/models";
 import { assertLocationInScope, HttpError, isScoped } from "@/lib/authz";
-import { normalizeCan } from "@/lib/govt-attendance";
+import { looksLikeCan } from "@/lib/govt-attendance";
 import { emailError, canonicalPhone, phoneError } from "@/lib/validate";
 import { candidateEligibility } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { renderMail, sendMail } from "@/lib/mailer";
 import { sendSms } from "@/lib/sms";
-
-// QA-714 / QA-719 (-210): what a portal Candidate ID has to LOOK like at a hand-typed door.
-// Deliberately NOT `normalizeCan` - that is the MATCHER (/CAN[\s_-]*(\d+)/i) and it reads only
-// digits after CAN, so using it as a format refused `CAN_ED0711202`, a shape this product stores
-// and every suite uses. The wall caught that in eleven assertions before it shipped. The rule is
-// the one the data actually obeys: begins with CAN, and carries at least one digit.
-const looksLikeCan = (s: unknown) => /^\s*CAN[\s_-]?[A-Za-z0-9-]*\d[A-Za-z0-9-]*\s*$/i.test(String(s ?? ""));
 
 export const { GET, POST } = collectionRoutes({
   model: Candidate, entity: "Candidate",
@@ -47,14 +40,23 @@ export const { GET, POST } = collectionRoutes({
     // exist. The Excel writer and sheet-sync already store absent; this is the door that did not,
     // and it is the door the drawer's Add form posts through (type-then-clear reproduces it).
     if (typeof data.sidh_candidate_id === "string" && !data.sidh_candidate_id.trim()) delete data.sidh_candidate_id;
-    // QA-714 (-210): the same shape check the item door now applies. This files own rule two lines
-    // down is "manual entry is strict", and an id every reader parses with normalizeCan but no
-    // writer validates is the shape that let "40918461" save, audit as a change, and leave the
-    // student blocked with nothing on screen saying why. The bulk import keeps its own
-    // normalize-and-report lane; this is the hand-typed door.
+    // QA-714 (-210): the same shape check the item door applies - one definition, imported by both
+    // (QA-728). An id every reader parses with normalizeCan but no writer validated is the shape
+    // that let "40918461" save, audit as a change, and leave the student blocked with nothing on
+    // screen saying why.
+    //
+    // QA-727 (-212, checker on qa-210): the comment that used to sit here said "the bulk import
+    // keeps its own normalize-and-report lane; this is the hand-typed door." There was no such lane
+    // for this field - the importer wrote any string verbatim and normalizeCan was not even imported
+    // into that file. The excuse named a safeguard that did not exist, on the door the code itself
+    // calls how rosters actually arrive. The importer now reports the field per row, the way it has
+    // always reported phone; this door still REFUSES, because a hand-typed id has a human at the
+    // keyboard who can be told.
     if (typeof data.sidh_candidate_id === "string" && data.sidh_candidate_id.trim() && !looksLikeCan(data.sidh_candidate_id)) {
       throw new HttpError(400, `"${data.sidh_candidate_id.trim()}" is not a portal Candidate ID. It reads like CAN_12345678 - the letters CAN followed by the number. Copy it from SIDH exactly as it appears there.`);
     }
+    // QA-730: store what was validated, without the whitespace the partial unique index would miss.
+    if (typeof data.sidh_candidate_id === "string") data.sidh_candidate_id = data.sidh_candidate_id.trim();
     // QA-141 (Umesh): manual entry is strict; bulk import keeps its own normalize-and-report
     // lane (rows are client data and are never dropped over format).
     const pErr = phoneError(data.phone);

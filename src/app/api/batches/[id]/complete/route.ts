@@ -69,12 +69,19 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   // payload never carried. Umesh went looking for a certificate problem because the screen sent him
   // there. A screen that names the wrong cause is worse than one that says nothing.
   const noCan = await enrolledWithoutCan(id);
+  // QA-737 (-212, checker on qa-211): a missing portal ID only blocks while certification is still
+  // unsigned. Once certification_status is Completed - derived earlier, or signed by an Admin - the
+  // gap is a data-quality fact, not a door. The drawer listed it as an open blocker regardless, so
+  // a batch that completes 200 through the ordinary door was shown as blocked. The list says which
+  // of the two it is; the students are still named either way, because they still need the IDs.
+  const certSigned = (closure?.certification_status ?? "Pending") === "Completed";
   return NextResponse.json({
     status: batch.status,
     can_complete_cleanly: o.unmarked.length === 0 && o.unsettled.length === 0,
     admin_only: true,
     ...o,
     no_portal_id: noCan,
+    no_portal_id_blocks: !certSigned,
     closure: { assessment_status: closure?.assessment_status ?? "Pending", certification_status: closure?.certification_status ?? "Pending" },
   });
 });
@@ -132,16 +139,21 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // press carries `force: true`.
   const force = body.force === true;
   const noCan = await enrolledWithoutCan(id);
+  // QA-737: the same test the preview applies - a portal-ID gap under an already-signed
+  // certification is not a door, and refusing a first press over it told the operator to go fix
+  // something that was not stopping anything.
+  const preClosure = await Closure.findOne({ batch: id }).select("certification_status").lean<any>();
+  const canBlocks = (preClosure?.certification_status ?? "Pending") !== "Completed";
   const blockers = [
     ...o.unmarked.map((u) => ({ kind: "no result recorded", who: u.name ?? "(unnamed)", phone: u.phone ?? null, tab: "Candidates" })),
     ...o.unsettled.map((c) => ({ kind: "passed, certificate not settled", who: c.name ?? "(unnamed)", phone: c.phone ?? null, tab: "Closure" })),
-    ...noCan.map((n) => ({ kind: "no portal Candidate ID", who: n.name || "(unnamed)", phone: n.phone ?? null, tab: "Closure" })),
+    ...(canBlocks ? noCan.map((n) => ({ kind: "no portal Candidate ID", who: n.name || "(unnamed)", phone: n.phone ?? null, tab: "Closure" })) : []),
   ];
   if (blockers.length && !force) {
     const counts = [
       o.unmarked.length ? `${o.unmarked.length} with no result` : null,
       o.unsettled.length ? `${o.unsettled.length} passed with no certificate settled` : null,
-      noCan.length ? `${noCan.length} with no portal Candidate ID` : null,
+      canBlocks && noCan.length ? `${noCan.length} with no portal Candidate ID` : null,
     ].filter(Boolean).join(", ");
     throw new HttpError(409,
       `This batch still has ${counts}. Nothing has been changed. Fix them, or complete the batch `
@@ -200,17 +212,50 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   //     past it under their own name with a reason. `certification_derived` is set FALSE on purpose:
   //     a derived tick is a statement about the rows, and this one is not - it is a person's
   //     decision, and the audit row says so.
-  if (noCan.length) {
+  //
+  //     QA-735 / QA-736 (-212, checker on qa-211): this used to fire only `if (noCan.length)`, and
+  //     that condition was WRONG about its own reason. The portal ID is not the only way
+  //     certification stays Pending - `deriveCompletion` only signs certification when
+  //     `pass_count > 0`, so a batch where NOBODY passed never derives it either. On such a batch,
+  //     with no portal-ID gap at all, this override was skipped, the ladder below reached Rule 18,
+  //     and the press 409'd - AFTER step 1 had written every unmarked student a permanent `Fail`
+  //     and step 3 had moved the batch Active -> Closing. That is QA-697 restored in the release
+  //     whose whole subject was a button that could only fail: the batch was left permanently
+  //     un-completable while the drawer reported it clean. The -209 checker's reproduction passed
+  //     only because its fixture happened to have a portal-ID gap.
+  //
+  //     So the condition is now the true one: on a FORCED press, if certification is still not
+  //     Completed by this point, the Admin signs it - whatever the reason it did not derive - and
+  //     the audit row names that actual reason rather than assuming the portal ID.
+  if (force) {
     const closureDoc = await Closure.findOne({ batch: id });
     if (closureDoc && closureDoc.certification_status !== "Completed") {
+      const why = noCan.length
+        ? `${noCan.length} enrolled student(s) still had no portal Candidate ID`
+        : `no candidate passed, so certification never derived on its own`;
+      const was = closureDoc.certification_status ?? "Pending";
       closureDoc.certification_status = "Completed";
       (closureDoc as any).certification_derived = false;
       if (!closureDoc.certification_date) closureDoc.certification_date = new Date();
       await closureDoc.save();
       await audit({ entity: "Closure", entityId: closureDoc._id, field: "certification_status",
-        oldValue: "Pending",
-        newValue: `Completed - signed by an Admin completing ${batch.code} while ${noCan.length} enrolled student(s) still had no portal Candidate ID: ${reason}`,
+        oldValue: was,
+        newValue: `Completed - signed by an Admin completing ${batch.code} while ${why}: ${reason}`,
         actor: user.id, actorType: "USER" });
+    }
+  }
+
+  // QA-736: the writes above are IRREVERSIBLE - permanent Fail rows and a status move. Before the
+  // ladder can refuse and strand the batch half-settled, assert that the one gate this door is
+  // responsible for opening is actually open. If this ever fires, the message says what was already
+  // written instead of a bare 409 that reads like nothing happened.
+  if (force) {
+    const signed = await Closure.findOne({ batch: id }).select("certification_status").lean<any>();
+    if (signed && signed.certification_status !== "Completed") {
+      throw new HttpError(500,
+        `${batch.code}: results were settled and certification could not be signed off, so the batch `
+        + `was NOT completed. The result rows written by this press stand - reopen the batch and `
+        + `check the Closure tab before pressing again.`);
     }
   }
 

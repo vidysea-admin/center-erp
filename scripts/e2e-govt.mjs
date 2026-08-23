@@ -1801,6 +1801,82 @@ ok("SSRF guard does not block the real client workbook", stillOk.data.ok === tru
     (stillBlocked.missing ?? []).some((m) => m.name === `${NAME} NoId One`),
     JSON.stringify((stillBlocked.missing ?? []).map((m) => m.name)));
 
+  // ---- -212, checker on qa-210 (QA-725/726/730). Three defects the -210 guard SHIPPED. ----
+  //
+  // QA-726 is the live one and the worst: the Candidates drawer re-sends sidh_candidate_id on every
+  // edit (openEdit loads it into the form), and -210 validated the field on every PATCH that carried
+  // it. So a record already holding a value the guard refuses - typed before -210, or written by the
+  // bulk importer, which still had no guard at all - became UNEDITABLE. Not the ID: the NAME, the
+  // PHONE, the EMAIL, the CENTRE. The one record you most need to correct was the one you could not
+  // touch. Written the way saveCandidate builds the request, or it would not reproduce.
+  // The junk cannot be planted through this door any more - that is the -210 fix working. It can
+  // still be planted through the BULK IMPORTER, which is where real ones come from and which -210
+  // left unguarded (QA-727). That reproduction lives in e2e-flows-blindspot, which owns that door;
+  // here we pin the half that is reachable over HTTP: an UNCHANGED value must never be re-validated.
+  await req(admin, "PATCH", `/api/candidates/${c1._id}`, { sidh_candidate_id: "CAN_CHK208A" }, 200);
+  const unrelated = await req(admin, "PATCH", `/api/candidates/${c1._id}`,
+    { email: `noid.${STAMP}@example.com`, sidh_candidate_id: "CAN_CHK208A" });
+  ok("-212 (QA-726): re-sending the UNCHANGED stored id with an unrelated edit does not refuse the save",
+    unrelated.status === 200, `status=${unrelated.status} error=${JSON.stringify(unrelated.data?.error ?? null).slice(0, 130)}`);
+  const stillNew = await req(admin, "PATCH", `/api/candidates/${c1._id}`, { sidh_candidate_id: "40918461" });
+  ok("-212 (QA-726): …and a genuinely NEW junk value is still refused - the guard did not go soft",
+    stillNew.status === 400, `status=${stillNew.status}`);
+  // QA-730: the guard blessed padded values and stored them untrimmed. The QA-417 partial unique
+  // index is built on the RAW string, so a padded copy of an id someone else holds does not collide,
+  // and the health screen's duplicate bucket groups on the raw value too - neither sees the pair.
+  await req(admin, "PATCH", `/api/candidates/${c1._id}`, { sidh_candidate_id: `  CAN_${STAMP}7  ` }, 200);
+  const padded = (await req(admin, "GET", `/api/candidates/${c1._id}`)).data?.item;
+  ok("-212 (QA-730): a padded id is stored TRIMMED, so the partial unique index can still see it",
+    padded?.sidh_candidate_id === `CAN_${STAMP}7`, JSON.stringify(padded?.sidh_candidate_id ?? null));
+  // QA-726 part 2: clearing has to CLEAR. The drawer's `v !== ""` filter dropped an emptied field,
+  // so the screen reported a saved edit while the old id stayed in the database - and that id is
+  // exactly what blocks the automatic linker, which only ever fills an EMPTY one.
+  await req(admin, "PATCH", `/api/candidates/${c1._id}`, { sidh_candidate_id: null }, 200);
+  const cleared = (await req(admin, "GET", `/api/candidates/${c1._id}`)).data?.item;
+  ok("-212 (QA-726): clearing the portal ID actually clears it on the record",
+    cleared && !cleared.sidh_candidate_id, JSON.stringify(cleared?.sidh_candidate_id ?? null));
+  // QA-725: the residue the -210 guard deliberately leaves. `looksLikeCan` accepts CAN followed by
+  // letters; `normalizeCan` reads only the digits, so `CAN_CHK208A` is stored, valid to the door
+  // that took it, and INVISIBLE to the gate. Until QA-719 is decided the row must SAY so - a blocked
+  // student holding an unreadable id used to render exactly like one holding nothing, so the
+  // operator retyped what was already there and nothing moved.
+  // The SAME student, before and after — that is what makes the two states comparable. This roster
+  // has one blocked student, so asserting "some other row is empty" was a fixture accident, not a
+  // property; taken literally it would pass only where a second gap happened to exist.
+  const emptyBefore = ((await req(admin, "GET", `/api/batches/${nb._id}/link-portal-ids`)).data.missing ?? [])
+    .find((m) => m.name === `${NAME} NoId One`);
+  ok("-212 (QA-725): a student genuinely holding nothing is reported as holding nothing",
+    emptyBefore?.on_record === null && emptyBefore?.unreadable === false, JSON.stringify(emptyBefore ?? null));
+  await req(admin, "PATCH", `/api/candidates/${c1._id}`, { sidh_candidate_id: "CAN_CHK208A" }, 200);
+  const echoed = (await req(admin, "GET", `/api/batches/${nb._id}/link-portal-ids`)).data;
+  const row = (echoed.missing ?? []).find((m) => m.name === `${NAME} NoId One`);
+  ok("-212 (QA-725): …and once they hold an id the gate cannot read, the row is NOT blank any more",
+    row?.unreadable === true && row?.on_record === "CAN_CHK208A", JSON.stringify(row ?? null));
+  ok("-212 (QA-725): …and they are STILL blocking — naming the id does not excuse it",
+    Boolean(row) && echoed.blocking === (echoed.missing ?? []).length,
+    JSON.stringify({ blocking: echoed.blocking, listed: (echoed.missing ?? []).length }));
+
+  // -212, Umesh 23/08: "jo candidate card hai, usme HAR KISI ki portal id bhi dikha... even
+  // attendance wale tab me bhi". The chip is only as true as the payload behind it: the roster
+  // route populated "name phone lifecycle_status" and nothing else, so a chip reading
+  // sidh_candidate_id would have read "no portal ID" for every student on every batch - a
+  // screen-wide falsehood no source-scanning pin can see, because the component would be right and
+  // the data behind it empty. That is exactly how three green walls shipped broken screens today.
+  await req(admin, "PATCH", `/api/candidates/${c1._id}`, { sidh_candidate_id: `CAN_${STAMP}5` }, 200);
+  const roster = (await req(admin, "GET", `/api/batches/${nb._id}/members`)).data.items ?? [];
+  const carried = roster.find((r) => String(r.candidate?._id) === String(c1._id));
+  ok("-212: the roster payload CARRIES the portal ID, so the card can show it at all",
+    carried?.candidate?.sidh_candidate_id === `CAN_${STAMP}5`,
+    JSON.stringify(carried?.candidate ?? null).slice(0, 160));
+  // The attendance payload flattens the candidate onto the row, so the field is `sidh_candidate_id`
+  // directly - reading it under `.candidate` returned nulls and would have pinned nothing.
+  const att = (await req(admin, "GET", `/api/batches/${nb._id}/attendance`)).data;
+  ok("-212: …and so does the attendance payload, which is the other tab he named",
+    (att.members ?? []).some((r) => r.sidh_candidate_id === `CAN_${STAMP}5`),
+    JSON.stringify((att.members ?? []).slice(0, 3).map((r) => [r.name, r.sidh_candidate_id ?? null])));
+
+  await req(admin, "PATCH", `/api/candidates/${c1._id}`, { sidh_candidate_id: null }, 200);
+
   // The hand-typed path — the one he asked for. Same door the screen uses.
   const typed = await req(admin, "PATCH", `/api/candidates/${c1._id}`, { sidh_candidate_id: `CAN_${STAMP}9999` });
   ok("-205: an id typed by hand is accepted on the ordinary candidate door", typed.status === 200,

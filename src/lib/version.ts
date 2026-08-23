@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-211";
+export const RELEASE = "2026.08.14-212";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,19 @@ export const RELEASE = "2026.08.14-211";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-212 repairs two ways the previous two releases could strand real work. Finishing a batch in " +
+  "which nobody passed used to fail at the very last step, but only AFTER it had recorded every " +
+  "unmarked student as failed and moved the batch on - leaving it impossible to finish and looking " +
+  "as though nothing had happened. It now completes, and the record says the sign-off was a " +
+  "person's decision and why. Separately, the new check on the government Candidate ID was being " +
+  "applied to every save, not only to a number someone had just typed - so a record that already " +
+  "held a bad number could not be edited at all, not the name, the phone, the email or the centre. " +
+  "The check now applies only to a number that actually changed, emptying the box really does " +
+  "clear it, and the bulk import reports the numbers it cannot read instead of storing them in " +
+  "silence. On the batch screen, a student whose stored ID cannot be read now shows that ID and " +
+  "says so, rather than appearing to have none at all.";
+
+const RELEASE_NOTE_ARCHIVE_211 =
   "-211 takes three sentences off the batch screen that were not true, and one button away from " +
   "people it could never work for. The button to finish a batch was being offered on batches that " +
   "have not reached the stage where finishing is possible, so for anyone other than an " +
@@ -156,6 +169,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
+  RELEASE_NOTE_ARCHIVE_211 + " " +
   RELEASE_NOTE_ARCHIVE_210 +
   RELEASE_NOTE_ARCHIVE_209 +
   RELEASE_NOTE_ARCHIVE_208 +

@@ -134,7 +134,14 @@ function CandidatesInner() {
       if (drawer === "edit" && editId) {
         // PATCH is partial: a blank select/date means "not changing this", never "cast '' to
         // ObjectId/Date" (imported rows legitimately have location/program/dob still empty).
-        const json = Object.fromEntries(Object.entries(form).filter(([, v]) => v !== ""));
+        const json: any = Object.fromEntries(Object.entries(form).filter(([, v]) => v !== ""));
+        // QA-726 (-212, checker on qa-210): the ONE field where blank has to mean "clear it", not
+        // "leave it". The filter above dropped an emptied portal ID, so the drawer reported a saved
+        // edit while the junk id stayed in the database - and that id is exactly what blocks the
+        // automatic linker for that student. Emptying the box is how an operator FIXES a wrong id,
+        // so it has to reach the server; null (not "") because the QA-417 partial index does not
+        // index null.
+        if (form.sidh_candidate_id !== undefined && !String(form.sidh_candidate_id).trim()) json.sidh_candidate_id = null;
         await api(`/api/candidates/${editId}`, { method: "PATCH", json });
       } else await api("/api/candidates", { method: "POST", json: form });
       setDrawer(""); setForm({}); setEditId(""); load();
@@ -867,8 +874,28 @@ function CandidatesInner() {
                 // (CHI-ITI: 45/45 invalid, imported anyway). The report stays a report — but the
                 // button waits for an explicit, informed confirmation.
                 const badMapping = (importState.preview?.phone_invalid_count ?? 0) >= Math.max(1, Math.ceil((importState.preview?.valid ?? 0) / 2));
+                const badCanCount = importState.preview?.candidate_id_invalid_count ?? 0;
                 return (
                   <>
+                    {/* QA-727 (-212, checker on qa-210): the importer wrote any string to the portal
+                        Candidate ID and said nothing, so a mis-mapped column filled a whole roster
+                        with values the certification gate cannot read — and each one then blocks the
+                        automatic linker for that student permanently, because that door only ever
+                        fills an EMPTY id. Reported, never refused (QA-141: client rows are not
+                        dropped over format), and shown on the PREVIEW so the mapping can be fixed
+                        before the rows land. */}
+                    {badCanCount > 0 && (
+                      <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                        <b>{badCanCount} portal Candidate ID{badCanCount === 1 ? "" : "s"} the certification gate cannot read.</b>{" "}
+                        They will be imported as they are, but those students will still count as having no portal ID — and the
+                        &ldquo;Link portal IDs&rdquo; button will skip them, because it only fills an empty one. Check the column
+                        mapping first; a real ID reads like CAN_12345678.
+                        <div className="mt-1 font-mono text-[11px] text-amber-800">
+                          {(importState.preview.candidate_id_invalid ?? []).slice(0, 5).join(" · ")}
+                          {badCanCount > 5 ? ` · +${badCanCount - 5} more` : ""}
+                        </div>
+                      </div>
+                    )}
                     {badMapping && (
                       <div className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-800">
                         <b>{importState.preview.phone_invalid_count} of {importState.preview.valid} phone numbers are invalid — the column mapping is probably wrong.</b>{" "}

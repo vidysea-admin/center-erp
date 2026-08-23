@@ -32,3 +32,39 @@ export function emailError(v: unknown, opts?: { optional?: boolean }): string | 
   if (!s) return opts?.optional ? null : "Email is required.";
   return EMAIL_RE.test(s) ? null : "That does not look like an email address (name@domain.tld).";
 }
+
+// ---- The portal Candidate ID (SIDH "CAN" id) ----
+//
+// These three live HERE, in the pure module, and `lib/govt-attendance.ts` re-exports them for the
+// server callers that have always imported them from there. -212 (QA-728): they were in
+// govt-attendance, which imports the mongoose models, so no client component could touch them - and
+// the batch screen had already grown its OWN inline `/CAN[\s_-]*(\d+)/i` rather than import one.
+// That is the fifth spelling of a concept whose line in ARCHITECTURE.md section 3 reads "Never
+// write a near-copy of that regex". A pure module is the only home that both sides can share.
+
+/**
+ * -155: ONE normalisation of the portal CAN id. Reads only the DIGITS after CAN.
+ * Everything that decides WHO MATCHES WHOM goes through this: the certification gate, the
+ * certificate matcher, the health screen, link-portal-ids.
+ */
+export const normalizeCan = (s: unknown): string | null => {
+  const m = /CAN[\s_-]*(\d+)/i.exec(String(s ?? ""));
+  return m ? "CAN" + m[1] : null;
+};
+
+/**
+ * QA-714 (-210): the SHAPE test for a HAND-TYPED value - begins with CAN, carries at least one
+ * digit. Deliberately NOT `normalizeCan`: that is the matcher, and using it as a format refused
+ * `CAN_ED0711202`, a shape this product stores. Eleven wall assertions caught that before it shipped.
+ *
+ * Known and deliberate: this accepts ids `normalizeCan` cannot read. Widening the matcher is QA-719
+ * and is Umesh's decision, not a side effect of a validation release - so where the two disagree the
+ * screen SAYS so, via storedCanIsUnreadable, instead of showing a blank.
+ */
+export const looksLikeCan = (s: unknown) => /^\s*CAN[\s_-]?[A-Za-z0-9-]*\d[A-Za-z0-9-]*\s*$/i.test(String(s ?? ""));
+
+/** QA-725: there IS a value on record and this system cannot read it. Asked in exactly one place. */
+export const storedCanIsUnreadable = (s: unknown) => {
+  const raw = String(s ?? "").trim();
+  return raw.length > 0 && normalizeCan(raw) === null;
+};

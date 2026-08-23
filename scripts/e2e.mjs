@@ -821,6 +821,65 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
       anyFail === 0, JSON.stringify({ failed: anyFail, rows: rrows.length }));
   }
 
+  // ---- QA-735 / QA-736 (-212, checker on qa-211): QA-697 RESTORED, on a shape nothing covered ----
+  //
+  // The Admin's force door signed certification only `if (noCan.length)` — a condition that was
+  // wrong about its own reason. `deriveCompletion` signs certification only when `pass_count > 0`,
+  // so a batch where NOBODY passed never derives it either. On such a batch, with every portal ID
+  // present, the override was skipped, the ladder reached Rule 18, and the press 409'd — AFTER it
+  // had written every unmarked student a permanent `Fail` and moved the batch Active -> Closing.
+  // Permanently un-completable, while the drawer reported it clean.
+  //
+  // It survived because every pin for this door — QA-697's included — used a roster WITH a
+  // portal-ID gap, and the gap is what made the override fire. Take the gap away and the door
+  // closes. That is the second dead-button shape in three releases, in the release whose subject
+  // was a button that could only fail.
+  {
+    // NO `noCan` — every student holds a real portal ID. Nobody is marked, so nobody passes.
+    const { b: zb } = await mkBatch(2, 10);
+    const pressed = await req("POST", `/api/batches/${zb._id}/complete`,
+      { reason: "QA-735 pin: nobody passed and no portal ID is missing", force: true });
+    ok("QA-735: a forced press on a batch where NOBODY passed completes, instead of 409 at the last step",
+      pressed.status === 200, `status=${pressed.status} error=${JSON.stringify(pressed.data?.error ?? null).slice(0, 200)}`);
+    ok("QA-736: …and the batch actually reaches Completed rather than being stranded in Closing",
+      (await statusOf(zb._id)) === "Completed", await statusOf(zb._id));
+    const zc = await closureOf(zb._id);
+    ok("QA-735: …certification is signed by the Admin, NOT derived — the tick is a person's decision",
+      zc?.certification_status === "Completed" && zc?.certification_derived === false,
+      JSON.stringify({ cert: zc?.certification_status, derived: zc?.certification_derived }));
+    // The reason must name the TRUE cause. The old audit line asserted the portal ID even when the
+    // portal ID was not the problem — this batch has every ID.
+    // the audit model stores `new_value` (snake_case) — reading `newValue` here returned three
+    // empty strings and made this pin pass-by-accident-shaped rather than false. Read both.
+    const zAudit = (await req("GET", `/api/audit/Closure/${zc._id}`)).data.items ?? [];
+    const nv = (a) => String(a.new_value ?? a.newValue ?? "");
+    ok("QA-735: …and the audit row says why certification did not derive, not a borrowed reason",
+      zAudit.some((a) => /no candidate passed/i.test(nv(a))),
+      JSON.stringify(zAudit.slice(0, 3).map((a) => nv(a).slice(0, 90))));
+    ok("QA-735: …and it does NOT blame the portal Candidate ID, which this batch has for everyone",
+      zAudit.length > 0 && !zAudit.some((a) => /portal Candidate ID/i.test(nv(a))),
+      JSON.stringify(zAudit.map((a) => nv(a).slice(0, 70))));
+  }
+
+  // ---- QA-737 (-212, checker on qa-211): the drawer's list and the server's door must agree ----
+  // A portal-ID gap only blocks while certification is UNSIGNED. Once it is Completed — derived or
+  // signed — the gap is a data-quality fact, not a door, and the ordinary transition passes. The
+  // preview listed it as an open blocker regardless, so a batch that completes 200 was shown as
+  // blocked and the operator was sent to fix something that was stopping nothing.
+  {
+    const { b: sb, mems: sm } = await mkBatch(2, 11, { noCan: true });
+    await req("PUT", `/api/batches/${sb._id}/results`, { rows: sm.map((m) => ({ member: String(m._id), result: "Pass", score: 70, max_score: 100, assessed_on: today })) }, 200);
+    const pre = (await req("GET", `/api/batches/${sb._id}/complete`)).data;
+    ok("QA-737: while certification is unsigned, the missing portal IDs ARE reported as blocking",
+      pre.no_portal_id_blocks === true && (pre.no_portal_id ?? []).length === 2,
+      JSON.stringify({ blocks: pre.no_portal_id_blocks, n: (pre.no_portal_id ?? []).length }));
+    await req("POST", `/api/batches/${sb._id}/complete`, { reason: "QA-737 pin: sign it past the gap", force: true }, 200);
+    const post = (await req("GET", `/api/batches/${sb._id}/complete`)).data;
+    ok("QA-737: …and once it IS signed, the same students are still named but no longer called blocking",
+      post.no_portal_id_blocks === false && (post.no_portal_id ?? []).length === 2,
+      JSON.stringify({ blocks: post.no_portal_id_blocks, n: (post.no_portal_id ?? []).length }));
+  }
+
   // ---- -126 (S18-02 / S18-03 / S18-04): the PUBLIC self-registration door ----
   // Shivshakti, 18/08: "jab hum self register ki link bhejte hain toh wo saare column yahan bhi show
   // hone chahiye." SS-01 landed on the internal form and both internal routes and never touched this

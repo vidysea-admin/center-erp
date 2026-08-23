@@ -223,6 +223,76 @@ console.log("\n--- FL6: the import flags the file's own duplicates and refuses a
     JSON.stringify(preview.data.duplicates));
   ok("FL6: …and it is a flag, not a block — all 3 rows stay importable", preview.data.valid === 3, String(preview.data.valid));
 
+  // ---- -212 (QA-727, checker on qa-210): the portal Candidate ID at the BULK door. ----
+  //
+  // -210 hardened the two hand-typed candidate doors and left this one writing any string verbatim,
+  // then excused it in a comment naming a "normalize-and-report lane" for this field that did not
+  // exist - normalizeCan was not even imported into that route. This is the door the file's own
+  // header calls how rosters actually arrive, so a mis-mapped column could fill a whole roster with
+  // values the certification gate cannot read, 201, silently. Each one then blocks the automatic
+  // linker for that student PERMANENTLY, because link-portal-ids only ever fills an EMPTY id.
+  //
+  // REPORT, never refuse (QA-141: client rows are not dropped over format) - but never in silence,
+  // and on the PREVIEW, so the mapping can be fixed before the rows land.
+  const canRows = [
+    { "Student Name": `FL Can A ${stamp}`, "Mobile": "9811100011", "Candidate ID": "40918461" },     // no CAN at all
+    // CAN-shaped and accepted by the door's shape test, but normalizeCan reads only the DIGITS after
+    // CAN - a letter first means it reads as NO id at all. STAMPED, because e2e-govt pins the same
+    // class on the same shared database and two suites sharing one literal collide on the QA-417
+    // partial unique index (it cost this release a red wall).
+    { "Student Name": `FL Can B ${stamp}`, "Mobile": "9811100012", "Candidate ID": `CAN_A${stamp}` },
+    { "Student Name": `FL Can C ${stamp}`, "Mobile": "9811100013", "Candidate ID": `CAN_${stamp}44` }, // genuinely fine
+  ];
+  const canWs = XLSX.utils.json_to_sheet(canRows);
+  const canWb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(canWb, canWs, "Sheet1");
+  const canBuf = XLSX.write(canWb, { type: "buffer", bookType: "xlsx" });
+  const canFile = () => new File([canBuf], "can-probe.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const canMap = JSON.stringify({ "Student Name": "name", "Mobile": "phone", "Candidate ID": "sidh_candidate_id" });
+
+  const canPrev = await multipart(admin, "/api/candidates/import",
+    { file: canFile(), location: loc._id, program: prog._id, mapping: canMap }, 200);
+  ok("-212 (QA-727): the importer REPORTS portal Candidate IDs the gate cannot read, on the preview",
+    canPrev.data.candidate_id_invalid_count === 2,
+    `count=${canPrev.data.candidate_id_invalid_count} list=${JSON.stringify(canPrev.data.candidate_id_invalid ?? null)}`);
+  ok("-212 (QA-727): …and it names WHICH ones, both kinds — the non-CAN and the unreadable-CAN",
+    (canPrev.data.candidate_id_invalid ?? []).some((s) => s.includes("40918461"))
+    && (canPrev.data.candidate_id_invalid ?? []).some((s) => s.includes(`CAN_A${stamp}`)),
+    JSON.stringify(canPrev.data.candidate_id_invalid ?? null));
+  ok("-212 (QA-727): …and the good one is NOT reported — a report everything flags is not a report",
+    !(canPrev.data.candidate_id_invalid ?? []).some((s) => s.includes(`CAN_${stamp}44`)),
+    JSON.stringify(canPrev.data.candidate_id_invalid ?? null));
+  const canDone = await multipart(admin, "/api/candidates/import",
+    { file: canFile(), location: loc._id, program: prog._id, mapping: canMap, confirm: "1" }, 201);
+  ok("-212 (QA-727): the rows still IMPORT — this is a report, not a refusal (QA-141)",
+    canDone.data.imported === 3 && canDone.data.candidate_id_invalid_count === 2,
+    `imported=${canDone.data.imported} flagged=${canDone.data.candidate_id_invalid_count}`);
+
+  // ---- -212 (QA-726, checker on qa-210): the LIVE regression, and it can only be reproduced here.
+  //
+  // -210's guard ran on every PATCH that carried sidh_candidate_id, and the Candidates drawer
+  // re-sends that field on every edit (openEdit loads it into the form). So a record already holding
+  // a value the guard refuses could not be edited AT ALL - not the name, the phone, the email or the
+  // centre. The one record most in need of correction was the one you could not touch.
+  //
+  // It has to be pinned HERE because the importer is now the only door that can still put such a
+  // value on a record - and that is exactly why the defect existed. My first attempt at this pin
+  // lived in e2e-govt and planted "CAN_CHK208A", which the guard ACCEPTS, so it passed against the
+  // mutated build too: a pin that cannot fail. The mutation run is the only reason that was caught.
+  const badCand = ((await req(admin, "GET", "/api/candidates?q=9811100011&limit=5")).data?.items ?? [])[0];
+  ok("-212 (QA-726): the importer really did store the unreadable value (the precondition)",
+    badCand?.sidh_candidate_id === "40918461", JSON.stringify(badCand?.sidh_candidate_id ?? null));
+  const edit = await req(admin, "PATCH", `/api/candidates/${badCand?._id}`, {
+    // shaped exactly as saveCandidate builds it: every non-empty form field, the stored ID included
+    name: badCand?.name, phone: badCand?.phone, email: `flcan.${stamp}@example.com`,
+    sidh_candidate_id: badCand?.sidh_candidate_id,
+  });
+  ok("-212 (QA-726): THE REGRESSION — a candidate holding an unreadable ID can still be edited",
+    edit.status === 200, `status=${edit.status} error=${JSON.stringify(edit.data?.error ?? null).slice(0, 150)}`);
+  const stillGuarded = await req(admin, "PATCH", `/api/candidates/${badCand?._id}`, { sidh_candidate_id: "CANDIDATE" });
+  ok("-212 (QA-726): …and the guard did NOT go soft — a genuinely new junk value is still refused",
+    stillGuarded.status === 400, `status=${stillGuarded.status}`);
+
   // QA-146 part 2 (-83, checker on the CHI-ITI import): the sheet's own column-number,
   // header and description rows were stored as candidates ("1"/"5", "Salutation"/"EmailID",
   // "Input field, Mr, Ms, Mrs, Mx *"). Not a format drop on client rows — a template row is

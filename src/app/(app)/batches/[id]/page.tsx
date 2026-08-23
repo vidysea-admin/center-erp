@@ -5,6 +5,10 @@ import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { api, fmtDate, toInputDate } from "@/lib/client";
 import { personLabel, personList, personSeparator } from "@/lib/person";
+// -212 (QA-728): the shared portal-CAN helpers, from the PURE module. They used to live only in
+// lib/govt-attendance, which imports the mongoose models, so this screen could not reach them and
+// grew its own inline copy of the regex instead - the fifth spelling of one concept.
+import { normalizeCan, storedCanIsUnreadable } from "@/lib/validate";
 import { trainerSelectGroups } from "@/lib/trainer-select";
 import { slotHoursPerDay } from "@/lib/slot-rules";
 import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, HealthBanner, NameCell, Notice, Section, Tabs, inputCls, statusLabel } from "@/components/ui";
@@ -1039,6 +1043,33 @@ function EnrolStepToggle({ m, field, label, onUpdate }: any) {
     </button>
   );
 }
+// -212, Umesh 23/08: "jo candidate card hai, usme har kisi ki portal id bhi properly highlight
+// karke dikha". -208 put the portal ID on the batch screen, but only as a list of the students who
+// are MISSING one - so the ID a student DOES hold was still invisible everywhere except the edit
+// drawer. This is the chip that answers it, in one place, used by every candidate row on this
+// screen: the roster card and both attendance pickers.
+//
+// Three states, because there are three, and the middle one is the whole reason QA-725 exists:
+//   has one, readable        -> show it, quietly. Nothing to do.
+//   has one, NOT readable    -> amber. It is stored, and certification cannot see it. Until QA-719
+//                               is decided this is a real state a person has to be told about,
+//                               because the row otherwise looks identical to the next one.
+//   has none                 -> amber. This is what blocks the batch.
+function PortalIdChip({ candidate, className = "" }: { candidate: any; className?: string }) {
+  const raw = String(candidate?.sidh_candidate_id ?? "").trim();
+  const unreadable = storedCanIsUnreadable(raw);
+  if (raw && !unreadable) {
+    return <span className={`rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[11px] text-gray-700 ${className}`}
+      title="Portal Candidate ID (SIDH)">{raw}</span>;
+  }
+  if (raw) {
+    return <span className={`rounded bg-amber-100 px-1.5 py-0.5 font-mono text-[11px] font-medium text-amber-900 ${className}`}
+      title="This is stored on the candidate, but certification cannot read it as a portal ID. It has to read as CAN followed by the number.">{raw} ⚠</span>;
+  }
+  return <span className={`rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-900 ${className}`}
+    title="No portal Candidate ID on record. Certification cannot complete until this is filled in from SIDH.">no portal ID</span>;
+}
+
 function EnrolCard({ m, onUpdate, selected, onSelect }: any) {
   const who = m.candidate?.name || m.candidate?.email || m.candidate?.phone || "(unnamed candidate)";
   return (
@@ -1049,6 +1080,7 @@ function EnrolCard({ m, onUpdate, selected, onSelect }: any) {
           <div className="min-w-0">
             <div className="truncate font-semibold" title={who}>{who}</div>
             <div className="text-sm text-gray-500">{m.candidate?.phone}{m.candidate?.email && m.candidate?.name ? ` · ${m.candidate.email}` : ""}</div>
+            <div className="mt-1"><PortalIdChip candidate={m.candidate} /></div>
           </div>
         </label>
         <Chip value={m.enrollment_status} />
@@ -1211,10 +1243,22 @@ function PortalIdGaps({ batchId, onChanged }: any) {
                   coming from that function. It is kept, narrowed to a guard rather than a promise:
                   if the payload ever does carry such a row, this says so instead of rendering a box
                   that would save nowhere. The claim that it was a delivered feature is withdrawn. */}
+              {/* QA-725 (-212, checker on qa-210): a student who HOLDS an id this system cannot read
+                  used to render exactly like a student who holds nothing — blank box, no
+                  explanation — so the operator retyped what was already there and the row did not
+                  move. `normalizeCan` reads only the digits after CAN, so `CAN_ED0711202` and
+                  `CAN_CHK208A` are both stored, both valid to the door that accepted them, and both
+                  invisible to the gate. Widening the matcher is QA-719 and is Umesh's call; until
+                  then this row says what is on record and that it cannot be read. */}
+              {m.unreadable && (
+                <span className="rounded bg-amber-50 px-1.5 py-0.5 text-amber-800" title="Stored on this candidate, but the certification gate cannot read it as a portal ID.">
+                  on record: <span className="font-mono">{m.on_record}</span> — not readable as a portal ID
+                </span>
+              )}
               {!m.candidate ? (
                 <span className="text-amber-700">no candidate record on this row — nothing to write an ID onto</span>
               ) : (<>
-                <input className="w-40 rounded-lg border border-gray-300 px-2 py-1 text-xs" placeholder="CAN_…"
+                <input className="w-40 rounded-lg border border-gray-300 px-2 py-1 text-xs" placeholder={m.unreadable ? "replace it…" : "CAN_…"}
                   value={draft[m.candidate] ?? ""}
                   onChange={(e) => setDraft({ ...draft, [m.candidate]: e.target.value })}
                   onKeyDown={(e) => { if (e.key === "Enter") save(m.candidate, draft[m.candidate] ?? ""); }} />
@@ -1766,6 +1810,7 @@ function DailyExecution({ batchId, batch, role, error, setError }: any) {
                         PERSON was here - the highest-consequence place on the screen to be unable to
                         tell two people apart. It was on no ledger row at all. */}
                     <span className="min-w-0 truncate">{form.present.has(m._id) ? "✓ " : ""}{personLabel(m.candidate) || m.candidate?.name}</span>
+                    <PortalIdChip candidate={m.candidate} className="shrink-0" />
                     {form.present.has(m._id) && (
                       <span onClick={(e) => { e.stopPropagation(); toggleBiometric(m._id); }}
                         title="Biometric done on the govt app?"
@@ -1918,6 +1963,10 @@ function RoundDrawer({ log, members, onClose, onSaved, error, setError }: any) {
               className={`rounded-lg border px-2 py-2 text-left text-sm ${present.has(String(m._id)) ? "border-green-300 bg-green-50 text-green-800" : already.has(String(m._id)) ? "border-gray-200 bg-gray-50 text-gray-400" : "border-gray-200 bg-white text-gray-500"}`}>
               <span className="flex items-center justify-between gap-1">
                 <span className="min-w-0 truncate">{present.has(String(m._id)) ? "✓ " : already.has(String(m._id)) ? "· " : ""}{m.candidate?.name}</span>
+                {/* -212 (Umesh 23/08): "even attendance wale tab me bhi wo kar de" — the ID rides
+                    the attendance row too, so a centre marking attendance sees which students the
+                    portal cannot identify without leaving the screen they are already on. */}
+                <PortalIdChip candidate={m.candidate} className="shrink-0" />
                 {present.has(String(m._id)) && (
                   <span onClick={(e) => { e.stopPropagation(); toggleB(String(m._id)); }} title="Biometric done on the govt app?"
                     className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${biometric.has(String(m._id)) ? "border-blue-300 bg-blue-100 text-blue-700" : "border-gray-300 bg-white text-gray-400"}`}>
@@ -2001,6 +2050,7 @@ function LogEditDrawer({ log, members, onClose, onSaved, error, setError }: any)
                 className={`rounded-lg border px-2 py-2 text-left text-sm ${form.present.has(String(m._id)) ? "border-green-300 bg-green-50 text-green-800" : "border-gray-200 bg-white text-gray-500"}`}>
                 <span className="flex items-center justify-between gap-1">
                   <span className="min-w-0 truncate">{form.present.has(String(m._id)) ? "✓ " : ""}{m.candidate?.name}</span>
+                  <PortalIdChip candidate={m.candidate} className="shrink-0" />
                   {form.present.has(String(m._id)) && (
                     <span onClick={(e) => { e.stopPropagation(); toggleBio(String(m._id)); }} title="Biometric done on the govt app?"
                       className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${form.biometric.has(String(m._id)) ? "border-blue-300 bg-blue-100 text-blue-700" : "border-gray-300 bg-white text-gray-400"}`}>
@@ -2602,8 +2652,10 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
   // name the matcher would then reject.
   const expectedNames = certReady
     .map((i) => {
-      const m = /CAN[\s_-]*(\d+)/i.exec(String(i.candidate?.sidh_candidate_id ?? ""));
-      return m ? { name: i.candidate?.name, file: `CAN${m[1]}.pdf` } : null;
+      // -212 (QA-728): was an inline near-copy of the matcher's regex. It is the shared one now, so
+      // the name this screen SUGGESTS for a file cannot drift from the name the server MATCHES on.
+      const can = normalizeCan(i.candidate?.sidh_candidate_id);
+      return can ? { name: i.candidate?.name, file: `${can}.pdf` } : null;
     })
     .filter(Boolean) as { name: string; file: string }[];
 

@@ -120,6 +120,11 @@ async function plan(batchId: string) {
       phone: g.phone ?? null,
       result: r?.result ?? "Pending",
       certificate_status: r?.certificate_status ?? null,
+      // QA-725: what is ON RECORD for this student, and whether this system can read it. A blocked
+      // student with an unreadable id looks identical to one with no id at all, so the operator
+      // retypes what is already there. The row now says which of the two it is.
+      on_record: g.on_record ?? null,
+      unreadable: Boolean(g.on_record),
     };
   });
 

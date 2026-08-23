@@ -215,6 +215,21 @@ invalid recipient) and **always** write a MailLog row. Bounces: SNS → `public/
   definition; readers = the -154 import guard, the portal-id-health screen, the ID-re-match.
 - **CAN normalisation:** `normalizeCan()` in `lib/govt-attendance.ts`; `link-portal-ids` aliases
   its old local `canOf` to it. Never write a near-copy of that regex.
+  **There are now THREE named tests on this one concept, all in `lib/govt-attendance.ts`, and they
+  are not interchangeable — importing the wrong one is a shipped bug both ways:**
+  - `normalizeCan(s)` — the **matcher**. Reads only the DIGITS after CAN, returns `CAN<digits>` or
+    null. Everything that decides *who matches whom* uses this: the certification gate
+    (`enrolledWithoutCan`), the certificate matcher, the health screen, `link-portal-ids`.
+  - `looksLikeCan(s)` — the **shape test** for a hand-typed value (begins with CAN, has a digit).
+    Used only by the two candidate write doors. Using `normalizeCan` here instead refused
+    `CAN_ED0711202`, a shape this product stores — eleven wall assertions, -210 run 1.
+  - `storedCanIsUnreadable(s)` — "there is a value on record and the matcher cannot read it". The
+    honest gap between the two above, which is what the batch screen prints on a blocked row.
+  **They disagree by design** (`looksLikeCan("CAN_CHK208A")` is true, `normalizeCan` of it is null)
+  and that disagreement is **QA-719, an open decision of Umesh's** — widening the matcher changes
+  who matches whom across imports, health and certificates. Do not close it in passing.
+  A fourth spelling still exists and is NOT collapsed: `CAN_SHAPE` (`/CAN/i`) in
+  `api/candidates/portal-id-health/route.ts:33`.
 - **New door:** `api/candidates/portal-id-health` (GET plan / POST selected fixes, audited,
   never overwrites) — the link-portal-ids contract one level up. UI: the Candidates page
   "Portal ID health" drawer.

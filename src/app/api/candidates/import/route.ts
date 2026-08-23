@@ -10,6 +10,7 @@ import { audit } from "@/lib/audit";
 import { findDuplicateCandidates, normalizePhone } from "@/lib/duplicates";
 import { canonicalPhone } from "@/lib/validate";
 import { personLabel } from "@/lib/person";
+import { looksLikeCan, normalizeCan } from "@/lib/govt-attendance";
 
 // -154 (QA-424, REQ-385): the SET of importable fields comes from the catalog; the HANDLING stays
 // deliberate. Deriving behaviour from a type would have quietly changed how existing fields are
@@ -214,6 +215,28 @@ export const POST = apiHandler(async (req: NextRequest) => {
     }
   }
 
+  // QA-727 (-212, checker on qa-210): the same treatment for the portal Candidate ID, at the door
+  // this file's own header calls how rosters actually arrive. -210 hardened the two hand-typed
+  // doors and left this one writing any string verbatim - `40918461`, `CANDIDATE`, all of it, 201,
+  // no warning - and excused it in a comment naming a "normalize-and-report lane" that did not
+  // exist for this field. `phone_invalid` two lines up is the proof that per-row format reporting
+  // already lives here; the field simply was never given it.
+  //
+  // REPORT, never refuse: a client's sheet is client data and the QA-141 ruling is that rows are
+  // not dropped over format. What is unacceptable is doing it SILENTLY, because the value then
+  // blocks the automatic linker for that student forever - link-portal-ids only ever fills an EMPTY
+  // id - and nothing ever said so. Trimmed on the way in for the same reason as the typed doors
+  // (QA-730): the partial unique index is built on the raw string.
+  const candidateIdInvalid: string[] = [];
+  for (const c of candidates) {
+    if (typeof c.sidh_candidate_id !== "string") continue;
+    const raw = c.sidh_candidate_id.trim();
+    if (!raw) { delete c.sidh_candidate_id; continue; } // QA-450: absent, not "" - the index indexes ""
+    c.sidh_candidate_id = raw;
+    if (!looksLikeCan(raw)) candidateIdInvalid.push(`${personLabel(c)} — "${raw}"`);
+    else if (!normalizeCan(raw)) candidateIdInvalid.push(`${personLabel(c)} — "${raw}" (stored, but certification cannot read it — the ID must be CAN followed by the number)`);
+  }
+
   // Rule 7: the import path is where bulk duplicates actually enter. Flag them, never block —
   // the operator decides. Checks both against existing records and within the file itself.
   const seen = new Map<string, number>();
@@ -249,6 +272,9 @@ export const POST = apiHandler(async (req: NextRequest) => {
       interest_unmatched: [...new Set(interestUnmatched)].slice(0, 25),
       date_unparseable: dateUnparseable.slice(0, 25), date_unparseable_count: dateUnparseable.length,
       phone_invalid: phoneInvalid.slice(0, 25), phone_invalid_count: phoneInvalid.length,
+      // QA-727: on the PREVIEW, so a sheet whose Candidate ID column is mapped to the wrong header
+      // is seen BEFORE the import runs — the same reasoning as unhandled_fields above it.
+      candidate_id_invalid: candidateIdInvalid.slice(0, 25), candidate_id_invalid_count: candidateIdInvalid.length,
       unknown_columns: unknownCols,
       // QA-110: say the quiet part — which columns are about to be DROPPED vs stored.
       ignored_columns: acceptUnknown ? [] : unknownCols,
@@ -256,6 +282,6 @@ export const POST = apiHandler(async (req: NextRequest) => {
     });
   }
   const docs = await Candidate.insertMany(candidates);
-  await audit({ entity: "Candidate", entityId: docs[0]?._id ?? location, field: "import", newValue: `${docs.length} imported, ${duplicates.length} flagged as possible duplicates${dateUnparseable.length ? `, ${dateUnparseable.length} unreadable dates` : ""}${phoneInvalid.length ? `, ${phoneInvalid.length} un-normalizable phones` : ""}${!acceptUnknown && unknownCols.length ? `, ${unknownCols.length} column(s) ignored: ${unknownCols.join(", ")}` : ""}`, actor: user.id });
-  return NextResponse.json({ imported: docs.length, skipped: rows.length - candidates.length, duplicate_count: duplicates.length, date_unparseable: dateUnparseable.slice(0, 25), date_unparseable_count: dateUnparseable.length, phone_invalid: phoneInvalid.slice(0, 25), phone_invalid_count: phoneInvalid.length, ignored_columns: acceptUnknown ? [] : unknownCols, unhandled_fields: [...new Set(unhandledFields)], sidh_status_unmatched: [...new Set(sidhStatusUnmatched)].slice(0, 25), blank_by_field: blankByField }, { status: 201 });
+  await audit({ entity: "Candidate", entityId: docs[0]?._id ?? location, field: "import", newValue: `${docs.length} imported, ${duplicates.length} flagged as possible duplicates${dateUnparseable.length ? `, ${dateUnparseable.length} unreadable dates` : ""}${phoneInvalid.length ? `, ${phoneInvalid.length} un-normalizable phones` : ""}${candidateIdInvalid.length ? `, ${candidateIdInvalid.length} portal Candidate ID(s) the gate cannot read` : ""}${!acceptUnknown && unknownCols.length ? `, ${unknownCols.length} column(s) ignored: ${unknownCols.join(", ")}` : ""}`, actor: user.id });
+  return NextResponse.json({ imported: docs.length, skipped: rows.length - candidates.length, duplicate_count: duplicates.length, date_unparseable: dateUnparseable.slice(0, 25), date_unparseable_count: dateUnparseable.length, phone_invalid: phoneInvalid.slice(0, 25), phone_invalid_count: phoneInvalid.length, candidate_id_invalid: candidateIdInvalid.slice(0, 25), candidate_id_invalid_count: candidateIdInvalid.length, ignored_columns: acceptUnknown ? [] : unknownCols, unhandled_fields: [...new Set(unhandledFields)], sidh_status_unmatched: [...new Set(sidhStatusUnmatched)].slice(0, 25), blank_by_field: blankByField }, { status: 201 });
 });

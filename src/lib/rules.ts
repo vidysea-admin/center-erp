@@ -1240,7 +1240,19 @@ export async function enrolledWithoutCan(batchId: string) {
     .populate("candidate", "name phone sidh_candidate_id").lean<any[]>();
   return members
     .filter((m) => m.candidate && !normalizeCan(m.candidate.sidh_candidate_id))
-    .map((m) => ({ member: String(m._id), name: String(m.candidate?.name ?? ""), phone: m.candidate?.phone ?? null }));
+    // QA-725 (-212, checker on qa-210): the value ON RECORD rides along too. This list is built by
+    // asking `normalizeCan`, and `normalizeCan` reads only the DIGITS after CAN - so a student
+    // holding `CAN_CHK208A` lands here looking exactly like a student holding nothing at all. The
+    // operator sees a blank row, types the id that is already there, and nothing changes. Until
+    // QA-719 is decided (widening the matcher changes who matches whom across imports, health and
+    // certificates - Umesh's call, not a validation release's), the honest thing is to SAY the
+    // record has an id this system cannot read, and print it.
+    .map((m) => ({
+      member: String(m._id),
+      name: String(m.candidate?.name ?? ""),
+      phone: m.candidate?.phone ?? null,
+      on_record: String(m.candidate?.sidh_candidate_id ?? "").trim() || null,
+    }));
 }
 
 // Rules 45/46: certification completes when every Pass candidate holds an Issued certificate.

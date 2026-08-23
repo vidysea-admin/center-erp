@@ -7,13 +7,7 @@ import { HttpError, apiHandler, requireUser, requireEdit } from "@/lib/authz";
 import { dbConnect } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { emailError, canonicalPhone, phoneError } from "@/lib/validate";
-
-// QA-714 / QA-719 (-210): what a portal Candidate ID has to LOOK like at a hand-typed door.
-// Deliberately NOT `normalizeCan` - that is the MATCHER (/CAN[\s_-]*(\d+)/i) and it reads only
-// digits after CAN, so using it as a format refused `CAN_ED0711202`, a shape this product stores
-// and every suite uses. The wall caught that in eleven assertions before it shipped. The rule is
-// the one the data actually obeys: begins with CAN, and carries at least one digit.
-const looksLikeCan = (s: unknown) => /^\s*CAN[\s_-]?[A-Za-z0-9-]*\d[A-Za-z0-9-]*\s*$/i.test(String(s ?? ""));
+import { looksLikeCan } from "@/lib/govt-attendance";
 
 export const { GET, PATCH } = itemRoutes({
   model: Candidate, entity: "Candidate",
@@ -32,7 +26,7 @@ export const { GET, PATCH } = itemRoutes({
   writeRoles: ["Admin", "Operations", "Location", "Enrollment"],
   permission: "candidates.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
   // QA-141 (Umesh): edits are as strict as creates — fixed-up numbers land as the bare 10.
-  beforeUpdate(_id, body, _existing, user) {
+  beforeUpdate(_id, body, existing, user) {
     // -156 (QA-450): null, not "" - clearing the field has to stay possible, and the QA-417 partial
     // index does not index null. Same reasoning as the create door one file over.
     if (typeof body.sidh_candidate_id === "string" && !body.sidh_candidate_id.trim()) body.sidh_candidate_id = null;
@@ -45,9 +39,25 @@ export const { GET, PATCH } = itemRoutes({
     // every day, and Umesh's team is about to type ten of them.
     // Refused at the door rather than in the widget, so every caller is covered - the Candidates
     // drawer has had this input since -116.
-    if (typeof body.sidh_candidate_id === "string" && body.sidh_candidate_id.trim() && !looksLikeCan(body.sidh_candidate_id)) {
-      throw new HttpError(400, `"${body.sidh_candidate_id.trim()}" is not a portal Candidate ID. It reads like CAN_12345678 — the letters CAN followed by the number. Copy it from SIDH exactly as it appears there.`);
+    //
+    // QA-726 (-212, checker on qa-210): ONLY when the value actually CHANGED. -210 validated every
+    // PATCH that carried the field, and the Candidates drawer re-sends it on EVERY edit (openEdit
+    // loads it into the form) - so a record already holding an old junk id, typed before -210 or
+    // written by the bulk importer that still has no guard, became UNEDITABLE. Measured by the
+    // checker: changing only the EMAIL of three imported candidates returned 400 naming a portal ID
+    // the operator had not touched. A guard on newly typed input must never retroactively freeze
+    // records that already hold the thing it now refuses - the fix for those is to correct them,
+    // and this made correcting them the one thing you could not do.
+    if (typeof body.sidh_candidate_id === "string" && body.sidh_candidate_id.trim()
+      && body.sidh_candidate_id.trim() !== String((existing as any)?.sidh_candidate_id ?? "").trim()
+      && !looksLikeCan(body.sidh_candidate_id)) {
+      throw new HttpError(400, `"${body.sidh_candidate_id.trim()}" is not a portal Candidate ID. It reads like CAN_12345678 - the letters CAN followed by the number. Copy it from SIDH exactly as it appears there.`);
     }
+    // QA-730: store what was validated, not that value plus whatever whitespace arrived with it.
+    // The QA-417 partial unique index is built on the RAW string, so "  CAN_12345678  " does not
+    // collide with the same id another candidate already holds, and the health screen's duplicate
+    // bucket groups on the raw value too - so neither sees the pair.
+    if (typeof body.sidh_candidate_id === "string") body.sidh_candidate_id = body.sidh_candidate_id.trim();
     // -135 (QA-283): the caller may say "these documents were done on SIDH". It does NOT get to say
     // WHO confirmed it or WHEN — the server stamps both from the session, because a mark whose
     // provenance the client can write is not evidence, it is a field. Clearing it clears them too,

@@ -303,15 +303,12 @@ export function shiftSignature(rows: Array<{ total_days_present?: number | null;
   };
 }
 
-/**
- * -155: ONE normalisation of the portal CAN id. link-portal-ids grew its own local copy first
- * (-108); the health screen and the re-match need the identical test, and a second regex that is
- * almost the same is how two doors disagree about one identity.
- */
-export const normalizeCan = (s: unknown): string | null => {
-  const m = /CAN[\s_-]*(\d+)/i.exec(String(s ?? ""));
-  return m ? "CAN" + m[1] : null;
-};
+// -155 / QA-728: the three portal-CAN helpers moved to `lib/validate.ts`, which imports nothing and
+// is therefore reachable from CLIENT components too. This file imports the mongoose models, so
+// while they lived here no screen could use them - and the batch screen had already grown its own
+// inline copy of the regex rather than import one. Re-exported so every existing server caller that
+// imports them from `@/lib/govt-attendance` keeps working unchanged.
+export { normalizeCan, looksLikeCan, storedCanIsUnreadable } from "@/lib/validate";
 
 export type MatchStatus = "Matched" | "Ambiguous" | "Unmatched";
 // -146 (QA-316): `GovtRow &` here, while matchGovtRows now honestly accepts Partial<GovtRow>[],
