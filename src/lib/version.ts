@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-214";
+export const RELEASE = "2026.08.14-215";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,17 @@ export const RELEASE = "2026.08.14-214";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-215 is about students who were never missing anything. On the batch screen, the panel that " +
+  "lists everyone holding up certification now checks whether the government Candidate ID is " +
+  "already in the system under a different field - it very often is, because an older version of " +
+  "the import form offered no correct destination for it and it landed in the ID reference box " +
+  "instead. Where that is the case the panel says so, names those students, and offers to move the " +
+  "numbers across in one action. Nothing has to be typed, an ID already on record is never " +
+  "overwritten, and every move is recorded against the candidate. The tool that does this already " +
+  "existed on the candidates screen; what was missing was any sign of it on the screen where the " +
+  "problem is actually met.";
+
+const RELEASE_NOTE_ARCHIVE_214 =
   "-214 is four things the centre team asked for on the batch closure screen. The box that asked " +
   "for a roll number is gone - it had never been filled in once - and in its place is the " +
   "government Candidate ID, which is the number that actually matters and which can now be typed " +
@@ -194,6 +205,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
+  RELEASE_NOTE_ARCHIVE_214 + " " +
   RELEASE_NOTE_ARCHIVE_213 + " " +
   RELEASE_NOTE_ARCHIVE_212 + " " +
   RELEASE_NOTE_ARCHIVE_211 + " " +

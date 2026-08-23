@@ -1646,7 +1646,32 @@ for (const file of walk(root)) {
   }
 }
 
-// ---- -212 (Umesh 23/08): the portal ID on EVERY candidate row, from ONE chip ----
+// ---- -215 (QA-770): the blocked-student panel must offer the ids that are already here ----
+// 57 candidates on live hold a CAN-shaped value in `id_reference` with `sidh_candidate_id` empty,
+// ten of them on the batch Umesh has been chasing all week. The remedy was built and never run
+// because it lives on a different screen. If this panel ever stops offering it, a centre is back to
+// typing ids the system already has - so the offer is pinned, and so is the safety sentence, because
+// "we moved 57 identity fields for you" is a claim that has to say what it will not overwrite.
+{
+  const rel = "app/(app)/batches/[id]/page.tsx";
+  const src = stripComments(fs.readFileSync(path.join(root, rel), "utf-8"));
+  const body = fnBody(src, "PortalIdGaps");
+  const reads = /portal-id-health/.test(body);
+  const scoped = /blockedIds/.test(body);            // system-wide plan, narrowed to THIS batch
+  const applies = /copy:/.test(body);
+  const saysSafe = /never overwritten|only fills an empty|Only fills an empty/i.test(body);
+  if (reads && scoped && applies && saysSafe) passed++;
+  else {
+    failed++;
+    pushStructural(rel + ": the portal-ID panel does not offer the ids that already exist"
+      + " (reads the health plan=" + reads + ", narrowed to this batch=" + scoped
+      + ", can apply the move=" + applies + ", says what it will NOT overwrite=" + saysSafe + ")"
+      + " - QA-770: ten of Umesh's \"missing\" ids were in id_reference the whole time, and the fix"
+      + " existed on a screen he was not standing on.");
+  }
+}
+
+// ---- -212 (Umesh 23/08): the portal ID on EVERY candidate row, from ONE chip ----// ---- -212 (Umesh 23/08): the portal ID on EVERY candidate row, from ONE chip ----
 // "jo candidate card hai, usme har kisi ki portal id bhi properly highlight karke dikha ... even
 // attendance wale tab me bhi wo kar de". -208 had put the portal ID on this screen but only as a
 // list of the students MISSING one, so the ID a student DOES hold was invisible outside the edit

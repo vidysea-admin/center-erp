@@ -1245,8 +1245,42 @@ function PortalIdGaps({ batchId, onChanged }: any) {
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState<string | null>(null);
   const [err, setErr] = useState("");
-  const load = () => api(`/api/batches/${batchId}/link-portal-ids`).then(setPlan).catch(() => setPlan(null));
+  // QA-770 (-215, checker on live -213): most of these students are not missing an ID at all - it is
+  // sitting in the WRONG FIELD. 57 candidates system-wide carry a CAN-shaped value in `id_reference`
+  // (which the model itself says is "government ID reference, NOT the Aadhaar number itself") with
+  // `sidh_candidate_id` empty - and TEN of them are on AVP-GURU-RPLAVP-DST-02, the batch this whole
+  // week has been about. Umesh has been told ten IDs are missing; ten of them are already here.
+  //
+  // The remedy was BUILT (portal-id-health's `misfiled` bucket, REQ-381) and nobody ran it, because
+  // it lives on the Candidates screen and the person with the problem is standing on the BATCH
+  // screen. Same shape as everything else this week: the capability exists where the pain is not.
+  // So this surfaces it here. It is the existing door, unchanged - only ever fills an EMPTY
+  // sidh_candidate_id, and re-checks the plan at apply time, so a value that appeared in between is
+  // refused rather than overwritten.
+  const [health, setHealth] = useState<any>(null);
+  const [moving, setMoving] = useState(false);
+  const load = () => Promise.all([
+    api(`/api/batches/${batchId}/link-portal-ids`).then(setPlan).catch(() => setPlan(null)),
+    api("/api/candidates/portal-id-health").then(setHealth).catch(() => setHealth(null)),
+  ]);
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [batchId]);
+
+  // Only the misfiled rows that belong to THIS batch's blocked students - the health screen is
+  // system-wide and a centre must not be offered someone else's roster to fix from here.
+  const blockedIds = new Set((plan?.missing ?? []).map((m: any) => String(m.candidate)).filter(Boolean));
+  const recoverable: any[] = ((health?.misfiled ?? []) as any[]).filter((m) => blockedIds.has(String(m.candidate)));
+
+  async function moveMisfiled() {
+    if (moving || !recoverable.length) return;
+    setMoving(true); setErr("");
+    try {
+      const res = await api("/api/candidates/portal-id-health", { method: "POST", json: { copy: recoverable.map((m) => String(m.candidate)) } });
+      const refused = (res?.results?.refused ?? []) as string[];
+      if (refused.length) setErr(`${refused.length} left untouched: ${refused[0]}`);
+      await load(); onChanged?.();
+    } catch (e: any) { setErr(e.message); }
+    setMoving(false);
+  }
 
   async function save(candidateId: string, rawId: string) {
     const v = String(rawId ?? "").trim();
@@ -1272,6 +1306,27 @@ function PortalIdGaps({ batchId, onChanged }: any) {
         {open ? "hide the list" : `show which ${gaps.length}`}
       </button>
       {err && <div className="mt-1 text-red-700">{err}</div>}
+      {/* QA-770: the good news first, because it changes what the person does next. */}
+      {recoverable.length > 0 && (
+        <div className="mt-2 rounded-lg border border-green-300 bg-green-50 px-2.5 py-2 text-green-900">
+          <b>{recoverable.length} of them already have an ID — it is filed in the wrong place.</b>{" "}
+          The value is sitting in that candidate&rsquo;s <span className="font-mono">ID reference</span> field,
+          which is not the field certification reads. Nothing has to be typed.
+          <div className="mt-1 font-mono text-[11px]">
+            {/* REQ-389 / QA-476: through personLabel, never a bare name - this very batch has two
+                Sachin Kumars, and a list of bare names would offer the operator two identical rows. */}
+            {recoverable.slice(0, 4).map((m: any) => personLabel({ name: m.name, phone: m.phone, sidh_candidate_id: m.can })).join("  ·  ")}
+            {recoverable.length > 4 ? `  ·  +${recoverable.length - 4} more` : ""}
+          </div>
+          <button type="button" onClick={moveMisfiled} disabled={moving}
+            className="mt-1.5 rounded-lg bg-green-700 px-2.5 py-1 font-medium text-white hover:bg-green-800 disabled:bg-green-300">
+            {moving ? "Moving…" : `Move ${recoverable.length} into the portal ID field`}
+          </button>
+          <div className="mt-1 text-[11px] text-green-800">
+            Only fills an empty portal ID — an ID already on record is never overwritten, and every move is recorded.
+          </div>
+        </div>
+      )}
       {open && (
         <div className="mt-2 space-y-1 rounded-lg border border-gray-200 bg-white p-2">
           <div className="text-[11px] text-gray-500">Type the portal Candidate ID from SIDH and press Save. The count above recounts itself.</div>

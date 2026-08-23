@@ -1857,6 +1857,59 @@ ok("SSRF guard does not block the real client workbook", stillOk.data.ok === tru
     Boolean(row) && echoed.blocking === (echoed.missing ?? []).length,
     JSON.stringify({ blocking: echoed.blocking, listed: (echoed.missing ?? []).length }));
 
+  // ---- QA-770 (-215, checker on live -213): the blocked student who is not missing anything ----
+  //
+  // 57 candidates on live carry a CAN-shaped value in `id_reference` - the field the model itself
+  // calls "government ID reference, NOT the Aadhaar number itself" - with `sidh_candidate_id` empty.
+  // TEN of them are on AVP-GURU-RPLAVP-DST-02, the batch this whole week has been about. Umesh has
+  // been told ten IDs are missing; ten of them were already in the system, one column over.
+  //
+  // The remedy existed (portal-id-health's `misfiled` bucket, pinned in e2e-flows-blindspot) and was
+  // never run, because it lives on the Candidates screen while the person with the problem stands on
+  // the BATCH screen. What was never pinned is the CONNECTION: that a misfiled id is WHY a batch is
+  // blocked, and that moving it clears the block. That is what -215 surfaces and this pins.
+  {
+    // Its OWN batch. My first version enrolled into `nb`, the shared fixture two blocks up, and the
+    // extra member broke two EXISTING assertions there that count exactly (-205 "missing 0" and
+    // -207 "roster 4"). A new pin that moves another pin's numbers is a pin that will be deleted by
+    // whoever it inconveniences next.
+    const rb = (await req(admin, "POST", "/api/batches", { location: loc._id, program: program._id, target_size: 3, planned_start: localDate() }, 201)).data.item;
+    const ref = `CAN_${STAMP}31`;
+    const cRef = (await req(admin, "POST", "/api/candidates", {
+      // STAMP is 6 digits, so the phone must be prefixed to TEN - `97${STAMP}` was eight, the create
+      // came back 400, `.data.item` was undefined and the whole suite crashed on `._id`. The wall
+      // refused to count that run at all, which is the crash guard doing exactly its job.
+      name: `${NAME} Misfiled One`, phone: `9558${STAMP}`, location: loc._id, program: program._id,
+      id_reference: ref,   // the id is HERE, and sidh_candidate_id is deliberately left empty
+    }, 201)).data.item;   // these routes wrap in `item` - reading `.data` gave an undefined _id and
+                          // the whole block passed its ids as "undefined" to the API
+    const mRef = (await req(admin, "POST", `/api/batches/${rb._id}/members`, { candidate: cRef._id }, 201)).data.item;
+    await req(admin, "PATCH", `/api/members/${mRef._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+
+    const blocked = (await req(admin, "GET", `/api/batches/${rb._id}/link-portal-ids`)).data;
+    const row = (blocked.missing ?? []).find((m) => m.name === `${NAME} Misfiled One`);
+    ok("-215 (QA-770): a student whose ID sits in id_reference is counted as BLOCKING the batch",
+      Boolean(row) && row.on_record === null, JSON.stringify(row ?? null));
+
+    const health = (await req(admin, "GET", "/api/candidates/portal-id-health")).data;
+    const mis = (health.misfiled ?? []).find((m) => String(m.candidate) === String(cRef._id));
+    ok("-215 (QA-770): …and the health plan already knows the id is there, one column over",
+      Boolean(mis) && mis.can === ref, JSON.stringify(mis ?? null));
+
+    const moved = await req(admin, "POST", "/api/candidates/portal-id-health", { copy: [String(cRef._id)] });
+    ok("-215 (QA-770): moving it is one action, not ten typed IDs", moved.status === 200 && moved.data.copied === 1,
+      JSON.stringify(moved.data).slice(0, 140));
+
+    const after = (await req(admin, "GET", `/api/batches/${rb._id}/link-portal-ids`)).data;
+    ok("-215 (QA-770): THE POINT — that student stops blocking the batch, with nothing typed",
+      !(after.missing ?? []).some((m) => m.name === `${NAME} Misfiled One`),
+      JSON.stringify((after.missing ?? []).map((m) => m.name)));
+    const readBack = (await req(admin, "GET", `/api/candidates/${cRef._id}`)).data?.item;
+    ok("-215 (QA-770): …and id_reference is left exactly as it was — a copy, not a move",
+      readBack?.sidh_candidate_id === ref && readBack?.id_reference === ref,
+      JSON.stringify({ sidh: readBack?.sidh_candidate_id, ref: readBack?.id_reference }));
+  }
+
   // -212, Umesh 23/08: "jo candidate card hai, usme HAR KISI ki portal id bhi dikha... even
   // attendance wale tab me bhi". The chip is only as true as the payload behind it: the roster
   // route populated "name phone lifecycle_status" and nothing else, so a chip reading
