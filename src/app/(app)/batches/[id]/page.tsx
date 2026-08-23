@@ -11,7 +11,7 @@ import { personLabel, personList, personSeparator } from "@/lib/person";
 import { normalizeCan, storedCanIsUnreadable } from "@/lib/validate";
 import { trainerSelectGroups } from "@/lib/trainer-select";
 import { slotHoursPerDay } from "@/lib/slot-rules";
-import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, HealthBanner, NameCell, Notice, Section, Tabs, inputCls, statusLabel } from "@/components/ui";
+import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthBanner, NameCell, Notice, Section, Tabs, inputCls, statusLabel } from "@/components/ui";
 import { Activity } from "@/components/activity";
 import { usePerms } from "@/components/shell";
 import { compressImage, flushQueue, fmtBytes, getLastUploadInfo, getQueue, pickRecorderMime, uploadWithRetry, videoKnobs, type VideoKnobs } from "@/lib/upload";
@@ -141,9 +141,15 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
   // day N of M, our logged days, the portal's working days, who is qualified — instead of a
   // readiness checklist for a batch that already started.
   const [att, setAtt] = useState<any>(null);
+  // QA-750 (-214, Umesh 23/08): "isme new information bhi aani chahiye jaise out of 23 kitne qualify
+  // hue the and kitne certified ho gaye and all, like kitne pass kitne fail." The numbers already
+  // exist - `summarizeResults` computes appeared/passed/failed/absent/certificates_issued and
+  // GET /results returns them as `summary`. No new API, just the fetch this screen never made.
+  const [resSummary, setResSummary] = useState<any>(null);
   useEffect(() => {
     if (!["Active", "Closing", "Completed", "Closed"].includes(b.status)) { setAtt(null); return; }
     api(`/api/batches/${b._id}/attendance`).then(setAtt).catch(() => setAtt(null));
+    api(`/api/batches/${b._id}/results`).then((d) => setResSummary(d.summary ?? null)).catch(() => setResSummary(null));
   }, [b._id, b.status]);
   const running = ["Active", "Closing", "Completed", "Closed"].includes(b.status);
   const dayN = b.actual_start ? Math.max(1, Math.floor((Date.now() - new Date(b.actual_start).getTime()) / 864e5) + 1) : null;
@@ -400,6 +406,24 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
             <div><div className="text-xs text-gray-500">Portal working days</div><div className="text-lg font-semibold">{att ? (portalDays || <span className="text-sm font-normal text-gray-500">not imported</span>) : "—"}</div></div>
             <div><div className="text-xs text-gray-500">Qualified for assessment</div><div className="text-lg font-semibold text-green-700">{att ? att.qualified_count : "—"}</div></div>
           </div>
+          {/* QA-750. Two rows, not one, and they are NOT a subtotal of each other: "qualified for
+              assessment" is an ATTENDANCE verdict (enough hours to sit the exam) and pass/fail is a
+              RESULT. Printing them as one chain would repeat QA-704 - three numbers on one screen
+              answering what reads like one question. So the second row says out loud what it counts. */}
+          {resSummary && (
+            <div className="mt-3 border-t border-gray-100 pt-3">
+              <div className="mb-1.5 text-xs text-gray-500">Results recorded so far — this is the exam, not the attendance bar above</div>
+              <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+                <div><div className="text-xs text-gray-500">Marked</div><div className="text-lg font-semibold">{resSummary.appeared ?? 0}<span className="text-sm font-normal text-gray-500"> of {data.readiness?.roster_count ?? 0}</span></div></div>
+                <div><div className="text-xs text-gray-500">Passed</div><div className="text-lg font-semibold text-green-700">{resSummary.passed ?? 0}</div></div>
+                <div><div className="text-xs text-gray-500">Failed</div><div className="text-lg font-semibold text-red-600">{resSummary.failed ?? 0}</div></div>
+                <div><div className="text-xs text-gray-500">Certificates issued</div><div className="text-lg font-semibold">{resSummary.certificates_issued ?? 0}<span className="text-sm font-normal text-gray-500"> of {resSummary.passed ?? 0}</span></div></div>
+              </div>
+              {(resSummary.absent ?? 0) > 0 && (
+                <div className="mt-1.5 text-xs text-gray-500">{resSummary.absent} marked Absent.</div>
+              )}
+            </div>
+          )}
           {/* Umesh's own list, 19/08: "mark attendance, daily attendance" plus the two he named
               when asked — roster and certificates. Every one already had a door; the point is that
               they were all a tab-click away from the screen a person opens precisely to do one. */}
@@ -570,11 +594,19 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
         {/* QA-007 (15/08): a finished batch with no portal id, no Drive folder or no time
             slot is an evidence gap the client can ask about — name what is missing instead
             of leaving blanks nobody notices. */}
-        {["Closing", "Completed"].includes(b.status) && (!b.govt_batch_id || !b.drive_folder_url || !b.slot_start) && (
+        {/* QA-749 (-214, Umesh 23/08): "ab sach mai humko ye drive evidence chahiye bhi? drive to use
+            hi nahi ho raha na ab, ab to google cloud mai store ho raha hai na data. to ye galat hai
+            na??" He was right, and the measurement is blunter than the question: NOTHING in the
+            backend reads `drive_folder_url` - it exists on the model and on one PATCH allow-list and
+            nowhere else - while `lib/storage.ts:4` states in its own words that "the USER never sees
+            Drive", which is precisely what this banner and the field below were doing. Live evidence
+            storage is GCS. So the batch was being nagged for a folder nobody would ever open.
+            His ruling, asked directly: "poori tarah hatao" - banner and form both. The SCHEMA is
+            untouched, so every link already typed is still in the database. */}
+        {["Closing", "Completed"].includes(b.status) && (!b.govt_batch_id || !b.slot_start) && (
           <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
             Still missing on this finished batch: {[
               !b.govt_batch_id && "the SIDH batch ID",
-              !b.drive_folder_url && "the Drive evidence folder",
               !b.slot_start && "the time slot",
             ].filter(Boolean).join(" · ")} — fill them below so the record stands on its own.
           </div>
@@ -677,16 +709,18 @@ function EditDetails({ b, onChanged, error, setError }: any) {
     planned_start: toInputDate(b.planned_start), planned_end: toInputDate(b.planned_end), target_size: b.target_size,
     slot_start: b.slot_start ?? "", slot_end: b.slot_end ?? "",
     relevant_skills: b.relevant_skills ?? [],
-    govt_batch_id: b.govt_batch_id ?? "", drive_folder_url: b.drive_folder_url ?? "",
+    // QA-749: `drive_folder_url` deliberately NOT carried on this form any more. PATCH is partial,
+    // so leaving it out means every link already in the database stays exactly as it is - the field
+    // is invisible, not deleted. Carrying it would have meant re-sending it on every Details save
+    // for a box nobody can see.
+    govt_batch_id: b.govt_batch_id ?? "",
     location: b.location?._id ?? b.location ?? "", program: b.program?._id ?? b.program ?? "",
   });
-  const [driveRoot, setDriveRoot] = useState("");
   const planning = b.status === "Planning";
   useEffect(() => {
     api("/api/trainers?limit=2000").then((d) => setTrainers(d.items)).catch(() => {});
     const locId = b.location?._id ?? b.location;
     api(`/api/locations/${locId}/rooms`).then((d) => setRooms(d.items)).catch(() => {});
-    api("/api/defaults").then((d) => setDriveRoot(d.item?.drive_root_url ?? "")).catch(() => {});
     if (planning) {
       api("/api/locations?limit=2000").then((d) => setAllLocations(d.items)).catch(() => {});
       api("/api/programs?limit=1000").then((d) => setAllPrograms(d.items)).catch(() => {});
@@ -786,16 +820,6 @@ function EditDetails({ b, onChanged, error, setError }: any) {
         <Field label="Government batch ID (SIDH)">
           <input className={inputCls} value={form.govt_batch_id} placeholder="as shown on the portal"
             onChange={(e) => setForm({ ...form, govt_batch_id: e.target.value })} />
-        </Field>
-        <Field label="Drive evidence folder">
-          <input className={inputCls} value={form.drive_folder_url} placeholder="https://drive.google.com/…"
-            onChange={(e) => setForm({ ...form, drive_folder_url: e.target.value })} />
-          {/* RPL project → All Locations → District — this batch's folder lives under here. */}
-          {driveRoot && (
-            <a href={form.drive_folder_url || driveRoot} target="_blank" rel="noreferrer" className="mt-1 inline-block text-xs text-blue-700 hover:underline">
-              {form.drive_folder_url ? "Open this batch's folder ↗" : "Open the project Drive to create it ↗"}
-            </a>
-          )}
         </Field>
       </div>
       <div className="text-xs text-gray-500">Actual: {fmtDate(b.actual_start)} → {fmtDate(b.actual_end)}</div>
@@ -1067,6 +1091,15 @@ function EnrolStepToggle({ m, field, label, onUpdate }: any) {
 // assertions - the fifth broken screen behind a green wall in two days. The two tabs he actually
 // named are `Candidates` (the roster table) and `Attendance`, and both take flat rows, so this
 // accepts a bare value as well as a candidate object.
+// QA-747: the three states, named once. PortalIdChip renders them; the closure card's input needs
+// the same answer to colour its border, and two spellings of "is this id readable" on one screen is
+// exactly what ARCHITECTURE section 3 exists to stop.
+function portalIdState(v: unknown): "none" | "unreadable" | "ok" {
+  const raw = String(v ?? "").trim();
+  if (!raw) return "none";
+  return storedCanIsUnreadable(raw) ? "unreadable" : "ok";
+}
+
 function PortalIdChip({ candidate, value, className = "" }: { candidate?: any; value?: unknown; className?: string }) {
   const raw = String(value ?? candidate?.sidh_candidate_id ?? "").trim();
   const unreadable = storedCanIsUnreadable(raw);
@@ -2660,6 +2693,34 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
 
   const active = items.filter((i) => !i.left_on);
   const pending = active.filter((i) => !i.result || i.result.result === "Pending");
+
+  // QA-748 (-214, Umesh 23/08): "yeh joh saare candidate cards hai, inke upar bhi filter hona
+  // chahiye... kisiko sirf pass wale candidate dekhne toh woh us card ke through hi filter laga de,
+  // aur kisiko aise chahiye ki jinki candidate id missing hai toh woh missing wale aa jayen... abhi
+  // to 40-45 hain, let's suppose kal ke din 200 plus ho jata hai to us case mein to ye bahut hi
+  // zyada ho jayega na, complex to scroll and all." Plus, asked what to include: "sab kuch" and
+  // "candidate id search, mock test, aur jaise bhi possible, search based filteration too".
+  //
+  // The Review table beside this view has had search and per-column filters since the -83 table-UX
+  // cycle (DataTable builds them in); the CARD view had nothing. Client-side, because the payload
+  // already carries every row - no new API.
+  const [cardFilter, setCardFilter] = useState("all");
+  const [cardSearch, setCardSearch] = useState("");
+  const CARD_FILTERS: { value: string; label: string; title: string; test: (i: any) => boolean }[] = [
+    { value: "all", label: "All", title: "Everyone on the roster", test: () => true },
+    { value: "Pass", label: "Pass", title: "Marked Pass", test: (i) => i.result?.result === "Pass" },
+    { value: "Fail", label: "Fail", title: "Marked Fail", test: (i) => i.result?.result === "Fail" },
+    { value: "Absent", label: "Absent", title: "Marked Absent", test: (i) => i.result?.result === "Absent" },
+    { value: "pending", label: "Not marked", title: "No result recorded yet", test: (i) => !i.result || i.result.result === "Pending" },
+    // his own example, and the one this whole week has been about
+    { value: "nocan", label: "No portal ID", title: "No portal Candidate ID on record, or one the certification gate cannot read", test: (i) => portalIdState(i.candidate?.sidh_candidate_id) !== "ok" },
+    { value: "nocert", label: "Passed, no certificate", title: "Passed but the certificate is not settled yet", test: (i) => i.result?.result === "Pass" && !["Issued", "Not Issued"].includes(i.result?.certificate_status) },
+    { value: "mock", label: "Mock: not qualified", title: "Sat the mock test and did not clear it", test: (i) => i.result?.mock_appeared === true && i.result?.mock_qualified !== true },
+  ];
+  const q = cardSearch.trim().toLowerCase();
+  const matchesSearch = (i: any) => !q || [i.candidate?.name, i.candidate?.phone, i.candidate?.sidh_candidate_id]
+    .some((v) => String(v ?? "").toLowerCase().includes(q));
+  const shown = items.filter((i) => (CARD_FILTERS.find((f) => f.value === cardFilter)?.test ?? (() => true))(i) && matchesSearch(i));
   const passes = items.filter((i) => i.result?.result === "Pass");
   // -108: the pre-flight numbers, in the words the panel says them in.
   const certReady = passes.filter((i) => !i.result?.certificate_file);
@@ -2757,10 +2818,27 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
             defaultValue={i.result?.mock_note ?? ""}
             onBlur={(e) => e.target.value !== String(i.result?.mock_note ?? "") && mark(i.member, { mock_note: e.target.value })} />
         )}
-        <input placeholder="Roll no" disabled={closed}
-          className="ml-auto w-28 rounded-lg border border-gray-300 px-2 py-0.5"
-          defaultValue={i.result?.roll_no ?? ""}
-          onBlur={(e) => e.target.value !== String(i.result?.roll_no ?? "") && mark(i.member, { roll_no: e.target.value })} />
+        {/* QA-747 (-214, Umesh 23/08): "role number ka kya kaam hai bhai isme... role number nai
+            chayye, candidate id chayye. Candidate id fill karne ke liye woh hona chahiye, taaki jin
+            students ki candidate id missing hai unko wo kar payein."
+            The Roll no box that used to sit here was filled 0 times out of 45 on the live batch, and
+            it is in no contract - REQUIREMENTS-2026-08-20's "two roll numbers" is REQ-378 talking
+            about `_id` and `sidh_candidate_id`, not this field. The FIELD stays on the model and on
+            this door's allow-list so nothing already typed anywhere dies; only the box is gone.
+            The write goes through THIS door (closure.manage), not the candidate door
+            (candidates.manage) - his decision, so a Trainer can fill one in without meeting a 403. */}
+        <span className="ml-auto flex items-center gap-1.5">
+          {portalIdState(i.candidate?.sidh_candidate_id) === "unreadable" && (
+            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-900"
+              title="Stored on this candidate, but certification cannot read it as a portal ID.">not readable</span>
+          )}
+          <input placeholder="Candidate ID" disabled={closed}
+            className={`w-40 rounded-lg border px-2 py-0.5 ${portalIdState(i.candidate?.sidh_candidate_id) === "ok" ? "border-gray-300" : "border-amber-300 bg-amber-50"}`}
+            title="The portal Candidate ID from SIDH — the only key the certificate matcher joins on."
+            defaultValue={i.candidate?.sidh_candidate_id ?? ""}
+            onBlur={(e) => e.target.value !== String(i.candidate?.sidh_candidate_id ?? "")
+              && mark(i.member, { sidh_candidate_id: e.target.value })} />
+        </span>
       </div>
       <ResultButtons i={i} />
       <div className="flex flex-wrap items-center gap-2">
@@ -3041,11 +3119,36 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
           ]} empty="No members on this batch." />
       ) : (
         <>
+          {/* QA-748: the filter strip. Counts come from the fetched set, so it doubles as the
+              at-a-glance summary - "45 me se kitne kya" without opening anything. */}
+          <div className="mb-3 space-y-2">
+            <FilterPills active={cardFilter} onChange={setCardFilter}
+              options={CARD_FILTERS.map((f) => ({ value: f.value, label: f.label, title: f.title, count: items.filter(f.test).length }))} />
+            <div className="flex flex-wrap items-center gap-2">
+              <input className="w-64 rounded-lg border border-gray-300 px-2 py-1 text-sm"
+                placeholder="Search name, phone or Candidate ID…"
+                value={cardSearch} onChange={(e) => setCardSearch(e.target.value)} />
+              {(cardFilter !== "all" || q) && (
+                <>
+                  <span className="text-xs text-gray-500">showing {shown.length} of {items.length}</span>
+                  <button type="button" className="text-xs font-medium text-blue-700 hover:underline"
+                    onClick={() => { setCardFilter("all"); setCardSearch(""); }}>clear</button>
+                </>
+              )}
+            </div>
+          </div>
+          {/* An empty result says so. A screen that just goes blank reads as broken. */}
+          {shown.length === 0 && (
+            <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-4 text-sm text-gray-600">
+              No student on this batch matches {cardFilter === "all" ? "that search" : `"${CARD_FILTERS.find((f) => f.value === cardFilter)?.label}"`}
+              {q ? ` and "${cardSearch.trim()}"` : ""}. <button type="button" className="font-medium text-blue-700 hover:underline" onClick={() => { setCardFilter("all"); setCardSearch(""); }}>Show everyone</button>
+            </div>
+          )}
           <div className="hidden gap-3 md:grid md:grid-cols-2 xl:grid-cols-3">
-            {items.map((i) => <Card key={i.member} i={i} />)}
+            {shown.map((i) => <Card key={i.member} i={i} />)}
           </div>
           <div className="md:hidden">
-            {items.length > 0 && <Card i={items[Math.min(idx, items.length - 1)]} />}
+            {shown.length > 0 && <Card i={shown[Math.min(idx, shown.length - 1)]} />}
             <div className="mt-3 flex items-center justify-between">
               <Btn kind="ghost" onClick={() => setIdx((v) => Math.max(0, v - 1))} disabled={idx === 0}>← Prev</Btn>
               <span className="text-sm text-gray-500">{idx + 1} / {items.length}</span>

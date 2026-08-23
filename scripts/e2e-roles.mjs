@@ -132,6 +132,62 @@ const ownActive = spocBatches.data.items.find((b) => !["Completed", "Cancelled"]
 if (ownActive) {
   ok("SPOC can read results for own batch", (await req(spoc, "GET", `/api/batches/${ownActive._id}/results`)).status === 200);
   ok("view-only user cannot mark results", (await req(viewer, "PUT", `/api/batches/${ownActive._id}/results`, { rows: [{ member: "000000000000000000000000", result: "Pass" }] })).status === 403);
+
+  // ---- QA-747 (-214, Umesh 23/08): the TRAINER must be able to type a portal Candidate ID ----
+  //
+  // His words: "role number nai chayye, candidate id chayye. Candidate id fill karne ke liye woh
+  // hona chahiye, taaki jin students ki candidate id missing hai unko wo kar payein." Asked whether
+  // a Trainer should be able to save one, he said "Trainer bhi bhar sake".
+  //
+  // That is the whole reason the write lives on THIS door. The closure card opens on
+  // `closure.manage`, which a Trainer has; `PATCH /api/candidates/:id` wants `candidates.manage`,
+  // which a Trainer does NOT have and which does not even list Trainer in writeRoles. Wiring the box
+  // to that door would have shown every Trainer an input that 403s on save - the dead-button class
+  // that shipped three times in three releases (QA-712, QA-723, QA-754). So this pin is not a nicety:
+  // it is the assertion that the button a Trainer can SEE is a button a Trainer can PRESS.
+  // THE CORRECTION, and it is mine. I asked Umesh "should a Trainer be able to save one?" and I
+  // told him the card opens on `closure.manage`, "which a Trainer has". **A Trainer does not have
+  // it.** `permissions.ts:61` grants Trainer exactly one right - `batches.daily_log` - so a Trainer
+  // has never been able to open or mark this card at all. He answered "Trainer bhi bhar sake" to a
+  // question built on a false fact, and the wall refused the pin I wrote from it (403, four
+  // assertions). Widening this is a live permission-matrix decision and it is HIS - `closure.manage`
+  // also carries certificate upload, so it is not a small grant.
+  //
+  // What the code does guarantee, and what is pinned here, is the COUPLING: the id is written on the
+  // same door and the same right as marking a result, so everyone who can SEE this card can fill the
+  // box, and anyone who cannot mark cannot write an identity field either. No visible control that
+  // refuses on press - which was the entire reason for choosing this door.
+  const spocRows = (await req(spoc, "GET", `/api/batches/${ownActive._id}/results`)).data?.items ?? [];
+  const target = spocRows.find((r) => r.candidate?._id && !r.left_on);
+  if (target) {
+    const stamp = String(Date.now()).slice(-7);
+    const wrote = await req(spoc, "PUT", `/api/batches/${ownActive._id}/results`,
+      { rows: [{ member: String(target.member), sidh_candidate_id: `CAN_${stamp}` }] });
+    ok("QA-747: whoever can mark results can save a portal Candidate ID from the same card",
+      wrote.status === 200, `status=${wrote.status} error=${JSON.stringify(wrote.data?.error ?? null).slice(0, 140)}`);
+    const idOf = (rows) => rows.find((r) => String(r.member) === String(target.member))?.candidate?.sidh_candidate_id ?? null;
+    ok("QA-747: …and it actually landed on the candidate, not just returned 200",
+      idOf((await req(spoc, "GET", `/api/batches/${ownActive._id}/results`)).data?.items ?? []) === `CAN_${stamp}`,
+      String(idOf((await req(spoc, "GET", `/api/batches/${ownActive._id}/results`)).data?.items ?? [])));
+    // the guard is the SHARED one, so this door cannot take junk either (QA-714)
+    const junk = await req(spoc, "PUT", `/api/batches/${ownActive._id}/results`,
+      { rows: [{ member: String(target.member), sidh_candidate_id: "40918461" }] });
+    ok("QA-747: …junk is refused here with the same message as every other door",
+      junk.status === 400 && /portal Candidate ID/i.test(String(junk.data?.error ?? "")),
+      `status=${junk.status} error=${JSON.stringify(junk.data?.error ?? null).slice(0, 120)}`);
+    ok("QA-747: …and the refused row left the stored id exactly as it was (nothing written first)",
+      idOf((await req(spoc, "GET", `/api/batches/${ownActive._id}/results`)).data?.items ?? []) === `CAN_${stamp}`,
+      String(idOf((await req(spoc, "GET", `/api/batches/${ownActive._id}/results`)).data?.items ?? [])));
+    // and the two who cannot mark cannot write an identity field either - no half-open door
+    for (const [who, cookie] of [["a view-only user", viewer], ["a Trainer (no closure right today)", trainer]]) {
+      const r = await req(cookie, "PUT", `/api/batches/${ownActive._id}/results`,
+        { rows: [{ member: String(target.member), sidh_candidate_id: `CAN_${stamp}1` }] });
+      ok(`QA-747: …and ${who} cannot write one either`, r.status === 403, `status=${r.status}`);
+    }
+    ok("QA-747: …the stored id is untouched after both refusals",
+      idOf((await req(spoc, "GET", `/api/batches/${ownActive._id}/results`)).data?.items ?? []) === `CAN_${stamp}`,
+      String(idOf((await req(spoc, "GET", `/api/batches/${ownActive._id}/results`)).data?.items ?? [])));
+  }
 }
 
 // Alerts: the by-ID action route must be location-scoped exactly like the list

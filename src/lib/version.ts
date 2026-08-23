@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-213";
+export const RELEASE = "2026.08.14-214";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,20 @@ export const RELEASE = "2026.08.14-213";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-214 is four things the centre team asked for on the batch closure screen. The box that asked " +
+  "for a roll number is gone - it had never been filled in once - and in its place is the " +
+  "government Candidate ID, which is the number that actually matters and which can now be typed " +
+  "straight onto a student's card by anyone who marks results. The cards can be filtered and " +
+  "searched: by result, by who has no portal ID, by who passed without a certificate, by mock-test " +
+  "outcome, and by name, phone or Candidate ID - so a roster of two hundred does not have to be " +
+  "scrolled. The request for a Drive evidence folder has been removed from the batch screen " +
+  "entirely, because files have not been stored in Drive for some time and nothing in the system " +
+  "ever read that link. And the summary at the top of a running batch now also says how many " +
+  "students have been marked, how many passed, how many failed and how many certificates are " +
+  "issued - separately from the attendance figure above it, because those answer different " +
+  "questions.";
+
+const RELEASE_NOTE_ARCHIVE_213 =
   "-213 answers a review of the previous release. Finishing a batch whose students had all been " +
   "removed from the roster could record a sign-off in the administrator's name and then still " +
   "refuse to finish, leaving the batch stuck; and the same batch, finished the ordinary way, moved " +
@@ -180,6 +194,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
+  RELEASE_NOTE_ARCHIVE_213 + " " +
   RELEASE_NOTE_ARCHIVE_212 + " " +
   RELEASE_NOTE_ARCHIVE_211 + " " +
   RELEASE_NOTE_ARCHIVE_210 +

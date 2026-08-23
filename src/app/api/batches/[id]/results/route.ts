@@ -2,8 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
-import { BatchMember, CandidateResult } from "@/models";
+import { BatchMember, Candidate, CandidateResult } from "@/models";
 import { assertBatchInScope, bulkMarkResults, summarizeBatchResults } from "@/lib/rules";
+import { looksLikeCan } from "@/lib/validate";
+import { audit } from "@/lib/audit";
 
 // GET — every roster member left-joined to its result row, so the marking grid renders
 // before anything has been marked. Pure read: no writes, no aggregate recompute (Rule 41).
@@ -49,7 +51,51 @@ export const PUT = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   const rows = body.rows.map((r: Record<string, unknown>) =>
     Object.fromEntries(Object.entries(r).filter(([k]) => allowed.includes(k))));
 
+  // QA-747 (-214, Umesh 23/08): "role number nai chayye, candidate id chayye. Candidate id fill
+  // karne ke liye woh hona chahiye, taaki jin students ki candidate id missing hai unko wo kar
+  // payein." The card's `Roll no` box was filled 0 times out of 45 on the live batch; the thing a
+  // centre actually needs there is the portal Candidate ID.
+  //
+  // It is written HERE, on this door, and not through PATCH /api/candidates/:id - deliberately, and
+  // it is his call. This card opens on `closure.manage`, which a TRAINER has; the candidate door
+  // wants `candidates.manage`, which a Trainer does not. Putting the box on the card and the write
+  // on that door would have shown every Trainer an input that 403s on save - the dead-button class
+  // that shipped three times in three releases (QA-712, QA-723, QA-754). Asked directly, Umesh said
+  // "Trainer bhi bhar sake", so the write lives on the door the card already has.
+  //
+  // `sidh_candidate_id` belongs to Candidate, not CandidateResult, so it is pulled out BEFORE the
+  // allow-list above rather than added to it.
+  const canRows: { member: string; raw: string | null }[] = [];
+  for (const r of body.rows as Record<string, unknown>[]) {
+    if (!("sidh_candidate_id" in r)) continue;
+    const v = r.sidh_candidate_id;
+    canRows.push({ member: String(r.member), raw: typeof v === "string" && v.trim() ? v.trim() : null });
+  }
+  // Validate EVERY id before writing ANYTHING. -206 and -213 both shipped a door that wrote first
+  // and refused afterwards; this one refuses first.
+  for (const c of canRows) {
+    if (c.raw && !looksLikeCan(c.raw)) {
+      throw new HttpError(400, `"${c.raw}" is not a portal Candidate ID. It reads like CAN_12345678 - the letters CAN followed by the number. Copy it from SIDH exactly as it appears there. Nothing has been saved.`);
+    }
+  }
+
   const res = await bulkMarkResults(id, rows, user.id);
+
+  // Only now, and only where the value actually CHANGED (QA-726: re-validating an unchanged value is
+  // what made records holding an old bad id uneditable). Trimmed on the way in (QA-730) - the QA-417
+  // partial unique index is built on the raw string.
+  for (const c of canRows) {
+    const m = await BatchMember.findOne({ _id: c.member, batch: id }).select("candidate").lean<any>();
+    if (!m?.candidate) continue;
+    const cand = await Candidate.findById(m.candidate);
+    if (!cand) continue;
+    const was = String(cand.sidh_candidate_id ?? "").trim();
+    if (was === String(c.raw ?? "")) continue;
+    cand.sidh_candidate_id = c.raw as any;
+    await cand.save();
+    await audit({ entity: "Candidate", entityId: cand._id, field: "sidh_candidate_id",
+      oldValue: was || null, newValue: c.raw ?? null, actor: user.id, actorType: "USER" });
+  }
   if (res.updated === 0 && res.errors.length) throw new HttpError(400, res.errors[0].error);
   const after = await CandidateResult.find({ batch: id }).lean<any[]>();
   return NextResponse.json({ ...res, summary: await summarizeBatchResults(id, after) });
