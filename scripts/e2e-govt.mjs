@@ -1746,11 +1746,14 @@ ok("SSRF guard does not block the real client workbook", stillOk.data.ok === tru
 // screen reads, and then type an id in the way the screen types it — through the ordinary candidate
 // door — and watch the counts move.
 {
-  const nb = (await req(admin, "POST", "/api/batches", { location: loc._id, program: program._id, target_size: 2, planned_start: localDate() })).data.item;
+  const nb = (await req(admin, "POST", "/api/batches", { location: loc._id, program: program._id, target_size: 5, planned_start: localDate() })).data.item;   // > the 3 members below: Rule 48 caps ENROLMENT at target_size, and an unenrolled member is invisible to the gate
   const c1 = (await req(admin, "POST", "/api/candidates", { name: `${NAME} NoId One`, phone: "9556" + STAMP, location: loc._id, program: program._id })).data.item;
   const c2 = (await req(admin, "POST", "/api/candidates", { name: `${NAME} NoId Two`, phone: "9557" + STAMP, location: loc._id, program: program._id, sidh_candidate_id: `CAN_${STAMP}8888` })).data.item;
-  await req(admin, "POST", `/api/batches/${nb._id}/members`, { candidate: c1._id });
-  await req(admin, "POST", `/api/batches/${nb._id}/members`, { candidate: c2._id });
+  // The gate counts ENROLLED students, so the fixture has to enrol them - otherwise this block
+  // would pass on an empty list and prove nothing, which is how the first -207 run reported roster 0.
+  const mm1 = (await req(admin, "POST", `/api/batches/${nb._id}/members`, { candidate: c1._id })).data.item;
+  const mm2 = (await req(admin, "POST", `/api/batches/${nb._id}/members`, { candidate: c2._id })).data.item;
+  for (const mm of [mm1, mm2]) await req(admin, "PATCH", `/api/members/${mm._id}`, { reg_done: true, kyc_done: true, accept_done: true });
 
   const p0 = (await req(admin, "GET", `/api/batches/${nb._id}/link-portal-ids`)).data;
   ok("-205: the payload NAMES the students with no portal ID — a count alone is not actionable",
@@ -1763,8 +1766,8 @@ ok("SSRF guard does not block the real client workbook", stillOk.data.ok === tru
   // "EXHAUSTED reported as a result" trap this project has a rule about.
   const m0 = p0.missing ?? [];
   ok("-205: …and the list length agrees with the count the screen prints beside it",
-    m0.length === p0.without_portal_id && p0.with_portal_id === 1 && p0.roster === 2,
-    JSON.stringify({ n: m0.length, without: p0.without_portal_id, with: p0.with_portal_id }));
+    m0.length === p0.blocking && p0.with_portal_id === 1 && p0.roster === 2,
+    JSON.stringify({ n: m0.length, blocking: p0.blocking, with: p0.with_portal_id, roster: p0.roster }));
   // His second question, answered on the row: "inke certificate to nahi honge na, matlab jo fail
   // wale bachche hain, unhi me se 10 hain, ya kaun se hain".
   ok("-205: …each named student carries their RESULT and phone, so the row identifies a person",
@@ -1778,15 +1781,45 @@ ok("SSRF guard does not block the real client workbook", stillOk.data.ok === tru
     JSON.stringify(typed.data).slice(0, 120));
   const p1 = (await req(admin, "GET", `/api/batches/${nb._id}/link-portal-ids`)).data;
   ok("-205: THE ASK — after typing it, that student leaves the list and the counts move",
-    (p1.missing ?? []).length === 0 && p1.without_portal_id === 0 && p1.with_portal_id === 2,
-    JSON.stringify({ missing: p1.missing?.length, without: p1.without_portal_id, with: p1.with_portal_id }));
+    (p1.missing ?? []).length === 0 && p1.blocking === 0 && p1.with_portal_id === 2,
+    JSON.stringify({ missing: p1.missing?.length, blocking: p1.blocking, with: p1.with_portal_id }));
 
   // QA-676: the Overview caption said "Waiting on certificates" whenever certification was Pending,
   // which on the Gurugram batch was false — nothing was outstanding but the portal IDs. The payload
   // the caption reads must carry that fact, or the screen can only guess again.
+  // -207 (QA-702): the -205 version of this asserted only `Array.isArray(cp.no_portal_id)`, which is
+  // true of an empty array — so it passed on a payload that named nobody. It names them now, and it
+  // is checked against the OTHER screen's list, because QA-704 was exactly the two disagreeing.
+  const c3 = (await req(admin, "POST", "/api/candidates", { name: `${NAME} NoId Three`, phone: "9558" + STAMP, location: loc._id, program: program._id })).data.item;
+  const m3 = (await req(admin, "POST", `/api/batches/${nb._id}/members`, { candidate: c3._id })).data.item;
+  await req(admin, "PATCH", `/api/members/${m3._id}`, { reg_done: true, kyc_done: true, accept_done: true });
   const cp = (await req(admin, "GET", `/api/batches/${nb._id}/complete`)).data;
-  ok("-205 (QA-676): the completion payload carries the portal-ID gap, so the caption can name it",
-    Array.isArray(cp.no_portal_id), JSON.stringify({ keys: Object.keys(cp).slice(0, 10) }));
+  const p2 = (await req(admin, "GET", `/api/batches/${nb._id}/link-portal-ids`)).data;
+  ok("-207 (QA-702): the completion payload NAMES the students with no portal ID, not merely an array",
+    Array.isArray(cp.no_portal_id) && cp.no_portal_id.length >= 1
+    && cp.no_portal_id.some((x) => x.name === `${NAME} NoId Three`),
+    JSON.stringify((cp.no_portal_id ?? []).map((x) => x.name)));
+  // QA-704: two screens, one question, one answer. The Overview caption reads `no_portal_id` and
+  // points the reader at the Certificates tab, which reads `missing` — on the Gurugram shape those
+  // two disagreed and the screen printed three different numbers for what Umesh asked once.
+  ok("-207 (QA-704): the caption's list and the Certificates tab's list are the SAME set",
+    cp.no_portal_id.length >= 1 && (p2.missing ?? []).length >= 1
+    && cp.no_portal_id.length === (p2.missing ?? []).length
+    && cp.no_portal_id.map((x) => x.name).sort().join("|") === (p2.missing ?? []).map((x) => x.name).sort().join("|"),
+    JSON.stringify({ caption: cp.no_portal_id.map((x) => x.name), tab: (p2.missing ?? []).map((x) => x.name) }));
+  // QA-701: the count was a subtraction, so a member the list dropped stayed in the number - the
+  // screen printed 8 while the button offered "show which 7".
+  // QA-701: the number printed beside "show which N" must BE the length of that list. It used to be
+  // a roster-wide subtraction, so an orphaned member stayed in the count and fell out of the list -
+  // the panel read "8 without" beside a button offering "show which 7". `blocking` is that number
+  // now; `without_portal_id` keeps its roster-wide meaning for the certificate-matching sentence,
+  // and the screen never prints it beside the list.
+  ok("-207 (QA-701): the count printed beside the list IS the length of that list",
+    p2.blocking === (p2.missing ?? []).length,
+    JSON.stringify({ blocking: p2.blocking, n: (p2.missing ?? []).length }));
+  ok("-207: …and the roster-wide counts still describe the whole roster, so certificate matching is unaffected",
+    p2.roster === 3 && p2.with_portal_id + p2.without_portal_id === p2.roster,
+    JSON.stringify({ roster: p2.roster, with: p2.with_portal_id, without: p2.without_portal_id }));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

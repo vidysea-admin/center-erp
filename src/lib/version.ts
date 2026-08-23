@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-206";
+export const RELEASE = "2026.08.14-207";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,19 @@ export const RELEASE = "2026.08.14-206";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-207 leaves one button where there were two, and makes three numbers agree. The batch screen " +
+  "offered both \"Mark Completed (Admin)\" and \"Complete Batch\" for the same job, stacked below " +
+  "the row of actions rather than in it, and pressing the first opened a panel far down the page " +
+  "that read as a different dialog entirely. There is one button now, sitting with Attendance, " +
+  "Daily log, Roster and Certificates and looking like them, and it opens the confirmation as a " +
+  "proper panel over the screen. That confirmation also stopped contradicting itself: it used to " +
+  "announce that every student was marked and every certificate settled on a batch where ten " +
+  "students had no government portal ID, two lines under a line correctly saying so. And the two " +
+  "places that count those students now count the same people - one screen was counting everyone " +
+  "on the roster and the other only the enrolled, so a single question was being answered with " +
+  "three different numbers on one page.";
+
+const RELEASE_NOTE_ARCHIVE_206 =
   "-206 stops a button from half-finishing a batch. When an administrator completed a batch that " +
   "still had students nobody had marked, the system recorded every one of them as failed, signed " +
   "off the assessment, moved the batch a step forward - and only then discovered it could not " +
@@ -26,7 +39,7 @@ export const RELEASE_NOTE_CURRENT =
   "is written: the batch is refused up front, the refusal says which thing is missing and that " +
   "nothing was changed, and the screen reloads so what is shown is what is stored. Separately, the " +
   "check that protects the status buttons restored last release could itself be switched off by " +
-  "one word added to the line deciding who may move a batch; it now watches that line too.";
+  "one word added to the line deciding who may move a batch; it now watches that line too. ";
 
 const RELEASE_NOTE_ARCHIVE_205 =
   "-205 answers a question the screen was refusing to answer. A batch cannot be certified until " +
@@ -99,6 +112,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
+  RELEASE_NOTE_ARCHIVE_206 +
   RELEASE_NOTE_ARCHIVE_205 +
   RELEASE_NOTE_ARCHIVE_204 +
   RELEASE_NOTE_ARCHIVE_203 +

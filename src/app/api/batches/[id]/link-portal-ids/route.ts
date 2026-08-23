@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { BatchMember, Candidate, CandidateResult, GovtAttendanceRow } from "@/models";
-import { assertBatchInScope } from "@/lib/rules";
+import { assertBatchInScope, enrolledWithoutCan } from "@/lib/rules";
 import { normalizeCan } from "@/lib/govt-attendance";
 import { audit } from "@/lib/audit";
 
@@ -92,30 +92,57 @@ async function plan(batchId: string) {
   // missing an id and gives them no way to find out which ten. So the list rides along, with the
   // phone (REQ-389 — two students on this very roster share a name) and with the RESULT, because
   // his next question was whether the ten are the ones who failed.
-  const missingIds = members.filter((m) => m.candidate && !canOf(m.candidate.sidh_candidate_id));
-  const resultRows = missingIds.length
-    ? await CandidateResult.find({ batch: batchId, batch_member: { $in: missingIds.map((m) => m._id) } })
+  // QA-704 / QA-701 (-207, checker on qa-205): -205 put a SECOND count of "who has no portal ID" on
+  // the same screen and made the Overview caption point at it. On the Gurugram shape the screen then
+  // gave three different numbers - 1, 7 and 8 - for the single question Umesh had asked, because this
+  // route counted every member on the roster while the gate that actually blocks certification
+  // (`enrolledWithoutCan`, honoured at rules.ts's deriveCompletion) counts only ENROLLED ones, and
+  // `without_portal_id` was computed by subtraction so an orphaned member vanished from the list but
+  // stayed in the count. That is the QA-676 fault reshipped inverted by the unit that existed to
+  // remove it.
+  //
+  // One function decides WHO, and it is the one the gate honours. This route only adds the detail a
+  // person needs to act on the row. The count is the length of that list, never a subtraction.
+  const gateMissing = await enrolledWithoutCan(batchId);
+  const memberById = new Map(members.map((m) => [String(m._id), m]));
+  const resultRows = gateMissing.length
+    ? await CandidateResult.find({ batch: batchId, batch_member: { $in: gateMissing.map((g) => g.member) } })
       .select("batch_member result certificate_status").lean<any[]>()
     : [];
   const resultByMember = new Map(resultRows.map((r) => [String(r.batch_member), r]));
-  const missing = missingIds.map((m) => {
-    const r = resultByMember.get(String(m._id));
+  const missing = gateMissing.map((g) => {
+    const m = memberById.get(g.member);
+    const r = resultByMember.get(g.member);
     return {
-      candidate: String(m.candidate._id),
-      member: String(m._id),
-      name: m.candidate.name,
-      phone: m.candidate.phone ?? null,
+      candidate: m?.candidate?._id ? String(m.candidate._id) : null,
+      member: g.member,
+      name: g.name,
+      phone: g.phone ?? null,
       result: r?.result ?? "Pending",
       certificate_status: r?.certificate_status ?? null,
-      left: !!m.left_on,
     };
   });
 
+  // Two sets live here and they answer two different questions, so they are named apart and the
+  // screen never mixes them:
+  //
+  //   roster / with_portal_id / without_portal_id  - the WHOLE roster. This is the certificate
+  //     MATCHING question ("N of M candidates carry a portal ID"): a file named for a candidate has
+  //     to find them whether or not their enrolment is complete. My first attempt at QA-704 pointed
+  //     these at the gate set too, and the wall caught it immediately - six assertions came back
+  //     reporting roster 0, because a fixture roster is not `enrollment_status: "Completed"`. That
+  //     would have silently emptied this panel for real rosters in the same state.
+  //
+  //   missing - the students who are actually BLOCKING certification, from `enrolledWithoutCan`,
+  //     the one function the gate honours. This is the list the screen opens and the caption on the
+  //     Overview points at, and its length is the only number printed beside it (QA-701: the panel
+  //     used to print a roster-wide count next to a button offering a shorter list).
   return {
     roster: members.length,
     with_portal_id: withId,
     without_portal_id: members.length - withId,
     missing,
+    blocking: missing.length,
     linkable, already, conflicts,
   };
 }
