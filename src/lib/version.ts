@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-207";
+export const RELEASE = "2026.08.14-208";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,14 @@ export const RELEASE = "2026.08.14-207";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-208 puts the list of students missing their government portal ID on the attendance screen too, " +
+  "not only on the certificates one. That number is what stops a batch being certified, and until " +
+  "now a centre had to know to go looking for it on a tab they may not open for weeks. It is the " +
+  "same list in both places - the same names, the same box to type the ID into, and saving one " +
+  "updates both - rather than a second copy built to look alike. Where a batch has no missing IDs " +
+  "it shows nothing at all.";
+
+const RELEASE_NOTE_ARCHIVE_207 =
   "-207 leaves one button where there were two, and makes three numbers agree. The batch screen " +
   "offered both \"Mark Completed (Admin)\" and \"Complete Batch\" for the same job, stacked below " +
   "the row of actions rather than in it, and pressing the first opened a panel far down the page " +
@@ -27,7 +35,7 @@ export const RELEASE_NOTE_CURRENT =
   "students had no government portal ID, two lines under a line correctly saying so. And the two " +
   "places that count those students now count the same people - one screen was counting everyone " +
   "on the roster and the other only the enrolled, so a single question was being answered with " +
-  "three different numbers on one page.";
+  "three different numbers on one page. ";
 
 const RELEASE_NOTE_ARCHIVE_206 =
   "-206 stops a button from half-finishing a batch. When an administrator completed a batch that " +
@@ -112,6 +120,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
+  RELEASE_NOTE_ARCHIVE_207 +
   RELEASE_NOTE_ARCHIVE_206 +
   RELEASE_NOTE_ARCHIVE_205 +
   RELEASE_NOTE_ARCHIVE_204 +

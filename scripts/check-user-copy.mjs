@@ -1623,6 +1623,29 @@ for (const file of walk(root)) {
   }
 }
 
+// ---- -208: the portal-ID gap is ONE widget, mounted where the work happens ----
+// Umesh, 23/08: "even attendance wale tab me bhi vo kar de, yeh closer wale me kar dhe." Two places
+// is what he asked for; two COPIES is what this repo's ARCHITECTURE.md section 3 is a catalogue of,
+// and this widget carries a WRITE - a second copy would be a second door onto a candidate's identity
+// field. So: declared once, mounted at least twice, and the parent must not have kept its own copy
+// of the state or the saver.
+{
+  const rel = "app/(app)/batches/[id]/page.tsx";
+  const src = stripComments(fs.readFileSync(path.join(root, rel), "utf-8"));
+  const decls = (src.match(/function PortalIdGaps\(/g) ?? []).length;
+  const mounts = (src.match(/<PortalIdGaps\b/g) ?? []).length;
+  const leftovers = /const \[showMissing|const \[canDraft|async function saveCan\(/.test(src);
+  if (decls === 1 && mounts >= 2 && !leftovers) passed++;
+  else {
+    failed++;
+    pushStructural(rel + ": the portal-ID gap widget is not one component in two homes"
+      + " (declarations=" + decls + ", mounts=" + mounts + ", the parent still holds its own copy of the state or saver=" + leftovers + ")"
+      + " - Umesh asked for it on the Certificates tab AND the Attendance tab; two literals of a"
+      + " widget that WRITES a candidate's portal ID is a second door onto an identity field, which"
+      + " is the class ARCHITECTURE.md section 3 exists to list.");
+  }
+}
+
 {
   // QA-377: the registers must ACCOUNT FOR EVERY HIT. A raise site that forgets to classify is
   // exactly how this check misfiled twice; now it cannot be forgotten silently, because an

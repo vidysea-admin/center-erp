@@ -1113,6 +1113,75 @@ function Enrollment({ batchId, error, setError }: any) {
 // attendance … show them two types: the one they are taking and the government portal's —
 // days AND hours — and once the hours threshold is crossed, mark that child GREEN:
 // qualified for assessments." Visible to every login that can open the batch.
+
+// -208: the portal-ID gap, as one component. It fetches its own picture, names every student the
+// certification gate is blocked on, and takes the ID typed straight from SIDH - through the ordinary
+// candidate door, the same one the Candidates drawer uses. Mounted on Certificates and on Attendance.
+//
+// It renders NOTHING when there is no gap. A panel that says "0 students are missing an ID" is noise
+// on the screen of a centre that has nothing to fix.
+function PortalIdGaps({ batchId, onChanged }: any) {
+  const [plan, setPlan] = useState<any>(null);
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState<string | null>(null);
+  const [err, setErr] = useState("");
+  const load = () => api(`/api/batches/${batchId}/link-portal-ids`).then(setPlan).catch(() => setPlan(null));
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [batchId]);
+
+  async function save(candidateId: string, rawId: string) {
+    const v = String(rawId ?? "").trim();
+    if (!v || !candidateId) return;
+    setSaving(candidateId); setErr("");
+    try {
+      await api(`/api/candidates/${candidateId}`, { method: "PATCH", json: { sidh_candidate_id: v } });
+      setDraft((d) => { const n = { ...d }; delete n[candidateId]; return n; });
+      await load();
+      onChanged?.();
+    } catch (e: any) { setErr(e?.message ?? String(e)); }
+    finally { setSaving(null); }
+  }
+
+  const gaps = plan?.missing ?? [];
+  if (!plan || gaps.length === 0) return null;
+
+  return (
+    <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+      <b>{plan.blocking ?? gaps.length} student{(plan.blocking ?? gaps.length) === 1 ? " has" : "s have"} no portal Candidate ID.</b>{" "}
+      Certification cannot complete until every one of them does.
+      <button type="button" onClick={() => setOpen((v) => !v)} className="ml-1 font-semibold underline">
+        {open ? "hide the list" : `show which ${gaps.length}`}
+      </button>
+      {err && <div className="mt-1 text-red-700">{err}</div>}
+      {open && (
+        <div className="mt-2 space-y-1 rounded-lg border border-gray-200 bg-white p-2">
+          <div className="text-[11px] text-gray-500">Type the portal Candidate ID from SIDH and press Save. The count above recounts itself.</div>
+          {gaps.map((m: any) => (
+            <div key={m.member} className="flex flex-wrap items-center gap-2 border-t border-gray-100 pt-1 text-xs first:border-t-0">
+              <span className="min-w-[9rem] font-medium text-gray-800">{m.name}</span>
+              <span className="text-gray-500">{m.phone ?? "no phone"}</span>
+              <span className={m.result === "Pass" ? "text-green-700" : m.result === "Pending" ? "text-amber-700" : "text-gray-500"}>{m.result}</span>
+              {!m.candidate ? (
+                <span className="text-amber-700">candidate record missing — this row cannot take an ID</span>
+              ) : (<>
+                <input className="w-40 rounded-lg border border-gray-300 px-2 py-1 text-xs" placeholder="CAN_…"
+                  value={draft[m.candidate] ?? ""}
+                  onChange={(e) => setDraft({ ...draft, [m.candidate]: e.target.value })}
+                  onKeyDown={(e) => { if (e.key === "Enter") save(m.candidate, draft[m.candidate] ?? ""); }} />
+                <button type="button" onClick={() => save(m.candidate, draft[m.candidate] ?? "")}
+                  disabled={saving === m.candidate || !(draft[m.candidate] ?? "").trim()}
+                  className="rounded-lg bg-blue-600 px-2.5 py-1 font-medium text-white hover:bg-blue-700 disabled:bg-blue-300">
+                  {saving === m.candidate ? "Saving…" : "Save"}
+                </button>
+              </>)}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AttendanceTab({ batchId, batch, role, error, setError }: any) {
   const [data, setData] = useState<any>(null);
   const load = () => api(`/api/batches/${batchId}/attendance`).then(setData).catch((e: any) => setError(e.message));
@@ -1217,6 +1286,10 @@ function AttendanceTab({ batchId, batch, role, error, setError }: any) {
   const portalAsOf = data.members.map((m: any) => m.govt?.as_of).filter(Boolean).sort().pop();
   return (
     <div className="space-y-3">
+      {/* -208 (Umesh, 23/08): "even attendance wale tab me bhi vo kar de". Same component as the
+          Certificates tab, mounted where the centre works every day - one widget, two homes. It
+          renders nothing when there is no gap. */}
+      <PortalIdGaps batchId={batchId} onChanged={load} />
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="rounded-full bg-gray-100 px-2 py-0.5">Programme: {data.program_hours} hrs</span>
         <span className="cursor-help rounded-full bg-gray-100 px-2 py-0.5" title={`${data.min_attendance_pct}% of programme hours. Hours come from the government portal once an import is matched; until then they are estimated from our daily logs × the batch slot. The portal meter is what the assessor settles against.`}>Needed for assessment: {data.required_hours} hrs</span>
@@ -2312,12 +2385,6 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
   const [mapping, setMapping] = useState<any>(null);
   const [linkPlan, setLinkPlan] = useState<any>(null); // portal-id readiness for the pre-flight panel
   const [linking, setLinking] = useState(false);
-  // -205 (Umesh, 23/08): "ye jo 10 students remaining hai, ye 10 hai kaun se? ... team ko kya, mujhe
-  // bhi nahi pata chala." The count was printed and the names never were, next to a sentence telling
-  // him to "map by hand below" with nothing below to map. Open the list, and type the id right there.
-  const [showMissing, setShowMissing] = useState(false);
-  const [canDraft, setCanDraft] = useState<Record<string, string>>({});
-  const [savingCan, setSavingCan] = useState<string | null>(null);
   const [certBusy, setCertBusy] = useState<string | null>(null); // per-candidate upload in flight
 
   // 2026-08-14 (CEO 49:33): "sare certificate ek folder mein ID ke saath — upload hote
@@ -2410,23 +2477,6 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
     finally { setLinking(false); }
   }
 
-  // -205: the id typed by hand, on the row of the student it belongs to. `sidh_candidate_id` has been
-  // on the candidate PATCH allow-list since -116; what was missing was anywhere to type it from the
-  // batch that is blocked by its absence. Umesh: "individual candidate card me candidate id bharne
-  // wala koi form input value type hi nahi hai... wahin par value fill karein aur wahin par show ho
-  // jaaye." One save, then the panel recounts itself, so the number he is watching moves as the team
-  // works down the list.
-  async function saveCan(candidateId: string, raw: string) {
-    const v = String(raw ?? "").trim();
-    if (!v) return;
-    setSavingCan(candidateId);
-    try {
-      await api(`/api/candidates/${candidateId}`, { method: "PATCH", json: { sidh_candidate_id: v } });
-      setCanDraft((d) => { const n = { ...d }; delete n[candidateId]; return n; });
-      await load(); await loadLinkPlan();
-    } catch (e: any) { setError(e.message); }
-    finally { setSavingCan(null); }
-  }
 
   const [loaded, setLoaded] = useState(false);
   // QA-070 (-70): the marking screen was hours-blind — the CEO's exact ask is knowing WHO
@@ -2699,50 +2749,12 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
               {!linkPlan.linkable?.length && linkPlan.without_portal_id > 0 && (
                 <span className="ml-1">Nothing to link from the imports so far — these have to be typed in from the portal.</span>
               )}
-              {/* -205: the count, opened. It used to say "map by hand below" with nothing below it. */}
-              {linkPlan.missing?.length > 0 && (
-                <button type="button" onClick={() => setShowMissing((v) => !v)}
-                  className="ml-1 font-semibold underline">
-                  {showMissing ? "hide the list" : `show which ${linkPlan.missing.length}`}
-                </button>
-              )}
-              {showMissing && linkPlan.missing?.length > 0 && (
-                <div className="mt-2 space-y-1 rounded-lg border border-gray-200 bg-white p-2">
-                  {/* His second question, answered on the row rather than made him ask again: "inke
-                      certificate to nahi honge na, matlab jo fail wale bachche hain, unhi me se 10
-                      hain, ya kaun se hain". The result rides beside every name. */}
-                  <div className="text-[11px] text-gray-500">
-                    Type the portal Candidate ID from SIDH and press Save. The count above recounts itself.
-                  </div>
-                  {linkPlan.missing.map((m: any) => (
-                    <div key={m.candidate} className="flex flex-wrap items-center gap-2 border-t border-gray-100 pt-1 text-xs first:border-t-0">
-                      <span className="min-w-[9rem] font-medium text-gray-800">{m.name}</span>
-                      <span className="text-gray-500">{m.phone ?? "no phone"}</span>
-                      <span className={m.result === "Pass" ? "text-green-700" : m.result === "Pending" ? "text-amber-700" : "text-gray-500"}>{m.result}</span>
-                      {/* -207 (QA-701): a roster row can exist whose candidate record is gone. It
-                          still blocks the gate, so it still belongs on this list — but there is
-                          nothing to write an ID onto, and offering a box that silently saves nowhere
-                          is worse than saying so. */}
-                      {!m.candidate ? (
-                        <span className="text-amber-700">candidate record missing — this row cannot take an ID</span>
-                      ) : (<>
-                      <input
-                        className="w-40 rounded-lg border border-gray-300 px-2 py-1 text-xs"
-                        placeholder="CAN_…"
-                        value={canDraft[m.candidate] ?? ""}
-                        onChange={(e) => setCanDraft({ ...canDraft, [m.candidate]: e.target.value })}
-                        onKeyDown={(e) => { if (e.key === "Enter") saveCan(m.candidate, canDraft[m.candidate] ?? ""); }}
-                      />
-                      <button type="button"
-                        onClick={() => saveCan(m.candidate, canDraft[m.candidate] ?? "")}
-                        disabled={savingCan === m.candidate || !(canDraft[m.candidate] ?? "").trim()}
-                        className="rounded-lg bg-blue-600 px-2.5 py-1 font-medium text-white hover:bg-blue-700 disabled:bg-blue-300">
-                        {savingCan === m.candidate ? "Saving…" : "Save"}
-                      </button></>)}
-                    </div>
-                  ))}
-                </div>
-              )}
+              {/* -208 (Umesh, 23/08): "even attendance wale tab me bhi vo kar de, yeh closer wale
+                  me kar dhe". The list of students with no portal ID is ONE component now, mounted
+                  where the work happens - here on Certificates, and on Attendance where the centre
+                  is every day. A second copy of the same widget is the drift ARCHITECTURE.md
+                  section 3 is a catalogue of, and this one carries a WRITE. */}
+              <PortalIdGaps batchId={batchId} onChanged={() => { load(); loadLinkPlan(); }} />
               {linkPlan.conflicts?.length > 0 && (
                 <div className="mt-1 text-amber-800">
                   {linkPlan.conflicts.length} left untouched because the portal gives conflicting IDs: {personList(linkPlan.conflicts.slice(0, 3))}
