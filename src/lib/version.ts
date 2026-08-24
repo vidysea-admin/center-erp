@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-238";
+export const RELEASE = "2026.08.14-239";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -42,6 +42,23 @@ const RELEASE_NOTE_ARCHIVE_230 =
   "Someone who genuinely joined mid-course can still be given their own date, and a batch that "  +
   "has not started is unaffected.";
 export const RELEASE_NOTE_CURRENT =
+  "-239 names three changes that reached production without a release describing them, and "  +
+  "carries a repair to the screen where sheet changes are reviewed. On that screen every row "  +
+  "used to offer the same seven actions, and for any given row at least one of them could not "  +
+  "work - the reviewer only found out by choosing it and reading a refusal. Each row now offers "  +
+  "the actions that fit it, the one right step is marked, and an action that would be refused "  +
+  "is shown greyed out with the reason written beside it rather than hidden or silently "  +
+  "offered. Every action carries a one-line description, and the manual now defines all seven. "  +
+  "Three refusals that a person could previously only discover by pressing are now answered "  +
+  "before the press: a change that already raised follow-up actions can no longer be dismissed "  +
+  "and leave them with nothing to belong to; the suggested action on a job-role row is only "  +
+  "suggested when the centre actually has that job role on record; and the rollback button "  +
+  "appears only where rolling back genuinely works, instead of asking for confirmation and "  +
+  "then refusing. A value the sheet has cleared now reads as cleared in both the list and the "  +
+  "review panel, where it used to print as nothing at all while still being written into the "  +
+  "record. Alongside these, two controls on the batch screen now ask for the same right the "  +
+  "server asks for, so neither is offered to someone it would refuse.";
+const RELEASE_NOTE_ARCHIVE_238 =
   "-238 moves that question out of a block that called it optional. On both public registration "  +
   "pages the choice between the current intake and a later one had been placed inside the section "  +
   "headed \"Government registration details - all optional\", below Salutation. It is not optional: "  +
@@ -456,6 +473,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
+  RELEASE_NOTE_ARCHIVE_238 + " " +
   RELEASE_NOTE_ARCHIVE_237 + " " + RELEASE_NOTE_ARCHIVE_236 + " " +
   RELEASE_NOTE_ARCHIVE_231 + " " +
   // -230 was built and never released on its own - -231 carries it. Its note is archived rather
