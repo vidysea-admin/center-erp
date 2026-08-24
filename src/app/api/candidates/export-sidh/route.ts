@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { canonicalAadhaar } from "@/lib/validate";
 import * as XLSX from "xlsx";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, locationFilter, assertLocationInScope } from "@/lib/authz";
@@ -36,7 +37,14 @@ export const GET = apiHandler(async (req: NextRequest) => {
   const rows = items.map((c) => ({
     full_name: c.name,
     mobile: c.phone,
-    aadhaar_or_vid: c.aadhaar_no ?? "",        // 2026-08-24: stored now; blank still means "we do not hold one"
+    // QA-942 (qa-233 checker): the importer stores what it cannot read (it reports rather than
+    // refusing — QA-141), so a record CAN hold a non-conforming Aadhaar. Shipping that into the
+    // government's own upload as though it were a real number is the worst end of that chain: the
+    // portal rejects the student and nothing here ever said the value was doubtful. A value we
+    // cannot read is not an Aadhaar number, so this column carries only ones that check out —
+    // exactly as it carried nothing at all before -230, and the calling agent fills the blanks the
+    // way it always has. The stored value is untouched; it is visible and fixable on the record.
+    aadhaar_or_vid: canonicalAadhaar(c.aadhaar_no) ?? "",
     qp_code: c.program?.code ?? "",
     scheme_id: "",                            // per-course; operator confirms in the CRM console
     district: c.location?.city ?? "",

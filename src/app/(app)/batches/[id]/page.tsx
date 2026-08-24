@@ -1338,7 +1338,9 @@ function PortalIdGaps({ batchId, onChanged }: any) {
   const [err, setErr] = useState("");
   // QA-770 (-215, checker on live -213): most of these students are not missing an ID at all - it is
   // sitting in the WRONG FIELD. 57 candidates system-wide carry a CAN-shaped value in `id_reference`
-  // (which the model itself says is "government ID reference, NOT the Aadhaar number itself") with
+  // (which the model USED TO call "government ID reference, NOT the Aadhaar number itself" — until
+  // 2026-08-24, when Umesh reversed that and `aadhaar_no` became its own field; `id_reference` is now
+  // "some other government ID", neither Aadhaar nor the portal CAN id) with
   // `sidh_candidate_id` empty - and TEN of them are on AVP-GURU-RPLAVP-DST-02, the batch this whole
   // week has been about. Umesh has been told ten IDs are missing; ten of them are already here.
   //

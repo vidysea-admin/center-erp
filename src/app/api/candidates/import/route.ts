@@ -8,7 +8,7 @@ import { parseSheetDate } from "@/lib/rules";
 import { CANDIDATE_IMPORT_FIELDS } from "@/lib/field-catalog";
 import { audit } from "@/lib/audit";
 import { findDuplicateCandidates, normalizePhone } from "@/lib/duplicates";
-import { canonicalPhone, canonicalApaar } from "@/lib/validate";
+import { canonicalAadhaar, canonicalApaar, canonicalPhone } from "@/lib/validate";
 import { personLabel } from "@/lib/person";
 import { looksLikeCan, normalizeCan } from "@/lib/govt-attendance";
 
@@ -237,6 +237,31 @@ export const POST = apiHandler(async (req: NextRequest) => {
     else if (!normalizeCan(raw)) candidateIdInvalid.push(`${personLabel(c)} — "${raw}" (stored, but certification cannot read it — the ID must be CAN followed by the number)`);
   }
 
+  // QA-941 (2026-08-24, qa-233 checker): the Aadhaar number had NO lane here, and the comment in
+  // lib/validate.ts asserted it did — "bulk import keeps the normalize-and-report lane". Measured by
+  // the checker: a checksum failure AND the literal string "NOT-AN-AADHAAR" both imported silently,
+  // 201, no warning. That is QA-727 repeating one release later, on a field that is worse to get
+  // wrong: QA-942 traces it straight through to the government SIDH export, which ships whatever is
+  // on the record.
+  //
+  // REPORT, never refuse — the QA-141 ruling stands, a client's sheet is client data and rows are not
+  // dropped over format. What is unacceptable is silence, because the operator then has no moment at
+  // which they could have known.
+  //
+  // NORMALIZE what we can first: "2341 2341 2346" and "2341-2341-2346" are how a person writes a
+  // 12-digit number, and refusing those would report a fault the sheet does not have.
+  const aadhaarInvalid = [];
+  for (const c of candidates) {
+    if (typeof c.aadhaar_no !== "string") continue;
+    const raw = c.aadhaar_no.trim();
+    if (!raw) { delete c.aadhaar_no; continue; } // absent, never "" on the record
+    const canon = canonicalAadhaar(raw);
+    if (canon) { c.aadhaar_no = canon; continue; }
+    // Stored as given (never dropped), and NAMED so the operator sees it on the preview.
+    c.aadhaar_no = raw;
+    aadhaarInvalid.push(`${personLabel(c)} — "${raw}" (stored, but it is not a readable Aadhaar number — the SIDH export will carry it as-is)`);
+  }
+
   // QA-902 (2026-08-24): the same lane for the government APAAR ID, given to it at the same time as
   // the field rather than a release later — QA-727 is the row that records what "we will add the
   // guard to the importer afterwards" actually costs.
@@ -303,6 +328,9 @@ export const POST = apiHandler(async (req: NextRequest) => {
       // QA-727: on the PREVIEW, so a sheet whose Candidate ID column is mapped to the wrong header
       // is seen BEFORE the import runs — the same reasoning as unhandled_fields above it.
       candidate_id_invalid: candidateIdInvalid.slice(0, 25), candidate_id_invalid_count: candidateIdInvalid.length,
+      // QA-941: on the PREVIEW too — the point of the preview is that a mis-mapped column is seen
+      // BEFORE 45 rows land, and Aadhaar reaches a government export.
+      aadhaar_invalid: aadhaarInvalid.slice(0, 25), aadhaar_invalid_count: aadhaarInvalid.length,
       // QA-902: the APAAR ID gets the same treatment on the PREVIEW. The duplicate list is not
       // cosmetic - a repeated APAAR makes the insert below fail as a whole batch, so this is the
       // one place it can be fixed before 45 good rows are lost with it.
@@ -315,6 +343,6 @@ export const POST = apiHandler(async (req: NextRequest) => {
     });
   }
   const docs = await Candidate.insertMany(candidates);
-  await audit({ entity: "Candidate", entityId: docs[0]?._id ?? location, field: "import", newValue: `${docs.length} imported, ${duplicates.length} flagged as possible duplicates${dateUnparseable.length ? `, ${dateUnparseable.length} unreadable dates` : ""}${phoneInvalid.length ? `, ${phoneInvalid.length} un-normalizable phones` : ""}${candidateIdInvalid.length ? `, ${candidateIdInvalid.length} portal Candidate ID(s) the gate cannot read` : ""}${apaarInvalid.length ? `, ${apaarInvalid.length} unreadable APAAR ID(s)` : ""}${!acceptUnknown && unknownCols.length ? `, ${unknownCols.length} column(s) ignored: ${unknownCols.join(", ")}` : ""}`, actor: user.id });
-  return NextResponse.json({ imported: docs.length, skipped: rows.length - candidates.length, duplicate_count: duplicates.length, date_unparseable: dateUnparseable.slice(0, 25), date_unparseable_count: dateUnparseable.length, phone_invalid: phoneInvalid.slice(0, 25), phone_invalid_count: phoneInvalid.length, candidate_id_invalid: candidateIdInvalid.slice(0, 25), candidate_id_invalid_count: candidateIdInvalid.length, apaar_invalid: apaarInvalid.slice(0, 25), apaar_invalid_count: apaarInvalid.length, apaar_duplicate: apaarDuplicate.slice(0, 25), apaar_duplicate_count: apaarDuplicate.length, ignored_columns: acceptUnknown ? [] : unknownCols, unhandled_fields: [...new Set(unhandledFields)], sidh_status_unmatched: [...new Set(sidhStatusUnmatched)].slice(0, 25), blank_by_field: blankByField }, { status: 201 });
+  await audit({ entity: "Candidate", entityId: docs[0]?._id ?? location, field: "import", newValue: `${docs.length} imported, ${duplicates.length} flagged as possible duplicates${dateUnparseable.length ? `, ${dateUnparseable.length} unreadable dates` : ""}${phoneInvalid.length ? `, ${phoneInvalid.length} un-normalizable phones` : ""}${candidateIdInvalid.length ? `, ${candidateIdInvalid.length} portal Candidate ID(s) the gate cannot read` : ""}${apaarInvalid.length ? `, ${apaarInvalid.length} unreadable APAAR ID(s)` : ""}${aadhaarInvalid.length ? `, ${aadhaarInvalid.length} unreadable Aadhaar number(s)` : ""}${!acceptUnknown && unknownCols.length ? `, ${unknownCols.length} column(s) ignored: ${unknownCols.join(", ")}` : ""}`, actor: user.id });
+  return NextResponse.json({ imported: docs.length, skipped: rows.length - candidates.length, duplicate_count: duplicates.length, date_unparseable: dateUnparseable.slice(0, 25), date_unparseable_count: dateUnparseable.length, phone_invalid: phoneInvalid.slice(0, 25), phone_invalid_count: phoneInvalid.length, candidate_id_invalid: candidateIdInvalid.slice(0, 25), candidate_id_invalid_count: candidateIdInvalid.length, aadhaar_invalid: aadhaarInvalid.slice(0, 25), aadhaar_invalid_count: aadhaarInvalid.length, apaar_invalid: apaarInvalid.slice(0, 25), apaar_invalid_count: apaarInvalid.length, apaar_duplicate: apaarDuplicate.slice(0, 25), apaar_duplicate_count: apaarDuplicate.length, ignored_columns: acceptUnknown ? [] : unknownCols, unhandled_fields: [...new Set(unhandledFields)], sidh_status_unmatched: [...new Set(sidhStatusUnmatched)].slice(0, 25), blank_by_field: blankByField }, { status: 201 });
 });

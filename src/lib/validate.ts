@@ -28,16 +28,25 @@ export function phoneError(v: unknown, opts?: { optional?: boolean }): string | 
 // ---- Aadhaar (2026-08-24, Umesh: "candidate form mai aadhaar number nhi aa rha hai, aadhaar
 // number k liye form mai daal") ----
 //
-// READ THIS BEFORE ASSUMING THE FIELD WAS SIMPLY FORGOTTEN. Until today this product deliberately
-// did NOT hold an Aadhaar number: `models/index.ts` labels `id_reference` "government ID reference
-// (NOT the Aadhaar number itself)", and `api/candidates/export-sidh` ships the `aadhaar_or_vid`
-// column BLANK with the comment "filled by the calling agent, never stored here". Umesh reversed
+// READ THIS BEFORE ASSUMING THE FIELD WAS SIMPLY FORGOTTEN. Until 2026-08-24 this product
+// deliberately did NOT hold an Aadhaar number: `models/index.ts` USED TO label `id_reference`
+// "government ID reference (NOT the Aadhaar number itself)", and `api/candidates/export-sidh` USED
+// TO ship the `aadhaar_or_vid` column blank, commented "filled by the calling agent, never stored
+// here". Both of those lines are gone — quoted here in the PAST TENSE on purpose, because this
+// comment is the record of a reversal and a reader must not mistake the quotation for the code. Umesh reversed
 // that decision explicitly, and chose the full number on all three intake doors. The comments that
 // asserted the old rule are corrected in the same change, because a comment that outlives its rule
 // is how the next reader gets it wrong (QA-606).
 //
-// Manual entry is STRICT, exactly like phone above: a human is at the keyboard and can fix it. Bulk
-// import keeps the normalize-and-report lane and never drops a row over format.
+// Manual entry is STRICT, exactly like phone above: a human is at the keyboard and can fix it.
+//
+// QA-943 (qa-233 checker): this sentence used to continue "bulk import keeps the normalize-and-report
+// lane" — and that lane DID NOT EXIST for this field when the sentence was written. A checksum failure
+// and the literal "NOT-AN-AADHAAR" both imported silently. That is precisely QA-727, where an excuse
+// named a safeguard that was not there, repeated one release later by the person who had cited it.
+// The lane is real now (`aadhaar_invalid` in api/candidates/import), so the claim is true — but it is
+// worth leaving the history here rather than a clean sentence, because the failure was not the missing
+// code, it was asserting the code existed.
 //
 // The checksum is the point, not decoration. Aadhaar carries a Verhoeff check digit, which catches
 // every single-digit error and every adjacent transposition - the two ways a hand-typed 12-digit

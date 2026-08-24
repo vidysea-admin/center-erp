@@ -379,6 +379,78 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
         res.status === 200, `status=${res.status}`);
     }
 
+    // ---- QA-941 / QA-942 (qa-233 checker, FAIL cycle 1) ----
+    // The bulk importer had NO lane for Aadhaar: a checksum failure and the literal string
+    // "NOT-AN-AADHAAR" both imported silently, 201, no warning - while lib/validate.ts asserted in a
+    // comment that the "normalize-and-report lane" existed. That is QA-727 repeating one release
+    // later, cited by the person who had just read it. Worse than the portal-ID case, because
+    // QA-942 traced the unreadable value straight through to the GOVERNMENT SIDH export.
+    //
+    // Two separate promises are pinned here, and they pull in opposite directions on purpose:
+    // the row is NEVER dropped (QA-141: a client's sheet is client data), and the export NEVER
+    // carries a value it cannot read.
+    {
+      const XLSX = await import("xlsx");
+      const mkSheet = (rows) => {
+        const ws = XLSX.utils.json_to_sheet(rows);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+        return XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+      };
+      const impName = "ImpAad " + stamp;
+      const buf = mkSheet([
+        { Name: impName + " A", Phone: "9811" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0"), Aadhaar: "234123412345" },
+        { Name: impName + " B", Phone: "9812" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0"), Aadhaar: "NOT-AN-AADHAAR" },
+        { Name: impName + " C", Phone: "9813" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0"), Aadhaar: "2341 2341 2346" },
+      ]);
+      const post = async (extra) => {
+        const fd = new FormData();
+        fd.append("file", new Blob([buf]), "aad.xlsx");
+        fd.append("location", String(loc._id));
+        fd.append("program", String(prog._id));
+        fd.append("mapping", JSON.stringify({ Name: "name", Phone: "phone", Aadhaar: "aadhaar_no" }));
+        fd.append("accept_unknown", "1");
+        for (const [k, v] of Object.entries(extra ?? {})) fd.append(k, v);
+        const r = await fetch(BASE + "/api/candidates/import", { method: "POST", headers: { cookie: admin }, body: fd });
+        return { status: r.status, data: await r.json().catch(() => ({})) };
+      };
+
+      const preview = await post({});
+      ok("QA-941: the import PREVIEW names the unreadable Aadhaar numbers instead of taking them silently",
+        (preview.data?.aadhaar_invalid_count ?? 0) === 2,
+        `count=${preview.data?.aadhaar_invalid_count} ${JSON.stringify(preview.data?.aadhaar_invalid ?? []).slice(0, 150)}`);
+      ok("QA-941: ...and it names WHICH person, not just a number",
+        (preview.data?.aadhaar_invalid ?? []).some((l) => String(l).includes(impName)),
+        JSON.stringify(preview.data?.aadhaar_invalid ?? []).slice(0, 150));
+
+      const done = await post({ confirm: "1" });
+      ok("QA-941: the rows are still IMPORTED - reported, never refused (QA-141: a client's sheet is client data)",
+        done.data?.imported === 3, `imported=${done.data?.imported}`);
+      ok("QA-941: ...and the confirm response reports them too, not only the preview",
+        (done.data?.aadhaar_invalid_count ?? 0) === 2, `count=${done.data?.aadhaar_invalid_count}`);
+
+      const rows = (await req(admin, "GET", `/api/candidates?limit=2000&location=${loc._id}`)).data.items;
+      const rowA = rows.find((c) => c.name === impName + " A");
+      const rowC = rows.find((c) => c.name === impName + " C");
+      ok("QA-941: the unreadable value is STORED as given - visible and fixable, not silently dropped",
+        rowA?.aadhaar_no === "234123412345", `stored=${rowA?.aadhaar_no}`);
+      ok("QA-941: ...and a spaced-but-valid one is normalised to bare 12 digits on the way in",
+        rowC?.aadhaar_no === "234123412346", `stored=${rowC?.aadhaar_no}`);
+
+      // QA-942: the government export. The whole chain ends here, and this is the assertion that
+      // matters most - a value we cannot read must not leave the building dressed as an Aadhaar.
+      const xl = await fetch(BASE + `/api/candidates/export-sidh?location=${loc._id}&all=1`, { headers: { cookie: admin } });
+      const ab = await xl.arrayBuffer();
+      const wb = XLSX.read(Buffer.from(ab), { type: "buffer" });
+      const out = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+      const outA = out.find((r) => String(r.full_name) === impName + " A");
+      const outC = out.find((r) => String(r.full_name) === impName + " C");
+      ok("QA-942: the SIDH export does NOT carry an Aadhaar the system cannot read",
+        outA && String(outA.aadhaar_or_vid ?? "") === "", `exported="${outA?.aadhaar_or_vid}"`);
+      ok("QA-942: ...and it DOES carry a good one - the guard filters, it does not blank the column",
+        outC && String(outC.aadhaar_or_vid) === "234123412346", `exported="${outC?.aadhaar_or_vid}"`);
+    }
+
     // The PUBLIC doors get the same rule. A field one door validates and another does not is the
     // -116/QA-275 shape, and it is silent - the value looks saved and is not.
     {
