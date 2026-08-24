@@ -14,6 +14,17 @@ export const GET = apiHandler(async (req: NextRequest) => {
   if (req.nextUrl.searchParams.get("count") === "1") {
     return NextResponse.json({ count: await SheetChange.countDocuments(status === "all" ? {} : { status }) });
   }
+  // QA-1016 (S3, checker on qa-234 cycle 2): this route is deliberately UNBOUNDED, and the reason
+  // is recorded here rather than left to be rediscovered. It is a work-to-zero review queue: the
+  // person reading it is the person whose job is to empty it, and a silent `limit` would hide rows
+  // from exactly them — the failure QA-666 already cost us once, when 74 rows sat unactionable and
+  // invisible. The screen has no pagination to reveal what a cap dropped, so a cap here would not
+  // be a performance decision, it would be a correctness one.
+  //
+  // Measured cost (checker, A/B at ~55 rows): 52 ms -> 78 ms median, the delta being the per-row
+  // follow-up count plus the memoised target-row lookup below. Both are O(rows) with a small
+  // constant. If this queue is ever routinely in the hundreds, the fix is to aggregate the counts
+  // in one pipeline rather than to truncate the list — a bound is the one thing it must not get.
   const items = await SheetChange.find(status === "all" ? {} : { status })
     .sort({ detected_at: -1 })
     .populate("location", "name code")

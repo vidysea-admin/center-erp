@@ -796,7 +796,23 @@ for (const file of walk(root)) {
     if (rel) console.log("  ·   CHANGELOG gate skipped — qa/CHANGELOG.jsonl is in the root repo and is not present here");
   } else {
     const ch = fs.readFileSync(chPath, "utf-8");
-    if (ch.includes('"release":"' + rel + '"')) passed++;
+    // QA-1012 (2026-08-24): this was a raw substring match on `"release":"<rel>"` — with NO space
+    // after the colon. A row written by `JSON.stringify(obj, null, 1)`, or by any hand that typed a
+    // space, is valid JSON carrying the right data and the gate still reported the release as
+    // undeclared. That happened for real: the -240 row existed, the ledger parsed clean at 425 rows,
+    // and this pin held the whole tree's wall red while the thing it demanded was already on disk.
+    // A gate that can be defeated by one space is not checking the data, it is checking the
+    // formatting — and it fails in the direction that costs most, blocking a correct release.
+    // PARSE, then compare. Unparseable lines are counted and named rather than silently skipped:
+    // "I could not read the file" and "the row is not there" are different answers.
+    const chLines = ch.trim().split("
+").filter(Boolean);
+    let chBad = 0, chHas = false;
+    for (const line of chLines) {
+      try { if (JSON.parse(line).release === rel) chHas = true; } catch { chBad++; }
+    }
+    if (chBad) console.log(`  ·   CHANGELOG: ${chBad} unparseable line(s) — the release check read the rest`);
+    if (chHas) passed++;
     else { failed++; pushStructural(`qa/CHANGELOG.jsonl: no row for ${rel} — QA-574. This is the one release step with nothing in front of it, which is why it has now been missed in four separate generations of this defect. Add the row before pushing.`); }
   }
 }
@@ -2247,19 +2263,6 @@ for (const file of walk(root)) {
   else { failed++; pushStructural("app/(app)/sync + api/sheet-changes/[id]/revert: whether an applied change can be put back is decided in two places again - QA-989. The page used to test action_taken itself while the door additionally required 'approved_target:', so a tc_status row showed a Revert button, took the confirm, and then refused with 'Not a target change.' - the sibling of the very sentence this unit replaced."); }
 }
 
-  // -175: every finding, printed once, AFTER every check has had its say. See the note where this
-  // loop used to live.
-  for (const h of hits) console.log("  ✗ " + h);
-  const copyHits = hits.filter((h, n) => copyIdx.has(n));
-  const structural = hits.length - copyHits.length;
-  // no escape sequences in these template literals on purpose: the last two attempts at this file
-  // wrote a backspace byte and then a real newline into the source (-144, and this line).
-  if (hits.length) console.log("");
-  if (copyHits.length) console.log(copyHits.length + ' user-facing string(s) still carry a Rule/DEC/QA code - rewrite as "what happened + what to do".');
-  if (structural) console.log(structural + ' structural finding(s) above are NOT copy problems - read the line, not this summary.');
-}
-
-
 // ---- QA-976 (-232 cycle 2, checker): a report lane the API returns and no screen renders ----
 //
 // Cycle 2 added THREE report lanes to the candidate importer and rendered NONE of them, then
@@ -2289,6 +2292,20 @@ for (const file of walk(root)) {
     passed++;
   }
 }
+
+  // -175: every finding, printed once, AFTER every check has had its say. See the note where this
+  // loop used to live.
+  for (const h of hits) console.log("  ✗ " + h);
+  const copyHits = hits.filter((h, n) => copyIdx.has(n));
+  const structural = hits.length - copyHits.length;
+  // no escape sequences in these template literals on purpose: the last two attempts at this file
+  // wrote a backspace byte and then a real newline into the source (-144, and this line).
+  if (hits.length) console.log("");
+  if (copyHits.length) console.log(copyHits.length + ' user-facing string(s) still carry a Rule/DEC/QA code - rewrite as "what happened + what to do".');
+  if (structural) console.log(structural + ' structural finding(s) above are NOT copy problems - read the line, not this summary.');
+}
+
+
 
 console.log(`\ncheck-user-copy: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

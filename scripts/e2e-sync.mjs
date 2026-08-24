@@ -496,8 +496,16 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
     ok("sync S1-3: the running batch can still record its daily log", logAfter.status === 201, `got ${logAfter.status}`);
 
     // ---- sync S1-8: bulkIgnore must not close a change that still has Pending follow-ups ----
+    // QA-1013 (checker on qa-234 cycle 2): this press USED to be asserted at 200, and the line
+    // below used to assert that it had overwritten the deferred close. That is the S1 itself,
+    // green in this wall since before qa-234 existed: a second action on a row held Open by Rule 7
+    // rewrites action_taken, which settleChangeIfDone matches on, so the centre never closes. The
+    // follow-ups this block needs were already raised by the Close two presses above; the Stop was
+    // never needed for the point being made, only for the defect it happened to exercise.
     const stopped = await req("POST", `/api/sheet-changes/${cityChange._id}/apply`, { action: "Stop location", note: "audit stop" });
-    ok("Stop location applies and raises follow-ups", stopped.status === 200, `got ${stopped.status}`);
+    ok("QA-1013: a SECOND action on a row mid-settlement is refused - this used to be asserted at 200",
+      stopped.status === 409 && /already being carried out/i.test(String(stopped.data?.error ?? "")),
+      `got ${stopped.status}: ${JSON.stringify(stopped.data?.error ?? null).slice(0, 130)}`);
     const afterStop = (await req("GET", `/api/sheet-changes/${cityChange._id}`)).data.item
       ?? ((await req("GET", "/api/sheet-changes?status=Open")).data.items ?? []).find((c) => String(c._id) === String(cityChange._id));
     if (afterStop) {
@@ -505,7 +513,7 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
       const bi = (await req("POST", "/api/sheet-changes/bulk-ignore", { ids: [cityChange._id] }, 200)).data;
       ok("sync S1-8: bulk-ignore refuses a change with Pending follow-ups", (bi.skipped ?? 0) === 1 && (bi.ignored ?? 0) === 0, JSON.stringify(bi));
       const stillOpen = ((await req("GET", "/api/sheet-changes?status=Open")).data.items ?? []).find((c) => String(c._id) === String(cityChange._id));
-      ok("sync S1-8: …so it is still Open, with its real action intact", !!stillOpen && stillOpen.action_taken === "Stop location", JSON.stringify({ s: stillOpen?.status, a: stillOpen?.action_taken }));
+      ok("sync S1-8: …so it is still Open, with its real action intact", !!stillOpen && stillOpen.action_taken === "Close location", JSON.stringify({ s: stillOpen?.status, a: stillOpen?.action_taken }));
 
       // ---- QA-986 (S1, checker on qa-234 cycle 1): the SINGLE-row door had the same hole ----
       //
@@ -522,7 +530,7 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
       const noActionVerdict = (rowNow?.actions ?? []).find((a) => a.action === "No action");
       ok("QA-986: the row itself says No action is unavailable while follow-ups are Pending",
         noActionVerdict?.ok === false && /follow-up/i.test(String(noActionVerdict?.why ?? "")),
-        JSON.stringify(noActionVerdict).slice(0, 220));
+        JSON.stringify(noActionVerdict ?? null).slice(0, 220));
       // THE invariant, stated as an invariant rather than as a guess about this row: a star may
       // never sit on an action classifyChange itself says the door refuses. My first version of
       // this assertion demanded NOTHING be starred, which was wrong - `Apply value` is genuinely
@@ -542,8 +550,48 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
       const survived = ((await req("GET", "/api/sheet-changes?status=Open")).data.items ?? [])
         .find((c) => String(c._id) === String(cityChange._id));
       ok("QA-986: …so the row is untouched and still remembers what was really applied",
-        survived?.status === "Open" && survived?.action_taken === "Stop location" && survived?.pending_followups > 0,
+        survived?.status === "Open" && survived?.action_taken === "Close location" && survived?.pending_followups > 0,
         JSON.stringify({ s: survived?.status, a: survived?.action_taken, f: survived?.pending_followups }));
+
+      // ---- QA-1013 (S1, checker on qa-234 cycle 2): the CLASS, not the one action ----
+      //
+      // Cycle 2 closed Rule 7's hole for `No action` because that is the action QA-986's text
+      // named. Five presses with the same or worse consequence stayed open on the same row, and
+      // this unit's own star sat on one of them. The checker measured it on a DEFERRED
+      // `Close location`: pressing the starred `Apply value` returned 200, rewrote action_taken,
+      // and after every follow-up settled the centre sat at "Not Started" - forever, because
+      // settleChangeIfDone matches on action_taken. `Start location` re-opened a centre mid-close;
+      // `Stop` and a repeat `Close` doubled the follow-ups 3 -> 6.
+      //
+      // I MET THIS SHAPE ON MY OWN WALL AND ARGUED MYSELF OUT OF IT. An assertion of mine failed
+      // saying a star sat on this row; I judged the product right and the assertion wrong, and
+      // replaced it with one the code makes true by construction - a pin that cannot fail. So the
+      // assertions below are written against the ROW, which is what the original was looking at.
+      const settlingRow = ((await req("GET", "/api/sheet-changes?status=Open")).data.items ?? [])
+        .find((c) => String(c._id) === String(cityChange._id));
+      ok("QA-1013: a row mid-settlement offers NO action at all - not five of six",
+        (settlingRow?.actions ?? []).length === 7 && (settlingRow?.actions ?? []).every((a) => a.ok === false),
+        JSON.stringify((settlingRow?.actions ?? []).filter((a) => a.ok).map((a) => a.action)));
+      ok("QA-1013: …and stars nothing, because the real next step is on the follow-ups",
+        (settlingRow?.actions ?? []).filter((a) => a.recommended).length === 0,
+        JSON.stringify((settlingRow?.actions ?? []).filter((a) => a.recommended).map((a) => a.action)));
+      ok("QA-1013: …and every refusal names the action already applied and the count still pending",
+        (settlingRow?.actions ?? []).every((a) => /already being carried out/i.test(String(a.why))
+          && new RegExp(String(settlingRow?.action_taken ?? "__none__")).test(String(a.why))),
+        JSON.stringify((settlingRow?.actions ?? [])[0]?.why ?? "").slice(0, 200));
+
+      // Every door, not just the one. Each of these returned 200 before this fix.
+      for (const act of ["Apply value", "Start location", "Stop location", "Close location", "Update target"]) {
+        const r = await req("POST", `/api/sheet-changes/${cityChange._id}/apply`, { action: act, note: "QA-1013 pin" });
+        ok(`QA-1013: "${act}" on a mid-settlement row is REFUSED (it used to land 200)`,
+          r.status === 409 && /already being carried out/i.test(String(r.data?.error ?? "")),
+          `status=${r.status} error=${JSON.stringify(r.data?.error ?? null).slice(0, 120)}`);
+      }
+      const intact = ((await req("GET", "/api/sheet-changes?status=Open")).data.items ?? [])
+        .find((c) => String(c._id) === String(cityChange._id));
+      ok("QA-1013: …so after five refused presses the row still remembers what was REALLY applied",
+        intact?.action_taken === "Close location" && intact?.status === "Open" && intact?.pending_followups === settlingRow?.pending_followups,
+        JSON.stringify({ a: intact?.action_taken, s: intact?.status, f: intact?.pending_followups, was: settlingRow?.pending_followups }));
     }
   } else { ok("sync S1-3/S1-8: city change detected", false, "no change row"); }
 
@@ -1279,7 +1327,7 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
   const before8 = await findRow8();
   ok("QA-988: with NO target row, the star is NOT on Update target",
     !!before8 && V8(before8, "Update target")?.recommended !== true,
-    JSON.stringify(V8(before8, "Update target")).slice(0, 200));
+    JSON.stringify(V8(before8, "Update target") ?? null).slice(0, 200));
   ok("QA-988: …the row says so in words, naming the job role",
     V8(before8, "Update target")?.ok === false && new RegExp("P" + s8).test(String(V8(before8, "Update target")?.why ?? "")),
     JSON.stringify(V8(before8, "Update target")?.why ?? "").slice(0, 200));
@@ -1293,7 +1341,7 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
   const after8 = await findRow8();
   ok("QA-988: once the target row exists, the SAME row stars Update target",
     V8(after8, "Update target")?.ok === true && V8(after8, "Update target")?.recommended === true,
-    JSON.stringify(V8(after8, "Update target")).slice(0, 200));
+    JSON.stringify(V8(after8, "Update target") ?? null).slice(0, 200));
   const live8 = await req("POST", `/api/sheet-changes/${after8._id}/apply`, { action: "Update target" }, 200);
   ok("QA-988: …and the starred press now lands",
     live8.status === 200, JSON.stringify(live8.data).slice(0, 150));
@@ -1303,7 +1351,7 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
     .find((c) => String(c._id) === String(after8._id));
   ok("QA-989: an applied tc_status row does NOT offer Revert",
     applied8?.revert?.ok === false && /TC status or TC ID/i.test(String(applied8?.revert?.why ?? "")),
-    JSON.stringify(applied8?.revert).slice(0, 220));
+    JSON.stringify(applied8?.revert ?? null).slice(0, 220));
   const rv8 = await req("POST", `/api/sheet-changes/${after8._id}/revert`, {});
   ok("QA-989: …and the door refuses with the SAME sentence, not 'Not a target change.'",
     rv8.status === 400 && String(rv8.data?.error ?? "") === String(applied8?.revert?.why ?? "__none__"),
@@ -1323,7 +1371,7 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
     .find((c) => String(c._id) === String(city8._id));
   ok("QA-989: an applied Apply value IS still revertable, and the door agrees",
     cityApplied?.revert?.ok === true,
-    JSON.stringify(cityApplied?.revert).slice(0, 200));
+    JSON.stringify(cityApplied?.revert ?? null).slice(0, 200));
   const rvOk = await req("POST", `/api/sheet-changes/${city8._id}/revert`, {}, 200);
   ok("QA-989: …and it really reverts",
     rvOk.status === 200, JSON.stringify(rvOk.data).slice(0, 140));

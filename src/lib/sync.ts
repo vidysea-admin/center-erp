@@ -159,6 +159,21 @@ export type ClassifiableChange = {
   // a deferred Close that `settleChangeIfDone` can never settle. The count has to reach the
   // predicate or the screen keeps offering it.
   pending_followups?: number;
+  // QA-1013 (S1, checker on qa-234 cycle 2): cycle 2 closed the Rule 7 hole for ONE action out of
+  // six, because QA-986's text happened to name `No action`. On a row that is mid-settlement -
+  // `action_taken` already set, follow-ups still Pending, held Open by Rule 7 - the other five
+  // still landed 200, and this unit's own star sat on one of them. Measured by the checker on a
+  // DEFERRED `Close location`: pressing the starred `Apply value` rewrote action_taken, and
+  // settleChangeIfDone (which matches action_taken) then never closed the centre - it sat at
+  // "Not Started" permanently. `Start location` re-opened a centre mid-close; `Stop` and a repeat
+  // `Close` doubled the follow-ups 3 -> 6.
+  //
+  // I MET THIS ON MY OWN WALL AND ARGUED MYSELF OUT OF IT. An assertion of mine failed saying a
+  // star sat on such a row; I decided the product was right and the assertion wrong, and replaced
+  // it with one the code makes true by construction - a pin that cannot fail, which is the QA-212
+  // disease, in the same unit where I added a pin against it. So the guard is on the ROW now, not
+  // inside a `case`: one condition, all six actions, both doors.
+  action_taken?: string | null;
   // QA-988 (S2, same verdict): `targetRowField` only proves the field NAME parses as
   // "<base>:<CODE>". The door additionally requires the LocationTarget row to already exist for
   // tc_status/tc_id (a 409 — `approved_target` may upsert). Without this, cycle 1 put a ★ on a
@@ -166,6 +181,14 @@ export type ClassifiableChange = {
   // undefined = the caller did not look; then the option stays offered but is never starred.
   target_row_exists?: boolean;
 };
+
+// QA-1013 (S1): "this row is mid-settlement" — an action was applied, follow-ups it raised are
+// still Pending, and Rule 7 is holding the row Open until they resolve. ONE definition, exported,
+// so the predicate and the apply door cannot answer it differently. Cycle 2's mistake was smaller
+// than this and cost an S1: it put the equivalent test inside a single `case`.
+export function isSettling(c: { action_taken?: string | null; pending_followups?: number }): boolean {
+  return !!String(c.action_taken ?? "").trim() && (Number(c.pending_followups ?? 0) || 0) > 0;
+}
 
 export function classifyChange(c: ClassifiableChange): ActionVerdict[] {
   const field = String(c.field_name ?? "");
@@ -186,6 +209,20 @@ export function classifyChange(c: ClassifiableChange): ActionVerdict[] {
   // treated as zero, because the door re-checks it anyway and a screen that refused on a number it
   // never fetched would be its own defect.
   const pending = Number(c.pending_followups ?? 0) || 0;
+
+  // QA-1013 (S1): THE ROW-LEVEL GUARD. A change that already carries an action and still has
+  // Pending follow-ups is mid-settlement - it is on the queue ONLY because Rule 7 holds it there
+  // until they resolve, not because anything further is wanted from it. Any second action
+  // overwrites `action_taken`, which is the field `settleChangeIfDone` reads, so a deferred
+  // `Close location` silently stops being a close and its centre never closes. Two of the six also
+  // raise a duplicate set of follow-ups.
+  //
+  // This is deliberately ONE condition applied to EVERY action rather than a test inside any
+  // case. Cycle 2 put it inside `case "No action"` because that was the action the issue happened
+  // to name, and five presses with the same or worse consequence stayed open - one of them starred.
+  // The class, not the instance.
+  const settling = isSettling(c);
+  const settlingWhy = `This change is already being carried out: "${String(c.action_taken ?? "").trim()}" was applied and ${pending} follow-up${pending === 1 ? "" : "s"} ${pending === 1 ? "is" : "are"} still Pending. It stays on the queue until ${pending === 1 ? "it is" : "they are"} resolved, and nothing further can be applied to it until then — a second action would overwrite the record of what was really applied, and on a deferred close it would stop the centre ever closing. Resolve or cancel the follow-up${pending === 1 ? "" : "s"} first.`;
 
   // QA-988: `approved_target` may CREATE its row (the door upserts it); a government status or id
   // may not - "a status cannot create the row it describes". So the row's existence only gates the
@@ -289,6 +326,15 @@ export function classifyChange(c: ClassifiableChange): ActionVerdict[] {
   // was - a guaranteed refusal. One line, and it makes the class of defect unrepresentable rather
   // than fixing its two instances.
   if (pick && !byAction[pick]?.ok) pick = "";
+
+  // QA-1013: the row-level guard is applied LAST and to EVERY action, so no per-action branch
+  // above can accidentally survive it. A mid-settlement row offers nothing and stars nothing - the
+  // only real next step is on the follow-ups, which is not one of these seven actions, so an empty
+  // recommendation is the honest answer rather than a least-bad pick.
+  if (settling) {
+    for (const a of Object.keys(byAction)) byAction[a] = { ...byAction[a], ok: false, why: settlingWhy };
+    pick = "";
+  }
 
   // Emitted in schema-enum order: SHEET_CHANGE_ACTION stays the single place the vocabulary is
   // named, and an action added there without a description here is caught by the wall pin rather
@@ -726,6 +772,17 @@ export async function applySheetChange(changeId: string, action: string, note: s
   // press that buried it.
   const pendingNow = await FollowUpAction.countDocuments({ source_change: change._id, status: "Pending" });
   const facts = { ...change.toObject(), pending_followups: pendingNow };
+
+  // QA-1013 (S1): the row-level refusal, BEFORE the switch, so it covers all six actions rather
+  // than the one an issue happened to name. A change that already carries an action and still has
+  // Pending follow-ups is only on the queue because Rule 7 holds it there; a second action
+  // overwrites `action_taken` — the field `settleChangeIfDone` matches on — so a deferred
+  // `Close location` quietly stops being a close and its centre never closes. `Stop` and a repeat
+  // `Close` additionally raise a duplicate set of follow-ups.
+  //
+  // Same `isSettling` the drawer's verdicts use, and the sentence comes from the same predicate,
+  // so what the screen greys out and what this door refuses cannot drift.
+  if (isSettling(facts)) throw new HttpError(409, verdictFor(facts, action).why);
 
   let followUps = 0;
   switch (action) {
