@@ -1856,7 +1856,27 @@ for (const file of walk(root)) {
   // sender under any other name is invisible to it, and so is a rename-plus-drop, which is the exact
   // shape QA-712 was. It counts by SHAPE now: every POST to /complete on this page, whatever the
   // function around it is called, must carry `force`.
-  const posts = [...page.matchAll(/\/complete`\s*,\s*\{[\s\S]{0,240}?\}\s*\)/g)].map((m) => m[0]);
+  // QA-722 residual (-234): counting by SHAPE closed the rename-plus-drop, but only ON THIS PAGE.
+  // A sender in ANY OTHER FILE was still invisible - the same blind spot one directory out. It scans
+  // every client file now. `/api/upload/complete` is a DIFFERENT endpoint (chunked-upload finish)
+  // and is excluded by name, not by luck: it takes no `force` and never will.
+  const senders = [];
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const fp = path.join(dir, e.name);
+      if (e.isDirectory()) { walk(fp); continue; }
+      if (!/\.(tsx|ts)$/.test(e.name)) continue;
+      if (fp.includes(path.join("api", "batches"))) continue;      // the route itself, not a sender
+      const src = stripComments(fs.readFileSync(fp, "utf-8"));
+      for (const m of src.matchAll(/\/complete`\s*,\s*\{[\s\S]{0,240}?\}\s*\)/g)) {
+        const before = src.slice(Math.max(0, m.index - 120), m.index);
+        if (/upload/.test(before)) continue;                        // /api/upload/complete
+        senders.push({ file: path.relative(root, fp).split(path.sep).join("/"), text: m[0] });
+      }
+    }
+  };
+  walk(path.join(root, "app"));
+  const posts = senders.map((x) => x.text);
   const withoutForce = posts.filter((p) => !/force:\s*true/.test(p));
   if (posts.length >= 1 && withoutForce.length === 0) passed++;
   else {
@@ -2130,6 +2150,61 @@ for (const file of walk(root)) {
   }
 
   if (bad) failed++; else passed++;
+}
+
+// ---- -232 (QA-946): the Sync Inbox action vocabulary, and the ONE place it is allowed to live ----
+//
+// The drawer used to carry its own copy of the seven actions, plus two more hardcoded subsets for
+// the reason label and the follow-up warning. The apply door in lib/sync.ts accepts at most one of
+// the top two on any row (`Update target` needs a "<field>:<CODE>" row, `Apply value` needs a bare
+// one - exact complements), so a copy that could not see the row's kind put a guaranteed-400 option
+// at the top of every dropdown. Umesh hit it on a `tc_password` row.
+//
+// Two pins, because the two halves fail differently:
+//   (a) the page must not re-grow a lifecycle vocabulary of its own;
+//   (b) classifyChange must describe EVERY action the schema enum names - an action added to
+//       SHEET_CHANGE_ACTION and not here does not become a wrong option, it silently stops being
+//       offered at all, which is the quieter and worse failure.
+{
+  const syncPage = stripComments(fs.readFileSync(path.join(root, "app/(app)/sync/page.tsx"), "utf8"));
+
+  // (a) The four lifecycle actions are decided server-side now. `Update target` / `Apply value`
+  // are deliberately NOT in this list: the row-actions column still names that pair for REVERT,
+  // which is a different question (what can be undone) answered by a different route, and pinning
+  // it here would make this check lie about what it is protecting.
+  const LIFECYCLE = ["Start location", "Put on hold", "Stop location", "Close location"];
+  const leaked = LIFECYCLE.filter((a) => syncPage.includes('"' + a + '"') || syncPage.includes("'" + a + "'"));
+  if (!leaked.length) passed++;
+  else {
+    failed++;
+    pushStructural("app/(app)/sync: the drawer names " + JSON.stringify(leaked) + " itself again - QA-946. Which action fits a row is decided by classifyChange in lib/sync.ts and travels in the GET payload, because the apply door refuses through that same predicate. A second copy here is how a guaranteed-400 option sat at the top of every row's dropdown with nothing on screen saying so.");
+  }
+
+  // …and it must be reading the server's verdicts, not an array it rebuilt under another name.
+  const readsVerdicts = /actions/.test(syncPage) && /recommended/.test(syncPage) && /requires_note/.test(syncPage);
+  if (readsVerdicts) passed++;
+  else { failed++; pushStructural("app/(app)/sync: the drawer no longer reads the per-row action verdicts (actions / recommended / requires_note) from the API - QA-946. Without them the Action list cannot say which option this row accepts, which is the whole defect."); }
+
+  // (b) every schema action has a description, and the emitted order comes from the enum.
+  const syncLib = fs.readFileSync(path.join(root, "lib/sync.ts"), "utf8");
+  const modelsSrc = fs.readFileSync(path.join(root, "models/index.ts"), "utf8");
+  const enumLine = modelsSrc.match(/SHEET_CHANGE_ACTION = \[([^\]]+)\]/);
+  const enumActions = enumLine ? [...enumLine[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]) : [];
+  const byActionBlock = syncLib.slice(syncLib.indexOf("const byAction"), syncLib.indexOf("return SHEET_CHANGE_ACTION.map"));
+  const undescribed = enumActions.filter((a) => !byActionBlock.includes('"' + a + '"'));
+  if (enumActions.length === 7 && !undescribed.length) passed++;
+  else {
+    failed++;
+    pushStructural("lib/sync classifyChange: " + JSON.stringify(undescribed) + " of the " + enumActions.length + " SHEET_CHANGE_ACTION values have no verdict - QA-946. An action the schema accepts and this map does not describe is not offered on any row at all, and nothing else on the screen would show that it went missing.");
+  }
+
+  // The refusals must come from the verdict, not from their own sentences - that is what makes the
+  // door's 400 and the drawer's disabled option the same words.
+  const refusalsShared = /verdictFor\(change, "Update target"\)\.why/.test(syncLib)
+    && /verdictFor\(change, "Apply value"\)/.test(syncLib)
+    && !/"Not a target-row change\."/.test(syncLib.replace(/\/\/[^\n]*/g, ""));
+  if (refusalsShared) passed++;
+  else { failed++; pushStructural("lib/sync: the apply door no longer refuses THROUGH classifyChange - QA-946. When the door writes its own refusal, the sentence the screen shows and the sentence the server returns can disagree, and the one a person reads is whichever they hit first."); }
 }
 
   // -175: every finding, printed once, AFTER every check has had its say. See the note where this

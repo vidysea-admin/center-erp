@@ -1,7 +1,7 @@
 // Sync engine — Rules 1–9 (§4 "Location and sync").
 // External sheet is fetched as CSV (Google Sheet "export?format=csv" URL or any CSV endpoint).
 import {
-  Batch, BatchMember, Candidate, FollowUpAction, Location, LocationTarget, Program, SheetChange, SyncSource, Trainer, TrainerRequest,
+  Batch, BatchMember, Candidate, FollowUpAction, Location, LocationTarget, Program, SHEET_CHANGE_ACTION, SheetChange, SyncSource, Trainer, TrainerRequest,
 } from "@/models";
 import { audit } from "@/lib/audit";
 import { HttpError } from "@/lib/authz";
@@ -101,6 +101,162 @@ export function targetRowField(field: string): { base: string; code: string } | 
   if (i < 0) return null;
   const base = field.slice(0, i), code = field.slice(i + 1);
   return TARGET_ROW_FIELDS.has(base) && code ? { base, code } : null;
+}
+
+// QA-946 (Umesh, 24/08, with a screenshot of /sync): the Review-change drawer offered the SAME
+// seven actions on EVERY Location row, while this file's own guards refuse most of them on most
+// rows. `Update target` only ever passes on a "<base>:<CODE>" row (the guard in the apply switch);
+// `Apply value` only ever passes on a bare LOCATION_FIELDS name (its guard). Those two conditions
+// are EXACT COMPLEMENTS - so for any given row one of the top two options is guaranteed to 400,
+// and nothing on the screen said which one. He picked `Update target` on a `tc_password` row and
+// got "Not a target-row change." with no next step, on the screen whose whole job is to tell a
+// reviewer what to do.
+//
+// The server always knew the row's kind; the screen never asked. This is the ONE predicate both
+// now read - the apply switch refuses THROUGH it, and GET /api/sheet-changes ships it to the
+// drawer - so an offered option and a refusal cannot disagree, which is the failure they had.
+// Deliberately NOT a fresh list: it derives from LOCATION_FIELDS and TARGET_ROW_FIELDS above, the
+// same Sets the diff loop and the doors already use, and it emits in SHEET_CHANGE_ACTION order so
+// the schema enum stays the one place the vocabulary is named. Two lists of "what is a row field"
+// is exactly the ARCHITECTURE section 3 disease, and QA-497 is what it cost last time.
+export type ActionVerdict = {
+  action: string;          // a SHEET_CHANGE_ACTION member
+  ok: boolean;             // will the apply door accept this action on this row
+  recommended?: boolean;   // the right next step for this row (at most one per row)
+  requires_note?: boolean; // the door refuses without a reason (Rule 5)
+  raises_followups?: boolean; // applying it generates FollowUpActions (Rule 8) and holds the row Open (Rule 7)
+  why: string;             // one line - shown in the option itself AND used in the refusal
+};
+
+// Status fields never take a generic write - each has its own guarded action. The Apply value
+// guard reads THIS list rather than keeping its own copy.
+const STATUS_FIELDS = ["approval_status", "operational_status", "pipeline_status", "lifecycle_status"];
+
+// When the changed field IS an operational status, the sheet's new value names the action.
+const LIFECYCLE_BY_VALUE: Record<string, string> = {
+  "not started": "Start location",
+  "active": "Start location",
+  "on hold": "Put on hold",
+  "stopped": "Stop location",
+  "closed": "Close location",
+};
+
+const TARGET_BASE_LABEL: Record<string, string> = {
+  approved_target: "approved target",
+  tc_status: "TC status",
+  tc_id: "TC ID",
+};
+
+// Everything the verdict is decided from. Deliberately the stored fields and nothing else - a
+// SheetChange document, a .lean() row and a test fixture all satisfy it.
+export type ClassifiableChange = {
+  field_name?: string; entity_type?: string; new_value?: string; location?: unknown; entity?: unknown;
+};
+
+export function classifyChange(c: ClassifiableChange): ActionVerdict[] {
+  const field = String(c.field_name ?? "");
+  const entityType = (c.entity_type as "Location" | "Trainer" | "Candidate") ?? "Location";
+  const isEntity = entityType !== "Location";
+  const rowField = targetRowField(field);
+  const isStatus = STATUS_FIELDS.includes(field);
+  const spec = isEntity ? fieldSpec(entityType, field) : undefined;
+  const isCentreField = !rowField && !isStatus && LOCATION_FIELDS.has(field);
+  // A row the sync could not match to a record: every action except "No action" 400s on the
+  // missing target, so say that once rather than six times.
+  const hasRecord = isEntity ? !!c.entity : !!c.location;
+  // QA-668: a sheet that CLEARS a cell arrives as an empty new_value, and `Apply value` writes
+  // that blank. A reviewer has to be told they are erasing, not filling.
+  const clears = String(c.new_value ?? "").trim() === "";
+
+  const canUpdateTarget = hasRecord && !isEntity && !!rowField;
+  const canApplyValue = hasRecord && (isEntity ? !!spec : isCentreField);
+  const canLifecycle = hasRecord && !isEntity;
+
+  // Exactly one recommendation, decided from the row's kind - never guessed.
+  let pick = "No action";
+  if (canUpdateTarget) pick = "Update target";
+  else if (hasRecord && isStatus && !isEntity) {
+    // `Start location` is the only action that writes approval_status (it copies new_value), but
+    // it ALSO marks the centre Active. That is right for an approval and WRONG for anything else,
+    // so a rejection or a blank is not quietly turned into "make this centre live".
+    if (field === "approval_status") {
+      pick = /^(approved|approval granted|yes)$/i.test(String(c.new_value ?? "").trim()) ? "Start location" : "No action";
+    } else {
+      pick = LIFECYCLE_BY_VALUE[String(c.new_value ?? "").trim().toLowerCase()] ?? "No action";
+    }
+  } else if (canApplyValue) pick = "Apply value";
+
+  const noRecord = isEntity
+    ? "This change is not matched to a record, so there is nothing to write to."
+    : "This change is not matched to a centre, so there is nothing to write to.";
+
+  const whyUpdateTarget = canUpdateTarget
+    ? `Write the sheet's value into this centre's ${TARGET_BASE_LABEL[rowField!.base] ?? rowField!.base} for job role ${rowField!.code}. It never edits an existing batch.`
+    : !hasRecord ? noRecord
+    : isEntity ? `A target row belongs to a centre and a job role - this change is on a ${entityType} record.`
+    : isStatus ? `"${field}" is a status field, not a target row - there is no approved target, TC status or TC ID here to update.`
+    : `"${field}" is a plain centre field, not a (centre x job role) target row - there is no approved target, TC status or TC ID here to update. Use "Apply value" to write it onto the centre.`;
+
+  const whyApplyValue = canApplyValue
+    ? (clears
+      ? `The sheet has CLEARED this cell, so applying it ERASES ${field} on this ${isEntity ? entityType.toLowerCase() : "centre"}. Nothing else changes.`
+      : `Copy the sheet's value straight into ${field} on this ${isEntity ? entityType.toLowerCase() : "centre"}. Audited as external sync, and revertible afterwards.`)
+    : !hasRecord ? noRecord
+    : rowField ? `"${field}" lives on a (centre x job role) target row - use "Update target" so it reaches the right row.`
+    : isStatus ? `"${field}" changes what the centre IS, not one of its details, so it goes through its own action (Start / Put on hold / Stop / Close) rather than a plain write.`
+    : isEntity ? `"${field}" is not a mapped field on a ${entityType}, so no action can write it.`
+    : `"${field}" is not a field the sheet may own on a centre, so no action can write it.`;
+
+  const lifecycleRefusal = !hasRecord ? noRecord
+    : `The centre lifecycle does not apply to a ${entityType} row - only value changes do.`;
+
+  const byAction: Record<string, Omit<ActionVerdict, "action">> = {
+    "No action": {
+      ok: true,
+      why: "Dismiss this change - nothing is written anywhere. The row moves to Ignored, and you can re-open it later.",
+    },
+    "Update target": { ok: canUpdateTarget, why: whyUpdateTarget },
+    "Start location": {
+      ok: canLifecycle,
+      why: canLifecycle
+        ? `Mark the centre operational - its status becomes Active.${field === "approval_status" ? " On this row it also records the sheet's new approval status." : ""}`
+        : lifecycleRefusal,
+    },
+    "Put on hold": {
+      ok: canLifecycle, requires_note: true,
+      why: canLifecycle
+        ? "Pause the centre - its status becomes On Hold and your reason is stored on it. A reason is required. No follow-up tasks are raised."
+        : lifecycleRefusal,
+    },
+    "Stop location": {
+      ok: canLifecycle, requires_note: true, raises_followups: canLifecycle,
+      why: canLifecycle
+        ? "Stop the centre - its status becomes Stopped. A reason is required, and follow-up tasks are raised: stop each active batch, release its trainer, cancel open trainer requests, return candidates to the pool."
+        : lifecycleRefusal,
+    },
+    "Close location": {
+      ok: canLifecycle, requires_note: true, raises_followups: canLifecycle,
+      why: canLifecycle
+        ? "Close the centre - its status becomes Closed. A reason is required. If any batch is still Active or Closing the close is DEFERRED: the follow-ups are raised now, the centre keeps running so its batches can still be logged, and it closes when the last follow-up is settled."
+        : lifecycleRefusal,
+    },
+    "Apply value": { ok: canApplyValue, why: whyApplyValue },
+  };
+
+  // Emitted in schema-enum order: SHEET_CHANGE_ACTION stays the single place the vocabulary is
+  // named, and an action added there without a description here is caught by the wall pin rather
+  // than silently disappearing off the screen.
+  return SHEET_CHANGE_ACTION.map((action) => {
+    const v = byAction[action] ?? { ok: false, why: `"${action}" has no description yet.` };
+    return { action, ...v, ...(action === pick ? { recommended: true } : {}) };
+  });
+}
+
+// One verdict, by name - what the apply door asks for the single action it is about to run, so its
+// refusal and the drawer's disabled option are literally the same sentence.
+export function verdictFor(c: ClassifiableChange, action: string): ActionVerdict {
+  return classifyChange(c).find((v) => v.action === action)
+    ?? { action, ok: false, why: `Unknown action: ${action}` };
 }
 
 async function impactSnapshot(locationId: unknown) {
@@ -489,7 +645,10 @@ export async function applySheetChange(changeId: string, action: string, note: s
       // Rule 4: writes approved_target only; never edits batches
       if (!loc) throw new HttpError(400, "Change has no matched location.");
       const rowField = targetRowField(change.field_name);
-      if (!rowField) throw new HttpError(400, "Not a target-row change.");
+      // QA-946: the refusal is the SAME sentence the drawer prints under the disabled option, so a
+      // reviewer who reaches this door another way is told the next step, not just the verdict.
+      // "Not a target-row change." named what was wrong and nothing about what to do instead.
+      if (!rowField) throw new HttpError(400, verdictFor(change, "Update target").why);
       const program = await Program.findOne({ code: rowField.code });
       if (!program) throw new HttpError(400, `Program ${rowField.code} not found.`);
       // 2026-08-12 audit (sync S1-1): parseInt(new_value || "0") turned a blank cell into a
@@ -551,10 +710,12 @@ export async function applySheetChange(changeId: string, action: string, note: s
       if (!targetId) throw new HttpError(400, "Change has no matched record to write to.");
       // field_name is sheet data, not a free property path — only catalog/mapping fields may be
       // written, and status fields must go through their own guarded actions above.
-      const blocked = ["approval_status", "operational_status", "pipeline_status", "lifecycle_status"];
-      const allowed = !blocked.includes(change.field_name) && !targetRowField(change.field_name)
-        && (entityType === "Location" ? LOCATION_FIELDS.has(change.field_name) : !!fieldSpec(entityType, change.field_name));
-      if (!allowed) throw new HttpError(400, `"${change.field_name}" cannot be written by Apply value — use the specific action for it.`);
+      // QA-946: this used to carry its own copy of the rule (a `blocked` list + the LOCATION_FIELDS
+      // / fieldSpec test), which is the same rule the screen needed and could not see. Both read
+      // classifyChange now, so what the drawer offers and what this door accepts cannot drift, and
+      // the refusal names the action to use instead.
+      const applyVerdict = verdictFor(change, "Apply value");
+      if (!applyVerdict.ok) throw new HttpError(400, applyVerdict.why);
       const doc = await Model.findById(targetId);
       if (!doc) throw new HttpError(404, `${entityType} not found.`);
       const snap = change.impact_snapshot as any;

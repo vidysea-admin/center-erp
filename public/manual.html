@@ -264,7 +264,18 @@
   <p class="sub">The client's Google/OneDrive workbooks feed the ERP. Changes queue for review; nothing applies itself to master data without an Admin's click.</p>
   <ol class="steps">
     <li><b>Sheet Watch</b> — each watched workbook, its tabs, and what changed since last look; whole-row deletions are called out.</li>
-    <li><b>Sync Inbox</b> — apply or ignore each change; applied values write to the record and audit as external sync.</li>
+    <li><b>Sync Inbox</b> — apply or ignore each change; applied values write to the record and audit as external sync. Open a row and the <b>Action</b> list is built for that row: the one right step is marked <b>★</b>, the ones that would be refused are greyed out with the reason. The seven actions mean:
+      <table>
+        <tr><th>Action</th><th>What it does</th></tr>
+        <tr><td><b>No action</b></td><td>Dismiss it — nothing is written anywhere. The row moves to Ignored and can be re-opened later.</td></tr>
+        <tr><td><b>Update target</b></td><td>Only for a <i>centre × job role</i> row (approved target, TC status, TC ID). Writes that one target row. It never edits an existing batch.</td></tr>
+        <tr><td><b>Apply value</b></td><td>The plain write — copies the sheet's value into one field of the centre, trainer or candidate. If the sheet cleared the cell, applying it <b>erases</b> that field.</td></tr>
+        <tr><td><b>Start location</b></td><td>Marks the centre operational (status becomes Active). On an approval row it also records the new approval status.</td></tr>
+        <tr><td><b>Put on hold</b></td><td>Pauses the centre (On Hold). A reason is required. No follow-up tasks are raised.</td></tr>
+        <tr><td><b>Stop location</b></td><td>Stops the centre (Stopped). A reason is required, and follow-ups are raised — stop each active batch, release its trainer, cancel open trainer requests, return candidates to the pool.</td></tr>
+        <tr><td><b>Close location</b></td><td>Closes the centre (Closed). A reason is required. If a batch is still Active or Closing the close is <b>deferred</b>: follow-ups are raised now, the centre keeps running so its batches can still be logged, and it closes when the last follow-up is settled.</td></tr>
+      </table>
+      A change stays <b>Open</b> while it has pending follow-ups — that is what stops acknowledge-and-forget.</li>
     <li><b>Tab mappings</b> (Admin → Sync Source) — map a sheet tab's columns to an entity to auto-ingest new rows. Approve mappings carefully: an active Trainer/Candidate mapping creates records from sheet rows on every sync cycle.</li>
   </ol>
 </section>

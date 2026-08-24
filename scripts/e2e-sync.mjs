@@ -1095,5 +1095,111 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
     JSON.stringify({ created: rN.created, orphans: orphans.length }));
 }
 
+// ---- -232 (QA-946, Umesh 24/08, with a screenshot of /sync): every row carries the actions
+// that FIT IT, and the door's refusal is the screen's own sentence ----
+//
+// The drawer rendered ONE hardcoded list of seven on every Location row while the apply switch
+// accepts at most one of the top two: `Update target` needs a "<field>:<CODE>" row, `Apply value`
+// needs a bare one, and those are exact complements. So one of the first two options was always a
+// guaranteed 400 and nothing said which. He picked `Update target` on a `tc_password` row and got
+// "Not a target-row change." - a sentence that names what is wrong and nothing about what to do.
+//
+// This surface had ZERO coverage before this block: grepping scripts/ for `target-row`,
+// `Not a target` and `targetRow` returned nothing, in BOTH directions. The refusal a human hit on
+// production was untested, and so was the acceptance.
+{
+  const s9 = "C" + Date.now().toString().slice(-6);
+  const mkUp9 = async (csv, name) => {
+    const f = new FormData();
+    f.append("file", new File([csv], name, { type: "text/csv" }));
+    return (await req("POST", "/api/upload", f, 200)).data;
+  };
+  const p9 = (await req("POST", "/api/programs", { code: "P" + s9, name: "Cls Prog " + s9, trainer_skill: "ClsSkill" + s9 }, 201)).data.item;
+  const l9 = (await req("POST", "/api/locations", { code: "L" + s9, name: "Cls Loc " + s9, external_id: s9, approval_status: "Approved", city: "Jaipur" }, 201)).data.item;
+  // One centre, three row KINDS at once: a plain centre field, a (centre x job role) target row,
+  // and the credential column - the exact row Umesh was looking at.
+  const u9 = await mkUp9(`Center ID,City,Target,TC Password\n${s9},Kota,150,pw${s9}\n`, "cls" + s9 + ".csv");
+  const src9 = (await req("POST", "/api/sync-sources", {
+    name: "Cls " + s9, source_url: new URL(u9.url, BASE).href,
+    field_mappings: { "Center ID": "external_id", "City": "city", "Target": `approved_target:P${s9}`, "TC Password": "tc_password" },
+  }, 201)).data.item;
+  await req("POST", `/api/sync-sources/${src9._id}/run`, undefined, 200);
+
+  const rows9 = (await req("GET", "/api/sheet-changes?status=Open")).data.items
+    .filter((c) => String(c.location?._id ?? c.location) === String(l9._id));
+  const cityRow = rows9.find((c) => c.field_name === "city");
+  const tgtRow = rows9.find((c) => String(c.field_name).startsWith("approved_target:"));
+  const pwRow = rows9.find((c) => c.field_name === "tc_password");
+  const V = (row, a) => (row?.actions ?? []).find((x) => x.action === a);
+
+  ok("QA-946: every change row ships its own action verdicts, one per schema action",
+    rows9.length >= 3 && rows9.every((c) => Array.isArray(c.actions) && c.actions.length === 7),
+    JSON.stringify({ rows: rows9.length, first: (rows9[0]?.actions ?? []).length }));
+
+  // The two complements, in BOTH directions - this is the entire defect.
+  ok("QA-946: on a plain centre field, Apply value is the recommendation and Update target is REFUSED",
+    V(cityRow, "Apply value")?.ok === true && V(cityRow, "Apply value")?.recommended === true
+    && V(cityRow, "Update target")?.ok === false,
+    JSON.stringify({ apply: V(cityRow, "Apply value"), update: V(cityRow, "Update target") }).slice(0, 260));
+  ok("QA-946: on a target row it is exactly the other way round",
+    V(tgtRow, "Update target")?.ok === true && V(tgtRow, "Update target")?.recommended === true
+    && V(tgtRow, "Apply value")?.ok === false,
+    JSON.stringify({ update: V(tgtRow, "Update target"), apply: V(tgtRow, "Apply value") }).slice(0, 260));
+  ok("QA-946: the credential row Umesh actually clicked recommends Apply value, not Update target",
+    V(pwRow, "Apply value")?.recommended === true && V(pwRow, "Update target")?.ok === false,
+    JSON.stringify(V(pwRow, "Update target") ?? null).slice(0, 200));
+
+  ok("QA-946: exactly ONE recommendation per row - never two, never none",
+    rows9.every((c) => (c.actions ?? []).filter((x) => x.recommended).length === 1),
+    JSON.stringify(rows9.map((c) => (c.actions ?? []).filter((x) => x.recommended).map((x) => x.action))));
+  ok("QA-946: No action is legal on every row, and every verdict carries a reason",
+    rows9.every((c) => V(c, "No action")?.ok === true)
+    && rows9.every((c) => (c.actions ?? []).every((x) => typeof x.why === "string" && x.why.length > 20)),
+    JSON.stringify(rows9.map((c) => V(c, "No action")?.ok)));
+  ok("QA-946: Hold/Stop/Close declare they need a reason, and only Stop/Close declare follow-ups",
+    ["Put on hold", "Stop location", "Close location"].every((a) => V(cityRow, a)?.requires_note === true)
+    && V(cityRow, "Stop location")?.raises_followups === true
+    && V(cityRow, "Close location")?.raises_followups === true
+    && !V(cityRow, "Put on hold")?.raises_followups,
+    JSON.stringify(["Put on hold", "Stop location", "Close location"].map((a) => V(cityRow, a))).slice(0, 300));
+
+  // No verdict may quote a value. The row is masked BEFORE it is classified, and this is the pin
+  // that keeps a future `why` from carrying a live portal credential past that mask.
+  ok("QA-946: no action verdict quotes the changed VALUE - only the field name",
+    rows9.every((c) => (c.actions ?? []).every((x) => !String(c.new_value ?? "").trim()
+      || !x.why.includes(String(c.new_value).trim()))),
+    JSON.stringify(rows9.map((c) => c.new_value)).slice(0, 160));
+
+  // The refusal a human actually hit.
+  const bad9 = await req("POST", `/api/sheet-changes/${cityRow._id}/apply`, { action: "Update target" }, 400);
+  const badMsg = String(bad9.data?.error ?? "");
+  ok("QA-946: the refusal names the action to use INSTEAD - it used to be only 'Not a target-row change.'",
+    /Apply value/.test(badMsg) && badMsg !== "Not a target-row change.",
+    JSON.stringify(badMsg).slice(0, 220));
+  ok("QA-946: the door's refusal is the SAME sentence the drawer prints under the disabled option",
+    badMsg === V(cityRow, "Update target")?.why,
+    JSON.stringify({ door: badMsg, screen: V(cityRow, "Update target")?.why }).slice(0, 320));
+
+  // The other complement's refusal, and that it too points somewhere.
+  const bad9b = await req("POST", `/api/sheet-changes/${tgtRow._id}/apply`, { action: "Apply value" }, 400);
+  ok("QA-946: Apply value on a target row is refused and names Update target",
+    /Update target/.test(String(bad9b.data?.error ?? "")) && String(bad9b.data?.error ?? "") === V(tgtRow, "Apply value")?.why,
+    JSON.stringify({ door: String(bad9b.data?.error ?? ""), screen: V(tgtRow, "Apply value")?.why }).slice(0, 320));
+
+  // Rule 5 was only ever discoverable by pressing Apply and reading a 400. The row declares it now,
+  // and the door still enforces it - both halves pinned, because the screen disabling its own
+  // button is worth nothing if the door stops asking.
+  const noNote9 = await req("POST", `/api/sheet-changes/${cityRow._id}/apply`, { action: "Stop location" }, 400);
+  ok("QA-946: Stop with no reason is still refused by the door (Rule 5), and the row said so first",
+    /reason/i.test(String(noNote9.data?.error ?? "")) && V(cityRow, "Stop location")?.requires_note === true,
+    JSON.stringify(String(noNote9.data?.error ?? "")).slice(0, 200));
+
+  // And the recommendation is not merely advice - applying it works.
+  await req("POST", `/api/sheet-changes/${cityRow._id}/apply`, { action: "Apply value" }, 200);
+  const l9after = (await req("GET", `/api/locations/${l9._id}`)).data.item;
+  ok("QA-946: the recommended action is the one that actually lands",
+    l9after?.city === "Kota", JSON.stringify({ city: l9after?.city }));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

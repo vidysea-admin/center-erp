@@ -4,10 +4,26 @@ import { api, fmtDate, fmtDT } from "@/lib/client";
 import { usePerms } from "@/components/shell";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, RouteTabs, inputCls } from "@/components/ui";
 
-const ACTIONS = ["No action", "Update target", "Apply value", "Start location", "Put on hold", "Stop location", "Close location"];
-// Entity changes (tab mappings on trainers/candidates) are value swaps — the location status
-// machinery does not apply to them.
-const ENTITY_ACTIONS = ["No action", "Apply value"];
+// QA-946 (Umesh, 24/08, screenshot of this screen): the action list is NOT written here any more.
+// It used to be two hardcoded arrays — seven actions for every Location row, two for entity rows —
+// and the apply door accepts at most ONE of the top two on any given row, because `Update target`
+// needs a "<field>:<CODE>" row and `Apply value` needs a bare one, and those are exact complements.
+// So one of the first two options was always a guaranteed 400, the screen never said which, and a
+// reviewer's only way to learn a row's kind was to pick wrong and read the refusal. He picked
+// `Update target` on a `tc_password` row and got "Not a target-row change."
+//
+// GET /api/sheet-changes now ships one verdict per action, decided by `classifyChange` in
+// lib/sync.ts — the SAME predicate the apply door refuses through. A client component cannot
+// import it (lib/sync.ts pulls mongoose), so it travels in the payload, the way trainers'
+// `allowed_next` already does. Nothing about which action fits which row is decided in this file.
+type ActionVerdict = { action: string; ok: boolean; recommended?: boolean; requires_note?: boolean; raises_followups?: boolean; why: string };
+const verdicts = (r: any): ActionVerdict[] => (Array.isArray(r?.actions) ? r.actions : []);
+const verdictOf = (r: any, action: string): ActionVerdict | undefined => verdicts(r).find((v) => v.action === action);
+
+// A cleared cell arrives as an empty new_value and reads as nothing at all — "Approved →" and then
+// silence — while `Apply value` writes that blank into the record (QA-668). Same `∅` the Old column
+// and the row list already use, plus the word for what applying it does.
+const shownValue = (v: any) => (String(v ?? "").trim() === "" ? "∅ — clears this field" : String(v));
 
 // Who/what a change is about: the centre for the classic mapped sync, the named row for
 // tab-mapping changes on trainers/candidates.
@@ -290,7 +306,7 @@ It leaves the review queue. You can re-open it later from the Ignored list.`;
           <div className="space-y-4">
             <div className="rounded-lg bg-gray-50 p-4 text-sm">
               <div className="font-medium">{rowLabel(review) ?? "Unmatched location"}</div>
-              <div className="mt-1">Field <b>{review.field_name}</b>: <span className="text-gray-500">{review.old_value || "∅"}</span> → <b>{review.new_value}</b></div>
+              <div className="mt-1">Field <b>{review.field_name}</b>: <span className="text-gray-500">{review.old_value || "∅"}</span> → <b>{shownValue(review.new_value)}</b></div>
               <div className="mt-1 text-xs text-gray-400">Detected {fmtDT(review.detected_at)}</div>
             </div>
             {review.impact_snapshot && review.impact_snapshot.active_batches !== undefined && (
@@ -317,21 +333,68 @@ It leaves the review queue. You can re-open it later from the Ignored list.`;
                 {canApprove && <> Use <b>Re-open</b> on its row to put it back.</>}
               </div>
             ) : (<>
-            <Field label="Action" required>
-              <select className={inputCls} value={action} onChange={(e) => setAction(e.target.value)}>
-                <option value="">Select…</option>
-                {(review.entity_type && review.entity_type !== "Location" ? ENTITY_ACTIONS : ACTIONS).map((a) => <option key={a}>{a}</option>)}
-              </select>
-            </Field>
-            <Field label={["Put on hold", "Stop location", "Close location"].includes(action) ? "Reason (required)" : "Note"}>
-              <input className={inputCls} value={note} onChange={(e) => setNote(e.target.value)} />
-            </Field>
-            {["Stop location", "Close location"].includes(action) && (
-              <p className="text-xs text-amber-700">This will generate follow-up actions (stop batches, release trainers, cancel requests, return candidates). Nothing is cascaded silently — each follow-up needs an owner to resolve it.</p>
-            )}
-            {/* the apply door itself needs sheet.approve; the button obeys the same key */}
-            {canApprove && <Btn onClick={apply} disabled={!action}>Apply & Acknowledge</Btn>}
-            {!canApprove && <p className="text-xs text-gray-600">You can read this change. Acting on it needs the sheet-approval right.</p>}
+            {(() => {
+              const vs = verdicts(review);
+              const rec = vs.find((v) => v.recommended);
+              const chosen = verdictOf(review, action);
+              // The door refuses Put on hold / Stop / Close without a reason (Rule 5, lib/sync.ts).
+              // The button used to test `!action` only, so the way to discover that rule was to
+              // press Apply and read a 400. `requires_note` comes from the same verdict the door
+              // reads, so this can never be the stale half of the pair.
+              const noteMissing = !!chosen?.requires_note && !note.trim();
+              const snap = review.impact_snapshot;
+              const groups: [string, ActionVerdict[]][] = [
+                ["Recommended for this row", vs.filter((v) => v.recommended)],
+                ["Also possible", vs.filter((v) => v.ok && !v.recommended)],
+                ["Doesn't apply to this row", vs.filter((v) => !v.ok)],
+              ];
+              return (<>
+              <Field label="Action" required>
+                <select className={inputCls} value={action} onChange={(e) => setAction(e.target.value)}>
+                  {/* Deliberately NOT pre-selected to the recommendation (Umesh's call, 24/08):
+                      Apply writes to production data, so the recommended step is marked and
+                      explained, and the press stays a decision somebody made on purpose. */}
+                  <option value="">Select…</option>
+                  {groups.map(([label, group]) => group.length === 0 ? null : (
+                    <optgroup key={label} label={`── ${label} ──`}>
+                      {group.map((v) => (
+                        // Disabled, not hidden: an option a reviewer never sees is one they never
+                        // learn the shape of. The reason rides in the label because a native
+                        // select has no tooltip on touch, and in `title` for when it truncates.
+                        <option key={v.action} value={v.action} disabled={!v.ok} title={v.why}>
+                          {v.ok ? (v.recommended ? "★ " : "") : "✗ "}{v.action} — {v.why}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </Field>
+              {vs.length === 0 && (
+                <p className="text-xs text-amber-700">This change did not arrive with its list of applicable actions — reload the page. Applying is blocked rather than guessed at.</p>
+              )}
+              {!action && rec && (
+                <p className="text-xs text-gray-600"><b className="text-gray-800">★ Recommended: {rec.action}</b> — {rec.why}</p>
+              )}
+              {chosen && (
+                <p className={`text-xs ${chosen.ok ? "text-gray-600" : "text-red-700"}`}><b className="text-gray-800">{chosen.action}</b> — {chosen.why}</p>
+              )}
+              <Field label={chosen?.requires_note ? "Reason (required)" : "Note"}>
+                <input className={inputCls} value={note} onChange={(e) => setNote(e.target.value)} />
+              </Field>
+              {chosen?.raises_followups && (
+                <p className="text-xs text-amber-700">
+                  This will generate follow-up actions (stop batches, release trainers, cancel requests, return candidates). Nothing is cascaded silently — each follow-up needs an owner to resolve it, and this change stays Open until they are.
+                  {snap && snap.active_batches !== undefined && <> At detection this centre had <b>{snap.active_batches}</b> active batch(es), <b>{snap.assigned_trainers}</b> assigned trainer(s) and <b>{snap.open_trainer_requests}</b> open trainer request(s).</>}
+                </p>
+              )}
+              {/* the apply door itself needs sheet.approve; the button obeys the same key */}
+              {canApprove && <Btn onClick={apply} disabled={!action || noteMissing || chosen?.ok === false}>Apply & Acknowledge</Btn>}
+              {canApprove && noteMissing && (
+                <p className="text-xs text-amber-700">{chosen!.action} needs a reason before it can be applied — it is stored on the centre and carried onto every follow-up it raises.</p>
+              )}
+              {!canApprove && <p className="text-xs text-gray-600">You can read this change. Acting on it needs the sheet-approval right.</p>}
+              </>);
+            })()}
             </>)}
           </div>
         )}
