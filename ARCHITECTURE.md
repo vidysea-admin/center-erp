@@ -76,7 +76,7 @@ StoredFile, ApprovalRule, ApprovalRequest, AuditLog, Scheme, JobRole, CandidateD
 | `storage.ts` | Evidence adapter (GCS → Drive → local) · `putFile` · `getFileStream` · `ALLOWED_UPLOAD_EXT` · `storageHealth` |
 | `upload.ts` | Client side: `compressImage/Video` · `uploadResumable` · `uploadWithRetry` · offline queue |
 | `govt-attendance.ts` | `parseGovtAttendance` · `isTrainerRow` · `matchGovtRows` · `reconcileAgainstLogs` · `hhmmssToMinutes` |
-| `sync.ts` / `workbook.ts` / `tab-mapping.ts` / `field-catalog.ts` | The sheet ingest stack. **`sourceAllowed()` in `workbook.ts` is the single-truth OneDrive policy — in code, not prose** |
+| `sync.ts` / `workbook.ts` / `tab-mapping.ts` / `field-catalog.ts` | The sheet ingest stack. **`sourceAllowed()` in `workbook.ts` is the single-truth OneDrive policy — in code, not prose.** **`classifyChange()` in `sync.ts` is the single truth for which Sync-Inbox action fits which row** — the apply switch refuses THROUGH it (`verdictFor`) and `GET /api/sheet-changes` ships its verdicts to the drawer, so an offered option and a refusal cannot disagree (QA-946) |
 | `alerts.ts` | `evaluateAlerts()` — 10 dedup'd notification rules |
 | `rate-limit.ts` | `clientKey` · `rateLimit` · `phoneChallengeGate` (SMS toll-fraud) |
 | `safe-fetch.ts` | SSRF guard: `assertPublicUrl` · `safeFetch` · `internalFileToken` |
@@ -399,11 +399,22 @@ CAN id), `id_reference` (anything else). QA-414 measured 55 live candidates whos
 Four such boxes side by side is that same trap, widened again — and **two of the four are 12-digit
 numbers**, which is the closest resemblance any pair on this schema has ever had.
 
-That pair has one guard and it is deliberate: **every door that writes `apaar_id` refuses a value
-equal to that same candidate's `aadhaar_no`, by name** (`api/candidates/route.ts`,
-`api/candidates/[id]/route.ts`, and the `crossCheck` hook in `api/batches/[id]/results/route.ts`). It
-is the only one of the four confusions that is knowable at the door; the rest are only discoverable
-when the government portal rejects that student. `apaar_id` also rides `scripts/mirror-prod.mjs`
+That pair has one guard, and **it is NOT uniform across the doors — say it exactly, because the
+first version of this paragraph said "every door … refuses" and that was a false universal in the
+anti-drift map itself** (QA-949, found by the qa-232 checker). The truth, per door:
+
+| Door | On an APAAR equal to that candidate's Aadhaar |
+|---|---|
+| `api/candidates/route.ts` (create) | **refuses**, 400, naming which box it is |
+| `api/candidates/[id]/route.ts` (edit) | **refuses**, 400 — and in BOTH directions since QA-950, because asking only "is this APAAR the Aadhaar?" let the operator set the APAAR first and the Aadhaar second and walk straight past it |
+| `api/batches/[id]/results/route.ts` (Closure card) | **refuses**, 400, via the `crossCheck` hook |
+| `api/candidates/import/route.ts` (Excel) | **REPORTS, never refuses** — `apaar_same_as_aadhaar` on the preview and the confirm |
+
+The importer differs on purpose and the difference is the QA-141 ruling, not an oversight: a client's
+sheet is client data and a row is never dropped over format. What is unacceptable there is silence —
+and silence is what it did until QA-949, on the one door where QA-414's 55 records actually arrived.
+This is the only one of the four confusions that is knowable at the door at all; the rest are
+discoverable only when the government portal rejects that student. `apaar_id` also rides `scripts/mirror-prod.mjs`
 REDACT with `aadhaar_no`, but is **NOT** in `AUDIT_MASK_FIELDS` and **is** in `searchFields` — it is a
 number a centre quotes back to the government and searches on, which Aadhaar is not. That split is a
 decision; if it is wrong, it is Umesh's to flip.
@@ -475,6 +486,18 @@ is private; export it). `ACTIVE_BATCH_STATUSES` (`rules.ts:14` vs `sync.ts:13`).
 `["Issued","Not Issued"]` — the settled-certificate predicate, **3 copies** (`rules.ts:1230`,
 `certificates/route.ts:254`, `complete/route.ts:38`) — should be `isCertificateSettled()`.
 `CANDIDATE_DOC_TYPE` (models :310) never reaches its own UI at all — only a `guess()` infers it.
+**`SHEET_CHANGE_ACTION` — COLLAPSED 2026-08-24 (QA-946), and worth reading as the worked example.**
+It had **six** copies: `models/index.ts:87`, `sync/page.tsx:7` (all seven), `:10` (the entity two),
+`:326` (the reason-needing three), `:329` (the follow-up two), `:275` (the revertable two). The cost
+was not cosmetic: the page's copy could not see `field_name`, while the apply door accepts at most
+one of `Update target` / `Apply value` per row and those two conditions are exact complements — so
+**every row's dropdown carried a guaranteed-400 option at the top and nothing said which one**.
+Now: `classifyChange()` in `lib/sync.ts` derives from `LOCATION_FIELDS` + `TARGET_ROW_FIELDS`, emits
+in `SHEET_CHANGE_ACTION` order, the door refuses through it, the screen renders it, and
+`check-user-copy.mjs` pins both that the page names no lifecycle action of its own and that every
+enum member has a verdict. **One copy survives on purpose:** `page.tsx:275` still names
+`["Update target","Apply value"]` for the **revert** button — a different question (what can be
+undone, owned by `revert/route.ts:21`), deliberately excluded from the pin rather than half-covered.
 
 ### 3.9 Field whitelists — create vs edit
 Byte-identical duplicated lists in `locations`, `programs`, `sync-sources`. Deliberate differences in

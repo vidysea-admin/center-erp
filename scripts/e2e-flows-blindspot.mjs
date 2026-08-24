@@ -1108,5 +1108,84 @@ console.log("\n--- FL16 (QA-902): the government APAAR ID, on the door the Closu
   await req(admin, "POST", `/api/batches/${b._id}/transition`, { target: "Cancelled", reason: "FL16 fixture cleanup" }, 200);
 }
 
+
+console.log("\n--- FL17 (qa-232 cycle 2): the three the checker FAILED cycle 1 on ---");
+{
+  // Every assertion here was RED on cycle 1. The checker drove all three itself and the manifest
+  // now carries its measurements, so these are regression pins, not decoration.
+  const dayG = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+  const ap17 = (n) => `17${stamp}${String(n).padStart(4, "0")}`;
+  const AADH17 = "234567890124";                       // Verhoeff-valid, first digit not 0/1
+
+  // --- QA-948: the in-file duplicate detector skipped UNREADABLE values ---------------------
+  // It sat behind `if (!canon) … continue`, so it missed exactly the case it creates: an
+  // unreadable APAAR is still STORED (`canon ?? raw`) and the partial index is on $type:"string",
+  // so it indexes any string. Checker measured on a 20-row sheet: preview said
+  // apaar_duplicate_count=0, confirm answered a bare 409, and 3 of 20 rows landed - 17 lost.
+  const badApaar = "99";                                // unreadable on purpose
+  const dupRows = [
+    { "Student Name": `FL17 Dup A ${stamp}`, "Mobile": "9822217001", "APAAR ID": badApaar },
+    { "Student Name": `FL17 Dup B ${stamp}`, "Mobile": "9822217002", "APAAR ID": badApaar },
+  ];
+  const dwb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(dwb, XLSX.utils.json_to_sheet(dupRows), "Sheet1");
+  const dfile = new File([XLSX.write(dwb, { type: "buffer", bookType: "xlsx" })], "apaar-dup.xlsx",
+    { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const dmap = JSON.stringify({ "Student Name": "name", "Mobile": "phone", "APAAR ID": "apaar_id" });
+  const dprev = await multipart(admin, "/api/candidates/import", { file: dfile, location: loc._id, program: prog._id, mapping: dmap });
+  ok("FL17 (QA-948): two rows sharing an UNREADABLE APAAR are named on the preview - the case the detector used to skip",
+    dprev.data?.apaar_duplicate_count === 1,
+    JSON.stringify({ dup: dprev.data?.apaar_duplicate_count, rows: dprev.data?.apaar_duplicate, invalid: dprev.data?.apaar_invalid_count }));
+  ok("FL17 (QA-948): ...and it is still reported as unreadable too - the two lists are not exclusive",
+    dprev.data?.apaar_invalid_count === 2, JSON.stringify({ invalid: dprev.data?.apaar_invalid_count }));
+
+  // --- QA-949: the QA-414 guard was missing on the door where QA-414 actually happened -------
+  // The two hand-typed doors refused an APAAR equal to that candidate's Aadhaar; the IMPORTER,
+  // which is how rosters actually arrive, stored both fields equal with no word. REPORTED here,
+  // never refused - the QA-141 ruling that a client's sheet is not dropped over format.
+  const sameRows = [{ "Student Name": `FL17 Same ${stamp}`, "Mobile": "9822217003", "APAAR ID": AADH17, "Aadhaar": AADH17 }];
+  const swb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(swb, XLSX.utils.json_to_sheet(sameRows), "Sheet1");
+  const sfile = new File([XLSX.write(swb, { type: "buffer", bookType: "xlsx" })], "apaar-same.xlsx",
+    { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const smap = JSON.stringify({ "Student Name": "name", "Mobile": "phone", "APAAR ID": "apaar_id", "Aadhaar": "aadhaar_no" });
+  const sprev = await multipart(admin, "/api/candidates/import", { file: sfile, location: loc._id, program: prog._id, mapping: smap });
+  ok("FL17 (QA-949): the importer NAMES a row whose APAAR equals that candidate's own Aadhaar",
+    sprev.data?.apaar_same_as_aadhaar_count === 1,
+    JSON.stringify({ n: sprev.data?.apaar_same_as_aadhaar_count, rows: sprev.data?.apaar_same_as_aadhaar }));
+  const sconf = await multipart(admin, "/api/candidates/import", { file: sfile, location: loc._id, program: prog._id, mapping: smap, confirm: "1" });
+  ok("FL17 (QA-949 / QA-141): ...and REPORTS rather than refuses - the row still imports",
+    sconf.status === 201 && sconf.data?.imported === 1, JSON.stringify({ s: sconf.status, imported: sconf.data?.imported }));
+
+  // --- QA-950: the guard was one-directional ------------------------------------------------
+  // Set the APAAR first and the Aadhaar second and it walked straight past. A guard that depends
+  // on the order the operator types in is not a guard.
+  // A DIFFERENT Verhoeff-valid number from AADH17 on purpose: the QA-949 import above stores
+  // AADH17 as an apaar_id, and apaar_id is uniquely indexed - reusing it here made this pin fail
+  // for a fixture reason (409 "already in use"), leaving apaar_id null so the second PATCH had
+  // nothing to refuse. The pin was red for the wrong reason, which is its own kind of lie.
+  const REV17 = "876543210988";
+  const rev = (await req(admin, "POST", "/api/candidates",
+    { name: `FL17 Rev ${stamp}`, phone: phone(), location: loc._id, program: prog._id }, 201)).data.item;
+  await req(admin, "PATCH", `/api/candidates/${rev._id}`, { apaar_id: REV17 }, 200);
+  const revBack = await req(admin, "PATCH", `/api/candidates/${rev._id}`, { aadhaar_no: REV17 });
+  ok("FL17 (QA-950): setting the Aadhaar to a value already held as the APAAR is refused - the guard is not order-dependent",
+    revBack.status === 400 && /APAAR ID, not their Aadhaar/i.test(String(revBack.data?.error ?? "")),
+    `${revBack.status} ${JSON.stringify(revBack.data)}`);
+  const revRead = (await req(admin, "GET", `/api/candidates/${rev._id}`)).data.item;
+  ok("FL17 (QA-950): ...and the refusal wrote nothing - the two fields are not left equal",
+    (revRead?.aadhaar_no ?? null) === null && revRead?.apaar_id === REV17,
+    JSON.stringify({ aadhaar: revRead?.aadhaar_no ?? null, apaar: revRead?.apaar_id ?? null }));
+
+  // The forward direction must still hold - fixing one direction must not cost the other.
+  const FWD17 = "765432109878";
+  const fwd = (await req(admin, "POST", "/api/candidates",
+    { name: `FL17 Fwd ${stamp}`, phone: phone(), location: loc._id, program: prog._id, aadhaar_no: FWD17 }, 201)).data.item;
+  const fwdBack = await req(admin, "PATCH", `/api/candidates/${fwd._id}`, { apaar_id: FWD17 });
+  ok("FL17 (QA-414, still): the ORIGINAL direction is untouched - an APAAR equal to the stored Aadhaar is still refused",
+    fwdBack.status === 400 && /Aadhaar number, not their APAAR/i.test(String(fwdBack.data?.error ?? "")),
+    `${fwdBack.status} ${JSON.stringify(fwdBack.data)}`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

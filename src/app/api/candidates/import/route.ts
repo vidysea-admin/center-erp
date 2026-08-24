@@ -275,19 +275,39 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const apaarInvalid: string[] = [];
   const apaarSeen = new Map<string, string>();
   const apaarDuplicate: string[] = [];
+  const apaarSameAsAadhaar: string[] = [];   // QA-949
   for (const c of candidates) {
     if (typeof c.apaar_id !== "string") continue;
     const raw = c.apaar_id.trim();
     if (!raw) { delete c.apaar_id; continue; } // QA-450: absent, not "" - the index indexes ""
     const canon = canonicalApaar(raw);
     c.apaar_id = canon ?? raw;
-    if (!canon) { apaarInvalid.push(`${personLabel(c)} — "${raw}" (stored, but it is not a 12-digit APAAR ID)`); continue; }
+    if (!canon) apaarInvalid.push(`${personLabel(c)} — "${raw}" (stored, but it is not a 12-digit APAAR ID)`);
     // An APAAR belongs to one student, and the field carries a unique index — so two rows of ONE
     // sheet holding the same number would make `insertMany` below fail as a whole, taking the other
     // 44 good rows with it. Said on the preview, where it can still be fixed in the sheet.
-    const twin = apaarSeen.get(canon);
-    if (twin) apaarDuplicate.push(`${personLabel(c)} — "${canon}" is also on ${twin}`);
-    else apaarSeen.set(canon, personLabel(c));
+    //
+    // QA-948 (-232 cycle 1, checker): this used to sit behind `if (!canon) … continue`, so the
+    // detector skipped exactly the case IT created. An unreadable value is still STORED (the line
+    // above writes `canon ?? raw`) and the partial index is on `$type: "string"`, so it indexes any
+    // string — two rows carrying the same UNREADABLE APAAR therefore collided at insertMany with
+    // nothing said on the preview. Measured by the checker on a 20-row sheet: preview reported
+    // apaar_duplicate_count=0, confirm answered a bare 409, and **3 of 20 rows landed — 17 lost**,
+    // with no `imported` count to reveal that a partial import had happened at all.
+    // So the key is what actually goes into the DOCUMENT (`canon ?? raw`), not the readable subset.
+    const key = canon ?? raw;
+    const twin = apaarSeen.get(key);
+    if (twin) apaarDuplicate.push(`${personLabel(c)} — "${key}" is also on ${twin}`);
+    else apaarSeen.set(key, personLabel(c));
+    // QA-949 (-232 cycle 1, checker): the QA-414 guard was on the two hand-typed doors and NOT here
+    // — so the importer, which is how rosters actually arrive, stored apaar_id === aadhaar_no
+    // without a word. That is the exact defect the guard is named after, missing from the exact door
+    // where it happened. REPORTED, never refused (QA-141: a client's sheet is never dropped over
+    // format), which is the same posture every other check in this loop takes.
+    const aad = canonicalAadhaar((c as any).aadhaar_no);
+    if (aad && key === aad) {
+      apaarSameAsAadhaar.push(`${personLabel(c)} — "${key}" is this candidate's Aadhaar number, not their APAAR ID`);
+    }
   }
 
   // Rule 7: the import path is where bulk duplicates actually enter. Flag them, never block —
@@ -336,6 +356,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
       // one place it can be fixed before 45 good rows are lost with it.
       apaar_invalid: apaarInvalid.slice(0, 25), apaar_invalid_count: apaarInvalid.length,
       apaar_duplicate: apaarDuplicate.slice(0, 25), apaar_duplicate_count: apaarDuplicate.length,
+      apaar_same_as_aadhaar: apaarSameAsAadhaar.slice(0, 25), apaar_same_as_aadhaar_count: apaarSameAsAadhaar.length,
       unknown_columns: unknownCols,
       // QA-110: say the quiet part — which columns are about to be DROPPED vs stored.
       ignored_columns: acceptUnknown ? [] : unknownCols,
@@ -344,5 +365,5 @@ export const POST = apiHandler(async (req: NextRequest) => {
   }
   const docs = await Candidate.insertMany(candidates);
   await audit({ entity: "Candidate", entityId: docs[0]?._id ?? location, field: "import", newValue: `${docs.length} imported, ${duplicates.length} flagged as possible duplicates${dateUnparseable.length ? `, ${dateUnparseable.length} unreadable dates` : ""}${phoneInvalid.length ? `, ${phoneInvalid.length} un-normalizable phones` : ""}${candidateIdInvalid.length ? `, ${candidateIdInvalid.length} portal Candidate ID(s) the gate cannot read` : ""}${apaarInvalid.length ? `, ${apaarInvalid.length} unreadable APAAR ID(s)` : ""}${aadhaarInvalid.length ? `, ${aadhaarInvalid.length} unreadable Aadhaar number(s)` : ""}${!acceptUnknown && unknownCols.length ? `, ${unknownCols.length} column(s) ignored: ${unknownCols.join(", ")}` : ""}`, actor: user.id });
-  return NextResponse.json({ imported: docs.length, skipped: rows.length - candidates.length, duplicate_count: duplicates.length, date_unparseable: dateUnparseable.slice(0, 25), date_unparseable_count: dateUnparseable.length, phone_invalid: phoneInvalid.slice(0, 25), phone_invalid_count: phoneInvalid.length, candidate_id_invalid: candidateIdInvalid.slice(0, 25), candidate_id_invalid_count: candidateIdInvalid.length, aadhaar_invalid: aadhaarInvalid.slice(0, 25), aadhaar_invalid_count: aadhaarInvalid.length, apaar_invalid: apaarInvalid.slice(0, 25), apaar_invalid_count: apaarInvalid.length, apaar_duplicate: apaarDuplicate.slice(0, 25), apaar_duplicate_count: apaarDuplicate.length, ignored_columns: acceptUnknown ? [] : unknownCols, unhandled_fields: [...new Set(unhandledFields)], sidh_status_unmatched: [...new Set(sidhStatusUnmatched)].slice(0, 25), blank_by_field: blankByField }, { status: 201 });
+  return NextResponse.json({ imported: docs.length, skipped: rows.length - candidates.length, duplicate_count: duplicates.length, date_unparseable: dateUnparseable.slice(0, 25), date_unparseable_count: dateUnparseable.length, phone_invalid: phoneInvalid.slice(0, 25), phone_invalid_count: phoneInvalid.length, candidate_id_invalid: candidateIdInvalid.slice(0, 25), candidate_id_invalid_count: candidateIdInvalid.length, aadhaar_invalid: aadhaarInvalid.slice(0, 25), aadhaar_invalid_count: aadhaarInvalid.length, apaar_invalid: apaarInvalid.slice(0, 25), apaar_invalid_count: apaarInvalid.length, apaar_duplicate: apaarDuplicate.slice(0, 25), apaar_duplicate_count: apaarDuplicate.length, apaar_same_as_aadhaar: apaarSameAsAadhaar.slice(0, 25), apaar_same_as_aadhaar_count: apaarSameAsAadhaar.length, ignored_columns: acceptUnknown ? [] : unknownCols, unhandled_fields: [...new Set(unhandledFields)], sidh_status_unmatched: [...new Set(sidhStatusUnmatched)].slice(0, 25), blank_by_field: blankByField }, { status: 201 });
 });

@@ -112,6 +112,17 @@ export const { GET, PATCH } = itemRoutes({
         const aErr = aadhaarError(incoming, { optional: true });
         if (aErr) throw new HttpError(400, aErr);
         body.aadhaar_no = canonicalAadhaar(incoming)!;
+        // QA-950 (-232 cycle 1, checker): the QA-414 guard was asked in ONE direction only. Setting
+        // the APAAR first and the Aadhaar second walked straight past it - PATCH {apaar_id:X} → 200,
+        // then PATCH {aadhaar_no:X} → 200, and the record ends holding the same 12 digits in both
+        // government-ID fields, which is the precise state the guard exists to prevent. A guard that
+        // depends on the ORDER the operator happens to type in is not a guard. Asked here against
+        // whichever APAAR this save leaves on the record - the incoming one when the form sent it,
+        // otherwise the stored one - exactly as the apaar_id block below asks it of the Aadhaar.
+        const apaarAfter = canonicalApaar(body.apaar_id !== undefined ? body.apaar_id : (existing as any)?.apaar_id);
+        if (apaarAfter && apaarAfter === body.aadhaar_no) {
+          throw new HttpError(400, "That is this candidate's APAAR ID, not their Aadhaar number. They are both 12 digits and are different numbers — the Aadhaar number is the one on their Aadhaar card.");
+        }
       } else {
         body.aadhaar_no = current; // unchanged: pass through untouched, never re-judged
       }

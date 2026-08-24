@@ -44,7 +44,9 @@ const RELEASE_NOTE_ARCHIVE_230 =
 export const RELEASE_NOTE_CURRENT =
   "-231 records the government APAAR ID for every candidate. It sits beside the portal "  +
   "Candidate ID on the card where a batch is closed, so a centre types both numbers in one "  +
-  "place, and a trainer can fill either of them in without needing a right they do not have. "  +
+  "place. The new box asks for exactly the same right as the Candidate ID box beside it, so "  +
+  "anyone who may record results can fill either one, and anyone who may not sees both boxes "  +
+  "greyed out rather than being refused after typing. "  +
   "It is on the candidate form too, it can arrive with a bulk upload, it shows on the batch "  +
   "roster, and a student can be found by it. The number is checked for its twelve digits, and "  +
   "it belongs to one student: giving one person's APAAR ID to a second is refused and names "  +
