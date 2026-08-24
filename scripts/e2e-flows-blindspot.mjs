@@ -1370,6 +1370,50 @@ console.log("\n--- FL19 (-235): a cancelled batch can be RESTORED, and a typed j
   const mkCand = async (nm) => (await req(admin, "POST", "/api/candidates",
     { name: `FL19 ${nm} ${stamp}`, phone: phone(), location: loc._id, program: prog._id }, 201)).data.item;
 
+  // ---- Cancelled -> Ready, both directions. This is the gap a peer session caught, and it is the
+  // path the actual operator takes: MUZ-CHAR-RPLHSL-SPIT-01 shows readiness 4/4 and has no
+  // actual_start, so Ready is the target he will pick - and until now nothing pinned it either way.
+  const notReady = await req(admin, "POST", `/api/batches/${b2._id}/transition`, { target: "Ready", reason: "restore" });
+  // Asserted on the WORDS, not on "Rule 16" - this project strips Rule/DEC/QA codes out of every
+  // user-facing error on the way out (that is what the -111 pin at the end of this suite guards), so
+  // the server's `fail("Rule 16: readiness checks failing: ...")` reaches the caller as "Readiness
+  // checks failing: room_assigned, trainer_ready, roster_80pct". Matching the code would have pinned
+  // a string no user can ever see, and would have gone red the moment the sanitiser did its job.
+  ok("FL19: restoring to Ready runs the readiness chain - a batch that cannot pass it is refused, and the refusal NAMES the checks",
+    notReady.status === 409 && /readiness checks failing/i.test(String(notReady.data?.error ?? ""))
+      && /roster_80pct/.test(String(notReady.data?.error ?? "")),
+    `${notReady.status} ${JSON.stringify(notReady.data)}`);
+
+  // A batch that genuinely satisfies readiness: a trainer carrying this programme's skill, a room,
+  // and a roster that clears the 80% bar (target_size 1 with one enrolled member).
+  const flTr = (await req(admin, "POST", "/api/trainers", {
+    name: `FL19 Trainer ${stamp}`, phone: phone(), skills: [`fl${stamp}`],
+    pipeline_status: "Certified", available_from: istDay(-60),
+  }, 201)).data.item;
+  const flRoom = (await req(admin, "POST", `/api/locations/${loc._id}/rooms`,
+    { name: `FL19 Room ${stamp}`, type: "Classroom", capacity: 30 }, 201)).data.item;
+  const readyB = (await req(admin, "POST", "/api/batches",
+    { location: loc._id, program: prog._id, trainer: flTr._id, room: flRoom._id,
+      planned_start: istDay(-30), target_size: 1 }, 201)).data.item;
+  const readyCand = await mkCand("ReadyOne");
+  const readyM = (await req(admin, "POST", `/api/batches/${readyB._id}/members`,
+    { candidate: readyCand._id, joined_on: istDay(-30) }, 201)).data.item;
+  await req(admin, "PATCH", `/api/members/${readyM._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+  await req(admin, "POST", `/api/batches/${readyB._id}/transition`, { target: "Cancelled", reason: "FL19 ready fixture" }, 200);
+
+  const backToReady = await req(admin, "POST", `/api/batches/${readyB._id}/transition`,
+    { target: "Ready", reason: "cancelled by mistake" });
+  ok("FL19: a batch that passes readiness restores to Ready - THE path a real operator takes",
+    backToReady.status === 200 && backToReady.data?.item?.status === "Ready",
+    `${backToReady.status} ${JSON.stringify(backToReady.data?.item?.status ?? backToReady.data)}`);
+
+  // The restore must not have quietly started it. If actual_start appeared here, the batch would be
+  // treated as having run from a date nobody chose, and Rule 32 would open every day since.
+  ok("FL19: ...and it still carries NO actual_start - restoring did not secretly start it",
+    !backToReady.data?.item?.actual_start,
+    JSON.stringify({ actual_start: backToReady.data?.item?.actual_start ?? null }));
+  await req(admin, "POST", `/api/batches/${readyB._id}/transition`, { target: "Cancelled", reason: "FL19 cleanup" }, 200);
+
   const future = await req(admin, "POST", `/api/batches/${b1._id}/members`,
     { candidate: (await mkCand("Future"))._id, joined_on: istDay(1) });
   ok("FL19 (QA-908): a join date in the FUTURE is refused - it used to return 201",
