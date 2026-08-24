@@ -1868,14 +1868,24 @@ for (const file of walk(root)) {
       if (!/\.(tsx|ts)$/.test(e.name)) continue;
       if (fp.includes(path.join("api", "batches"))) continue;      // the route itself, not a sender
       const src = stripComments(fs.readFileSync(fp, "utf-8"));
-      for (const m of src.matchAll(/\/complete`\s*,\s*\{[\s\S]{0,240}?\}\s*\)/g)) {
-        const before = src.slice(Math.max(0, m.index - 120), m.index);
-        if (/upload/.test(before)) continue;                        // /api/upload/complete
+      // QA-1006 (-238, checker on qa-237): the match now carries its own URL, and the exclusion
+      // reads THAT rather than guessing from the 120 characters in front of it. The old test was
+      // `/upload/.test(<preceding 120 chars>)` — substring proximity, not the endpoint — so a
+      // force-less sender inside a function that merely took a param named `uploadBusy` was skipped
+      // in silence. Proved by mutation, not argued.
+      for (const m of src.matchAll(/`[^`]*\/complete`\s*,\s*\{[\s\S]{0,240}?\}\s*\)/g)) {
+        if (/\/upload\/complete`/.test(m[0])) continue;   // a DIFFERENT endpoint: chunked-upload finish, takes no force
         senders.push({ file: path.relative(root, fp).split(path.sep).join("/"), text: m[0] });
       }
     }
   };
-  walk(path.join(root, "app"));
+  // QA-1006: rooted at `src`, not `src/app`. The comment claimed "every client file" while the walk
+  // covered only `src/app` — so a force-less POST in a real "use client" component under
+  // `src/components` left the wall byte-identical. That is the THIRD iteration of one species on this
+  // very pin (-209 counted by function NAME, -211/-234 by shape on ONE page, -234 widened to
+  // `src/app` while still saying "every client file"): each fix closed the instance in front of it
+  // and left the sentence claiming more than the code enforced. Which is what QA-722 was about.
+  walk(root);
   const posts = senders.map((x) => x.text);
   const withoutForce = posts.filter((p) => !/force:\s*true/.test(p));
   if (posts.length >= 1 && withoutForce.length === 0) passed++;
