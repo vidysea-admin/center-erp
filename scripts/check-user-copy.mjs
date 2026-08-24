@@ -753,6 +753,33 @@ for (const file of walk(root)) {
     if (!lists.length) passed++;
     else { failed++; pushCopy(`${lists.length} person list(s) reach a bare name, so two people of one name read identically - render them through personLabel/personList from @/lib/person (QA-476/QA-482): ${lists.slice(0, 8).join(" | ")}`); }
   }
+  // QA-1087 (DRY roadmap unit 1, 2026-08-25): exactly ONE declaration of canonicalPhone may exist
+  // in src/, and it must be lib/validate.ts - the STRICT canon ("12345" -> null, the caller
+  // refuses). A second one lived in lib/rules.ts for four releases: same name, INVERTED contract
+  // ("12345" came back "12345"), zero callers - residue of the -191 plan-share key that -195/QA-618
+  // removed. The hazard was never the dead code; it was the import: every call site writes
+  // `canonicalPhone(x)!`, which compiles unchanged against the loose copy and stores an unvalidated
+  // fragment as a phone of record - the -126 defect one auto-import away. Declaration-matched, not
+  // word-matched: the identifier appears in ~8 comments (validate.ts's own header included) and in
+  // a version.ts release-note string, and a pin that cannot tell code from a comment about the code
+  // is not a check (ARCHITECTURE 3.2c). SKIP_FILES honoured for the same reason.
+  {
+    const DECL = /(?:^|[^.\w])(?:export\s+)?(?:function\s+canonicalPhone\s*\(|const\s+canonicalPhone\s*=)/;
+    const homes = [];
+    for (const abs of walk(root)) {
+      const rel = path.relative(root, abs).split(path.sep).join("/");
+      if (SKIP_FILES.has(rel)) continue;
+      const code = stripComments(fs.readFileSync(abs, "utf-8"));
+      if (DECL.test(code)) homes.push(rel);
+    }
+    if (homes.length === 1 && homes[0] === "lib/validate.ts") passed++;
+    else {
+      failed++;
+      pushStructural(
+        `canonicalPhone is declared in ${homes.length} file(s) [${homes.join(", ")}] - its only home is lib/validate.ts (strict: refuses what is not a 10-digit mobile). A second declaration under this name is how an unvalidated phone reaches the database with every call site still compiling: the deleted rules.ts copy had the OPPOSITE contract and zero callers, and `+"`canonicalPhone(x)!`"+` reads identically against either (QA-1087).`,
+      );
+    }
+  }
   const tips = bp.split(/\r?\n/).filter((l) => /title=/.test(l) && /awaiting_match/.test(l));
   const tipFaults = [];
   if (tips.length < 3) tipFaults.push(`app/(app)/batches/[id]/page.tsx: only ${tips.length} of the three awaiting-match tooltips (Candidates chip, Attendance chip, Closure summary) can be found - this check has lost a subject rather than passed (QA-434)`);

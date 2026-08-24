@@ -2079,10 +2079,15 @@ export type Basis = { key: string; label: string; date: Date | null; blocking?: 
 // on an indexed field rather than an $or of shapes - and one definition is read by the route that
 // mints links, the endpoint that lists them, and the screen that decides whether someone already
 // has one. Three readers of "the same person" is how they start disagreeing (ARCHITECTURE §3).
-export function canonicalPhone(v: unknown): string {
-  const digits = String(v ?? "").replace(/\D/g, "");
-  return digits.length >= 10 ? digits.slice(-10) : digits;
-}
+// The loose phone canonicaliser that sat here until 2026-08-25 (QA-1087) is DELETED, not moved.
+// It was -191's plan-share key helper; QA-618 (-195) took the phone out of that key entirely and
+// nothing imported it since - measured before deleting: ZERO callers in src/, every canonicalPhone
+// import resolves to @/lib/validate. Meanwhile its name collided with the STRICT canonicalPhone in
+// lib/validate.ts and INVERTED its contract: "12345" came back "12345" here, where the canon
+// returns null and the caller refuses. Every call site writes `canonicalPhone(x)!`, which compiles
+// unchanged against either copy - so one editor auto-import away from storing an unvalidated
+// fragment as a phone of record (the -126 defect, reintroduced silently). One name, one meaning:
+// lib/validate.ts is the only declaration in src/, and check-user-copy.mjs pins that census.
 // QA-621 (-195) — the fifth answer, and the first that does not GUESS.
 //
 // Four keys, four defects, one family: every one of them DERIVED the identity from something the

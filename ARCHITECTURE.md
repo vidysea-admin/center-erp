@@ -527,10 +527,18 @@ says *"every other path in the product uses lib/validate."* It did not. **SoT:**
 parses "6th July", **defaults the year to the current one**). Callers: the two importers vs the
 automated watch ingest. **SoT:** `rules.ts`; `field-catalog` should delegate and keep only its extension.
 
-### 3.5 Five phone normalizers
+### 3.5 Five phone normalizers — and the SIXTH this row never listed, which was the worst one
 `validate.ts:14` `canonicalPhone` (STRICT — the canon) · `duplicates.ts:7` `normalizePhone` (LOOSE
 compare key, deliberately different) · `field-catalog.ts:25` `phone10` · `messaging.ts:16` `tenDigits`
 (byte-identical to `phone10`) · `locations/page.tsx:52` `normPhone` (inline 5th).
+**A sixth existed and this row did not know it (deleted 2026-08-25, QA-1087):** `lib/rules.ts`
+exported a SECOND `canonicalPhone` — same name as the canon, INVERTED contract (`"12345"` came back
+`"12345"`; the canon returns null and the caller refuses). Residue of the `-191` plan-share key that
+`-195`/QA-618 removed; measured at zero callers before deletion. The hazard was the name, not the
+dead code: every call site writes `canonicalPhone(x)!`, which compiles unchanged against either copy,
+so one auto-import stored an unvalidated fragment as a phone of record. Now pinned in
+`check-user-copy.mjs`: exactly ONE `canonicalPhone` declaration in `src/`, at `lib/validate.ts`,
+declaration-matched (the identifier appears in ~8 comments and a release-note string).
 
 ### 3.6 `TRAINER_PIPELINE` — 8 copies of one 11-value list
 `models/index.ts:26` (**SoT**) · `rules.ts:1792` `TRAINER_FLOW` (edges — keys must match) ·
