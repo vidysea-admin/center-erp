@@ -555,8 +555,16 @@ export async function addMemberChecked(batchId: string, candidateId: string, joi
     // Rule 26 counts a member onto the roster for every day from `joined_on` onward, and Rule 28
     // freezes `roster_count` from exactly that. A join date before the batch began would put someone
     // on the roster for days the batch did not run.
-    if (began && requested < began) {
-      throw new HttpError(400, `This batch began on ${began.toISOString().slice(0, 10)} — a candidate cannot join before that.`);
+    // QA-1049 (checker on qa-235): `began` is null until `actual_start` is stamped, so before the
+    // batch is started there was NO lower bound at all — and the normal order is roster first, start
+    // second. A join date years before the batch was ever planned went in, and `joined_on` is not
+    // editable afterwards, so it stayed. `planned_start` is the honest floor for a batch that has not
+    // started: it is the earliest day the batch was ever meant to exist.
+    const floor = began ?? plannedKey;
+    if (floor && requested < floor) {
+      throw new HttpError(400, began
+        ? `This batch began on ${floor.toISOString().slice(0, 10)} — a candidate cannot join before that.`
+        : `This batch is planned to start on ${floor.toISOString().slice(0, 10)} — a candidate cannot join before that.`);
     }
   }
   const resolvedJoin = joined_on
@@ -991,7 +999,10 @@ export async function transitionBatch(batchId: string, target: string, opts: {
     case "Cancelled->Ready":
     case "Cancelled->Active": {
       if (!opts.isAdmin) fail("Only an Admin can restore a cancelled batch.");
-      if (!opts.reason) fail("Restoring a cancelled batch needs a reason — it is audited.");
+      // QA-1048 (checker on qa-235): `!opts.reason` accepts "   ", and the audit row four lines down
+      // already calls .trim() — so a restore could be recorded with a reason of nothing at all while
+      // the guard reported one was given. The two lines disagreed about what a reason IS.
+      if (!String(opts.reason ?? "").trim()) fail("Restoring a cancelled batch needs a reason — it is audited.");
       // Restoring to Ready runs the SAME Rule 16 chain Planning->Ready runs (:786). Without this,
       // cancel-then-restore becomes a way to arrive at Ready without ever passing readiness.
       if (target === "Ready") {

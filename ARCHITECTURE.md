@@ -644,24 +644,42 @@ rendered in TWO places (:479 inside the "Right now" card while a batch runs, :53
 readiness Section before it starts). `Cancelled` is NOT in `running` (:170), so a cancelled batch
 takes the readiness branch — which is why the Restore control lands there.
 
-### 3.13 "Was this batch recorded AFTER it ran?" — three spellings, and the gate reads one (QA-957/958/965, still open)
+### 3.13 "Was this batch recorded AFTER it ran?" — COLLAPSED (QA-957/958/965), do not re-grow it
 
-| Where | How it asks |
-|---|---|
-| `lib/rules.ts` `startWasRecordedAfterTheFact` | `AuditLog.exists({ entity:"Batch", field:"backdated_start" })` |
-| `lib/rules.ts` `activateFromEvidence` | writes `auto_activated`, a row that test never reads |
-| `candidates/page.tsx` | asks the SERVER via `start_recorded_after_the_fact` on the batch row (correct since -231 cycle 3; it used to re-derive `actual_start < today`, which is true of nearly every running batch) |
+**This row was first written, in this very file, saying the opposite — that the gate reads only one of
+two markers. That was false when it was written, and it was written without checking.** The claim came
+from a reading of QA-958/965 while those rows were still Open; they had since been fixed, and one look
+at the function would have said so. A wrong map row is worse than a missing one, because the next
+person spends their budget on a defect that is not there. Corrected here rather than deleted, so the
+correction is part of the record.
 
-The consequence is not cosmetic: `addMemberChecked` uses that test to decide a late joiner's default
-`joined_on`, so a batch activated from evidence rather than by the override gets today's date, Rule 26
-then says the member was on no day's roster while the batch ran, and the attendance the centre holds
-cannot be entered. **QA-958 names `MUZ-CHAR-RPLHSL-SPIT-01` as the production batch that arrives
-through exactly this door.**
+What is actually true:
 
-**SoT:** one predicate that asks for BOTH markers, beside `startWasRecordedAfterTheFact`, with every
-caller using it. -240 did NOT do this — it added an explicit join-date box on both roster screens,
-which makes the broken default matter less to an operator who uses the box, and leaves the gate
-wrong for everyone who does not. Named here rather than left implied.
+```ts
+// lib/rules.ts
+export async function startWasRecordedAfterTheFact(batchId: unknown): Promise<boolean> {
+  return !!(await AuditLog.exists({
+    entity: "Batch", entity_id: batchId,
+    field: { $in: ["backdated_start", "auto_activated"] },   // BOTH markers
+  }));
+}
+```
+
+Two markers exist because two paths reach the same state: `transitionBatch` writes `backdated_start`
+when an operator records a batch after it ran (-226), and `activateFromEvidence` writes
+`auto_activated` when a portal row or daily log activates one (-88). The predicate asks for both, and
+the screens do not re-derive it — `candidates/page.tsx` reads the server's own
+`start_recorded_after_the_fact` off the batch row rather than guessing from `actual_start < today`,
+which is the mistake -231 cycle 2 shipped and cycle 3 removed.
+
+**Do not re-grow it.** The failure mode this row guards is a THIRD spelling: any new caller that asks
+"did this batch run before it was entered?" by comparing dates instead of calling this predicate. A
+date comparison is true of nearly every running batch, which is why the last one leaked.
+
+**The live consequence, so nobody re-derives it either:** `addMemberChecked` uses this predicate to
+choose a late joiner's default `joined_on`. Get it wrong in the permissive direction and a walk-in
+enrolled today is written weeks early (QA-907); get it wrong in the strict direction and a real July
+batch cannot have its attendance entered at all (QA-892). Both have happened.
 
 ### 3.10 Other predicates with more than one copy
 **`totNeeded` — 4 copies of "does this trainer still need a TOT"**: `rules.ts:1865`

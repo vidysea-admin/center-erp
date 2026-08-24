@@ -48,6 +48,29 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
       biometric_member_ids: biometric, // Rule 51 holds on the final day-level pair
     });
     patch.internal_present = check.internal_present; // Rule 29
+    // QA-1047 (-243, checker on qa-235): the two lines above and below were correct on their own and
+    // wrong together. `validateDailyLog` counts presence against the roster AS IT IS NOW, while
+    // Rule 28 keeps `roster_count` frozen at what it was the day this log was saved. Those two agreed
+    // until qa-235 let an operator TYPE a join date: back-date a late joiner onto a day whose log is
+    // already frozen and today's roster for that day is larger than the number stored on the row, so
+    // `internal_present` climbs straight past `roster_count` — a government-portal-facing row that can
+    // read 12 present out of 6, and nothing refused it.
+    //
+    // The bound is `log.roster_count`, exactly as the `govt_present` branch below already does. Not
+    // the live roster: the frozen number IS the record of who could have been there that day, and
+    // recomputing it would be Rule 28's own defect (REQ-202: frozen, never recalculated).
+    if (check.internal_present > log.roster_count) {
+      throw new HttpError(400,
+        `${check.internal_present} present is more than the ${log.roster_count} on the roster that day. ` +
+        `Someone has been added to this batch with a joining date on or before ${new Date(log.log_date).toISOString().slice(0, 10)}, ` +
+        `so they were not on the roster when this day was recorded. Correct their joining date, or drop them from this day.`);
+    }
+    // ...and the same day's government figure, which escaped entirely: the check below runs only in
+    // the `else if`, so sending a present list AND a govt figure in one PATCH skipped Rule 30 outright.
+    const gWith = (patch.govt_present as number | null | undefined) ?? log.govt_present;
+    if (gWith !== undefined && gWith !== null && Number(gWith) > log.roster_count) {
+      throw new HttpError(400, `Rule 30: government attendance (${Number(gWith)}) cannot exceed the ${log.roster_count} on the roster that day.`);
+    }
     // Rule 28: roster_count stays frozen — deliberately NOT recomputed
     // A day-level edit is a CORRECTION, not a marking round: the day arrays are replaced as
     // given, and the correction is appended to the session history so the trail stays honest.

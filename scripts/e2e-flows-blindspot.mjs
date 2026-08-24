@@ -790,7 +790,14 @@ console.log("\n--- FL14 (-226): a batch that ALREADY RAN can be recorded, and th
   // The past date was never the blocker - Rule 17 only refuses starting BEFORE planned_start. The
   // blocker was the readiness chain (roster >= 80% of target can never be true for a batch typed in
   // months later) plus a screen that told him to press a button that only rendered on Ready.
-  const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+  // qa-226 disclosed this against itself and did not fix it: this helper built its dates from the
+  // UTC calendar day while the product decides on the IST one, so every FL14/FL15 pin was wrong for
+  // the ~5.5 hours a day when the two disagree. That window arrived - UTC 2026-08-24 while IST was
+  // already 2026-08-25 - and eleven assertions went red at once, none of them a product defect:
+  // `day(1)` was "tomorrow" in UTC and TODAY in IST, so "a future actual_start is still a 400"
+  // measured a date that was not in the future. A pin that is unreliable by the clock is on its way
+  // to being deleted by whoever it wakes at 3am. Same expression as istDay() below, on purpose.
+  const day = (n) => new Date(Date.now() + 5.5 * 3600 * 1000 + n * 86400000).toISOString().slice(0, 10);
   const bdLoc = (await req(admin, "POST", "/api/locations", {
     code: `TEST-BD${stamp}`, name: `TEST Backdate Centre ${stamp}`, city: "Test", state: "UP",
     approval_status: "Approved", operational_status: "Active",
@@ -1468,6 +1475,74 @@ console.log("\n--- FL19 (-235): a cancelled batch can be RESTORED, and a typed j
   const bulkErr = JSON.stringify(bulkFuture.data ?? {});
   ok("FL19: the BULK door refuses the same future join date - one rule, both doors",
     /cannot join in the future/i.test(bulkErr), `${bulkFuture.status} ${bulkErr}`);
+
+
+  // ---- cycle 2: the three the checker charged, pinned so they cannot come back ----
+
+  // QA-1048: a reason of three spaces used to pass `!opts.reason` while the audit row, which trims,
+  // recorded nothing at all. The guard and the record disagreed about what a reason IS.
+  const b4 = await cancelled(await mkB(istDay(-30)));
+  const blankReason = await req(admin, "POST", `/api/batches/${b4._id}/transition`, { target: "Planning", reason: "   " });
+  ok("FL19 (QA-1048): a restore reason of only whitespace is refused, not audited as blank",
+    blankReason.status === 409, `${blankReason.status} ${JSON.stringify(blankReason.data)}`);
+
+  // QA-1049: before a batch is started there was NO lower bound at all, because the floor was
+  // `actual_start` and that is not stamped yet - and roster-first, start-second is the NORMAL order.
+  // A date years before the batch was ever planned went in, permanently.
+  const notStarted = await mkB(istDay(3));
+  const wayBack = await req(admin, "POST", `/api/batches/${notStarted._id}/members`,
+    { candidate: (await mkCand("WayBack"))._id, joined_on: istDay(-400) });
+  ok("FL19 (QA-1049): a NOT-YET-STARTED batch floors the join date at its planned start",
+    wayBack.status === 400 && /planned to start/i.test(String(wayBack.data?.error ?? "")),
+    `${wayBack.status} ${JSON.stringify(wayBack.data)}`);
+  await req(admin, "POST", `/api/batches/${notStarted._id}/transition`, { target: "Cancelled", reason: "FL19 cleanup" }, 200);
+
+  // QA-1047 (S2) - the checker's headline, and the one that reaches a government-facing row.
+  // Rule 28 freezes `roster_count` on a daily log at save time; `validateDailyLog` counts presence
+  // against the roster AS IT IS NOW. Those agreed until this unit let an operator TYPE a join date:
+  // back-date someone onto a day whose log is already frozen and the live roster for that day is
+  // bigger than the number stored on the row, so `internal_present` walks straight past it.
+  // The log day must sit AFTER every existing member's join date, or creating it is refused before
+  // this pin can measure anything - b1's only member joined on istDay(-20).
+  const logDay = istDay(-18);
+  const beforeMembers = ((await req(admin, "GET", `/api/batches/${b1._id}/members`)).data.items ?? [])
+    .map((m) => String(m._id));
+  const frozenLog = (await req(admin, "POST", `/api/batches/${b1._id}/logs`,
+    { log_date: logDay, present_member_ids: beforeMembers, actual_topic: "FL19 frozen day" }, 201)).data.item;
+  ok("FL19 (QA-1047): precondition - the log froze a roster_count and it matches what was there",
+    Number(frozenLog?.roster_count) === beforeMembers.length && beforeMembers.length > 0,
+    JSON.stringify({ roster_count: frozenLog?.roster_count, members: beforeMembers.length }));
+
+  // Now the late joiner, back-dated to BEFORE that day - exactly what this unit exists to allow.
+  const backDated = await mkCand("BackDated");
+  const bdMember = (await req(admin, "POST", `/api/batches/${b1._id}/members`,
+    { candidate: backDated._id, joined_on: istDay(-19) }, 201)).data.item;
+  const overfull = [...beforeMembers, String(bdMember._id)];
+  const pushPast = await req(admin, "PATCH", `/api/logs/${frozenLog._id}`, { present_member_ids: overfull });
+  ok("FL19 (QA-1047): a frozen day cannot be marked with MORE present than its own roster_count",
+    pushPast.status === 400 && /more than the/i.test(String(pushPast.data?.error ?? "")),
+    `${pushPast.status} ${JSON.stringify(pushPast.data)}`);
+
+  // ...and the refusal has to say what to DO, or it is a dead end - the -224 fault this project
+  // shipped: a correct guard whose stated remedy did not exist on screen.
+  ok("FL19 (QA-1047): ...and the refusal names the cause - a joining date on or before that day",
+    /joining date/i.test(String(pushPast.data?.error ?? "")),
+    JSON.stringify(pushPast.data));
+
+  // The govt figure escaped entirely: its bound lived in an `else if`, so sending a present list AND
+  // a government number in one PATCH skipped Rule 30 outright.
+  const govtEscape = await req(admin, "PATCH", `/api/logs/${frozenLog._id}`,
+    { present_member_ids: beforeMembers, govt_present: Number(frozenLog.roster_count) + 5 });
+  ok("FL19 (QA-1047): government attendance is bounded even when sent together with a present list",
+    govtEscape.status === 400 && /cannot exceed/i.test(String(govtEscape.data?.error ?? "")),
+    `${govtEscape.status} ${JSON.stringify(govtEscape.data)}`);
+
+  // And the day still holds what it held - a refused edit must write nothing.
+  const afterLog = (await req(admin, "GET", `/api/batches/${b1._id}/logs`)).data.items
+    ?.find((l) => String(l._id) === String(frozenLog._id));
+  ok("FL19 (QA-1047): the refused edits wrote nothing - internal_present is still within roster_count",
+    afterLog && Number(afterLog.internal_present) <= Number(afterLog.roster_count),
+    JSON.stringify({ internal: afterLog?.internal_present, roster: afterLog?.roster_count }));
 
   await req(admin, "POST", `/api/batches/${b1._id}/transition`, { target: "Cancelled", reason: "FL19 cleanup" }, 200);
   await req(admin, "POST", `/api/batches/${b3._id}/transition`, { target: "Planning", reason: "FL19 cleanup" }, 200);
