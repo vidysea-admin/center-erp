@@ -576,7 +576,18 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
 
       // Both public doors accept the answer, and neither takes a value it did not offer.
       const pubFut = await pubPost(regTok.token, { name: "BIPub " + stamp, phone: "7994" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0"), email: "bipub" + stamp + "@test.local", batch_interest: "Future" });
-      ok("QA-945: the public self-registration door records a future-batch answer", pubFut.status === 201, `status=${pubFut.status}`);
+      // QA-1051 (qa-235 checker, S3): this said "RECORDS a future-batch answer" and only checked
+      // `status === 201` — so it PASSED on the build with no field at all, where nothing was recorded.
+      // A pin whose NAME outruns its ASSERTION, surviving one line from the one I had just fixed for
+      // exactly that and declared cured. Reading it back is what makes it a pin: 201 says the request
+      // was accepted, not that the answer survived.
+      {
+        const pubName = "BIPub " + stamp;
+        const stored = (await req(admin, "GET", `/api/candidates?limit=2000&location=${loc._id}`)).data.items.find((c) => c.name === pubName);
+        ok("QA-945: the public self-registration door RECORDS a future-batch answer (read back, not just 201)",
+          pubFut.status === 201 && stored?.batch_interest === "Future",
+          `status=${pubFut.status} stored=${stored?.batch_interest}`);
+      }
       // QA-945 (cycle 3): the API accepted this from the start and NEITHER PUBLIC FORM OFFERED IT,
       // so the person the option exists for could not use it - only staff could. A source-level pin,
       // because the wall has no browser: the failure was never in the route, it was that the screen

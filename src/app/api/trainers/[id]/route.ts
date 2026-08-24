@@ -4,7 +4,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { Batch, Trainer, TrainerDocument } from "@/models";
 import { hasPermission, requirePerm } from "@/lib/permissions";
-import { assertLocationOperational, assertTrainerDocInScope, TRAINER_FLOW } from "@/lib/rules";
+import { assertLocationOperational, assertTrainerDocDeleteInScope, assertTrainerDocInScope, TRAINER_FLOW } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 import { emailError, canonicalPhone, phoneError } from "@/lib/validate";
 import { maskTrainerSecrets } from "../route";
@@ -101,7 +101,21 @@ export const DELETE = apiHandler(async (_req: NextRequest, ctx: { params: Promis
   // A trainer's "location" is not one field (nominated / home / capable), which is why this file
   // already owns the union helper. Reused rather than re-derived - a second spelling of "which
   // centres is this trainer attached to" is exactly the drift ARCHITECTURE section 3 exists for.
-  assertTrainerDocInScope(user, t as any);
+  // QA-1038 (qa-234 cycle-2 checker, S2): the STRICTER helper, because the asymmetry this had was
+  // indefensible. `assertTrainerDocDeleteInScope` exists precisely because `capable_locations` is a
+  // TEACHING tie and not ownership — a centre that merely CAN teach a trainer may not delete one of
+  // their documents. This handler called the WIDER `assertTrainerDocInScope`, so the same SPOC was
+  // refused deleting a single Aadhaar scan (403, "Only the nominating or home centre…") and allowed
+  // to delete THE ENTIRE TRAINER RECORD (200). The lesser act was guarded more tightly than the
+  // greater one, measured by the checker on one trainer, one user, two doors.
+  //
+  // Worse, the manifest that shipped this CITED that very helper as its justification for keeping
+  // delete out of `.manage`. I named the right rule and then called the wrong function — §3.2c on
+  // this repo's own map is about exactly that, and here it cost a real gap rather than a comment.
+  //
+  // Deliberately the conservative direction: this NARROWS who may delete a trainer. Erasing a whole
+  // person's record must never be easier than erasing one page of their file.
+  await assertTrainerDocDeleteInScope(user, id);
   if (await Batch.exists({ trainer: id })) {
     throw new HttpError(409, `${t.name} is referenced by a batch — drop the trainer instead of deleting them.`);
   }

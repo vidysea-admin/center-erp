@@ -637,9 +637,27 @@ function CandidatesInner() {
             filterText: (r: any) => bucket === "Fresh" ? freshJourneyOf(r) : journeyOf(r),
             render: (r: any) => {
               const j = bucket === "Fresh" ? freshJourneyOf(r) : journeyOf(r);
-              return ["Dropped", "Dropout"].includes(j) && r.dropped_from_stage
+              // QA-1052 (qa-235 checker): the manifest for this unit CLAIMED a chip here and there
+              // was none — `tagOf()` fed only the pill counts and the filter, so the row itself said
+              // "Fresh Lead" and nothing about availability. Measured in a browser, not read.
+              // Umesh's ask was "unn candidates ka status bhi proper aa jaana chaiyee", and a status
+              // you can only see by clicking a filter is not the row telling you.
+              // Rendered BESIDE the stage, never instead of it: where someone has reached and whether
+              // they want this intake are different questions, which is the whole reason this field is
+              // a separate axis and not a lifecycle value.
+              const stage = ["Dropped", "Dropout"].includes(j) && r.dropped_from_stage
                 ? <span title={r.dropped_reason ? `Reason: ${r.dropped_reason}` : undefined}><Chip value={`${j} (at ${r.dropped_from_stage})`} /></span>
                 : <Chip value={j} />;
+              if (!isFutureInterest(r)) return stage;
+              return (
+                <span className="flex flex-wrap items-center gap-1">
+                  {stage}
+                  <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800"
+                    title="Told us they want a LATER batch. They cannot be added to one until this is changed — the row action does it in a click.">
+                    {FUTURE_INTEREST_TAG}
+                  </span>
+                </span>
+              );
             },
           },
           {

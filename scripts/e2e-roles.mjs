@@ -1692,6 +1692,32 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
       (await req(spoc, "DELETE", `/api/trainers/${farTrainer._id}`)).status === 403);
     await req(admin, "DELETE", `/api/trainers/${farTrainer._id}`);
 
+    // QA-1038 (qa-234 cycle-2 checker, S2): pinned as a PAIR, because the defect was only ever
+    // visible as a COMPARISON. `assertTrainerDocDeleteInScope` refuses a centre that merely CAN teach
+    // a trainer from deleting ONE of their documents; the delete handler used the wider helper, so
+    // that same user could delete THE WHOLE TRAINER. The lesser act was guarded more tightly than the
+    // greater one — and no single-door assertion could have seen it, which is why this asserts the two
+    // doors give the SAME answer rather than asserting either one alone.
+    {
+      const capOnly = (await req(admin, "POST", "/api/trainers", {
+        name: "CapOnly " + s10, phone: "7" + String(Math.floor(Math.random() * 1e9)).padStart(9, "0"),
+        home_location: farLoc._id, capable_locations: jprId ? [jprId] : [],
+      })).data.item;
+      if (jprId && capOnly?._id) {
+        const doc = await req(admin, "POST", `/api/trainers/${capOnly._id}/documents`,
+          { doc_type: "PAN", file_url: "/erp/api/files/q1038.pdf", original_name: "q1038.pdf" });
+        const delDoc = doc.data?.item?._id
+          ? await req(spoc, "DELETE", `/api/trainers/${capOnly._id}/documents/${doc.data.item._id}`)
+          : { status: 0 };
+        const delTrainer = await req(spoc, "DELETE", `/api/trainers/${capOnly._id}`);
+        ok("QA-1038: deleting the WHOLE trainer is never easier than deleting one of their documents",
+          delDoc.status === delTrainer.status, `document=${delDoc.status} trainer=${delTrainer.status}`);
+        ok("QA-1038: ...and a teaching-only tie is refused on both — capable_locations is not ownership",
+          delTrainer.status === 403, `trainer delete=${delTrainer.status}`);
+        await req(admin, "DELETE", `/api/trainers/${capOnly._id}`);
+      } else ok("QA-1038: capable-only fixture available", false, "no Jaipur location found");
+    }
+
     // restore Location exactly as found
     await req(admin, "PUT", "/api/permissions", { role: "Location", permissions: locBase }, 200);
     const locBack = ((await req(admin, "GET", "/api/permissions")).data.roles ?? []).find((r) => r.role === "Location")?.permissions ?? [];
