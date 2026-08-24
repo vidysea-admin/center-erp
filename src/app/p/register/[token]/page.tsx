@@ -44,7 +44,9 @@ export default function PublicRegisterPage({ params }: { params: Promise<{ token
 
   // -126 (S18-04): what the button knows. The three that were `required` stay required — the change is
   // that WE say so, in our own words, instead of handing the sentence to the browser.
-  const needsProgram = (meta?.programs?.length ?? 0) > 1 && !form.program;
+  // A pinned programme is never "still needed" — the token decides it and the API overrides whatever
+  // this form sends anyway, so nagging about it would name a field the student cannot see or change.
+  const needsProgram = !meta?.program_fixed && (meta?.programs?.length ?? 0) > 1 && !form.program;
   const missingBits = [
     !form.name && "your name",
     (!form.phone || phoneError(form.phone)) && "a 10-digit mobile number",
@@ -101,14 +103,26 @@ export default function PublicRegisterPage({ params }: { params: Promise<{ token
           <F label="Email *" hint={form.email ? emailError(form.email) ?? undefined : undefined}>
             <input className={inputCls} type="email" placeholder="you@example.com" value={form.email ?? ""} onChange={(e) => set("email", e.target.value)} />
           </F>
-          {meta.programs?.length > 1 && (
+          {/* 2026-08-24 (Umesh): "jo candidate register krega uska location and program pre fixed
+              rhegaa. vo khud nhi select krega." When the link pins the programme the picker is not
+              merely hidden — it is REPLACED by the answer, because a student who is told nothing
+              about their job role has been enrolled into one without being shown it. The centre has
+              always been named at the top of this page; the programme now gets the same courtesy. */}
+          {meta.program_fixed ? (
+            <F label="Program">
+              <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-[15px] text-gray-800">
+                {meta.programs?.[0]?.name ?? "—"}
+              </div>
+              <span className="mt-1 block text-xs text-gray-500">Set by the link you opened — you do not need to choose.</span>
+            </F>
+          ) : meta.programs?.length > 1 ? (
             <F label="Program *" hint={submitted && !form.program ? "Choose the programme you are registering for." : undefined}>
               <select className={inputCls} value={form.program ?? ""} onChange={(e) => set("program", e.target.value)}>
                 <option value="">Choose…</option>
                 {meta.programs.map((p: any) => <option key={p._id} value={p._id}>{p.name}</option>)}
               </select>
             </F>
-          )}
+          ) : null}
           <F label="Date of birth"><input type="date" className={inputCls} value={form.dob ?? ""} onChange={(e) => set("dob", e.target.value)} /></F>
           <F label="Gender">
             <select className={inputCls} value={form.gender ?? ""} onChange={(e) => set("gender", e.target.value)}>

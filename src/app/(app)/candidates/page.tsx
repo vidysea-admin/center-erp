@@ -49,7 +49,14 @@ function CandidatesInner() {
   const [loading, setLoading] = useState(true);
   const [shareLink, setShareLink] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [drawer, setDrawer] = useState<"" | "add" | "edit" | "import" | "assign" | "health">("");
+  const [drawer, setDrawer] = useState<"" | "add" | "edit" | "import" | "assign" | "health" | "reglink">("");
+  // 2026-08-24 (Umesh): the self-registration link now pins a PROGRAMME as well as a centre, so
+  // minting it is no longer a one-click action on whatever the list filter happens to be — it needs
+  // an answer the filter cannot supply. `regShared` carries the two names the panel prints, because
+  // the whole point of the change is that a person can see what the link they are about to send does.
+  const [regForm, setRegForm] = useState<any>({});
+  const [regBusy, setRegBusy] = useState(false);
+  const [regShared, setRegShared] = useState<{ location: string; program: string; reused: boolean } | null>(null);
   // -155 (QA-427): the portal-ID health drawer. plan = the GET (writes nothing); sel = the
   // operator's checked rows, keyed "kind:id" so one Set carries all three fixable groups.
   const [health, setHealth] = useState<any>(null);
@@ -278,16 +285,41 @@ function CandidatesInner() {
     } catch (e: any) { setError(e.message); }
     setHealthBusy(false);
   }
-  async function shareRegistrationLink() {
-    if (!fLoc) { setError("Pick a location filter first — the link is per location."); return; }
+  // 2026-08-24 (Umesh): "it should confirm location and program too jisse jo candidate register krega
+  // uska location and program pre fixed rhegaa. vo khud nhi select krega."
+  //
+  // This used to mint straight off the LIST FILTER, which is why no programme was ever attached: the
+  // filter has a centre and nothing else, so there was nowhere for the second answer to come from and
+  // the field was simply never sent. A link that decides a student's job role is worth one screen.
+  function openRegLink() {
+    setRegForm({ location: fLoc || "", program: "" });
+    setShareLink(""); setRegShared(null); setError("");
+    setDrawer("reglink");
+  }
+  async function mintRegLink() {
+    if (regBusy) return;
+    setRegBusy(true);
     try {
-      const existing = await api(`/api/public-tokens?purpose=register&location=${fLoc}`);
-      const active = existing.items?.find((t: any) => t.active);
-      const t = active ?? (await api("/api/public-tokens", { method: "POST", json: { purpose: "register", location: fLoc } })).item;
+      // Reuse has to match on BOTH now. Matching on the centre alone would hand back a link pinned to
+      // a DIFFERENT job role than the one just picked, and it would look right — same centre, live
+      // token, copies fine. The list route filters on purpose+location only (it has no programme
+      // filter), so the second half of the match is made here.
+      const existing = await api(`/api/public-tokens?purpose=register&location=${regForm.location}`);
+      const active = existing.items?.find((t: any) =>
+        t.active && String(t.program?._id ?? t.program ?? "") === String(regForm.program));
+      const t = active ?? (await api("/api/public-tokens", {
+        method: "POST", json: { purpose: "register", location: regForm.location, program: regForm.program },
+      })).item;
       const link = `${window.location.origin}${BASE_PATH}/p/register/${t.token}`;
       await copyText(link); // best-effort auto-copy; the panel is the guarantee
-      setError(""); setShareLink(link);
+      setRegShared({
+        location: locations.find((l) => l._id === regForm.location)?.name ?? "this centre",
+        program: programs.find((p) => p._id === regForm.program)?.name ?? "this programme",
+        reused: !!active,
+      });
+      setError(""); setShareLink(link); setDrawer("");
     } catch (e: any) { setError(e.message); }
+    setRegBusy(false);
   }
 
   // QA-105: document section for the edit drawer — list + multi-upload + delete.
@@ -394,7 +426,7 @@ function CandidatesInner() {
           <Btn kind="ghost" onClick={() => { setImportState({}); setDrawer("import"); }}>Import Excel</Btn>
           {/* -155 (QA-427): identity data goes wrong quietly; this is where it is seen and fixed. */}
           <Btn kind="ghost" onClick={loadHealth}>Portal ID health</Btn>
-          <Btn kind="ghost" onClick={shareRegistrationLink}>Self-reg link</Btn>
+          <Btn kind="ghost" onClick={openRegLink}>Self-reg link</Btn>
           {/* 2026-08-13 (Umesh): one public door for every candidate — share it anywhere. */}
           <CopyBtn text={`${typeof window !== "undefined" ? window.location.origin : ""}${BASE_PATH}/p/me`}
             className="rounded-lg border border-gray-300 px-3.5 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 whitespace-nowrap">
@@ -412,8 +444,10 @@ function CandidatesInner() {
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
       {shareLink && (
         <ShareLinkPanel label="Self-registration link" link={shareLink}
-          hint="Share it on WhatsApp — candidates fill their own details."
-          onDismiss={() => setShareLink("")} />
+          hint={regShared
+            ? `${regShared.reused ? "Existing link for" : "New link for"} ${regShared.location} · ${regShared.program}. Share it on WhatsApp — the candidate fills their own details and does not pick the centre or the programme.`
+            : "Share it on WhatsApp — candidates fill their own details."}
+          onDismiss={() => { setShareLink(""); setRegShared(null); }} />
       )}
       {/* CEO: Fresh = inquiry se batch-assign tak; Enrolled = batch se billing tak. */}
       <Tabs tabs={[`Fresh Candidates (${freshItems.length})`, `Enrolled Candidates (${enrolledItems.length})`]}
@@ -805,6 +839,40 @@ function CandidatesInner() {
               catch (e: any) { setError(e.message); }
             }}>Delete</Btn>
           )}
+        </div>
+      </Drawer>
+
+      {/* 2026-08-24 (Umesh): both answers, before the link exists. `offerable` with no second
+          argument is deliberate on the programme picker — a retired programme may stay on a record
+          that already points at one, but nothing NEW may start under it (-115/QA-221), and a
+          registration link is as new as it gets. The API refuses a retired one too, so the picker and
+          the door agree instead of the screen offering something the server will reject. */}
+      <Drawer error={error} open={drawer === "reglink"} onClose={() => setDrawer("")} title="Self-registration link">
+        <div className="space-y-3">
+          <p className="text-sm text-gray-600">
+            The link decides both — whoever opens it registers into <b>this centre</b> for <b>this programme</b>.
+            They fill in their own details and choose neither.
+          </p>
+          <Field label="Centre" required>
+            <select className={inputCls} value={regForm.location ?? ""} onChange={(e) => setRegForm({ ...regForm, location: e.target.value })}>
+              <option value="">Select…</option>
+              {offerable(locations, regForm.location).map((l) => <option key={l._id} value={l._id} title={l.name}>{l.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Programme" required>
+            <select className={inputCls} value={regForm.program ?? ""} onChange={(e) => setRegForm({ ...regForm, program: e.target.value })}>
+              <option value="">Select…</option>
+              {offerable(programs).map((p) => { const t = `${p.name}${p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}`; return <option key={p._id} value={p._id} title={t}>{t}</option>; })}
+            </select>
+          </Field>
+          <Btn disabled={regBusy || !regForm.location || !regForm.program} onClick={mintRegLink}>
+            {regBusy ? "Preparing…" : "Get link"}
+          </Btn>
+          <p className="text-[11px] text-gray-500">
+            A link already made for this exact centre and programme is reused, so re-sending it does not
+            invalidate the copy somebody is already holding. Links shared before this change keep working —
+            those still let the candidate pick their own programme.
+          </p>
         </div>
       </Drawer>
 

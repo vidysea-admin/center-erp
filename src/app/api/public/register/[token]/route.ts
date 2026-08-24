@@ -32,6 +32,12 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   return NextResponse.json({
     location: { name: t.location?.name, city: t.location?.city, state: t.location?.state },
     programs,
+    // 2026-08-24 (Umesh): the page cannot tell these two apart from `programs.length === 1` alone,
+    // and they are not the same fact. "This link pins your programme" is a promise made to the
+    // student; "the system happens to have one active programme today" is an accident that becomes
+    // a silent free choice the moment somebody adds a second. Only the token knows which it is, so
+    // the token says so rather than letting the screen guess.
+    program_fixed: !!t.program,
     education_levels: EDUCATION_LEVEL,
   });
 });

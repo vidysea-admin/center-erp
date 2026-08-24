@@ -216,6 +216,77 @@ ok("public registration works (location Not Started — advance pooling)", pubRe
 const shortPhone = await fetch(BASE + `/api/public/register/${regTok.token}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "Pub short", phone: "123456789" }) });
 ok("public registration rejects <10-digit phone", shortPhone.status === 400, `status=${shortPhone.status}`);
 
+// ---- QA-869 (Umesh 2026-08-24): the self-registration link pins its PROGRAMME, not just its centre ----
+// "it should confirm location and program too jisse jo candidate register krega uska location and
+// program pre fixed rhegaa. vo khud nhi select krega."
+//
+// The column and both public doors have honoured a pinned programme since the token was written; the
+// MINT UI never sent one, so every link ever shared let the student pick their own job role. The
+// refusal below is what makes that unrepeatable - a screen can forget a field, a door that refuses
+// cannot. The last two assertions are the other half of the promise: links already in somebody's
+// WhatsApp thread were NOT rotated off, so this pins that they still work rather than asserting it.
+{
+  const noProg = await req(admin, "POST", "/api/public-tokens", { purpose: "register", location: loc._id });
+  ok("QA-869: minting a registration link with no programme is refused",
+    noProg.status === 400, `status=${noProg.status}`);
+  ok("QA-869: ...and the refusal names the programme, so the operator knows which box to fill",
+    /programme|program/i.test(String(noProg.data?.error ?? "")), JSON.stringify(noProg.data));
+
+  // A retired programme may stay on a record that already points at one, but nothing NEW may start
+  // under it (-115/QA-221). A registration link is as new as it gets, and the picker hides retired
+  // programmes - so the door and the screen have to agree, or the screen offers what the server rejects.
+  const deadProg = (await req(admin, "POST", "/api/programs", { code: stamp + "X", name: "Retired Program " + stamp, trainer_skill: "Skill" + stamp, duration_days: 15, buffer_days: 5, default_batch_size: 30, completion_deadline_days: 90 })).data.item;
+  await req(admin, "PATCH", `/api/programs/${deadProg._id}`, { active: false });
+  const retired = await req(admin, "POST", "/api/public-tokens", { purpose: "register", location: loc._id, program: deadProg._id });
+  ok("QA-869: a retired programme cannot be given a new registration link",
+    retired.status === 409, `status=${retired.status} ${JSON.stringify(retired.data)}`);
+
+  // The pinned link tells the student what it decided for them, and says so as a FACT the page can
+  // act on - `programs.length === 1` alone cannot tell "this link pins it" from "the system happens
+  // to have one active programme today", and those two render differently on purpose.
+  const meta = await (await fetch(BASE + `/api/public/register/${regTok.token}`)).json();
+  ok("QA-869: a pinned token reports program_fixed and offers exactly its own programme",
+    meta.program_fixed === true && (meta.programs ?? []).length === 1 && String(meta.programs[0]._id) === String(prog._id),
+    JSON.stringify({ fixed: meta.program_fixed, n: (meta.programs ?? []).length }));
+
+  // The token WINS over anything the body carries. Without this the pin is decorative: a student (or
+  // anything posting to an unauthenticated door) could name a different job role and be filed under it.
+  const smuggle = await fetch(BASE + `/api/public/register/${regTok.token}`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "Pin " + stamp, phone: "7998" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0"), email: "pin" + stamp + "@test.local", program: deadProg._id }),
+  });
+  const smuggled = (await req(admin, "GET", `/api/candidates?limit=2000&location=${loc._id}`)).data.items.find((c) => c.name === "Pin " + stamp);
+  ok("QA-869: a programme sent in the body cannot override the one the link pins",
+    smuggle.status === 201 && String(smuggled?.program?._id ?? smuggled?.program) === String(prog._id),
+    `status=${smuggle.status} program=${JSON.stringify(smuggled?.program)}`);
+
+  // THE COMPATIBILITY PROMISE, measured rather than asserted. Every register token minted before this
+  // change has no programme, and they are in people's hands right now. The door refuses to CREATE one
+  // of these any more, which is exactly why it has to be inserted directly - there is no longer an API
+  // that can produce the shape being tested. Rotating them off would have killed a link somebody is
+  // holding to punish a defect that was never theirs.
+  const { MongoClient } = await import("mongodb");
+  const mc = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+  await mc.connect();
+  try {
+    const legacyToken = "legacy" + stamp + Math.floor(Math.random() * 1e6);
+    await mc.db(process.env.MONGODB_DB || "center_erp_ci").collection("publictokens").insertOne({
+      token: legacyToken, purpose: "register", location: new (await import("mongodb")).ObjectId(String(loc._id)),
+      active: true, createdAt: new Date(), updatedAt: new Date(), __v: 0,
+    });
+    const legacyMeta = await (await fetch(BASE + `/api/public/register/${legacyToken}`)).json();
+    ok("QA-869: a link shared BEFORE this change still opens, and still lets the candidate choose",
+      legacyMeta.program_fixed === false && (legacyMeta.programs ?? []).length >= 1,
+      JSON.stringify({ fixed: legacyMeta.program_fixed, n: (legacyMeta.programs ?? []).length }));
+    const legacyPost = await fetch(BASE + `/api/public/register/${legacyToken}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Legacy " + stamp, phone: "7997" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0"), email: "legacy" + stamp + "@test.local", program: prog._id }),
+    });
+    ok("QA-869: ...and a candidate can still register through it",
+      legacyPost.status === 201, `status=${legacyPost.status}`);
+  } finally { await mc.close(); }
+}
+
 // ---- QA-510 / QA-514 (-167): a destructive script must not have a production DEFAULT ----
 // Eight scripts read process.env.MONGODB_DB with a FALLBACK to the production database name.
 // (Spelled out rather than quoted verbatim: the census below sweeps this file too, and a comment

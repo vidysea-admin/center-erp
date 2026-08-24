@@ -3,7 +3,7 @@ import crypto from "crypto";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireRole, requireEdit, assertLocationInScope, isScoped, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
-import { Batch, BatchMember, Location, PublicToken } from "@/models";
+import { Batch, BatchMember, Location, Program, PublicToken } from "@/models";
 import { assertBatchInScope, recipientKey } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
@@ -54,14 +54,42 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const purpose = String(body.purpose ?? "");
 
   if (purpose === "register") {
-    if (!body.location) throw new HttpError(400, "location is required for a registration link");
+    if (!body.location) throw new HttpError(400, "Choose the centre this link registers candidates into.");
     assertLocationInScope(user, String(body.location));
+    // 2026-08-24 (Umesh): "candidate k self registration link mai abhi bss location confirm hoti hai,
+    // it should confirm location and program too jisse jo candidate register krega uska location and
+    // program pre fixed rhegaa. vo khud nhi select krega."
+    //
+    // The COLUMN and both public doors have honoured a pinned programme since this token was written
+    // (`PublicToken.program`, and the GET/POST one directory over) — the mint UI simply never sent one,
+    // so every link ever shared asked the student to pick their own job role from the full active list.
+    // Requiring it here, at the door, is what makes that unrepeatable: a screen can forget a field,
+    // an API that refuses cannot.
+    //
+    // Links already in a WhatsApp thread are NOT touched. `loadToken` is unchanged and a programme-less
+    // token still renders its picker, because rotating them off would kill a link somebody is holding
+    // right now to punish a defect that was never theirs (the REQ-393 lesson: a dead link explains
+    // nothing to the person holding it).
+    if (!body.program) {
+      throw new HttpError(400, "Choose the programme this link registers candidates into. The candidate does not pick their own — the link decides it.");
+    }
+    const prog = await Program.findById(String(body.program)).select("name active").lean<any>();
+    if (!prog) throw new HttpError(404, "That programme no longer exists — pick another one.");
+    // Rule: a retired programme may stay on a record that already points at one, but nothing NEW may
+    // be started under it (the `offerable` rule the pickers use, -115/QA-221). A registration link is
+    // as new as it gets.
+    if (prog.active === false) {
+      throw new HttpError(409, `${prog.name} is retired — a new registration link cannot be created for it.`);
+    }
+    const loc = await Location.findById(String(body.location)).select("name").lean<any>();
     const doc = await PublicToken.create({
       token: crypto.randomBytes(16).toString("hex"),
-      purpose, location: body.location, program: body.program || undefined,
+      purpose, location: body.location, program: body.program,
       created_by: user.id,
     });
-    await audit({ entity: "PublicToken", entityId: doc._id, field: "create", newValue: "register link", actor: user.id });
+    // The audit row names BOTH, because "register link" alone cannot answer the only question anybody
+    // asks of it later: which centre and which job role did this link put people into.
+    await audit({ entity: "PublicToken", entityId: doc._id, field: "create", newValue: `register link (${loc?.name ?? "centre"} / ${prog.name})`, actor: user.id });
     return NextResponse.json({ item: doc }, { status: 201 });
   }
 
