@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-227";
+export const RELEASE = "2026.08.14-229";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,39 @@ export const RELEASE = "2026.08.14-227";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-229 is a day of batch work shipped as one build. Marking candidates pass or fail, and with "  +
+  "it certificate upload, works again on a batch whose assessment had already been signed off "  +
+  "at batch level - one figure typed in, with no per-candidate result behind it. Every attempt "  +
+  "to mark someone individually was refused, and the refusal was right, because a roster would "  +
+  "otherwise overwrite figures a person had signed. What was missing was the way out it named: "  +
+  "reopening the assessment existed on no screen. There is now a reopen control beside the "  +
+  "sign-off, offered only to someone who may record results, which returns the assessment to "  +
+  "open and rebuilds the totals from the rows. Refusals in the marking grid are shown where the "  +
+  "press happened rather than at the top of a long page, a bulk mark that only partly succeeds "  +
+  "no longer reports clean success, and issuing certificates now names every candidate it "  +
+  "refused instead of keeping only the last one and closing its own panel. "  +
+  "A batch that already ran can now be entered after the fact. Past dates were never the "  +
+  "obstacle; the readiness checks were, because a roster can never reach its target on a batch "  +
+  "being typed in months later, and the banner named a control that only appeared once the "  +
+  "batch was already ready. An administrator may now start such a batch after a confirmation "  +
+  "listing every check it does not meet, in the words the checklist itself uses. No reason is "  +
+  "demanded - the request was to warn once and not to block. It applies only where the planned "  +
+  "start is strictly in the past and is refused on a batch starting today, and a batch that "  +
+  "finished in July no longer records today as its end date, which had also made the attendance "  +
+  "rules count days that never happened. Every such start is recorded with the checks it "  +
+  "passed over. "  +
+  "A batch code trailing number is now the count of batches on record for that centre and "  +
+  "programme, rather than a separate counter that could drift, and the code is minted only "  +
+  "after the batch validates, so a rejected batch no longer consumes a number. "  +
+  "The self-registration link now fixes the programme as well as the training centre. Until now "  +
+  "a link decided only which centre a candidate joined, and the candidate chose their own job "  +
+  "role from every active programme; the field existed on the link and on both public pages, "  +
+  "and only the screen that creates the link never sent it. Creating a link now asks for the "  +
+  "centre and the programme together and refuses without both, and refuses a retired programme "  +
+  "outright. Someone opening the link is shown the programme they are registering for and told "  +
+  "the link set it, instead of being given a list. Links shared before this change keep working "  +
+  "exactly as they did.";
+const RELEASE_NOTE_ARCHIVE_227 =
   "-227 restores marking candidates pass or fail, and with it certificate upload. On a batch "   +
   "whose assessment had already been signed off at batch level - one figure typed in, with no "  +
   "per-candidate result behind it - every attempt to mark an individual candidate was refused. "  +
@@ -330,6 +363,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
+  RELEASE_NOTE_ARCHIVE_227 + " " +
   RELEASE_NOTE_ARCHIVE_223 + " " +
   RELEASE_NOTE_ARCHIVE_222 + " " +
   RELEASE_NOTE_ARCHIVE_221 + " " +
