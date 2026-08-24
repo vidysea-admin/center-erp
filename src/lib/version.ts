@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-243";
+export const RELEASE = "2026.08.14-244";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -59,6 +59,23 @@ const RELEASE_NOTE_ARCHIVE_239 =
   "record. Alongside these, two controls on the batch screen now ask for the same right the "  +
   "server asks for, so neither is offered to someone it would refuse.";
 export const RELEASE_NOTE_CURRENT =
+  "-244 puts back two things a pair of well-meant guards had taken away, both of which stopped "  +
+  "ordinary work that had been possible the day before. Adding someone to a batch that has not "  +
+  "started yet was refused whenever their joining date was earlier than the date the batch is "  +
+  "planned to begin. That refusal was aimed at a mistyped year, but it also blocked the "  +
+  "everyday case this product exists for - a course that really ran earlier being typed into "  +
+  "the system now, where the roster is genuinely older than the record of it. A joining date "  +
+  "before the batch actually began is still refused, because a person cannot be counted "  +
+  "present on days the batch did not run; for a batch that has not started, the date is now "  +
+  "accepted with a warning that it cannot be changed afterwards. Second, a day's attendance "  +
+  "could not be saved at all when more people were marked present than the day's roster had "  +
+  "been frozen at - which is what happens when somebody joins on the day itself, and it "  +
+  "refused on both the daily log and the marking screen, so there was no way to record the "  +
+  "day at all. That refusal is gone. One related repair was kept: a check on the government "  +
+  "figure used to be skipped entirely whenever a present list and a government figure were "  +
+  "sent together, and it now applies either way.";
+
+const RELEASE_NOTE_ARCHIVE_243 =
   "-243 tightens who may delete a trainer, and shows a candidate's availability on the row "  +
   "itself. Deleting a whole trainer record was open to any centre listed as able to teach them, "  +
   "while deleting a single one of that trainer's documents was already restricted to the centre "  +
@@ -549,7 +566,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
-  RELEASE_NOTE_ARCHIVE_242 + " " + RELEASE_NOTE_ARCHIVE_240 + " " + RELEASE_NOTE_ARCHIVE_239 + " " + RELEASE_NOTE_ARCHIVE_238 + " " +
+  RELEASE_NOTE_ARCHIVE_243 + " " + RELEASE_NOTE_ARCHIVE_242 + " " + RELEASE_NOTE_ARCHIVE_241 + " " + RELEASE_NOTE_ARCHIVE_240 + " " + RELEASE_NOTE_ARCHIVE_239 + " " + RELEASE_NOTE_ARCHIVE_238 + " " +
   RELEASE_NOTE_ARCHIVE_237 + " " + RELEASE_NOTE_ARCHIVE_236 + " " +
   RELEASE_NOTE_ARCHIVE_231 + " " +
   // -230 was built and never released on its own - -231 carries it. Its note is archived rather
