@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-236";
+export const RELEASE = "2026.08.14-237";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -42,6 +42,21 @@ const RELEASE_NOTE_ARCHIVE_230 =
   "Someone who genuinely joined mid-course can still be given their own date, and a batch that "  +
   "has not started is unaffected.";
 export const RELEASE_NOTE_CURRENT =
+  "-237 puts a question to the person it was always about. A candidate registering through a "  +
+  "public link can now say whether they want the intake that is starting or a later one, on both "  +
+  "registration pages. Until now the answer was accepted by the system and never asked for on "  +
+  "the screen, so only staff could record it and the candidate whose choice it was could not. "  +
+  "Choosing a later batch also says, in as many words, that their details are kept and the "  +
+  "centre will contact them - without that sentence the choice reads like cancelling the "  +
+  "registration. The question sits above the optional government-ID section, because it decides "  +
+  "what happens to the person rather than merely recording something about them. "  +
+  "The warning shown when a spreadsheet import carries an unreadable Aadhaar number now says "  +
+  "what actually happens: that student reaches the government export with the column empty "  +
+  "until someone corrects it. It previously said the number would be carried through as typed, "  +
+  "which the same change had already stopped - the code did one thing and the sentence beside "  +
+  "it said another. That report is also shown on the import preview now; it was being produced "  +
+  "and then dropped before anyone could read it, and a report nobody reads is not a report.";
+const RELEASE_NOTE_ARCHIVE_236 =
   "-236 is the build production has actually been running, named. Four changes reached it after "  +
   "the last marker was written and none of them were described from outside, which is the thing "  +
   "this marker exists to prevent. "  +
@@ -427,6 +442,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
+  RELEASE_NOTE_ARCHIVE_236 + " " +
   RELEASE_NOTE_ARCHIVE_231 + " " +
   // -230 was built and never released on its own - -231 carries it. Its note is archived rather
   // than dropped: a note declared and left out of this chain is a dead constant, which is exactly
