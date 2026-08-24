@@ -63,9 +63,9 @@ StoredFile, ApprovalRule, ApprovalRequest, AuditLog, Scheme, JobRole, CandidateD
 | File | What it is |
 |---|---|
 | `authz.ts` | `HttpError` · `requireUser` · `requireRole` · `requireEdit` · `locationFilter` · **`apiHandler`** — the server error chokepoint (HttpError→`plain()`, E11000→409, Cast→404, Validation→400) |
-| `permissions.ts` | `PERMISSIONS` (17 keys) · `DEFAULT_ROLE_PERMISSIONS` · `hasPermission` · `requireView` · `requirePerm`. Deny wins; Admin bypasses |
+| `permissions.ts` | `PERMISSIONS` (**20 keys** — QA-894 added `candidates.delete` / `trainers.delete` / `batches.delete`) · `DEFAULT_ROLE_PERMISSIONS` · `hasPermission` · `requireView` · `requirePerm`. Deny wins; Admin bypasses |
 | `crud.ts` | `collectionRoutes` / `itemRoutes` / `pick` — the REST factory. **`CrudConfig.fields` IS the write whitelist** |
-| `validate.ts` | **`canonicalPhone` · `phoneError` · `emailError`** — THE write-time canon for phone/email. Client-safe |
+| `validate.ts` | **`canonicalPhone` · `phoneError` · `emailError` · `canonicalAadhaar` · `aadhaarError`** — THE write-time canon for phone/email/Aadhaar. Client-safe (imports nothing — §3.0) |
 | `duplicates.ts` | `normalizePhone` (deliberately LOOSE compare key — a different job) · `findDuplicateCandidates` (Rule 7, advisory) |
 | `user-copy.ts` | **`plain(msg)`** — strips `Rule 45` / `DEC-6` / `QA-142` / `Rule T3` from anything a user reads |
 | `version.ts` | `RELEASE` · `RELEASE_NOTE_CURRENT` · private `RELEASE_NOTE_ARCHIVE`. **Must stay ASCII** |
@@ -337,9 +337,65 @@ name what was not.
 **SoT:** extract the join-eligibility + adoption block into `rules.ts` beside `addMemberChecked` (:400)
 and have both routes call it.
 
-### 3.2 The two public intake doors — **live gap, QA-275**
+### 3.2 The candidate intake doors — **live gap, QA-275**, and it has now bitten twice more
+
 `public/register/[token]` writes the 9 government fields; `public/enrol-otp` (:150) writes **none**.
 S18-02/QA-261 fixed one door. **SoT:** one shared `publicCandidatePayload()` both routes call.
+
+**Count the doors before adding a field: there are FOUR, not two.** The staff create route, the staff
+edit route, and the two public ones — and a field is only real when every one of them accepts it. The
+recorded failure mode is not a 500, it is silence: a door that does not accept a field returns 200 and
+drops it, so the value looks saved and is gone on the next read (the -116 lesson, which cost a whole
+release when the government fields were creatable but not editable).
+
+Two fields added 2026-08-24 are the current test of whether this row is being read:
+
+| Field | Staff create | Staff edit | `public/register` | `public/enrol-otp` | Import catalog |
+|---|---|---|---|---|---|
+| `aadhaar_no` (QA-893) | yes | yes | yes | yes | yes |
+| `batch_interest` (Unit C) | pending | pending | pending | pending | pending |
+
+**`aadhaar_no` also reversed a standing decision, so do not trust older comments about it.** Until
+2026-08-24 this product deliberately held no Aadhaar number: `models/index.ts` said `id_reference` is
+"NOT the Aadhaar number itself" and `export-sidh` shipped its `aadhaar_or_vid` column blank on purpose.
+Umesh reversed both. THREE consequences ride with it and are not optional — `scripts/mirror-prod.mjs`
+REDACT (QA-536: no local mirror may carry live Aadhaar), `lib/audit.ts` `AUDIT_MASK_FIELDS` (the audit
+trail must not become the leak), and its deliberate absence from `searchFields` and every table column.
+
+**There are now THREE government-ID fields on a Candidate and they are not interchangeable** —
+`aadhaar_no` (the Aadhaar), `sidh_candidate_id` (the portal CAN id), `id_reference` (anything else).
+QA-414 measured 55 live candidates whose portal id landed in `id_reference` because it was the
+closest-looking option on a screen that did not offer the right one. Three such boxes side by side is
+that same trap, widened.
+
+### 3.2b Delete is a RIGHT now, not a role — QA-894 (2026-08-24)
+
+All three delete verbs already existed with their safety refusals and were shut behind a hard-coded
+`user.role !== "Admin"`. The team saw no button and reported the feature as absent, which is worth
+remembering: **a capability nobody can reach is indistinguishable from one that was never built.**
+
+`candidates.delete` · `trainers.delete` · `batches.delete` — three separate keys (Umesh's call), so a
+centre principal can clear a junk candidate row without also being able to erase a trainer or a batch.
+Defaults: Operations all three, Location only `candidates.delete`, Enrollment and Trainer none.
+
+**Delete is deliberately NOT folded into `.manage`.** Editing a record and destroying it are different
+powers — `assertTrainerDocDeleteInScope` exists in `rules.ts` for exactly this reason, because document
+DELETE had to be narrower than document read/upload.
+
+**The safety refusals are unchanged and must stay that way**: a candidate with batch history is Dropped
+(409), a trainer referenced by a batch is Dropped (409), a batch carrying any recorded work is Cancelled
+(409). Widening who may press a verb is the reason to keep what it refuses strict, not to relax it.
+
+**Readers to keep in step (four UI gates + three routes):** `api/candidates/[id]`, `api/trainers/[id]`,
+`api/batches/[id]`, and the buttons in `trainers/page.tsx`, `batches/page.tsx` (Planning row, Edit mode
+only — pinned in `check-user-copy.mjs`), `batches/[id]/page.tsx`, and `candidates/page.tsx`.
+
+**Live-behaviour warning (QA-036 pattern, and it has caught people here before):** changing
+`DEFAULT_ROLE_PERMISSIONS` changes NOTHING on production. `getRolePermissions` (`permissions.ts:98`)
+returns a role's STORED `RolePermission` row when one exists and only falls back to the defaults when it
+does not — and every role on production already has a stored row. The three new toggles must be ticked
+in the matrix (`PUT /api/permissions`) and read back, or Operations and Location see exactly the missing
+buttons they see today.
 
 ### 3.3 `public/trainer-apply` never adopted `lib/validate` — **live hole, QA-274**
 `:26` `S(body.phone).replace(/\D/g,"").slice(-10)` + `:56` `length !== 10` + `:58` its own email regex.
