@@ -2652,8 +2652,8 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
           <div />
           {legacy && !perCandidate && showLegacyEntry ? (
             <>
-              <Field label="Appeared (legacy batch-level)"><input type="number" className={inputCls} value={form.appeared ?? ""} onChange={(e) => setForm({ ...form, appeared: +e.target.value })} /></Field>
-              <Field label="Passed (legacy batch-level)"><input type="number" className={inputCls} value={form.passed ?? ""} onChange={(e) => setForm({ ...form, passed: +e.target.value })} /></Field>
+              <Field label="Appeared (legacy batch-level)"><input type="number" disabled={closed} className={inputCls} value={form.appeared ?? ""} onChange={(e) => setForm({ ...form, appeared: +e.target.value })} /></Field>
+              <Field label="Passed (legacy batch-level)"><input type="number" disabled={closed} className={inputCls} value={form.passed ?? ""} onChange={(e) => setForm({ ...form, passed: +e.target.value })} /></Field>
             </>
           ) : !legacy || perCandidate ? (
             <>
@@ -2744,7 +2744,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
           <Field label="Certificate distribution date"><input type="date" disabled={closed} className={inputCls} value={toInputDate(form.certificate_distribution_date)} onChange={(e) => setForm({ ...form, certificate_distribution_date: e.target.value })} /></Field>
           <Field label="Uploaded to SIDH portal on"><input type="date" disabled={closed} className={inputCls} value={toInputDate(form.sidh_uploaded_on)} onChange={(e) => setForm({ ...form, sidh_uploaded_on: e.target.value })} /></Field>
           {legacy && !perCandidate
-            ? <Field label="Certificates issued"><input type="number" className={inputCls} value={form.certificates_issued ?? ""} onChange={(e) => setForm({ ...form, certificates_issued: +e.target.value })} /></Field>
+            ? <Field label="Certificates issued"><input type="number" disabled={closed} className={inputCls} value={form.certificates_issued ?? ""} onChange={(e) => setForm({ ...form, certificates_issued: +e.target.value })} /></Field>
             : <Field label="Certificates issued"><div className={inputCls + " bg-gray-50 text-gray-700"}>{closure?.certificates_issued ?? 0} <span className="text-xs text-gray-400">derived</span></div></Field>}
         </div>
         {!legacy && summary && summary.passed > summary.certificates_issued && (
@@ -3635,14 +3635,19 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
           <div className="md:hidden">
             {shown.length > 0 && <Card i={shown[Math.min(idx, shown.length - 1)]} />}
             {shown.length === 0 && null}
-            <div className="mt-3 flex items-center justify-between">
+            {/* -235 (QA-968-note-QA-789, checker on qa-232 cycle 1): -216 rebuilt this pager onto
+                `shown` and I then proposed CLOSING the row - wrongly. The counter was right about the
+                list but the pager still RENDERED on an empty one, so a filter matching nothing showed
+                the honest "no candidate matches" line and, directly beneath it, "1 / 0". Two answers
+                to one question again, one of them impossible. A pager for nothing is nothing. */}
+            {shown.length > 0 && <div className="mt-3 flex items-center justify-between">
               {/* QA-779 (-216, checker on qa-214): this was bound to `items` while the card beside it
                   renders `shown`, so a filter with one result read "1 / 12" and Next walked the
                   counter while the card never changed. The pager belongs to the list on screen. */}
               <Btn kind="ghost" onClick={() => setIdx((v) => Math.max(0, v - 1))} disabled={idx === 0}>← Prev</Btn>
               <span className="text-sm text-gray-500">{Math.min(idx + 1, Math.max(shown.length, 1))} / {shown.length}</span>
               <Btn kind="ghost" onClick={() => setIdx((v) => Math.min(shown.length - 1, v + 1))} disabled={idx >= shown.length - 1}>Next →</Btn>
-            </div>
+            </div>}
           </div>
         </>
       )}

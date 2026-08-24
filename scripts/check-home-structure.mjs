@@ -118,23 +118,32 @@ ok("home: the strip's JSX closes before the trainers-by-role block", stripClose 
   const mark = b.indexOf("async function mark(");
   const markEnd = b.indexOf("async function bulkApply", mark);
   const markBody = mark > 0 && markEnd > mark ? b.slice(mark, markEnd) : "";
-  // -232 (QA-833): the quietest member of the dead-control family on this tab. Not a button that
-  // refuses - an INPUT that accepts your typing beside a Save that cannot fire, so the date is taken
-  // and then discarded with nothing said. The SIX closure date boxes must carry the same gate their
-  // Save carries (`closed`). Scoped to those six by name: this file holds 18 date inputs and the
-  // other twelve (Overview, Daily Execution, filters) are NOT closure fields and must NOT be gated
-  // on `closed` - the first cut of this pin demanded all eighteen and was wrong, which is the only
-  // reason it is written this way.
-  const CLOSURE_DATES = ["assessment_date", "mock_test_date", "result_expected_date",
-    "certification_date", "certificate_distribution_date", "sidh_uploaded_on"];
-  const ungated = CLOSURE_DATES.filter((f) => {
-    const i = b.indexOf(`toInputDate(form.${f})`);
-    if (i < 0) return true;                                   // field missing entirely = a failure too
-    const tagStart = b.lastIndexOf("<input", i);
-    return tagStart < 0 || !/disabled=\{closed\}/.test(b.slice(tagStart, i));
-  });
-  ok("-232 (QA-833): every closure date box carries the same gate its Save carries",
-    ungated.length === 0, `ungated: ${ungated.join(", ") || "(none)"}`);
+  // -232 (QA-833) -> -235 (QA-961, QA-962: checker on qa-232 cycle 1). The quietest member of the
+  // dead-control family on this tab: not a button that refuses, an INPUT that accepts your typing
+  // beside a Save that cannot fire, so the value is taken and then discarded with nothing said.
+  //
+  // THIS PIN WAS AN INSTANCE PIN AND THAT IS WHY IT MISSED. Cycle 1 named the six date fields, I
+  // gated those six, and the checker found a SEVENTH ungated input in the same two cards
+  // (`certificates_issued`) that the pin could not see - `grep -c certificates_issued` on it was 0.
+  // Re-scanning the region then found TWO MORE nobody had named (`appeared`, `passed`). Nine inputs,
+  // three still open after a fix that "closed" the row. So it asks the CLASS question now: every
+  // input inside the Assessment and Certification cards must carry the same gate their Save carries.
+  // A new field added tomorrow is covered without anyone remembering to add a pin.
+  //
+  // QA-962: matched anywhere in the tag, so `disabled={closed}` written AFTER `value=` is fine -
+  // the old pin false-redded on semantically identical code, the same shape as qa-221's formatter.
+  {
+    const a = b.indexOf("title={`Assessment \u2014 ");
+    const z = b.indexOf("title={`Invoice \u2014");
+    const region = a > 0 && z > a ? b.slice(a, z) : "";
+    const inputs = [...region.matchAll(/<input[\s\S]*?\/>/g)].map((m) => m[0]);
+    const ungated = inputs.filter((t) => !/disabled=\{closed\}/.test(t));
+    const nameOf = (t) => (/value=\{(?:toInputDate\()?form\.(\w+)/.exec(t) || [, "?"])[1];
+    ok("-235 (QA-833/QA-961): EVERY input in the closure cards carries the same gate its Save carries",
+      region.length > 0 && inputs.length >= 6 && ungated.length === 0,
+      region.length === 0 ? "could not locate the closure cards"
+        : `${inputs.length} inputs, ${ungated.length} ungated: ${ungated.map(nameOf).join(", ") || "(none)"}`);
+  }
 
   // -224 (QA-880, recommended by the cycle-3 checker): the CLASS pin, not another instance pin.
   // Every instance above says "this one handler is fixed". This one says "no handler in this panel
