@@ -2020,7 +2020,7 @@ console.log("\n--- QA-897: empty roster is named, not left to look like a failed
   // one never has to reach Ready: an EMPTY roster is the whole point of it.
   const mk = await req(admin, "POST", "/api/batches", {
     location: loc._id, program: program._id,
-    target_size: 5, planned_start: new Date(Date.now() + 3 * 864e5).toISOString().slice(0, 10),
+    target_size: 5, planned_start: localDate(Date.now() + 3 * 864e5),
   }, 201);
   ok("QA-897: precondition - the empty-roster fixture batch was actually created",
     !!mk.data?.item?._id, `${mk.status} ${JSON.stringify(mk.data).slice(0, 200)}`);
@@ -2047,6 +2047,13 @@ console.log("\n--- QA-897: empty roster is named, not left to look like a failed
     onFull.data.roster_is_empty === false,
     JSON.stringify({ flag: onFull.data.roster_is_empty, matched: onFull.data.matched_count }));
 
+  // EVERY date below goes through `localDate()` (:11), never `toISOString().slice(0,10)`. The first
+  // version of these pins used the latter and Rule 25 refused both drops with a 400: `left_on` came
+  // out as the UTC calendar day while `joined_on` had defaulted to `istToday()`, so between IST
+  // midnight and UTC midnight — about five and a half hours every single day — left_on preceded
+  // joined_on. The precondition pins caught it; without them rows 2 and 3 would have failed with a
+  // flag reading that had nothing to do with the flag. Same class as qa-226's disclosed `day()`
+  // helper in e2e-flows-blindspot.
   // QA-1041 — the same sentence, a THIRD time, and the checker's charge was that the fix "did not
   // remove the false sentence, it moved it to the other side". It was right, so these four pins now
   // hold the WHOLE truth table instead of one corner of it. Two questions were being answered by one
@@ -2057,7 +2064,7 @@ console.log("\n--- QA-897: empty roster is named, not left to look like a failed
     const mkLeft = async (label) => {
       const mk = await req(admin, "POST", "/api/batches", {
         location: loc._id, program: program._id,
-        target_size: 5, planned_start: new Date(Date.now() + 4 * 864e5).toISOString().slice(0, 10),
+        target_size: 5, planned_start: localDate(Date.now() + 4 * 864e5),
       }, 201);
       return mk.data.item;
     };
@@ -2072,7 +2079,7 @@ console.log("\n--- QA-897: empty roster is named, not left to look like a failed
     ok("QA-1041: precondition - a member was actually added before being dropped",
       addOut.status === 201 && !!addOut.data?.item?._id, `${addOut.status} ${JSON.stringify(addOut.data).slice(0, 160)}`);
     const dropOut = await req(admin, "POST", `/api/members/${addOut.data.item._id}/drop`,
-      { left_on: new Date().toISOString().slice(0, 10), drop_reason: "QA-1041 pin" }, 200);
+      { left_on: localDate(), drop_reason: "QA-1041 pin" }, 200);
     ok("QA-1041: precondition - and the drop stuck", dropOut.status === 200, `${dropOut.status}`);
 
     // A departed member whose name the FILE DOES CARRY. `${NAME} Alpha` is a row in the fixture CSV,
@@ -2087,7 +2094,7 @@ console.log("\n--- QA-897: empty roster is named, not left to look like a failed
     ok("QA-1041: precondition - the in-file member was added",
       addIn.status === 201 && !!addIn.data?.item?._id, `${addIn.status} ${JSON.stringify(addIn.data).slice(0, 160)}`);
     const dropIn = await req(admin, "POST", `/api/members/${addIn.data.item._id}/drop`,
-      { left_on: new Date().toISOString().slice(0, 10), drop_reason: "QA-1041 pin" }, 200);
+      { left_on: localDate(), drop_reason: "QA-1041 pin" }, 200);
     ok("QA-1041: precondition - and that drop stuck too", dropIn.status === 200, `${dropIn.status}`);
 
     const upNever    = await upload(admin, { file: csvFile(), batch: emptyBatch._id });
