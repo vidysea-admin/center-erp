@@ -160,11 +160,35 @@ async function makeBatch(lc, pc, trainerName, roomIdx, planStartOffset, memberCo
   // roster the 2026-08-13 server check now refuses)
   const pool = candidates[lc].filter((c) => String(c.program) === String(programs[pc]._id)).slice(0, memberCount);
   const memberIds = [];
+  const refused = [];
+  // QA-1024. `joined_on: day(planStartOffset)` sent a FUTURE date for every batch planned ahead
+  // (B3 +3, B4 +7), and -240 now refuses that by name: "A candidate cannot join in the future".
+  // The rule is right — a join date after today cannot carry attendance — so the FIXTURE is what
+  // was wrong: somebody who signs up for a batch starting next week joins TODAY, not on its start
+  // date. Clamped, which is also what the screens do (their date input carries max=istTodayInput()).
+  const joinOffset = Math.min(planStartOffset, 0);
   for (const c of pool) {
     try {
-      const m = (await req("POST", `/api/batches/${b._id}/members`, { candidate: c._id, joined_on: day(planStartOffset) })).item;
+      const m = (await req("POST", `/api/batches/${b._id}/members`, { candidate: c._id, joined_on: day(joinOffset) })).item;
       memberIds.push(m._id);
-    } catch { /* already active elsewhere */ }
+    } catch (e) {
+      // This used to be `catch { /* already active elsewhere */ }` — a comment that GUESSED the
+      // reason and threw the real one away. It swallowed ten refusals in a row, the roster came
+      // back empty, and the failure surfaced thirty lines later as
+      // `PATCH /api/members/undefined → 404`, which names neither the cause nor the batch.
+      // A fixture that cannot build itself must say so where it happened.
+      refused.push(`${c.name ?? c._id}: ${e.message}`);
+    }
+  }
+  if (refused.length) {
+    console.log(`  !! ${b.code ?? lc}: ${refused.length} of ${pool.length} could not be added — ${refused[0]}`);
+  }
+  // Deliberately `< pool.length`, not `< enrollCount`. B3 enrols 6 and then indexes memberIds[6]
+  // and [7] to mark two failures, so a roster that merely clears enrollCount still dies later on
+  // an undefined id. The fixture asked for the whole pool; anything less is a broken fixture and
+  // every "0 failed" printed after it means less than it looks.
+  if (memberIds.length < pool.length) {
+    throw new Error(`Fixture ${b.code ?? lc}: only ${memberIds.length} of ${pool.length} candidates joined. First refusal: ${refused[0] ?? "none — the candidate pool itself was short"}`);
   }
   for (const mid of memberIds.slice(0, enrollCount)) {
     await req("PATCH", `/api/members/${mid}`, { reg_done: true, kyc_done: true, accept_done: true });
