@@ -118,6 +118,24 @@ ok("home: the strip's JSX closes before the trainers-by-role block", stripClose 
   const mark = b.indexOf("async function mark(");
   const markEnd = b.indexOf("async function bulkApply", mark);
   const markBody = mark > 0 && markEnd > mark ? b.slice(mark, markEnd) : "";
+  // -232 (QA-833): the quietest member of the dead-control family on this tab. Not a button that
+  // refuses - an INPUT that accepts your typing beside a Save that cannot fire, so the date is taken
+  // and then discarded with nothing said. The SIX closure date boxes must carry the same gate their
+  // Save carries (`closed`). Scoped to those six by name: this file holds 18 date inputs and the
+  // other twelve (Overview, Daily Execution, filters) are NOT closure fields and must NOT be gated
+  // on `closed` - the first cut of this pin demanded all eighteen and was wrong, which is the only
+  // reason it is written this way.
+  const CLOSURE_DATES = ["assessment_date", "mock_test_date", "result_expected_date",
+    "certification_date", "certificate_distribution_date", "sidh_uploaded_on"];
+  const ungated = CLOSURE_DATES.filter((f) => {
+    const i = b.indexOf(`toInputDate(form.${f})`);
+    if (i < 0) return true;                                   // field missing entirely = a failure too
+    const tagStart = b.lastIndexOf("<input", i);
+    return tagStart < 0 || !/disabled=\{closed\}/.test(b.slice(tagStart, i));
+  });
+  ok("-232 (QA-833): every closure date box carries the same gate its Save carries",
+    ungated.length === 0, `ungated: ${ungated.join(", ") || "(none)"}`);
+
   // -224 (QA-880, recommended by the cycle-3 checker): the CLASS pin, not another instance pin.
   // Every instance above says "this one handler is fixed". This one says "no handler in this panel
   // may regress into the defect at all": inside CandidateResults, a catch that reports ONLY through
