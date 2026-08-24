@@ -151,6 +151,20 @@ const TARGET_BASE_LABEL: Record<string, string> = {
 // SheetChange document, a .lean() row and a test fixture all satisfy it.
 export type ClassifiableChange = {
   field_name?: string; entity_type?: string; new_value?: string; location?: unknown; entity?: unknown;
+  // QA-986 (S1, checker on qa-234 cycle 1): Rule 7. The apply door skips its pending-follow-ups
+  // check for exactly "No action" (`if (action !== "No action")` below), and `bulkIgnore` has
+  // refused that same operation since the 2026-08-12 audit (sync S1-8). So the row's own Ignore
+  // button is correctly disabled while its drawer offers the identical press two inches away —
+  // one press orphaned three follow-ups, overwrote `action_taken` from "Stop location", and left
+  // a deferred Close that `settleChangeIfDone` can never settle. The count has to reach the
+  // predicate or the screen keeps offering it.
+  pending_followups?: number;
+  // QA-988 (S2, same verdict): `targetRowField` only proves the field NAME parses as
+  // "<base>:<CODE>". The door additionally requires the LocationTarget row to already exist for
+  // tc_status/tc_id (a 409 — `approved_target` may upsert). Without this, cycle 1 put a ★ on a
+  // press that answers 409, which is the very defect this unit exists to remove, one layer in.
+  // undefined = the caller did not look; then the option stays offered but is never starred.
+  target_row_exists?: boolean;
 };
 
 export function classifyChange(c: ClassifiableChange): ActionVerdict[] {
@@ -168,13 +182,29 @@ export function classifyChange(c: ClassifiableChange): ActionVerdict[] {
   // that blank. A reviewer has to be told they are erasing, not filling.
   const clears = String(c.new_value ?? "").trim() === "";
 
-  const canUpdateTarget = hasRecord && !isEntity && !!rowField;
+  // QA-986: Rule 7 reaches the predicate. Zero is "none pending"; the caller not looking is also
+  // treated as zero, because the door re-checks it anyway and a screen that refused on a number it
+  // never fetched would be its own defect.
+  const pending = Number(c.pending_followups ?? 0) || 0;
+
+  // QA-988: `approved_target` may CREATE its row (the door upserts it); a government status or id
+  // may not - "a status cannot create the row it describes". So the row's existence only gates the
+  // other two bases, and only when the caller actually looked.
+  const targetUpsertable = rowField?.base === "approved_target";
+  const targetRowMissing = !!rowField && !targetUpsertable && c.target_row_exists === false;
+  const targetRowUnknown = !!rowField && !targetUpsertable && c.target_row_exists === undefined;
+
+  const canUpdateTarget = hasRecord && !isEntity && !!rowField && !targetRowMissing;
   const canApplyValue = hasRecord && (isEntity ? !!spec : isCentreField);
   const canLifecycle = hasRecord && !isEntity;
 
   // Exactly one recommendation, decided from the row's kind - never guessed.
   let pick = "No action";
-  if (canUpdateTarget) pick = "Update target";
+  // QA-988: offered is not the same as recommended. When nobody checked whether the target row
+  // exists, the option stays available (the door is the authority) but it does not get a star -
+  // a star on a press that answers 409 is this unit's own defect, one layer in.
+  if (canUpdateTarget && !targetRowUnknown) pick = "Update target";
+  else if (canUpdateTarget) pick = "";
   else if (hasRecord && isStatus && !isEntity) {
     // `Start location` is the only action that writes approval_status (it copies new_value), but
     // it ALSO marks the centre Active. That is right for an approval and WRONG for anything else,
@@ -191,7 +221,8 @@ export function classifyChange(c: ClassifiableChange): ActionVerdict[] {
     : "This change is not matched to a centre, so there is nothing to write to.";
 
   const whyUpdateTarget = canUpdateTarget
-    ? `Write the sheet's value into this centre's ${TARGET_BASE_LABEL[rowField!.base] ?? rowField!.base} for job role ${rowField!.code}. It never edits an existing batch.`
+    ? `Write the sheet's value into this centre's ${TARGET_BASE_LABEL[rowField!.base] ?? rowField!.base} for job role ${rowField!.code}. It never edits an existing batch.${targetRowUnknown ? " This centre must already have a target row for that job role — a status cannot create the row it describes." : ""}`
+    : targetRowMissing ? `This centre has no target row for job role ${rowField!.code}, so there is nothing to mark. Set that job role's approved target first — a status cannot create the row it describes.`
     : !hasRecord ? noRecord
     : isEntity ? `A target row belongs to a centre and a job role - this change is on a ${entityType} record.`
     : isStatus ? `"${field}" is a status field, not a target row - there is no approved target, TC status or TC ID here to update.`
@@ -212,8 +243,17 @@ export function classifyChange(c: ClassifiableChange): ActionVerdict[] {
 
   const byAction: Record<string, Omit<ActionVerdict, "action">> = {
     "No action": {
-      ok: true,
-      why: "Dismiss this change - nothing is written anywhere. The row moves to Ignored, and you can re-open it later.",
+      // QA-986 (S1): Rule 7 - "A SheetChange shall not be markable Actioned while it has Pending
+      // FollowUpActions" (REQ-254), and REQUIREMENTS.md's own note on it is "this is what stops
+      // acknowledge-and-forget". Ignoring is not Actioning, which is how the hole survived - but
+      // burying the row is worse than actioning it: `action_taken` is overwritten, the follow-ups
+      // are orphaned with their parent gone from the queue, and `settleChangeIfDone` matches on
+      // {status:"Open", action_taken:{$ne:null}}, so a DEFERRED Close buried this way never closes
+      // its centre. One press. `bulkIgnore` has refused exactly this since the 2026-08-12 audit.
+      ok: pending === 0,
+      why: pending > 0
+        ? `This change already raised ${pending} follow-up${pending === 1 ? "" : "s"} that ${pending === 1 ? "is" : "are"} still Pending. Dismissing it now would leave ${pending === 1 ? "it" : "them"} with no parent on the queue and erase the record of what was applied — and a deferred close would never complete. Resolve or cancel the follow-up${pending === 1 ? "" : "s"} first.`
+        : "Dismiss this change - nothing is written anywhere. The row moves to Ignored, and you can re-open it later.",
     },
     "Update target": { ok: canUpdateTarget, why: whyUpdateTarget },
     "Start location": {
@@ -243,6 +283,13 @@ export function classifyChange(c: ClassifiableChange): ActionVerdict[] {
     "Apply value": { ok: canApplyValue, why: whyApplyValue },
   };
 
+  // THE INVARIANT, added in cycle 2 because cycle 1 broke it twice (QA-986, QA-988): a star may
+  // never sit on an action this same function says the door will refuse. Cycle 1 computed `pick`
+  // from the row's KIND and never re-checked it against `ok`, so the recommendation could be - and
+  // was - a guaranteed refusal. One line, and it makes the class of defect unrepresentable rather
+  // than fixing its two instances.
+  if (pick && !byAction[pick]?.ok) pick = "";
+
   // Emitted in schema-enum order: SHEET_CHANGE_ACTION stays the single place the vocabulary is
   // named, and an action added there without a description here is caught by the wall pin rather
   // than silently disappearing off the screen.
@@ -257,6 +304,43 @@ export function classifyChange(c: ClassifiableChange): ActionVerdict[] {
 export function verdictFor(c: ClassifiableChange, action: string): ActionVerdict {
   return classifyChange(c).find((v) => v.action === action)
     ?? { action, ok: false, why: `Unknown action: ${action}` };
+}
+
+// QA-989 (S2, checker on qa-234 cycle 1): whether an APPLIED change can be put back. This is a
+// different question from classifyChange's - that one asks what may be DONE to an Open row, this
+// asks what may be UNDONE on a settled one - and it was answered in two places that disagreed.
+//
+// `sync/page.tsx` offered the button for `action_taken in ("Update target","Apply value")`, while
+// `revert/route.ts` additionally requires `field_name` to start with "approved_target:" for the
+// target case. So every applied `tc_status:<CODE>` / `tc_id:<CODE>` row - and those are exactly
+// the rows REQUIREMENTS-2026-08-23-SYNC-INBOX.md is about - rendered a Revert button that asked
+// the user to confirm and then answered 400 "Not a target change.". That sentence is the literal
+// sibling of "Not a target-row change.", the one this unit exists to have replaced, on the same
+// screen. qa-234 cycle 1 declared this pair "a known second copy, deliberately out of scope";
+// leaving a dead control in place is not a scope decision, so it is one function now and BOTH
+// sides import it.
+export function canRevert(c: { status?: string; action_taken?: string | null; field_name?: string }): { ok: boolean; why: string } {
+  if (c.status !== "Actioned") {
+    return { ok: false, why: "Only a change that was actually applied can be put back." };
+  }
+  if (c.action_taken === "Apply value") {
+    return { ok: true, why: "Put the field back to the value it held before this change was applied." };
+  }
+  if (c.action_taken === "Update target") {
+    // The door's own narrowing: a target NUMBER can be put back exactly; a government status or id
+    // has no recorded previous row state to restore, so the door refuses it.
+    if (String(c.field_name ?? "").startsWith("approved_target:")) {
+      return { ok: true, why: "Put the approved target back to the number it held before." };
+    }
+    return {
+      ok: false,
+      why: "A government TC status or TC ID cannot be rolled back from here - only an approved target number can. Correct it on the location's target row instead.",
+    };
+  }
+  return {
+    ok: false,
+    why: "Start, hold, stop and close carry follow-up actions and operational state - undoing one is a decision, not a value swap, so it is done on the location screen with a reason.",
+  };
 }
 
 async function impactSnapshot(locationId: unknown) {
@@ -636,11 +720,24 @@ export async function applySheetChange(changeId: string, action: string, note: s
   if (change.status !== "Open") throw new HttpError(409, "Change already handled.");
   const loc = change.location ? await Location.findById(change.location) : null;
 
+  // QA-986 (S1): the facts the predicate needs, fetched ONCE and handed to it, so the door refuses
+  // through the same sentence the screen shows. Rule 7's count was previously read only at the
+  // BOTTOM of this function and only for actions other than "No action" — which is exactly the
+  // press that buried it.
+  const pendingNow = await FollowUpAction.countDocuments({ source_change: change._id, status: "Pending" });
+  const facts = { ...change.toObject(), pending_followups: pendingNow };
+
   let followUps = 0;
   switch (action) {
-    case "No action":
-      change.status = "Ignored"; // Rule 9 semantics for single ignore
+    case "No action": {
+      // Rule 9 semantics for single ignore — but Rule 7 first. `bulkIgnore` has refused this
+      // operation since the 2026-08-12 audit (sync S1-8); this door skipped it, so the row's own
+      // disabled Ignore button and its enabled drawer disagreed about the same press.
+      const v = verdictFor(facts, "No action");
+      if (!v.ok) throw new HttpError(409, v.why);
+      change.status = "Ignored";
       break;
+    }
     case "Update target": {
       // Rule 4: writes approved_target only; never edits batches
       if (!loc) throw new HttpError(400, "Change has no matched location.");
@@ -648,7 +745,7 @@ export async function applySheetChange(changeId: string, action: string, note: s
       // QA-946: the refusal is the SAME sentence the drawer prints under the disabled option, so a
       // reviewer who reaches this door another way is told the next step, not just the verdict.
       // "Not a target-row change." named what was wrong and nothing about what to do instead.
-      if (!rowField) throw new HttpError(400, verdictFor(change, "Update target").why);
+      if (!rowField) throw new HttpError(400, verdictFor(facts, "Update target").why);
       const program = await Program.findOne({ code: rowField.code });
       if (!program) throw new HttpError(400, `Program ${rowField.code} not found.`);
       // 2026-08-12 audit (sync S1-1): parseInt(new_value || "0") turned a blank cell into a
@@ -714,7 +811,7 @@ export async function applySheetChange(changeId: string, action: string, note: s
       // / fieldSpec test), which is the same rule the screen needed and could not see. Both read
       // classifyChange now, so what the drawer offers and what this door accepts cannot drift, and
       // the refusal names the action to use instead.
-      const applyVerdict = verdictFor(change, "Apply value");
+      const applyVerdict = verdictFor(facts, "Apply value");
       if (!applyVerdict.ok) throw new HttpError(400, applyVerdict.why);
       const doc = await Model.findById(targetId);
       if (!doc) throw new HttpError(404, `${entityType} not found.`);

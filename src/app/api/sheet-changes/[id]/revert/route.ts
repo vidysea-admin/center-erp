@@ -4,6 +4,7 @@ import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Candidate, Location, LocationTarget, Program, SheetChange, Trainer } from "@/models";
 import { audit } from "@/lib/audit";
+import { canRevert } from "@/lib/sync";
 
 // Rollback for an applied sheet change (2026-08-13, Umesh: "hum rollback kar paayein purane data
 // mein"). Scope is deliberately narrow: "Update target" and "Apply value" write a plain value
@@ -18,10 +19,12 @@ export const POST = apiHandler(async (_req: NextRequest, ctx: { params: Promise<
 
   const change = await SheetChange.findById(id);
   if (!change) throw new HttpError(404, "Change not found");
-  if (change.status !== "Actioned" || !["Update target", "Apply value"].includes(change.action_taken ?? "")) {
-    throw new HttpError(400,
-      "Only an applied \"Update target\" or \"Apply value\" change can be reverted — status actions (start/hold/stop/close) carry follow-ups and are undone through the location screen, with a reason.");
-  }
+  // QA-989 (checker on qa-234 cycle 1): ONE predicate, shared with the list route that decides
+  // whether to render the button at all. This used to be two guards here and a third, looser copy
+  // in sync/page.tsx, so every applied tc_status:/tc_id: row showed a Revert button whose door
+  // answered 400 "Not a target change." after the user had already confirmed.
+  const revertable = canRevert(change);
+  if (!revertable.ok) throw new HttpError(400, revertable.why);
 
   // Generic field write — put back exactly what was there (the resolved old value when the
   // tab-mapping engine stored one, else the sheet's old text; blank means unset).
@@ -48,7 +51,6 @@ export const POST = apiHandler(async (_req: NextRequest, ctx: { params: Promise<
     return NextResponse.json({ item: change, reverted_to: change.old_value ?? null });
   }
   if (!change.location) throw new HttpError(400, "Change has no matched location.");
-  if (!change.field_name?.startsWith("approved_target:")) throw new HttpError(400, "Not a target change.");
 
   const code = change.field_name.split(":")[1];
   const program = await Program.findOne({ code }).lean<{ _id: unknown }>();

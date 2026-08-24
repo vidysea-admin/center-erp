@@ -249,7 +249,12 @@ It leaves the review queue. You can re-open it later from the Ignored list.`;
           { key: "_sel", label: "", mobile: false, render: (r: any) => r.status === "Open" ? <input type="checkbox" checked={selected.has(r._id)} onChange={() => toggle(r._id)} onClick={(e) => e.stopPropagation()} /> : null },
           { key: "location", label: "About", render: (r: any) => rowLabel(r) ?? <span className="text-amber-600">Unmatched</span> },
           { key: "field_name", label: "Field" },
-          { key: "change", label: "Old → New", minWidth: 280, filterText: (r: any) => `${r.old_value ?? ""} ${r.new_value ?? ""}`, render: (r: any) => <span className="text-xs">{r.old_value || "∅"} → <b>{r.new_value}</b></span> },
+          // QA-987 (checker on qa-234 cycle 1): cycle 1 fixed the DRAWER and left this cell alone,
+          // so the list still printed "Ramesh Kumar →" and stopped. QA-668's own `actual` names the
+          // LIST first — it is the surface a reviewer scans before opening anything — so half the
+          // issue was closed while the half it was reported on stayed broken. Same helper, both
+          // places, which is the only way they cannot drift apart again.
+          { key: "change", label: "Old → New", minWidth: 280, filterText: (r: any) => `${r.old_value ?? ""} ${r.new_value ?? ""}`, render: (r: any) => <span className="text-xs">{r.old_value || "∅"} → <b>{shownValue(r.new_value)}</b></span> },
           { key: "detected_at", label: "Detected", render: (r: any) => fmtDT(r.detected_at) },
           {
             key: "status", label: "Status",
@@ -287,8 +292,17 @@ It leaves the review queue. You can re-open it later from the Ignored list.`;
           {
             // 2026-08-13 (Umesh): rollback. Only an applied target update is a plain value swap;
             // status actions carry follow-ups and are undone on the location screen with a reason.
+            //
+            // QA-989 (checker on qa-234 cycle 1): this used to test `action_taken` here, with its
+            // own looser copy of the rule — the revert door ALSO requires `approved_target:` for
+            // the target case. So every applied `tc_status:<CODE>` / `tc_id:<CODE>` row rendered
+            // this button, asked the user to confirm, and then answered 400 "Not a target change."
+            // — the literal sibling of the sentence this whole unit exists to have replaced, on
+            // this very screen. It reads the server's `revert` verdict now (lib/sync.ts canRevert,
+            // the same function the door refuses through), so the button exists exactly when the
+            // press will work.
             key: "_revert", label: "", mobile: false, render: (r: any) =>
-              r.status === "Actioned" && ["Update target", "Apply value"].includes(r.action_taken) ? (
+              r.revert?.ok ? (
                 <button className="text-[11px] font-medium text-red-600 hover:underline"
                   title={`Put ${r.field_name} back to "${r.old_value || "unset"}"`}
                   onClick={async (e) => {

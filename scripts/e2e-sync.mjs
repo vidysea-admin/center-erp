@@ -506,6 +506,44 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
       ok("sync S1-8: bulk-ignore refuses a change with Pending follow-ups", (bi.skipped ?? 0) === 1 && (bi.ignored ?? 0) === 0, JSON.stringify(bi));
       const stillOpen = ((await req("GET", "/api/sheet-changes?status=Open")).data.items ?? []).find((c) => String(c._id) === String(cityChange._id));
       ok("sync S1-8: …so it is still Open, with its real action intact", !!stillOpen && stillOpen.action_taken === "Stop location", JSON.stringify({ s: stillOpen?.status, a: stillOpen?.action_taken }));
+
+      // ---- QA-986 (S1, checker on qa-234 cycle 1): the SINGLE-row door had the same hole ----
+      //
+      // `bulkIgnore` refuses this exact operation on this exact row, two lines above. The drawer
+      // offered `No action` on it anyway - enabled, ok:true, Apply & Acknowledge enabled - and one
+      // press set status=Ignored, overwrote action_taken "Stop location" -> "No action", and left
+      // the follow-ups Pending with their parent gone from the queue. Worse than the lost record:
+      // settleChangeIfDone() matches {status:"Open", action_taken:{$ne:null}}, so a DEFERRED
+      // `Close location` buried this way can never settle and the centre stays open forever.
+      // That is REQ-254 ("this is what stops acknowledge-and-forget") defeated by one press, and
+      // public/manual.html promises the opposite in words this very unit wrote.
+      const rowNow = ((await req("GET", "/api/sheet-changes?status=Open")).data.items ?? [])
+        .find((c) => String(c._id) === String(cityChange._id));
+      const noActionVerdict = (rowNow?.actions ?? []).find((a) => a.action === "No action");
+      ok("QA-986: the row itself says No action is unavailable while follow-ups are Pending",
+        noActionVerdict?.ok === false && /follow-up/i.test(String(noActionVerdict?.why ?? "")),
+        JSON.stringify(noActionVerdict).slice(0, 220));
+      // THE invariant, stated as an invariant rather than as a guess about this row: a star may
+      // never sit on an action classifyChange itself says the door refuses. My first version of
+      // this assertion demanded NOTHING be starred, which was wrong - `Apply value` is genuinely
+      // legal on this row (status is still Open, and applying it leaves it Open under Rule 7), so
+      // starring it is correct. The code was right and my expectation was not.
+      const starred986 = (rowNow?.actions ?? []).filter((a) => a.recommended);
+      ok("QA-986: no star sits on an action this same row says is refused",
+        starred986.every((a) => a.ok === true) && !starred986.some((a) => a.action === "No action"),
+        JSON.stringify(starred986.map((a) => ({ a: a.action, ok: a.ok }))));
+      const buried = await req("POST", `/api/sheet-changes/${cityChange._id}/apply`, { action: "No action" });
+      ok("QA-986: the single-row apply door REFUSES it too - not just bulk-ignore",
+        buried.status === 409 && /follow-up/i.test(String(buried.data?.error ?? "")),
+        `status=${buried.status} error=${JSON.stringify(buried.data?.error ?? null).slice(0, 150)}`);
+      ok("QA-986: the door's refusal is the SAME sentence the drawer prints on the disabled option",
+        String(buried.data?.error ?? "") === String(noActionVerdict?.why ?? "__none__"),
+        JSON.stringify({ door: String(buried.data?.error ?? "").slice(0, 120), screen: String(noActionVerdict?.why ?? "").slice(0, 120) }));
+      const survived = ((await req("GET", "/api/sheet-changes?status=Open")).data.items ?? [])
+        .find((c) => String(c._id) === String(cityChange._id));
+      ok("QA-986: …so the row is untouched and still remembers what was really applied",
+        survived?.status === "Open" && survived?.action_taken === "Stop location" && survived?.pending_followups > 0,
+        JSON.stringify({ s: survived?.status, a: survived?.action_taken, f: survived?.pending_followups }));
     }
   } else { ok("sync S1-3/S1-8: city change detected", false, "no change row"); }
 
@@ -1199,6 +1237,96 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
   const l9after = (await req("GET", `/api/locations/${l9._id}`)).data.item;
   ok("QA-946: the recommended action is the one that actually lands",
     l9after?.city === "Kota", JSON.stringify({ city: l9after?.city }));
+}
+
+// ---- cycle 2 (checker verdict on qa-234): QA-988 the STAR that was itself a dead press, and
+// ---- QA-989 the Revert button that was dead on exactly the rows this workbook is made of ----
+//
+// QA-988: cycle 1 decided `Update target` from `targetRowField()`, which only proves the field
+// NAME parses as "<base>:<CODE>". The door additionally requires the LocationTarget row to already
+// EXIST for tc_status / tc_id - a 409, "a status cannot create the row it describes" - while
+// `approved_target` may upsert. So the drawer put a * on a press that answers 409. Before this
+// unit there was no recommendation at all, which means this unit is what put the star there: the
+// very defect it exists to remove, one layer in. And because the door's refusal is a 409, it sat
+// outside every 400-shaped assertion cycle 1 wrote.
+//
+// QA-989: the Revert button tested `action_taken` in the page while revert/route.ts ALSO required
+// `approved_target:`. Every applied tc_status:/tc_id: row - and REQUIREMENTS-2026-08-23-SYNC-INBOX
+// is entirely about tc_status rows - rendered the button, took the user's confirm, and answered
+// 400 "Not a target change.", the literal sibling of the sentence this unit replaced.
+{
+  const s8 = "K" + Date.now().toString().slice(-6);
+  const mkUp8 = async (csv, name) => {
+    const f = new FormData();
+    f.append("file", new File([csv], name, { type: "text/csv" }));
+    return (await req("POST", "/api/upload", f, 200)).data;
+  };
+  const p8 = (await req("POST", "/api/programs", { code: "P" + s8, name: "Cyc2 Prog " + s8, trainer_skill: "Cyc2Skill" + s8 }, 201)).data.item;
+  const l8 = (await req("POST", "/api/locations", { code: "L" + s8, name: "Cyc2 Loc " + s8, external_id: s8, approval_status: "Approved", city: "Jaipur" }, 201)).data.item;
+
+  // A government verdict for a job role this centre has NO target row for.
+  const u8 = await mkUp8(`Center ID,TC Status\n${s8},Approved\n`, "cyc2" + s8 + ".csv");
+  const src8 = (await req("POST", "/api/sync-sources", {
+    name: "Cyc2 " + s8, source_url: new URL(u8.url, BASE).href,
+    field_mappings: { "Center ID": "external_id", "TC Status": `tc_status:P${s8}` },
+  }, 201)).data.item;
+  await req("POST", `/api/sync-sources/${src8._id}/run`, undefined, 200);
+
+  const findRow8 = async () => ((await req("GET", "/api/sheet-changes?status=Open")).data.items ?? [])
+    .find((c) => String(c.location?._id ?? c.location) === String(l8._id) && String(c.field_name).startsWith("tc_status:"));
+  const V8 = (row, a) => (row?.actions ?? []).find((x) => x.action === a);
+
+  const before8 = await findRow8();
+  ok("QA-988: with NO target row, the star is NOT on Update target",
+    !!before8 && V8(before8, "Update target")?.recommended !== true,
+    JSON.stringify(V8(before8, "Update target")).slice(0, 200));
+  ok("QA-988: …the row says so in words, naming the job role",
+    V8(before8, "Update target")?.ok === false && new RegExp("P" + s8).test(String(V8(before8, "Update target")?.why ?? "")),
+    JSON.stringify(V8(before8, "Update target")?.why ?? "").slice(0, 200));
+  const dead8 = await req("POST", `/api/sheet-changes/${before8._id}/apply`, { action: "Update target" });
+  ok("QA-988: …and the door really does answer 409 - the refusal cycle 1's 400-shaped pins could not see",
+    dead8.status === 409 && /no target row/i.test(String(dead8.data?.error ?? "")),
+    `status=${dead8.status} error=${JSON.stringify(dead8.data?.error ?? null).slice(0, 150)}`);
+
+  // Now give the centre a real target row for that job role. Nothing else changes.
+  await req("PUT", `/api/locations/${l8._id}/targets`, { program: p8._id, approved_target: 30 }, 200);
+  const after8 = await findRow8();
+  ok("QA-988: once the target row exists, the SAME row stars Update target",
+    V8(after8, "Update target")?.ok === true && V8(after8, "Update target")?.recommended === true,
+    JSON.stringify(V8(after8, "Update target")).slice(0, 200));
+  const live8 = await req("POST", `/api/sheet-changes/${after8._id}/apply`, { action: "Update target" }, 200);
+  ok("QA-988: …and the starred press now lands",
+    live8.status === 200, JSON.stringify(live8.data).slice(0, 150));
+
+  // ---- QA-989: what can be put back is one rule now, not two ----
+  const applied8 = ((await req("GET", "/api/sheet-changes?status=Actioned")).data.items ?? [])
+    .find((c) => String(c._id) === String(after8._id));
+  ok("QA-989: an applied tc_status row does NOT offer Revert",
+    applied8?.revert?.ok === false && /TC status or TC ID/i.test(String(applied8?.revert?.why ?? "")),
+    JSON.stringify(applied8?.revert).slice(0, 220));
+  const rv8 = await req("POST", `/api/sheet-changes/${after8._id}/revert`, {});
+  ok("QA-989: …and the door refuses with the SAME sentence, not 'Not a target change.'",
+    rv8.status === 400 && String(rv8.data?.error ?? "") === String(applied8?.revert?.why ?? "__none__"),
+    JSON.stringify({ door: String(rv8.data?.error ?? "").slice(0, 120), screen: String(applied8?.revert?.why ?? "").slice(0, 120) }));
+
+  // …while a plain centre field, applied, still IS revertable - the rule got sharper, not smaller.
+  const u8b = await mkUp8(`Center ID,City\n${s8},Kota\n`, "cyc2b" + s8 + ".csv");
+  const src8b = (await req("POST", "/api/sync-sources", {
+    name: "Cyc2b " + s8, source_url: new URL(u8b.url, BASE).href,
+    field_mappings: { "Center ID": "external_id", "City": "city" },
+  }, 201)).data.item;
+  await req("POST", `/api/sync-sources/${src8b._id}/run`, undefined, 200);
+  const city8 = ((await req("GET", "/api/sheet-changes?status=Open")).data.items ?? [])
+    .find((c) => String(c.location?._id ?? c.location) === String(l8._id) && c.field_name === "city");
+  await req("POST", `/api/sheet-changes/${city8._id}/apply`, { action: "Apply value" }, 200);
+  const cityApplied = ((await req("GET", "/api/sheet-changes?status=Actioned")).data.items ?? [])
+    .find((c) => String(c._id) === String(city8._id));
+  ok("QA-989: an applied Apply value IS still revertable, and the door agrees",
+    cityApplied?.revert?.ok === true,
+    JSON.stringify(cityApplied?.revert).slice(0, 200));
+  const rvOk = await req("POST", `/api/sheet-changes/${city8._id}/revert`, {}, 200);
+  ok("QA-989: …and it really reverts",
+    rvOk.status === 200, JSON.stringify(rvOk.data).slice(0, 140));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

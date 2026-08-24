@@ -2200,11 +2200,41 @@ for (const file of walk(root)) {
 
   // The refusals must come from the verdict, not from their own sentences - that is what makes the
   // door's 400 and the drawer's disabled option the same words.
-  const refusalsShared = /verdictFor\(change, "Update target"\)\.why/.test(syncLib)
-    && /verdictFor\(change, "Apply value"\)/.test(syncLib)
-    && !/"Not a target-row change\."/.test(syncLib.replace(/\/\/[^\n]*/g, ""));
+  // Pinned on the PROPERTY, not on a variable name: cycle 2 renamed the argument from `change`
+  // to a `facts` bundle (it now carries the pending-follow-ups count and the target-row
+  // existence the predicate needs), and a name-shaped pin failed on a change that made the
+  // thing it protects STRONGER. What matters is that each guard asks verdictFor for the action
+  // it is about to run, and that neither hand-written refusal has crept back.
+  const codeOnly = syncLib.replace(/\/\/[^\n]*/g, "");
+  const asks = (a) => new RegExp('verdictFor\\([A-Za-z_$][\\w$]*, "' + a + '"\\)').test(codeOnly);
+  const refusalsShared = asks("Update target") && asks("Apply value")
+    && asks("No action")                                   // QA-986: Rule 7 on the SINGLE-row door
+    && !/"Not a target-row change\."/.test(codeOnly)
+    && !/cannot be written by Apply value/.test(codeOnly);
   if (refusalsShared) passed++;
   else { failed++; pushStructural("lib/sync: the apply door no longer refuses THROUGH classifyChange - QA-946. When the door writes its own refusal, the sentence the screen shows and the sentence the server returns can disagree, and the one a person reads is whichever they hit first."); }
+
+  // QA-987 (checker on qa-234 cycle 1): the cleared-value wording was applied to the DRAWER and
+  // not to the LIST cell, so half of QA-668 was closed while the surface QA-668's own report
+  // names FIRST stayed broken. The helper exists precisely so both surfaces say one thing; a
+  // single call site means somebody is again rendering a blank as a blank in only one place.
+  const shownValueCalls = (syncPage.match(/shownValue\(/g) ?? []).length;
+  const rawNewValueRender = /<b>\{review\.new_value\}<\/b>|<b>\{r\.new_value\}<\/b>/.test(syncPage);
+  if (shownValueCalls >= 2 && !rawNewValueRender) passed++;
+  else {
+    failed++;
+    pushStructural("app/(app)/sync: a cleared sheet value is not named as cleared on every surface - shownValue() is called " + shownValueCalls + " time(s) (the two call sites that matter are the drawer and the list cell) and a raw {new_value} render is " + (rawNewValueRender ? "still present" : "absent") + " - QA-987 / QA-668. A blank that prints as empty space is the defect: the list is what a reviewer scans, and 'Apply value' writes that invisible blank into the record.");
+  }
+
+  // QA-989 (same verdict): the Revert button must not carry its own copy of what can be undone.
+  // The page's copy was looser than revert/route.ts, so every applied tc_status:/tc_id: row
+  // rendered a button that answered 400 after the user confirmed.
+  const revertShared = /r\.revert\?\.ok/.test(syncPage)
+    && !/\["Update target", "Apply value"\]\.includes\(r\.action_taken\)/.test(syncPage)
+    && /canRevert/.test(fs.readFileSync(path.join(root, "app/api/sheet-changes/[id]/revert/route.ts"), "utf8"))
+    && /export function canRevert/.test(syncLib);
+  if (revertShared) passed++;
+  else { failed++; pushStructural("app/(app)/sync + api/sheet-changes/[id]/revert: whether an applied change can be put back is decided in two places again - QA-989. The page used to test action_taken itself while the door additionally required 'approved_target:', so a tc_status row showed a Revert button, took the confirm, and then refused with 'Not a target change.' - the sibling of the very sentence this unit replaced."); }
 }
 
   // -175: every finding, printed once, AFTER every check has had its say. See the note where this
