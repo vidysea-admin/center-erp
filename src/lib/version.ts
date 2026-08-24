@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-242";
+export const RELEASE = "2026.08.14-243";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -59,6 +59,16 @@ const RELEASE_NOTE_ARCHIVE_239 =
   "record. Alongside these, two controls on the batch screen now ask for the same right the "  +
   "server asks for, so neither is offered to someone it would refuse.";
 export const RELEASE_NOTE_CURRENT =
+  "-243 tightens who may delete a trainer, and shows a candidate's availability on the row "  +
+  "itself. Deleting a whole trainer record was open to any centre listed as able to teach them, "  +
+  "while deleting a single one of that trainer's documents was already restricted to the centre "  +
+  "that nominated or hosts them - the larger act was the less guarded one. Both now follow the "  +
+  "same rule, which narrows deletion rather than widening it. Separately, a candidate who told "  +
+  "us they want a later batch was only identifiable by opening a filter; that is now shown "  +
+  "beside their stage on the row, because where someone has reached and whether they are "  +
+  "available are different questions and a list has to answer both.";
+
+const RELEASE_NOTE_ARCHIVE_242 =
   "-242 corrects a sentence this product started saying two releases ago. When government "  +
   "attendance is uploaded against a batch, and the batch has nobody on it, the upload now says "  +
   "that plainly instead of blaming the portal identifiers. That was right, and it was still "  +
@@ -70,6 +80,7 @@ export const RELEASE_NOTE_CURRENT =
   "that disagreed about that now read the same record. This release also adds the missing test "  +
   "for restoring a cancelled batch to Ready, which is the path an operator actually takes and "  +
   "the one branch of that feature no test had ever run.";
+
 const RELEASE_NOTE_ARCHIVE_241 =
   "-241 closes a way a centre's records could be destroyed by someone who was not allowed to see "  +
   "them. Deleting a candidate or a trainer had never checked which centre the record belonged to. "  +
@@ -538,7 +549,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
-  RELEASE_NOTE_ARCHIVE_240 + " " + RELEASE_NOTE_ARCHIVE_239 + " " + RELEASE_NOTE_ARCHIVE_238 + " " +
+  RELEASE_NOTE_ARCHIVE_242 + " " + RELEASE_NOTE_ARCHIVE_240 + " " + RELEASE_NOTE_ARCHIVE_239 + " " + RELEASE_NOTE_ARCHIVE_238 + " " +
   RELEASE_NOTE_ARCHIVE_237 + " " + RELEASE_NOTE_ARCHIVE_236 + " " +
   RELEASE_NOTE_ARCHIVE_231 + " " +
   // -230 was built and never released on its own - -231 carries it. Its note is archived rather
