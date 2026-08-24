@@ -8,7 +8,11 @@ import { assertBatchInScope, recipientKey } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
 // Admin/Ops management of public capability links (2026-08-11):
-//   POST {purpose:"register", location, program?}  → one shareable self-registration link
+//   POST {purpose:"register", location, program}   → one shareable self-registration link
+//     (QA-888: this read `program?` and was RIGHT until -229 made the field required, two lines
+//      below. I made it stale in the same commit that made it wrong and did not update it; the
+//      checker found it. A comment describing a rule the code no longer has is worse than no
+//      comment, QA-606.)
 //   POST {purpose:"feedback", batch}               → one link per active roster member
 //   POST {purpose:"attendance", batch}             → one link per active roster member
 //     (2026-08-13, Manish: "bacche puchte hain sir mera kitna ho gaya" — each student gets a
