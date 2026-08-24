@@ -1553,6 +1553,30 @@ console.log("\n--- FL19 (-235): a cancelled batch can be RESTORED, and a typed j
     govtEscape.status === 400 && /cannot exceed/i.test(String(govtEscape.data?.error ?? "")),
     `${govtEscape.status} ${JSON.stringify(govtEscape.data)}`);
 
+  // QA-1064: the ceiling above travelled into this branch and the FLOOR did not, and I then wrote in a
+  // release note that the check "now applies either way" - a sentence that is on the production
+  // endpoint. A negative figure alone was refused; the same figure sent WITH a present list was stored,
+  // and the screen rendered "-4/2 (-200%)". Both halves are pinned here so the note becomes true and
+  // stays true.
+  const govtNegative = await req(admin, "PATCH", `/api/logs/${frozenLog._id}`,
+    { present_member_ids: beforeMembers, govt_present: -4 });
+  ok("FL19 (QA-1064): a NEGATIVE government figure is refused in the present-list branch too",
+    govtNegative.status === 400 && /whole number of zero or more/i.test(String(govtNegative.data?.error ?? "")),
+    `${govtNegative.status} ${JSON.stringify(govtNegative.data)}`);
+
+  const govtFraction = await req(admin, "PATCH", `/api/logs/${frozenLog._id}`,
+    { present_member_ids: beforeMembers, govt_present: 1.5 });
+  ok("FL19 (QA-1064): ...and a fractional one, which used to be stored as 1.5",
+    govtFraction.status === 400 && /whole number/i.test(String(govtFraction.data?.error ?? "")),
+    `${govtFraction.status} ${JSON.stringify(govtFraction.data)}`);
+
+  // The refusals must not have written: a stored -4 is the whole defect.
+  const govtAfter = (await req(admin, "GET", `/api/batches/${b1._id}/logs`)).data.items
+    ?.find((l) => String(l._id) === String(frozenLog._id));
+  ok("FL19 (QA-1064): none of the three refusals wrote anything to the stored figure",
+    govtAfter && (govtAfter.govt_present ?? null) === (frozenLog.govt_present ?? null),
+    JSON.stringify({ before: frozenLog?.govt_present ?? null, after: govtAfter?.govt_present ?? null }));
+
   // And the day still holds what it held - a refused edit must write nothing.
   const afterLog = (await req(admin, "GET", `/api/batches/${b1._id}/logs`)).data.items
     ?.find((l) => String(l._id) === String(frozenLog._id));
@@ -1564,6 +1588,58 @@ console.log("\n--- FL19 (-235): a cancelled batch can be RESTORED, and a typed j
   await req(admin, "POST", `/api/batches/${b3._id}/transition`, { target: "Planning", reason: "FL19 cleanup" }, 200);
 }
 
+
+
+console.log("\n--- FL20 (QA-1023): a .csv must not silently swap day and month ---");
+{
+  // PRE-EXISTING, not qa-232's - found by that unit's cycle-3 checker and deliberately not charged
+  // to it. In a .csv, SheetJS converts a date-looking cell to an Excel serial AT READ TIME using a
+  // US MM-DD reading, before any of our code sees it. So the shipped template's own format - its
+  // header literally reads "DOB (DD-MM-YYYY)" - is transposed whenever the day is 12 or less:
+  //     "05-06-2001" -> serial 37017 -> 6 MAY 2001     (the sheet said 5 June)
+  //     "25-12-1999" -> stays a string -> 25 Dec 1999  (survives ONLY because 25 cannot be a month)
+  // That second line is why it went unseen: invisible in any sheet whose rows use a day above 12,
+  // including our own sample file. A silently wrong DOB changes who counts as eligible.
+  const csv = [
+    "Student Name,Mobile,DOB",
+    `FL20 Swap ${stamp},9822219001,05-06-2001`,   // day 5 <= 12: the trap
+    `FL20 Safe ${stamp},9822219002,25-12-1999`,   // day 25 > 12: survived even before the fix
+  ].join("\n");
+  const csvFile = new File([Buffer.from(csv)], "dates.csv", { type: "text/csv" });
+  const cmap = JSON.stringify({ "Student Name": "name", "Mobile": "phone", "DOB": "dob" });
+  const cconf = await multipart(admin, "/api/candidates/import",
+    { file: csvFile, location: loc._id, program: prog._id, mapping: cmap, confirm: "1" });
+  ok("FL20: the .csv imports at all", cconf.status === 201 && cconf.data?.imported === 2,
+    JSON.stringify({ s: cconf.status, imported: cconf.data?.imported }));
+
+  const findDob = async (nm) => {
+    const hit = ((await req(admin, "GET", `/api/candidates?q=${encodeURIComponent(nm)}&limit=5`)).data.items ?? [])[0];
+    if (!hit) return null;
+    const d = (await req(admin, "GET", `/api/candidates/${hit._id}`)).data.item?.dob;
+    return d ? String(d).slice(0, 10) : null;
+  };
+  const swap = await findDob(`FL20 Swap ${stamp}`);
+  ok("FL20 (QA-1023): 05-06-2001 in a .csv is read as 5 JUNE, the format the template asks for - not 6 May",
+    swap === "2001-06-05", JSON.stringify({ got: swap, expected: "2001-06-05" }));
+  const safe = await findDob(`FL20 Safe ${stamp}`);
+  ok("FL20: ...and the day-above-12 case still reads correctly - the fix did not cost the case that already worked",
+    safe === "1999-12-25", JSON.stringify({ got: safe, expected: "1999-12-25" }));
+
+  // A real .xlsx must be untouched by the change: a workbook stores the string AS a string, so only
+  // the CSV parser was ever coercing. This pin is what stops the fix leaking into the xlsx path.
+  const xrows = [{ "Student Name": `FL20 Xlsx ${stamp}`, "Mobile": "9822219003", "DOB": "05-06-2001" }];
+  const xwb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(xwb, XLSX.utils.json_to_sheet(xrows), "Sheet1");
+  const xfile = new File([XLSX.write(xwb, { type: "buffer", bookType: "xlsx" })], "dates.xlsx",
+    { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const xconf = await multipart(admin, "/api/candidates/import",
+    { file: xfile, location: loc._id, program: prog._id, mapping: cmap, confirm: "1" });
+  ok("FL20: an .xlsx with the same value still imports", xconf.status === 201 && xconf.data?.imported === 1,
+    JSON.stringify({ s: xconf.status, imported: xconf.data?.imported }));
+  const xdob = await findDob(`FL20 Xlsx ${stamp}`);
+  ok("FL20: ...and reads as 5 June too - the xlsx path is unchanged",
+    xdob === "2001-06-05", JSON.stringify({ got: xdob, expected: "2001-06-05" }));
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

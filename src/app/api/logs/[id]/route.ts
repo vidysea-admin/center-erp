@@ -72,9 +72,20 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
     // `else if`, so sending a present list AND a government figure in one PATCH skipped it entirely.
     // ...and the same day's government figure, which escaped entirely: the check below runs only in
     // the `else if`, so sending a present list AND a govt figure in one PATCH skipped Rule 30 outright.
+    // QA-1064: I copied Rule 30's CEILING into this branch and left its FLOOR behind, then said in a
+    // release note that the check "now applies either way" — and that sentence is on the production
+    // endpoint. Measured by the cycle-3 checker: `govt_present: -4` alone is a 400, the same -4 sent
+    // WITH a present list was a 200, and MongoDB held -4 against roster_count 2, rendering "-4/2
+    // (-200%)". 1.5 stored the same way. Both halves live in the `else if` below and only one made the
+    // journey. That is the fourth time today a guard was written down and then walked past, and the
+    // third time it was me. Both branches now ask the same three questions, in the same order.
     const gWith = (patch.govt_present as number | null | undefined) ?? log.govt_present;
-    if (gWith !== undefined && gWith !== null && Number(gWith) > log.roster_count) {
-      throw new HttpError(400, `Rule 30: government attendance (${Number(gWith)}) cannot exceed the ${log.roster_count} on the roster that day.`);
+    if (gWith !== undefined && gWith !== null) {
+      const g = Number(gWith);
+      if (!Number.isInteger(g) || g < 0) throw new HttpError(400, "Rule 30: government attendance must be a whole number of zero or more.");
+      if (g > log.roster_count) {
+        throw new HttpError(400, `Rule 30: government attendance (${g}) cannot exceed the ${log.roster_count} on the roster that day.`);
+      }
     }
     // Rule 28: roster_count stays frozen — deliberately NOT recomputed
     // A day-level edit is a CORRECTION, not a marking round: the day arrays are replaced as
