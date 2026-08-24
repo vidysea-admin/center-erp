@@ -1382,6 +1382,26 @@ console.log("\n--- FL19 (-235): a cancelled batch can be RESTORED, and a typed j
     tooEarly.status === 400 && /cannot join before/i.test(String(tooEarly.data?.error ?? "")),
     `${tooEarly.status} ${JSON.stringify(tooEarly.data)}`);
 
+  // The regression my first version of that guard shipped, now pinned so it cannot come back.
+  // "Not in the future" is the wrong spelling of QA-908: a batch that has NOT started yet can be
+  // rostered with that batch's own start date, and refusing it broke seed-sample.mjs outright
+  // (:165 sends joined_on = planned_start; B3 is planned +3 days) - every member add 400'd, its
+  // catch{} swallowed them, and the seed died on `PATCH /api/members/undefined`, taking B4/B5, the
+  // daily logs, the trainer requests and the cost entries with it. Two sessions read that as a
+  // broken seed script before anyone read it as a broken guard.
+  const futureBatch = await mkB(istDay(5));
+  const preReg = await req(admin, "POST", `/api/batches/${futureBatch._id}/members`,
+    { candidate: (await mkCand("PreReg"))._id, joined_on: istDay(5) }, 201);
+  ok("FL19: a NOT-YET-STARTED batch accepts its own planned start as the join date",
+    preReg.status === 201, `${preReg.status} ${JSON.stringify(preReg.data?.error ?? "")}`);
+
+  const beyondPlanned = await req(admin, "POST", `/api/batches/${futureBatch._id}/members`,
+    { candidate: (await mkCand("TooFar"))._id, joined_on: istDay(6) });
+  ok("FL19: ...but a day BEYOND that planned start is still refused - the bound is the batch, not 'today'",
+    beyondPlanned.status === 400 && /planned to start/i.test(String(beyondPlanned.data?.error ?? "")),
+    `${beyondPlanned.status} ${JSON.stringify(beyondPlanned.data)}`);
+  await req(admin, "POST", `/api/batches/${futureBatch._id}/transition`, { target: "Cancelled", reason: "FL19 cleanup" }, 200);
+
   // The whole point of the unit: the late joiner lands on a real training day and can be marked
   // present for it. This is what "maximum data collect karna hai" actually needs to be true.
   const late = await mkCand("Late");

@@ -480,7 +480,7 @@ export async function addMemberChecked(batchId: string, candidateId: string, joi
   }
 
   // ---- 2. context read once, for the checks above and the values below ----
-  const batch = await Batch.findById(batchId).select("target_size code actual_start").lean<any>();
+  const batch = await Batch.findById(batchId).select("target_size code actual_start planned_start").lean<any>();
   const rosterCount = await BatchMember.countDocuments({ batch: batchId, left_on: null });
   // QA-892 (-230, Umesh 24/08: "purana batch hai naa aur humko actual data chaiye"): the join date
   // defaults to the day the BATCH really began, not the day someone typed it in.
@@ -534,7 +534,24 @@ export async function addMemberChecked(batchId: string, candidateId: string, joi
   if (joined_on) {
     const requested = dayKey(joined_on);
     if (isNaN(requested.getTime())) throw new HttpError(400, "The join date is not a valid date.");
-    if (requested > istToday()) throw new HttpError(400, "A candidate cannot join in the future — the join date must be today or earlier.");
+    // The upper bound is the BATCH's timeline, not "today", and the difference is a regression I
+    // shipped into a wall before catching it. My first version refused anything after today, which
+    // reads correctly until you meet a batch that has not started yet: rostering someone onto next
+    // week's batch with that batch's own start date is an ordinary, correct thing to do, and it
+    // started returning 400. seed-sample.mjs does exactly that (:165 sends joined_on =
+    // planned_start; B3 is planned +3 days), every member add failed, its `catch {}` swallowed them,
+    // and the seed then died on `PATCH /api/members/undefined` - taking B4/B5, the daily logs, the
+    // trainer requests and the cost entries with it. Two sessions read that as a broken seed script.
+    //
+    // QA-908's complaint was a joined_on THIRTY DAYS PAST a running batch's start, which this still
+    // refuses. "Not in the future" was the wrong spelling of it.
+    const plannedKey = batch?.planned_start ? dayKey(batch.planned_start) : null;
+    const latest = plannedKey && plannedKey > istToday() ? plannedKey : istToday();
+    if (requested > latest) {
+      throw new HttpError(400, plannedKey && plannedKey > istToday()
+        ? `This batch is planned to start on ${plannedKey.toISOString().slice(0, 10)} — a candidate cannot be joined after that date.`
+        : "A candidate cannot join in the future — the join date must be today or earlier.");
+    }
     // Rule 26 counts a member onto the roster for every day from `joined_on` onward, and Rule 28
     // freezes `roster_count` from exactly that. A join date before the batch began would put someone
     // on the roster for days the batch did not run.
