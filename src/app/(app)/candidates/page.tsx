@@ -1093,6 +1093,10 @@ function CandidatesInner() {
                 // button waits for an explicit, informed confirmation.
                 const badMapping = (importState.preview?.phone_invalid_count ?? 0) >= Math.max(1, Math.ceil((importState.preview?.valid ?? 0) / 2));
                 const badCanCount = importState.preview?.candidate_id_invalid_count ?? 0;
+                // QA-972 (qa-233 checker, cycle 2): the import route reported unreadable Aadhaar
+                // numbers and NO screen rendered it, so the operator was still never told. A report
+                // nobody reads is the same as no report - and this one ends at a government export.
+                const badAadhaarCount = importState.preview?.aadhaar_invalid_count ?? 0;
                 return (
                   <>
                     {/* QA-727 (-212, checker on qa-210): the importer wrote any string to the portal
@@ -1111,6 +1115,22 @@ function CandidatesInner() {
                         <div className="mt-1 font-mono text-[11px] text-amber-800">
                           {(importState.preview.candidate_id_invalid ?? []).slice(0, 5).join(" · ")}
                           {badCanCount > 5 ? ` · +${badCanCount - 5} more` : ""}
+                        </div>
+                      </div>
+                    )}
+                    {/* QA-972: same shape as the portal-ID block above, deliberately - an operator
+                        who has learned to read one warning should not have to learn a second. The
+                        CONSEQUENCE is named, not the mechanism: this student reaches SIDH with a blank
+                        Aadhaar column until somebody corrects it. */}
+                    {badAadhaarCount > 0 && (
+                      <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                        <b>{badAadhaarCount} Aadhaar number{badAadhaarCount === 1 ? "" : "s"} cannot be read.</b>{" "}
+                        They will be imported exactly as they appear in the sheet — nothing is dropped — but the
+                        SIDH export will leave the Aadhaar column BLANK for those students until they are corrected.
+                        Check the column mapping first; a real one is 12 digits.
+                        <div className="mt-1 font-mono text-[11px] text-amber-800">
+                          {(importState.preview.aadhaar_invalid ?? []).slice(0, 5).join(" · ")}
+                          {badAadhaarCount > 5 ? ` · +${badAadhaarCount - 5} more` : ""}
                         </div>
                       </div>
                     )}

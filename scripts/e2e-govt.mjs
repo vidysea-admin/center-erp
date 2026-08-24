@@ -1860,7 +1860,8 @@ ok("SSRF guard does not block the real client workbook", stillOk.data.ok === tru
   // ---- QA-770 (-215, checker on live -213): the blocked student who is not missing anything ----
   //
   // 57 candidates on live carry a CAN-shaped value in `id_reference` - the field the model itself
-  // calls "government ID reference, NOT the Aadhaar number itself" - with `sidh_candidate_id` empty.
+  // USED TO call "government ID reference, NOT the Aadhaar number itself" (until 2026-08-24, when
+  // `aadhaar_no` became its own field) - with `sidh_candidate_id` empty.
   // TEN of them are on AVP-GURU-RPLAVP-DST-02, the batch this whole week has been about. Umesh has
   // been told ten IDs are missing; ten of them were already in the system, one column over.
   //

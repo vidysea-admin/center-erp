@@ -449,6 +449,18 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
         outA && String(outA.aadhaar_or_vid ?? "") === "", `exported="${outA?.aadhaar_or_vid}"`);
       ok("QA-942: ...and it DOES carry a good one - the guard filters, it does not blank the column",
         outC && String(outC.aadhaar_or_vid) === "234123412346", `exported="${outC?.aadhaar_or_vid}"`);
+
+      // QA-971 (cycle 2): the operator-facing sentence must AGREE with what the export does. Cycle 2
+      // shipped a message saying "the SIDH export will carry it as-is" in the same commit that made
+      // the export carry nothing - I contradicted my own fix in the words a person reads, and it
+      // reached master. Pinned as a STRING assertion because that is the only thing that catches a
+      // sentence: no behaviour changed, only the truth of the claim.
+      ok("QA-971: the import warning does NOT claim the export carries an unreadable Aadhaar",
+        !(preview.data?.aadhaar_invalid ?? []).some((l) => /carry it as-is/i.test(String(l))),
+        JSON.stringify(preview.data?.aadhaar_invalid ?? []).slice(0, 160));
+      ok("QA-971: ...it says what the export ACTUALLY does - leaves the column blank",
+        (preview.data?.aadhaar_invalid ?? []).every((l) => /blank/i.test(String(l))),
+        JSON.stringify(preview.data?.aadhaar_invalid ?? []).slice(0, 160));
     }
 
     // The PUBLIC doors get the same rule. A field one door validates and another does not is the

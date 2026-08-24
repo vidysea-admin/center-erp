@@ -259,7 +259,12 @@ export const POST = apiHandler(async (req: NextRequest) => {
     if (canon) { c.aadhaar_no = canon; continue; }
     // Stored as given (never dropped), and NAMED so the operator sees it on the preview.
     c.aadhaar_no = raw;
-    aadhaarInvalid.push(`${personLabel(c)} — "${raw}" (stored, but it is not a readable Aadhaar number — the SIDH export will carry it as-is)`);
+    // QA-971 (qa-233 checker, cycle 2): this sentence used to end "the SIDH export will carry it
+    // as-is" — and QA-942, IN THE SAME COMMIT, made the export carry nothing. I contradicted my own
+    // fix in the message the operator actually reads, and it reached master. The words now say what
+    // the code does, and they say the CONSEQUENCE rather than the mechanism: what an operator needs
+    // to know is that this student will go to SIDH without an Aadhaar unless somebody fixes it.
+    aadhaarInvalid.push(`${personLabel(c)} — "${raw}" (stored as given, but it is not a readable Aadhaar number, so the SIDH export will leave that column BLANK for this student until it is corrected)`);
   }
 
   // QA-902 (2026-08-24): the same lane for the government APAAR ID, given to it at the same time as
