@@ -521,12 +521,19 @@ export async function addMemberChecked(batchId: string, candidateId: string, joi
   // IS the record ... a `backdated: true` column would be a second source of truth for something
   // already written down". So this asks the record rather than inferring from a date.
   const backdated = began ? await startWasRecordedAfterTheFact(batchId) : false;
-  // -235 (Umesh, 24/08): both roster-add screens now let the operator TYPE the join date, because the
-  // default above can only ever GUESS - it reads one audit row (`backdated_start`) and QA-958/965
-  // measured that the other activation path writes `auto_activated`, which that test never reads. A
-  // typed date needs the guards `actual_start` already has (:824) and this parameter has never had:
-  // QA-908 measured `joined_on` thirty days in the FUTURE returning 201, leaving a member on no day's
-  // roster until that date arrived. Nothing warned anyone.
+  // -235 (Umesh, 24/08): both roster-add screens now let the operator TYPE the join date. The reason
+  // is NOT that the default above is broken - an earlier version of this comment said it reads only
+  // `backdated_start` and misses `auto_activated`, and that was FALSE (QA-1044): the predicate two
+  // hundred lines up asks for BOTH markers, and QA-957/958/965 are Fixed. I wrote that from a stale
+  // reading of Open ledger rows without opening the function, and then repeated it in ARCHITECTURE.md.
+  // Correcting it here rather than deleting it, because the next person to "notice the gap" will
+  // otherwise spend their afternoon on a defect that is not there.
+  //
+  // The real reason is narrower and still worth it: the default can only ever infer ONE date - the day
+  // the batch began - and a student who genuinely joined mid-course has a different one, which nothing
+  // could express before. A typed date then needs the guards `actual_start` already has (:824) and
+  // this parameter never had: QA-908 measured `joined_on` thirty days in the FUTURE returning 201,
+  // leaving a member on no day's roster until that date arrived. Nothing warned anyone.
   //
   // The guards live HERE and not in either route: both doors pass through this function (REQ-358), and
   // §3.1 records what happened the one time a join rule shipped on one door and not the other (QA-273).
