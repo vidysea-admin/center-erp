@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-226";
+export const RELEASE = "2026.08.14-227";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,15 @@ export const RELEASE = "2026.08.14-226";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-227 restores marking candidates pass or fail, and with it certificate upload. On a batch "   +
+  "whose assessment had already been signed off at batch level - one figure typed in, with no "  +
+  "per-candidate result behind it - every attempt to mark an individual candidate was refused. "  +
+  "The refusal was right: a roster would otherwise overwrite figures a person had signed. But "   +
+  "the remedy it named, reopening the assessment, existed on no screen, and the refusal was "     +
+  "drawn at the top of the page, far above the list of candidates the operator had scrolled "     +
+  "through. So marking read as dead, and because nothing could reach a pass, certificate "        +
+  "upload was dead behind it. Those were one fault, not three. The door now exists, and a "       +
+  "refusal is shown where the attempt was made. "                                                 +
   "-226 lets a batch that already began be entered after the fact, and -225 makes a batch code "  +
   "count what is actually on record. Centres could not enter batches that ran months ago. Past "  +
   "dates were never the obstacle: the readiness chain asked for a roster at eighty percent of "  +
