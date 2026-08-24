@@ -383,7 +383,21 @@ export async function assertRoomFreeForBatch(roomId: string, batchId: string | n
 // ---------- Roster (Rules 20–26) ----------
 // Rule 26: roster on date D
 export async function rosterOnDate(batchId: string, d: Date): Promise<any[]> {
-  const D = dayStart(d);
+  // QA-894 (-230): dayKey, not dayStart — the same encoding the roster is WRITTEN with.
+  //
+  // The join date is stored by `addMemberChecked` (:425) and restamped by `transitionBatch` (:738),
+  // and both now use `dayKey`. Comparing those with `dayStart` asked the question in a different
+  // encoding than the answer was written in: on a server whose local timezone is not UTC, a member
+  // who joined TODAY has `joined_on` = today at 00:00 UTC while `dayStart(today)` is 18:30 UTC
+  // YESTERDAY, so `joined_on <= D` is false and someone who joined this morning is not on this
+  // morning's roster. Found by FL4 going red under this unit, not by reading the code.
+  //
+  // This does not make the product "run on UTC". `istToday()` (:191) decides what day it is in IST
+  // and always has; `dayKey` is only how that day is WRITTEN DOWN, pinned so it cannot drift when
+  // the same date is written by a UTC container and read by an IST laptop. That drift is F-008
+  // (:145), an S1 — it is the reason the missing-log alarm once reported "no daily log for 8
+  // operating days" directly above a table listing five.
+  const D = dayKey(d);
   return BatchMember.find({
     batch: batchId,
     joined_on: { $lte: D },
@@ -398,14 +412,54 @@ export async function activeRoster(batchId: string): Promise<any[]> {
 // Rule 20 + 21: add a candidate to a batch.
 // Returns { member, warning } — over-target assignment is a WARNING, not a block: centres
 // deliberately assign a dropout buffer. The hard cap lands on enrolment (Rule 48).
-export async function addMemberChecked(batchId: string, candidateId: string, joined_on: Date) {
+export async function addMemberChecked(batchId: string, candidateId: string, joined_on?: Date | null) {
+  // Both roster-add doors land here — `api/batches/[id]/members` (single) and
+  // `api/candidates/assign` (bulk). ARCHITECTURE.md §3.1 records that those two have already drifted
+  // apart once (QA-273: one adopted a centre-less candidate, the other refused them by comparing
+  // against the string "undefined"), which is why anything that decides whether or how someone joins
+  // belongs in this function and not in a route.
+  //
+  // Kept in three named parts on purpose, so the next precondition drops in beside the existing one
+  // rather than becoming a third spelling of "things to check before someone joins a batch".
+
+  // ---- 1. preconditions: everything that can REFUSE the join ----
   const existing = await BatchMember.findOne({ candidate: candidateId, left_on: null }).populate("batch", "code").lean<any>();
   if (existing) {
     throw new HttpError(409, `Rule 20: Candidate already active in batch ${existing.batch?.code ?? existing.batch}.`);
   }
-  const batch = await Batch.findById(batchId).select("target_size code").lean<any>();
+
+  // ---- 2. context read once, for the checks above and the values below ----
+  const batch = await Batch.findById(batchId).select("target_size code actual_start").lean<any>();
   const rosterCount = await BatchMember.countDocuments({ batch: batchId, left_on: null });
-  const member = await BatchMember.create({ batch: batchId, candidate: candidateId, joined_on: dayStart(joined_on) });
+  // QA-892 (-230, Umesh 24/08: "purana batch hai naa aur humko actual data chaiye"): the join date
+  // defaults to the day the BATCH really began, not the day someone typed it in.
+  //
+  // -226 opened the door to record a batch that already ran, and `transitionBatch` restamps the
+  // roster to `actual_start` when Start is pressed (:712). But that restamp fires ONCE, at that
+  // moment. Anyone added AFTERWARDS — which is the normal order, since the roster is usually built
+  // after the batch is created — landed on today's date, and Rule 29 `rosterOnDate` (:385) admits a
+  // member only where `joined_on <= D`. So every real day of a July batch read "not on the roster"
+  // for them, and the attendance the centre actually holds could not be entered at all. The
+  // operator had no way to see the mistake until they sat down to fill attendance weeks later.
+  //
+  // Both roster-add doors call this function, so the default lives here rather than in either
+  // route — ARCHITECTURE.md §3.1 records that those two doors have already drifted apart once
+  // (QA-273), and a third copy of this decision is how that happens again.
+  //
+  // An explicit `joined_on` from the caller still wins: someone who genuinely joined mid-course is
+  // a real case, and this only supplies the default when the caller says nothing.
+  // ---- 3. resolved values, then the write ----
+  // dayKey, not dayStart. F-008 (:145) records that `dayStart` is midnight in the SERVER PROCESS's
+  // timezone, so the same calendar day is a different instant on a UTC container and an IST laptop;
+  // `dayKey` pins it to UTC midnight. It matters here specifically because `transitionBatch`'s
+  // restamp already writes `dayKey(actual_start)` (:738) — writing `dayStart` here would give two
+  // encodings of the same day to the same roster, one per door, which is the F-008 shape again.
+  // Caught by this unit's own pin failing on an IST machine, not by reading the code.
+  const began = batch?.actual_start ? dayKey(batch.actual_start) : null;
+  const resolvedJoin = joined_on
+    ? dayKey(joined_on)
+    : began && began < istToday() ? began : istToday();
+  const member = await BatchMember.create({ batch: batchId, candidate: candidateId, joined_on: resolvedJoin });
   await Candidate.findByIdAndUpdate(candidateId, { lifecycle_status: "Assigned" }); // Rule 21
   const warning = batch && rosterCount + 1 > batch.target_size
     ? `Roster is now ${rosterCount + 1} of target ${batch.target_size} — enrolment will be capped at ${batch.target_size}.`

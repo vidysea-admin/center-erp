@@ -30,7 +30,9 @@ export const POST = apiHandler(async (req: NextRequest) => {
     .select("name dob education last_training_date location program").lean<any[]>();
   const byId = new Map(candDocs.map((c) => [String(c._id), c]));
 
-  const results: { candidate: string; ok: boolean; error?: string; warning?: string }[] = [];
+  // QA-892: `joined_on` is part of the answer, not a detail — on a backdated batch it is the day the
+  // student is counted from, and every attendance day the operator can enter afterwards depends on it.
+  const results: { candidate: string; ok: boolean; error?: string; warning?: string; joined_on?: Date | null }[] = [];
   for (const cid of candidate_ids) {
     try {
       // 2026-08-13 (Manish walkthrough — Prem Kumar/Lalit on the wrong roster): a candidate
@@ -51,7 +53,10 @@ export const POST = apiHandler(async (req: NextRequest) => {
       if (c0.program && batch.program && String(c0.program) !== String(batch.program)) {
         throw new HttpError(409, `${c0.name ?? "Candidate"} is registered under a different job role/scheme than this batch.`);
       }
-      const m = await addMemberChecked(batchId, cid, joined_on ? new Date(joined_on) : new Date());
+      // QA-892: `undefined`, not `new Date()` — see the note in addMemberChecked. This is the door
+      // that matters most for a backdated batch: the roster is normally built here, in bulk, after
+      // the batch exists.
+      const m = await addMemberChecked(batchId, cid, joined_on ? new Date(joined_on) : undefined);
       // Import convention: program-less candidates (bulk/portal imports) inherit the batch's
       // programme on enrolment.
       if (!c0.program && batch.program) {
@@ -85,6 +90,10 @@ export const POST = apiHandler(async (req: NextRequest) => {
       ].filter(Boolean) as string[];
       results.push({
         candidate: cid, ok: true,
+        // QA-892: the date this enrolment actually landed on. The operator is told which day the
+        // student is counted from, because on a backdated batch it is NOT the day they pressed the
+        // button, and every attendance day they can enter afterwards depends on it.
+        joined_on: (m as any).joined_on ?? null,
         ...(warnings.length ? { warning: warnings.join(" · ") } : {}),
       });
     } catch (e) {

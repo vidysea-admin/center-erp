@@ -3,7 +3,7 @@ import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { api, offerable } from "@/lib/client";
+import { api, fmtDate, offerable } from "@/lib/client";
 import { personLabel } from "@/lib/person";
 import { CANDIDATE_IMPORT_FIELDS } from "@/lib/field-catalog";
 import { emailError, phoneError } from "@/lib/validate";
@@ -180,13 +180,31 @@ function CandidatesInner() {
     setDrawer("edit");
   }
 
-  async function bulkAssign(batchId: string) {
+  // QA-892 (-230, Umesh 24/08: "purana batch hai naa aur humko actual data chaiye"). A batch that
+  // already began counts its roster from the day it began, not from today — otherwise Rule 29 reads
+  // every real day as "not on the roster" and the attendance the centre actually holds cannot be
+  // entered at all. The server does that for us now; this says it out loud BEFORE the press, because
+  // it changes which days the operator will be able to fill in afterwards, and the old behaviour
+  // failed silently — nothing told them until they sat down to enter attendance weeks later.
+  async function bulkAssign(batch: any) {
+    const began = batch?.actual_start ? new Date(batch.actual_start) : null;
+    const isBackdated = began && !isNaN(began.getTime()) && began < new Date(new Date().toDateString());
+    if (isBackdated && !window.confirm(
+      `${batch.code} already started on ${fmtDate(batch.actual_start)}.\n\n` +
+      `These ${selected.size} candidate(s) will be counted on the roster from that day, not from today — ` +
+      `so their attendance can be entered for the days the batch actually ran.\n\n` +
+      `If someone genuinely joined later, add them on their own card with their real joining date instead.`,
+    )) return;
     try {
-      const res = await api("/api/candidates/assign", { method: "POST", json: { batch: batchId, candidate_ids: [...selected] } });
+      const res = await api("/api/candidates/assign", { method: "POST", json: { batch: batch._id, candidate_ids: [...selected] } });
       const failed = res.results.filter((r: any) => !r.ok);
       const notes: string[] = [];
       if (failed.length) notes.push(`${failed.length} failed: ${failed[0].error}`);
       if (res.warnings?.length) notes.push(`Eligibility warnings — ${res.warnings.join(" · ")}`);
+      // Say which day they landed on, not just that it worked. On a backdated batch that date is the
+      // whole point of the enrolment, and it is the one thing the operator cannot see from the grid.
+      const landed = res.results.find((r: any) => r.ok && r.joined_on)?.joined_on;
+      if (isBackdated && landed) notes.push(`counted on the roster from ${fmtDate(landed)}`);
       if (notes.length) setError(`${res.assigned} assigned. ${notes.join(" | ")}`);
       setSelected(new Set()); setDrawer(""); load();
     } catch (e: any) { setError(e.message); }
@@ -879,8 +897,16 @@ function CandidatesInner() {
       <Drawer error={error} open={drawer === "assign"} onClose={() => setDrawer("")} title={`Assign ${selected.size} candidates to batch`}>
         <div className="space-y-2">
           {batches.map((b) => (
-            <button key={b._id} onClick={() => bulkAssign(b._id)} className="flex w-full items-center justify-between rounded-lg border px-4 py-3 text-left text-sm hover:bg-blue-50">
-              <span><span className="font-medium">{b.code}</span> · {b.location?.name} · {b.program?.name}</span>
+            <button key={b._id} onClick={() => bulkAssign(b)} className="flex w-full items-center justify-between rounded-lg border px-4 py-3 text-left text-sm hover:bg-blue-50">
+              <span>
+                <span className="font-medium">{b.code}</span> · {b.location?.name} · {b.program?.name}
+                {/* QA-892: a batch that already ran is the case where the join date is not today.
+                    Saying so on the row means the operator sees it while CHOOSING, not only in the
+                    confirmation after they have already decided. */}
+                {b.actual_start && new Date(b.actual_start) < new Date(new Date().toDateString()) && (
+                  <span className="ml-2 text-xs text-amber-700">started {fmtDate(b.actual_start)} — roster counts from that day</span>
+                )}
+              </span>
               <span className="text-xs text-gray-500">{b.roster_count}/{b.target_size} · <Chip value={b.status} /></span>
             </button>
           ))}

@@ -859,6 +859,61 @@ console.log("\n--- FL14 (-226): a batch that ALREADY RAN can be recorded, and th
     okDay.status < 400 && badDay.status >= 400,
     JSON.stringify({ after: okDay.status, before: badDay.status, e: badDay.data?.error }));
 
+  // ---- FL15 (-230, QA-892): the roster of a backdated batch counts from the day it BEGAN ----
+  // The half of Umesh's ask that -226 did not finish. `transitionBatch` restamps the roster to
+  // actual_start when Start is pressed (rules.ts:712) - but that fires ONCE, and the roster is
+  // normally built AFTER the batch exists. Anyone added later landed on today's date, Rule 29
+  // (rosterOnDate, :385) admits a member only where joined_on <= D, and so every real day of a
+  // July batch read "not on the roster" for them. The attendance the centre actually holds could
+  // not be entered at all, and nothing said so until someone sat down to enter it weeks later.
+  console.log("\n--- FL15 (-230): candidates added AFTER a backdated start still count from the real start ---");
+  {
+    const mkCand = async (nm) => (await req(admin, "POST", "/api/candidates",
+      { name: `FL15 ${nm} ${stamp}`, phone: phone(), location: bdLoc._id, program: bdProg._id }, 201)).data.item;
+
+    // `old` is Active with actual_start = day(-30), and its roster is still empty.
+    const late = await mkCand("Late");
+    const asg = await req(admin, "POST", "/api/candidates/assign", { batch: old._id, candidate_ids: [late._id] }, 200);
+    ok("FL15: bulk assign reports the day the student is counted from",
+      String(asg.data?.results?.[0]?.joined_on ?? "").slice(0, 10) === day(-30),
+      JSON.stringify(asg.data?.results?.[0]));
+
+    const mem = (await req(admin, "GET", `/api/batches/${old._id}/members`)).data.items
+      .find((m) => String(m.candidate?._id ?? m.candidate) === String(late._id));
+    ok("FL15: joined_on is the batch's REAL start, not the day of entry",
+      String(mem?.joined_on ?? "").slice(0, 10) === day(-30),
+      JSON.stringify({ joined_on: mem?.joined_on, expected: day(-30), today: day(0) }));
+
+    // The whole point: a day the batch really ran must now be enterable FOR THIS STUDENT.
+    const log = await req(admin, "POST", `/api/batches/${old._id}/logs`,
+      { log_date: day(-19), present_member_ids: [String(mem._id)], actual_topic: "FL15" });
+    ok("FL15: a real training day can be entered with this student marked present",
+      log.status < 400, `${log.status} ${JSON.stringify(log.data?.error ?? "")}`);
+
+    // ...and the safety valve: someone who genuinely joined mid-course is still a real case, so an
+    // explicit date from the caller must still win over the default.
+    const mid = await mkCand("Mid");
+    await req(admin, "POST", `/api/batches/${old._id}/members`,
+      { candidate: mid._id, joined_on: day(-10) }, 201);
+    const midMem = (await req(admin, "GET", `/api/batches/${old._id}/members`)).data.items
+      .find((m) => String(m.candidate?._id ?? m.candidate) === String(mid._id));
+    ok("FL15: an explicit joined_on still wins - the default only fills a silence",
+      String(midMem?.joined_on ?? "").slice(0, 10) === day(-10),
+      JSON.stringify({ joined_on: midMem?.joined_on, expected: day(-10) }));
+
+    // And a batch that has NOT begun is untouched: today's date is still right for it.
+    const fresh = await mkBd(day(3));
+    const c3 = await mkCand("Fresh");
+    await req(admin, "POST", "/api/candidates/assign", { batch: fresh._id, candidate_ids: [c3._id] }, 200);
+    const freshMem = (await req(admin, "GET", `/api/batches/${fresh._id}/members`)).data.items
+      .find((m) => String(m.candidate?._id ?? m.candidate) === String(c3._id));
+    ok("FL15: a batch that has not started still records today - the default is scoped, not global",
+      String(freshMem?.joined_on ?? "").slice(0, 10) === day(0),
+      JSON.stringify({ joined_on: freshMem?.joined_on, expected: day(0) }));
+
+    await req(admin, "POST", `/api/batches/${fresh._id}/transition`, { target: "Cancelled", reason: "FL15 fixture cleanup" }, 200);
+  }
+
   await req(admin, "POST", `/api/batches/${todayBatch._id}/transition`, { target: "Cancelled", reason: "FL14 fixture cleanup" }, 200);
 }
 

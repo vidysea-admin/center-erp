@@ -104,7 +104,9 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   if (cand.program && batch.program && String(cand.program) !== String(batch.program)) {
     throw new HttpError(409, `${cand.name ?? "Candidate"} is registered under a different job role/scheme than this batch.`);
   }
-  const m = await addMemberChecked(id, body.candidate, body.joined_on ? new Date(body.joined_on) : new Date());
+  // QA-892: `undefined`, not `new Date()`. The default belongs to addMemberChecked, which knows
+  // whether this batch already began — passing today's date here would override that silently.
+  const m = await addMemberChecked(id, body.candidate, body.joined_on ? new Date(body.joined_on) : undefined);
   // Import convention: program-less candidates inherit the batch's programme on enrolment.
   if (!cand.program && batch.program) {
     await Candidate.updateOne({ _id: body.candidate }, { $set: { program: batch.program } });
