@@ -94,7 +94,7 @@ StoredFile, ApprovalRule, ApprovalRequest, AuditLog, Scheme, JobRole, CandidateD
 - **Admin/system:** `defaults`, `users`, `permissions`, `master-lists/[list]`, `approvals`, `notifications`, `audit/*`, `home`, `invoices`, `costs`, `test-email`, `test-storage`.
 - **Reporting (Karunn sir's two, -170/-171/-174):** `reports/rollup` + `reports/rollup/export` (QA-398/QA-441) · `plan-tracker` + `plan-tracker/export` (QA-399/QA-526) · `plan-batch` (the standalone backward planner, `?start=&location=&program=&trainer=`).
   **Each screen and its export MUST read the same function** — `reportRollup` and `planTrackerRows` in `rules.ts`. An export that recomputes is an export that eventually disagrees, and then nobody can say which one is the report. If you change either function, both doors move together; there is no second copy to update, and there must never be one.
-- **PUBLIC (no session — a token IS the credential):** `public/register/[token]` · `public/enrol-otp` · `public/trainer-apply` · `public/attendance/[token]` · `public/feedback/[token]` · `public/plan/[token]` · `public/portal-lookup` · `public/ses-notifications` · `public/version`.
+- **PUBLIC (no session — a token IS the credential):** `public/register/[token]` · `public/enrol-otp` · `public/trainer-apply` · `public/attendance/[token]` · `public/feedback/[token]` · `public/plan/[token]` · `public/portal-lookup` · `public/geography` (LGD state/district/sub-district lists, bundled at `src/data/lgd-geography.json`) · `public/ses-notifications` · `public/version`.
 
 ### 1.5 `src/app/(app)/**` — authenticated screens
 

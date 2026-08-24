@@ -10,6 +10,7 @@ import { emailError, phoneError } from "@/lib/validate";
 import { FRESH_TAGS, JOURNEY_TAGS, isFreshCandidate, freshJourneyOf as sharedFreshJourneyOf, journeyOf as sharedJourneyOf } from "@/lib/candidate-journey";
 import { Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, ShareLinkPanel, SourceCell, copyText, inputCls , Tabs} from "@/components/ui";
 import { useLocationCtx } from "@/components/shell";
+import { GeographyFields } from "@/components/geography-fields";
 import { BASE_PATH } from "@/lib/base-path";
 import { bulkSmsCsv, smsLink, unsendableCount, waLink } from "@/lib/messaging";
 import { uploadWithRetry } from "@/lib/upload";
@@ -748,9 +749,17 @@ function CandidatesInner() {
                 <input className={inputCls} list="cand-category" value={form.social_category ?? ""} onChange={(e) => set("social_category", e.target.value)} />
                 <datalist id="cand-category">{["General", "OBC", "SC", "ST", "EWS"].map((o) => <option key={o} value={o} />)}</datalist>
               </Field>
-              <Field label="State"><input className={inputCls} value={form.state ?? ""} onChange={(e) => set("state", e.target.value)} /></Field>
-              <Field label="District"><input className={inputCls} value={form.district ?? ""} onChange={(e) => set("district", e.target.value)} /></Field>
-            <Field label="Sub-district"><input className={inputCls} value={form.sub_district ?? ""} onChange={(e) => set("sub_district", e.target.value)} /></Field>
+              {/* 2026-08-24 (Umesh, with the SIDH form on screen): "state - selected state dropdown -
+                  respective district - respective sub district". These were three free-text boxes on
+                  THREE separate doors; the behaviour now lives in one component and each door keeps
+                  its own label markup. A stored value LGD does not carry stays selected and is
+                  marked, never dropped - "purana data chhedo mat, sirf batao". */}
+              <GeographyFields
+                state={form.state} district={form.district} subDistrict={form.sub_district}
+                onChange={(patch) => setForm((f: any) => ({ ...f, ...patch }))}
+                inputCls={inputCls}
+                wrap={(label, child, hint) => <Field label={label}>{child}{hint}</Field>}
+              />
           </div>
           {/* 15/08 (Umesh): no candidate fee in this programme — the fee inputs left the
               drawer. Schema + Rule 54 toggle stay dormant for a future paid scheme. */}

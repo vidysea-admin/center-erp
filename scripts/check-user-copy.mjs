@@ -1895,6 +1895,44 @@ for (const file of walk(root)) {
   if (bad) failed++;
 }
 
+// ---- -222 (Umesh, 2026-08-24): all THREE intake doors ask geography the same way ----
+// "candidate form - state - selected state dropdown - respective district - respective sub district".
+// State/District/Sub-district were three free-text inputs written out THREE separate times, on
+// three doors with three different label wrappers. The class this pin exists for is not the free
+// text - it is the THREE COPIES: QA-271 is the standing row for `offerable` living in three files,
+// where the one master that needed it most was missed in all three, and ARCHITECTURE.md section 3
+// exists to list exactly this. So the pin is not "the cascade is present on the door I edited"; it
+// is "no intake door still asks for these as free text, and every one of them goes through the one
+// component". A fourth door added later fails this until it does the same.
+{
+  const doors = [
+    "app/(app)/candidates/page.tsx",
+    "app/p/register/[token]/page.tsx",
+    "app/p/enrol/page.tsx",
+  ];
+  const missing = [];
+  const freeText = [];
+  for (const rel of doors) {
+    const src = stripComments(fs.readFileSync(path.join(root, rel), "utf-8"));
+    if (!/GeographyFields/.test(src)) missing.push(rel);
+    // an <input> bound to any of the three fields is the shape that was replaced
+    if (/<input[^>]*value=\{form\.(state|district|sub_district)/.test(src)) freeText.push(rel);
+  }
+  const endpoint = fs.existsSync(path.join(root, "app/api/public/geography/route.ts"));
+  const data = fs.existsSync(path.join(root, "data/lgd-geography.json"));
+  if (!missing.length && !freeText.length && endpoint && data) passed++;
+  else {
+    failed++;
+    pushStructural("candidate intake: the State/District/Sub-district cascade is not on every intake door"
+      + " (no GeographyFields=" + JSON.stringify(missing)
+      + ", still free text=" + JSON.stringify(freeText)
+      + ", public endpoint=" + endpoint + ", bundled LGD list=" + data + ")"
+      + " - these fields feed the government portal, and a door left on free text is a door that"
+      + " keeps producing spellings SIDH will not accept. Three copies of one field group is the"
+      + " QA-271 shape, which is why this pin counts DOORS and not the one that was edited.");
+  }
+}
+
 {
   // QA-377: the registers must ACCOUNT FOR EVERY HIT. A raise site that forgets to classify is
   // exactly how this check misfiled twice; now it cannot be forgotten silently, because an

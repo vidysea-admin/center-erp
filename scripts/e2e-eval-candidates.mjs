@@ -144,4 +144,55 @@ ok("[avg] Failed filter is accepted and type-clean", notCert.status === 200 && (
     JSON.stringify({ v: cleared.sidh_docs_verified, by: cleared.sidh_docs_verified_by, on: cleared.sidh_docs_verified_on }));
 }
 
+// ---- -222 (Umesh, 2026-08-24): State -> District -> Sub-district, the government's own list ----
+// "candidate form - state - selected state dropdown - respective district - respective sub district".
+// The three fields existed on all three intake doors as FREE TEXT, so nothing stopped a spelling
+// the government portal will not accept. The list is now LGD's own (bundled, export 2026-08-23),
+// served by a public endpoint because two of the three doors have no session.
+{
+  const g = async (qs) => await req("", "GET", `/api/public/geography${qs}`, undefined, 200);
+
+  const states = (await g("")).data;
+  ok("-222: the geography endpoint answers unauthenticated with every state and UT",
+    states.level === "state" && states.items.length === 36, `level=${states.level} n=${states.items?.length}`);
+  ok("-222: ...and it is LGD's list, not a hand-typed one (Uttar Pradesh present, marked a State not a UT)",
+    states.items.some((x) => x.name === "Uttar Pradesh" && x.ut === false),
+    JSON.stringify(states.items.slice(0, 2)));
+
+  const upD = (await g("?state=Uttar%20Pradesh")).data;
+  ok("-222: districts cascade from the chosen state",
+    upD.level === "district" && upD.known === true && upD.items.length > 70, `n=${upD.items?.length}`);
+  ok("-222: ...and carry the real district names (Jalaun - the one on Umesh's SIDH screenshot)",
+    upD.items.some((d) => d.name === "Jalaun"), "Jalaun missing");
+
+  const bhS = (await g("?state=Uttar%20Pradesh&district=Bhadohi")).data;
+  ok("-222: sub-districts cascade from the chosen district (Aurai under Bhadohi)",
+    bhS.level === "subDistrict" && bhS.known === true && bhS.items.some((x) => x.name === "Aurai"),
+    JSON.stringify(bhS.items?.slice(0, 4)));
+
+  // SIDH renders the same names in UPPER CASE (the screenshot says UTTAR PRADESH / JALAUN) and our
+  // own live rows carry a third casing. Comparing raw strings would have made every stored value
+  // look absent, so the match is case- and spacing-insensitive on BOTH sides. Pinned, because a
+  // future "tidy up" of that comparison would silently amber-flag the whole database.
+  const shout = (await g("?state=UTTAR%20PRADESH")).data;
+  ok("-222: the same state in SIDH's upper case resolves to the same districts",
+    shout.known === true && shout.items.length === upD.items.length, `${shout.items?.length} vs ${upD.items?.length}`);
+  const spaced = (await g("?state=%20uttar%20%20pradesh%20")).data;
+  ok("-222: ...and so does stray whitespace, rather than reading as a different state",
+    spaced.known === true && spaced.items.length === upD.items.length, `n=${spaced.items?.length}`);
+
+  // Umesh's second decision, at the API layer: "purana data chhedo mat, sirf batao". A value LGD
+  // does not carry is NOT an error - it is a fact about an old row, and the caller is told so.
+  // This is not a hypothetical: our own live centre reads "Sant Ravidasnagar", and LGD renamed that
+  // district to Bhadohi. If this endpoint 404'd or 500'd on it, opening such a candidate to fix a
+  // phone number would have blanked their district.
+  const gone = await req("", "GET", "/api/public/geography?state=Uttar%20Pradesh&district=Sant%20Ravidas%20Nagar", undefined, 200);
+  ok("-222: a district LGD no longer carries is reported, not refused (Sant Ravidas Nagar -> Bhadohi)",
+    gone.data.known === false && Array.isArray(gone.data.items) && gone.data.items.length === 0,
+    JSON.stringify(gone.data).slice(0, 120));
+  const nonsense = await req("", "GET", "/api/public/geography?state=Nowhereland", undefined, 200);
+  ok("-222: ...and an unknown state is the same shape, never a 500",
+    nonsense.data.known === false && nonsense.data.items.length === 0, JSON.stringify(nonsense.data).slice(0, 120));
+}
+
 finish();

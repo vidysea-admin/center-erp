@@ -9,6 +9,7 @@ import { api } from "@/lib/client";
 // them here is what removes the bubble; it also ends a real divergence, since the API behind this page
 // re-implemented phone validation as `length >= 10` while the rest of the product uses canonicalPhone.
 import { emailError, phoneError } from "@/lib/validate";
+import { GeographyFields } from "@/components/geography-fields";
 
 const inputCls = "w-full rounded-lg border border-gray-300 px-3 py-2.5 text-[15px] focus:border-blue-500 focus:outline-none";
 
@@ -157,9 +158,15 @@ export default function PublicRegisterPage({ params }: { params: Promise<{ token
               {["General", "OBC", "SC", "ST", "EWS"].map((o) => <option key={o}>{o}</option>)}
             </select>
           </F>
-          <F label="State"><input className={inputCls} value={form.state ?? ""} onChange={(e) => set("state", e.target.value)} /></F>
-          <F label="District"><input className={inputCls} value={form.district ?? ""} onChange={(e) => set("district", e.target.value)} /></F>
-          <F label="Sub-district"><input className={inputCls} value={form.sub_district ?? ""} onChange={(e) => set("sub_district", e.target.value)} /></F>
+          {/* 2026-08-24 (Umesh): the government's own cascade, shared with the other two intake
+              doors. This page keeps its own <F> wrapper on purpose - the app's <Field> carries
+              desktop sizing and this form is opened from WhatsApp on a phone. */}
+          <GeographyFields
+            state={form.state} district={form.district} subDistrict={form.sub_district}
+            onChange={(patch) => setForm((f: any) => ({ ...f, ...patch }))}
+            inputCls={inputCls}
+            wrap={(label, child, hint) => <F label={label}>{child}{hint}</F>}
+          />
           {/* Honeypot — humans never see it, bots fill it */}
           <input type="text" name="website" value={form.website ?? ""} onChange={(e) => set("website", e.target.value)} className="hidden" tabIndex={-1} autoComplete="off" />
           {/* -126 (S18-04): the browser bubble is gone because nothing is `required` any more — the

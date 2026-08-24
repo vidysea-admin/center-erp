@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { BASE_PATH } from "@/lib/base-path";
 import { emailError, phoneError } from "@/lib/validate";
+import { GeographyFields } from "@/components/geography-fields";
 
 // QA-116 — the OTP enrolment path (CEO's "one of the two"; Umesh 16/08: email-OTP, mail is
 // live). A candidate with NO link registers themselves: prove the email with a 6-digit code,
@@ -179,12 +180,15 @@ export default function EnrolOtpPage() {
                 <option value="">—</option>
                 {["General", "OBC", "SC", "ST", "EWS"].map((o) => <option key={o}>{o}</option>)}
               </select></label>
-            <label className="block text-sm"><span className="mb-1 block text-gray-600">State</span>
-              <input className={inputCls} value={form.state ?? ""} onChange={(e) => set("state", e.target.value)} /></label>
-            <label className="block text-sm"><span className="mb-1 block text-gray-600">District</span>
-              <input className={inputCls} value={form.district ?? ""} onChange={(e) => set("district", e.target.value)} /></label>
-            <label className="block text-sm"><span className="mb-1 block text-gray-600">Sub-district</span>
-              <input className={inputCls} value={form.sub_district ?? ""} onChange={(e) => set("sub_district", e.target.value)} /></label>
+            {/* 2026-08-24 (Umesh): the government's own cascade, third of the three intake doors. */}
+            <GeographyFields
+              state={form.state} district={form.district} subDistrict={form.sub_district}
+              onChange={(patch) => setForm((f: any) => ({ ...f, ...patch }))}
+              inputCls={inputCls}
+              wrap={(label, child, hint) => (
+                <label className="block text-sm"><span className="mb-1 block text-gray-600">{label}</span>{child}{hint}</label>
+              )}
+            />
 
             <button className={btnCls} disabled={busy || !form.name || (ctx.channel !== "sms" && (!form.phone || !!phoneError(form.phone))) || (form.email && !!emailError(form.email)) || !form.location || !form.program} onClick={register}>
               {busy ? "Submitting…" : "Register"}

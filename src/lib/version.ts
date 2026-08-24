@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-221";
+export const RELEASE = "2026.08.14-222";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,17 @@ export const RELEASE = "2026.08.14-221";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-222 replaces the three free-text State, District and Sub-district boxes on every candidate " +
+  "intake form - the internal one and both public ones - with dropdowns that cascade the way the " +
+  "government's own portal does: pick a state, see its districts, pick a district, see its " +
+  "sub-districts. The list is the Government of India's own Local Government Directory, bundled " +
+  "with the app (36 states and union territories, 784 districts, 7,092 sub-districts), so the " +
+  "spelling entered here is a spelling the portal will accept. What is already saved on a " +
+  "candidate is never rewritten or dropped: a stored value the directory does not carry - a " +
+  "renamed district, an old spelling - stays exactly as recorded, shown selected with an amber " +
+  "mark saying it is not in the government list.";
+
+const RELEASE_NOTE_ARCHIVE_221 =
   "-221 answers the check on the release before it. The safeguard added last time, which refuses " +
   "a screen whose permission only an administrator could ever reach, recognised only one way of " +
   "writing that fault: the same mistake spelled with different quotes, with an extra comma, or in " +
@@ -278,6 +289,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
+  RELEASE_NOTE_ARCHIVE_221 + " " +
   RELEASE_NOTE_ARCHIVE_220 + " " +
   RELEASE_NOTE_ARCHIVE_219 + " " +
   RELEASE_NOTE_ARCHIVE_218 + " " +
