@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-237";
+export const RELEASE = "2026.08.14-238";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -42,6 +42,19 @@ const RELEASE_NOTE_ARCHIVE_230 =
   "Someone who genuinely joined mid-course can still be given their own date, and a batch that "  +
   "has not started is unaffected.";
 export const RELEASE_NOTE_CURRENT =
+  "-238 moves that question out of a block that called it optional. On both public registration "  +
+  "pages the choice between the current intake and a later one had been placed inside the section "  +
+  "headed \"Government registration details - all optional\", below Salutation. It is not optional: "  +
+  "it is the one answer on the page that decides whether the person joins the batch that is "  +
+  "starting. It now sits directly beneath the programme, because the programme and this answer "  +
+  "together are what somebody is signing up for, and everything under the optional heading is "  +
+  "detail that is merely recorded. Nothing else changed - the same field, the same wording, the "  +
+  "same reassurance that a person choosing a later batch keeps their registration and will be "  +
+  "contacted. This was found by looking at the published page rather than by reading the change "  +
+  "that made it, which is why the release that introduced it also described its position "  +
+  "incorrectly.";
+
+const RELEASE_NOTE_ARCHIVE_237 =
   "-237 puts a question to the person it was always about. A candidate registering through a "  +
   "public link can now say whether they want the intake that is starting or a later one, on both "  +
   "registration pages. Until now the answer was accepted by the system and never asked for on "  +
@@ -56,6 +69,7 @@ export const RELEASE_NOTE_CURRENT =
   "which the same change had already stopped - the code did one thing and the sentence beside "  +
   "it said another. That report is also shown on the import preview now; it was being produced "  +
   "and then dropped before anyone could read it, and a report nobody reads is not a report.";
+
 const RELEASE_NOTE_ARCHIVE_236 =
   "-236 is the build production has actually been running, named. Four changes reached it after "  +
   "the last marker was written and none of them were described from outside, which is the thing "  +
@@ -442,7 +456,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
-  RELEASE_NOTE_ARCHIVE_236 + " " +
+  RELEASE_NOTE_ARCHIVE_237 + " " + RELEASE_NOTE_ARCHIVE_236 + " " +
   RELEASE_NOTE_ARCHIVE_231 + " " +
   // -230 was built and never released on its own - -231 carries it. Its note is archived rather
   // than dropped: a note declared and left out of this chain is a dead constant, which is exactly
