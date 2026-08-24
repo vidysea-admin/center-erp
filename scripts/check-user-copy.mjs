@@ -1627,8 +1627,15 @@ for (const file of walk(root)) {
   // canTransition. The value is still declared, still referenced in both branches — and it renders
   // the "moved by Operations/Admin" note instead of the controls, which is QA-693 restored exactly.
   // The checker did it in one token, with tsc rc=0 and this file at 259 passed / 0 failed. So the
-  // GUARD itself is pinned: whatever canTransition is, it must be about the ROLE, and must not
-  // consult whether the batch is running or what status it is at.
+  // GUARD itself is pinned: it must not consult whether the batch is running or what status it is
+  // at — those are a different question, asked separately beside it.
+  //
+  // The sentence here used to end "whatever canTransition is, it must be about the ROLE". That was
+  // never what this test checks — it checks only that `running`/`status` stay out — and as of
+  // QA-798 it is the wrong thing to want: the guard is now the PERMISSION the server itself asks
+  // (`batches.manage`), not a blacklist of role names. Corrected in place rather than left to
+  // mislead the next reader into restoring the literal, which is exactly the trap QA-1059 records
+  // one tab over.
   const decl = /const canTransition = ([^;]*);/.exec(scan);
   const guardSrc = decl ? decl[1] : "";
   const guardClean = !!guardSrc && !/\brunning\b/.test(guardSrc) && !/\bb\.status\b/.test(guardSrc) && !/\bstatus\b/.test(guardSrc);
@@ -1642,6 +1649,52 @@ for (const file of walk(root)) {
       + " closed or cancelled from this screen. That is what -112 shipped and nobody noticed for 92"
       + " releases; Umesh asked for the control to sit in the card, not merely to exist, and one"
       + " appended token on the guard puts it all back.");
+  }
+
+  // ---- QA-798 (sweep cycle 1, Umesh 2026-08-25 "go for 2"): the guard must ask the SAME thing
+  // the server asks. `transition/route.ts` and `api/batches/[id]/route.ts:75` both call
+  // `requirePerm(user, "batches.manage")`. The screen used to decide with
+  // `role !== "Location" && role !== "Trainer" && role !== "Enrollment"` — a blacklist of three
+  // names, wrong in BOTH directions once an Admin edits the matrix (which the product supports):
+  // grant the right to Location and the screen hides controls they may use; revoke it from
+  // Operations and the screen shows controls that 403 on press. The second is the dead-control
+  // class this one screen has produced six times.
+  //
+  // Pinned as a PAIR on purpose: "no role literal" alone would pass on a guard that hard-codes
+  // `true`, and "names the permission" alone would pass on `role === "Admin" || can(...)`. Both,
+  // or it is not the server's question.
+  {
+    // TWO SOURCES ON PURPOSE, and both halves of this pin were wrong before this comment existed:
+    //
+    // `scan` is `blankStrings(src)` — it blanks the CONTENTS of string literals, so
+    // `role !== "Location"` arrives as `role !== "        "` and `canBatchOv("batches.manage")` as
+    // `canBatchOv("              ")`. My first version matched the role NAMES (can never fire), my
+    // second matched the permission STRING (can never pass). Both were assertions about text that
+    // does not exist by the time they run. I found it the only way that works: I mutated the guard
+    // back to the role literal and read WHICH half went red — and the report said
+    // `asks batches.manage=false, still has a role literal=false`, i.e. the pin was red for one
+    // reason and blind to the other.
+    //
+    // So: the IDENTIFIER `role` survives blanking and is read off `scan` (real code, not a
+    // comment — `hasDecl` above already proves the declaration is code). The permission NAME only
+    // exists in the raw text, so it is read off `src`, from the same declaration. A comment cannot
+    // fake it, because the declaration itself had to be found in the stripped source first.
+    const rawDecl = /const canTransition = ([^;]*);/.exec(src);
+    const guardRaw = rawDecl ? rawDecl[1] : "";
+    const rolyLiteral = /\brole\b/.test(guardSrc);
+    const asksPerm = /can\w*\(\s*"batches\.manage"/.test(guardRaw);
+    if (asksPerm && !rolyLiteral) passed++;
+    else {
+      failed++;
+      pushStructural(rel + ": the batch status controls decide by ROLE NAME, not by the permission"
+        + " the server asks (asks batches.manage=" + asksPerm + ", still has a role literal=" + rolyLiteral
+        + ") -> " + JSON.stringify(guardSrc.trim().slice(0, 110))
+        + " - `transition/route.ts` and `api/batches/[id]/route.ts:75` both call"
+        + " requirePerm(user,\"batches.manage\"), so any principal the matrix moves across that line"
+        + " sees Mark Ready / Start / Record start date / Back to Planning / Assessment done /"
+        + " Complete / Cancel / the room picker either ENABLED and 403-ing on press, or hidden when"
+        + " they may in fact use them. QA-798 is the map of ~45 such controls on this screen.");
+    }
   }
 }
 

@@ -153,6 +153,20 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
 // exist rather than duplicating any screen.
 function Overview({ data, role, onChanged, error, setError, onGo }: any) {
   const b = data.item;
+  // QA-798 (sweep, Umesh 2026-08-25: "go for 2"). Every control below that changes the batch —
+  // Mark Ready, Start, Record start date, back to Planning, Assessment done, Close, Cancel, and
+  // the room picker — decided its own enabled state from `b.status` alone, while BOTH servers
+  // behind them ask a permission: `transition/route.ts:requirePerm(user,"batches.manage")` and
+  // `[id]/route.ts:75` the same for the PATCH the room picker sends. So a principal without that
+  // right saw every one of them ENABLED and got a 403 on press — the dead-control class, whose
+  // sixth outing on this same screen was found by a checker on 2026-08-25.
+  //
+  // Deliberately the SAME shape as `mayMark` (:3027) and `mayMarkTab` (:2652), not a third
+  // spelling: permissive while the rights are still loading, so nothing flickers disabled on a
+  // slow fetch, and `.status` keeps its own meaning beside it rather than absorbing this one.
+  // The two questions stay named apart — "is this batch AT that stage?" and "may THIS PERSON move
+  // it?" — because collapsing them is exactly what QA-785 cost, one tab over.
+  const { can: canBatchOv, loaded: batchPermsOv } = usePerms();
   // -88 (Umesh): once a batch runs, the Overview says so in numbers — running since when,
   // day N of M, our logged days, the portal's working days, who is qualified — instead of a
   // readiness checklist for a batch that already started.
@@ -174,7 +188,18 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
   const portalDays = withPortal.length ? Math.max(0, ...withPortal.map((m: any) => Number(m.govt?.working_days ?? 0))) : 0;
   // Umesh role matrix: "no batch edit" for principal/SPOC — the server 403s regardless
   // (batches.manage removed from the Location role); the buttons simply are not offered.
-  const canTransition = role !== "Location" && role !== "Trainer" && role !== "Enrollment";
+  // QA-798: this WAS `role !== "Location" && role !== "Trainer" && role !== "Enrollment"` — a
+  // blacklist of three role NAMES, standing in for a permission the server actually asks by name.
+  // It is wrong in both directions, and the permission matrix is editable from inside the product,
+  // so both are reachable without touching code:
+  //   - grant `batches.manage` to Location, and the screen HIDES controls that principal may use;
+  //   - revoke it from Operations, and the screen SHOWS controls that 403 on press.
+  // The second is the dead-control class this screen has now produced six times.
+  // Replaced IN PLACE rather than gated a second time beside — a second spelling of "who may move
+  // this batch" is precisely what ARCHITECTURE.md section 3 is a list of.
+  // `canAssignRoom` (:452) already derives from this, and the room picker's PATCH lands on
+  // `api/batches/[id]/route.ts:75`, which asks the same `batches.manage`. One term, both doors.
+  const canTransition = !batchPermsOv || canBatchOv("batches.manage", "edit");
   const r = data.readiness;
   const [reason, setReason] = useState("");
   const [confirmCancel, setConfirmCancel] = useState(false);
