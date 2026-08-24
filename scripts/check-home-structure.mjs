@@ -133,10 +133,20 @@ ok("home: the strip's JSX closes before the trainers-by-role block", stripClose 
   // QA-962: matched anywhere in the tag, so `disabled={closed}` written AFTER `value=` is fine -
   // the old pin false-redded on semantically identical code, the same shape as qa-221's formatter.
   {
+    // QA-983 (checker on qa-232 c2): the region must be the two cards this pin NAMES. It ran
+    // Assessment -> INVOICE, so any new card added between them was dragged into the gate, and
+    // renaming an UNRELATED card (Invoice) turned this pin red. It ends at the Certification
+    // card's own </Section> now \u2014 a boundary neither a third card nor a rename can move.
     const a = b.indexOf("title={`Assessment \u2014 ");
-    const z = b.indexOf("title={`Invoice \u2014");
-    const region = a > 0 && z > a ? b.slice(a, z) : "";
-    const inputs = [...region.matchAll(/<input[\s\S]*?\/>/g)].map((m) => m[0]);
+    const cert = b.indexOf("title={`Certification \u2014");
+    const endTag = cert > 0 ? b.indexOf("</Section>", cert) : -1;
+    const region = a > 0 && cert > a && endTag > cert ? b.slice(a, endTag) : "";
+    // QA-982 (same checker, and the sharper of the two): `<input \u2026/>` matched LAZILY to the next
+    // `/>`, so a NON-self-closing `<input \u2026></input>` was invisible AND the match ran on until it
+    // swallowed the Save button's own `disabled={closed}` \u2014 the pin then reported "0 ungated" with
+    // the real defect standing. It was mutation-proved: re-open `certificates_issued` in that shape
+    // and the pin still passed. A tag body cannot contain `<`, so stopping there closes both holes.
+    const inputs = [...region.matchAll(/<input[^<]*/g)].map((m) => m[0]);
     const ungated = inputs.filter((t) => !/disabled=\{closed\}/.test(t));
     const nameOf = (t) => (/value=\{(?:toInputDate\()?form\.(\w+)/.exec(t) || [, "?"])[1];
     ok("-235 (QA-833/QA-961): EVERY input in the closure cards carries the same gate its Save carries",

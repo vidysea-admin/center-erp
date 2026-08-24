@@ -105,7 +105,16 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
           </p>
           <div className="mt-2 flex flex-wrap gap-2">
             <Btn small onClick={() => setTab("Candidates")}>Add students to this batch</Btn>
-            <Link href="/candidates"><Btn small kind="ghost">Import candidates (Excel)</Btn></Link>
+            {/* QA-896 (Umesh 24/08: "iss batch wale mai bulk sheet upload ... kaam nhi krr rha hai
+                properly"). This was a bare `<Link href="/candidates">`. It carried NOTHING — not the
+                batch, not the centre, not the programme — so the button on a banner that says "this
+                batch has no students" dropped the operator on a generic page where they had to
+                re-pick the centre and job role the batch already knew, and the batch stayed empty
+                afterwards because the importer only fills the pool. Four steps, two of which the
+                system could already answer. It now carries all three. */}
+            <Link href={`/candidates?import=1&batch=${b._id}${b.location?._id ? `&location=${b.location._id}` : ""}${b.program?._id ? `&program=${b.program._id}` : ""}`}>
+              <Btn small kind="ghost">Import candidates (Excel)</Btn>
+            </Link>
             {/* 2026-08-24 (Umesh): "vo bhi respective acess wale persons". The gate was a hard-coded
                         role test, so the verb was invisible to the team who needed it. It follows the
                         togglable right now, and the SERVER refuses independently - this only decides
@@ -272,6 +281,40 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
     finally { setBackdating(false); }
   }
 
+  // -235 (Umesh, 24/08, on MUZ-CHAR-RPLHSL-SPIT-01): "Money Sir ne galti se cancel mark kar diya hai."
+  // Cancel was a one-way door in BOTH halves — rules.ts had no `Cancelled->` arm, and this screen
+  // renders no status control at all on a cancelled batch, so a mis-click on a live batch carrying 33
+  // students left nothing on screen to undo it with. The confirmation opens in the same Drawer primitive
+  // as the two below it (the -207 ruling); the window.prompt on the Reopen control is the older pattern
+  // and is deliberately left alone rather than half-migrated inside an unrelated unit.
+  const [restoreOpen, setRestoreOpen] = useState(false);
+  const [restoreTarget, setRestoreTarget] = useState("Planning");
+  const [restoreReason, setRestoreReason] = useState("");
+  const [restoring, setRestoring] = useState(false);
+  // qa-234's ruling applied here: an option that cannot work is GREYED WITH ITS REASON, never removed —
+  // a picker that silently omits a choice cannot tell you why it is missing. These strings only EXPLAIN
+  // what the server will say; the server stays the decider. A client gate that tries to BE the decision
+  // is the QA-733/QA-798 class, and this file is where that class lives.
+  const restoreBlocked: Record<string, string | null> = {
+    Planning: null,
+    Ready: r.ready ? null : "readiness checks are not met",
+    Active: b.actual_start ? null : "this batch never started",
+  };
+  async function restoreBatch() {
+    const why = restoreReason.trim();
+    if (!why || restoreBlocked[restoreTarget]) return;
+    setRestoring(true);
+    try {
+      // Not routed through transition() on purpose: that helper SWALLOWS the failure (:256) and its
+      // callers then close their drawer regardless, so a refusal would take itself off screen along with
+      // the control that caused it. Here the refusal — Admin-only, readiness, "never started" — IS the
+      // point of the confirmation, so it stays up and the drawer only closes on success.
+      await api(`/api/batches/${b._id}/transition`, { method: "POST", json: { target: restoreTarget, reason: why } });
+      setRestoreOpen(false); setRestoreReason(""); onChanged();
+    } catch (e: any) { setError(e.message); }
+    finally { setRestoring(false); }
+  }
+
   // QA-150 (Umesh, 15/08): the checklist renders EXACTLY the checks that gate Mark Ready —
   // rules.batchReadiness().checks, in its order — and counts only those. It used to list
   // four of five and add a row that was not a check at all, so the header said "5/5" while
@@ -371,6 +414,13 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
         </span>
       )}
       {["Planning", "Ready", "Active"].includes(b.status) && <Btn small kind="danger" onClick={() => setConfirmCancel(true)}>Cancel Batch</Btn>}
+      {/* -235: the way back out of Cancelled. Offered only to an Admin, because only an Admin can do it
+          (rules.ts) — a control that could do nothing but 409 for the person looking at it is exactly the
+          dead button QA-723 charged. Everyone else who can move status gets the sentence instead, because
+          a cancelled batch used to show a completely blank row and there was no way to learn why. */}
+      {b.status === "Cancelled" && (isAdmin
+        ? <Btn small onClick={() => setRestoreOpen(true)}>Restore batch</Btn>
+        : <span className="text-xs text-gray-500">This batch is cancelled. Only an Admin can restore it.</span>)}
     </>
   ) : (
     <span className="text-xs text-gray-400">Batch status is moved by Operations/Admin.</span>
@@ -541,6 +591,43 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
           client), and the press goes through. The reason box is optional on purpose: every other
           override in this product demands one, but demanding one here would be the stopping he
           asked us not to do. */}
+      {/* -235: Umesh chose "Admin target khud chune" over a fixed restore point, so all three pre-cancel
+          states are offered and the Admin says which one the batch was really in. */}
+      <Drawer open={restoreOpen && b.status === "Cancelled"} onClose={() => setRestoreOpen(false)} title={`Restore ${b.code}`} error={error}>
+        <div className="space-y-3 text-sm">
+          <p className="text-gray-600">
+            This batch was cancelled{b.cancel_reason ? <> — reason on record: <b>{b.cancel_reason}</b></> : ", with no reason on record"}.
+            Restoring puts its status back so work can continue; it changes no dates and undoes nothing else.
+          </p>
+          <Field label="Put it back to" required>
+            <div className="space-y-1">
+              {["Planning", "Ready", "Active"].map((t) => {
+                const why = restoreBlocked[t];
+                return (
+                  <label key={t} className={`flex items-center gap-2 text-sm ${why ? "text-gray-400" : "text-gray-800"}`}>
+                    <input type="radio" name="restore-target" value={t} disabled={!!why}
+                      checked={restoreTarget === t} onChange={() => setRestoreTarget(t)} />
+                    <span>{statusLabel(t)}</span>
+                    {why && <span className="text-xs">— not available: {why}</span>}
+                  </label>
+                );
+              })}
+            </div>
+          </Field>
+          <p className="text-xs text-gray-500">
+            Restoring to Ready runs the same readiness checks that Mark Ready runs. Restoring to Active is
+            only for a batch that genuinely started — one that never did is restored to Planning or Ready
+            and then started with its real date.
+          </p>
+          <Field label="Reason" required>
+            <input className={inputCls} placeholder="e.g. cancelled by mistake" value={restoreReason} onChange={(e) => setRestoreReason(e.target.value)} />
+          </Field>
+          <div className="flex flex-wrap items-center gap-2">
+            <Btn onClick={restoreBatch} disabled={restoring || !restoreReason.trim() || !!restoreBlocked[restoreTarget]}>{restoring ? "Restoring…" : "Restore batch"}</Btn>
+            <Btn kind="ghost" onClick={() => setRestoreOpen(false)}>Cancel</Btn>
+          </div>
+        </div>
+      </Drawer>
       <Drawer open={backdateOpen && beganAlready} onClose={() => setBackdateOpen(false)} title={`Record ${b.code} as already started`} error={error}>
         <div className="text-sm">
           <div className="font-semibold text-amber-900">This batch is being recorded after it began</div>
@@ -2838,19 +2925,33 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
               "main khali payment lene mein interested nahi hoon; no dues, tab close". */}
           <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
             <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={!!closure?.dues_settled}
+              <input type="checkbox" disabled={!mayMarkTab} checked={!!closure?.dues_settled}
                 onChange={(e) => saveClosure({ dues_settled: e.target.checked })} />
               <span className="font-medium">All dues settled — trainer, centre, vendor: NO dues pending</span>
             </label>
             {closure?.dues_settled && closure?.dues_marked_at && (
               <p className="mt-1 text-xs text-gray-500">Attested {fmtDate(closure.dues_marked_at)}</p>
             )}
-            <input className={inputCls + " mt-2"} placeholder="Dues note (optional — what was settled, references)"
+            <input className={inputCls + " mt-2"} disabled={!mayMarkTab} placeholder="Dues note (optional — what was settled, references)"
               value={closure?.dues_note ?? ""} onChange={(e) => saveClosure({ dues_note: e.target.value })} />
             <p className="mt-2 text-xs text-gray-500">
               Batch closes from the Overview tab once certification is Completed, the invoice is
               PAID, and this attestation is ticked.
             </p>
+            {/* -236 (QA-985, checker on qa-232 c2): these two were the ONLY write controls on this
+                tab with no gate at all - a Viewer could tick an attestation the server would refuse.
+                They are now gated on the PERMISSION and deliberately NOT on `closed`: rules.ts keeps
+                dues_settled/dues_note in POST_COMPLETION_WRITABLE on purpose (DEC-6 - the dues
+                attestation HAPPENS after the batch finishes; that is its whole point). Gating them
+                on status would have been the obvious fix and would have broken the money flow. What
+                was actually wrong is that four other places on this screen say "frozen" while these
+                two still write - so the screen says it, rather than leaving the operator to find out. */}
+            {statusClosedTab && (
+              <p className="mt-1 text-xs text-gray-500">
+                The batch is finished, but this attestation stays open on purpose — dues are settled
+                after a batch ends, not before.
+              </p>
+            )}
           </div>
         </div>
       </Section>
