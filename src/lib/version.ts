@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-229";
+export const RELEASE = "2026.08.14-230";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,31 @@ export const RELEASE = "2026.08.14-229";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-230 finishes the repairs to the screen where candidates are marked and certificates are "  +
+  "issued, and opens three things that had been closed to everyone but one role. On the "  +
+  "marking grid, a bulk mark that succeeded left the refusals it had just overcome sitting on "  +
+  "the cards, so a candidate recorded as passed still carried a message saying the assessment "  +
+  "had to be reopened first; those clear when the mark lands. The reopen control itself is no "  +
+  "longer offered on a batch whose sign-off was worked out from the individual results rather "  +
+  "than typed in, where it explained itself with two statements that were not true and did "  +
+  "nothing when pressed. Bulk certificate upload is no longer offered to someone the server "  +
+  "will refuse; it names the right they would need instead, and it did more than look "  +
+  "clickable - the files were uploaded to storage before the refusal came back. "  +
+  "Deleting is now three separate rights rather than a single test for one role. A centre may "  +
+  "be given the right to remove a wrong row from its own candidate pool without also being "  +
+  "able to remove a trainer or a batch. Every refusal that guarded these before still stands: "  +
+  "a candidate who has batch history and a batch that carries recorded work are both still "  +
+  "refused, to anyone. "  +
+  "A candidate's Aadhaar number can now be recorded, on the staff form and on both public "  +
+  "registration pages, checked for the twelve digits and the checksum the number carries. "  +
+  "And a batch that is being entered after it already ran now counts its students from the day "  +
+  "it really began rather than the day someone typed them in. The roster is normally built "  +
+  "after the batch exists, so students added afterwards were being counted from today, and the "  +
+  "attendance a centre actually holds for those weeks could not be entered against them at "  +
+  "all. The screen says which day they will be counted from before the enrolment, not after. "  +
+  "Someone who genuinely joined mid-course can still be given their own date, and a batch that "  +
+  "has not started is unaffected.";
+const RELEASE_NOTE_ARCHIVE_229 =
   "-229 is a day of batch work shipped as one build. Marking candidates pass or fail, and with "  +
   "it certificate upload, works again on a batch whose assessment had already been signed off "  +
   "at batch level - one figure typed in, with no per-candidate result behind it. Every attempt "  +
@@ -363,6 +388,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
+  RELEASE_NOTE_ARCHIVE_229 + " " +
   RELEASE_NOTE_ARCHIVE_227 + " " +
   RELEASE_NOTE_ARCHIVE_223 + " " +
   RELEASE_NOTE_ARCHIVE_222 + " " +
