@@ -188,6 +188,16 @@ T8 bypass branch. `GET /api/trainers/[id]` returns `allowed_next` so the UI offe
 + dues). After **every** result/certificate save: `recomputeClosureAggregates` →
 `settleCertificatesFromFiles` → `summarizeBatchResults` → `deriveCompletion`.
 
+`Cancelled` is reachable from `Planning`/`Ready`/`Active` (Rule 19) and, since -240, is no longer
+terminal: **`Cancelled →Planning|Ready|Active`** is one fall-through arm in `transitionBatch`,
+Admin-only, reason required, audited as `restored_from_cancelled`. It RESTORES a status and does
+nothing else — it clears `cancel_reason`, refuses any `actual_start`/`backdate_override` sent with
+it, re-runs Rule 16 when the target is `Ready`, and refuses `→Active` unless `actual_start` is
+already stamped. That last guard is what stops restore becoming a second, ungated Start: a batch
+that never ran has no Active state to be put back into, and jumping there would pass Rule 17 AND
+-226's `backdate_override` in one step. `Closed` and `Completed` remain unreachable from
+`Cancelled`; the only other backwards edge is Admin `Completed →Closing` (DEC-6 escape).
+
 **(d) Government attendance** — `parseGovtAttendance` → `resolveLocationFromFile` → `matchGovtRows`
 (`isTrainerRow` first) → `reconcileAgainstLogs` → preview → confirm writes rows + stamps
 `sidh_candidate_id` → `activateFromEvidence`. Verdicts via `assessmentHoursBar` →
@@ -266,6 +276,16 @@ invalid recipient) and **always** write a MailLog row. Bounces: SNS → `public/
     Used by the two candidate write doors, the Closure card's `crossCheck` table, and the drawer's
     live hint. One rule, one sentence, whether the refusal comes from the form or from the API.
   - `storedApaarIsUnreadable(s)` — "there **is** a value on record and this system cannot read it."
+  - `sameGovtNumber(a, b)` — **the FIFTH export, and the one that exists because the other four are
+    the wrong tool for one question** (QA-977, QA-1025). It asks *"are these two government numbers
+    THE SAME NUMBER"* as a **digits** comparison, and all four write doors ask it through this and
+    nothing else. Every door used to ask it through `canonicalAadhaar()` — a **validity** test — so
+    the guard could not fire whenever the Aadhaar side was not a *valid* Aadhaar, and the headline
+    instance is the first live APAAR this product was ever given: `190305516076`, which begins with
+    1, which `canonicalAadhaar` rejects. The edit door returned 200 and stored both government-ID
+    fields holding the same digits. **Equality is not validity.** Proved by mutation: reverting this
+    helper to the validity form reproduces that exact 200, and restoring it returns the suite to
+    green.
     Not the same question: the bulk importer REPORTS a malformed APAAR and stores it anyway (QA-141 —
     a client's sheet is never dropped over format), so this state really occurs, and a screen showing
     a blank box on such a record would be lying about what is stored. `apaarIdState()` in the batch
@@ -594,6 +614,54 @@ effect deliberately.
 under a code our own minter would never issue (the legacy three-part `GGM-DST-01` shape), and it is
 the reason a rename in Mongo alone is dangerous: re-running that seeder afterwards creates a SECOND
 batch under the old code.
+
+### 3.12 The batch-status gate has a SECOND copy on the client, and this file never said so (added -240)
+
+`transitionBatch` (`lib/rules.ts`) decides which status moves are legal. `batches/[id]/page.tsx`
+decides which ones to OFFER — `canTransition` (:177, a role literal), `isAdmin` (:191), `running`
+(:170, a status literal), and the per-control conditions inside `statusActions` (:324-386). That is a
+second implementation of the same question, and until this row it appeared nowhere in section 3
+because a grep for a shared NAME finds nothing: the two copies share no identifier. Section 3.0c's
+standard applies — *searching for a name is not a census*.
+
+Its bug history is the argument for the row: **QA-693 (S1)** — every status control unreachable for
+92 releases; **QA-696** — the pin that could not fail for the defect it named; **QA-733** — the
+widened pin defeated by one renamed local; **QA-478** — an opener and its panel gated on different
+expressions, so the panel was dead UI; **QA-798** — a class sweep finding ~25 further controls that
+decide from a role or status literal where the server decides from a permission; **QA-828/825/785** —
+`closed = ["Completed","Cancelled"].includes(status)` conflating permission with status on the
+Closure tab.
+
+**SoT:** the server. The client's job is to EXPLAIN, never to decide — and where it cannot act, it
+must say why rather than render nothing. -240's restore drawer follows that: it offers all three
+targets and greys the impossible ones **with the reason** (`restoreBlocked`, derived from `r.ready`
+and `b.actual_start`), because a picker that silently omits a choice cannot tell you why it is
+missing. The standing risk is that those two strings drift from the server's two refusals; both are
+pinned in `e2e-flows-blindspot.mjs` FL19.
+
+**Note the render sites, because -204/-205/-677 were all about this:** `statusActions` is ONE value
+rendered in TWO places (:479 inside the "Right now" card while a batch runs, :537 inside the
+readiness Section before it starts). `Cancelled` is NOT in `running` (:170), so a cancelled batch
+takes the readiness branch — which is why the Restore control lands there.
+
+### 3.13 "Was this batch recorded AFTER it ran?" — three spellings, and the gate reads one (QA-957/958/965, still open)
+
+| Where | How it asks |
+|---|---|
+| `lib/rules.ts` `startWasRecordedAfterTheFact` | `AuditLog.exists({ entity:"Batch", field:"backdated_start" })` |
+| `lib/rules.ts` `activateFromEvidence` | writes `auto_activated`, a row that test never reads |
+| `candidates/page.tsx` | asks the SERVER via `start_recorded_after_the_fact` on the batch row (correct since -231 cycle 3; it used to re-derive `actual_start < today`, which is true of nearly every running batch) |
+
+The consequence is not cosmetic: `addMemberChecked` uses that test to decide a late joiner's default
+`joined_on`, so a batch activated from evidence rather than by the override gets today's date, Rule 26
+then says the member was on no day's roster while the batch ran, and the attendance the centre holds
+cannot be entered. **QA-958 names `MUZ-CHAR-RPLHSL-SPIT-01` as the production batch that arrives
+through exactly this door.**
+
+**SoT:** one predicate that asks for BOTH markers, beside `startWasRecordedAfterTheFact`, with every
+caller using it. -240 did NOT do this — it added an explicit join-date box on both roster screens,
+which makes the broken default matter less to an operator who uses the box, and leaves the gate
+wrong for everyone who does not. Named here rather than left implied.
 
 ### 3.10 Other predicates with more than one copy
 **`totNeeded` — 4 copies of "does this trainer still need a TOT"**: `rules.ts:1865`
