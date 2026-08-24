@@ -2438,6 +2438,42 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
     try { await api(`/api/batches/${batchId}/closure`, { method: "PUT", json: patch }); load(); onChanged(); }
     catch (e: any) { setError(e.message); }
   }
+
+  // -224 (Umesh 24/08, measured on live BHA-ITI-RPLHSL-SPIT-01): "Start per-candidate marking"
+  // opened a grid in which EVERY control was guaranteed to fail. rules.ts:1302 refuses each mark
+  // while the assessment already carries a batch-level sign-off and no per-candidate row exists -
+  // and the remedy that refusal NAMES ("Reopen the assessment before marking candidates
+  // individually") existed nowhere in this product: Mark Completed disables itself once Completed,
+  // and Overview's "Reopen (Admin)" reopens a completed BATCH, so an Active batch was never offered
+  // one. The 409 then landed in the page-top banner (page.tsx:83), thousands of pixels above a
+  // viewport scrolled through 46 cards, so from the operator's seat Pass/Fail were simply dead - and
+  // with nothing able to reach Pass, "Issue certificates" stayed disabled and every bulk-uploaded
+  // certificate came back refused. One fault, three symptoms, exactly the -223 shape.
+  //
+  // The guard is CORRECT and is untouched (2026-08-12 audit S0: it stops a batch-level 30/25 being
+  // silently rewritten to 1/1 by the first candidate marked). What was missing is the door it asks
+  // for. `assessment_status` is already in the closure PUT allow-list and updateClosure guards only
+  // SETTING Completed - reverting to Pending was always permitted by the server, never offered by
+  // the client.
+  const [reopening, setReopening] = useState(false);
+  async function reopenAssessment(then?: () => void) {
+    const a = closure?.appeared, p = closure?.passed;
+    const figures = a != null || p != null ? ` — ${a ?? "?"} appeared, ${p ?? "?"} passed` : "";
+    if (!window.confirm(
+      `Reopen this batch's assessment?\n\n`
+      + `It was completed with batch-level figures${figures}, recorded by hand rather than from the roster.\n\n`
+      + `Marking candidates individually REBUILDS those totals from the per-candidate rows, so those numbers will be replaced by whatever the rows actually say. The batch itself is not reopened and nothing else changes.\n\n`
+      + `This is audited.`)) return;
+    setReopening(true);
+    try {
+      // Same door and same payload shape as saveClosure - written out here only so the grid opens
+      // AFTER the reopen lands, and stays shut if it does not.
+      await api(`/api/batches/${batchId}/closure`, { method: "PUT", json: { assessment_status: "Pending" } });
+      await load(); onChanged();
+      then?.();
+    } catch (e: any) { setError(e.message); }
+    finally { setReopening(false); }
+  }
   async function saveInvoice(patch: any) {
     try { await api(`/api/batches/${batchId}/invoice`, { method: "PATCH", json: patch }); load(); }
     catch (e: any) { setError(e.message); }
@@ -2543,8 +2579,16 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
                 READ-ONLY, which is exactly what someone who may not mark should get: the results,
                 visible. Vanishing is not refusing, and vanishing left the people whose daily job
                 this is with no door at all. */}
-            <Btn small onClick={() => setPerCandidate(true)}>
-              {mayMarkTab ? "Start per-candidate marking" : "View per-candidate results"}
+            {/* -224: when a batch-level sign-off already stands, opening the grid without reopening
+                the assessment opens a room where every control 409s. Reopen first, with the figures
+                that are about to be rebuilt stated out loud. Someone who may NOT mark is never
+                offered the reopen - they get the read-only view, which is what they came for. */}
+            <Btn small disabled={reopening}
+              onClick={() => {
+                if (mayMarkTab && closure?.assessment_status === "Completed") { reopenAssessment(() => setPerCandidate(true)); return; }
+                setPerCandidate(true);
+              }}>
+              {reopening ? "Reopening…" : mayMarkTab ? "Start per-candidate marking" : "View per-candidate results"}
             </Btn>
             {mayMarkTab && !showLegacyEntry && <Btn small kind="ghost" onClick={() => setShowLegacyEntry(true)}>Batch-level figures (legacy)…</Btn>}
           </span>
@@ -2613,6 +2657,17 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
                 already signed off{closure?.assessment_date ? ` on ${fmtDate(closure.assessment_date)}` : ""}
                 {statusClosedTab ? " — the batch is finished, so this is frozen. An Admin can Reopen it from the Overview tab." : ""}
               </span>
+            )}
+            {/* -224: the door rules.ts:1302 tells the operator to use. It existed nowhere before -
+                this line only ever MENTIONED reopening when the batch itself was finished, i.e.
+                never on the Active batch where per-candidate marking is actually blocked. Offered
+                only to someone the server will accept, so it is not another dead control. */}
+            {closure?.assessment_status === "Completed" && !statusClosedTab && mayMarkTab && (
+              <button onClick={() => reopenAssessment()} disabled={reopening}
+                title="Marking candidates individually is refused while a batch-level sign-off stands, because the roster would silently overwrite the figures recorded by hand. Reopening rebuilds them from the rows instead."
+                className="w-fit rounded-lg border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50">
+                {reopening ? "Reopening…" : "Reopen assessment"}
+              </button>
             )}
             {/* Two reasons, two sentences. Calling an ACTIVE batch "finished" is the whole defect. */}
             {statusClosedTab && closure?.assessment_status !== "Completed" && (
@@ -2766,6 +2821,23 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
   const [compressNote, setCompressNote] = useState<string | null>(null); // -123 (QA-157): say what compression did
   const [linkNote, setLinkNote] = useState<string | null>(null); // -111: link success, auto-hides
   const [uploading, setUploading] = useState(false);
+  // -224 (Umesh 24/08: "pass fail, and certificate bulk upload ... not properly working"): every
+  // failure in this panel reported ONLY through setError, and that banner renders at page.tsx:83 -
+  // the top of the page, above the tabs. This grid starts ~2,400 lines of JSX below it and the
+  // operator is scrolled through 46 cards, so a refusal painted thousands of pixels out of sight and
+  // the button read as dead. The codebase diagnosed exactly this for the Complete button at the top
+  // of ClosureTab ("refused with an error banner far above where he was looking, so from his seat it
+  // did nothing at all") and fixed ONLY that button; the marking grid never got it.
+  //
+  // The page-level banner is KEPT - it is right for page-level failures. What is added is a second
+  // surface that says it where the press happened: once in the panel, and for a per-candidate mark,
+  // pinned to the card that failed so one refusal among 46 is attributable to a person.
+  const [gridError, setGridError] = useState<string | null>(null);
+  const [cardErrors, setCardErrors] = useState<Record<string, string>>({});
+  const report = (m: string) => { setGridError(m); setError(m); };
+  const fail = (e: any) => { const m = e?.message ?? String(e); report(m); return m; };
+  const clearCardError = (member: string) =>
+    setCardErrors((c) => { if (!c[member]) return c; const n = { ...c }; delete n[member]; return n; });
   // QA-777 (-216, checker on qa-214): `closed` was the ONLY thing disabling these controls, and it
   // is about the BATCH, not the person. `page.tsx:35` gates only the Costs tab and `GET /results`
   // carries no permission check at all - so a Trainer or an Enrollment user could open Closure, see
@@ -2798,6 +2870,17 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
   // -108 step 1: stage the files and get a proposed mapping. Nothing is attached yet.
   async function uploadCertificates(list: FileList | null) {
     if (!list?.length) return;
+    // -224: Rule 45 is knowable BEFORE the bytes move, and this door never asked. The line directly
+    // above this button already prints "0 can take a certificate now" - yet the operator could still
+    // pick 46 files, watch every one compress, upload and land in the bucket, and only then read a
+    // preview in which all 46 are refused as not-Pass. Refuse at the picker instead, and say which
+    // of the two cases it is, because they need opposite actions.
+    if (!certReady.length) {
+      report(certDone.length
+        ? `Every candidate marked Pass on this batch already has a certificate — a bulk upload has nothing to attach. To replace one, use that candidate's own card below. Nothing has been uploaded.`
+        : `No candidate is marked Pass yet, and a certificate can only go to a candidate who passed. Mark the results first — nothing has been uploaded.`);
+      return;
+    }
     setUploading(true);
     setCertUpload(null);
     try {
@@ -2831,7 +2914,7 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
       // Each staged file carries its own chosen member, seeded from the server's proposal so a
       // correct auto-match needs no clicks and a wrong one is one dropdown away.
       setMapping({ ...data, choice: Object.fromEntries((data.staged ?? []).map((s: any) => [s.url, s.member ?? ""])) });
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { fail(e); }
     finally { setUploading(false); }
   }
 
@@ -2843,14 +2926,15 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
       .filter((s: any) => mapping.choice[s.url])
       .map((s: any) => ({ url: s.url, member: mapping.choice[s.url] }));
     const discard = (mapping.staged ?? []).filter((s: any) => !mapping.choice[s.url]).map((s: any) => s.url);
-    if (!pairs.length) { setError("Nothing to attach — point at least one certificate at a candidate, or press Cancel to discard them."); return; }
+    if (!pairs.length) { report("Nothing to attach — point at least one certificate at a candidate, or press Cancel to discard them."); return; }
     setUploading(true);
     try {
       const data = await api(`/api/batches/${batchId}/certificates`, { method: "POST", json: { confirm: true, pairs, discard } });
       setCertUpload(data); setCertOk(true);
       setMapping(null);
+      setGridError(null);
       await load(); onChanged(); loadLinkPlan();
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { fail(e); }
     finally { setUploading(false); }
   }
 
@@ -2873,10 +2957,10 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
       setCertUpload(null);
       await load(); await loadLinkPlan();
       if (res.linked) setLinkNote(`${res.linked} portal ID${res.linked === 1 ? "" : "s"} linked from the government imports — those certificates will now match by file name.`);
-      if (!res.linked) setError(res.conflicts?.length
+      if (!res.linked) report(res.conflicts?.length
         ? `Nothing linked — ${res.conflicts.length} candidate(s) have conflicting portal IDs, left untouched. Fix them on the candidate record.`
         : "Nothing to link — the portal attendance imported so far names no new IDs for this roster.");
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { fail(e); }
     finally { setLinking(false); }
   }
 
@@ -2899,24 +2983,44 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
   async function mark(member: string, patch: any) {
     try {
       await api(`/api/batches/${batchId}/results`, { method: "PUT", json: { rows: [{ member, assessed_on: bulk.assessed_on, assessor: bulk.assessor || undefined, ...patch }] } });
+      clearCardError(member); setGridError(null);
       await load(); onChanged();
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) {
+      const m = fail(e);
+      setCardErrors((c) => ({ ...c, [member]: m }));
+    }
   }
   async function bulkApply(rows: any[]) {
     if (!rows.length) return;
-    try { await api(`/api/batches/${batchId}/results`, { method: "PUT", json: { rows } }); await load(); onChanged(); }
-    catch (e: any) { setError(e.message); }
+    try {
+      const res = await api(`/api/batches/${batchId}/results`, { method: "PUT", json: { rows } });
+      // -224: bulkMarkResults (rules.ts:1429) collects per-row failures and the route throws ONLY
+      // when every single row failed (results/route.ts:121) - otherwise it returns 200 with
+      // { updated, errors }. This function discarded `errors` entirely, so "Mark 45 pending as Pass"
+      // could mark 20, refuse 25, and report a clean success. A partial write that says nothing is
+      // worse than a refusal: the operator believes the roster is marked.
+      const errs: any[] = Array.isArray(res?.errors) ? res.errors : [];
+      if (errs.length) {
+        const byMember: Record<string, string> = {};
+        for (const e of errs) if (e?.member) byMember[String(e.member)] = String(e.error ?? "refused, no reason given");
+        setCardErrors((c) => ({ ...c, ...byMember }));
+        const names = errs.map((e) => items.find((i) => String(i.member) === String(e.member))?.candidate?.name).filter(Boolean) as string[];
+        report(`${res?.updated ?? 0} marked · ${errs.length} refused — ${errs[0]?.error ?? "no reason given"}`
+          + (names.length ? ` (${names.slice(0, 3).join(", ")}${names.length > 3 ? ` +${names.length - 3} more` : ""})` : ""));
+      } else setGridError(null);
+      await load(); onChanged();
+    } catch (e: any) { fail(e); }
   }
   async function certPatch(resultId: string, patch: any) {
-    try { await api(`/api/results/${resultId}`, { method: "PATCH", json: patch }); await load(); onChanged(); }
-    catch (e: any) { setError(e.message); }
+    try { setGridError(null); await api(`/api/results/${resultId}`, { method: "PATCH", json: patch }); await load(); onChanged(); }
+    catch (e: any) { fail(e); }
   }
 
   // -108: one certificate, one candidate. Goes through the SAME upload door as every other file
   // (uploadWithRetry: compression, 3 retries, offline queue) and then the existing certificate
   // field patch — no new server contract, and no file-name matching to get wrong.
   async function uploadOneCertificate(i: any, file: File) {
-    if (!i.result?._id) { setError("Mark this candidate's result first — a certificate attaches to a result."); return; }
+    if (!i.result?._id) { report("Mark this candidate's result first — a certificate attaches to a result."); return; }
     setCertBusy(String(i.result._id));
     try {
       const url = await uploadWithRetry(file, "closure", {
@@ -2924,7 +3028,7 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
         entity: "Batch", entity_id: batchId,
       });
       await certPatch(String(i.result._id), { certificate_file: url });
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { fail(e); }
     finally { setCertBusy(null); }
   }
 
@@ -3088,6 +3192,18 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
         </span>
       </div>
       <ResultButtons i={i} />
+      {/* -224: the refusal for THIS candidate, on THIS card. A message in the panel header is right
+          for a bulk action; a per-candidate mark that fails needs to name the person it failed for,
+          or on a 46-card roster the operator cannot tell who did not get marked. Clears on this
+          card's next successful mark. */}
+      {cardErrors[String(i.member)] && (
+        <div className="flex items-start gap-1.5 rounded-lg border border-red-200 bg-red-50 px-2 py-1.5 text-[11px] leading-4 text-red-800">
+          <span aria-hidden className="font-bold">!</span>
+          <span className="flex-1">{cardErrors[String(i.member)]}</span>
+          <button aria-label="Dismiss" onClick={() => clearCardError(String(i.member))}
+            className="rounded px-1 leading-none text-red-400 hover:text-red-700">×</button>
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-2">
         <input type="number" placeholder="Score" disabled={closed}
           className="w-24 rounded-lg border border-gray-300 px-2 py-1 text-sm"
@@ -3123,8 +3239,8 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
                     onClick={async () => {
                       const reason = window.prompt(`Remove ${i.candidate?.name}'s certificate file? The certificate number and status stay. Reason:`);
                       if (reason === null) return;
-                      try { await api(`/api/results/${i.result._id}/certificate`, { method: "DELETE", json: { reason } }); await load(); onChanged(); }
-                      catch (e: any) { setError(e.message); }
+                      try { await api(`/api/results/${i.result._id}/certificate`, { method: "DELETE", json: { reason } }); setGridError(null); await load(); onChanged(); }
+                      catch (e: any) { fail(e); }
                     }}>remove</button>
                 )}
               </>
@@ -3164,6 +3280,14 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
         </div>
       )}
 
+      {/* -224: the panel's own failure surface. Every refusal from this grid used to be painted at
+          the top of the PAGE, which on a 46-card roster is thousands of pixels above the press. */}
+      {gridError && (
+        <div className="mb-3">
+          <Notice kind="error" onDismiss={() => setGridError(null)}>{gridError}</Notice>
+        </div>
+      )}
+
       {!closed && (
         <div className="mb-3 flex flex-wrap items-end gap-2 rounded-lg bg-gray-50 p-3">
           <Field label="Assessment date (applies to marks)">
@@ -3182,9 +3306,17 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
             const absent = pending.filter((i) => logs.length && !present.has(String(i.member)));
             bulkApply(absent.map((i) => ({ member: i.member, result: "Absent", assessed_on: bulk.assessed_on })));
           }} disabled={!pending.length}>Mark absentees from last log</Btn>
-          <Btn small onClick={() => { setCertForm({ certificate_date: toInputDate(new Date()), prefix: "RPL/2026/", numbers: {} }); setCertDrawer(true); }} disabled={!passes.length}>
-            Issue certificates ({passes.length})
-          </Btn>
+          {/* -224: `disabled={!passes.length}` with nothing beside it is indistinguishable from a
+              broken button - and on a batch where marking itself was refused, this was the FIRST
+              thing the operator pressed. A control that cannot fire says why (the QA-004 pattern). */}
+          <span className="inline-flex flex-col gap-0.5">
+            <Btn small onClick={() => { setCertForm({ certificate_date: toInputDate(new Date()), prefix: "RPL/2026/", numbers: {} }); setCertDrawer(true); }} disabled={!passes.length}>
+              Issue certificates ({passes.length})
+            </Btn>
+            {!passes.length && (
+              <span className="text-[10px] font-medium text-amber-700">no candidate is marked Pass yet — mark results first</span>
+            )}
+          </span>
         </div>
       )}
 

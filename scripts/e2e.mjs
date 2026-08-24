@@ -1193,6 +1193,59 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
     const back2 = (await req("GET", `/api/candidates/${c116._id}`)).data.item;
     ok("-116 (SS-01): …and they can be corrected later", back2.district === "Bhadohi" && back2.religion === "Muslim", JSON.stringify({ d: back2.district, r: back2.religion }));
   }
+
+  // ---- -224 (Umesh 24/08, LIVE on BHA-ITI-RPLHSL-SPIT-01): the trap between the two modes ----
+  // Measured on production before this was written: batch Active, Closure.assessment_status
+  // "Completed" from a hand-typed batch-level entry (appeared 23, passed 23), ZERO CandidateResult
+  // rows, roster 46. In that state rules.ts refuses EVERY per-candidate mark - correctly, because
+  // the roster would otherwise silently overwrite figures a human signed. But the remedy its message
+  // names ("reopen the assessment") existed in no screen, and the refusal itself painted in the
+  // page-top banner far above a viewport scrolled through 46 cards. So Pass/Fail read as dead, and
+  // with nothing able to reach Pass, certificate upload was dead behind it. One fault, three
+  // symptoms. This pins the SERVER contract the fix depends on, in the order it has to hold.
+  {
+    const { b: t1, mems: tm } = await mkBatch(2, 8);   // tag 8 — 1,2,3,4,9,10,11,12,13 are taken; a reused tag collides on the trainer phone
+    // the legacy door: a batch-level sign-off, exactly as the live batch carries one
+    await req("PUT", `/api/batches/${t1._id}/closure`, { assessment_status: "Completed", appeared: 2, passed: 2, assessment_date: today }, 200);
+    ok("-224: precondition — a batch-level sign-off stands and NO per-candidate row exists",
+      (await closureOf(t1._id))?.assessment_status === "Completed" && (await rowsOf(t1._id)).every((i) => !i.result),
+      JSON.stringify({ a: (await closureOf(t1._id))?.assessment_status, rows: (await rowsOf(t1._id)).filter((i) => i.result).length }));
+
+    // 1. the trap itself — every mark is refused, and this is the state the live batch was stuck in
+    const trapped = await req("PUT", `/api/batches/${t1._id}/results`, { rows: [{ member: String(tm[0]._id), result: "Pass", assessed_on: today }] });
+    ok("-224: marking a candidate is REFUSED while a batch-level sign-off stands (the live trap)",
+      trapped.status >= 400 && /reopen the assessment/i.test(String(trapped.data?.error ?? "")),
+      `${trapped.status} ${String(trapped.data?.error ?? "").slice(0, 110)}`);
+    ok("-224: …and the refusal wrote NOTHING — no half-marked row left behind",
+      (await rowsOf(t1._id)).every((i) => !i.result), JSON.stringify((await rowsOf(t1._id)).map((i) => i.result?.result)));
+
+    // 2. the door the refusal asks for. THIS is what no screen offered; the server always allowed it.
+    const reopened = await req("PUT", `/api/batches/${t1._id}/closure`, { assessment_status: "Pending" });
+    ok("-224: reopening the assessment is accepted by the server (the door the message names)",
+      reopened.status === 200 && (await closureOf(t1._id))?.assessment_status === "Pending",
+      `${reopened.status} ${String((await closureOf(t1._id))?.assessment_status)}`);
+
+    // 3. and only now does the thing Umesh pressed actually work
+    const freed = await req("PUT", `/api/batches/${t1._id}/results`, { rows: [{ member: String(tm[0]._id), result: "Pass", score: 70, max_score: 100, assessed_on: today }] });
+    ok("-224: after the reopen the SAME press is accepted — the trap is escapable",
+      freed.status === 200 && (await rowsOf(t1._id)).find((i) => String(i.member) === String(tm[0]._id))?.result?.result === "Pass",
+      `${freed.status} ${String((await rowsOf(t1._id)).find((i) => String(i.member) === String(tm[0]._id))?.result?.result)}`);
+
+    // 4. the partial-bulk shape the client was throwing away. bulkMarkResults collects per-row
+    //    failures and the route throws ONLY when every row failed - so a mixed batch returns 200
+    //    with a NON-EMPTY errors[], and "Mark N pending as Pass" could mark some, refuse the rest,
+    //    and report a clean success. The contract has to carry both halves for the UI to show them.
+    const mixed = await req("PUT", `/api/batches/${t1._id}/results`, { rows: [
+      { member: String(tm[1]._id), result: "Pass", score: 60, assessed_on: today },
+      { member: "0".repeat(24), result: "Pass", assessed_on: today },
+    ] });
+    ok("-224: a PARTIAL bulk mark returns 200 carrying BOTH halves — updated AND errors[]",
+      mixed.status === 200 && (mixed.data?.updated ?? 0) === 1 && Array.isArray(mixed.data?.errors) && mixed.data.errors.length === 1,
+      JSON.stringify({ s: mixed.status, u: mixed.data?.updated, e: mixed.data?.errors?.length }));
+    ok("-224: …and each refused row names WHICH member it was, so the card can be pointed at",
+      !!mixed.data?.errors?.[0]?.member && !!mixed.data?.errors?.[0]?.error,
+      JSON.stringify(mixed.data?.errors?.[0]));
+  }
 }
 
 // ---- -102 (Manish 17/08): a roster row that should never have existed can be REMOVED ----
