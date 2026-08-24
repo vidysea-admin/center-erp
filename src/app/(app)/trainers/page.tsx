@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useSession } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, fmtDate, pipelineLabel, toInputDate, offerable } from "@/lib/client";
+import { usePerms } from "@/components/shell";
 import { personLabel } from "@/lib/person";
 import { emailError, phoneError } from "@/lib/validate";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, ShareLinkPanel, SourceCell, Tabs, inputCls } from "@/components/ui";
@@ -68,6 +69,11 @@ function TrainersInner() {
   // edit-flag on, and not a role whose writes are refused (Enrollment/Trainer).
   const { data: session } = useSession();
   const su: any = session?.user ?? {};
+  // 2026-08-24 (QA-894): who may DELETE a trainer follows the togglable right, not a role name.
+  // `loaded` matters: before the rights arrive `can()` answers false for everyone, and a button that
+  // appears a moment later is better than one that flickers away from somebody mid-click.
+  const { can: canRight, loaded: rightsLoaded } = usePerms();
+  const canDeleteTrainer = rightsLoaded && canRight("trainers.delete", "edit");
   const canWrite = !!su.can_edit && !["Enrollment", "Trainer"].includes(su.role);
   const [edit, setEdit] = useState<any>(null);
   const [form, setForm] = useState<any>({ max_concurrent_batches: 1, status: "Available" });
@@ -489,7 +495,11 @@ function TrainersInner() {
                     <Btn small kind="ghost" onClick={() => openEdit(r)}>Edit</Btn>
                     {/* QA-130: deletion is for junk rows (probes, duplicate imports) — Admin
                         only; the API refuses anyone referenced by a batch (drop those instead). */}
-                    {su.role === "Admin" && (
+                    {/* 2026-08-24 (Umesh): "vo bhi respective acess wale persons". The gate was a hard-coded
+                        role test, so the verb was invisible to the team who needed it. It follows the
+                        togglable right now, and the SERVER refuses independently - this only decides
+                        whether somebody is shown a button they would be allowed to press. */}
+                    {canDeleteTrainer && (
                       <Btn small kind="ghost" onClick={async () => {
                         if (!window.confirm(`Delete ${r.name} (${r.phone}) permanently? Their documents go too. A trainer with real history should be Dropped, not deleted.`)) return;
                         try { await api(`/api/trainers/${r._id}`, { method: "DELETE" }); load(); }

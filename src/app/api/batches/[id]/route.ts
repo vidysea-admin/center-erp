@@ -33,7 +33,14 @@ export const DELETE = apiHandler(async (_req: NextRequest, ctx: { params: Promis
   await dbConnect();
   const user = await requireUser();
   requireEdit(user);
-  if (user.role !== "Admin") throw new HttpError(403, "Only an Admin may delete a batch.");
+  // 2026-08-24 (Umesh): "delete krne ka option dena hai team ko … but vo bhi respective acess wale
+  // persons." This verb was never missing - it was shut behind a hard-coded Admin test, so the team
+  // saw no button and reported the feature as absent. It is a togglable right now, so an Admin can
+  // grant or revoke it per role and per person from the Permissions matrix.
+  //
+  // EVERY SAFETY REFUSAL BELOW IS UNCHANGED. Widening WHO may press the verb is not a reason to
+  // soften WHAT it refuses - if anything it is the reason not to, because more people can now reach it.
+  await requirePerm(user, "batches.delete");
   const { id } = await ctx.params;
   await assertBatchInScope(user, id); // Rule 38
   const batch = await Batch.findById(id).select("code status location program").lean<any>();

@@ -31,6 +31,9 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
   // server remains the real gate either way.
   const { data: session } = useSession();
   const role = (session?.user as any)?.role;
+  // 2026-08-24 (QA-894): the empty-shell delete follows `batches.delete` rather than the Admin role.
+  const { can: canRightB, loaded: rightsLoadedB } = usePerms();
+  const canDeleteBatch = rightsLoadedB && canRightB("batches.delete", "edit");
   // R-E (CEO 14/08): Operations is post-only on money — the batch cost ledger is Admin's.
   const tabs = TABS.filter((t) => t !== "Costs" || role === "Admin");
   const [tab, setTab] = useState(sp.get("tab") && TABS.includes(sp.get("tab")!) ? sp.get("tab")! : "Overview");
@@ -103,7 +106,11 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
           <div className="mt-2 flex flex-wrap gap-2">
             <Btn small onClick={() => setTab("Candidates")}>Add students to this batch</Btn>
             <Link href="/candidates"><Btn small kind="ghost">Import candidates (Excel)</Btn></Link>
-            {role === "Admin" && (
+            {/* 2026-08-24 (Umesh): "vo bhi respective acess wale persons". The gate was a hard-coded
+                        role test, so the verb was invisible to the team who needed it. It follows the
+                        togglable right now, and the SERVER refuses independently - this only decides
+                        whether somebody is shown a button they would be allowed to press. */}
+            {canDeleteBatch && (
               <Btn small kind="danger" onClick={async () => {
                 if (!confirm(`Delete ${b.code}? This is only allowed while the batch carries no members, results, costs, logs or attendance.`)) return;
                 try {
@@ -3472,15 +3479,30 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
           )}
 
           <div className="flex flex-wrap items-center gap-3">
-            <label className={`cursor-pointer rounded-lg px-3 py-1.5 text-xs font-medium text-white ${uploading ? "bg-gray-400" : "bg-blue-600 hover:bg-blue-700"}`}>
-              {uploading ? "Reading…" : "⬆ Upload certificates (bulk)"}
-              <input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" disabled={uploading}
-                onChange={(e) => { uploadCertificates(e.target.files); e.target.value = ""; }} />
-            </label>
+            {/* QA-879 (checker on qa-224 cycle 2; reproduced in a browser on a real Trainer login,
+                evidence-24-08/live229/trainer-login-closure-permission-reason.png): this control
+                rendered ENABLED for anyone who could see the tab, and choosing a file fired
+                POST /certificates -> 403. That is worse than a dead button - the certificate path
+                pushes the bytes to STORAGE before the server refuses, so a login without the right
+                could still spend an upload before being told no. Its per-candidate twin has asked
+                `mayMark` since -217 (see the comment above that one); only the BULK control was left
+                behind, which is why -229 shipped with every other control on this card correct and
+                this one still live. It does not vanish silently either: QA-825 was a door that
+                disappeared instead of refusing, so the reason takes its place, in the same words the
+                Closure card already uses for Save and Mark Completed. */}
+            {mayMark ? (
+              <label className={`cursor-pointer rounded-lg px-3 py-1.5 text-xs font-medium text-white ${uploading ? "bg-gray-400" : "bg-blue-600 hover:bg-blue-700"}`}>
+                {uploading ? "Reading…" : "⬆ Upload certificates (bulk)"}
+                <input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" disabled={uploading}
+                  onChange={(e) => { uploadCertificates(e.target.files); e.target.value = ""; }} />
+              </label>
+            ) : (
+              <span className="text-xs font-medium text-gray-500">read-only for your login — ask an Admin for the right to upload certificates</span>
+            )}
             {compressNote && <span className="text-xs text-gray-500">{compressNote}</span>}
-            <span className="cursor-help text-xs text-gray-500" title="Every file is shown with the candidate it is going to, and you can change any of them, before anything is saved. A file named CAN_12345.pdf is matched for you. Or upload from a candidate's own card below — no file name needed.">
+            {mayMark && <span className="cursor-help text-xs text-gray-500" title="Every file is shown with the candidate it is going to, and you can change any of them, before anything is saved. A file named CAN_12345.pdf is matched for you. Or upload from a candidate's own card below — no file name needed.">
               Preview first, then save · <span className="font-mono">CAN_12345.pdf</span> matches itself · <span className="underline decoration-dotted">?</span>
-            </span>
+            </span>}
           </div>
 
           {linkNote && <Notice kind="success" onDismiss={() => setLinkNote(null)}>{linkNote}</Notice>}

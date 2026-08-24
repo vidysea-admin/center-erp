@@ -17,6 +17,21 @@ export const PERMISSIONS: { key: string; label: string; group: string }[] = [
   { key: "trainers.manage", label: "Create/edit trainers & requests", group: "Trainers" },
   { key: "candidates.manage", label: "Create/edit/import candidates", group: "Candidates" },
   { key: "candidates.assign", label: "Assign candidates to batches", group: "Candidates" },
+  // 2026-08-24 (Umesh): "koi galti se candidate delete krr diyaa tho delete krne ka option dena hai
+  // team ko … esse hi trainer ko bhi delete kr skte hai and batch ko bhi delete krr skte hai but vo
+  // bhi respective acess wale persons."
+  //
+  // All three delete verbs ALREADY EXISTED and already carried their safety refusals; each was shut
+  // behind a hard-coded `user.role !== "Admin"`, which is why the team could not see the buttons.
+  // Umesh chose THREE separate rights rather than one, so a centre principal can clear a junk
+  // candidate row without also being able to erase a trainer or a batch.
+  //
+  // Deleting is deliberately NOT folded into `.manage`: editing a record and destroying it are
+  // different powers, and this product already learned that the expensive way — `assertTrainerDocDeleteInScope`
+  // exists precisely because document DELETE had to be narrower than document read/upload.
+  { key: "candidates.delete", label: "Delete candidate records (junk rows only — a real person is Dropped)", group: "Candidates" },
+  { key: "trainers.delete", label: "Delete trainer records (junk rows only — a real trainer is Dropped)", group: "Trainers" },
+  { key: "batches.delete", label: "Delete empty batch shells (a batch with any history is Cancelled)", group: "Batches" },
   { key: "batches.manage", label: "Plan/edit batches & transitions", group: "Batches" },
   { key: "batches.daily_log", label: "Enter daily logs & evidence", group: "Batches" },
   { key: "closure.manage", label: "Assessment, certification & closure", group: "Batches" },
@@ -47,6 +62,9 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "locations.manage", "trainers.manage",
     "candidates.manage", "candidates.assign", "batches.manage", "batches.daily_log",
     "closure.manage", "attendance.govt", "costs.manage", "invoices.manage", "feedback.links",
+    // 2026-08-24: all three deletes. Operations already carries every corresponding .manage right,
+    // and clearing junk rows out of the pool is their job.
+    "candidates.delete", "trainers.delete", "batches.delete",
   ],
   // 2026-08-13 (Umesh + CEO): principal/SPOC = "same admin access limited to their location —
   // trainer, candidate and all; NO attendance (trainer karega); NO batch edit; certificate
@@ -54,6 +72,11 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   Location: [
     "locations.manage", "trainers.manage", "candidates.manage", "candidates.assign",
     "closure.manage", "feedback.links",
+    // 2026-08-24: the CANDIDATE delete only. A principal clears a mis-typed row out of their own
+    // pool; erasing a trainer or a batch is a wider blast radius than their remit, and the 2026-08-13
+    // ruling on this role already drew that line ("NO batch edit"). An Admin can still grant either
+    // of the other two to a specific person via the per-user Special rights.
+    "candidates.delete",
   ],
   // QA-036 (checker, vs the role table): Enrollment's brief is candidate registration and
   // the enrollment worklist — daily attendance is the SPOC/Trainer's job, removed 14/08.

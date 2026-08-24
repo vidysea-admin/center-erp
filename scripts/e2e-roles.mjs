@@ -540,7 +540,18 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   ok("QA-130 rider: created_by rides on the row (schema stopped dropping it)", !!got.data.item?.created_by, JSON.stringify(got.data.item?.created_by ?? null));
 
   ok("QA-130: Location SPOC cannot delete a trainer", (await req(spoc, "DELETE", `/api/trainers/${tid}`)).status === 403);
-  ok("QA-130: Operations cannot delete either — Admin-only verb", (await req(ops, "DELETE", `/api/trainers/${tid}`)).status === 403);
+  // QA-894 (2026-08-24): this line used to read "Operations cannot delete either - Admin-only verb".
+  // Umesh reversed that: delete follows a togglable right now, and Operations holds `trainers.delete`
+  // by default. The assertion is UPDATED rather than deleted, because what it guards is still real -
+  // it just guards the new rule. It gets its OWN throwaway trainer: letting it delete `tid` would
+  // destroy the fixture the rest of this block depends on, which is exactly what happened when the
+  // rule changed underneath it.
+  {
+    const own = await req(admin, "POST", "/api/trainers", { name: `Q894 Ops ${stamp61}`, phone: p130(7), skills: ["Q894"], home_location: jpr._id });
+    ok("QA-894: Operations CAN delete a junk trainer now - it follows trainers.delete, not the Admin role",
+      own.status === 201 && (await req(ops, "DELETE", `/api/trainers/${own.data.item._id}`)).status === 200,
+      `create=${own.status}`);
+  }
 
   const bat = await req(admin, "POST", "/api/batches", { location: jpr._id, program: prog._id, planned_start: "2026-09-01", trainer: tid });
   ok("QA-130: batch fixture referencing the trainer", bat.status < 300, `got ${bat.status}`);
@@ -856,13 +867,27 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
     // QA-153 (-83): the shell decides "does this door exist for you" from THIS payload — so
     // it must carry the role and the togglable keys the route rules read (attendance.govt,
     // costs.manage, sheet.sources), and say nothing for a right the person does not hold.
-    // -84: candidate delete is Admin-only (QA-130 shape) — Operations gets 403 even though they manage candidates
+    // -84 said "candidate delete is Admin-only - Operations gets 403 even though they manage
+    // candidates". QA-894 (2026-08-24) reversed that on Umesh's instruction: Operations holds
+    // `candidates.delete` by default now. Updated, not removed - and the SEPARATION is what is worth
+    // asserting, so Enrollment (who also manage candidates, and were never granted the delete) is
+    // checked in the same breath. If one right ever silently opened another, this is the line that
+    // notices.
     {
-      const c = (await req(admin, "POST", "/api/candidates", { name: "Del Probe " + s25, phone: "9700" + s25.slice(-6), location: jpr._id, program: (await req(admin, "GET", "/api/programs?limit=1")).data.items?.[0]?._id }, 201)).data.item;
-      if (c?._id) {
-        ok("-84: Operations cannot delete a candidate (Admin-only verb)", (await req(ops, "DELETE", `/api/candidates/${c._id}`)).status === 403);
-        ok("-84: Admin can", (await req(admin, "DELETE", `/api/candidates/${c._id}`)).status === 200);
-      } else ok("-84: fixture candidate created", false, JSON.stringify(c));
+      const progId = (await req(admin, "GET", "/api/programs?limit=1")).data.items?.[0]?._id;
+      const mkProbe = async (n) => (await req(admin, "POST", "/api/candidates", { name: "Del Probe " + n + s25, phone: "9700" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0"), location: jpr._id, program: progId }, 201)).data.item;
+      const c1 = await mkProbe("A");
+      if (c1?._id) {
+        ok("QA-894: Operations CAN delete a candidate now (candidates.delete, not the Admin role)",
+          (await req(ops, "DELETE", `/api/candidates/${c1._id}`)).status === 200);
+      } else ok("QA-894: fixture candidate created", false, JSON.stringify(c1));
+      const c2 = await mkProbe("B");
+      if (c2?._id) {
+        ok("QA-894: Enrollment still CANNOT - they manage candidates but were never given the delete",
+          (await req(enroll, "DELETE", `/api/candidates/${c2._id}`)).status === 403);
+        ok("QA-894: ...and an Admin still can, without holding the right explicitly",
+          (await req(admin, "DELETE", `/api/candidates/${c2._id}`)).status === 200);
+      } else ok("QA-894: second fixture candidate created", false, JSON.stringify(c2));
     }
     const meTr = await req(trainer, "GET", "/api/permissions/me");
     ok("QA-153: a trainer's effective rights carry no attendance.govt / costs.manage / sheet.sources (so Govt Attendance, Costs, Sheet Sync do not exist for them)",
@@ -1510,6 +1535,112 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   } else {
     ok("QA-082: skipped — no Active batch visible to the trainer", true);
   }
+}
+
+// ---- QA-894 (Umesh 2026-08-24): three delete rights, not one Admin role ----
+// "koi galti se candidate delete krr diyaa tho delete krne ka option dena hai team ko … esse hi
+// trainer ko bhi delete kr skte hai and batch ko bhi delete krr skte hai but vo bhi respective
+// acess wale persons."
+//
+// None of these verbs was missing. All three existed, with their safety refusals, shut behind a
+// hard-coded `user.role !== "Admin"` - so the team saw no button and reported the feature as absent.
+// Umesh chose THREE separate rights so a centre principal can clear a junk candidate row without
+// also being able to erase a trainer or a batch.
+//
+// The point of these assertions is the SEPARATION. One right must not open another, and widening who
+// may press the verb must not have softened what it refuses.
+{
+  const s9 = "D9" + Date.now().toString().slice(-6);
+  const permsSnap = (await req(admin, "GET", "/api/permissions")).data;
+  const setOf = (role) => (permsSnap.roles ?? []).find((r) => r.role === role)?.permissions ?? [];
+  const opsBase = setOf("Operations");
+  const catalogKeys = (permsSnap.catalog ?? []).map((c) => c.key);
+
+  ok("QA-894: the three delete rights are in the permissions catalogue, so an Admin can see them",
+    ["candidates.delete", "trainers.delete", "batches.delete"].every((k) => catalogKeys.includes(k)),
+    JSON.stringify(catalogKeys.filter((k) => k.endsWith(".delete"))));
+
+  // A junk candidate and a junk trainer, made through the API so nothing is hand-seeded.
+  const loc9 = (await req(admin, "POST", "/api/locations", { code: "L" + s9, name: "Del Loc " + s9, approval_status: "Approved" })).data.item;
+  const prog9 = (await req(admin, "POST", "/api/programs", { code: "P" + s9, name: "Del Prog " + s9, trainer_skill: "sk" + s9, duration_days: 15, buffer_days: 5, default_batch_size: 30, completion_deadline_days: 90 })).data.item;
+  const mkJunkCand = async () => (await req(admin, "POST", "/api/candidates", {
+    name: "Junk " + s9 + Math.random().toString(36).slice(2, 5),
+    phone: "9" + String(Math.floor(Math.random() * 1e9)).padStart(9, "0"),
+    location: loc9._id, program: prog9._id,
+  })).data.item;
+
+  // ---- GRANT candidates.delete ONLY, to Operations ----
+  await req(admin, "PUT", "/api/permissions", { role: "Operations", permissions: [...opsBase.filter((k) => !String(k).endsWith(".delete")), "candidates.delete"] }, 200);
+  await new Promise((r) => setTimeout(r, 5500)); // the role-permission cache has a 5s TTL
+
+  {
+    const c = await mkJunkCand();
+    const del = await req(ops, "DELETE", `/api/candidates/${c._id}`);
+    ok("QA-894: a NON-ADMIN holding candidates.delete can remove a junk candidate row",
+      del.status === 200, `status=${del.status} ${JSON.stringify(del.data).slice(0, 140)}`);
+  }
+  {
+    const t = (await req(admin, "POST", "/api/trainers", { name: "Junk Trainer " + s9, phone: "8" + String(Math.floor(Math.random() * 1e9)).padStart(9, "0") })).data.item;
+    const del = await req(ops, "DELETE", `/api/trainers/${t._id}`);
+    ok("QA-894: ...and the SAME user, without trainers.delete, is refused on a trainer",
+      del.status === 403, `status=${del.status} ${JSON.stringify(del.data).slice(0, 140)}`);
+    ok("QA-894: ...and the refusal names the right to ask an Admin for, not just 'forbidden'",
+      /right/i.test(String(del.data?.error ?? "")), String(del.data?.error ?? "").slice(0, 120));
+    await req(admin, "DELETE", `/api/trainers/${t._id}`); // tidy up as Admin
+  }
+
+  // ---- THE SAFETY REFUSALS ARE UNCHANGED. More people can reach the verb now, which is the reason
+  // to prove this rather than assume it. ----
+  {
+    const c = await mkJunkCand();
+    const b = (await req(admin, "POST", "/api/batches", { location: loc9._id, program: prog9._id, planned_start: "2027-06-01", target_size: 5 })).data.item;
+    await req(admin, "POST", `/api/batches/${b._id}/members`, { candidate: c._id });
+    const del = await req(ops, "DELETE", `/api/candidates/${c._id}`);
+    ok("QA-894: a candidate WITH batch history is still refused - a real person is Dropped, not erased",
+      del.status === 409, `status=${del.status}`);
+    ok("QA-894: ...and the refusal says to drop them instead",
+      /drop/i.test(String(del.data?.error ?? "")), String(del.data?.error ?? "").slice(0, 120));
+
+    // and the batch that now carries a member cannot be deleted either, by anyone
+    await req(admin, "PUT", "/api/permissions", { role: "Operations", permissions: [...opsBase.filter((k) => !String(k).endsWith(".delete")), "candidates.delete", "batches.delete"] }, 200);
+    await new Promise((r) => setTimeout(r, 5500));
+    const delB = await req(ops, "DELETE", `/api/batches/${b._id}`);
+    ok("QA-894: a batch carrying recorded work is still refused - it is Cancelled, never deleted",
+      delB.status === 409, `status=${delB.status} ${JSON.stringify(delB.data).slice(0, 140)}`);
+  }
+  {
+    const b2 = (await req(admin, "POST", "/api/batches", { location: loc9._id, program: prog9._id, planned_start: "2027-07-01", target_size: 5 })).data.item;
+    const delB2 = await req(ops, "DELETE", `/api/batches/${b2._id}`);
+    ok("QA-894: an EMPTY batch shell can be deleted by a non-Admin holding batches.delete",
+      delB2.status === 200, `status=${delB2.status} ${JSON.stringify(delB2.data).slice(0, 140)}`);
+  }
+
+  // ---- REVOKING closes it again. A right that cannot be taken back is not a toggle. ----
+  await req(admin, "PUT", "/api/permissions", { role: "Operations", permissions: opsBase.filter((k) => !String(k).endsWith(".delete")) }, 200);
+  await new Promise((r) => setTimeout(r, 5500));
+  {
+    const c = await mkJunkCand();
+    const del = await req(ops, "DELETE", `/api/candidates/${c._id}`);
+    ok("QA-894: revoking candidates.delete closes the door again",
+      del.status === 403, `status=${del.status}`);
+    await req(admin, "DELETE", `/api/candidates/${c._id}`);
+  }
+
+  // ---- Admin is unaffected: the role bypass in requirePerm still applies, so this change cannot
+  // have locked the one person who could always do it out of their own product. ----
+  {
+    const c = await mkJunkCand();
+    const del = await req(admin, "DELETE", `/api/candidates/${c._id}`);
+    ok("QA-894: an Admin still deletes without holding the right explicitly (role bypass intact)",
+      del.status === 200, `status=${del.status}`);
+  }
+
+  // restore Operations exactly as found, so no later suite inherits this block's grants
+  await req(admin, "PUT", "/api/permissions", { role: "Operations", permissions: opsBase }, 200);
+  const restored = ((await req(admin, "GET", "/api/permissions")).data.roles ?? []).find((r) => r.role === "Operations")?.permissions ?? [];
+  ok("QA-894: Operations' rights are restored exactly as found - this block leaves no residue",
+    JSON.stringify([...restored].sort()) === JSON.stringify([...opsBase].sort()),
+    JSON.stringify({ was: opsBase.length, now: restored.length }));
 }
 
 // unauthenticated → 401

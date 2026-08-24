@@ -8,7 +8,7 @@ import { trainerSelectGroups } from "@/lib/trainer-select";
 import { slotGuidelineErrors } from "@/lib/slot-rules";
 import { BASE_PATH } from "@/lib/base-path";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthChip, SourceCell, Tabs, inputCls, statusLabel, useCopied } from "@/components/ui";
-import { useLocationCtx } from "@/components/shell";
+import { useLocationCtx, usePerms } from "@/components/shell";
 
 // -115 (QA-221): a RETIRED programme (active === false) leaves the pickers where something new is
 // created, but never disappears from a record that already points at one — editing such a record must
@@ -314,7 +314,7 @@ function BatchesInner() {
             planCopied={planCopied} copyPlan={copyPlan} open={planOpen} setOpen={setPlanOpen}
             onError={setError} onInfo={setInfo}
             onCreated={() => { setPlanOpen(false); loadTrack(); load(); }} />
-          <PlanningTable rows={track} role={role} onSaved={loadTrack} onError={setError} />
+          <PlanningTable rows={track} onSaved={loadTrack} onError={setError} />
         </>
       )}
 
@@ -1026,7 +1026,9 @@ const PLAN_COLUMN_SOURCE: Record<string, string> = {
   // batch. It is ours, and saying so is more honest than inventing a heading for it.
 };
 
-function PlanningTable({ rows, role, onSaved, onError }: { rows: any[] | null; role?: string; onSaved: () => void; onError: (m: string) => void }) {
+// 2026-08-24 (QA-894): `role` left this signature when the delete gate stopped being a role test.
+// Removed rather than left dangling - a prop nothing reads is a question the next reader has to answer.
+function PlanningTable({ rows, onSaved, onError }: { rows: any[] | null; onSaved: () => void; onError: (m: string) => void }) {
   const [editing, setEditing] = useState<{ id: string; field: string } | null>(null);
   const [value, setValue] = useState("");
   // -196 (Umesh, 2026-08-22): "edit ka button nhi aa rha yaha par". Three cells have been clickable
@@ -1199,10 +1201,15 @@ function PlanningTable({ rows, role, onSaved, onError }: { rows: any[] | null; r
     // Rule 15 recomputes this on the server when the start moves, so a start edit refreshes both.
     { key: "planned_end", label: "Expected batch end date", minWidth: 170, render: (r: any) => bcell(r, "planned_end") },
   ];
-  // -196: "batch ko delete krne k liye kuch nhi hai". DELETE /api/batches/:id is Admin-only and
-  // counts everything hanging off the batch before it goes; the column only appears in Edit mode,
-  // so nobody meets a delete button while reading.
-  if (editMode && role === "Admin") {
+  // -196: "batch ko delete krne k liye kuch nhi hai". DELETE /api/batches/:id counts everything
+  // hanging off the batch before it goes; the column only appears in Edit mode, so nobody meets a
+  // delete button while reading.
+  // 2026-08-24 (QA-894, Umesh: "vo bhi respective acess wale persons"): the gate was the Admin role
+  // and is now the togglable `batches.delete` right, so Operations - who plan the batches - can clear
+  // their own empty shells without an Admin. The server refuses independently; this only decides who
+  // is offered the button.
+  const { can: canRightP, loaded: rightsLoadedP } = usePerms();
+  if (editMode && rightsLoadedP && canRightP("batches.delete", "edit")) {
     columns.push({
       key: "_act", label: "", minWidth: 74,
       render: (r: any) => (

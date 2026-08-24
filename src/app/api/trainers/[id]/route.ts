@@ -3,7 +3,7 @@ import { itemRoutes } from "@/lib/crud";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { Batch, Trainer, TrainerDocument } from "@/models";
-import { hasPermission } from "@/lib/permissions";
+import { hasPermission, requirePerm } from "@/lib/permissions";
 import { assertLocationOperational, assertTrainerDocInScope, TRAINER_FLOW } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 import { emailError, canonicalPhone, phoneError } from "@/lib/validate";
@@ -73,7 +73,14 @@ export const DELETE = apiHandler(async (_req: NextRequest, ctx: { params: Promis
   await dbConnect();
   const user = await requireUser();
   requireEdit(user);
-  if (user.role !== "Admin") throw new HttpError(403, "Only an Admin may delete a trainer.");
+  // 2026-08-24 (Umesh): "delete krne ka option dena hai team ko … but vo bhi respective acess wale
+  // persons." This verb was never missing - it was shut behind a hard-coded Admin test, so the team
+  // saw no button and reported the feature as absent. It is a togglable right now, so an Admin can
+  // grant or revoke it per role and per person from the Permissions matrix.
+  //
+  // EVERY SAFETY REFUSAL BELOW IS UNCHANGED. Widening WHO may press the verb is not a reason to
+  // soften WHAT it refuses - if anything it is the reason not to, because more people can now reach it.
+  await requirePerm(user, "trainers.delete");
   const { id } = await ctx.params;
   const t = await Trainer.findById(id);
   if (!t) throw new HttpError(404, "Trainer not found");
