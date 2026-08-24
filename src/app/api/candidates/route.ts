@@ -2,7 +2,7 @@ import { collectionRoutes } from "@/lib/crud";
 import { BatchMember, Candidate, CandidateResult, Location, Program } from "@/models";
 import { assertLocationInScope, HttpError, isScoped } from "@/lib/authz";
 import { looksLikeCan } from "@/lib/govt-attendance";
-import { aadhaarError, canonicalAadhaar, apaarError, canonicalApaar, emailError, canonicalPhone, phoneError } from "@/lib/validate";
+import { aadhaarError, canonicalAadhaar, apaarError, canonicalApaar, sameGovtNumber, emailError, canonicalPhone, phoneError } from "@/lib/validate";
 import { candidateEligibility } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { renderMail, sendMail } from "@/lib/mailer";
@@ -105,7 +105,9 @@ export const { GET, POST } = collectionRoutes({
       // The QA-414 guard. Two 12-digit government numbers on one form is a fresh chance to repeat
       // the defect that put 55 portal ids in the wrong box — so the one confusion that is knowable
       // here is refused BY NAME, rather than stored and discovered by the portal months later.
-      if (data.aadhaar_no !== undefined && data.apaar_id === canonicalAadhaar(data.aadhaar_no)) {
+      // QA-977: EQUALITY, not validity - canonicalAadhaar here made the guard unfireable for any
+      // APAAR beginning 0 or 1, which includes the very first live value this feature was given.
+      if (data.aadhaar_no !== undefined && sameGovtNumber(data.apaar_id, data.aadhaar_no)) {
         throw new HttpError(400, "That is this candidate's Aadhaar number, not their APAAR ID. They are both 12 digits and are different numbers — the APAAR ID is the academic account number from the government portal.");
       }
     } else if (data.apaar_id !== undefined) {

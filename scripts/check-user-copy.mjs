@@ -2219,5 +2219,36 @@ for (const file of walk(root)) {
   if (structural) console.log(structural + ' structural finding(s) above are NOT copy problems - read the line, not this summary.');
 }
 
+
+// ---- QA-976 (-232 cycle 2, checker): a report lane the API returns and no screen renders ----
+//
+// Cycle 2 added THREE report lanes to the candidate importer and rendered NONE of them, then
+// defended a 17-of-20 row loss with "the operator is warned before confirming". They were not: the
+// server said it and the drawer never repeated it. The checker proved it with a control — the
+// portal-CAN lane, same response, same drawer, renders fine.
+//
+// This pin is deliberately a CLASS pin, not three instance pins. The failure was not "I forgot
+// apaar_duplicate"; it was "nothing makes a lane's renderer mandatory". So: every `*_count` key the
+// import route puts in its payload must be referenced by the import drawer. A lane added next month
+// is covered without anyone remembering this.
+{
+  const importSrc = fs.readFileSync(path.join(root, "app/api/candidates/import/route.ts"), "utf-8");
+  const drawerSrc = fs.readFileSync(path.join(root, "app/(app)/candidates/page.tsx"), "utf-8");
+  const lanes = [...new Set([...importSrc.matchAll(/(\w+_count)\s*:/g)].map((m) => m[1]))];
+  const unrendered = lanes.filter((k) => !drawerSrc.includes(k));
+  if (lanes.length === 0) {
+    failed++;
+    pushStructural("check-user-copy: found NO *_count report lanes in the candidate import route — this pin has stopped measuring anything, which is worse than a failure");
+  } else if (unrendered.length) {
+    failed++;
+    pushStructural(
+      `candidates import: ${unrendered.length} of ${lanes.length} report lane(s) are returned by the API and rendered NOWHERE in the import drawer — ` +
+      `${unrendered.join(", ")}. The operator is told nothing, so any claim that they were "warned before confirming" is false.`,
+    );
+  } else {
+    passed++;
+  }
+}
+
 console.log(`\ncheck-user-copy: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

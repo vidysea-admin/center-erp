@@ -8,7 +8,7 @@ import { parseSheetDate } from "@/lib/rules";
 import { CANDIDATE_IMPORT_FIELDS } from "@/lib/field-catalog";
 import { audit } from "@/lib/audit";
 import { findDuplicateCandidates, normalizePhone } from "@/lib/duplicates";
-import { canonicalAadhaar, canonicalApaar, canonicalPhone } from "@/lib/validate";
+import { canonicalAadhaar, canonicalApaar, canonicalPhone, sameGovtNumber } from "@/lib/validate";
 import { personLabel } from "@/lib/person";
 import { looksLikeCan, normalizeCan } from "@/lib/govt-attendance";
 
@@ -309,8 +309,8 @@ export const POST = apiHandler(async (req: NextRequest) => {
     // without a word. That is the exact defect the guard is named after, missing from the exact door
     // where it happened. REPORTED, never refused (QA-141: a client's sheet is never dropped over
     // format), which is the same posture every other check in this loop takes.
-    const aad = canonicalAadhaar((c as any).aadhaar_no);
-    if (aad && key === aad) {
+    // QA-977: equality, not validity - the importer had the same hole as the three typed doors.
+    if (sameGovtNumber(key, (c as any).aadhaar_no)) {
       apaarSameAsAadhaar.push(`${personLabel(c)} — "${key}" is this candidate's Aadhaar number, not their APAAR ID`);
     }
   }

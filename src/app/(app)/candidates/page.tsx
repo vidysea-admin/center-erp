@@ -1134,6 +1134,66 @@ function CandidatesInner() {
                         </div>
                       </div>
                     )}
+                    {/* QA-976 (-232 cycle 2, checker): cycle 2 added THREE report lanes to the import
+                        API and rendered NONE of them, then defended the row loss with "the operator is
+                        warned before confirming". They were not warned - the server said it and no
+                        screen repeated it. The checker used the portal-CAN block above as a control:
+                        same response, same drawer, it renders. Same shape as that block on purpose -
+                        somebody who has learned to read one of these should not have to learn a third. */}
+                    {(importState.preview?.apaar_duplicate_count ?? 0) > 0 && (
+                      <div className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-800">
+                        <b>{importState.preview.apaar_duplicate_count} APAAR ID{importState.preview.apaar_duplicate_count === 1 ? " is" : "s are"} on more than one row of this sheet.</b>{" "}
+                        This one is worth stopping for: an APAAR ID belongs to one student and the database enforces it, so
+                        importing as-is <b>fails the whole sheet part-way through</b> — some rows land, the rest are lost, and
+                        the error will not tell you which. Fix the duplicate rows in the sheet and preview again.
+                        <div className="mt-1 font-mono text-[11px] text-red-700">
+                          {(importState.preview.apaar_duplicate ?? []).slice(0, 5).join(" · ")}
+                          {importState.preview.apaar_duplicate_count > 5 ? ` · +${importState.preview.apaar_duplicate_count - 5} more` : ""}
+                        </div>
+                      </div>
+                    )}
+                    {(importState.preview?.apaar_same_as_aadhaar_count ?? 0) > 0 && (
+                      <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                        <b>{importState.preview.apaar_same_as_aadhaar_count} row{importState.preview.apaar_same_as_aadhaar_count === 1 ? " has" : "s have"} the same number in the APAAR ID and Aadhaar columns.</b>{" "}
+                        They are both 12 digits and they are different numbers, so this is almost always a column mapped to the
+                        wrong destination — the mistake that once put 55 students&rsquo; portal IDs in the wrong field. Nothing is
+                        dropped; check the mapping before you confirm.
+                        <div className="mt-1 font-mono text-[11px] text-amber-800">
+                          {(importState.preview.apaar_same_as_aadhaar ?? []).slice(0, 5).join(" · ")}
+                          {importState.preview.apaar_same_as_aadhaar_count > 5 ? ` · +${importState.preview.apaar_same_as_aadhaar_count - 5} more` : ""}
+                        </div>
+                      </div>
+                    )}
+                    {(importState.preview?.apaar_invalid_count ?? 0) > 0 && (
+                      <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                        <b>{importState.preview.apaar_invalid_count} APAAR ID{importState.preview.apaar_invalid_count === 1 ? "" : "s"} cannot be read.</b>{" "}
+                        They will be imported exactly as they appear in the sheet — nothing is dropped — but those students will
+                        count as having no APAAR ID until they are corrected. Check the column mapping first; a real one is 12 digits.
+                        <div className="mt-1 font-mono text-[11px] text-amber-800">
+                          {(importState.preview.apaar_invalid ?? []).slice(0, 5).join(" · ")}
+                          {importState.preview.apaar_invalid_count > 5 ? ` · +${importState.preview.apaar_invalid_count - 5} more` : ""}
+                        </div>
+                      </div>
+                    )}
+                    {/* QA-976, found by this unit's own class pin rather than by a person: the
+                        importer has reported unreadable DATES since QA-097 and no screen has ever
+                        rendered it. Not this unit's defect - older than it - but the pin exists to
+                        make "the API said it" and "the operator was told" the same thing, and an
+                        exception carved for the one lane that predates the pin would hollow it out
+                        on day one. A date that cannot be read lands as EMPTY, which for a date of
+                        birth silently changes who counts as eligible. */}
+                    {(importState.preview?.date_unparseable_count ?? 0) > 0 && (
+                      <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                        <b>{importState.preview.date_unparseable_count} date{importState.preview.date_unparseable_count === 1 ? "" : "s"} could not be read.</b>{" "}
+                        Those rows import with the date left EMPTY — nothing else is dropped. A blank date of birth changes
+                        whether that student counts as eligible, so check the column mapping and the date format in the sheet
+                        before you confirm.
+                        <div className="mt-1 font-mono text-[11px] text-amber-800">
+                          {(importState.preview.date_unparseable ?? []).slice(0, 5).join(" · ")}
+                          {importState.preview.date_unparseable_count > 5 ? ` · +${importState.preview.date_unparseable_count - 5} more` : ""}
+                        </div>
+                      </div>
+                    )}
                     {badMapping && (
                       <div className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-800">
                         <b>{importState.preview.phone_invalid_count} of {importState.preview.valid} phone numbers are invalid — the column mapping is probably wrong.</b>{" "}

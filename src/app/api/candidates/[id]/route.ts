@@ -7,7 +7,7 @@ import { HttpError, apiHandler, requireUser, requireEdit } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { dbConnect } from "@/lib/db";
 import { audit } from "@/lib/audit";
-import { aadhaarError, canonicalAadhaar, apaarError, canonicalApaar, emailError, canonicalPhone, phoneError } from "@/lib/validate";
+import { aadhaarError, canonicalAadhaar, apaarError, canonicalApaar, sameGovtNumber, emailError, canonicalPhone, phoneError } from "@/lib/validate";
 import { looksLikeCan } from "@/lib/govt-attendance";
 
 export const { GET, PATCH } = itemRoutes({
@@ -119,8 +119,11 @@ export const { GET, PATCH } = itemRoutes({
         // depends on the ORDER the operator happens to type in is not a guard. Asked here against
         // whichever APAAR this save leaves on the record - the incoming one when the form sent it,
         // otherwise the stored one - exactly as the apaar_id block below asks it of the Aadhaar.
-        const apaarAfter = canonicalApaar(body.apaar_id !== undefined ? body.apaar_id : (existing as any)?.apaar_id);
-        if (apaarAfter && apaarAfter === body.aadhaar_no) {
+        // QA-977: compare DIGITS, not validity. canonicalApaar/canonicalAadhaar are format tests and
+        // either side failing one made the guard silently unfireable - including for an APAAR
+        // beginning 0 or 1, which is a shape the government really issues.
+        const apaarAfter = body.apaar_id !== undefined ? body.apaar_id : (existing as any)?.apaar_id;
+        if (sameGovtNumber(apaarAfter, body.aadhaar_no)) {
           throw new HttpError(400, "That is this candidate's APAAR ID, not their Aadhaar number. They are both 12 digits and are different numbers — the Aadhaar number is the one on their Aadhaar card.");
         }
       } else {
@@ -145,8 +148,9 @@ export const { GET, PATCH } = itemRoutes({
         body.apaar_id = canonicalApaar(incoming)!;
         // The QA-414 guard, asked against whichever Aadhaar this save leaves on the record — the
         // incoming one when the form sent it, otherwise the stored one.
-        const aadhaar = canonicalAadhaar(body.aadhaar_no !== undefined ? body.aadhaar_no : (existing as any)?.aadhaar_no);
-        if (aadhaar && body.apaar_id === aadhaar) {
+        // QA-977: the same equality test, so the two directions cannot drift apart again.
+        const aadhaarAfter = body.aadhaar_no !== undefined ? body.aadhaar_no : (existing as any)?.aadhaar_no;
+        if (sameGovtNumber(body.apaar_id, aadhaarAfter)) {
           throw new HttpError(400, "That is this candidate's Aadhaar number, not their APAAR ID. They are both 12 digits and are different numbers — the APAAR ID is the academic account number from the government portal.");
         }
       } else {

@@ -127,6 +127,29 @@ export function apaarError(v: unknown, opts?: { optional?: boolean }): string | 
   return null;
 }
 
+/**
+ * QA-977 (-232 cycle 2, checker): "are these two government numbers THE SAME NUMBER" — asked as a
+ * DIGITS comparison, in one place, by all four doors.
+ *
+ * READ THIS BEFORE SIMPLIFYING IT BACK. Every door used to ask the question through
+ * `canonicalAadhaar()`, which is a **validity** test: it refuses any number beginning 0 or 1 and
+ * runs a Verhoeff check digit. So the guard silently did nothing whenever the Aadhaar side was not
+ * a *valid* Aadhaar — and the most important instance of that is **Umesh's own APAAR,
+ * `190305516076`, which begins with 1**. `canonicalAadhaar("190305516076")` is `null`, the
+ * comparison became `x === null`, and the edit door returned 200 and stored both government-ID
+ * fields holding the same digits. The guard existed, was tested, and could not fire on the very
+ * value the feature was built from.
+ *
+ * The irony is worth keeping on the page: the comment on `apaarError` above says in so many words
+ * that APAAR must not be routed through the Aadhaar rules because a real one begins with 1 — and
+ * the comparison was routed through them anyway. Equality is not validity. Ask equality.
+ */
+export const sameGovtNumber = (a: unknown, b: unknown): boolean => {
+  const digits = (v: unknown) => String(v ?? "").replace(/[\s-]/g, "");
+  const x = digits(a);
+  return /^\d{12}$/.test(x) && x === digits(b);
+};
+
 /** QA-902: there IS a value on record and it is not a readable APAAR ID. The bulk importer stores
  *  what it reports (it never refuses a row), so a stored non-conforming value is a state that
  *  really occurs and the screen has to be able to say so rather than showing a blank. Asked in

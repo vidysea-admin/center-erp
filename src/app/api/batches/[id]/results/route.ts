@@ -4,7 +4,7 @@ import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { BatchMember, Candidate, CandidateResult } from "@/models";
 import { assertBatchInScope, bulkMarkResults, summarizeBatchResults } from "@/lib/rules";
-import { looksLikeCan, apaarError, canonicalApaar, canonicalAadhaar } from "@/lib/validate";
+import { looksLikeCan, apaarError, canonicalApaar, canonicalAadhaar, sameGovtNumber } from "@/lib/validate";
 import { audit } from "@/lib/audit";
 
 // GET — every roster member left-joined to its result row, so the marking grid renders
@@ -96,7 +96,7 @@ export const PUT = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
       // confusion that is knowable at the door, so it is refused here by name instead of being
       // discovered when the portal rejects that student.
       crossCheck: (cand: any, next: string) =>
-        canonicalAadhaar(cand?.aadhaar_no) === next
+        sameGovtNumber(next, cand?.aadhaar_no)
           ? `That is ${cand?.name ?? "this candidate"}'s Aadhaar number, not their APAAR ID. They are both 12 digits and are different numbers - the APAAR ID is the academic account number from the government portal. Nothing has been saved.`
           : null,
     },

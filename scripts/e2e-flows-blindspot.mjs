@@ -1210,5 +1210,60 @@ console.log("\n--- FL17 (qa-232 cycle 2): the three the checker FAILED cycle 1 o
     `${fwdBack.status} ${JSON.stringify(fwdBack.data)}`);
 }
 
+
+console.log("\n--- FL18 (qa-232 cycle 3, QA-977): the guard that could not fire on Umesh's own number ---");
+{
+  // All four doors asked "is this APAAR the same as the Aadhaar?" THROUGH `canonicalAadhaar()`,
+  // which is a VALIDITY test - Verhoeff, and no leading 0 or 1. So whenever the Aadhaar side was
+  // not a *valid* Aadhaar the comparison became `x === null` and the guard silently did nothing.
+  // The most important instance is Umesh's own APAAR, 190305516076, which begins with 1.
+  //
+  // The reachable path is real, not contrived: the IMPORTER reports a malformed Aadhaar and stores
+  // it anyway (QA-141), so a record holding a leading-1 "Aadhaar" exists by design.
+  const LEAD1 = "190305516076";          // Umesh's own APAAR shape: 12 digits, begins with 1
+  const rows18 = [{ "Student Name": `FL18 Lead1 ${stamp}`, "Mobile": "9822218001", "Aadhaar": LEAD1 }];
+  const wb18 = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb18, XLSX.utils.json_to_sheet(rows18), "Sheet1");
+  const file18 = new File([XLSX.write(wb18, { type: "buffer", bookType: "xlsx" })], "lead1.xlsx",
+    { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const map18 = JSON.stringify({ "Student Name": "name", "Mobile": "phone", "Aadhaar": "aadhaar_no" });
+  const conf18 = await multipart(admin, "/api/candidates/import", { file: file18, location: loc._id, program: prog._id, mapping: map18, confirm: "1" });
+  ok("FL18: precondition - the importer really does store a leading-1 value in aadhaar_no (reports, never refuses)",
+    conf18.status === 201 && conf18.data?.imported === 1, JSON.stringify({ s: conf18.status, imported: conf18.data?.imported }));
+  const who18 = ((await req(admin, "GET", `/api/candidates?q=${encodeURIComponent(`FL18 Lead1 ${stamp}`)}&limit=5`)).data.items ?? [])[0];
+  const rec18 = who18 ? (await req(admin, "GET", `/api/candidates/${who18._id}`)).data.item : null;
+  ok("FL18: precondition - that value is on the record", rec18?.aadhaar_no === LEAD1,
+    JSON.stringify({ stored: rec18?.aadhaar_no ?? null }));
+
+  // THE PIN. Before QA-977 this returned 200 and left both government-ID fields holding LEAD1.
+  const guard18 = who18 ? await req(admin, "PATCH", `/api/candidates/${who18._id}`, { apaar_id: LEAD1 }) : { status: 0 };
+  ok("FL18 (QA-977): an APAAR equal to the stored Aadhaar is refused EVEN WHEN that Aadhaar is not a valid one - equality, not validity",
+    guard18.status === 400 && /Aadhaar number, not their APAAR/i.test(String(guard18.data?.error ?? "")),
+    `${guard18.status} ${JSON.stringify(guard18.data)}`);
+  const after18 = who18 ? (await req(admin, "GET", `/api/candidates/${who18._id}`)).data.item : null;
+  ok("FL18 (QA-977): ...and nothing was written - the two fields are not left equal",
+    (after18?.apaar_id ?? null) === null && after18?.aadhaar_no === LEAD1,
+    JSON.stringify({ apaar: after18?.apaar_id ?? null, aadhaar: after18?.aadhaar_no ?? null }));
+
+  // The reverse direction, same hole, same fix.
+  const rev18 = (await req(admin, "POST", "/api/candidates",
+    { name: `FL18 Rev ${stamp}`, phone: phone(), location: loc._id, program: prog._id, apaar_id: LEAD1 }, 201)).data.item;
+  const revGuard18 = await req(admin, "PATCH", `/api/candidates/${rev18._id}`, { aadhaar_no: LEAD1 });
+  ok("FL18 (QA-977, reverse): setting an Aadhaar equal to the stored APAAR is refused too, for a leading-1 value",
+    revGuard18.status === 400, `${revGuard18.status} ${JSON.stringify(revGuard18.data)}`);
+
+  // And the closure-card door, which had the identical comparison.
+  const b18 = (await req(admin, "POST", "/api/batches",
+    { location: loc._id, program: prog._id, planned_start: new Date().toISOString().slice(0, 10), target_size: 20 }, 201)).data.item;
+  await req(admin, "POST", "/api/candidates/assign", { batch: b18._id, candidate_ids: [who18._id] }, 200);
+  const mem18 = ((await req(admin, "GET", `/api/batches/${b18._id}/members`)).data.items ?? [])
+    .find((m) => String(m.candidate?._id ?? m.candidate) === String(who18._id));
+  const card18 = await req(admin, "PUT", `/api/batches/${b18._id}/results`, { rows: [{ member: String(mem18._id), apaar_id: LEAD1 }] });
+  ok("FL18 (QA-977, Closure card): the same refusal on the third door",
+    card18.status === 400 && /Aadhaar number, not their APAAR/i.test(String(card18.data?.error ?? "")),
+    `${card18.status} ${JSON.stringify(card18.data)}`);
+  await req(admin, "POST", `/api/batches/${b18._id}/transition`, { target: "Cancelled", reason: "FL18 fixture cleanup" }, 200);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
