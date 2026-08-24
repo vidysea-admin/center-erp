@@ -84,6 +84,24 @@ export const DELETE = apiHandler(async (_req: NextRequest, ctx: { params: Promis
   const { id } = await ctx.params;
   const t = await Trainer.findById(id);
   if (!t) throw new HttpError(404, "Trainer not found");
+  // QA-1008 / QA-1009 (qa-234 checker, S1): **Rule 38 was missing here, and I am the one who made it
+  // reachable.** While delete was hard-coded to Admin this omission could not be hit - an Admin is
+  // unscoped by definition, so no scoped user ever reached the handler. Opening the verb to
+  // `candidates.delete` / `trainers.delete` did not create the hole; it woke it up. Measured by the
+  // checker on the LIVE release: a Location user who gets 403 merely READING a foreign centre's
+  // record got 200 DELETING it, and the record really went.
+  //
+  // The contrast is what proves this was an omission and not a decision: this unit's own THIRD door,
+  // `api/batches/[id]`, calls `assertBatchInScope` and correctly refuses. Two of three doors had the
+  // check; nobody noticed the third because nobody could reach it.
+  //
+  // Placed BEFORE the history/reference refusal below, deliberately. A 409 saying "this person has
+  // batch history" is itself a disclosure about a record the caller may not see at all - the refusal
+  // must be "not yours" before it is ever "not empty".
+  // A trainer's "location" is not one field (nominated / home / capable), which is why this file
+  // already owns the union helper. Reused rather than re-derived - a second spelling of "which
+  // centres is this trainer attached to" is exactly the drift ARCHITECTURE section 3 exists for.
+  assertTrainerDocInScope(user, t as any);
   if (await Batch.exists({ trainer: id })) {
     throw new HttpError(409, `${t.name} is referenced by a batch — drop the trainer instead of deleting them.`);
   }

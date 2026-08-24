@@ -3,7 +3,7 @@ import { itemRoutes } from "@/lib/crud";
 import { BatchMember, Candidate, CandidateDocument } from "@/models";
 import { candidateEligibility } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
-import { HttpError, apiHandler, requireUser, requireEdit } from "@/lib/authz";
+import { HttpError, apiHandler, isScoped, requireEdit, requireUser } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { dbConnect } from "@/lib/db";
 import { audit } from "@/lib/audit";
@@ -188,6 +188,28 @@ export const DELETE = apiHandler(async (_req: NextRequest, ctx: { params: Promis
   const { id } = await ctx.params;
   const c = await Candidate.findById(id);
   if (!c) throw new HttpError(404, "Candidate not found");
+  // QA-1008 / QA-1009 (qa-234 checker, S1): **Rule 38 was missing here, and I am the one who made it
+  // reachable.** While delete was hard-coded to Admin this omission could not be hit - an Admin is
+  // unscoped by definition, so no scoped user ever reached the handler. Opening the verb to
+  // `candidates.delete` / `trainers.delete` did not create the hole; it woke it up. Measured by the
+  // checker on the LIVE release: a Location user who gets 403 merely READING a foreign centre's
+  // record got 200 DELETING it, and the record really went.
+  //
+  // The contrast is what proves this was an omission and not a decision: this unit's own THIRD door,
+  // `api/batches/[id]`, calls `assertBatchInScope` and correctly refuses. Two of three doors had the
+  // check; nobody noticed the third because nobody could reach it.
+  //
+  // Placed BEFORE the history/reference refusal below, deliberately. A 409 saying "this person has
+  // batch history" is itself a disclosure about a record the caller may not see at all - the refusal
+  // must be "not yours" before it is ever "not empty".
+  if (isScoped(user)) {
+    // Fail closed, exactly as itemRoutes' GET/PATCH do (crud.ts): a record with NO centre is not
+    // visible to a scoped user either, so it is not deletable by one.
+    const locId = (c as any).location;
+    if (!locId || !user.location_scope.map(String).includes(String(locId))) {
+      throw new HttpError(403, "Out of scope");
+    }
+  }
   if (await BatchMember.exists({ candidate: id })) {
     throw new HttpError(409, `${c.name} has batch history — drop them from the batch instead of deleting the record.`);
   }

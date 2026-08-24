@@ -1635,6 +1635,71 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
       del.status === 200, `status=${del.status}`);
   }
 
+  // ---- QA-1008 / QA-1009 (qa-234 checker, S1): Rule 38 on the delete doors ----
+  // Opening delete from a hard-coded Admin test to a togglable right did not create this hole - it
+  // WOKE IT UP. While the verb was Admin-only the missing scope check was unreachable, because an
+  // Admin is unscoped by definition. The moment a Location user could hold `candidates.delete`, a
+  // person who gets 403 merely READING a foreign centre's record could DELETE it, and the record
+  // really went. Measured on the live release by the checker, not reasoned about.
+  //
+  // The contrast is why this was an omission rather than a decision: the THIRD door of the same unit,
+  // `api/batches/[id]`, already called assertBatchInScope and refused correctly. Two of three doors
+  // had the check.
+  //
+  // These assertions are the pair that matters: refused on somebody ELSE'S centre, still allowed on
+  // their OWN. A pin that only proves the refusal would pass just as well on a door that refuses
+  // everyone, which is a different bug wearing the same green tick.
+  {
+    const s10 = "SC" + Date.now().toString().slice(-6);
+    const jprId = (await req(admin, "GET", "/api/locations?limit=200")).data.items
+      ?.find((l) => /jaipur|jpr/i.test(String(l.name) + String(l.code)))?._id;
+    const farLoc = (await req(admin, "POST", "/api/locations", { code: "FAR" + s10, name: "Far Centre " + s10, approval_status: "Approved" })).data.item;
+    const anyProg = (await req(admin, "GET", "/api/programs?limit=1")).data.items?.[0]?._id;
+
+    // grant the SPOC's role the delete rights this unit ships by default to Location
+    const permsNow = (await req(admin, "GET", "/api/permissions")).data;
+    const locBase = (permsNow.roles ?? []).find((r) => r.role === "Location")?.permissions ?? [];
+    await req(admin, "PUT", "/api/permissions", { role: "Location", permissions: [...new Set([...locBase, "candidates.delete", "trainers.delete"])] }, 200);
+    await new Promise((r) => setTimeout(r, 5500)); // role-permission cache TTL
+
+    const mkAt = async (locId) => (await req(admin, "POST", "/api/candidates", {
+      name: "Scope " + s10 + Math.random().toString(36).slice(2, 5),
+      phone: "9" + String(Math.floor(Math.random() * 1e9)).padStart(9, "0"),
+      location: locId, program: anyProg,
+    })).data.item;
+
+    const foreign = await mkAt(farLoc._id);
+    const readForeign = await req(spoc, "GET", `/api/candidates/${foreign._id}`);
+    const delForeign = await req(spoc, "DELETE", `/api/candidates/${foreign._id}`);
+    ok("QA-1008: a scoped user cannot DELETE another centre's candidate",
+      delForeign.status === 403, `read=${readForeign.status} delete=${delForeign.status}`);
+    ok("QA-1008: ...and the record is genuinely still there afterwards",
+      (await req(admin, "GET", `/api/candidates/${foreign._id}`)).status === 200);
+    // The shape that made this an S1 rather than a nit: read and delete DISAGREED. Whatever the
+    // answer is, the two doors must give the same one about the same record.
+    ok("QA-1008: ...read and delete agree - a record you may not READ is not one you may DESTROY",
+      (readForeign.status === 403) === (delForeign.status === 403),
+      `read=${readForeign.status} delete=${delForeign.status}`);
+
+    if (jprId) {
+      const own = await mkAt(jprId);
+      ok("QA-1008: ...but they CAN still delete a junk row at their OWN centre - the fix scopes, it does not close the door",
+        (await req(spoc, "DELETE", `/api/candidates/${own._id}`)).status === 200);
+    } else ok("QA-1008: own-centre fixture available", false, "no Jaipur location found");
+
+    const farTrainer = (await req(admin, "POST", "/api/trainers", { name: "Scope Trainer " + s10, phone: "8" + String(Math.floor(Math.random() * 1e9)).padStart(9, "0"), home_location: farLoc._id })).data.item;
+    ok("QA-1009: a scoped user cannot DELETE another centre's trainer either",
+      (await req(spoc, "DELETE", `/api/trainers/${farTrainer._id}`)).status === 403);
+    await req(admin, "DELETE", `/api/trainers/${farTrainer._id}`);
+
+    // restore Location exactly as found
+    await req(admin, "PUT", "/api/permissions", { role: "Location", permissions: locBase }, 200);
+    const locBack = ((await req(admin, "GET", "/api/permissions")).data.roles ?? []).find((r) => r.role === "Location")?.permissions ?? [];
+    ok("QA-1008: Location's rights are restored exactly as found - this block leaves no residue",
+      JSON.stringify([...locBack].sort()) === JSON.stringify([...locBase].sort()),
+      JSON.stringify({ was: locBase.length, now: locBack.length }));
+  }
+
   // restore Operations exactly as found, so no later suite inherits this block's grants
   await req(admin, "PUT", "/api/permissions", { role: "Operations", permissions: opsBase }, 200);
   const restored = ((await req(admin, "GET", "/api/permissions")).data.roles ?? []).find((r) => r.role === "Operations")?.permissions ?? [];
