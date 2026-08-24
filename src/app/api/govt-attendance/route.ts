@@ -135,12 +135,19 @@ export const POST = apiHandler(async (req: NextRequest) => {
     // derive it from the rows at read time instead of hoping it was stored (QA-300).
     have_local_logs: matched.some((r) => (r.internal_days_present ?? 0) > 0),
     // QA-897 (Umesh 24/08: "attandance upload kaam nhi krr rha hai properly"). On a batch with NO
-    // students, matchGovtRows can never match anything — it filters members by batch and there are
-    // none — so every row comes back Unmatched and the screen reads like the upload failed. It did
-    // not fail; there is nobody to match against yet. Saying so is the difference between an
-    // operator fixing the roster and an operator re-uploading the same file expecting a different
-    // answer. Costs one count, and only when a batch was named.
+    // students every STUDENT row comes back Unmatched — matchGovtRows builds its candidate index
+    // from this batch's members (:357) and there are none — so the screen reads like the upload
+    // failed. It did not fail; there is nobody to match against yet. Saying so is the difference
+    // between an operator fixing the roster and an operator re-uploading the same file expecting a
+    // different answer. Costs one count, and only when a batch was named.
+    //
+    // The first version of this said "nothing can match" and that was FALSE, caught by this unit's
+    // own control pin returning matched_count 1 on an empty batch. Trainer lookup at :401 is
+    // deliberately GLOBAL (-149/QA-334, -151/QA-350 argued and kept it), so a trainer row matches
+    // whatever the roster holds. Hence a second count: the claim the screen makes is about STUDENTS,
+    // so the number the screen is allowed to lean on has to be about students too.
     roster_is_empty: batchId ? (await BatchMember.countDocuments({ batch: batchId, left_on: null })) === 0 : false,
+    matched_student_count: matched.filter((r) => r.match_status === "Matched" && !r.trainer).length,
   };
 
   if (!confirm) {

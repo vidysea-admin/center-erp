@@ -327,8 +327,9 @@ function Inner() {
                 it is said first and the other note is suppressed while it applies. */}
             {upload.roster_is_empty ? (
               <p className="rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-800">
-                This batch has no students on its roster yet, so none of these {upload.row_count} rows can match anyone.
+                This batch has no students on its roster yet, so no student row in this file can be matched to anyone.
                 The upload itself is fine — add the students to the batch first, then import this file again.
+                {upload.matched_student_count === 0 && upload.matched_count > 0 && " (Trainer rows are matched separately and are unaffected.)"}
               </p>
             ) : !!upload.unmatched_count && (
               <p className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">

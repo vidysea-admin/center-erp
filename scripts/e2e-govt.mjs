@@ -2005,10 +2005,12 @@ ok("SSRF guard does not block the real client workbook", stillOk.data.ok === tru
 
 // ---- QA-897: an empty roster is why nothing matched, and the upload must say so ----
 // Umesh, 24/08, on MUZ-CHAR-RPLHSL-SPIT-01: "attandance upload kaam nhi krr rha hai properly".
-// It was working. The batch had no students, so matchGovtRows (which filters members BY BATCH)
-// could not match anyone, every row came back Unmatched, and the screen's standing note blamed the
-// portal Candidate ID — sending the operator to fix a thing that was not broken. The roster is the
-// answer, and only the server knows it.
+// It was working. The batch had no students, so matchGovtRows (whose candidate index is built from
+// THIS BATCH's members, :357) could not match a single student, every student row came back
+// Unmatched, and the screen's standing note blamed the portal Candidate ID — sending the operator to
+// fix a thing that was not broken. The roster is the answer, and only the server knows it.
+// Trainer rows are a separate question: that lookup is global by design, so "nothing matched" was
+// never the right claim — see the assertion below, which is where that error was caught.
 console.log("\n--- QA-897: empty roster is named, not left to look like a failed upload ---");
 {
   // No trainer and no room ON PURPOSE. The fixture batch above already holds both, and a second
@@ -2028,9 +2030,15 @@ console.log("\n--- QA-897: empty roster is named, not left to look like a failed
   ok("QA-897: an upload aimed at a batch with NO roster reports roster_is_empty",
     onEmpty.status === 200 && onEmpty.data.roster_is_empty === true,
     JSON.stringify({ status: onEmpty.status, flag: onEmpty.data.roster_is_empty, matched: onEmpty.data.matched_count }));
-  ok("QA-897: and it is genuinely the roster, not the file - the same file matches on a batch that HAS one",
-    onEmpty.data.matched_count === 0,
-    JSON.stringify({ empty_batch_matched: onEmpty.data.matched_count }));
+  // This assertion read `matched_count === 0` and FAILED on the wall with empty_batch_matched 1 -
+  // correctly. Trainer lookup in matchGovtRows is deliberately GLOBAL (govt-attendance.ts:401,
+  // argued in -149/QA-334 and kept in -151/QA-350), so a trainer row in the file matches whatever
+  // the roster holds. The claim the screen makes is about STUDENTS, so this is the number that
+  // carries it. The over-strong version would have shipped a red block saying "none of these rows
+  // can match anyone" over a preview that had just matched one.
+  ok("QA-897: and it is genuinely the roster - not one STUDENT row matches on an empty batch",
+    onEmpty.data.matched_student_count === 0,
+    JSON.stringify({ students: onEmpty.data.matched_student_count, all_matched: onEmpty.data.matched_count }));
 
   // The control that makes the pin mean something: the SAME file on the populated batch must NOT
   // raise the flag. Without this, a pin that always returned true would pass.
