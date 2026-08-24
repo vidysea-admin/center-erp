@@ -72,7 +72,13 @@ export const RELEASE_NOTE_CURRENT =
   "attendance the centre already held for the weeks before that could not be entered against "  +
   "them at all. Both screens that add students to a batch now ask for the joining date and "  +
   "offer the day the batch really began. A date in the future, or one before the batch started, "  +
-  "is refused with the reason said out loud.";
+  "is refused with the reason said out loud. This release also names three changes that would "  +
+  "otherwise have reached production undescribed. Importing candidates from a batch that has "  +
+  "none no longer sends the operator away at the end: it offers to enrol the people just "  +
+  "imported onto that same batch. Uploading government attendance for a batch with an empty "  +
+  "roster now says so plainly instead of blaming the portal identifiers - fill the roster "  +
+  "first. And a test pin that measured less than its own description claimed has been "  +
+  "repaired.";
 const RELEASE_NOTE_ARCHIVE_238 =
   "-238 moves that question out of a block that called it optional. On both public registration "  +
   "pages the choice between the current intake and a later one had been placed inside the section "  +
