@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-220";
+export const RELEASE = "2026.08.14-221";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,20 @@ export const RELEASE = "2026.08.14-220";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-221 answers the check on the release before it. The safeguard added last time, which refuses " +
+  "a screen whose permission only an administrator could ever reach, recognised only one way of " +
+  "writing that fault: the same mistake spelled with different quotes, with an extra comma, or in " +
+  "the layout a code formatter itself produces would have passed unnoticed, so running the " +
+  "formatter alone would have switched the safeguard off. It now reads the rule rather than its " +
+  "spelling, examines every screen in the file rather than one list, and fails outright if it " +
+  "cannot account for a rule it has found. Separately, the warning shown before re-opening a " +
+  "sheet change no longer searches the change's own note for a phrase - that phrase can be typed " +
+  "into the reason box on the very same screen, which would have made the row claim ever after " +
+  "that it had been reverted. Whether a change was reverted is now read only as a recorded fact, " +
+  "and for changes settled before that fact began to be recorded the warning says plainly that it " +
+  "is not known rather than guessing.";
+
+const RELEASE_NOTE_ARCHIVE_220 =
   "-220 repairs the release before it, which fixed two faults by introducing two more. Sync now " +
   "was reporting every healthy source as a failure, in red, because the previous fix compared the " +
   "result against a word this system never produces; it reads the real outcomes now, and a run " +
@@ -264,6 +278,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
+  RELEASE_NOTE_ARCHIVE_220 + " " +
   RELEASE_NOTE_ARCHIVE_219 + " " +
   RELEASE_NOTE_ARCHIVE_218 + " " +
   RELEASE_NOTE_ARCHIVE_217 + " " +

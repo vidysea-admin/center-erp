@@ -1656,18 +1656,38 @@ for (const file of walk(root)) {
 // purpose.)
 {
   const rel = "components/shell.tsx";
-  const src = stripComments(fs.readFileSync(path.join(root, rel), "utf-8"));
-  const block = src.slice(src.indexOf("const ROUTE_RULES"), src.indexOf("export function routeAllowed"));
-  const rules = [...block.matchAll(/\{\s*prefix:\s*"([^"]+)"[^}]*\}/g)].map((m) => m[0]);
-  const dead = rules.filter((r) => /perm:/.test(r) && /roles:\s*\[\s*"Admin"\s*\]/.test(r))
-    .map((r) => (/prefix:\s*"([^"]+)"/.exec(r) ?? [])[1]);
+  const raw = stripComments(fs.readFileSync(path.join(root, rel), "utf-8"));
+  // QA-818 (-221, checker on qa-220): the -220 version of this pin matched today's SPELLING, not the
+  // shape. Six mutations that are the IDENTICAL defect and all compile (`tsc` exit 0) left it green
+  // at 270/0: `["Admin",]` · `["Admin","Admin"]` · `['Admin']` · `["Admin", ]` · prettier's multiline
+  // `[\n "Admin",\n]` · and a SECOND rules array declared AFTER `routeAllowed`, which the old
+  // `slice(…, indexOf("export function routeAllowed"))` never even looked at. Two of those are what
+  // `prettier`/`eslint --fix` emit, so running a formatter would have silently disarmed the pin —
+  // a pin that a formatter can turn off was never pinning the class. So: normalise quoting and
+  // whitespace first, read EVERY rule object in the file rather than one block, parse the roles
+  // array as a SET, and refuse to pass at all if the parser did not account for every rule present.
+  const src = raw.replace(/'/g, '"').replace(/\s+/g, " ");
+  const rules = [...src.matchAll(/\{ ?prefix: ?"[^"]+"[^{}]*\}/g)].map((m) => m[0]);
+  const prefixCount = (src.match(/prefix: ?"/g) ?? []).length;
+  const rolesOf = (r) => {
+    const m = /roles: ?\[([^\]]*)\]/.exec(r);
+    if (!m) return null;
+    return [...new Set(m[1].split(",").map((s) => s.trim().replace(/^"|"$/g, "")).filter(Boolean))];
+  };
+  const dead = rules
+    .filter((r) => /perm: ?"/.test(r))
+    .filter((r) => { const roles = rolesOf(r); return Array.isArray(roles) && roles.length === 1 && roles[0] === "Admin"; })
+    .map((r) => (/prefix: ?"([^"]+)"/.exec(r) ?? [])[1]);
   // …and routeAllowed must still short-circuit Admin, or this pin is measuring the wrong thing.
-  const adminShortCircuits = /perms\.role === "Admin"\s*\)\s*return true/.test(src);
-  if (rules.length >= 5 && adminShortCircuits && dead.length === 0) passed++;
+  const adminShortCircuits = /perms\.role ?=== ?"Admin" ?\) ?return true/.test(src);
+  // A rule the parser could not read is a rule this pin did not check — that must FAIL, not pass
+  // quietly. Silent under-counting is how the second-array mutation walked past the -220 pin.
+  const parsedAll = rules.length === prefixCount;
+  if (rules.length >= 5 && parsedAll && adminShortCircuits && dead.length === 0) passed++;
   else {
     failed++;
     pushStructural(rel + ": a ROUTE_RULES entry carries a permission only an Admin can reach"
-      + " (rules parsed=" + rules.length + ", Admin short-circuits=" + adminShortCircuits
+      + " (rules parsed=" + rules.length + "/" + prefixCount + ", Admin short-circuits=" + adminShortCircuits
       + ", unreachable=" + JSON.stringify(dead) + ")"
       + " - routeAllowed returns true for Admin before it reads `perm`, so that permission is dead"
       + " text and every gate written behind that screen is unreachable with it. QA-806 shipped this"
@@ -1675,7 +1695,7 @@ for (const file of walk(root)) {
   }
 }
 
-// ---- -217 (QA-785): EVERY component on the Closure tab asks whether this person may mark ----// ---- -217 (QA-785): EVERY component on the Closure tab asks whether this person may mark ----
+// ---- -217 (QA-785): EVERY component on the Closure tab asks whether this person may mark ----
 // The class has now shipped five times (QA-712, QA-723, QA-754, QA-775, QA-785) and the last two
 // were the SAME TAB: -216 gated the card component and left its parent, 250 lines up, on a
 // status-only `closed`. A Trainer pressed an enabled "Mark Completed" and was refused. Counting

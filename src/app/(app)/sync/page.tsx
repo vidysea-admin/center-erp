@@ -69,31 +69,44 @@ export default function SyncInboxPage() {
   // somebody's sentence is not a safety sentence. It reads FACTS now — `reverted_at` and
   // `action_taken` — and the ordering is deliberate: reverted is checked first, because a reverted
   // row also carries a real `action_taken`.
+  // QA-821 (-221, checker on qa-220): QA-812's "disclosed limit" was not a hypothetical hand-typed
+  // edge case — it is a BOX ON THIS SCREEN. `changeStatus` below prompts "Reason (optional)", the
+  // status route appends that reason verbatim into `note`, and -220's fallback then grepped `note`
+  // for `Reverted to "`. So any reviewer who typed that phrase into the Reason box made the row
+  // claim, permanently, that it had been reverted and that "the record does NOT carry the value" —
+  // QA-805 reincarnated through the same door, two clicks away. The grep got tighter; the trust in
+  // free text did not. It is GONE. This reads structural fields only.
+  //
+  // `reverted_at` is written only by reverts since -219, and there is no backfill (a production
+  // write, and Umesh's call). So its absence means "not reverted" ONLY for rows settled after that
+  // release. For older rows it means "never recorded" — and guessing in either direction is exactly
+  // what QA-812 punished, so those rows get an honest third message instead of a confident wrong one.
+  const REVERT_FACT_SINCE = Date.parse("2026-08-25T00:00:00Z");
+  function revertRecorded(r: any): boolean {
+    const t = Date.parse(String(r.actioned_at ?? ""));
+    return Number.isFinite(t) && t >= REVERT_FACT_SINCE;
+  }
+
   function reopenWarning(r: any): string {
     const who = rowLabel(r) ?? "this record";
-    // QA-812 (-220, checker on qa-219): `reverted_at` only exists on rows reverted since -219. There
-    // is no backfill (that is a production write, and Umesh's call), so for every OLDER reverted row
-    // -219 said "the record already carries that value" - the exact opposite of the truth, on a row
-    // -218's loose grep had classified CORRECTLY. Fixed forward, regressed backward.
-    //
-    // The fallback is the literal the REVERT ROUTE itself writes, not the loose /Revert/i that made
-    // QA-805: someone typing "do NOT revert this" does not match it. Disclosed limit - a person who
-    // types that exact phrase by hand would still fool it, which is why the field is checked first
-    // and a backfill is proposed rather than assumed.
-    const wasReverted = Boolean(r.reverted_at) || /Reverted to "/.test(String(r.note ?? ""));
-    if (wasReverted) {
+    if (r.reverted_at) {
       return `Re-open this change for ${who}?
 
-This one was applied and then REVERTED${r.reverted_at ? ` on ${fmtDate(r.reverted_at)}` : ""}. The record does NOT carry the value now. Re-opening puts it back on the review queue as a change waiting to be applied again.`;
+This one was applied and then REVERTED on ${fmtDate(r.reverted_at)}. The record does NOT carry the value now. Re-opening puts it back on the review queue as a change waiting to be applied again.`;
     }
     if (!r.action_taken || r.action_taken === "No action") {
       return `Re-open this change for ${who}?
 
 Nobody acted on it — it was dismissed. It goes back to the review queue exactly as it arrived.`;
     }
+    if (!revertRecorded(r)) {
+      return `Re-open this change for ${who}?
+
+CAREFUL: this change was APPLIED${r.actioned_at ? ` on ${fmtDate(r.actioned_at)}` : ""} (${r.action_taken}). Whether it was reverted afterwards was NOT recorded for changes settled before 25 Aug 2026 — check the record itself before you apply it again. Re-opening puts it back on the queue, where applying it would write “${r.new_value ?? ""}”.`;
+    }
     return `Re-open this change for ${who}?
 
-CAREFUL: this change was already APPLIED${r.actioned_at ? ` on ${fmtDate(r.actioned_at)}` : ""} (${r.action_taken}). The record already carries that value. Re-opening puts it back on the queue, where applying it again would write "${r.new_value ?? ""}" a second time.`;
+CAREFUL: this change was already APPLIED${r.actioned_at ? ` on ${fmtDate(r.actioned_at)}` : ""} (${r.action_taken}). The record already carries that value. Re-opening puts it back on the queue, where applying it again would write “${r.new_value ?? ""}” a second time.`;
   }
 
   async function changeStatus(r: any, next: "Open" | "Ignored") {
