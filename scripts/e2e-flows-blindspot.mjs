@@ -911,6 +911,55 @@ console.log("\n--- FL14 (-226): a batch that ALREADY RAN can be recorded, and th
       String(freshMem?.joined_on ?? "").slice(0, 10) === day(0),
       JSON.stringify({ joined_on: freshMem?.joined_on, expected: day(0) }));
 
+    // ---- QA-907: the leak cycle 1 shipped, and the reason this block exists twice ----
+    // Cycle 1 asked "did this batch start on a past day?" — true of almost every RUNNING batch — so
+    // the default escaped onto batches nobody asked it to change. A walk-in added today to an
+    // ordinary running batch was written ten days early, and a daily log marking them present
+    // BEFORE they arrived went 400 -> 201. The pin below is the one that was missing: cycle 1
+    // tested the not-started boundary, and the leak was at the started-NORMALLY boundary.
+    // The batch must genuinely reach Active by the ORDINARY path, so readiness has to pass for real:
+    // a trainer, a room, and a member whose enrolment steps are done. A first version of this pin
+    // skipped all three, the Ready transition 409'd on `room_assigned, trainer_ready`, the batch
+    // stayed in Planning with no actual_start — and the assertions below PASSED anyway, for the
+    // wrong reason. A pin that cannot fail is not a pin (QA-212), so the transitions are asserted
+    // with an expected 200 rather than fired and hoped over.
+    const bdTr = (await req(admin, "POST", "/api/trainers", {
+      name: `FL15 Trainer ${stamp}`, phone: phone(), skills: [`bd${stamp}`], pipeline_status: "Certified",
+      available_from: day(-60),
+    }, 201)).data.item;
+    const bdRoom = (await req(admin, "POST", `/api/locations/${bdLoc._id}/rooms`,
+      { name: `FL15 Room ${stamp}`, type: "Classroom", capacity: 30 }, 201)).data.item;
+    const normal = (await req(admin, "POST", "/api/batches",
+      { location: bdLoc._id, program: bdProg._id, trainer: bdTr._id, room: bdRoom._id,
+        planned_start: day(-10), target_size: 1 }, 201)).data.item;
+    const early = await mkCand("Early");
+    const earlyM = (await req(admin, "POST", `/api/batches/${normal._id}/members`,
+      { candidate: early._id, joined_on: day(-10) }, 201)).data.item;
+    await req(admin, "PATCH", `/api/members/${earlyM._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+    await req(admin, "POST", `/api/batches/${normal._id}/transition`, { target: "Ready" }, 200);
+    // The ordinary path: no backdate_override, so NO `backdated_start` audit row is written.
+    await req(admin, "POST", `/api/batches/${normal._id}/transition`, { target: "Active", actual_start: day(-10) }, 200);
+    const normalNow = (await req(admin, "GET", `/api/batches/${normal._id}`)).data.item;
+    ok("FL15/QA-907: precondition - the control batch really IS Active with a past actual_start",
+      normalNow?.status === "Active" && String(normalNow?.actual_start ?? "").slice(0, 10) === day(-10),
+      JSON.stringify({ status: normalNow?.status, actual_start: normalNow?.actual_start, expected: day(-10) }));
+
+    const walkIn = await mkCand("WalkIn");
+    await req(admin, "POST", "/api/candidates/assign", { batch: normal._id, candidate_ids: [walkIn._id] }, 200);
+    const wm = (await req(admin, "GET", `/api/batches/${normal._id}/members`)).data.items
+      .find((m) => String(m.candidate?._id ?? m.candidate) === String(walkIn._id));
+    ok("FL15/QA-907: a walk-in joining a NORMALLY running batch is recorded TODAY, not at its start",
+      String(wm?.joined_on ?? "").slice(0, 10) === day(0),
+      JSON.stringify({ joined_on: wm?.joined_on, expected: day(0), batch_started: day(-10) }));
+
+    // The consequence, which is what actually matters: attendance before they arrived stays refused.
+    const before = await req(admin, "POST", `/api/batches/${normal._id}/logs`,
+      { log_date: day(-5), present_member_ids: [String(wm._id)], actual_topic: "QA-907" });
+    ok("FL15/QA-907: marking that walk-in present BEFORE they joined is still refused",
+      before.status >= 400,
+      `${before.status} ${JSON.stringify(before.data?.error ?? "")} — a 201 here means the guard is gone`);
+
+    await req(admin, "POST", `/api/batches/${normal._id}/transition`, { target: "Cancelled", reason: "FL15 fixture cleanup" }, 200);
     await req(admin, "POST", `/api/batches/${fresh._id}/transition`, { target: "Cancelled", reason: "FL15 fixture cleanup" }, 200);
   }
 

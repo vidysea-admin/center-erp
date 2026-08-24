@@ -2,7 +2,7 @@
 // center-erp-data-model-rules.md §4. Rule numbers are cited inline.
 import { Types } from "mongoose";
 import {
-  Batch, BatchMember, Candidate, CandidateResult, Closure, CostCategory, CostEntry, DailyLog, GovtAttendanceRow, Invoice, Location,
+  AuditLog, Batch, BatchMember, Candidate, CandidateResult, Closure, CostCategory, CostEntry, DailyLog, GovtAttendanceRow, Invoice, Location,
   LocationTarget, Notification, Program, Room, Scheme, TRAINER_PIPELINE, Trainer, TrainerDocument,
 } from "@/models";
 import { audit, auditDiff } from "@/lib/audit";
@@ -428,6 +428,29 @@ export async function addMemberChecked(batchId: string, candidateId: string, joi
     throw new HttpError(409, `Rule 20: Candidate already active in batch ${existing.batch?.code ?? existing.batch}.`);
   }
 
+  // QA-907 (-230, Umesh 24/08): "jo future interested hai unka status jab tak update nhi hoga tho vo
+  // batch mai register nhi hongee aur select krne mai aana chaiye ki phle status update kro."
+  //
+  // A candidate who told us they are interested in a FUTURE batch has not agreed to join this one.
+  // Enrolling them anyway is not a small slip: it puts a real person on a government roster, and the
+  // centre only finds out when that student does not turn up on day one.
+  //
+  // The candidate is loaded HERE rather than passed in by the caller. Both roster-add doors already
+  // load the candidate for their own checks, so accepting it as an argument would have been cheaper -
+  // and would have made this refusal depend on every caller remembering to supply it. That is exactly
+  // how the pair in ARCHITECTURE.md §3.1 drifted apart (QA-273), and a third door added later would
+  // inherit the gap silently. One read, in the one place both doors must pass through.
+  //
+  // The message names the fix, because a refusal that does not say what to do next is a dead end -
+  // the -224 fault this project shipped two days ago was precisely a correct guard whose stated
+  // remedy did not exist on screen.
+  const cand = await Candidate.findById(candidateId).select("name batch_interest").lean<any>();
+  if (cand?.batch_interest === "Future") {
+    throw new HttpError(409,
+      `${cand.name ?? "This candidate"} is marked as interested in a FUTURE batch, so they are not being enrolled yet. ` +
+      `Open their record and change "Interested in" to the current intake first — then add them.`);
+  }
+
   // ---- 2. context read once, for the checks above and the values below ----
   const batch = await Batch.findById(batchId).select("target_size code actual_start").lean<any>();
   const rosterCount = await BatchMember.countDocuments({ batch: batchId, left_on: null });
@@ -456,9 +479,25 @@ export async function addMemberChecked(batchId: string, candidateId: string, joi
   // encodings of the same day to the same roster, one per door, which is the F-008 shape again.
   // Caught by this unit's own pin failing on an IST machine, not by reading the code.
   const began = batch?.actual_start ? dayKey(batch.actual_start) : null;
+  // QA-907 (-231 cycle 2). Cycle 1 tested `began < istToday()` — "this batch started on a past day"
+  // — and that is true of almost EVERY running batch, not only one recorded after the fact. Umesh's
+  // words were "bss old batches k liye hi". The checker proved the leak rather than arguing it: on a
+  // batch taken Planning -> Ready -> Active by the ordinary path with no override, a walk-in enrolled
+  // today was written ten days early, and a daily log marking them present on a day BEFORE they
+  // arrived went from 400 ("was not on this batch's roster") to 201 Created. A refusal that used to
+  // hold stopped holding, on a government-portal-facing attendance row, on a batch nobody asked this
+  // unit to change.
+  //
+  // The marker for "recorded after it ran" already exists and needs no new field: transitionBatch
+  // writes a `backdated_start` audit row (:805), and that block's own comment says "the audit trail
+  // IS the record ... a `backdated: true` column would be a second source of truth for something
+  // already written down". So this asks the record rather than inferring from a date.
+  const backdated = began
+    ? await AuditLog.exists({ entity: "Batch", entity_id: batchId, field: "backdated_start" })
+    : null;
   const resolvedJoin = joined_on
     ? dayKey(joined_on)
-    : began && began < istToday() ? began : istToday();
+    : backdated && began && began < istToday() ? began : istToday();
   const member = await BatchMember.create({ batch: batchId, candidate: candidateId, joined_on: resolvedJoin });
   await Candidate.findByIdAndUpdate(candidateId, { lifecycle_status: "Assigned" }); // Rule 21
   const warning = batch && rosterCount + 1 > batch.target_size
