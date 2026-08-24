@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-241";
+export const RELEASE = "2026.08.14-242";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -59,6 +59,18 @@ const RELEASE_NOTE_ARCHIVE_239 =
   "record. Alongside these, two controls on the batch screen now ask for the same right the "  +
   "server asks for, so neither is offered to someone it would refuse.";
 export const RELEASE_NOTE_CURRENT =
+  "-242 corrects a sentence this product started saying two releases ago. When government "  +
+  "attendance is uploaded against a batch, and the batch has nobody on it, the upload now says "  +
+  "that plainly instead of blaming the portal identifiers. That was right, and it was still "  +
+  "wrong in one case: a batch whose students have all LEFT was being called empty, while a row "  +
+  "for one of those departed students went on matching perfectly well. The upload then told the "  +
+  "operator that nothing in the file could match anyone - over a preview in which something "  +
+  "just had - and in doing so it hid the note that would have told them what to actually do. "  +
+  "A batch someone has left is not a batch with nobody in it, and the two halves of the product "  +
+  "that disagreed about that now read the same record. This release also adds the missing test "  +
+  "for restoring a cancelled batch to Ready, which is the path an operator actually takes and "  +
+  "the one branch of that feature no test had ever run.";
+const RELEASE_NOTE_ARCHIVE_241 =
   "-241 closes a way a centre's records could be destroyed by someone who was not allowed to see "  +
   "them. Deleting a candidate or a trainer had never checked which centre the record belonged to. "  +
   "That could not be reached while deletion was reserved to administrators, who are not restricted "  +
