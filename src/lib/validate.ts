@@ -84,6 +84,49 @@ export function aadhaarError(v: unknown, opts?: { optional?: boolean }): string 
   return verhoeffOk(digits) ? null : "That Aadhaar number does not check out — one digit is likely mistyped or two are swapped. Please compare it with the card.";
 }
 
+// ---- APAAR ID (2026-08-24, Umesh: "jaise abhi candidate id aati hai vaise hi govt APAAR ID hota
+// hai, to ye bhi daal paayein for each one of the user team") ----
+//
+// APAAR = Automated Permanent Academic Account Registry - the student's 12-digit government academic
+// account number (the same number the ABC / Academic Bank of Credits portal shows). A centre reads it
+// off the portal exactly as it reads the CAN id, which is why it lives beside `sidh_candidate_id` and
+// not beside `aadhaar_no`.
+//
+// DO NOT "HARMONISE" THIS WITH THE AADHAAR VALIDATOR ABOVE. They are both 12 digits and that is the
+// whole of what they share. `aadhaarError` refuses any number beginning 0 or 1 and runs a Verhoeff
+// check digit; the very first live APAAR value this product was given - Umesh's own screenshot,
+// 190305516076 - BEGINS WITH 1, so routing it through that function would refuse a real id from the
+// government's own screen. APAAR carries no published check digit, so the only honest test is the
+// length and that it is all digits. A validator that invents a checksum it cannot verify would refuse
+// correct data, which is worse than accepting a typo.
+//
+// Manual entry is STRICT (a human is at the keyboard and can be told); bulk import keeps the
+// normalize-and-report lane and never drops a row over format - the QA-141 ruling, unchanged.
+
+/** 12 bare digits, or null. Spaces and hyphens are how people write it and are not an error. */
+export function canonicalApaar(v: unknown): string | null {
+  const digits = String(v ?? "").replace(/[\s-]/g, "");
+  return /^\d{12}$/.test(digits) ? digits : null;
+}
+
+export function apaarError(v: unknown, opts?: { optional?: boolean }): string | null {
+  const s = String(v ?? "").trim();
+  if (!s) return opts?.optional ? null : "APAAR ID is required.";
+  const digits = s.replace(/[\s-]/g, "");
+  if (!/^\d+$/.test(digits)) return "APAAR ID is 12 digits - letters and symbols are not part of it.";
+  if (digits.length !== 12) return `APAAR ID must be exactly 12 digits (this has ${digits.length}).`;
+  return null;
+}
+
+/** QA-902: there IS a value on record and it is not a readable APAAR ID. The bulk importer stores
+ *  what it reports (it never refuses a row), so a stored non-conforming value is a state that
+ *  really occurs and the screen has to be able to say so rather than showing a blank. Asked in
+ *  exactly one place, the same discipline `storedCanIsUnreadable` exists for. */
+export const storedApaarIsUnreadable = (s: unknown) => {
+  const raw = String(s ?? "").trim();
+  return raw.length > 0 && canonicalApaar(raw) === null;
+};
+
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
 export function emailError(v: unknown, opts?: { optional?: boolean }): string | null {

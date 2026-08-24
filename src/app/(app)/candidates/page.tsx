@@ -6,10 +6,10 @@ import { useSession } from "next-auth/react";
 import { api, fmtDate, offerable } from "@/lib/client";
 import { personLabel } from "@/lib/person";
 import { CANDIDATE_IMPORT_FIELDS } from "@/lib/field-catalog";
-import { emailError, phoneError } from "@/lib/validate";
+import { aadhaarError, apaarError, emailError, phoneError } from "@/lib/validate";
 import { FRESH_TAGS, JOURNEY_TAGS, isFreshCandidate, freshJourneyOf as sharedFreshJourneyOf, journeyOf as sharedJourneyOf } from "@/lib/candidate-journey";
 import { Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, ShareLinkPanel, SourceCell, copyText, inputCls , Tabs} from "@/components/ui";
-import { useLocationCtx } from "@/components/shell";
+import { useLocationCtx, usePerms } from "@/components/shell";
 import { GeographyFields } from "@/components/geography-fields";
 import { BASE_PATH } from "@/lib/base-path";
 import { bulkSmsCsv, smsLink, unsendableCount, waLink } from "@/lib/messaging";
@@ -30,6 +30,11 @@ function CandidatesInner() {
   // need it once the data is included here." Admin/Ops keep provenance; Enrollment doesn't.
   const { data: session } = useSession();
   const role = (session?.user as any)?.role;
+  // 2026-08-24 (QA-904, Umesh: "delete krne ka option dena hai team ko … but vo bhi respective acess
+  // wale persons"). This was `role === "Admin"`, which is why the team saw no button and reported the
+  // verb as missing. The server refuses independently; this only decides who is OFFERED it.
+  const { can: canRight, loaded: rightsLoaded } = usePerms();
+  const canDeleteCandidate = rightsLoaded && canRight("candidates.delete", "edit");
   const [items, setItems] = useState<any[]>([]);
   const [locations, setLocations] = useState<any[]>([]);
   const [programs, setPrograms] = useState<any[]>([]);
@@ -150,6 +155,10 @@ function CandidatesInner() {
         // so it has to reach the server; null (not "") because the QA-417 partial index does not
         // index null.
         if (form.sidh_candidate_id !== undefined && !String(form.sidh_candidate_id).trim()) json.sidh_candidate_id = null;
+        // QA-902: the same for the APAAR ID, and for the identical reason — emptying the box is how
+        // an operator REMOVES a wrong government id, so it has to reach the server; null (not "")
+        // because the partial unique index does not index null but does index the empty string.
+        if (form.apaar_id !== undefined && !String(form.apaar_id).trim()) json.apaar_id = null;
         await api(`/api/candidates/${editId}`, { method: "PATCH", json });
       } else await api("/api/candidates", { method: "POST", json: form });
       setDrawer(""); setForm({}); setEditId(""); load();
@@ -169,6 +178,10 @@ function CandidatesInner() {
       education: r.education ?? "", source: r.source ?? "",
       last_training_date: r.last_training_date ? String(r.last_training_date).slice(0, 10) : "",
       sidh_candidate_id: r.sidh_candidate_id ?? "",
+      // QA-903: this list IS the edit form. A field the API accepts but openEdit does not load is
+      // sent back EMPTY on the next save - the -116 shape, and it is silent.
+      aadhaar_no: r.aadhaar_no ?? "",
+      apaar_id: r.apaar_id ?? "",
       // -116 (SS-01): the government-portal fields ride the edit form too, or opening a record and
       // saving it would silently drop everything typed into that section.
       ...Object.fromEntries(["salutation", "father_name", "mother_name", "marital_status", "religion",
@@ -617,6 +630,27 @@ function CandidatesInner() {
             { key: "source", label: "Source", mobile: false, filterable: true, filterText: (r: any) => r.source ?? "Entered in ERP", render: (r: any) => <SourceCell source={r.source} /> },
           ]),
           {
+            // 2026-08-24 (QA-904) — THE ACTUAL COMPLAINT. Umesh: "abhi candidate details edit and
+            // delete nhi hoo paa rhi hai naa". Both verbs existed: the row has opened the edit drawer
+            // on click since it was written, and Delete sat at the bottom of that drawer. Neither was
+            // VISIBLE. Nothing on the row said it was clickable, so the feature was unreachable in
+            // the only sense that matters to the person using it.
+            // The Trainers directory already does this correctly (trainers/page.tsx) - same shape,
+            // copied rather than reinvented, so the two lists behave alike.
+            key: "_edit", label: "", render: (r: any) => (
+              <span onClick={(e) => e.stopPropagation()} className="flex items-center gap-1">
+                <Btn small kind="ghost" onClick={() => openEdit(r)}>Edit</Btn>
+                {canDeleteCandidate && (
+                  <Btn small kind="ghost" onClick={async () => {
+                    if (!window.confirm(`Delete "${r.name}" (${r.phone}) permanently? Their documents go too. A candidate with batch history should be dropped from the batch, not deleted.`)) return;
+                    try { await api(`/api/candidates/${r._id}`, { method: "DELETE" }); load(); }
+                    catch (e: any) { setError(e.message); }
+                  }}>Delete</Btn>
+                )}
+              </span>
+            ),
+          },
+          {
             // QA-021 (-68): Dropout is reachable from ANY stage now, not only a batch roster.
             key: "_drop", label: "", render: (r: any) => (
               <span onClick={(e) => e.stopPropagation()}>
@@ -730,10 +764,39 @@ function CandidatesInner() {
             </Field>
             <Field label="Last govt training (if any)"><input type="date" className={inputCls} value={form.last_training_date ?? ""} onChange={(e) => set("last_training_date", e.target.value)} /></Field>
           </div>
+          {/* 2026-08-24 (Umesh): "candidate form mai aadhaar number nhi aa rha hai". Checked WHILE
+              TYPING with the same function the API refuses with, so the operator is told before they
+              press Add rather than after (QA-141's canon). The check digit is why this is worth doing
+              at all: a mistyped Aadhaar looks perfectly valid on screen and is only discovered when
+              the government portal rejects that student, weeks later.
+              THREE government-ID boxes now sit on this form and they are NOT interchangeable, so each
+              one says what it is for. QA-414 measured 55 live candidates whose portal id landed in
+              "Govt ID reference" because it was the nearest-looking option on a screen that did not
+              offer the right one. */}
+          <Field label="Aadhaar number">
+            <input className={inputCls} inputMode="numeric" placeholder="12 digits" value={form.aadhaar_no ?? ""} onChange={(e) => set("aadhaar_no", e.target.value)} />
+            {form.aadhaar_no && aadhaarError(form.aadhaar_no, { optional: true }) && <p className="mt-1 text-xs text-red-600">{aadhaarError(form.aadhaar_no, { optional: true })}</p>}
+          </Field>
           {/* 2026-08-12: the portal attendance export keys on this ID — filling it in makes every
               future import match this candidate automatically instead of falling back to the name. */}
           <Field label="Portal Candidate ID (from the government portal, e.g. CAN_40918461)">
             <input className={inputCls} placeholder="CAN_…" value={form.sidh_candidate_id ?? ""} onChange={(e) => set("sidh_candidate_id", e.target.value)} />
+          </Field>
+          {/* QA-902 (-232, Umesh 24/08): the government APAAR ID, directly under the portal id it is
+              the sibling of. It is fillable on the batch Closure card too (that is where he asked for
+              it first, and that door is open to a Trainer) — this one is the record's own screen, and
+              a field editable in only one place is a field an operator cannot correct.
+              The hint validates while typing with the SAME function the API refuses with, so the form
+              and the door never disagree about what a valid APAAR ID is. */}
+          <Field label="APAAR ID (government academic account — 12 digits)">
+            <input className={inputCls} inputMode="numeric" placeholder="e.g. 190305516076"
+              value={form.apaar_id ?? ""} onChange={(e) => set("apaar_id", e.target.value)} />
+            {form.apaar_id && apaarError(form.apaar_id, { optional: true }) && (
+              <span className="mt-1 block text-xs text-red-600">{apaarError(form.apaar_id, { optional: true })}</span>
+            )}
+            <span className="mt-0.5 block text-[11px] text-gray-500">
+              Not the Aadhaar number — both are 12 digits and they are different numbers.
+            </span>
           </Field>
           {/* 2026-08-11: "कौन से program में interested… कौन-कौन सी location में" — for fast shortlisting later.
               2026-08-13 (Umesh): stacked full-width — side-by-side clipped "Govt. ITI Charthwal, Muzaff…"
@@ -848,9 +911,10 @@ function CandidatesInner() {
             || !!phoneError(form.phone) || !!phoneError(form.alt_phone, { optional: true }) || !!emailError(form.email, { optional: true })}>
             {drawer === "edit" ? "Save changes" : "Add"}
           </Btn>
-          {/* -84 (QA-146 part 2): junk rows (a sheet's own header/description lines) need a way
-              out — Admin only; the API refuses anyone with batch history (drop those instead). */}
-          {drawer === "edit" && editId && role === "Admin" && (
+          {/* -84 (QA-146 part 2): junk rows (a sheet's own header/description lines) need a way out.
+              QA-904 (2026-08-24): was Admin-only, now follows `candidates.delete`. The API still
+              refuses anyone with batch history — a real person is Dropped, never erased. */}
+          {drawer === "edit" && editId && canDeleteCandidate && (
             <Btn kind="ghost" onClick={async () => {
               if (!window.confirm(`Delete "${form.name}" (${form.phone}) permanently? Their documents go too. A candidate with batch history should be dropped from the batch, not deleted.`)) return;
               try { await api(`/api/candidates/${editId}`, { method: "DELETE" }); setDrawer(""); setEditId(""); load(); }

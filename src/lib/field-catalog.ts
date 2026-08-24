@@ -108,6 +108,12 @@ export const FIELD_CATALOG: Record<"Candidate" | "Trainer" | "Location", FieldSp
     { key: "source", label: "Source", type: "text", aliases: ["source", "mobiliser", "campaign", "reference"] },
     { key: "sidh_status", label: "SIDH status", type: "enum", enum: ["Not Registered", "Link Sent", "Registered", "Registration Failed"], aliases: ["sidh status", "enrolled status", "enrollment status", "registration status"] },
     { key: "sidh_candidate_id", label: "Portal candidate ID (SIDH/NCVET)", type: "text", aliases: ["candidate id", "portal candidate id", "can id", "sidh id"] },
+    // QA-902 (2026-08-24): the government APAAR ID. Listed HERE - directly under the portal id and
+    // ABOVE both aadhaar_no and id_reference - for the reason the Aadhaar row records below: the
+    // nearest-looking option wins when the right one is not offered, and that is precisely how
+    // QA-414 put 55 portal ids into id_reference. "apaar id" also beats "candidate id" on a header
+    // like "Candidate APAAR ID", because the resolver takes the LONGEST matching alias first.
+    { key: "apaar_id", label: "APAAR ID (govt academic account, 12 digits)", type: "text", aliases: ["apaar", "apaar id", "apaar no", "apaar number", "apar id", "abc id", "academic bank of credits", "academic bank of credits id"] },
     // -154 (QA-424): these five have been accepted by the Excel import since it was written and
     // were never in the catalog, so the catalog and the import screen each held half the truth.
     // They are all real fields on CandidateSchema.

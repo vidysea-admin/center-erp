@@ -917,5 +917,147 @@ console.log("\n--- FL14 (-226): a batch that ALREADY RAN can be recorded, and th
   await req(admin, "POST", `/api/batches/${todayBatch._id}/transition`, { target: "Cancelled", reason: "FL14 fixture cleanup" }, 200);
 }
 
+
+console.log("\n--- FL16 (QA-902): the government APAAR ID, on the door the Closure card writes through ---");
+{
+  // Umesh 24/08: "hrr individual candidate k liye jaise abhi candidate id aati hai vaise hi govt
+  // APAAR ID hota hai... card mai iske liye bhi jagah bnaao same as candidate id."
+  // The box sits on the batch Closure card, so the write goes through PUT /api/batches/:id/results
+  // on `closure.manage` - the same door the Candidate ID box uses, so a Trainer can fill one in.
+  //
+  // These pins also close a gap QA-880 named out loud: the identity-write path on THIS door had no
+  // automated coverage for EITHER field, which is how -214, -216 and -217 each shipped a
+  // write-then-refuse defect that only a human driving a browser ever caught. The block below is
+  // written against the GENERALISED loop, so most of it pins the portal Candidate ID too.
+  const dayF = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+  const apaar = (n) => `19${stamp}${String(n).padStart(4, "0")}`;   // exactly 12 digits, unique per run
+  const AADHAAR = "234567890124";                                   // Verhoeff-valid, first digit not 0/1
+
+  const b = (await req(admin, "POST", "/api/batches",
+    { location: loc._id, program: prog._id, planned_start: dayF(0), target_size: 20 }, 201)).data.item;
+  const mk = async (nm, extra = {}) => (await req(admin, "POST", "/api/candidates",
+    { name: `FL16 ${nm} ${stamp}`, phone: phone(), location: loc._id, program: prog._id, ...extra }, 201)).data.item;
+  const c1 = await mk("One"), c2 = await mk("Two"), c3 = await mk("Three", { aadhaar_no: AADHAAR });
+  await req(admin, "POST", "/api/candidates/assign", { batch: b._id, candidate_ids: [c1._id, c2._id, c3._id] }, 200);
+  const memOf = async () => (await req(admin, "GET", `/api/batches/${b._id}/members`)).data.items ?? [];
+  const members = await memOf();
+  const memFor = (c) => members.find((m) => String(m.candidate?._id ?? m.candidate) === String(c._id));
+  const m1 = memFor(c1), m2 = memFor(c2), m3 = memFor(c3);
+  const put = (rows, expect) => req(admin, "PUT", `/api/batches/${b._id}/results`, { rows }, expect);
+  const items = async () => (await req(admin, "GET", `/api/batches/${b._id}/results`)).data.items ?? [];
+  const candOf = async (m) => (await items()).find((i) => String(i.member) === String(m._id))?.candidate ?? null;
+
+  // 1. It writes at all, and it comes back on the payload the card reads.
+  await put([{ member: String(m1._id), apaar_id: apaar(1) }], 200);
+  ok("FL16: a 12-digit APAAR written through the Closure door lands on the candidate",
+    (await candOf(m1))?.apaar_id === apaar(1), JSON.stringify({ got: (await candOf(m1))?.apaar_id ?? null }));
+  ok("FL16: ...and rides the ROSTER payload too - without this the roster column renders empty on a record that has one",
+    ((await memOf()).find((m) => String(m._id) === String(m1._id))?.candidate?.apaar_id) === apaar(1));
+
+  // 2. Spaces and hyphens are how a 12-digit number gets typed; they are normalised, not refused.
+  //    This matters beyond tidiness: the partial unique index is built on the RAW string (QA-730).
+  await put([{ member: String(m2._id), apaar_id: `19 ${stamp} 000-2` }], 200);
+  ok("FL16 (QA-730): a spaced/hyphenated APAAR is stored as the bare 12 digits",
+    (await candOf(m2))?.apaar_id === apaar(2), JSON.stringify({ got: (await candOf(m2))?.apaar_id ?? null }));
+
+  // 3. REFUSE BEFORE WRITING ANYTHING - and prove it ACROSS fields, which is the property the
+  //    generalised loop had to keep. A valid portal id rides in the same row as a bad APAAR: if the
+  //    door wrote as it went, the CAN would be on the record after a request that said it refused.
+  //    That is the -206/-213/QA-780 class, and it shipped three times on this door.
+  const canary = `CAN_FL16${stamp}`;
+  const bad = await put([{ member: String(m1._id), sidh_candidate_id: canary, apaar_id: apaar(1).slice(0, 11) }]);
+  ok("FL16: an 11-digit APAAR is refused at the door, in words that say what is wrong",
+    bad.status === 400 && /12 digits/i.test(String(bad.data?.error ?? "")), `${bad.status} ${JSON.stringify(bad.data)}`);
+  const afterBad = await candOf(m1);
+  ok("FL16 (QA-780, cross-field): the VALID portal id in that same request was not written either - nothing was saved",
+    (afterBad?.sidh_candidate_id ?? null) === null && afterBad?.apaar_id === apaar(1),
+    JSON.stringify({ can: afterBad?.sidh_candidate_id ?? null, apaar: afterBad?.apaar_id ?? null }));
+
+  // 4. Two rows of ONE request claiming the same APAAR (QA-786: the DB pre-check cannot see this).
+  const twin = await put([{ member: String(m1._id), apaar_id: apaar(9) }, { member: String(m2._id), apaar_id: apaar(9) }]);
+  ok("FL16 (QA-786): the same APAAR given to two students in one save is refused",
+    twin.status === 409 && /two different students/i.test(String(twin.data?.error ?? "")), `${twin.status} ${JSON.stringify(twin.data)}`);
+  ok("FL16 (QA-786): ...and NEITHER was written - both keep what they had",
+    (await candOf(m1))?.apaar_id === apaar(1) && (await candOf(m2))?.apaar_id === apaar(2));
+
+  // 5. An APAAR another candidate already holds - the 409 names the person, or it is unactionable.
+  const clash = await put([{ member: String(m2._id), apaar_id: apaar(1) }]);
+  ok("FL16 (QA-417): an APAAR already on another candidate is refused, NAMING them",
+    clash.status === 409 && new RegExp(`FL16 One ${stamp}`).test(String(clash.data?.error ?? "")),
+    `${clash.status} ${JSON.stringify(clash.data)}`);
+
+  // 6. The QA-414 guard. APAAR and Aadhaar are both 12 digits; this is the one confusion that is
+  //    knowable at the door rather than months later when the portal rejects the student.
+  const cross = await put([{ member: String(m3._id), apaar_id: AADHAAR }]);
+  ok("FL16 (QA-414 guard): a candidate's own Aadhaar typed into the APAAR box is refused BY NAME",
+    cross.status === 400 && /Aadhaar number, not their APAAR/i.test(String(cross.data?.error ?? "")),
+    `${cross.status} ${JSON.stringify(cross.data)}`);
+  ok("FL16: ...and that candidate's APAAR is still absent - the refusal wrote nothing",
+    ((await candOf(m3))?.apaar_id ?? null) === null);
+
+  // 7. Clearing is how a WRONG id gets removed, and "" must never reach the record (QA-450): the
+  //    partial unique index does not index null but DOES index the empty string, so a second blank
+  //    would be refused as a duplicate identity that does not exist.
+  await put([{ member: String(m1._id), apaar_id: "" }], 200);
+  ok("FL16 (QA-450): clearing the box stores ABSENT, not an empty string",
+    ((await candOf(m1))?.apaar_id ?? null) === null, JSON.stringify({ got: (await candOf(m1))?.apaar_id ?? "(absent)" }));
+  const clear2 = await put([{ member: String(m2._id), apaar_id: "   " }]);
+  ok("FL16 (QA-450): ...and a SECOND candidate can be cleared too - no false 'already in use'",
+    clear2.status === 200 && ((await candOf(m2))?.apaar_id ?? null) === null, `${clear2.status} ${JSON.stringify(clear2.data)}`);
+
+  // 8. The candidate doors (drawer Add / Edit), which is the other place Umesh asked for it.
+  const badPost = await req(admin, "POST", "/api/candidates",
+    { name: `FL16 Bad ${stamp}`, phone: phone(), location: loc._id, program: prog._id, apaar_id: "12345" });
+  ok("FL16: the candidate CREATE door refuses a malformed APAAR", badPost.status === 400, `${badPost.status} ${JSON.stringify(badPost.data)}`);
+  const blank = await mk("Blank", { apaar_id: "" });
+  const blankRead = (await req(admin, "GET", `/api/candidates/${blank._id}`)).data.item;
+  ok("FL16 (QA-450, create door): a blank APAAR is stored as absent, never an empty string",
+    (blankRead?.apaar_id ?? null) === null, JSON.stringify({ got: blankRead?.apaar_id ?? "(absent)" }));
+  const blank2 = await req(admin, "POST", "/api/candidates",
+    { name: `FL16 Blank2 ${stamp}`, phone: phone(), location: loc._id, program: prog._id, apaar_id: "" });
+  ok("FL16 (QA-450, create door): a SECOND blank is not a duplicate", blank2.status === 201, `${blank2.status} ${JSON.stringify(blank2.data)}`);
+
+  const edited = await mk("Edit");
+  await req(admin, "PATCH", `/api/candidates/${edited._id}`, { apaar_id: apaar(20) }, 200);
+  ok("FL16 (-116 lesson): the EDIT door accepts it too - a create-only field looks saved and is gone on the next read",
+    ((await req(admin, "GET", `/api/candidates/${edited._id}`)).data.item?.apaar_id) === apaar(20));
+  await req(admin, "PATCH", `/api/candidates/${edited._id}`, { apaar_id: "" }, 200);
+  ok("FL16: ...and the edit door can clear it back to absent",
+    (((await req(admin, "GET", `/api/candidates/${edited._id}`)).data.item?.apaar_id) ?? null) === null);
+
+  // 9. The bulk import: REPORTS, never refuses (QA-141) - and the record it leaves behind must stay
+  //    EDITABLE in every other field (QA-726). -210 shipped the opposite and it took a checker to
+  //    find: changing only the EMAIL of an imported candidate returned 400 naming an id the operator
+  //    had never touched.
+  const irows = [{ "Student Name": `FL16 Imp ${stamp}`, "Mobile": "9822216001", "APAAR ID": "99" }];
+  const iwb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(iwb, XLSX.utils.json_to_sheet(irows), "Sheet1");
+  const ifile = new File([XLSX.write(iwb, { type: "buffer", bookType: "xlsx" })], "apaar.xlsx",
+    { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const imap = JSON.stringify({ "Student Name": "name", "Mobile": "phone", "APAAR ID": "apaar_id" });
+  const iprev = await multipart(admin, "/api/candidates/import", { file: ifile, location: loc._id, program: prog._id, mapping: imap });
+  ok("FL16 (QA-727 lane): the PREVIEW names a malformed APAAR instead of importing it in silence",
+    iprev.data?.apaar_invalid_count === 1, JSON.stringify({ n: iprev.data?.apaar_invalid_count, rows: iprev.data?.apaar_invalid }));
+  const iconf = await multipart(admin, "/api/candidates/import", { file: ifile, location: loc._id, program: prog._id, mapping: imap, confirm: "1" });
+  ok("FL16 (QA-141): ...and the row is still IMPORTED - a client's sheet is never dropped over format",
+    iconf.status === 201 && iconf.data?.imported === 1, JSON.stringify({ s: iconf.status, d: iconf.data?.imported }));
+  const imported = ((await req(admin, "GET", `/api/candidates?q=${encodeURIComponent(`FL16 Imp ${stamp}`)}&limit=5`)).data.items ?? [])[0];
+  const keepEditable = imported
+    ? await req(admin, "PATCH", `/api/candidates/${imported._id}`, { email: `fl16imp${stamp}@t.local` })
+    : { status: 0 };
+  ok("FL16 (QA-726): a record holding an unreadable APAAR is still editable in every OTHER field",
+    keepEditable.status === 200, `${keepEditable.status} ${JSON.stringify(keepEditable.data ?? {})}`);
+
+  // 10. Search: Umesh asked for it on the roster, and the shell search rides the same field list.
+  const notYet = (await req(admin, "GET", `/api/candidates?q=${apaar(20)}&limit=5`)).data.items ?? [];
+  await req(admin, "PATCH", `/api/candidates/${edited._id}`, { apaar_id: apaar(20) }, 200);
+  const nowFound = (await req(admin, "GET", `/api/candidates?q=${apaar(20)}&limit=5`)).data.items ?? [];
+  ok("FL16: a candidate is findable BY their APAAR ID once it is on record",
+    notYet.length === 0 && nowFound.some((x) => String(x._id) === String(edited._id)),
+    JSON.stringify({ before: notYet.length, after: nowFound.length }));
+
+  await req(admin, "POST", `/api/batches/${b._id}/transition`, { target: "Cancelled", reason: "FL16 fixture cleanup" }, 200);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -4,7 +4,7 @@ import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { BatchMember, Candidate, CandidateResult } from "@/models";
 import { assertBatchInScope, bulkMarkResults, summarizeBatchResults } from "@/lib/rules";
-import { looksLikeCan } from "@/lib/validate";
+import { looksLikeCan, apaarError, canonicalApaar, canonicalAadhaar } from "@/lib/validate";
 import { audit } from "@/lib/audit";
 
 // GET — every roster member left-joined to its result row, so the marking grid renders
@@ -18,7 +18,7 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   // -108: sidh_candidate_id rides along so the closure screen can show the EXACT file name the
   // certificate matcher would accept for each candidate, instead of a generic "CAN_12345.pdf"
   // format hint that told a trainer nothing about their own batch.
-  const members = await BatchMember.find({ batch: id }).populate("candidate", "name phone lifecycle_status sidh_candidate_id").sort({ joined_on: 1 }).lean<any[]>();
+  const members = await BatchMember.find({ batch: id }).populate("candidate", "name phone lifecycle_status sidh_candidate_id apaar_id aadhaar_no").sort({ joined_on: 1 }).lean<any[]>();
   const rows = await CandidateResult.find({ batch: id }).lean<any[]>();
   const byCandidate = new Map(rows.map((r) => [String(r.candidate), r]));
 
@@ -65,18 +65,56 @@ export const PUT = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   //
   // `sidh_candidate_id` belongs to Candidate, not CandidateResult, so it is pulled out BEFORE the
   // allow-list above rather than added to it.
-  const canRows: { member: string; raw: string | null }[] = [];
+  //
+  // QA-902 (2026-08-24, Umesh: "jaise abhi candidate id aati hai vaise hi govt APAAR ID hota hai...
+  // card mein iske liye bhi jagah banao same as candidate id"): there are now TWO candidate identity
+  // fields written through this door, and this block is NOT duplicated for the second one. What used
+  // to be a bespoke sidh_candidate_id path is one loop over the table below, because everything that
+  // makes this block correct was learned the expensive way and applies identically to both:
+  //   -206 / -213  refuse before writing ANYTHING, never write-then-refuse
+  //   QA-780       resolve and pre-check every id before the first save
+  //   QA-786       ...including against the ids THIS SAME REQUEST is about to claim
+  //   QA-726       only where the value actually CHANGED, or records holding a bad value freeze
+  //   QA-417       the partial unique index would otherwise throw E11000 mid-loop
+  //   QA-730       store what was validated, without the whitespace the index would miss
+  // A near-copy of all six for field two is exactly what ARCHITECTURE.md section 3 exists to stop.
+  const ID_FIELDS = [
+    {
+      key: "sidh_candidate_id", label: "portal Candidate ID",
+      ok: (s: string) => looksLikeCan(s),
+      canon: (s: string) => s.trim(),
+      formatError: (raw: string) => `"${raw}" is not a portal Candidate ID. It reads like CAN_12345678 - the letters CAN followed by the number. Copy it from SIDH exactly as it appears there. Nothing has been saved.`,
+      crossCheck: () => null,
+    },
+    {
+      key: "apaar_id", label: "APAAR ID",
+      ok: (s: string) => apaarError(s, { optional: true }) === null,
+      canon: (s: string) => canonicalApaar(s)!,
+      formatError: (raw: string) => `${apaarError(raw, { optional: true })} Nothing has been saved.`,
+      // The QA-414 guard. APAAR and Aadhaar are BOTH 12 digits, and models/index.ts records that 55
+      // live candidates already had a government id typed into the wrong box once. This is the one
+      // confusion that is knowable at the door, so it is refused here by name instead of being
+      // discovered when the portal rejects that student.
+      crossCheck: (cand: any, next: string) =>
+        canonicalAadhaar(cand?.aadhaar_no) === next
+          ? `That is ${cand?.name ?? "this candidate"}'s Aadhaar number, not their APAAR ID. They are both 12 digits and are different numbers - the APAAR ID is the academic account number from the government portal. Nothing has been saved.`
+          : null,
+    },
+  ] as const;
+
+  type IdWant = { member: string; field: (typeof ID_FIELDS)[number]; raw: string | null };
+  const wants: IdWant[] = [];
   for (const r of body.rows as Record<string, unknown>[]) {
-    if (!("sidh_candidate_id" in r)) continue;
-    const v = r.sidh_candidate_id;
-    canRows.push({ member: String(r.member), raw: typeof v === "string" && v.trim() ? v.trim() : null });
+    for (const f of ID_FIELDS) {
+      if (!(f.key in r)) continue;
+      const v = r[f.key];
+      wants.push({ member: String(r.member), field: f, raw: typeof v === "string" && v.trim() ? v.trim() : null });
+    }
   }
   // Validate EVERY id before writing ANYTHING. -206 and -213 both shipped a door that wrote first
   // and refused afterwards; this one refuses first.
-  for (const c of canRows) {
-    if (c.raw && !looksLikeCan(c.raw)) {
-      throw new HttpError(400, `"${c.raw}" is not a portal Candidate ID. It reads like CAN_12345678 - the letters CAN followed by the number. Copy it from SIDH exactly as it appears there. Nothing has been saved.`);
-    }
+  for (const w of wants) {
+    if (w.raw && !w.field.ok(w.raw)) throw new HttpError(400, w.field.formatError(w.raw));
   }
 
   // QA-780 (-216, checker on qa-214): resolve and PRE-CHECK every id write before anything is
@@ -85,46 +123,64 @@ export const PUT = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   // saved and audited an identity field. That is the same write-then-refuse class as QA-697 and
   // QA-751, on a smaller surface but the same shape, and the door had just been given a THIRD
   // caller. Resolve, check uniqueness, then write - and let the result errors fire first.
-  const planned: { cand: any; was: string; raw: string | null }[] = [];
+  const planned: { cand: any; field: (typeof ID_FIELDS)[number]; was: string; next: string | null }[] = [];
   // QA-786 (-217, checker on qa-216): the pre-check asked only the DATABASE, so two rows in ONE
   // request naming the same new id both passed it - the first was written and audited, and the
   // partial unique index then threw 409 on the second. The id was saved by a request that refused.
   // QA-780 survived exactly one path, and it was the path where the conflict does not exist yet.
+  // Keyed by FIELD as well as value, or an APAAR would collide with a CAN id that happened to match.
   const claimedHere = new Map<string, string>();
-  for (const c of canRows) {
-    const m = await BatchMember.findOne({ _id: c.member, batch: id }).select("candidate").lean<any>();
+  // QA-902: one mongoose document per candidate, loaded ONCE and shared. With two id fields on this
+  // door a single request can now change both on the same person, and two separate findById copies
+  // would each save their own field over the other's - the second write silently undoing the first.
+  // That failure did not exist while this loop handled one field, which is precisely why it has to
+  // be dealt with here rather than left for whoever adds field three.
+  const docs = new Map<string, any>();
+  for (const w of wants) {
+    const m = await BatchMember.findOne({ _id: w.member, batch: id }).select("candidate").lean<any>();
     if (!m?.candidate) continue;
-    const cand = await Candidate.findById(m.candidate);
-    if (!cand) continue;
-    const was = String(cand.sidh_candidate_id ?? "").trim();
+    const cid = String(m.candidate);
+    let cand = docs.get(cid);
+    if (!cand) {
+      cand = await Candidate.findById(m.candidate);
+      if (!cand) continue;
+      docs.set(cid, cand);
+    }
+    const was = String(cand[w.field.key] ?? "").trim();
+    const next = w.raw ? w.field.canon(w.raw) : null;
     // QA-726: only where the value actually CHANGED. Re-validating an unchanged value is what made
     // records already holding a bad id uneditable in every other field.
-    if (was === String(c.raw ?? "")) continue;
-    if (c.raw) {
+    if (was === String(next ?? "")) continue;
+    if (next) {
+      const cross = w.field.crossCheck(cand, next);
+      if (cross) throw new HttpError(400, cross);
       // QA-417's partial unique index would throw E11000 halfway through the loop, after earlier
       // rows had already been written. Asked here instead, so the refusal costs nothing.
-      const clash = await Candidate.findOne({ sidh_candidate_id: c.raw, _id: { $ne: cand._id } }).select("name").lean<any>();
+      const clash = await Candidate.findOne({ [w.field.key]: next, _id: { $ne: cand._id } }).select("name").lean<any>();
       if (clash) {
-        throw new HttpError(409, `"${c.raw}" is already the portal Candidate ID of ${clash.name ?? "another candidate"}. Nothing has been saved.`);
+        throw new HttpError(409, `"${next}" is already the ${w.field.label} of ${clash.name ?? "another candidate"}. Nothing has been saved.`);
       }
       // …and against the ids this same request is about to claim.
-      const twin = claimedHere.get(c.raw);
+      const ck = `${w.field.key}:${next}`;
+      const twin = claimedHere.get(ck);
       if (twin && twin !== String(cand._id)) {
-        throw new HttpError(409, `"${c.raw}" was given to two different students in the same save. A portal Candidate ID belongs to one person. Nothing has been saved.`);
+        throw new HttpError(409, `"${next}" was given to two different students in the same save. A ${w.field.label} belongs to one person. Nothing has been saved.`);
       }
-      claimedHere.set(c.raw, String(cand._id));
+      claimedHere.set(ck, String(cand._id));
     }
-    planned.push({ cand, was, raw: c.raw });
+    planned.push({ cand, field: w.field, was, next });
   }
 
   const res = await bulkMarkResults(id, rows, user.id);
   if (res.updated === 0 && res.errors.length) throw new HttpError(400, res.errors[0].error);
 
-  for (const w of planned) {
-    w.cand.sidh_candidate_id = w.raw as any;
-    await w.cand.save();
-    await audit({ entity: "Candidate", entityId: w.cand._id, field: "sidh_candidate_id",
-      oldValue: w.was || null, newValue: w.raw ?? null, actor: user.id, actorType: "USER" });
+  // Set every planned field first, then save each candidate ONCE (see the `docs` note above), then
+  // audit — one row per field, so a save that changed both ids leaves two separate trail entries.
+  for (const p of planned) p.cand[p.field.key] = p.next as any;
+  for (const cand of new Set(planned.map((p) => p.cand))) await cand.save();
+  for (const p of planned) {
+    await audit({ entity: "Candidate", entityId: p.cand._id, field: p.field.key,
+      oldValue: p.was || null, newValue: p.next ?? null, actor: user.id, actorType: "USER" });
   }
   const after = await CandidateResult.find({ batch: id }).lean<any[]>();
   return NextResponse.json({ ...res, summary: await summarizeBatchResults(id, after) });

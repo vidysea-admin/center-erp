@@ -7,7 +7,7 @@ import { HttpError, apiHandler, requireUser, requireEdit } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { dbConnect } from "@/lib/db";
 import { audit } from "@/lib/audit";
-import { aadhaarError, canonicalAadhaar, emailError, canonicalPhone, phoneError } from "@/lib/validate";
+import { aadhaarError, canonicalAadhaar, apaarError, canonicalApaar, emailError, canonicalPhone, phoneError } from "@/lib/validate";
 import { looksLikeCan } from "@/lib/govt-attendance";
 
 export const { GET, PATCH } = itemRoutes({
@@ -26,6 +26,10 @@ export const { GET, PATCH } = itemRoutes({
     // which the wall caught then: a field on the create door alone is typed once and silently dropped
     // on every later save, which is the worst shape a field can have because nothing on screen says so.
     "aadhaar_no",
+    // 2026-08-24 (Umesh): the APAAR ID must be EDITABLE, not just creatable — the -116 lesson, for
+    // the third time in this list. A wrong government id is fixed by correcting it, and a field only
+    // the create door accepts cannot be corrected at all.
+    "apaar_id",
   ],
   readRoles: ["Admin", "Operations", "Location", "Enrollment"], // QA-060/095: not the Trainer's lens
   writeRoles: ["Admin", "Operations", "Location", "Enrollment"],
@@ -107,6 +111,32 @@ export const { GET, PATCH } = itemRoutes({
         body.aadhaar_no = canonicalAadhaar(incoming)!;
       } else {
         body.aadhaar_no = current; // unchanged: pass through untouched, never re-judged
+      }
+    }
+    // QA-902 (2026-08-24): the APAAR ID, with the QA-726 rule built in from the first line rather
+    // than added after it bites. The drawer re-sends EVERY field on every edit, so validating a
+    // value that did not change is what made records holding an old bad portal id uneditable in
+    // every other field — measured then: changing only the EMAIL of three imported candidates
+    // returned 400 naming an id the operator had not touched. The bulk importer writes this field
+    // and does not refuse rows over format, so records holding an unvalidatable APAAR will exist by
+    // design, and fixing the phone number on one of them must never be blocked by it.
+    if (body.apaar_id !== undefined) {
+      const incoming = String(body.apaar_id).trim();
+      const current = String((existing as any)?.apaar_id ?? "").trim();
+      if (!incoming) {
+        body.apaar_id = null; // clearing it must stay possible — that is how a wrong one is removed
+      } else if (incoming !== current) {
+        const apErr = apaarError(incoming, { optional: true });
+        if (apErr) throw new HttpError(400, apErr);
+        body.apaar_id = canonicalApaar(incoming)!;
+        // The QA-414 guard, asked against whichever Aadhaar this save leaves on the record — the
+        // incoming one when the form sent it, otherwise the stored one.
+        const aadhaar = canonicalAadhaar(body.aadhaar_no !== undefined ? body.aadhaar_no : (existing as any)?.aadhaar_no);
+        if (aadhaar && body.apaar_id === aadhaar) {
+          throw new HttpError(400, "That is this candidate's Aadhaar number, not their APAAR ID. They are both 12 digits and are different numbers — the APAAR ID is the academic account number from the government portal.");
+        }
+      } else {
+        body.apaar_id = current; // unchanged: pass through untouched, never re-judged
       }
     }
   },

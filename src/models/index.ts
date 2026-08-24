@@ -433,6 +433,22 @@ const CandidateSchema = new Schema({
   // Portal "Candidate ID" (CAN_40918461). The government attendance export keys on this, so it
   // is the only reliable join — names repeat within a centre.
   sidh_candidate_id: { type: String, default: null },
+  // 2026-08-24 (Umesh): the government APAAR ID - "jaise abhi candidate id aati hai vaise hi govt
+  // APAAR ID hota hai". Automated Permanent Academic Account Registry, 12 digits, read off the
+  // government portal exactly as the CAN id above is, which is why it sits here and not beside
+  // aadhaar_no.
+  //
+  // THIS IS THE THIRD GOVERNMENT-ID FIELD ON THIS SCHEMA, and the note 30 lines up is about exactly
+  // that hazard: QA-414 measured 55 live candidates whose PORTAL id landed in id_reference because
+  // it was the closest-looking box on screen. apaar_id and aadhaar_no are BOTH 12 digits, so this
+  // pair is more confusable than that one was. Two things exist because of it: every door refuses an
+  // APAAR that equals that same candidate's aadhaar_no (by name, so the operator knows which box
+  // they are in), and the import catalog lists this ABOVE id_reference so a sheet's APAAR column has
+  // a correct destination rather than a nearest-looking one.
+  //
+  // Validated by `apaarError` in lib/validate.ts - 12 digits, NOT the Aadhaar rules (see the comment
+  // there: a real APAAR begins with 1, which aadhaarError refuses outright).
+  apaar_id: { type: String, default: null },
   lifecycle_status: { type: String, enum: LIFECYCLE_STATUS, required: true, default: "Unassigned" },
   // CEO 14/08 [15:21]: "I hope we are also capturing when a candidate is enrolled" — stamped
   // once, the first time enrollment completes (Rule 21); never cleared on a later drop, so a
@@ -469,6 +485,13 @@ const CandidateSchema = new Schema({
 // collide and the second write would be refused. Every writer must store undefined/null, never
 // "" - which is why the import writer trims and drops empties rather than writing a blank.
 CandidateSchema.index({ sidh_candidate_id: 1 }, { unique: true, partialFilterExpression: { sidh_candidate_id: { $type: "string" } } });
+
+// QA-902 (2026-08-24): the same guarantee for the APAAR ID, for the same reason and with the same
+// shape. An APAAR number identifies ONE student to the government; two candidate rows holding it
+// means one of them is wrong, and the cheapest moment to learn that is the moment somebody types
+// the second one - not months later when the portal rejects a student. The EMPTY-STRING hole
+// applies here too and is the reason every writer of this field stores undefined/null and never "".
+CandidateSchema.index({ apaar_id: 1 }, { unique: true, partialFilterExpression: { apaar_id: { $type: "string" } } });
 
 // ---------- Batch ----------
 const BatchSchema = new Schema({

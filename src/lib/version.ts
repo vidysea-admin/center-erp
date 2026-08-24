@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-230";
+export const RELEASE = "2026.08.14-231";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -16,7 +16,7 @@ export const RELEASE = "2026.08.14-230";
 // than the truncation was. So the note is two constants: what THIS build changed, which is what a
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
-export const RELEASE_NOTE_CURRENT =
+const RELEASE_NOTE_ARCHIVE_230 =
   "-230 finishes the repairs to the screen where candidates are marked and certificates are "  +
   "issued, and opens three things that had been closed to everyone but one role. On the "  +
   "marking grid, a bulk mark that succeeded left the refusals it had just overcome sitting on "  +
@@ -41,6 +41,23 @@ export const RELEASE_NOTE_CURRENT =
   "all. The screen says which day they will be counted from before the enrolment, not after. "  +
   "Someone who genuinely joined mid-course can still be given their own date, and a batch that "  +
   "has not started is unaffected.";
+export const RELEASE_NOTE_CURRENT =
+  "-231 records the government APAAR ID for every candidate. It sits beside the portal "  +
+  "Candidate ID on the card where a batch is closed, so a centre types both numbers in one "  +
+  "place, and a trainer can fill either of them in without needing a right they do not have. "  +
+  "It is on the candidate form too, it can arrive with a bulk upload, it shows on the batch "  +
+  "roster, and a student can be found by it. The number is checked for its twelve digits, and "  +
+  "it belongs to one student: giving one person's APAAR ID to a second is refused and names "  +
+  "whose it already is. A spreadsheet whose column is wrong is still imported, and every row "  +
+  "it could not read is listed before the import runs rather than after. "  +
+  "The APAAR ID and the Aadhaar number are both twelve digits and are different numbers, so "  +
+  "typing a candidate's own Aadhaar into the APAAR box is refused in those words. Neither "  +
+  "number is carried into a developer's local copy of the data. "  +
+  "This build also carries -230, which finished the repairs to the marking and certificate "  +
+  "screen, made deleting three separate rights instead of one role, began recording the "  +
+  "Aadhaar number, and made a batch entered after it ran count its students from the day it "  +
+  "really began. -230 was built but never released on its own; the two ship together, and "  +
+  "its full note is kept below.";
 const RELEASE_NOTE_ARCHIVE_229 =
   "-229 is a day of batch work shipped as one build. Marking candidates pass or fail, and with "  +
   "it certificate upload, works again on a batch whose assessment had already been signed off "  +
@@ -388,6 +405,11 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
+  // -230 was built and never released on its own - -231 carries it. Its note is archived rather
+  // than dropped: a note declared and left out of this chain is a dead constant, which is exactly
+  // the shape QA-265 records (329 lines of this file were no-op expression statements for an
+  // unknown number of releases, and production published 97 characters).
+  RELEASE_NOTE_ARCHIVE_230 + " " +
   RELEASE_NOTE_ARCHIVE_229 + " " +
   RELEASE_NOTE_ARCHIVE_227 + " " +
   RELEASE_NOTE_ARCHIVE_223 + " " +

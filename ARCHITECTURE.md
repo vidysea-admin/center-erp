@@ -63,7 +63,7 @@ StoredFile, ApprovalRule, ApprovalRequest, AuditLog, Scheme, JobRole, CandidateD
 | File | What it is |
 |---|---|
 | `authz.ts` | `HttpError` · `requireUser` · `requireRole` · `requireEdit` · `locationFilter` · **`apiHandler`** — the server error chokepoint (HttpError→`plain()`, E11000→409, Cast→404, Validation→400) |
-| `permissions.ts` | `PERMISSIONS` (**20 keys** — QA-894 added `candidates.delete` / `trainers.delete` / `batches.delete`) · `DEFAULT_ROLE_PERMISSIONS` · `hasPermission` · `requireView` · `requirePerm`. Deny wins; Admin bypasses |
+| `permissions.ts` | `PERMISSIONS` (**20 keys** — QA-904 added `candidates.delete` / `trainers.delete` / `batches.delete`) · `DEFAULT_ROLE_PERMISSIONS` · `hasPermission` · `requireView` · `requirePerm`. Deny wins; Admin bypasses |
 | `crud.ts` | `collectionRoutes` / `itemRoutes` / `pick` — the REST factory. **`CrudConfig.fields` IS the write whitelist** |
 | `validate.ts` | **`canonicalPhone` · `phoneError` · `emailError` · `canonicalAadhaar` · `aadhaarError`** — THE write-time canon for phone/email/Aadhaar. Client-safe (imports nothing — §3.0) |
 | `duplicates.ts` | `normalizePhone` (deliberately LOOSE compare key — a different job) · `findDuplicateCandidates` (Rule 7, advisory) |
@@ -241,6 +241,26 @@ invalid recipient) and **always** write a MailLog row. Bounces: SNS → `public/
   `api/candidates/portal-id-health/route.ts:33`. **Before adding any new test of "does this look
   like a CAN", grep this entry — six copies of it have been written by people who had read this
   file.**
+- **TWO 12-DIGIT VALIDATORS IN `lib/validate.ts`, AND THEY DISAGREE ON PURPOSE (QA-902, 2026-08-24).**
+  `aadhaarError` / `canonicalAadhaar` and `apaarError` / `canonicalApaar` both take a 12-digit
+  government number, and the temptation to collapse them into one "12-digit id" helper is obvious and
+  **wrong**. The Aadhaar pair refuses any number beginning `0` or `1` and runs a **Verhoeff** check
+  digit; the APAAR pair does neither, because **APAAR has no published check digit and a real live
+  APAAR begins with 1** — Umesh's own screenshot, `190305516076`. Routing APAAR through `aadhaarError`
+  would refuse a correct id read straight off the government's screen, and inventing a checksum this
+  product cannot verify would be worse than accepting a typo. **Do not "harmonise" them.** The comment
+  above each in `lib/validate.ts` says the same thing; this row exists because the third person to
+  read that file is the one who usually writes the seventh copy.
+  APAAR has **two** named tests, on the CAN pattern above and for the same reason — they answer
+  different questions:
+  - `apaarError(s, {optional})` — the **hand-typed shape test**, and the words a person is shown.
+    Used by the two candidate write doors, the Closure card's `crossCheck` table, and the drawer's
+    live hint. One rule, one sentence, whether the refusal comes from the form or from the API.
+  - `storedApaarIsUnreadable(s)` — "there **is** a value on record and this system cannot read it."
+    Not the same question: the bulk importer REPORTS a malformed APAAR and stores it anyway (QA-141 —
+    a client's sheet is never dropped over format), so this state really occurs, and a screen showing
+    a blank box on such a record would be lying about what is stored. `apaarIdState()` in the batch
+    page is the single caller that turns it into a colour.
 - **New door:** `api/candidates/portal-id-health` (GET plan / POST selected fixes, audited,
   never overwrites) — the link-portal-ids contract one level up. UI: the Candidates page
   "Portal ID health" drawer.
@@ -352,8 +372,18 @@ Two fields added 2026-08-24 are the current test of whether this row is being re
 
 | Field | Staff create | Staff edit | `public/register` | `public/enrol-otp` | Import catalog |
 |---|---|---|---|---|---|
-| `aadhaar_no` (QA-893) | yes | yes | yes | yes | yes |
+| `aadhaar_no` (QA-903) | yes | yes | yes | yes | yes |
+| `apaar_id` (QA-902) | yes | yes | **no, deliberately** | **no, deliberately** | yes |
 | `batch_interest` (Unit C) | pending | pending | pending | pending | pending |
+
+**Read `apaar_id`'s two "no"s as a decision, not as this row biting a third time.** Asked directly on
+2026-08-24, Umesh chose the staff doors, the drawer, the Excel import and the batch roster, and did
+**not** choose the public self-registration forms — the same posture `sidh_candidate_id` has always
+had, and for the same reason: a portal-issued id is read off the government portal by a centre, not
+recalled by a student filling in a form. If a later cycle adds it to the public doors, that is a new
+decision of Umesh's and this line is the evidence that its absence was never an oversight. It also has
+a **FIFTH** write door the other rows do not have — `PUT /api/batches/[id]/results`, the Closure card,
+on `closure.manage` so a Trainer can fill one in (QA-747's ruling, now serving two fields).
 
 **`aadhaar_no` also reversed a standing decision, so do not trust older comments about it.** Until
 2026-08-24 this product deliberately held no Aadhaar number: `models/index.ts` said `id_reference` is
@@ -362,13 +392,23 @@ Umesh reversed both. THREE consequences ride with it and are not optional — `s
 REDACT (QA-536: no local mirror may carry live Aadhaar), `lib/audit.ts` `AUDIT_MASK_FIELDS` (the audit
 trail must not become the leak), and its deliberate absence from `searchFields` and every table column.
 
-**There are now THREE government-ID fields on a Candidate and they are not interchangeable** —
-`aadhaar_no` (the Aadhaar), `sidh_candidate_id` (the portal CAN id), `id_reference` (anything else).
-QA-414 measured 55 live candidates whose portal id landed in `id_reference` because it was the
-closest-looking option on a screen that did not offer the right one. Three such boxes side by side is
-that same trap, widened.
+**There are now FOUR government-ID fields on a Candidate and they are not interchangeable** —
+`aadhaar_no` (the Aadhaar), `apaar_id` (the APAAR academic account), `sidh_candidate_id` (the portal
+CAN id), `id_reference` (anything else). QA-414 measured 55 live candidates whose portal id landed in
+`id_reference` because it was the closest-looking option on a screen that did not offer the right one.
+Four such boxes side by side is that same trap, widened again — and **two of the four are 12-digit
+numbers**, which is the closest resemblance any pair on this schema has ever had.
 
-### 3.2b Delete is a RIGHT now, not a role — QA-894 (2026-08-24)
+That pair has one guard and it is deliberate: **every door that writes `apaar_id` refuses a value
+equal to that same candidate's `aadhaar_no`, by name** (`api/candidates/route.ts`,
+`api/candidates/[id]/route.ts`, and the `crossCheck` hook in `api/batches/[id]/results/route.ts`). It
+is the only one of the four confusions that is knowable at the door; the rest are only discoverable
+when the government portal rejects that student. `apaar_id` also rides `scripts/mirror-prod.mjs`
+REDACT with `aadhaar_no`, but is **NOT** in `AUDIT_MASK_FIELDS` and **is** in `searchFields` — it is a
+number a centre quotes back to the government and searches on, which Aadhaar is not. That split is a
+decision; if it is wrong, it is Umesh's to flip.
+
+### 3.2b Delete is a RIGHT now, not a role — QA-904 (2026-08-24)
 
 All three delete verbs already existed with their safety refusals and were shut behind a hard-coded
 `user.role !== "Admin"`. The team saw no button and reported the feature as absent, which is worth

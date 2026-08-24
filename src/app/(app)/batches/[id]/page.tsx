@@ -8,7 +8,7 @@ import { personLabel, personList, personSeparator } from "@/lib/person";
 // -212 (QA-728): the shared portal-CAN helpers, from the PURE module. They used to live only in
 // lib/govt-attendance, which imports the mongoose models, so this screen could not reach them and
 // grew its own inline copy of the regex instead - the fifth spelling of one concept.
-import { normalizeCan, storedCanIsUnreadable } from "@/lib/validate";
+import { normalizeCan, storedCanIsUnreadable, apaarError, storedApaarIsUnreadable } from "@/lib/validate";
 import { trainerSelectGroups } from "@/lib/trainer-select";
 import { slotHoursPerDay } from "@/lib/slot-rules";
 import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthBanner, NameCell, Notice, Section, Tabs, inputCls, statusLabel } from "@/components/ui";
@@ -31,7 +31,7 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
   // server remains the real gate either way.
   const { data: session } = useSession();
   const role = (session?.user as any)?.role;
-  // 2026-08-24 (QA-894): the empty-shell delete follows `batches.delete` rather than the Admin role.
+  // 2026-08-24 (QA-904): the empty-shell delete follows `batches.delete` rather than the Admin role.
   const { can: canRightB, loaded: rightsLoadedB } = usePerms();
   const canDeleteBatch = rightsLoadedB && canRightB("batches.delete", "edit");
   // R-E (CEO 14/08): Operations is post-only on money — the batch cost ledger is Admin's.
@@ -1022,6 +1022,17 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
             // no portal ID at all. Its own column, so it survives the mobile card collapse and can be
             // read down the list rather than hunted for inside a name cell.
             { key: "portal_id", label: "Portal ID", render: (r: any) => <PortalIdChip candidate={r.candidate} /> },
+            // QA-902: the APAAR ID on the roster too. Its own column for the same reason the Portal
+            // ID has one - it survives the mobile card collapse and can be read DOWN the list, which
+            // is how an operator finds the students still missing one. Read-only here; the box that
+            // fills it lives on the Closure card.
+            { key: "apaar_id", label: "APAAR ID", render: (r: any) => (
+              r.candidate?.apaar_id
+                ? <span className={`rounded px-1.5 py-0.5 font-mono text-[11px] ${apaarIdState(r.candidate.apaar_id) === "ok" ? "bg-gray-100 text-gray-700" : "bg-amber-100 font-medium text-amber-900"}`}
+                    title={apaarIdState(r.candidate.apaar_id) === "ok" ? "Government APAAR ID" : "Stored on this candidate, but it is not a readable 12-digit APAAR ID."}>
+                    {r.candidate.apaar_id}{apaarIdState(r.candidate.apaar_id) === "ok" ? "" : " ⚠"}</span>
+                : <span className="text-gray-400">—</span>
+            ) },
             { key: "phone", label: "Phone", render: (r: any) => r.candidate?.phone, mobile: false },
             { key: "joined_on", label: "Joined", render: (r: any) => fmtDate(r.joined_on) },
             { key: "enrollment_status", label: "Enrollment", render: (r: any) => <Chip value={r.enrollment_status} /> },
@@ -1166,6 +1177,18 @@ function portalIdState(v: unknown): "none" | "unreadable" | "ok" {
   const raw = String(v ?? "").trim();
   if (!raw) return "none";
   return storedCanIsUnreadable(raw) ? "unreadable" : "ok";
+}
+
+// QA-902 (2026-08-24): the same three states for the government APAAR ID, named once and in terms
+// of the SAME rule the server refuses on (lib/validate.ts `apaarError`), so the border a person sees
+// and the answer the door gives can never drift apart. "unreadable" is a state that really occurs:
+// the bulk importer reports a malformed APAAR and stores it anyway (QA-141 — a client's sheet is
+// never dropped over format), so a record can hold a value this system cannot read, and a blank box
+// on such a record would be a lie about what is stored.
+function apaarIdState(v: unknown): "none" | "unreadable" | "ok" {
+  const raw = String(v ?? "").trim();
+  if (!raw) return "none";
+  return storedApaarIsUnreadable(raw) ? "unreadable" : "ok";
 }
 
 function PortalIdChip({ candidate, value, className = "" }: { candidate?: any; value?: unknown; className?: string }) {
@@ -2610,15 +2633,20 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
         ) : undefined}
       >
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Assessment date"><input type="date" className={inputCls} value={toInputDate(form.assessment_date)} onChange={(e) => setForm({ ...form, assessment_date: e.target.value })} /></Field>
+          {/* -232 (QA-833): all six of these were typeable by a login whose Save is disabled - the
+              operator could fill a date, press a dead Save and lose it, with nothing saying why.
+              Same dead-control class as QA-712/723/754/775/785/791 on this very tab, in its
+              quietest form: not a button that refuses, an input that accepts and then discards.
+              `closed` is the one that already gates Save, so the box and its Save now agree. */}
+          <Field label="Assessment date"><input type="date" disabled={closed} className={inputCls} value={toInputDate(form.assessment_date)} onChange={(e) => setForm({ ...form, assessment_date: e.target.value })} /></Field>
           {/* -120 (M4-14, Manish 17/08 [09:17] — he typed the chain out on screen). These are the dates
               it asks for that the ERP never held, in his order. Every one is OPTIONAL and gates
               NOTHING: a batch that never ran a mock test leaves them blank and nothing changes. His
               mock-test STATUS wording is still owed, so no status is invented here — only the facts he
               named. What already existed is not rebuilt: the assessment date above, pass/fail counts,
               the fail reason (Rule 44), the certificate number (Rule 46), the file, and the invoice. */}
-          <Field label="Mock test date"><input type="date" className={inputCls} value={toInputDate(form.mock_test_date)} onChange={(e) => setForm({ ...form, mock_test_date: e.target.value })} /></Field>
-          <Field label="Result expected (tentative)"><input type="date" className={inputCls} value={toInputDate(form.result_expected_date)} onChange={(e) => setForm({ ...form, result_expected_date: e.target.value })} /></Field>
+          <Field label="Mock test date"><input type="date" disabled={closed} className={inputCls} value={toInputDate(form.mock_test_date)} onChange={(e) => setForm({ ...form, mock_test_date: e.target.value })} /></Field>
+          <Field label="Result expected (tentative)"><input type="date" disabled={closed} className={inputCls} value={toInputDate(form.result_expected_date)} onChange={(e) => setForm({ ...form, result_expected_date: e.target.value })} /></Field>
           <div />
           {legacy && !perCandidate && showLegacyEntry ? (
             <>
@@ -2709,10 +2737,10 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
       </Section>
       <Section title={`Certification — ${closure?.certification_status ?? "Pending"}`}>
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Certification date"><input type="date" className={inputCls} value={toInputDate(form.certification_date)} onChange={(e) => setForm({ ...form, certification_date: e.target.value })} /></Field>
+          <Field label="Certification date"><input type="date" disabled={closed} className={inputCls} value={toInputDate(form.certification_date)} onChange={(e) => setForm({ ...form, certification_date: e.target.value })} /></Field>
           {/* -120 (M4-14): the two dates after certification that his chain ends on. */}
-          <Field label="Certificate distribution date"><input type="date" className={inputCls} value={toInputDate(form.certificate_distribution_date)} onChange={(e) => setForm({ ...form, certificate_distribution_date: e.target.value })} /></Field>
-          <Field label="Uploaded to SIDH portal on"><input type="date" className={inputCls} value={toInputDate(form.sidh_uploaded_on)} onChange={(e) => setForm({ ...form, sidh_uploaded_on: e.target.value })} /></Field>
+          <Field label="Certificate distribution date"><input type="date" disabled={closed} className={inputCls} value={toInputDate(form.certificate_distribution_date)} onChange={(e) => setForm({ ...form, certificate_distribution_date: e.target.value })} /></Field>
+          <Field label="Uploaded to SIDH portal on"><input type="date" disabled={closed} className={inputCls} value={toInputDate(form.sidh_uploaded_on)} onChange={(e) => setForm({ ...form, sidh_uploaded_on: e.target.value })} /></Field>
           {legacy && !perCandidate
             ? <Field label="Certificates issued"><input type="number" className={inputCls} value={form.certificates_issued ?? ""} onChange={(e) => setForm({ ...form, certificates_issued: +e.target.value })} /></Field>
             : <Field label="Certificates issued"><div className={inputCls + " bg-gray-50 text-gray-700"}>{closure?.certificates_issued ?? 0} <span className="text-xs text-gray-400">derived</span></div></Field>}
@@ -3104,7 +3132,7 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
     { value: "mock", label: "Mock: not qualified", title: "Sat the mock test and did not clear it", test: (i) => i.result?.mock_appeared === true && i.result?.mock_qualified !== true },
   ];
   const q = cardSearch.trim().toLowerCase();
-  const matchesSearch = (i: any) => !q || [i.candidate?.name, i.candidate?.phone, i.candidate?.sidh_candidate_id]
+  const matchesSearch = (i: any) => !q || [i.candidate?.name, i.candidate?.phone, i.candidate?.sidh_candidate_id, i.candidate?.apaar_id]
     .some((v) => String(v ?? "").toLowerCase().includes(q));
   const shown = items.filter((i) => (CARD_FILTERS.find((f) => f.value === cardFilter)?.test ?? (() => true))(i) && matchesSearch(i));
   // QA-779: narrowing the list must put the pager back at the start, or the phone view opens on
@@ -3227,6 +3255,25 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
             defaultValue={i.candidate?.sidh_candidate_id ?? ""}
             onBlur={(e) => e.target.value !== String(i.candidate?.sidh_candidate_id ?? "")
               && mark(i.member, { sidh_candidate_id: e.target.value })} />
+          {/* QA-902 (-232, Umesh 24/08): "hrr individual candidate k liye jaise abhi candidate id
+              aati hai vaise hi govt APAAR ID hota hai... card mai iske liye bhi jagah bnaao same as
+              candidate id."
+              Right beside the Candidate ID and NOT on its own row — his words were "same as candidate
+              id", and the strip is flex-wrap, so on a narrow screen it drops to the next line without
+              costing vertical height on a 46-card roster.
+              `disabled={closed}` is not decoration and is not copied by habit: `closed` is
+              `batchClosedByStatus || !mayMark` (QA-777/QA-785), and an input that renders enabled for
+              someone whose save will 403 is the dead-control class this codebase has now shipped four
+              times (QA-712, QA-723, QA-754, QA-775). The write goes through THIS door — the same
+              `mark()` on `closure.manage` — so a Trainer can fill one in, exactly as Umesh asked for
+              the Candidate ID box ("Trainer bhi bhar sake") and repeated here ("admin, ops team, and
+              those all who can push the batch data"). */}
+          <input placeholder="APAAR ID" disabled={closed} inputMode="numeric"
+            className={`w-40 rounded-lg border px-2 py-0.5 ${apaarIdState(i.candidate?.apaar_id) === "ok" ? "border-gray-300" : apaarIdState(i.candidate?.apaar_id) === "unreadable" ? "border-amber-300 bg-amber-50" : "border-gray-300"}`}
+            title="The government APAAR ID — the student's 12-digit academic account number. Not the Aadhaar number: they are both 12 digits and are different numbers."
+            defaultValue={i.candidate?.apaar_id ?? ""}
+            onBlur={(e) => e.target.value !== String(i.candidate?.apaar_id ?? "")
+              && mark(i.member, { apaar_id: e.target.value })} />
         </span>
       </div>
       <ResultButtons i={i} />
@@ -3562,7 +3609,7 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
               options={CARD_FILTERS.map((f) => ({ value: f.value, label: f.label, title: f.title, count: items.filter(f.test).length }))} />
             <div className="flex flex-wrap items-center gap-2">
               <input className="w-64 rounded-lg border border-gray-300 px-2 py-1 text-sm"
-                placeholder="Search name, phone or Candidate ID…"
+                placeholder="Search name, phone, Candidate ID or APAAR ID…"
                 value={cardSearch} onChange={(e) => setCardSearch(e.target.value)} />
               {(cardFilter !== "all" || q) && (
                 <>

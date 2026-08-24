@@ -2,7 +2,7 @@ import { collectionRoutes } from "@/lib/crud";
 import { BatchMember, Candidate, CandidateResult, Location, Program } from "@/models";
 import { assertLocationInScope, HttpError, isScoped } from "@/lib/authz";
 import { looksLikeCan } from "@/lib/govt-attendance";
-import { aadhaarError, canonicalAadhaar, emailError, canonicalPhone, phoneError } from "@/lib/validate";
+import { aadhaarError, canonicalAadhaar, apaarError, canonicalApaar, emailError, canonicalPhone, phoneError } from "@/lib/validate";
 import { candidateEligibility } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { renderMail, sendMail } from "@/lib/mailer";
@@ -21,10 +21,16 @@ export const { GET, POST } = collectionRoutes({
     // 2026-08-24 (Umesh): the Aadhaar number. On BOTH candidate doors and both public ones — the
     // -116 lesson again: a field one door accepts and another drops looks saved and silently is not.
     "aadhaar_no",
+    // 2026-08-24 (Umesh): the government APAAR ID. On BOTH candidate doors, for the -116 reason
+    // spelled out two comments up — a field one door accepts and the other drops looks saved and
+    // silently is not.
+    "apaar_id",
   ],
   // 2026-08-13 (Umesh: "search should allow all the columns"): the global shell search
   // rides this too — alt numbers, mobiliser/campaign and the portal CAN_ id all findable.
-  searchFields: ["name", "phone", "alt_phone", "source", "sidh_candidate_id"],
+  // QA-902: the APAAR ID too — a centre that has the number off the portal and wants the student
+  // behind it should not have to know which of our fields it was typed into.
+  searchFields: ["name", "phone", "alt_phone", "source", "sidh_candidate_id", "apaar_id"],
   // QA-060/095 (CEO [38:43] "I shouldn't see all the candidates … just my batch-wise
   // details"): a Trainer never reads the centre's candidate pool — their lens is the
   // batch roster and the Attendance tab, which stay open to them.
@@ -82,6 +88,25 @@ export const { GET, POST } = collectionRoutes({
       data.aadhaar_no = canonicalAadhaar(data.aadhaar_no)!;
     } else if (data.aadhaar_no !== undefined) {
       delete data.aadhaar_no; // blank means "not supplied", never an empty string on the record
+    }
+    // QA-902 (2026-08-24): the APAAR ID, same posture as Aadhaar directly above — optional to
+    // supply, strict once supplied, stored canonical. Blank is DELETED rather than written as "",
+    // because this field carries a partial unique index (models/index.ts) and "" is a string: two
+    // candidates holding a blank would collide and the second create would be refused, naming a
+    // duplicate identity that does not exist. That is QA-450, which cost exactly this on the
+    // portal id, on this exact door — the one the drawer's Add form posts through.
+    if (data.apaar_id !== undefined && String(data.apaar_id).trim() !== "") {
+      const apErr = apaarError(data.apaar_id, { optional: true });
+      if (apErr) throw new HttpError(400, apErr);
+      data.apaar_id = canonicalApaar(data.apaar_id)!;
+      // The QA-414 guard. Two 12-digit government numbers on one form is a fresh chance to repeat
+      // the defect that put 55 portal ids in the wrong box — so the one confusion that is knowable
+      // here is refused BY NAME, rather than stored and discovered by the portal months later.
+      if (data.aadhaar_no !== undefined && data.apaar_id === canonicalAadhaar(data.aadhaar_no)) {
+        throw new HttpError(400, "That is this candidate's Aadhaar number, not their APAAR ID. They are both 12 digits and are different numbers — the APAAR ID is the academic account number from the government portal.");
+      }
+    } else if (data.apaar_id !== undefined) {
+      delete data.apaar_id;
     }
     if (data.location) assertLocationInScope(user, String(data.location));
     // -124 (M4-04): the centre is optional now — but only for someone who can see every centre.

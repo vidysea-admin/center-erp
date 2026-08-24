@@ -8,7 +8,7 @@ import { parseSheetDate } from "@/lib/rules";
 import { CANDIDATE_IMPORT_FIELDS } from "@/lib/field-catalog";
 import { audit } from "@/lib/audit";
 import { findDuplicateCandidates, normalizePhone } from "@/lib/duplicates";
-import { canonicalPhone } from "@/lib/validate";
+import { canonicalPhone, canonicalApaar } from "@/lib/validate";
 import { personLabel } from "@/lib/person";
 import { looksLikeCan, normalizeCan } from "@/lib/govt-attendance";
 
@@ -237,6 +237,34 @@ export const POST = apiHandler(async (req: NextRequest) => {
     else if (!normalizeCan(raw)) candidateIdInvalid.push(`${personLabel(c)} — "${raw}" (stored, but certification cannot read it — the ID must be CAN followed by the number)`);
   }
 
+  // QA-902 (2026-08-24): the same lane for the government APAAR ID, given to it at the same time as
+  // the field rather than a release later — QA-727 is the row that records what "we will add the
+  // guard to the importer afterwards" actually costs.
+  //
+  // NORMALIZE what we can: "1903 0551 6076" and "1903-0551-6076" are how a 12-digit number gets
+  // typed into a spreadsheet, and they are not errors. Storing the canonical form also matters more
+  // here than it looks — the partial unique index is built on the RAW string (QA-730), so without
+  // this the spaced and unspaced spellings of one person's APAAR would not collide with each other.
+  //
+  // REPORT, never refuse (QA-141): a client's sheet is client data. What is unacceptable is silence.
+  const apaarInvalid: string[] = [];
+  const apaarSeen = new Map<string, string>();
+  const apaarDuplicate: string[] = [];
+  for (const c of candidates) {
+    if (typeof c.apaar_id !== "string") continue;
+    const raw = c.apaar_id.trim();
+    if (!raw) { delete c.apaar_id; continue; } // QA-450: absent, not "" - the index indexes ""
+    const canon = canonicalApaar(raw);
+    c.apaar_id = canon ?? raw;
+    if (!canon) { apaarInvalid.push(`${personLabel(c)} — "${raw}" (stored, but it is not a 12-digit APAAR ID)`); continue; }
+    // An APAAR belongs to one student, and the field carries a unique index — so two rows of ONE
+    // sheet holding the same number would make `insertMany` below fail as a whole, taking the other
+    // 44 good rows with it. Said on the preview, where it can still be fixed in the sheet.
+    const twin = apaarSeen.get(canon);
+    if (twin) apaarDuplicate.push(`${personLabel(c)} — "${canon}" is also on ${twin}`);
+    else apaarSeen.set(canon, personLabel(c));
+  }
+
   // Rule 7: the import path is where bulk duplicates actually enter. Flag them, never block —
   // the operator decides. Checks both against existing records and within the file itself.
   const seen = new Map<string, number>();
@@ -275,6 +303,11 @@ export const POST = apiHandler(async (req: NextRequest) => {
       // QA-727: on the PREVIEW, so a sheet whose Candidate ID column is mapped to the wrong header
       // is seen BEFORE the import runs — the same reasoning as unhandled_fields above it.
       candidate_id_invalid: candidateIdInvalid.slice(0, 25), candidate_id_invalid_count: candidateIdInvalid.length,
+      // QA-902: the APAAR ID gets the same treatment on the PREVIEW. The duplicate list is not
+      // cosmetic - a repeated APAAR makes the insert below fail as a whole batch, so this is the
+      // one place it can be fixed before 45 good rows are lost with it.
+      apaar_invalid: apaarInvalid.slice(0, 25), apaar_invalid_count: apaarInvalid.length,
+      apaar_duplicate: apaarDuplicate.slice(0, 25), apaar_duplicate_count: apaarDuplicate.length,
       unknown_columns: unknownCols,
       // QA-110: say the quiet part — which columns are about to be DROPPED vs stored.
       ignored_columns: acceptUnknown ? [] : unknownCols,
@@ -282,6 +315,6 @@ export const POST = apiHandler(async (req: NextRequest) => {
     });
   }
   const docs = await Candidate.insertMany(candidates);
-  await audit({ entity: "Candidate", entityId: docs[0]?._id ?? location, field: "import", newValue: `${docs.length} imported, ${duplicates.length} flagged as possible duplicates${dateUnparseable.length ? `, ${dateUnparseable.length} unreadable dates` : ""}${phoneInvalid.length ? `, ${phoneInvalid.length} un-normalizable phones` : ""}${candidateIdInvalid.length ? `, ${candidateIdInvalid.length} portal Candidate ID(s) the gate cannot read` : ""}${!acceptUnknown && unknownCols.length ? `, ${unknownCols.length} column(s) ignored: ${unknownCols.join(", ")}` : ""}`, actor: user.id });
-  return NextResponse.json({ imported: docs.length, skipped: rows.length - candidates.length, duplicate_count: duplicates.length, date_unparseable: dateUnparseable.slice(0, 25), date_unparseable_count: dateUnparseable.length, phone_invalid: phoneInvalid.slice(0, 25), phone_invalid_count: phoneInvalid.length, candidate_id_invalid: candidateIdInvalid.slice(0, 25), candidate_id_invalid_count: candidateIdInvalid.length, ignored_columns: acceptUnknown ? [] : unknownCols, unhandled_fields: [...new Set(unhandledFields)], sidh_status_unmatched: [...new Set(sidhStatusUnmatched)].slice(0, 25), blank_by_field: blankByField }, { status: 201 });
+  await audit({ entity: "Candidate", entityId: docs[0]?._id ?? location, field: "import", newValue: `${docs.length} imported, ${duplicates.length} flagged as possible duplicates${dateUnparseable.length ? `, ${dateUnparseable.length} unreadable dates` : ""}${phoneInvalid.length ? `, ${phoneInvalid.length} un-normalizable phones` : ""}${candidateIdInvalid.length ? `, ${candidateIdInvalid.length} portal Candidate ID(s) the gate cannot read` : ""}${apaarInvalid.length ? `, ${apaarInvalid.length} unreadable APAAR ID(s)` : ""}${!acceptUnknown && unknownCols.length ? `, ${unknownCols.length} column(s) ignored: ${unknownCols.join(", ")}` : ""}`, actor: user.id });
+  return NextResponse.json({ imported: docs.length, skipped: rows.length - candidates.length, duplicate_count: duplicates.length, date_unparseable: dateUnparseable.slice(0, 25), date_unparseable_count: dateUnparseable.length, phone_invalid: phoneInvalid.slice(0, 25), phone_invalid_count: phoneInvalid.length, candidate_id_invalid: candidateIdInvalid.slice(0, 25), candidate_id_invalid_count: candidateIdInvalid.length, apaar_invalid: apaarInvalid.slice(0, 25), apaar_invalid_count: apaarInvalid.length, apaar_duplicate: apaarDuplicate.slice(0, 25), apaar_duplicate_count: apaarDuplicate.length, ignored_columns: acceptUnknown ? [] : unknownCols, unhandled_fields: [...new Set(unhandledFields)], sidh_status_unmatched: [...new Set(sidhStatusUnmatched)].slice(0, 25), blank_by_field: blankByField }, { status: 201 });
 });

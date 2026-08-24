@@ -68,7 +68,11 @@ const REDACT = {
   // FIELD, not a collection, and skipping whole collections was already proved insufficient. Without
   // this, every developer refreshing their local mirror would carry live Aadhaar numbers onto their
   // own disk, and nothing on screen would say so.
-  candidates: ["aadhaar_no"],
+  // 2026-08-24 (QA-902), the same day and the same argument: the APAAR ID is a government
+  // identity number issued to a named student and is Aadhaar-linked at the source, so a local
+  // mirror has no business carrying real ones. A developer testing the box needs a 12-digit
+  // number, not THIS student's 12-digit number.
+  candidates: ["aadhaar_no", "apaar_id"],
   locations: ["tc_password"],
   locationtargets: ["tc_password"],
   users: ["password_hash"],   // replaced below with a local-only hash; never carried across as-is

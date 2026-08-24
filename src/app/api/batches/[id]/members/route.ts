@@ -17,7 +17,7 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   // Without it the chip on every candidate card and both attendance pickers would read "no portal
   // ID" for the entire roster - a screen-wide falsehood that no source-scanning pin could see,
   // because the component would be correct and the data behind it empty.
-  const items = await BatchMember.find({ batch: id }).populate("candidate", "name phone lifecycle_status sidh_candidate_id").sort({ joined_on: 1 }).lean();
+  const items = await BatchMember.find({ batch: id }).populate("candidate", "name phone lifecycle_status sidh_candidate_id apaar_id").sort({ joined_on: 1 }).lean();
 
   // GD-102: "kitne bacche ki kitni-kitni attendance chal rahi hai" — each member's running
   // attendance, counted from the daily logs rather than stored anywhere it could go stale.
