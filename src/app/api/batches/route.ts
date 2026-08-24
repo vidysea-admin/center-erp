@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, requireRole, locationFilter, assertLocationInScope, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
-import { Batch, BatchMember, Candidate, Closure, DailyLog, GovtAttendanceRow, Invoice, Location, Notification, Program, Trainer } from "@/models";
+import { AuditLog, Batch, BatchMember, Candidate, Closure, DailyLog, GovtAttendanceRow, Invoice, Location, Notification, Program, Trainer } from "@/models";
 import { assertLocationOperational, earliestPossibleStart, earliestStartNote, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, createBatchWithCode, deriveTrainerStatus, settlementStage, trainerBookingWarnings, trainerForLogin } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
@@ -81,6 +81,15 @@ export const GET = apiHandler(async (req: NextRequest) => {
   ]);
   const logByB = new Map(logAgg.map((a: any) => [String(a._id), a]));
   const portalByB = new Map(portalAgg.map((a: any) => [String(a._id), a]));
+  // -231 cycle 3 (QA-957): the SERVER's answer to "was this batch's start recorded after it
+  // happened", carried on the row instead of re-derived in the client. Cycle 2 moved the roster
+  // rule onto the audit record but left the screen computing the same question from a date, so the
+  // confirmation and the amber note promised the operator the opposite of what the server did on
+  // every ordinary past-started batch. One derivation, one place — ARCHITECTURE.md §3.1.
+  // One query for the whole page rather than one per row.
+  const afterTheFactIds = new Set((await AuditLog.find({
+    entity: "Batch", entity_id: { $in: ids }, field: { $in: ["backdated_start", "auto_activated"] },
+  }).select("entity_id").lean<any[]>()).map((a) => String(a.entity_id)));
   // R-I (CEO [38:54-39:10]): a Trainer's default view is "batches assigned to ME", with the
   // rest of their centre reachable as guest faculty. is_mine marks which is which — resolved
   // above via trainerForLogin (link, else email; never by name).
@@ -96,6 +105,8 @@ export const GET = apiHandler(async (req: NextRequest) => {
     portal_rows: portalByB.get(String(b._id))?.rows ?? 0,
     portal_days: portalByB.get(String(b._id))?.days ?? 0,
     portal_days_present_max: portalByB.get(String(b._id))?.present_max ?? 0,
+    // QA-957: the roster rule's own answer, so the screen stops guessing it from a date.
+    start_recorded_after_the_fact: afterTheFactIds.has(String(b._id)),
     health: await batchHealth(String(b._id)),
     ...(user.role === "Trainer" ? { is_mine: myTrainerId != null && String(b.trainer?._id ?? b.trainer ?? "") === myTrainerId } : {}),
   })));

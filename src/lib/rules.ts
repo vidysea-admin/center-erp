@@ -412,6 +412,34 @@ export async function activeRoster(batchId: string): Promise<any[]> {
 // Rule 20 + 21: add a candidate to a batch.
 // Returns { member, warning } — over-target assignment is a WARNING, not a block: centres
 // deliberately assign a dropout buffer. The hard cap lands on enrolment (Rule 48).
+/**
+ * Was this batch's START recorded AFTER it happened? (-231 cycle 3, QA-957/QA-958.)
+ *
+ * The question is not "did it start on a past day" — that is true of nearly every running batch, and
+ * asking it that way is what shipped a live regression in `-230`: a walk-in added today to an
+ * ordinary running batch was written back to its start date, and a government-portal attendance row
+ * could then claim a student attended before they enrolled.
+ *
+ * The record already answers it, and there are TWO doors that write the record:
+ *   `backdated_start`  — transitionBatch's explicit override, someone typing in a batch that ran (:805)
+ *   `auto_activated`   — activateFromEvidence turning a Planning batch Active off portal attendance
+ *                        or daily logs, with actual_start set to the earliest evidenced day (:725)
+ * Cycle 2 asked only about the first, so the second inherited the original defect in silence —
+ * and `e2e-govt.mjs:298` calls that fixture "an after-the-fact Planning batch" in its own words.
+ *
+ * ONE function, because the API and the roster door both need this answer and re-deriving it in two
+ * places is ARCHITECTURE.md §3.1's shape — which is exactly how the screen and the server came to
+ * disagree in cycle 2 (the client re-computed "backdated" from a date and promised the operator the
+ * opposite of what the server did).
+ */
+export async function startWasRecordedAfterTheFact(batchId: unknown): Promise<boolean> {
+  return !!(await AuditLog.exists({
+    entity: "Batch",
+    entity_id: batchId,
+    field: { $in: ["backdated_start", "auto_activated"] },
+  }));
+}
+
 export async function addMemberChecked(batchId: string, candidateId: string, joined_on?: Date | null) {
   // Both roster-add doors land here — `api/batches/[id]/members` (single) and
   // `api/candidates/assign` (bulk). ARCHITECTURE.md §3.1 records that those two have already drifted
@@ -492,9 +520,7 @@ export async function addMemberChecked(batchId: string, candidateId: string, joi
   // writes a `backdated_start` audit row (:805), and that block's own comment says "the audit trail
   // IS the record ... a `backdated: true` column would be a second source of truth for something
   // already written down". So this asks the record rather than inferring from a date.
-  const backdated = began
-    ? await AuditLog.exists({ entity: "Batch", entity_id: batchId, field: "backdated_start" })
-    : null;
+  const backdated = began ? await startWasRecordedAfterTheFact(batchId) : false;
   const resolvedJoin = joined_on
     ? dayKey(joined_on)
     : backdated && began && began < istToday() ? began : istToday();

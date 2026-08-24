@@ -959,6 +959,29 @@ console.log("\n--- FL14 (-226): a batch that ALREADY RAN can be recorded, and th
       before.status >= 400,
       `${before.status} ${JSON.stringify(before.data?.error ?? "")} — a 201 here means the guard is gone`);
 
+    // ---- QA-957: the SERVER's answer must reach the screen, and cover BOTH after-the-fact doors ----
+    // Cycle 2 fixed the roster rule and left the client re-deriving the same question from a date,
+    // so the confirmation and the amber note promised a back-dated enrolment on every ordinary
+    // past-started batch. The list payload now carries the server's own answer; these pins are on
+    // that field, because it is the one both surfaces read.
+    const listRow = async (b) => ((await req(admin, "GET", "/api/batches?limit=2000")).data.items ?? [])
+      .find((x) => String(x._id) === String(b._id));
+
+    const normalRow = await listRow(normal);
+    ok("FL15/QA-957: an ordinary past-started batch is NOT flagged after-the-fact to the screen",
+      normalRow?.start_recorded_after_the_fact === false,
+      JSON.stringify({ flag: normalRow?.start_recorded_after_the_fact, actual_start: normalRow?.actual_start }));
+
+    const oldRow = await listRow(old);
+    ok("FL15/QA-957: a batch recorded AFTER it ran IS flagged after-the-fact to the screen",
+      oldRow?.start_recorded_after_the_fact === true,
+      JSON.stringify({ flag: oldRow?.start_recorded_after_the_fact }));
+
+    const freshRow = await listRow(fresh);
+    ok("FL15/QA-957: a batch that has not started is not flagged either",
+      freshRow?.start_recorded_after_the_fact === false,
+      JSON.stringify({ flag: freshRow?.start_recorded_after_the_fact }));
+
     await req(admin, "POST", `/api/batches/${normal._id}/transition`, { target: "Cancelled", reason: "FL15 fixture cleanup" }, 200);
     await req(admin, "POST", `/api/batches/${fresh._id}/transition`, { target: "Cancelled", reason: "FL15 fixture cleanup" }, 200);
   }

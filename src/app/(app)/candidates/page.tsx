@@ -208,8 +208,13 @@ function CandidatesInner() {
   // it changes which days the operator will be able to fill in afterwards, and the old behaviour
   // failed silently — nothing told them until they sat down to enter attendance weeks later.
   async function bulkAssign(batch: any) {
-    const began = batch?.actual_start ? new Date(batch.actual_start) : null;
-    const isBackdated = began && !isNaN(began.getTime()) && began < new Date(new Date().toDateString());
+    // QA-957 (-231 cycle 3): ask the SERVER, do not re-derive from a date. Cycle 2 moved the roster
+    // rule onto the `backdated_start` / `auto_activated` audit record but left this line computing
+    // "started on a past day" — true of nearly every running batch — so on an ordinary batch the
+    // dialog below promised a back-dated enrolment while the server recorded today. A false sentence
+    // at the exact moment the operator is deciding. `start_recorded_after_the_fact` is that same
+    // server answer, carried on the row by `GET /api/batches`.
+    const isBackdated = batch?.start_recorded_after_the_fact === true;
     if (isBackdated && !window.confirm(
       `${batch.code} already started on ${fmtDate(batch.actual_start)}.\n\n` +
       `These ${selected.size} candidate(s) will be counted on the roster from that day, not from today — ` +
@@ -1010,7 +1015,10 @@ function CandidatesInner() {
                 {/* QA-892: a batch that already ran is the case where the join date is not today.
                     Saying so on the row means the operator sees it while CHOOSING, not only in the
                     confirmation after they have already decided. */}
-                {b.actual_start && new Date(b.actual_start) < new Date(new Date().toDateString()) && (
+                {/* QA-957: the server's own answer, not a date guess. Cycle 2 lit this note on every
+                    batch whose start was simply in the past, which is nearly all of them, and told
+                    the operator the roster would count from that day when it would not. */}
+                {b.start_recorded_after_the_fact && (
                   <span className="ml-2 text-xs text-amber-700">started {fmtDate(b.actual_start)} — roster counts from that day</span>
                 )}
               </span>
