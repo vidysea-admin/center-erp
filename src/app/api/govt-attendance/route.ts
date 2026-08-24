@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, isScoped, HttpError } from "@/lib/authz";
 import { requirePerm, requireView } from "@/lib/permissions";
-import { Candidate, GovtAttendanceImport, GovtAttendanceRow, Notification } from "@/models";
+import { BatchMember, Candidate, GovtAttendanceImport, GovtAttendanceRow, Notification } from "@/models";
 import { activateFromEvidence } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 import {
@@ -134,6 +134,13 @@ export const POST = apiHandler(async (req: NextRequest) => {
     // schema field, so create() below drops it - which is correct now that both other surfaces
     // derive it from the rows at read time instead of hoping it was stored (QA-300).
     have_local_logs: matched.some((r) => (r.internal_days_present ?? 0) > 0),
+    // QA-897 (Umesh 24/08: "attandance upload kaam nhi krr rha hai properly"). On a batch with NO
+    // students, matchGovtRows can never match anything — it filters members by batch and there are
+    // none — so every row comes back Unmatched and the screen reads like the upload failed. It did
+    // not fail; there is nobody to match against yet. Saying so is the difference between an
+    // operator fixing the roster and an operator re-uploading the same file expecting a different
+    // answer. Costs one count, and only when a batch was named.
+    roster_is_empty: batchId ? (await BatchMember.countDocuments({ batch: batchId, left_on: null })) === 0 : false,
   };
 
   if (!confirm) {

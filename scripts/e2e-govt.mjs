@@ -2003,5 +2003,44 @@ ok("SSRF guard does not block the real client workbook", stillOk.data.ok === tru
     JSON.stringify({ roster: p2.roster, with: p2.with_portal_id, without: p2.without_portal_id }));
 }
 
+// ---- QA-897: an empty roster is why nothing matched, and the upload must say so ----
+// Umesh, 24/08, on MUZ-CHAR-RPLHSL-SPIT-01: "attandance upload kaam nhi krr rha hai properly".
+// It was working. The batch had no students, so matchGovtRows (which filters members BY BATCH)
+// could not match anyone, every row came back Unmatched, and the screen's standing note blamed the
+// portal Candidate ID — sending the operator to fix a thing that was not broken. The roster is the
+// answer, and only the server knows it.
+console.log("\n--- QA-897: empty roster is named, not left to look like a failed upload ---");
+{
+  // No trainer and no room ON PURPOSE. The fixture batch above already holds both, and a second
+  // batch naming the same ones is refused by assertTrainerAvailableForBatch /
+  // assertRoomFreeForBatch — which is what made the first version of this pin die on
+  // `undefined._id` instead of testing anything. Neither is required to create a batch, and this
+  // one never has to reach Ready: an EMPTY roster is the whole point of it.
+  const mk = await req(admin, "POST", "/api/batches", {
+    location: loc._id, program: program._id,
+    target_size: 5, planned_start: new Date(Date.now() + 3 * 864e5).toISOString().slice(0, 10),
+  }, 201);
+  ok("QA-897: precondition - the empty-roster fixture batch was actually created",
+    !!mk.data?.item?._id, `${mk.status} ${JSON.stringify(mk.data).slice(0, 200)}`);
+  const emptyBatch = mk.data.item;
+
+  const onEmpty = await upload(admin, { file: csvFile(), batch: emptyBatch._id });
+  ok("QA-897: an upload aimed at a batch with NO roster reports roster_is_empty",
+    onEmpty.status === 200 && onEmpty.data.roster_is_empty === true,
+    JSON.stringify({ status: onEmpty.status, flag: onEmpty.data.roster_is_empty, matched: onEmpty.data.matched_count }));
+  ok("QA-897: and it is genuinely the roster, not the file - the same file matches on a batch that HAS one",
+    onEmpty.data.matched_count === 0,
+    JSON.stringify({ empty_batch_matched: onEmpty.data.matched_count }));
+
+  // The control that makes the pin mean something: the SAME file on the populated batch must NOT
+  // raise the flag. Without this, a pin that always returned true would pass.
+  const onFull = await upload(admin, { file: csvFile(), batch: batch._id });
+  ok("QA-897: a batch that HAS students does not raise the flag",
+    onFull.data.roster_is_empty === false,
+    JSON.stringify({ flag: onFull.data.roster_is_empty, matched: onFull.data.matched_count }));
+
+  await req(admin, "POST", `/api/batches/${emptyBatch._id}/transition`, { target: "Cancelled", reason: "QA-897 fixture cleanup" }, 200);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

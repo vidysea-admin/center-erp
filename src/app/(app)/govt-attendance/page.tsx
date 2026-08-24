@@ -320,7 +320,17 @@ function Inner() {
             </div>
             <Field label="Period label"><input className={inputCls} placeholder="e.g. till 11 Aug"
               value={upload.period_label ?? ""} onChange={(e) => setUpload({ ...upload, period_label: e.target.value })} /></Field>
-            {!!upload.unmatched_count && (
+            {/* QA-897 (Umesh 24/08: "attandance upload kaam nhi krr rha hai properly"). On a batch
+                with NO students every row comes back unmatched, because there is nobody to match
+                against — and the note below then blames the portal Candidate ID, which is the wrong
+                fix and sends the operator to the wrong screen. The roster is the actual answer, so
+                it is said first and the other note is suppressed while it applies. */}
+            {upload.roster_is_empty ? (
+              <p className="rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-800">
+                This batch has no students on its roster yet, so none of these {upload.row_count} rows can match anyone.
+                The upload itself is fine — add the students to the batch first, then import this file again.
+              </p>
+            ) : !!upload.unmatched_count && (
               <p className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
                 Unmatched rows are still saved — they are the record of candidates the portal knows and the ERP does not.
                 Setting the portal Candidate ID on those candidates makes the next import match them automatically.

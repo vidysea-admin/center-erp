@@ -426,6 +426,17 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
       const done = await post({ confirm: "1" });
       ok("QA-941: the rows are still IMPORTED - reported, never refused (QA-141: a client's sheet is client data)",
         done.data?.imported === 3, `imported=${done.data?.imported}`);
+      // QA-896 (Umesh 24/08: "bulk sheet upload ... kaam nhi krr rha hai properly"). The batch's own
+      // empty-roster banner offers "Import candidates (Excel)", and the import fills only the POOL —
+      // so the batch stayed empty and the operator had to navigate back and enrol by hand. The screen
+      // now offers to enrol exactly the rows it just created, which needs their ids: guessing "the
+      // newest N" is wrong the moment two people import at once.
+      ok("QA-896: a confirmed import returns the ids it created, so the batch it came from can be offered them",
+        Array.isArray(done.data?.imported_ids) && done.data.imported_ids.length === done.data.imported,
+        JSON.stringify({ imported: done.data?.imported, ids: (done.data?.imported_ids ?? []).length }));
+      ok("QA-896: and they are real ids, not placeholders",
+        (done.data?.imported_ids ?? []).every((s) => /^[0-9a-f]{24}$/i.test(String(s))),
+        JSON.stringify((done.data?.imported_ids ?? []).slice(0, 3)));
       ok("QA-941: ...and the confirm response reports them too, not only the preview",
         (done.data?.aadhaar_invalid_count ?? 0) === 2, `count=${done.data?.aadhaar_invalid_count}`);
 
