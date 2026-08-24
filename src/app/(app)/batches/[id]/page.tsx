@@ -3677,18 +3677,43 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
             </div>
           ))}
           <Btn onClick={async () => {
+            // -224 cycle 2 (QA-862, checker on cycle 1). This loop is the NINTH failure path in this
+            // panel and cycle 1 missed it - and it is the real action behind the very button Umesh
+            // named. Three faults in five lines: the catch reported only to the page-top banner; each
+            // iteration's setError OVERWROTE the previous, so N refusals arrived as one; and the
+            // drawer closed itself unconditionally, so what was left of the message surfaced only
+            // after the thing the operator was reading had vanished. The checker drove it rather than
+            // reading it - three candidates Pass, ZERO issued, THREE failures, ONE message shown.
+            // `Drawer` already takes an `error` slot and this one is passed it; closing the drawer on
+            // failure is exactly what made that slot useless. So: keep every refusal, name every
+            // candidate, and close ONLY on success.
+            const failures: string[] = [];
+            let issued = 0, numbered = 0;
             for (const p of passes) {
               const no = certForm.numbers?.[p.result._id] ?? p.result.certificate_no;
               if (!no) continue;
+              numbered++;
               try {
                 if (p.result.certificate_status === "Pending") await api(`/api/results/${p.result._id}`, { method: "PATCH", json: { certificate_status: "Processing" } });
                 if (["Pending", "Processing"].includes(p.result.certificate_status)) {
                   await api(`/api/results/${p.result._id}`, { method: "PATCH", json: { certificate_status: "Generated", certificate_no: no, certificate_date: certForm.certificate_date } });
                 }
                 await api(`/api/results/${p.result._id}`, { method: "PATCH", json: { certificate_status: "Issued" } });
-              } catch (e: any) { setError(`${p.candidate?.name}: ${e.message}`); }
+                issued++;
+              } catch (e: any) { failures.push(`${p.candidate?.name ?? "This candidate"}: ${e?.message ?? String(e)}`); }
             }
-            setCertDrawer(false); await load(); onChanged();
+            await load(); onChanged();
+            if (failures.length) {
+              const shown = failures.slice(0, 3).join(" · ");
+              report(`${issued} issued · ${failures.length} refused — ${shown}${failures.length > 3 ? ` · +${failures.length - 3} more` : ""}`);
+              return; // the drawer STAYS OPEN, carrying the message beside the rows it is about
+            }
+            if (!numbered) {
+              report("No certificate number is filled in yet, so there was nothing to issue. Type the numbers the awarding body sent, or press Fill to number them in a series.");
+              return;
+            }
+            setGridError(null);
+            setCertDrawer(false);
           }}>Generate &amp; issue</Btn>
         </div>
       </Drawer>
