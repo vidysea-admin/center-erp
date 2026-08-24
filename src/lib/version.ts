@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-223";
+export const RELEASE = "2026.08.14-226";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,24 @@ export const RELEASE = "2026.08.14-223";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-226 lets a batch that already began be entered after the fact, and -225 makes a batch code "  +
+  "count what is actually on record. Centres could not enter batches that ran months ago. Past "  +
+  "dates were never the obstacle: the readiness chain asked for a roster at eighty percent of "  +
+  "target, which a batch being typed in long after it ran can never reach, and the banner told "  +
+  "the operator to press a control that only appeared once the batch was already Ready, so the "  +
+  "instruction named a button that was not there. An administrator may now start such a batch "  +
+  "from Planning as well as Ready, after a confirmation that names every check the batch does "  +
+  "not meet, in the same words the checklist itself uses. No reason is demanded: the request was "  +
+  "to warn once and not to block, and requiring a reason would have been the blocking it ruled "  +
+  "out. This is an override and not a general bypass - it applies only where the planned start "  +
+  "is strictly in the past, and is refused on a batch starting today. A batch that finished in "  +
+  "July no longer records today as its end date, which had also made the attendance rules count "  +
+  "days that never happened; the real end date is accepted, and cannot be in the future or "  +
+  "before the start. Every such start is recorded with the checks it passed over. -225 corrects "  +
+  "the number in a batch code. The codes are per centre and per programme and always were, but "  +
+  "the counter issuing them could drift, and the code was minted before the batch was "  +
+  "validated; the number is now derived from the batches actually on record.";
+const RELEASE_NOTE_ARCHIVE_223 =
   "-223 repairs a fault this project shipped two days ago that took work away from the people who " +
   "do it. Marking candidates pass or fail, and with it certificate upload, became unreachable for " +
   "anyone who did not hold the batch-closure right: the only button that opens the marking grid was " +
@@ -303,6 +321,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
+  RELEASE_NOTE_ARCHIVE_223 + " " +
   RELEASE_NOTE_ARCHIVE_222 + " " +
   RELEASE_NOTE_ARCHIVE_221 + " " +
   RELEASE_NOTE_ARCHIVE_220 + " " +
