@@ -2457,12 +2457,20 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
   // the client.
   const [reopening, setReopening] = useState(false);
   async function reopenAssessment(then?: () => void) {
+    // -224 cycle 3 (QA-878): this sentence used to ASSERT the provenance - "recorded by hand rather
+    // than from the roster" - on every batch it was offered for. On a derived sign-off that was
+    // simply false, and it was false in the one place a person is being asked to consent. Read the
+    // provenance instead of claiming it: `assessment_derived` is the field that knows, and a
+    // reopen that has nothing to rebuild says so rather than inventing a reason.
     const a = closure?.appeared, p = closure?.passed;
     const figures = a != null || p != null ? ` — ${a ?? "?"} appeared, ${p ?? "?"} passed` : "";
+    const byHand = closure?.assessment_derived !== true;
     if (!window.confirm(
       `Reopen this batch's assessment?\n\n`
-      + `It was completed with batch-level figures${figures}, recorded by hand rather than from the roster.\n\n`
-      + `Marking candidates individually REBUILDS those totals from the per-candidate rows, so those numbers will be replaced by whatever the rows actually say. The batch itself is not reopened and nothing else changes.\n\n`
+      + (byHand
+        ? `It was completed with batch-level figures${figures}, entered against the batch rather than derived from the roster.\n\n`
+          + `Marking candidates individually REBUILDS those totals from the per-candidate rows, so those numbers will be replaced by whatever the rows actually say. The batch itself is not reopened and nothing else changes.\n\n`
+        : `Its figures${figures} were derived from the per-candidate rows, not entered by hand, so reopening changes no number here. The batch itself is not reopened and nothing else changes.\n\n`)
       + `This is audited.`)) return;
     setReopening(true);
     try {
@@ -2660,11 +2668,20 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
             )}
             {/* -224: the door rules.ts:1302 tells the operator to use. It existed nowhere before -
                 this line only ever MENTIONED reopening when the batch itself was finished, i.e.
-                never on the Active batch where per-candidate marking is actually blocked. Offered
-                only to someone the server will accept, so it is not another dead control. */}
-            {closure?.assessment_status === "Completed" && !statusClosedTab && mayMarkTab && (
+                never on the Active batch where per-candidate marking is actually blocked.
+                -224 cycle 3 (QA-878, checker on cycle 2): my own predicate asked only HALF the
+                question the server asks. rules.ts:1302 refuses on TWO facts - the sign-off is
+                Completed AND there are ZERO per-candidate rows - and this asked only the first. So
+                on a batch whose sign-off was DERIVED from its rows (`legacy:false`,
+                `assessment_derived:true`) the control rendered, its confirm claimed the figures were
+                "recorded by hand rather than from the roster" - both clauses false - and pressing it
+                did nothing at all: the PUT set Pending, and deriveCompletion immediately restored
+                Completed from the rows. A dead button that lies to obtain consent, on the screen
+                whose whole release is about dead buttons. `legacy` is the client's name for "no
+                per-candidate rows exist", so it is the same question, asked in the client's words. */}
+            {legacy && closure?.assessment_status === "Completed" && !statusClosedTab && mayMarkTab && (
               <button onClick={() => reopenAssessment()} disabled={reopening}
-                title="Marking candidates individually is refused while a batch-level sign-off stands, because the roster would silently overwrite the figures recorded by hand. Reopening rebuilds them from the rows instead."
+                title="Marking candidates individually is refused while a batch-level sign-off stands, because rebuilding the totals from the roster would overwrite the figures that were entered against this batch. Reopening derives them from the rows instead."
                 className="w-fit rounded-lg border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50">
                 {reopening ? "Reopening…" : "Reopen assessment"}
               </button>
@@ -3000,14 +3017,28 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
       // could mark 20, refuse 25, and report a clean success. A partial write that says nothing is
       // worse than a refusal: the operator believes the roster is marked.
       const errs: any[] = Array.isArray(res?.errors) ? res.errors : [];
+      // -224 cycle 3 (QA-877, checker on cycle 2): a SUCCESSFUL bulk mark cleared only `gridError`
+      // and never `cardErrors`, so cards that had just been marked Pass went on displaying the old
+      // refusal - "Reopen the assessment before marking candidates individually" - beside a green
+      // Pass. A stale refusal standing next to the result that disproves it is the same lie this
+      // unit exists to remove, and it contradicted this component's own comment ("clears on that
+      // card's next successful mark"), which was true only for the single-candidate path. Every
+      // member this call actually updated gets its card cleared, exactly as mark() does.
+      const failed = new Set(errs.map((e) => String(e?.member)));
+      setCardErrors((c) => {
+        const n = { ...c };
+        for (const r of rows) { const m = String(r.member); if (!failed.has(m)) delete n[m]; }
+        for (const e of errs) if (e?.member) n[String(e.member)] = String(e.error ?? "refused, no reason given");
+        return n;
+      });
       if (errs.length) {
-        const byMember: Record<string, string> = {};
-        for (const e of errs) if (e?.member) byMember[String(e.member)] = String(e.error ?? "refused, no reason given");
-        setCardErrors((c) => ({ ...c, ...byMember }));
         const names = errs.map((e) => items.find((i) => String(i.member) === String(e.member))?.candidate?.name).filter(Boolean) as string[];
         report(`${res?.updated ?? 0} marked · ${errs.length} refused — ${errs[0]?.error ?? "no reason given"}`
           + (names.length ? ` (${names.slice(0, 3).join(", ")}${names.length > 3 ? ` +${names.length - 3} more` : ""})` : ""));
-      } else setGridError(null);
+      } else {
+        // …and the page-top banner the same report() wrote, or the two surfaces disagree (QA-877).
+        setGridError(null); setError("");
+      }
       await load(); onChanged();
     } catch (e: any) { fail(e); }
   }
@@ -3688,10 +3719,16 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
             // failure is exactly what made that slot useless. So: keep every refusal, name every
             // candidate, and close ONLY on success.
             const failures: string[] = [];
+            // -224 cycle 3 (QA-886, second checker): a candidate with no number was skipped in
+            // SILENCE as long as one other candidate had one - measured 3 Pass, 1 number typed, 1
+            // Issued, 2 left Pending, drawer closed, nothing said. Cycle 2 added the all-blank
+            // message and stopped one step short of the partial case, which is the same defect
+            // QA-857 named for bulkApply: a partial write that reports as a clean success.
+            const skipped: string[] = [];
             let issued = 0, numbered = 0;
             for (const p of passes) {
               const no = certForm.numbers?.[p.result._id] ?? p.result.certificate_no;
-              if (!no) continue;
+              if (!no) { skipped.push(p.candidate?.name ?? "This candidate"); continue; }
               numbered++;
               try {
                 if (p.result.certificate_status === "Pending") await api(`/api/results/${p.result._id}`, { method: "PATCH", json: { certificate_status: "Processing" } });
@@ -3703,16 +3740,28 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
               } catch (e: any) { failures.push(`${p.candidate?.name ?? "This candidate"}: ${e?.message ?? String(e)}`); }
             }
             await load(); onChanged();
+            const names = (xs: string[]) => `${xs.slice(0, 3).join(" · ")}${xs.length > 3 ? ` · +${xs.length - 3} more` : ""}`;
+            const skippedClause = skipped.length
+              ? ` · ${skipped.length} left out, no certificate number typed yet (${names(skipped)})` : "";
             if (failures.length) {
-              const shown = failures.slice(0, 3).join(" · ");
-              report(`${issued} issued · ${failures.length} refused — ${shown}${failures.length > 3 ? ` · +${failures.length - 3} more` : ""}`);
+              report(`${issued} issued · ${failures.length} refused — ${names(failures)}${skippedClause}`);
               return; // the drawer STAYS OPEN, carrying the message beside the rows it is about
             }
             if (!numbered) {
               report("No certificate number is filled in yet, so there was nothing to issue. Type the numbers the awarding body sent, or press Fill to number them in a series.");
               return;
             }
-            setGridError(null);
+            if (skipped.length) {
+              // Some went, some never had a number. That is a PARTIAL write, and a partial write
+              // that closes its own drawer and says nothing is exactly QA-857's shape.
+              report(`${issued} issued${skippedClause}`);
+              return;
+            }
+            // -224 cycle 3 (QA-877, extended by the second checker): the success branch cleared
+            // gridError and never the page-top banner, so a clean run left the PREVIOUS refusal
+            // standing on screen, contradicting what had just happened. `setError(null)` appeared
+            // zero times in this file before this line.
+            setGridError(null); setError("");
             setCertDrawer(false);
           }}>Generate &amp; issue</Btn>
         </div>
