@@ -69,7 +69,10 @@ export const RELEASE_NOTE_CURRENT =
   "present on days the batch did not run; for a batch that has not started, the date is now "  +
   "accepted with a warning that it cannot be changed afterwards. Second, a day's attendance "  +
   "could not be saved at all when more people were marked present than the day's roster had "  +
-  "been frozen at - which is what happens when somebody joins on the day itself, and it "  +
+  "been frozen at. That happens when somebody joins on the day itself, and again when "  +
+  "somebody is added to the batch later with an earlier joining date - which is precisely "  +
+  "what entering a course that has already run involves. The second case was the worse of "  +
+  "the two, because the days it blocked are days the centre already holds on paper. It "  +
   "refused on both the daily log and the marking screen, so there was no way to record the "  +
   "day at all. That refusal is gone. One related repair was kept: a check on the government "  +
   "figure used to be skipped entirely whenever a present list and a government figure were "  +
