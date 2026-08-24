@@ -1491,10 +1491,26 @@ console.log("\n--- FL19 (-235): a cancelled batch can be RESTORED, and a typed j
   // A date years before the batch was ever planned went in, permanently.
   const notStarted = await mkB(istDay(3));
   const wayBack = await req(admin, "POST", `/api/batches/${notStarted._id}/members`,
-    { candidate: (await mkCand("WayBack"))._id, joined_on: istDay(-400) });
-  ok("FL19 (QA-1049): a NOT-YET-STARTED batch floors the join date at its planned start",
-    wayBack.status === 400 && /planned to start/i.test(String(wayBack.data?.error ?? "")),
-    `${wayBack.status} ${JSON.stringify(wayBack.data)}`);
+    { candidate: (await mkCand("WayBack"))._id, joined_on: istDay(-400) }, 201);
+  // WARNS, does not refuse — and the first version of this pin asserted the opposite, which is how a
+  // 400 got shipped over the shape this whole product exists to support: a batch that really ran
+  // earlier and is typed in today, so planned_start is today and the roster is older. That refusal
+  // crashed e2e-govt and took four e2e.mjs assertions with it. REQ-411 decides this class outright:
+  // "just notify them once that this is a past date but dont stop them."
+  ok("FL19 (QA-1049): an early join date on a NOT-YET-STARTED batch is accepted",
+    wayBack.status === 201, `${wayBack.status} ${JSON.stringify(wayBack.data?.error ?? "")}`);
+  ok("FL19 (QA-1049): ...and it comes back with a warning that says it cannot be changed afterwards",
+    /before this batch's planned start/i.test(String(wayBack.data?.warning ?? ""))
+      && /cannot be changed afterwards/i.test(String(wayBack.data?.warning ?? "")),
+    JSON.stringify({ warning: wayBack.data?.warning ?? null }));
+
+  // The hard floor that REMAINS: once a batch has genuinely started, Rule 26 will not have someone on
+  // the roster for days it did not run. That refusal is not softened by the above.
+  const startedFloor = await req(admin, "POST", `/api/batches/${b1._id}/members`,
+    { candidate: (await mkCand("BeforeStart"))._id, joined_on: istDay(-90) });
+  ok("FL19 (QA-1049): a STARTED batch still hard-refuses a join date before it began",
+    startedFloor.status === 400 && /began on/i.test(String(startedFloor.data?.error ?? "")),
+    `${startedFloor.status} ${JSON.stringify(startedFloor.data)}`);
   await req(admin, "POST", `/api/batches/${notStarted._id}/transition`, { target: "Cancelled", reason: "FL19 cleanup" }, 200);
 
   // QA-1047 (S2) - the checker's headline, and the one that reaches a government-facing row.
@@ -1518,16 +1534,16 @@ console.log("\n--- FL19 (-235): a cancelled batch can be RESTORED, and a typed j
   const bdMember = (await req(admin, "POST", `/api/batches/${b1._id}/members`,
     { candidate: backDated._id, joined_on: istDay(-19) }, 201)).data.item;
   const overfull = [...beforeMembers, String(bdMember._id)];
-  const pushPast = await req(admin, "PATCH", `/api/logs/${frozenLog._id}`, { present_member_ids: overfull });
-  ok("FL19 (QA-1047): a frozen day cannot be marked with MORE present than its own roster_count",
-    pushPast.status === 400 && /more than the/i.test(String(pushPast.data?.error ?? "")),
-    `${pushPast.status} ${JSON.stringify(pushPast.data)}`);
-
-  // ...and the refusal has to say what to DO, or it is a dead end - the -224 fault this project
-  // shipped: a correct guard whose stated remedy did not exist on screen.
-  ok("FL19 (QA-1047): ...and the refusal names the cause - a joining date on or before that day",
-    /joining date/i.test(String(pushPast.data?.error ?? "")),
-    JSON.stringify(pushPast.data));
+  // The internal_present bound that used to be asserted here is WITHDRAWN, and the reason is worth
+  // more than the pin was. Refusing `internal_present > roster_count` broke `e2e.mjs`: a member who
+  // joins and attends on the SAME DAY is ordinary and truthful, and the log was frozen earlier that
+  // day with a smaller count. Rule 26 (REQ-119) says that member WAS on the roster; Rule 28 (REQ-202)
+  // says roster_count is never recalculated. Both cannot hold once a join date can be typed, and
+  // choosing between them is a contract + government-reporting decision, not the maker's. Raised in
+  // qa/feedback-inbox.md. What IS pinned below is the half that needed no ruling.
+  const stillAccepted = await req(admin, "PATCH", `/api/logs/${frozenLog._id}`, { present_member_ids: overfull });
+  ok("FL19: a same-day/back-dated joiner can still be marked on a frozen day (the guard I over-reached with is gone)",
+    stillAccepted.status === 200, `${stillAccepted.status} ${JSON.stringify(stillAccepted.data?.error ?? "")}`);
 
   // The govt figure escaped entirely: its bound lived in an `else if`, so sending a present list AND
   // a government number in one PATCH skipped Rule 30 outright.
@@ -1540,9 +1556,9 @@ console.log("\n--- FL19 (-235): a cancelled batch can be RESTORED, and a typed j
   // And the day still holds what it held - a refused edit must write nothing.
   const afterLog = (await req(admin, "GET", `/api/batches/${b1._id}/logs`)).data.items
     ?.find((l) => String(l._id) === String(frozenLog._id));
-  ok("FL19 (QA-1047): the refused edits wrote nothing - internal_present is still within roster_count",
-    afterLog && Number(afterLog.internal_present) <= Number(afterLog.roster_count),
-    JSON.stringify({ internal: afterLog?.internal_present, roster: afterLog?.roster_count }));
+  ok("FL19 (QA-1047): the REFUSED govt edit wrote nothing - the stored figure is unchanged",
+    afterLog && (afterLog.govt_present ?? null) === (frozenLog.govt_present ?? null),
+    JSON.stringify({ before: frozenLog?.govt_present ?? null, after: afterLog?.govt_present ?? null }));
 
   await req(admin, "POST", `/api/batches/${b1._id}/transition`, { target: "Cancelled", reason: "FL19 cleanup" }, 200);
   await req(admin, "POST", `/api/batches/${b3._id}/transition`, { target: "Planning", reason: "FL19 cleanup" }, 200);

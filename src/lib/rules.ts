@@ -531,6 +531,7 @@ export async function addMemberChecked(batchId: string, candidateId: string, joi
   // The guards live HERE and not in either route: both doors pass through this function (REQ-358), and
   // §3.1 records what happened the one time a join rule shipped on one door and not the other (QA-273).
   // They sit below rather than in the "preconditions" block above only because they need `began`.
+  let earlyJoinNote: string | undefined;
   if (joined_on) {
     const requested = dayKey(joined_on);
     if (isNaN(requested.getTime())) throw new HttpError(400, "The join date is not a valid date.");
@@ -555,16 +556,28 @@ export async function addMemberChecked(batchId: string, candidateId: string, joi
     // Rule 26 counts a member onto the roster for every day from `joined_on` onward, and Rule 28
     // freezes `roster_count` from exactly that. A join date before the batch began would put someone
     // on the roster for days the batch did not run.
-    // QA-1049 (checker on qa-235): `began` is null until `actual_start` is stamped, so before the
-    // batch is started there was NO lower bound at all — and the normal order is roster first, start
-    // second. A join date years before the batch was ever planned went in, and `joined_on` is not
-    // editable afterwards, so it stayed. `planned_start` is the honest floor for a batch that has not
-    // started: it is the earliest day the batch was ever meant to exist.
-    const floor = began ?? plannedKey;
-    if (floor && requested < floor) {
-      throw new HttpError(400, began
-        ? `This batch began on ${floor.toISOString().slice(0, 10)} — a candidate cannot join before that.`
-        : `This batch is planned to start on ${floor.toISOString().slice(0, 10)} — a candidate cannot join before that.`);
+    // A batch that has ALREADY STARTED has a hard floor, and it is Rule 26's: a member dated before
+    // `actual_start` would be on the roster for days the batch did not run, and Rule 28 freezes
+    // `roster_count` from exactly that count.
+    if (began && requested < began) {
+      throw new HttpError(400, `This batch began on ${began.toISOString().slice(0, 10)} — a candidate cannot join before that.`);
+    }
+    // QA-1049 said there is no lower bound at all until `actual_start` is stamped, and that is true:
+    // a mistyped year goes in and `joined_on` is not editable afterwards. My first answer was to floor
+    // it at `planned_start` — and that answer was WRONG, measured, not argued: it crashed `e2e-govt`
+    // outright and took four assertions in `e2e.mjs` with it, because that suite is built on the
+    // shape this product exists to support — a batch that really ran earlier, typed into the ERP
+    // today, so `planned_start` is today and the roster is twenty days older. That is Umesh's own
+    // "humko puraane completed batch bhi tho system mai daalne hai" (REQ-411), and I had just made it
+    // a 400.
+    //
+    // REQ-411 already decides this class: *"just notify them once that this is a past date but dont
+    // stop them."* So an early join date on a batch that has not started is a WARNING carried back to
+    // the caller, not a refusal. The operator is told; the door stays open.
+    if (!began && plannedKey && requested < plannedKey) {
+      earlyJoinNote = `Joining date ${requested.toISOString().slice(0, 10)} is before this batch's planned start `
+        + `(${plannedKey.toISOString().slice(0, 10)}). That is right for a batch being entered after it ran — `
+        + `if it is a typo, correct it now: a joining date cannot be changed afterwards.`;
     }
   }
   const resolvedJoin = joined_on
@@ -572,9 +585,16 @@ export async function addMemberChecked(batchId: string, candidateId: string, joi
     : backdated && began && began < istToday() ? began : istToday();
   const member = await BatchMember.create({ batch: batchId, candidate: candidateId, joined_on: resolvedJoin });
   await Candidate.findByIdAndUpdate(candidateId, { lifecycle_status: "Assigned" }); // Rule 21
-  const warning = batch && rosterCount + 1 > batch.target_size
-    ? `Roster is now ${rosterCount + 1} of target ${batch.target_size} — enrolment will be capped at ${batch.target_size}.`
-    : undefined;
+  // Both notes ride the ONE `warning` field the two roster routes already surface (members/route.ts
+  // returns it, candidates/assign collects it per candidate). Adding a second field would mean two
+  // more call sites remembering to render it, which is how the pair in §3.1 drifted apart.
+  const notes = [
+    batch && rosterCount + 1 > batch.target_size
+      ? `Roster is now ${rosterCount + 1} of target ${batch.target_size} — enrolment will be capped at ${batch.target_size}.`
+      : undefined,
+    earlyJoinNote,
+  ].filter(Boolean);
+  const warning = notes.length ? notes.join(" ") : undefined;
   return Object.assign(member, { warning });
 }
 

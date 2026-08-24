@@ -47,19 +47,10 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     biometric_member_ids: dayBiometric,
   });
 
-  // QA-1047 (-243): same escape as the day-level edit door. `validateDailyLog` counts the union
-  // against the roster AS IT IS NOW; `roster_count` on this row was frozen the day it was saved
-  // (Rule 28 / REQ-202). A member back-dated onto this day after the fact is on today's roster and
-  // not in that frozen number, so the union could push `internal_present` past it. A marking round
-  // is same-day only, which makes this the narrower of the two doors — but "narrower" is how the
-  // second copy of a defect always survives the fix to the first.
-  if (check.internal_present > log.roster_count) {
-    throw new HttpError(400,
-      `${check.internal_present} present is more than the ${log.roster_count} on the roster for this day. ` +
-      `Someone has been added to this batch with a joining date on or before this one, so they were not ` +
-      `on the roster when the day was recorded. Correct their joining date before marking them present.`);
-  }
-
+  // QA-1047: the same `internal_present > roster_count` guard was here and is withdrawn for the same
+  // reason — a marking round is same-day only, which is EXACTLY the case that guard got wrong: a
+  // member who joined today, marked present today, on a log frozen earlier today. See the long note in
+  // logs/[id]/route.ts; the unresolved half is a contract question, not a code one.
   log.sessions.push({ at: new Date(), present_member_ids: roundPresent, biometric_member_ids: roundBiometric, marked_by: user.id } as any);
   log.present_member_ids = dayPresent as any;
   log.biometric_member_ids = dayBiometric as any;
