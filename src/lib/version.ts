@@ -77,8 +77,24 @@ export const RELEASE_NOTE_CURRENT =
   "none no longer sends the operator away at the end: it offers to enrol the people just "  +
   "imported onto that same batch. Uploading government attendance for a batch with an empty "  +
   "roster now says so plainly instead of blaming the portal identifiers - fill the roster "  +
-  "first. And a test pin that measured less than its own description claimed has been "  +
-  "repaired.";
+  "first; it now says that about the STUDENT rows specifically, because trainer rows are "  +
+  "looked up across the whole system and do match on a batch with nobody on it, and the "  +
+  "earlier wording claimed nothing at all could match. And a test pin that measured less "  +
+  "than its own description claimed has been repaired. "  +
+  "Three further changes are named here rather than shipping undescribed. A staff member "  +
+  "restricted to certain centres could DELETE a candidate or a trainer belonging to a "  +
+  "centre they are not allowed to so much as open - the record really went. Reading it was "  +
+  "refused and deleting it was not. That is closed on both, and the refusal now comes "  +
+  "before the batch-history message, because telling someone that a person they may not "  +
+  "see has batch history is itself telling them something. This was reachable only after "  +
+  "delete was opened up to the team, so anyone who has not ticked those permissions was "  +
+  "never exposed. Separately, restoring a cancelled batch while also sending a date now "  +
+  "answers the date first: both refusals were correct, and which one you were shown "  +
+  "depended on the batch, so the same mistake could be explained two different ways on two "  +
+  "different days. And the sheet-inbox fault that -239 described - where a centre marked for "  +
+  "closing could quietly stop being closed because a later action on the same row overwrote "  +
+  "the record of the first - is now closed for the whole class of actions rather than the two "  +
+  "that were found, together with the older test that had been passing it.";
 const RELEASE_NOTE_ARCHIVE_238 =
   "-238 moves that question out of a block that called it optional. On both public registration "  +
   "pages the choice between the current intake and a later one had been placed inside the section "  +
