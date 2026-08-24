@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-240";
+export const RELEASE = "2026.08.14-241";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -59,6 +59,21 @@ const RELEASE_NOTE_ARCHIVE_239 =
   "record. Alongside these, two controls on the batch screen now ask for the same right the "  +
   "server asks for, so neither is offered to someone it would refuse.";
 export const RELEASE_NOTE_CURRENT =
+  "-241 closes a way a centre's records could be destroyed by someone who was not allowed to see "  +
+  "them. Deleting a candidate or a trainer had never checked which centre the record belonged to. "  +
+  "That could not be reached while deletion was reserved to administrators, who are not restricted "  +
+  "to a centre at all; opening deletion to centre staff, which this product did two releases ago, "  +
+  "made it reachable. A principal who is refused when merely opening another centre's candidate "  +
+  "could delete that same record, and it was really gone. Both now refuse first and say only that "  +
+  "the record is not theirs - the refusal comes before any message about batch history, because "  +
+  "such a message is itself a disclosure about a record the person may not see. Deleting within "  +
+  "one's own centre is unchanged. Batch deletion already checked this and was never affected. "  +
+  "Also in this build: a release-notes gate that had been rejecting a correctly declared release "  +
+  "over a single space in the file it reads, a fixture that tried to enrol a student on a date in "  +
+  "the future and swallowed ten refusals while doing it, and a stray line break inside a source "  +
+  "file that had reached the repository three times.";
+
+const RELEASE_NOTE_ARCHIVE_240 =
   "-240 gives a cancelled batch a way back, and gives a late joiner the right date. Until now "  +
   "cancelling a batch was final: there was no route out of the cancelled state at all, and the "  +
   "batch screen offered no control even to try, so a batch cancelled by mistake stayed cancelled "  +
@@ -95,6 +110,7 @@ export const RELEASE_NOTE_CURRENT =
   "closing could quietly stop being closed because a later action on the same row overwrote "  +
   "the record of the first - is now closed for the whole class of actions rather than the two "  +
   "that were found, together with the older test that had been passing it.";
+
 const RELEASE_NOTE_ARCHIVE_238 =
   "-238 moves that question out of a block that called it optional. On both public registration "  +
   "pages the choice between the current intake and a later one had been placed inside the section "  +
@@ -510,7 +526,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
-  RELEASE_NOTE_ARCHIVE_239 + " " + RELEASE_NOTE_ARCHIVE_238 + " " +
+  RELEASE_NOTE_ARCHIVE_240 + " " + RELEASE_NOTE_ARCHIVE_239 + " " + RELEASE_NOTE_ARCHIVE_238 + " " +
   RELEASE_NOTE_ARCHIVE_237 + " " + RELEASE_NOTE_ARCHIVE_236 + " " +
   RELEASE_NOTE_ARCHIVE_231 + " " +
   // -230 was built and never released on its own - -231 carries it. Its note is archived rather
