@@ -73,7 +73,21 @@ function CandidatesInner() {
   const [dropReasons, setDropReasons] = useState<any[]>([]);
   const [editId, setEditId] = useState<string>("");
   const [form, setForm] = useState<any>({});
-  const [importState, setImportState] = useState<any>({});
+  // QA-896 (Umesh 24/08: "iss batch wale mai bulk sheet upload ... kaam nhi krr rha hai properly").
+  // A batch with an empty roster shows a banner offering "Import candidates (Excel)", and that
+  // button used to be a bare link to this page carrying nothing. The operator then re-picked the
+  // centre and job role the batch already knew, imported, and found the batch STILL empty — because
+  // the importer fills the pool, not a roster. Four steps, two of them re-answering questions the
+  // system had. The banner now sends the batch, centre and programme; this reads them, opens the
+  // drawer already filled, and remembers the batch so the enrolment can be offered at the end.
+  const [importState, setImportState] = useState<any>(
+    sp.get("import") === "1"
+      ? { location: sp.get("location") ?? "", program: sp.get("program") ?? "" }
+      : {},
+  );
+  // Held separately from importState because importState is wiped on every drawer close, and this
+  // must survive the preview -> confirm round trip that sits between arriving and enrolling.
+  const [importForBatch, setImportForBatch] = useState<string>(sp.get("batch") ?? "");
   const [dupes, setDupes] = useState<any[]>([]);
   const set = (k: string, v: unknown) => setForm((f: any) => ({ ...f, [k]: v }));
 
@@ -105,6 +119,9 @@ function CandidatesInner() {
     ]).catch((e) => setError(e.message)).finally(() => setLoading(false));
   };
   useEffect(() => { load(); }, [fLoc]);
+  // QA-896: arriving from a batch's empty-roster banner opens the importer already filled in.
+  // Mount only — reopening it on every render would trap the operator in the drawer.
+  useEffect(() => { if (sp.get("import") === "1") setDrawer("import"); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 2026-08-14 (CEO): "do bucket banao — FRESH (inquiry, jab tak batch assign nahi) aur
   // ENROLLED (batch se billing tak ki poori journey, current status ke saath)".
@@ -453,7 +470,29 @@ function CandidatesInner() {
         // the remembered CHI-ITI mapping would have re-applied itself to every next sheet.
         const bad = (res.phone_invalid_count ?? importState.preview?.phone_invalid_count ?? 0) >= Math.max(1, Math.ceil((importState.preview?.valid ?? 0) / 2));
         if (!bad) { try { localStorage.setItem("erp-import-map-candidates-v2", JSON.stringify({ sig: [...(importState.columns ?? [])].sort().join("|"), mapping: importState.mapping ?? {} })); } catch {} }
-        setDrawer(""); setImportState({}); load();
+        setDrawer(""); setImportState({});
+        // QA-896: the last step the operator used to have to work out for themselves. They came here
+        // from a batch that said it had no students; importing fills the POOL, so without this the
+        // batch is still empty and they have to navigate back and enrol by hand. Offered, not done
+        // silently — enrolling is a decision, and some of an imported sheet may belong elsewhere.
+        const forBatch = importForBatch;
+        const ids: string[] = res.imported_ids ?? [];
+        if (forBatch && ids.length) {
+          const bt = batches.find((x: any) => String(x._id) === String(forBatch));
+          if (window.confirm(
+            `${ids.length} candidate(s) imported into the pool.\n\n` +
+            `Add them to ${bt?.code ?? "the batch you came from"} now?\n\n` +
+            `Importing only creates the records — until they are added, the batch still shows an empty roster.`,
+          )) {
+            try {
+              const asg = await api("/api/candidates/assign", { method: "POST", json: { batch: forBatch, candidate_ids: ids } });
+              const failed = (asg.results ?? []).filter((r: any) => !r.ok);
+              setError(`${asg.assigned} added to ${bt?.code ?? "the batch"}.${failed.length ? ` ${failed.length} refused: ${failed[0].error}` : ""}`);
+            } catch (e: any) { setError(`Imported, but adding to the batch failed: ${e.message}`); }
+          }
+          setImportForBatch("");
+        }
+        load();
       }
     } catch (e: any) { setError(e.message); }
   }
