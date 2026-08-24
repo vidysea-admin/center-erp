@@ -7,6 +7,7 @@ import { activateFromEvidence } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 import {
   parseGovtAttendance, matchGovtRows, reconcileAgainstLogs, resolveLocationFromFile, shiftSignature,
+  importLocationForWrite, scopedImportOr,
 } from "@/lib/govt-attendance";
 
 // Government portal attendance (2026-08-12). The boss's ask was that Manish uploads the portal
@@ -24,8 +25,13 @@ export const GET = apiHandler(async (req: NextRequest) => {
   const location = req.nextUrl.searchParams.get("location");
   if (batch) q.batch = batch;
   if (location) q.location = location;
-  // A scoped user only ever sees their own centres' imports.
-  if (isScoped(user)) q.location = { $in: user.location_scope ?? [] };
+  // A scoped user only ever sees their own centres' imports. QA-830: this used to OVERWRITE
+  // q.location with the scope, so an import stored with location:null - which the write below
+  // allowed - could never match, and the uploader's own import was invisible to them. The scope is
+  // an $and now, so an explicit ?location= still narrows and the scope still authorises.
+  if (isScoped(user)) {
+    q.$and = [{ $or: await scopedImportOr(user.location_scope ?? []) }];
+  }
   const items = await GovtAttendanceImport.find(q)
     .populate("location", "name external_id").populate("batch", "code")
     .populate("imported_by", "name")
@@ -95,7 +101,13 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // The portal stamps the TC code into "Org Name", so the centre is usually self-evident; the
   // operator can still override it when a file spans centres or the code is missing.
   const auto = await resolveLocationFromFile(parsed);
-  const locationId = String(form.get("location") || "") || auto?._id || null;
+  // QA-830: when neither the file nor the operator names a centre, take the BATCH's. `Batch.location`
+  // is required, so this always resolves - and it is what stops -223 onwards from writing another
+  // record that its own uploader can never reach.
+  const locationId = await importLocationForWrite(
+    String(form.get("location") || "") || (auto?._id ? String(auto._id) : null),
+    batchId ? String(batchId) : null,
+  );
   if (!locationId && !batchId) {
     throw new HttpError(400, parsed.tc_id
       ? `No centre in the ERP carries TC ID "${parsed.tc_id}". Pick the centre manually, or set that TC ID on the location first.`

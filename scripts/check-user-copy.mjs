@@ -1933,6 +1933,141 @@ for (const file of walk(root)) {
   }
 }
 
+// ---- -223 (QA-825/QA-828): "the batch is finished" may NEVER be decided by a permission ----
+// A client outage, and mine. -216/-217 folded two facts into one name:
+//     const closed = ["Completed","Cancelled"].includes(batch?.status) || !mayMarkTab;
+// `closed` is correct for `disabled=`. It is WRONG for deciding what renders and WRONG for choosing
+// a sentence, and it was doing both. The marking grid's ONLY door rendered on `!closed`, so a person
+// without `closure.manage` got no door at all - and four places told them "the batch is finished"
+// while the header showed the Active chip. Three client-visible symptoms, one expression.
+//
+// The SHAPE is pinned, not the wording: a batch-finished sentence must be reached only through a
+// term built from `batch?.status` ALONE, and the grid's door must render on that same term.
+// Counting the sentences would not have caught this - all four read correctly and all four were
+// reached by the wrong test.
+//
+// (The first draft of this very pin measured the wrong thing: it rejected the status-only term
+// because `/can[A-Z(]/i` matched the "Can" in "Cancelled". A pin that fails on correct code is as
+// useless as one that passes on broken code, which is why it was run before being believed.)
+{
+  const rel = "app/(app)/batches/[id]/page.tsx";
+  const src = stripComments(fs.readFileSync(path.join(root, rel), "utf-8"));
+
+  // 1. a status-only term must EXIST and must not smuggle a permission into itself.
+  const decl = /const\s+statusClosedTab\s*=\s*([^;]+);/.exec(src);
+  const body = decl ? decl[1] : "";
+  const statusOnly = Boolean(decl) && /batch\?\.status/.test(body)
+    && !/mayMark|canClose|permsReady|closeTabReady|\bcan\(/.test(body);
+
+  // 2. EVERY batch-finished sentence is reached only through a status-only term. Walk each
+  //    occurrence and read the gate that sits in front of it.
+  const SENT = "the batch is finished";
+  const gates = [];
+  for (let i = src.indexOf(SENT); i >= 0; i = src.indexOf(SENT, i + 1)) {
+    gates.push(src.slice(Math.max(0, i - 170), i));
+  }
+  const badGate = gates.filter((g) => !/statusClosedTab|batchClosedByStatus/.test(g));
+
+  // 3. the grid's only door renders on the batch's state, not on this person's rights.
+  const doorOnStatus = /actions=\{legacy && !perCandidate && !statusClosedTab \?/.test(src);
+
+  // 4. and the sign-off button reads the SAME inert term every other control on the card reads,
+  //    or it renders enabled and 403s - the class that has now shipped eight times.
+  const markGates = [...src.matchAll(/disabled=\{([^}]*?)\}>Mark Completed<\/Btn>/g)].map((m) => m[1]);
+  const markUngated = markGates.filter((g) => !/\bclosed\b/.test(g));
+
+  const ok = statusOnly && gates.length >= 4 && badGate.length === 0
+    && doorOnStatus && markGates.length >= 2 && markUngated.length === 0;
+  if (ok) passed++;
+  else {
+    failed++;
+    pushStructural(rel + ": a batch-finished sentence, or the marking grid's door, is decided by a"
+      + " term that mixes the batch's state with this person's rights"
+      + " (status-only term declared=" + statusOnly
+      + ", finished-sentences found=" + gates.length
+      + ", wrongly gated=" + badGate.length
+      + ", door on status=" + doorOnStatus
+      + ", Mark Completed buttons=" + markGates.length + " of which ungated=" + markUngated.length + ")"
+      + " - a person without the right then reads that an ACTIVE batch is finished, and the door to"
+      + " the marking grid disappears instead of opening read-only. That took pass/fail marking and"
+      + " certificate upload away from five live users for a day.");
+  }
+}
+
+// ---- -223: every date the Closure card SHOWS is a date it SENDS, and both copies agree ----
+// The card renders six date inputs; `Save` sent two. mock_test_date, result_expected_date,
+// certificate_distribution_date and sidh_uploaded_on were on the model AND in the server's PUT
+// allow-list, and no client payload ever carried them - so an operator typed a date, pressed Save,
+// and watched load() overwrite it from the server. Silent data loss, never filed.
+// The cause was FOUR hand-written patch literals. So the pin refuses the CAUSE: one list, one
+// builder, every call site through it, and the client's list must be a subset of the server's -
+// two allow-lists drifting apart is what QA-522 was, one layer out.
+{
+  const rel = "app/(app)/batches/[id]/page.tsx";
+  const src = stripComments(fs.readFileSync(path.join(root, rel), "utf-8"));
+  const srvRel = "app/api/batches/[id]/closure/route.ts";
+  const srv = stripComments(fs.readFileSync(path.join(root, srvRel), "utf-8"));
+
+  const decl = /const\s+CLOSURE_DATE_FIELDS\s*=\s*\[([^\]]*)\]/.exec(src);
+  const names = decl ? [...decl[1].matchAll(/"([a-z_]+)"/g)].map((m) => m[1]) : [];
+  // every date input the card renders must be in that list
+  const rendered = [...src.matchAll(/toInputDate\(form\.([a-z_]+)\)/g)].map((m) => m[1]);
+  const shownNotListed = [...new Set(rendered)].filter((f) => !names.includes(f));
+  // …and every listed field must be one the server will actually accept
+  const notAccepted = names.filter((f) => !srv.includes('"' + f + '"'));
+  // …and no saveClosure call may hand-write a date literal instead of using the builder
+  const calls = [...src.matchAll(/saveClosure\(\{([^;]*?)\}\)/g)].map((m) => m[1]);
+  const handWritten = calls.filter((c) => /[a-z_]*_date:|sidh_uploaded_on:/.test(c) && !/closureDatePatch\(/.test(c));
+
+  const ok = names.length === 6 && shownNotListed.length === 0 && notAccepted.length === 0
+    && handWritten.length === 0;
+  if (ok) passed++;
+  else {
+    failed++;
+    pushStructural(rel + ": a date the Closure card shows is not a date it sends"
+      + " (fields listed=" + names.length
+      + ", shown but unlisted=" + JSON.stringify(shownNotListed)
+      + ", listed but the server will not accept=" + JSON.stringify(notAccepted)
+      + ", saveClosure calls hand-writing a date instead of the builder=" + handWritten.length + ")"
+      + " - the operator types the date, presses Save, and load() overwrites it from the server."
+      + " Four of six were lost this way and nobody filed it, because no assertion in this repo"
+      + " renders the card and no API test can see a field the client never sends.");
+  }
+}
+
+// ---- -223: a failed fetch must never read as an empty answer ----
+// Three instances of this on ONE screen, and each cost something different:
+//   * loadBlockers 403s for anyone without `batches.manage`, the failure was swallowed, `blockers`
+//     became null, and `(blockers?.unmarked?.length ?? 0) > 0` went FALSE - so LESS permission made
+//     the sign-off button MORE pressable. It rendered enabled and 403'd on press.
+//   * activity.tsx swallowed its error and printed "No activity recorded.", making a 403
+//     indistinguishable from an empty history - on the very surface used to answer "who did this".
+// Both must distinguish "could not load" from "loaded, and empty", and the first must disable.
+{
+  const rel = "app/(app)/batches/[id]/page.tsx";
+  const src = stripComments(fs.readFileSync(path.join(root, rel), "utf-8"));
+  const act = stripComments(fs.readFileSync(path.join(root, "components/activity.tsx"), "utf-8"));
+
+  const blockersFlagged = /setBlockersFailed\(true\)/.test(src) && /blockersFailed/.test(src);
+  const marks = [...src.matchAll(/disabled=\{([^}]*?)\}>Mark Completed<\/Btn>/g)].map((m) => m[1]);
+  const marksReadFlag = marks.length >= 2 && marks.every((m) => /blockersFailed/.test(m));
+  // a bare swallow anywhere in the activity component is the defect itself
+  const bareSwallow = /\.catch\(\(\)\s*=>\s*\{\s*\}\)/.test(act);
+  const actFlags = /setFailed\(true\)/.test(act);
+
+  if (blockersFlagged && marksReadFlag && !bareSwallow && actFlags) passed++;
+  else {
+    failed++;
+    pushStructural("Closure tab / activity: a failed fetch is being read as an empty answer"
+      + " (blocker failure tracked=" + blockersFlagged
+      + ", Mark Completed buttons reading it=" + marks.filter((m) => /blockersFailed/.test(m)).length + "/" + marks.length
+      + ", activity.tsx still swallows bare=" + bareSwallow
+      + ", activity.tsx tracks failure=" + actFlags + ")"
+      + " - a 403 then looks like 'nothing pending' or 'no history', which enabled a button the"
+      + " server refuses and turned the audit trail into unusable evidence.");
+  }
+}
+
 {
   // QA-377: the registers must ACCOUNT FOR EVERY HIT. A raise site that forgets to classify is
   // exactly how this check misfiled twice; now it cannot be forgotten silently, because an

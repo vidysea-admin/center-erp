@@ -1,6 +1,15 @@
 // Role-wise access verification — Rules 38 (location scoping), 39 (can_edit), 40 (role gates).
 // Requires sample data (seed-sample.mjs). Run: node scripts/e2e-roles.mjs
-const BASE = process.env.BASE_URL || "http://localhost:3000/erp";
+//
+// QA-831 (S1, -223): this suite performs a real `PUT /api/permissions` (see the QA-025 P1 block
+// below) against whatever BASE_URL names, and it had NO guard. Two consequences, both real:
+// BASE_URL pointing at production would have made the wall rewrite the LIVE permission matrix; and
+// a run that dies between the PUT and its restore leaves Enrollment holding `costs.manage:view`.
+// `requireLocalBase` already existed in db-guard.mjs and seed-sample.mjs already used it — this
+// file did not. On 2026-08-24 an entire day went into proving the live matrix had NOT changed; one
+// accidental run of this script would have made that impossible to prove.
+import { requireLocalBase } from "./db-guard.mjs";
+const BASE = requireLocalBase("e2e-roles", process.env.BASE_URL || "http://localhost:3000/erp");
 let pass = 0, fail = 0;
 const ok = (n, c, x = "") => { if (c) { pass++; console.log("PASS  " + n); } else { fail++; console.log("FAIL  " + n + " " + x); } };
 

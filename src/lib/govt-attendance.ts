@@ -13,7 +13,7 @@
 // "Total Days Present" to "Days Present" still imports.
 import * as XLSX from "xlsx";
 import { parseCsv } from "@/lib/sync";
-import { BatchMember, Candidate, DailyLog, GovtAttendanceRow, Location, Trainer } from "@/models";
+import { Batch, BatchMember, Candidate, DailyLog, GovtAttendanceRow, Location, Trainer } from "@/models";
 
 export type GovtRow = {
   sl_no: number | null;
@@ -508,6 +508,65 @@ export async function reconcileAgainstLogs(rows: MatchedRow[]): Promise<MatchedR
 }
 
 // The centre the file belongs to, resolved from the TC code the portal stamps into Org Name.
+// ---- QA-830 (S1, 2026-08-24, client-reported): the person who uploads cannot find their upload ----
+//
+// The WRITE accepted `location: null` as long as a batch was given (route.ts:98-99). The READ, for a
+// scoped user, filtered on location alone - and a Trainer is ALWAYS scoped (authz.ts:83). So a row
+// written that way can never match, and the two by-id routes refused it outright.
+//
+// Measured cost: Kamal Kumar Kushwaha, who holds both attendance.govt and closure.manage, uploaded
+// the SAME 45 rows three times on 21 Aug - because after each successful upload the list said "No
+// portal attendance". 135 rows sit in the database, hidden from the person who put them there.
+// Admin never saw it, because Admin is not scoped.
+//
+// QA-125 deliberately made the by-id routes fail CLOSED here ("a centre-less import is not
+// scoped-readable/deletable; before this, `imp.location &&` silently let it through") and that
+// judgement was RIGHT. The defect is not the closed door - it is that the write is allowed to
+// produce a record with no centre at all. So the invariant is kept exactly as QA-125 set it, and
+// instead of concluding "no centre", we FIND the centre: an import's batch carries one, and
+// `Batch.location` is a required field. Scope is still checked, against a real centre.
+//
+// One home for all three call sites (the list, the by-id load, the row-match load) because they
+// disagreeing is precisely how this stayed invisible - ARCHITECTURE.md section 3.
+
+/** The centre this import belongs to: its own, or - for rows written before -223 - its batch's. */
+export async function importCentreId(imp: any): Promise<string | null> {
+  const own = imp?.location?._id ?? imp?.location;
+  if (own) return String(own);
+  const batchId = imp?.batch?._id ?? imp?.batch;
+  if (!batchId) return null;
+  const b = await Batch.findById(batchId).select("location").lean<any>();
+  return b?.location ? String(b.location) : null;
+}
+
+/** Is this import inside a scoped user's centres? Fails CLOSED when no centre can be found. */
+export async function importInScope(scope: unknown[], imp: any): Promise<boolean> {
+  const centre = await importCentreId(imp);
+  if (!centre) return false;
+  return scope.map(String).includes(centre);
+}
+
+/**
+ * The `$or` a scoped LIST must carry. A null-location row is admitted only through a batch whose
+ * centre is in scope - never a row that HAS a centre outside it, or this would widen access rather
+ * than repair it.
+ */
+export async function scopedImportOr(scope: unknown[]): Promise<Record<string, unknown>[]> {
+  const ids = (await Batch.find({ location: { $in: scope } }).select("_id").lean<any[]>()).map((b) => b._id);
+  return [{ location: { $in: scope } }, { location: null, batch: { $in: ids } }];
+}
+
+/**
+ * The centre a NEW import must be stored with. Derived from the batch when the file and the operator
+ * gave none, so -223 onwards cannot create another unreachable record.
+ */
+export async function importLocationForWrite(locationId: string | null, batchId: string | null): Promise<string | null> {
+  if (locationId) return locationId;
+  if (!batchId) return null;
+  const b = await Batch.findById(batchId).select("location").lean<any>();
+  return b?.location ? String(b.location) : null;
+}
+
 export async function resolveLocationFromFile(parsed: ParsedFile) {
   if (!parsed.tc_id) return null;
   return Location.findOne({ external_id: new RegExp(`^${parsed.tc_id}$`, "i") }).select("_id name external_id").lean<any>();

@@ -4,7 +4,7 @@ import { apiHandler, requireUser, requireEdit, isScoped, HttpError } from "@/lib
 import { requirePerm, requireView } from "@/lib/permissions";
 import { Batch, GovtAttendanceImport, GovtAttendanceRow } from "@/models";
 import { assessmentHoursBar, courseIsFinished, eligibilityVerdict, memberAttendedHours } from "@/lib/rules";
-import { isTrainerRow, matchGovtRows } from "@/lib/govt-attendance";
+import { importInScope, isTrainerRow, matchGovtRows } from "@/lib/govt-attendance";
 import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
 
@@ -15,7 +15,10 @@ async function loadInScope(id: string, user: Awaited<ReturnType<typeof requireUs
   if (!imp) throw new HttpError(404, "Import not found");
   // QA-125 sweep (15/08): fail CLOSED like costs/[id] — a centre-less import is not
   // scoped-readable/deletable; before this, `imp.location &&` silently let it through.
-  if (isScoped(user) && (!imp.location || !(user.location_scope ?? []).map(String).includes(String(imp.location._id)))) {
+  // QA-830 (-223): that rule STANDS. What changed is that the centre is FOUND before concluding
+  // there is none — an import's batch carries one — so the uploader of a location:null row can
+  // reach their own import instead of being 403'd off it. Still fails closed when no centre exists.
+  if (isScoped(user) && !(await importInScope(user.location_scope ?? [], imp))) {
     throw new HttpError(403, "That import belongs to a centre outside your assigned locations.");
   }
   return imp;

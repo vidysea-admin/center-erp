@@ -2306,7 +2306,16 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
   const [noCan, setNoCan] = useState<Array<{ name: string; phone: string | null }>>([]);
   const [adminBusy, setAdminBusy] = useState(false);
   const isAdmin = role === "Admin";
-  const loadBlockers = () => api(`/api/batches/${batchId}/complete`).then(setBlockers).catch(() => setBlockers(null));
+  // QA-785's real mechanism, and it is the opposite of what it looks like: loadBlockers hits
+  // GET /complete, which requires `batches.manage`. Without it the call 403s, the failure is
+  // swallowed, `blockers` becomes null, and `(blockers?.unmarked?.length ?? 0) > 0` is FALSE - so the
+  // sign-off button rendered ENABLED and 403'd on press. LESS permission produced a MORE pressable
+  // button. "Could not load" and "loaded, and empty" are now different states, and the first one
+  // disables.
+  const [blockersFailed, setBlockersFailed] = useState(false);
+  const loadBlockers = () => api(`/api/batches/${batchId}/complete`)
+    .then((b) => { setBlockers(b); setBlockersFailed(false); })
+    .catch(() => { setBlockers(null); setBlockersFailed(true); });
   useEffect(() => { loadBlockers(); }, [batchId, batch?.status]);
   // QA-712 (-209, checker on qa-207): this button was DEAD from the moment -206 shipped. It renders
   // only when blockers exist, and -206 made a press without `force` refuse 409 whenever blockers
@@ -2344,6 +2353,30 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
   }).catch((e: any) => setError(e.message));
   useEffect(() => { load(); }, [batchId]);
 
+  // ---- -223: the four dates nobody ever sent ----
+  // The card renders SIX date inputs. `Save` sent TWO. `mock_test_date`, `result_expected_date`,
+  // `certificate_distribution_date` and `sidh_uploaded_on` are real Date fields on ClosureSchema and
+  // all four are in the PUT allow-list (closure/route.ts:49) - nothing in the client ever put them
+  // in a payload. And the loss is IMMEDIATE, not on reload: saveClosure calls load(), which does
+  // setForm(d.closure ?? {}), so the operator types a date, presses Save, and watches it vanish.
+  // These are Manish's M4-14 chain dates; -120 shipped the model, the API and the inputs and never
+  // the payload. Same shape as QA-522 one layer out.
+  //
+  // The cause was FOUR hand-written patch literals (two Save, two Mark Completed). One builder now,
+  // used by all four, so a sign-off can no longer drop a date the operator just typed. The server's
+  // allow-list is the other copy of this list; a pin in check-user-copy asserts they agree.
+  const CLOSURE_DATE_FIELDS = ["assessment_date", "mock_test_date", "result_expected_date",
+    "certification_date", "certificate_distribution_date", "sidh_uploaded_on"] as const;
+  const closureDatePatch = (f: any): Record<string, unknown> => {
+    const out: Record<string, unknown> = {};
+    for (const k of CLOSURE_DATE_FIELDS) {
+      if (f?.[k] === undefined) continue;
+      // A blanked input is "" - send null so clearing a date is a clear, not a cast error.
+      out[k] = f[k] === "" ? null : f[k];
+    }
+    return out;
+  };
+
   async function saveClosure(patch: any) {
     try { await api(`/api/batches/${batchId}/closure`, { method: "PUT", json: patch }); load(); onChanged(); }
     catch (e: any) { setError(e.message); }
@@ -2374,7 +2407,23 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
   // not the line: I fixed exactly the line the verdict quoted and never looked one level out.
   const { can: canCloseTab, loaded: closeTabReady } = usePerms();
   const mayMarkTab = !closeTabReady || canCloseTab("closure.manage", "edit");
-  const closed = ["Completed", "Cancelled"].includes(batch?.status) || !mayMarkTab;
+  // QA-825 / QA-828 (-223, client-reported LIVE OUTAGE): these are TWO DIFFERENT FACTS, and -216/
+  // -217 collapsed them into one name. `closed` is right for `disabled=` - someone without the
+  // right SHOULD find the inputs inert. It is NOT right for deciding what RENDERS, and it is NOT
+  // right for choosing a sentence. It was doing both:
+  //   * the marking grid's ONLY door rendered on `!closed`, so without the right it VANISHED - not
+  //     refused, absent. `perCandidate` starts false, so there was no path to marking at all. And
+  //     "the certificate upload option is gone" was the same defect one step downstream: nothing
+  //     can be marked Pass, so no row ever offers a certificate.
+  //   * four places printed "the batch is finished" while the header on that same screen showed the
+  //     Active chip. That is worse than a dead control - it is a FALSE FACT about the batch, and it
+  //     sent the operator hunting for "Reopen" instead of asking an Admin for the right.
+  // Measured before fixing: the live permission matrix was never touched (it equals the defaults),
+  // so nothing was revoked - the only thing that changed was this expression. FIVE live users do
+  // this work without `closure.manage` (3 Trainer, 2 Enrollment), and no manifest of mine asked
+  // that question before tightening the gate. That is the process failure, not the line.
+  const statusClosedTab = ["Completed", "Cancelled"].includes(batch?.status);
+  const closed = statusClosedTab || !mayMarkTab;
 
   // QA-044: legacy batch with per-candidate rows but NO closure record — the cards below
   // would read 0 while the rows hold real passes/certificates. One click derives.
@@ -2430,10 +2479,17 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
       <div className="grid gap-4 lg:grid-cols-2">
       <Section
         title={`Assessment — ${closure?.assessment_status ?? "Pending"}`}
-        actions={legacy && !perCandidate && !closed ? (
+        actions={legacy && !perCandidate && !statusClosedTab ? (
           <span className="flex gap-1.5">
-            <Btn small onClick={() => setPerCandidate(true)}>Start per-candidate marking</Btn>
-            {!showLegacyEntry && <Btn small kind="ghost" onClick={() => setShowLegacyEntry(true)}>Batch-level figures (legacy)…</Btn>}
+            {/* Renders on the BATCH's state, never on this person's rights. Without the right the
+                grid still opens - every control inside it already reads `closed`, so it opens
+                READ-ONLY, which is exactly what someone who may not mark should get: the results,
+                visible. Vanishing is not refusing, and vanishing left the people whose daily job
+                this is with no door at all. */}
+            <Btn small onClick={() => setPerCandidate(true)}>
+              {mayMarkTab ? "Start per-candidate marking" : "View per-candidate results"}
+            </Btn>
+            {mayMarkTab && !showLegacyEntry && <Btn small kind="ghost" onClick={() => setShowLegacyEntry(true)}>Batch-level figures (legacy)…</Btn>}
           </span>
         ) : undefined}
       >
@@ -2471,13 +2527,20 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
         {legacy && !perCandidate && (
           <p className="mt-2 text-xs text-gray-500">Batch-level figures (recorded before per-candidate marking existed).</p>
         )}
-        <div className="mt-3 flex gap-2">
-          <Btn small kind="ghost" disabled={closed}
-            onClick={() => saveClosure({ assessment_date: form.assessment_date, ...(legacy && !perCandidate && showLegacyEntry ? { appeared: form.appeared, passed: form.passed } : {}) })}>Save</Btn>
+        {/* QA-829: `items-start`, because the flex default is `stretch` and the sibling span below
+            carries two lines of helper text - so Save was being stretched to its neighbour's height
+            and read as a broken control. It is LABELLED now too: it saves this card's dates and is
+            not a sign-off, which the screen never said. */}
+        <div className="mt-3 flex items-start gap-2">
+          <span className="inline-flex flex-col gap-0.5">
+            <Btn small kind="ghost" disabled={closed}
+              onClick={() => saveClosure({ ...closureDatePatch(form), ...(legacy && !perCandidate && showLegacyEntry ? { appeared: form.appeared, passed: form.passed } : {}) })}>Save</Btn>
+            <span className="text-[10px] font-medium text-gray-500">saves the dates — not a sign-off</span>
+          </span>
           <span className="inline-flex flex-col gap-0.5">
             <Btn small
-              onClick={() => saveClosure({ assessment_status: "Completed", assessment_date: form.assessment_date ?? new Date(), ...(legacy && !perCandidate && showLegacyEntry ? { appeared: form.appeared, passed: form.passed } : {}) })}
-              disabled={closure?.assessment_status === "Completed" || (blockers?.unmarked?.length ?? 0) > 0}>Mark Completed</Btn>
+              onClick={() => saveClosure({ ...closureDatePatch(form), assessment_status: "Completed", assessment_date: form.assessment_date ?? new Date(), ...(legacy && !perCandidate && showLegacyEntry ? { appeared: form.appeared, passed: form.passed } : {}) })}
+              disabled={closed || blockersFailed || closure?.assessment_status === "Completed" || (blockers?.unmarked?.length ?? 0) > 0}>Mark Completed</Btn>
             {closure?.assessment_status !== "Completed" && (blockers?.unmarked?.length ?? 0) > 0 && (
               <span className="text-[10px] font-medium text-amber-700"
                 title={personList(blockers.unmarked)}>
@@ -2491,11 +2554,18 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
             {closure?.assessment_status === "Completed" && (
               <span className="text-[10px] font-medium text-gray-500">
                 already signed off{closure?.assessment_date ? ` on ${fmtDate(closure.assessment_date)}` : ""}
-                {closed ? " — the batch is finished, so this is frozen. An Admin can Reopen it from the Overview tab." : ""}
+                {statusClosedTab ? " — the batch is finished, so this is frozen. An Admin can Reopen it from the Overview tab." : ""}
               </span>
             )}
-            {closed && closure?.assessment_status !== "Completed" && (
+            {/* Two reasons, two sentences. Calling an ACTIVE batch "finished" is the whole defect. */}
+            {statusClosedTab && closure?.assessment_status !== "Completed" && (
               <span className="text-[10px] font-medium text-gray-500">the batch is finished — Reopen it from the Overview tab to change results</span>
+            )}
+            {!statusClosedTab && !mayMarkTab && (
+              <span className="text-[10px] font-medium text-amber-700">read-only for your login — ask an Admin for the right to record results</span>
+            )}
+            {!statusClosedTab && mayMarkTab && blockersFailed && (
+              <span className="text-[10px] font-medium text-amber-700">could not check what is still pending — reload before signing off</span>
             )}
           </span>
         </div>
@@ -2514,13 +2584,16 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
         {!legacy && summary && summary.passed > summary.certificates_issued && (
           <p className="mt-2 text-xs text-amber-700">{summary.passed - summary.certificates_issued} passed candidate(s) still need an issued certificate.</p>
         )}
-        <div className="mt-3 flex gap-2">
-          <Btn small kind="ghost" disabled={closed}
-            onClick={() => saveClosure({ certification_date: form.certification_date, ...(legacy ? { certificates_issued: form.certificates_issued } : {}) })}>Save</Btn>
+        <div className="mt-3 flex items-start gap-2">
+          <span className="inline-flex flex-col gap-0.5">
+            <Btn small kind="ghost" disabled={closed}
+              onClick={() => saveClosure({ ...closureDatePatch(form), ...(legacy ? { certificates_issued: form.certificates_issued } : {}) })}>Save</Btn>
+            <span className="text-[10px] font-medium text-gray-500">saves the dates — not a sign-off</span>
+          </span>
           <span className="inline-flex flex-col gap-0.5">
             <Btn small
-              onClick={() => saveClosure({ certification_status: "Completed", certification_date: form.certification_date ?? new Date(), ...(legacy ? { certificates_issued: form.certificates_issued } : {}) })}
-              disabled={closure?.certification_status === "Completed" || (blockers?.unsettled?.length ?? 0) > 0 || closure?.assessment_status !== "Completed" || noCan.length > 0}>Mark Completed</Btn>
+              onClick={() => saveClosure({ ...closureDatePatch(form), certification_status: "Completed", certification_date: form.certification_date ?? new Date(), ...(legacy ? { certificates_issued: form.certificates_issued } : {}) })}
+              disabled={closed || blockersFailed || closure?.certification_status === "Completed" || (blockers?.unsettled?.length ?? 0) > 0 || closure?.assessment_status !== "Completed" || noCan.length > 0}>Mark Completed</Btn>
             {closure?.certification_status !== "Completed" && (blockers?.unsettled?.length ?? 0) > 0 && (
               <span className="text-[10px] font-medium text-amber-700"
                 title={personList(blockers.unsettled)}>
@@ -2534,11 +2607,17 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
             {closure?.certification_status === "Completed" && (
               <span className="text-[10px] font-medium text-gray-500">
                 already signed off{closure?.certification_date ? ` on ${fmtDate(closure.certification_date)}` : ""}
-                {closed ? " — the batch is finished, so this is frozen. An Admin can Reopen it from the Overview tab." : ""}
+                {statusClosedTab ? " — the batch is finished, so this is frozen. An Admin can Reopen it from the Overview tab." : ""}
               </span>
             )}
-            {closed && closure?.certification_status !== "Completed" && (
+            {statusClosedTab && closure?.certification_status !== "Completed" && (
               <span className="text-[10px] font-medium text-gray-500">the batch is finished — Reopen it from the Overview tab to change certification</span>
+            )}
+            {!statusClosedTab && !mayMarkTab && (
+              <span className="text-[10px] font-medium text-amber-700">read-only for your login — ask an Admin for the right to record certification</span>
+            )}
+            {!statusClosedTab && mayMarkTab && blockersFailed && (
+              <span className="text-[10px] font-medium text-amber-700">could not check what is still pending — reload before signing off</span>
             )}
             {/* -157 (QA-462): the same shape as the unsettled line four lines up, for the same
                 reason. The government issues no certificate without the portal Candidate ID, so

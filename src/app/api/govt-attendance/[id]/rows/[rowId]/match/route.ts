@@ -4,13 +4,15 @@ import { apiHandler, requireUser, requireEdit, isScoped, HttpError } from "@/lib
 import { requirePerm, requireView } from "@/lib/permissions";
 import { Batch, BatchMember, Candidate, DailyLog, GovtAttendanceImport, GovtAttendanceRow } from "@/models";
 import { audit } from "@/lib/audit";
-import { isTrainerRow } from "@/lib/govt-attendance";
+import { importInScope, isTrainerRow } from "@/lib/govt-attendance";
 
 async function loadRow(id: string, rowId: string, user: Awaited<ReturnType<typeof requireUser>>) {
   const imp = await GovtAttendanceImport.findById(id).populate("location", "name").lean<any>();
   if (!imp) throw new HttpError(404, "Import not found");
-  // Same fail-closed scope guard the GET/DELETE on this import use (QA-125 sweep).
-  if (isScoped(user) && (!imp.location || !(user.location_scope ?? []).map(String).includes(String(imp.location._id)))) {
+  // Same fail-closed scope guard the GET/DELETE on this import use (QA-125 sweep), and the same
+  // QA-830 repair: resolve the centre from the batch before concluding there is none, or the person
+  // who uploaded the file cannot correct a single ambiguous row in it.
+  if (isScoped(user) && !(await importInScope(user.location_scope ?? [], imp))) {
     throw new HttpError(403, "That import belongs to a centre outside your assigned locations.");
   }
   const row = await GovtAttendanceRow.findOne({ _id: rowId, import: id });

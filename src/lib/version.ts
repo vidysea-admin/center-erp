@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-222";
+export const RELEASE = "2026.08.14-223";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -17,6 +17,20 @@ export const RELEASE = "2026.08.14-222";
 // public build-marker is for, and the archive behind it, which stays in the bundle for anyone with
 // the source. Bumping a release writes RELEASE_NOTE_CURRENT and moves the old text to the archive.
 export const RELEASE_NOTE_CURRENT =
+  "-223 repairs a fault this project shipped two days ago that took work away from the people who " +
+  "do it. Marking candidates pass or fail, and with it certificate upload, became unreachable for " +
+  "anyone who did not hold the batch-closure right: the only button that opens the marking grid was " +
+  "hidden by the same test that decides whether a batch is finished, so instead of being refused it " +
+  "was simply absent, and nothing could be marked, so no candidate ever reached the state where a " +
+  "certificate can be attached. Those are one fault, not three. The same test also made four " +
+  "sentences claim that a running batch was finished, on a screen whose own heading said it was " +
+  "active. Whether a batch is finished and whether a person may change it are now separate " +
+  "questions, asked separately: the grid opens for anyone who may see it, read-only where they may " +
+  "not record results, the sign-off button is no longer offered to someone the server will refuse, " +
+  "and each message states the real reason. The two Save buttons beside it, which record only that " +
+  "card's dates, no longer render squashed and now say what they save.";
+
+const RELEASE_NOTE_ARCHIVE_222 =
   "-222 replaces the three free-text State, District and Sub-district boxes on every candidate " +
   "intake form - the internal one and both public ones - with dropdowns that cascade the way the " +
   "government's own portal does: pick a state, see its districts, pick a district, see its " +
@@ -289,6 +303,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
+  RELEASE_NOTE_ARCHIVE_222 + " " +
   RELEASE_NOTE_ARCHIVE_221 + " " +
   RELEASE_NOTE_ARCHIVE_220 + " " +
   RELEASE_NOTE_ARCHIVE_219 + " " +
