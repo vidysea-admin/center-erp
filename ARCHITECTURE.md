@@ -213,8 +213,17 @@ invalid recipient) and **always** write a MailLog row. Bounces: SNS → `public/
   same disease waiting to repeat (QA-424 residue — still hand-typed).
 - **shifted-column signature:** `shiftSignature()` in `lib/govt-attendance.ts` is the ONLY
   definition; readers = the -154 import guard, the portal-id-health screen, the ID-re-match.
-- **CAN normalisation:** `normalizeCan()` in `lib/govt-attendance.ts`; `link-portal-ids` aliases
-  its old local `canOf` to it. Never write a near-copy of that regex.
+- **CAN normalisation:** `normalizeCan()` is DEFINED in `lib/validate.ts`; `lib/govt-attendance.ts`
+  RE-EXPORTS it (`export { normalizeCan, looksLikeCan, storedCanIsUnreadable } from "@/lib/validate"`),
+  so live callers import it from both — `certificates/route.ts` from `validate`, `link-portal-ids`
+  and `candidates/import` from `govt-attendance`. `link-portal-ids` aliases its old local `canOf` to
+  it. Never write a near-copy of that regex.
+  <!-- QA-756 (-234): this bullet used to say the function lived in `lib/govt-attendance.ts`, which
+       contradicted the paragraph FOUR LINES BELOW IT saying its home is the pure module. A map that
+       disagrees with itself inside one bullet is worse than one that is merely out of date: both
+       statements look authoritative and the reader cannot tell which to trust. The paragraph was
+       right; the lead sentence was stale from before the move. -->
+
   **THREE named tests on this one concept. Their home is `lib/validate.ts` — the PURE module, which
   imports nothing, because the CLIENT screens need them too and `lib/govt-attendance.ts` imports the
   mongoose models. `govt-attendance` re-exports all three, so server callers may import from either.
