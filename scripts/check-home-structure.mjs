@@ -118,6 +118,35 @@ ok("home: the strip's JSX closes before the trainers-by-role block", stripClose 
   const mark = b.indexOf("async function mark(");
   const markEnd = b.indexOf("async function bulkApply", mark);
   const markBody = mark > 0 && markEnd > mark ? b.slice(mark, markEnd) : "";
+  // -224 (QA-880, recommended by the cycle-3 checker): the CLASS pin, not another instance pin.
+  // Every instance above says "this one handler is fixed". This one says "no handler in this panel
+  // may regress into the defect at all": inside CandidateResults, a catch that reports ONLY through
+  // the page-level setError is the whole fault this unit exists to remove - the refusal lands in a
+  // banner thousands of pixels above the press. `fail()` and `report()` are the two surfaces that
+  // reach the operator. The checker's point about this pin is the reason it is here: it would have
+  // failed cycle 1 in under a second, with no browser and no server, and cycle 1 instead took a
+  // human driving production to find. It also covers handlers nobody has written yet.
+  const cr = b.indexOf("function CandidateResults");
+  const crEnd = cr > 0 ? (b.indexOf("\nfunction ", cr + 10) === -1 ? b.length : b.indexOf("\nfunction ", cr + 10)) : -1;
+  const crBody = cr > 0 ? b.slice(cr, crEnd) : "";
+  const bareCatches = [];
+  if (crBody) {
+    const re = /catch\s*\([^)]*\)\s*\{/g;
+    let m;
+    while ((m = re.exec(crBody)) !== null) {
+      // walk to the matching brace so nested blocks do not truncate the body
+      let depth = 1, i = m.index + m[0].length;
+      while (i < crBody.length && depth > 0) { const c = crBody[i]; if (c === "{") depth++; else if (c === "}") depth--; i++; }
+      const body = crBody.slice(m.index, i);
+      if (/setError\s*\(/.test(body) && !/\b(fail|report)\s*\(/.test(body)) {
+        bareCatches.push(body.replace(/\s+/g, " ").slice(0, 90));
+      }
+    }
+  }
+  ok("-224 (QA-880 class pin): no catch in CandidateResults reports only through the page-level banner",
+    crBody.length > 0 && bareCatches.length === 0,
+    crBody.length === 0 ? "could not locate CandidateResults" : `${bareCatches.length} bare: ${JSON.stringify(bareCatches[0] ?? "")}`);
+
   ok("-224 (QA-856): a failed per-candidate mark pins its refusal to that candidate's own card",
     /setCardErrors/.test(markBody), markBody ? "mark() still reports only through the page-level banner" : "could not locate mark()");
 }
