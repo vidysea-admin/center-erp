@@ -637,7 +637,21 @@ export async function activateFromEvidence(batchId: string, opts: { actor?: stri
   return { activated: true };
 }
 
-export async function transitionBatch(batchId: string, target: string, opts: { isAdmin?: boolean; reason?: string; actual_start?: string | Date | null; actor?: string } = {}) {
+export async function transitionBatch(batchId: string, target: string, opts: {
+  isAdmin?: boolean; reason?: string; actual_start?: string | Date | null; actor?: string;
+  // -226 (Umesh, 24/08, on MUZ-CHAR-RPLHSL-SPIT-01): "allow admin to start a batch in past date and
+  // all, just notify them once that this is a past date but dont stop them. humko puraane completed
+  // batch bhi tho system mai daalne hai." A batch being recorded AFTER it ran cannot pass gates that
+  // describe preparation for a batch that has not started - the roster was never 80% of target on
+  // the day someone types it in months later. So the gates become advisory, ON RECORD, and only for
+  // a batch whose planned start is strictly in the past.
+  backdate_override?: boolean;
+  // The other end of the same problem, and the reason -81 fixed only half of it: Closing->Completed
+  // stamped actual_end = new Date() with no way to say otherwise, so a batch that finished in July
+  // and is entered today records "ended today" permanently - and Rule 32 then admits attendance for
+  // days after an end that never happened.
+  actual_end?: string | Date | null;
+} = {}) {
   const batch = await Batch.findById(batchId);
   if (!batch) throw new HttpError(404, "Batch not found");
   const from = batch.status;
@@ -656,13 +670,32 @@ export async function transitionBatch(batchId: string, target: string, opts: { i
     }
     case "Ready->Planning":
       break; // allow going back to fix things
+    // -226: ONE Start body, two ways in. Planning->Active exists ONLY for a batch that already began;
+    // it is a fall-through label rather than a second arm on purpose, so the actual_start handling,
+    // the future guard and the roster restamp below cannot drift into two versions.
+    case "Planning->Active":
     case "Ready->Active": {
       // QA-101 (-69): the SERVER's day said "before planned_start" at 1am IST — IST calendar
       // dates decide, in dayKey space (QA-081 pattern).
-      if (istToday() < dayKey(batch.planned_start)) fail("Rule 17: cannot start before planned_start.");
-      await assertLocationOperational(batch.location, "Starting a batch"); // Rule 1
+      const plannedKey = dayKey(batch.planned_start);
+      if (istToday() < plannedKey) fail("Rule 17: cannot start before planned_start.");
+      const began = istToday() > plannedKey;           // strictly a past IST calendar day
+      const backdating = opts.backdate_override === true;
+      // The line that keeps this an override and not a readiness bypass wearing a costume. Without
+      // it, anyone could pass the flag on a batch planned for today and skip every gate.
+      if (backdating && !began) fail("This batch's planned start has not passed, so there is nothing to record after the fact — start it the ordinary way.");
+      if (from === "Planning" && !backdating) fail("Mark this batch Ready before starting it. If it already began, record it with the real date it started instead.");
+      // Computed either way. When backdating, the result is not a gate — it is what the audit row
+      // has to say out loud, so the record carries what was not met at the time.
       const r = await batchReadiness(batchId);
-      if (!r.enrollment_ok) fail(`Enrollment threshold not met: ${r.enrolled_count}/${r.enrollment_threshold} required (${(await getDefaults()).enrollment_threshold_pct}% of roster).`);
+      if (!backdating) {
+        await assertLocationOperational(batch.location, "Starting a batch"); // Rule 1
+        if (!r.enrollment_ok) fail(`Enrollment threshold not met: ${r.enrolled_count}/${r.enrollment_threshold} required (${(await getDefaults()).enrollment_threshold_pct}% of roster).`);
+      } else if (!opts.actual_start) {
+        // Recording it without the real date is the exact damage -81 was written to stop: actual_start
+        // becomes today, is not editable afterwards, and Rule 32 then refuses every real day.
+        fail("A batch recorded after it began must carry the real date it started.");
+      }
       // -81 (Umesh, 15/08 — Gurugram DST-02 began 30-07, entered on 15-08): Start may carry
       // the REAL start date. Before this, actual_start was always "now" and unwritable
       // afterwards, so an after-the-fact batch got a wrong date forever and Rule 32 refused
@@ -682,6 +715,22 @@ export async function transitionBatch(batchId: string, target: string, opts: { i
         }
       } else {
         batch.actual_start = new Date();
+      }
+      if (backdating) {
+        // Same shape as activateFromEvidence's row: the gates are skipped ON RECORD, named, never
+        // silently. No new Batch field - the audit trail IS the record, and a `backdated: true`
+        // column would be a second source of truth for something already written down.
+        const skipped = Object.entries(r.checks).filter(([, v]) => !v)
+          .map(([k]) => READINESS_FAILURE_TEXT[k] ?? k.replace(/_/g, " "));
+        if (!r.enrollment_ok) skipped.push(`enrolled ${r.enrolled_count} of ${r.enrollment_threshold} needed`);
+        if (r.location_halted) skipped.push("the centre is not operational today");
+        await audit({
+          entity: "Batch", entityId: batch._id, field: "backdated_start",
+          newValue: `recorded after it began (was ${from}); actual start ${dayKey(opts.actual_start!).toISOString().slice(0, 10)}, planned start ${plannedKey.toISOString().slice(0, 10)}`
+            + `; ${skipped.length ? `not met at the time and recorded anyway: ${skipped.join(", ")}` : "every readiness check was met"}`
+            + `${String(opts.reason ?? "").trim() ? `; reason: ${String(opts.reason).trim()}` : ""}`,
+          actor: opts.actor ?? null, actorType: opts.actor ? "USER" : "SYSTEM",
+        });
       }
       break;
     }
@@ -707,7 +756,28 @@ export async function transitionBatch(batchId: string, target: string, opts: { i
     case "Closing->Completed": {
       const closure = await Closure.findOne({ batch: batchId }).lean<any>();
       if (closure?.certification_status !== "Completed") fail("Rule 18: certification must be Completed before batch completes.");
-      batch.actual_end = new Date();
+      // -226: the other end of -81. This line was always `new Date()` with no door, so a batch that
+      // finished in July and is entered today recorded "ended today" - permanently, because
+      // actual_end is not editable afterwards either. Rule 32 then ADMITS attendance for every day
+      // between the real end and today, which is the same class of wrong as the start-date bug, just
+      // pointing the other way. Same override, same two guards, and the second one is the one that
+      // matters: an end before the start would make every logged day illegal at once.
+      if (opts.backdate_override === true && opts.actual_end) {
+        const ended = dayKey(opts.actual_end);
+        if (isNaN(ended.getTime())) throw new HttpError(400, "actual_end is not a valid date.");
+        if (ended > istToday()) throw new HttpError(400, "A batch cannot end in the future — actual end must be today or earlier.");
+        if (batch.actual_start && ended < dayKey(batch.actual_start)) {
+          throw new HttpError(400, `A batch cannot end before it started — it started on ${dayKey(batch.actual_start).toISOString().slice(0, 10)}.`);
+        }
+        batch.actual_end = ended;
+        await audit({
+          entity: "Batch", entityId: batch._id, field: "backdated_end",
+          newValue: `recorded after it finished; actual end ${ended.toISOString().slice(0, 10)} instead of today`,
+          actor: opts.actor ?? null, actorType: opts.actor ? "USER" : "SYSTEM",
+        });
+      } else {
+        batch.actual_end = new Date();
+      }
       const roster = await activeRoster(batchId);
       const rosterCandidateIds = roster.map((m) => String(m.candidate));
       const results = await CandidateResult.find({ batch: batchId }).select("candidate result").lean<any[]>();

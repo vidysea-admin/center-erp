@@ -332,7 +332,14 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
 
   const fresh = await Batch.findById(id).select("status").lean<any>();
   if (fresh?.status === "Active") await transitionBatch(id, "Closing", { isAdmin: true, reason, actor: user.id });
-  const done = await transitionBatch(id, "Completed", { isAdmin: true, reason, actor: user.id });
+  // -226 (Umesh, 24/08): "humko puraane completed batch bhi tho system mai daalne hai." A batch being
+  // entered months after it finished must be able to say WHEN it finished; without this the ladder
+  // stamps today and the record is wrong at the far end forever (actual_end is no more editable than
+  // actual_start was before -81). rules.ts holds the guards - not future, and never before the start.
+  const done = await transitionBatch(id, "Completed", {
+    isAdmin: true, reason, actor: user.id,
+    ...(body.actual_end ? { actual_end: String(body.actual_end), backdate_override: true } : {}),
+  });
 
   // 4. The record Umesh asked for: "logs and all proper bnte rahe ki batch complete kab kab hua and
   //    what all where the pending issues if the user had forcefully completed the batch along with

@@ -773,5 +773,85 @@ console.log("\n--- FL13 (-225): the batch code's number is the count of batches 
   }
 }
 
+console.log("\n--- FL14 (-226): a batch that ALREADY RAN can be recorded, and the gates become a note ---");
+{
+  // Umesh, 2026-08-24, stuck on MUZ-CHAR-RPLHSL-SPIT-01 (planned start 24 Jul, entered in August):
+  // "at least allow admin to start a batch in past date and all, just notify them once that this is
+  // a past date but dont stop them. humko puraane completed batch bhi tho system mai daalne hai."
+  // The past date was never the blocker - Rule 17 only refuses starting BEFORE planned_start. The
+  // blocker was the readiness chain (roster >= 80% of target can never be true for a batch typed in
+  // months later) plus a screen that told him to press a button that only rendered on Ready.
+  const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+  const bdLoc = (await req(admin, "POST", "/api/locations", {
+    code: `TEST-BD${stamp}`, name: `TEST Backdate Centre ${stamp}`, city: "Test", state: "UP",
+    approval_status: "Approved", operational_status: "Active",
+  }, 201)).data.item;
+  const bdProg = (await req(admin, "POST", "/api/programs", {
+    code: `TEST-BP${stamp}`, name: `TEST Backdate Role ${stamp}`, trainer_skill: `bd${stamp}`,
+    duration_days: 30, buffer_days: 5, default_batch_size: 30, completion_deadline_days: 120,
+  }, 201)).data.item;
+  // target_size 20 with an empty roster: roster_80pct needs 16 and has 0, and enrollment_ok is false
+  // too. Both gates are genuinely failing - this is not a batch that would have passed anyway.
+  const mkBd = async (start) => (await req(admin, "POST", "/api/batches",
+    { location: bdLoc._id, program: bdProg._id, planned_start: start, target_size: 20 }, 201)).data.item;
+
+  const old = await mkBd(day(-30));
+  const rd = (await req(admin, "GET", `/api/batches/${old._id}`)).data.readiness;
+  ok("FL14: precondition - readiness genuinely fails, so nothing here passes by accident",
+    rd?.ready === false && rd?.checks?.roster_80pct === false, JSON.stringify(rd?.checks));
+
+  // 1. The refusal Umesh actually hit, and it now carries the way out in its own words.
+  const plain = await req(admin, "POST", `/api/batches/${old._id}/transition`, { target: "Active" });
+  ok("FL14: Planning -> Active without the override is still refused",
+    plain.status === 409 && /record it with the real date/i.test(String(plain.data?.error ?? "")),
+    `${plain.status} ${JSON.stringify(plain.data)}`);
+
+  // 2. Recording it without the real date is the -81 damage all over again: actual_start becomes
+  //    today, is unwritable afterwards, and Rule 32 then refuses every real day of the batch.
+  const noDate = await req(admin, "POST", `/api/batches/${old._id}/transition`, { target: "Active", backdate_override: true });
+  ok("FL14: the override without the real start date is refused", noDate.status === 409, `${noDate.status} ${JSON.stringify(noDate.data)}`);
+
+  // 3. The future guard survives the override - it is not weakened by it.
+  const future = await req(admin, "POST", `/api/batches/${old._id}/transition`, { target: "Active", backdate_override: true, actual_start: day(1) });
+  ok("FL14: a future actual_start is still a 400, override or not", future.status === 400, `${future.status} ${JSON.stringify(future.data)}`);
+
+  // 4. THE SAFETY PIN, and the most important assertion in this block. The override exists only for
+  //    a batch that already began. On a batch planned for TODAY there is nothing to record after the
+  //    fact, so passing the flag must not become a general way past readiness.
+  const todayBatch = await mkBd(day(0));
+  const notPast = await req(admin, "POST", `/api/batches/${todayBatch._id}/transition`, { target: "Active", backdate_override: true, actual_start: day(0) });
+  ok("FL14: the override is REFUSED when planned_start has not passed - it is not a readiness bypass",
+    notPast.status === 409 && /nothing to record after the fact/i.test(String(notPast.data?.error ?? "")),
+    `${notPast.status} ${JSON.stringify(notPast.data)}`);
+
+  // 5. The whole point: it goes in, carrying the day it really started.
+  const done = await req(admin, "POST", `/api/batches/${old._id}/transition`, { target: "Active", backdate_override: true, actual_start: day(-30), reason: "old completed batch from the centre register" }, 200);
+  ok("FL14: recorded - status Active and actual_start is the REAL day, not today",
+    done.data?.item?.status === "Active" && String(done.data?.item?.actual_start ?? "").slice(0, 10) === day(-30),
+    JSON.stringify({ s: done.data?.item?.status, a: done.data?.item?.actual_start }));
+
+  // 6. Advisory, not enforced: the checks are still computed and still say what they said.
+  const after = (await req(admin, "GET", `/api/batches/${old._id}`)).data.readiness;
+  ok("FL14: readiness is still FALSE after activation - the gate became a note, it did not become true",
+    after?.ready === false && after?.checks?.roster_80pct === false, JSON.stringify(after?.checks));
+
+  // 7. And the note is on the record, naming what was not met - in the same words the screen uses.
+  const trail = (await req(admin, "GET", `/api/audit/Batch/${old._id}`)).data;
+  const rows = trail?.items ?? trail?.rows ?? (Array.isArray(trail) ? trail : []);
+  const bd = rows.find((r) => r.field === "backdated_start");
+  ok("FL14: an audit row names the gates that were skipped, in READINESS_FAILURE_TEXT's own words",
+    !!bd && /roster below threshold/.test(String(bd.new_value ?? bd.newValue ?? "")),
+    JSON.stringify(bd ?? rows.map((r) => r.field)));
+
+  // 8. Rule 32 now measures against the REAL start, which is the entire reason the date matters.
+  const okDay = await req(admin, "POST", `/api/batches/${old._id}/logs`, { log_date: day(-20), present_member_ids: [], actual_topic: "FL14" });
+  const badDay = await req(admin, "POST", `/api/batches/${old._id}/logs`, { log_date: day(-40), present_member_ids: [], actual_topic: "FL14" });
+  ok("FL14: a day AFTER the real start is loggable, a day BEFORE it is not",
+    okDay.status < 400 && badDay.status >= 400,
+    JSON.stringify({ after: okDay.status, before: badDay.status, e: badDay.data?.error }));
+
+  await req(admin, "POST", `/api/batches/${todayBatch._id}/transition`, { target: "Cancelled", reason: "FL14 fixture cleanup" }, 200);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
