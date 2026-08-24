@@ -567,9 +567,18 @@ console.log("\n--- FL10: batch import (QA-028) — centres/roles by name, unknow
   // into the global-counter branch) with the wall green the entire time. The dead `/^B\d+/` branch
   // suggests someone SAW B### here and encoded it as acceptable. Now it is exact, and the legacy
   // shape is precisely what it refuses.
-  ok("FL10 (-225): the imported batch carries the CENTRE-PROGRAMME-NN code, never the legacy B### fallback",
-    (conf.data.created ?? []).length === 1 && new RegExp(`^${loc.code}-${prog.code}-\d{2,}$`).test(conf.data.created[0] ?? ""),
-    JSON.stringify(conf.data));
+  // -227: cycle 1 replaced a tautology with an assertion that could never PASS - `\d` inside a
+  // template literal is not an escape, it collapses to `d`, so the regex read `^...-d{2,}$`. Same
+  // disease, opposite sign, in the very line removing it. No regex over a built string now: compare
+  // the prefix literally and test the tail with a character class that has no escape to lose.
+  {
+    const got = String((conf.data.created ?? [])[0] ?? "");
+    const want = `${loc.code}-${prog.code}-`;
+    const tail = got.slice(want.length);
+    ok("FL10 (-227): the imported batch carries the CENTRE-PROGRAMME-NN code, never the legacy B### fallback",
+      (conf.data.created ?? []).length === 1 && got.startsWith(want) && tail.length >= 2 && /^[0-9]+$/.test(tail),
+      JSON.stringify({ got, want }));
+  }
   const listed = ((await req(admin, "GET", "/api/batches?limit=2000", undefined, 200)).data.items ?? []).find((b) => b.code === conf.data.created[0]);
   ok("FL10: the imported batch carries creator + file provenance",
     !!listed && listed.created_by?.name && /^Import: batches-probe\.xlsx$/.test(listed.source ?? ""), JSON.stringify({ code: listed?.code, by: listed?.created_by?.name, src: listed?.source }));

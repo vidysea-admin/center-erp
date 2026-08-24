@@ -2137,13 +2137,23 @@ export async function nextBatchCode(location?: { code?: string } | null, program
   // cancel; in the importer every refused row burned one. That is how a prefix reaches -04 holding
   // three batches, and a monotonic counter can never give the number back.
   //
-  // Honest cost of deriving instead: a number freed by a HARD delete is reissued. Bounded on purpose
-  // - a hard delete is Admin-only and refused outright for any batch carrying a member, log, result,
-  // cost, closure, portal row or invoice (api/batches/[id]/route.ts), and a CANCELLED batch keeps its
-  // row and its code, so this scan still counts it. The only reusable number therefore belongs to an
-  // empty shell that never held a roster, let alone reached a government form. Umesh chose this with
-  // that cost written in front of him (2026-08-24); it supersedes the monotonic rationale that this
-  // function and scripts/check-batch-code-counter.mjs used to carry.
+  // LOWEST FREE, not max+1 - and cycle 1 of this unit got that wrong in a way worth writing down.
+  // max+1 heals a gap only at the END of the series. Delete a MIDDLE batch and the hole is permanent,
+  // so the last code again reads higher than the number of batches on record - which is Umesh's
+  // original complaint, reproduced by the fix meant to end it. The checker caught it on the first
+  // real wall (QA-865), and this function's own new e2e block had already asserted lowest-free
+  // behaviour while the code returned max+1: the test was right and the implementation was wrong.
+  //
+  // Honest cost of lowest-free: a number freed by a hard delete IS reissued, so the trailing number
+  // is a slot, not a chronological rank - the 5th batch opened at a centre may carry -03. In exchange
+  // the set of numbers for a prefix is always exactly 1..N with no holes, which is what "the code
+  // must be location wise and program wise" asks for. Bounded on purpose: a hard delete is Admin-only
+  // and is refused outright for any batch carrying a member, log, result, cost, closure, portal row
+  // or invoice (api/batches/[id]/route.ts), and a CANCELLED batch keeps its row and its code, so this
+  // scan still counts it. The only reusable number therefore belongs to an empty shell that never
+  // held a roster, let alone reached a government form. Umesh chose contiguity with that cost written
+  // in front of him (2026-08-24); it supersedes the monotonic rationale this function and
+  // scripts/check-batch-code-counter.mjs used to carry.
   //
   // A STRING RANGE, not a regex. `code` carries a unique index, so [prefix- , prefix-\uffff) is an
   // index range scan - and unlike an anchored regex it needs no escaping of the prefix, which is
@@ -2153,13 +2163,16 @@ export async function nextBatchCode(location?: { code?: string } | null, program
   // a number rather than an assumption.
   const mine = await Batch.find({ code: { $gte: `${prefix}-`, $lt: `${prefix}-\uffff` } })
     .select("code").lean<{ code: string }[]>();
-  const max = mine.reduce((m, b) => {
+  const used = new Set<number>();
+  for (const b of mine) {
     const tail = String(b.code).slice(prefix.length + 1);
-    return /^\d+$/.test(tail) ? Math.max(m, Number(tail)) : m;
-  }, 0);
+    if (/^[0-9]+$/.test(tail)) used.add(Number(tail));   // [0-9] not \d: this file is edited by tools
+  }                                                       // that have already eaten one backslash once
+  let n = 1;
+  while (used.has(n)) n++;
   // padStart(2) stays: String(100).padStart(2,"0") is "100", so the series widens by itself at -99
   // -> -100. padStart(3) would put -004 beside an existing -04 and make two shapes of one code.
-  return `${prefix}-${String(max + 1).padStart(2, "0")}`;
+  return `${prefix}-${String(n).padStart(2, "0")}`;
 }
 
 // The ONE place a batch is written. The code is minted LAST - after mongoose has validated
