@@ -56,5 +56,71 @@ ok("home: the strip's JSX closes before the trainers-by-role block", stripClose 
     labelled, labelled ? "" : "the label does not name the meter");
 }
 
+// ---- -224 (QA-880): the batch CLOSURE screen, for the same reason Home is pinned here ----
+// This file's premise is "the structural pin the wall CAN run" on a client component the wall cannot
+// render. qa-224 needed exactly that and did not have it: THREE fix cycles on
+// batches/[id]/page.tsx were each caught by a human driving a browser, and the wall was green every
+// time. The seven -224 e2e pins test the SERVER contract and that unit changed no server file, so
+// they pass against pre-fix code - QA-880. Below are the client facts those three cycles turned on.
+// Each FAILS against the code as it was before its own fix, and none can be satisfied by a green
+// server. Limit, stated plainly: these pin STRUCTURE, not behaviour - they prove the guard is asked
+// and the surface is written, not that the pixels land where a person is looking.
+{
+  // BATCH_PAGE_OVERRIDE exists so these pins can be proved FALSIFIABLE: run them against an older
+  // commit's copy of this file and they must FAIL. A pin only verified against the fixed code is the
+  // QA-212 defect - a pin that cannot fail. Unset in CI and in the wall; it changes nothing there.
+  const bf = process.env.BATCH_PAGE_OVERRIDE
+    || path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "src", "app", "(app)", "batches", "[id]", "page.tsx");
+  const b = fs.readFileSync(bf, "utf8").split(CR).join("");
+
+  // QA-878: the reopen control must ask the SAME question its server guard asks. rules.ts refuses on
+  // TWO facts - sign-off Completed AND zero per-candidate rows - and this predicate asked only the
+  // first, so it rendered on DERIVED sign-offs where its own confirm was false and pressing it was a
+  // no-op. `legacy` is the client's name for "zero rows".
+  const reopenGate = b.indexOf('closure?.assessment_status === "Completed" && !statusClosedTab && mayMarkTab');
+  const gateLine = reopenGate > 0 ? b.slice(b.lastIndexOf("\n", reopenGate) + 1, reopenGate) : "";
+  ok("-224 (QA-878): the standing Reopen control also asks the zero-rows half of its server guard",
+    reopenGate > 0 && /legacy\s*&&\s*$/.test(gateLine.replace(/^\s*\{/, "")),
+    reopenGate > 0 ? `gate reads: ${JSON.stringify(gateLine.trim())}` : "reopen gate not found");
+
+  // ...and the confirm must READ provenance, not assert it. Asserting "recorded by hand" on a
+  // derived sign-off is a falsehood told to obtain consent.
+  ok("-224 (QA-878): the reopen confirm reads assessment_derived instead of asserting how the figures were made",
+    b.includes("assessment_derived"), "assessment_derived appears 0 times in this file");
+
+  // QA-877: a SUCCESSFUL bulk mark must clear the per-card refusals it has just disproved, or a
+  // stale "cannot mark" stands beside a green Pass. mark() already did this; bulkApply did not.
+  const bulk = b.indexOf("async function bulkApply");
+  const bulkEnd = b.indexOf("async function certPatch", bulk);
+  const bulkBody = bulk > 0 && bulkEnd > bulk ? b.slice(bulk, bulkEnd) : "";
+  ok("-224 (QA-877): a successful bulk mark clears the per-card errors of the members it updated",
+    /setCardErrors/.test(bulkBody) && /delete\s+n\[/.test(bulkBody),
+    bulkBody ? "bulkApply never removes a cardErrors entry" : "could not locate bulkApply");
+
+  // QA-862: "Generate & issue" must not close its own drawer on failure - that is what made the
+  // Drawer's existing `error` slot useless and left N refusals showing as one, after the panel the
+  // operator was reading had vanished.
+  const gen = b.indexOf("Generate &amp; issue");
+  const genStart = gen > 0 ? b.lastIndexOf("<Btn onClick={async () => {", gen) : -1;
+  const genBody = genStart > 0 ? b.slice(genStart, gen) : "";
+  ok("-224 (QA-862): Generate & issue does not close its drawer unconditionally after the loop",
+    genBody.length > 0 && !/\n\s*setCertDrawer\(false\);\s*await load\(\)/.test(genBody),
+    genBody ? "setCertDrawer(false) still runs straight after the loop" : "could not locate the handler");
+  ok("-224 (QA-862): ...and it collects every refusal instead of each overwriting the last",
+    /failures\.push\(/.test(genBody), "no failures[] accumulation in the issue loop");
+
+  // QA-886: and it must not silently skip candidates whose number is blank while issuing the rest.
+  ok("-224 (QA-886): Generate & issue counts the candidates it left out for want of a number",
+    /skipped\.push\(/.test(genBody), "blank-number candidates are still skipped in silence");
+
+  // QA-856: the marking grid's failures must reach a surface AT the press, not only the page-top
+  // banner thousands of pixels above a viewport scrolled through 46 cards.
+  const mark = b.indexOf("async function mark(");
+  const markEnd = b.indexOf("async function bulkApply", mark);
+  const markBody = mark > 0 && markEnd > mark ? b.slice(mark, markEnd) : "";
+  ok("-224 (QA-856): a failed per-candidate mark pins its refusal to that candidate's own card",
+    /setCardErrors/.test(markBody), markBody ? "mark() still reports only through the page-level banner" : "could not locate mark()");
+}
+
 console.log(`\ncheck-home-structure: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
