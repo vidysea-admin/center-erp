@@ -327,7 +327,54 @@ ok("all 7 rows persisted", detail.data.rows?.length === 7, `got ${detail.data.ro
   ok("QA-159: list row carries our day-wise count + last day (1 log written above)", !!row && row.attendance_days === 1 && !!row.attendance_last, JSON.stringify(row && { d: row.attendance_days, last: row.attendance_last }));
   ok("QA-159: list row carries the newest matched portal import for the batch (as_of + rows)", !!row && !!row.portal_as_of && row.portal_rows >= 1, JSON.stringify(row && { as_of: row.portal_as_of, rows: row.portal_rows }));
   const untouched = list.find((b) => String(b._id) !== String(batch._id) && !b.attendance_days && !b.portal_as_of);
-  ok("QA-159: a batch with nothing on record reads 0 / null (the UI says 'none yet')", !untouched || (untouched.attendance_days === 0 && untouched.portal_as_of === null), JSON.stringify(untouched && { d: untouched.attendance_days, p: untouched.portal_as_of }));
+  // A-12 CHANGED THIS ASSERTION'S EXPECTED VALUE ON PURPOSE, and says so rather than quietly
+  // widening it: `attendance_days` used to be 0 both for "never logged" and for "logged, zero days",
+  // and the whole point of A-12 is that those are different claims. A batch with nothing on record
+  // now reads `null`. The MEANING under test is unchanged - "nothing on record reads as nothing" -
+  // and `portal_as_of` beside it is still null, as `attendance_last` always was in this same case.
+  ok("QA-159 / A-12: a batch with nothing on record reads null / null (the UI says 'none yet')", !untouched || (untouched.attendance_days === null && untouched.portal_as_of === null), JSON.stringify(untouched && { d: untouched.attendance_days, p: untouched.portal_as_of }));
+}
+
+// ---- A-11 + A-12 (24-Aug issues sheet, Shiv + Manish clips; both measured on LIVE -244) ----
+// A-11: the batches list printed "N students" from a count of attendance ROWS, so the figure grew
+// with the number of IMPORTS instead of the number of people. Live: CHI-ITI-RPLAVP-BSRT-01 had 3
+// imports and said "129 students" against 45 seats; AVP-GURU-RPLAVP-DST-02 said 130; the only row
+// that read correctly had exactly one import. These pins were run against the pre-fix build first
+// and BOTH fail there (see the manifest) - that is what makes them worth keeping.
+{
+  const before = ((await req(admin, "GET", "/api/batches?limit=2000")).data.items ?? []).find((b) => String(b._id) === String(batch._id));
+  // A THIRD confirmed import of the SAME people onto the SAME batch. Nobody new arrives.
+  await upload(admin, { file: csvFile(), batch: batch._id, confirm: "1", period_label: `A-11 re-import ${STAMP}` });
+  const after = ((await req(admin, "GET", "/api/batches?limit=2000")).data.items ?? []).find((b) => String(b._id) === String(batch._id));
+
+  ok("A-11: the list carries a STUDENT count as its own number, not the row count wearing that label",
+    typeof after?.portal_students === "number",
+    JSON.stringify({ portal_students: after?.portal_students, portal_rows: after?.portal_rows }));
+
+  ok("A-11: re-importing the same file adds ROWS but NOT students - nobody new arrived",
+    typeof after?.portal_students === "number" && typeof before?.portal_students === "number"
+      && after.portal_students === before.portal_students && after.portal_rows > before.portal_rows,
+    JSON.stringify({ students_before: before?.portal_students, students_after: after?.portal_students,
+      rows_before: before?.portal_rows, rows_after: after?.portal_rows }));
+
+  // THIS PIN FAILED OPEN IN ITS FIRST DRAFT AND THE DRAFT IS WHY IT IS WRITTEN THIS WAY.
+  // Written as `(b.portal_students ?? 0) <= b.target_size` it PASSED against the pre-fix build -
+  // because the field did not exist there, `?? 0` made every batch read zero students, and zero is
+  // under every target. A pin that cannot fail on the broken code it was written for is not a pin;
+  // this repo has paid for that lesson under QA-219 and QA-1010 already. So the EXISTENCE of the
+  // number is asserted first, on every batch that has portal data at all, and only then the bound.
+  const all = ((await req(admin, "GET", "/api/batches?limit=2000")).data.items ?? []);
+  const missing = all.filter((b) => b.portal_as_of && typeof b.portal_students !== "number");
+  const over = all.filter((b) => b.target_size && typeof b.portal_students === "number" && b.portal_students > b.target_size);
+  ok("A-11: every batch with portal data reports a real student COUNT, and no batch reports more students than it has seats",
+    all.length > 0 && missing.length === 0 && over.length === 0,
+    JSON.stringify({ batches: all.length, missing_the_field: missing.map((b) => b.code),
+      over_target: over.map((b) => ({ code: b.code, students: b.portal_students, target: b.target_size })) }));
+
+  // A-12: never-logged and logged-zero must be distinguishable on the payload the list reads.
+  ok("A-12: a batch WITH day-wise logs still reports a real number, so null means absence and nothing else",
+    after?.attendance_days === 1,
+    JSON.stringify({ attendance_days: after?.attendance_days, attendance_last: after?.attendance_last }));
 }
 
 // ---- R-D (CEO 14/08): the batch Attendance tab — both meters + the green verdict ----

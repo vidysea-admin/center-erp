@@ -7,7 +7,7 @@ import { api, fmtDate, toInputDate, offerable } from "@/lib/client";
 import { trainerSelectGroups } from "@/lib/trainer-select";
 import { slotGuidelineErrors } from "@/lib/slot-rules";
 import { BASE_PATH } from "@/lib/base-path";
-import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthChip, SourceCell, Tabs, inputCls, statusLabel, useCopied } from "@/components/ui";
+import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, SourceCell, Tabs, inputCls, statusLabel, useCopied } from "@/components/ui";
 import { useLocationCtx, usePerms } from "@/components/shell";
 
 // -115 (QA-221): a RETIRED programme (active === false) leaves the pickers where something new is
@@ -145,7 +145,10 @@ function BatchesInner() {
   const blockCount = (c: string) => trainerScoped.filter((b) => b.status === "Planning" && blockersOf(b).has(c)).length;
   const statusShown = fStatus ? trainerScoped.filter((b) => b.status === fStatus) : trainerScoped;
   // -86: "no attendance yet" = no day-wise log AND no matched portal import.
-  const noAttendance = (b: any) => !(b.attendance_days > 0) && !b.portal_as_of;
+  // A-12: `attendance_days` may now be null (never logged) as well as 0 (logged, no days). Neither
+  // is "attendance on record", so the test is unchanged in meaning — spelled out because `null > 0`
+  // being false is the kind of accident that stops being true when someone rewrites the comparison.
+  const noAttendance = (b: any) => !((b.attendance_days ?? 0) > 0) && !b.portal_as_of;
   const shown = fBlock === "no-attendance"
     ? statusShown.filter((b) => noAttendance(b) && ["Ready", "Active", "Closing", "Completed"].includes(b.status))
     : fBlock ? statusShown.filter((b) => b.status === "Planning" && blockersOf(b).has(fBlock)) : statusShown;
@@ -394,17 +397,35 @@ function BatchesInner() {
               },
               // A Planning batch's gaps show inline — "backward planning chal rahi hai,
               // requirement incomplete" is visible from the LIST, not just the detail page.
-              // -102 (Manish 17/08 [04:10]: "ye health-wealth hum kyu dikha rahe hai"): on a
-              // RUNNING or finished batch the chip was pure noise — 4 of 5 live batches read Red
-              // only because the daily logs Manish was about to enter were not in yet, and the
-              // batch's real state is the Status column beside it. The chip earns its place while
-              // a batch is still being prepared, where its gap list IS the backward-planning
-              // signal; after that the row says nothing rather than crying red.
-              { key: "health", label: "Readiness", filterText: (r: any) => ["Planning", "Ready"].includes(r.status) ? String(r.health?.score ?? "") : "",
-                render: (r: any) => ["Planning", "Ready"].includes(r.status)
-                  ? <HealthChip health={r.health} inline={r.status === "Planning"} />
-                  : <span className="text-xs text-gray-300" title="Readiness is a preparation check — a running or finished batch is described by its Status.">—</span> },
-              { key: "roster", label: "Enrolled / Roster / Target", render: (r: any) => `${r.enrolled_count} / ${r.roster_count} / ${r.target_size}` },
+              // The Readiness column is GONE, and this note stays because it was narrowed once
+              // before and narrowing did not save it.
+              //
+              // -102 (Manish 17/08 [04:10]: "ye health-wealth hum kyu dikha rahe hai") already cut
+              // it back to Planning and Ready rows, on the finding that 4 of 5 live batches read Red
+              // only because the daily logs he was about to enter were not in yet. Umesh, 2026-08-25,
+              // looking at the same column after that narrowing: "ye column mostly blank hi hai …
+              // drop hi krr de ye column kisi kaam ka hai nhi. even in planning."
+              //
+              // He is describing what the narrowing produced. On live -244 the column renders a grey
+              // dash on every Active, Completed, Closed and Cancelled row — which is most of the
+              // table — and a chip only on Planning and Ready. A column that is empty on the majority
+              // of rows costs horizontal space on a table that already scrolls sideways, and the
+              // readiness answer it was carrying is not lost: the Planning tab is built entirely from
+              // /api/mapping/readiness and names the blockers per centre and job role, which is where
+              // someone preparing a batch actually looks. The banner above the table says the same
+              // thing in one line ("55 of 55 centre × job-role positions are blocked").
+              //
+              // The SERVER still computes `health` per row and this deliberately does not touch it:
+              // Home reads it, the planning strip reads it, and removing a column is not a reason to
+              // pull out a derivation three other screens depend on.
+              // Umesh, 2026-08-25: "isme ek passed bhi add krr doo so it will look like
+              // Passed/ Enrolled / Roster / Target". Passed comes from CandidateResult.result ===
+              // "Pass" (api/batches/route.ts), the same record the Closure tab writes. It is placed
+              // FIRST because on a finished batch it is the number being asked for, and the three
+              // behind it are the context that makes it mean something.
+              { key: "roster", label: "Passed / Enrolled / Roster / Target",
+                filterText: (r: any) => `${r.passed_count ?? 0} / ${r.enrolled_count} / ${r.roster_count} / ${r.target_size}`,
+                render: (r: any) => `${r.passed_count ?? 0} / ${r.enrolled_count} / ${r.roster_count} / ${r.target_size}` },
               // -86 (Umesh 15/08): "kis batch ki kitne din ki attendance available hai" — our
               // day-wise logs and the portal import, per row; "none yet" says so in grey.
               // -99 (QA-159, second half): a batch whose attendance came from the portal read
@@ -413,20 +434,42 @@ function BatchesInner() {
               // the headline for such a row, students move into the label, and sorting counts
               // whichever source actually has days.
               { key: "attendance", label: "Attendance", sortable: true, sortValue: (r: any) => Math.max(r.attendance_days ?? 0, r.portal_days ?? 0) * 1e6 + (r.portal_as_of ? new Date(r.portal_as_of).getTime() / 1e9 : 0),
-                filterText: (r: any) => (r.attendance_days > 0 || r.portal_as_of) ? `${r.attendance_days} days ours${r.portal_as_of ? ` ${r.portal_days ?? 0} days portal ${r.portal_rows ?? 0} students` : ""}` : "none yet",
-                render: (r: any) => (r.attendance_days > 0 || r.portal_as_of) ? (
+                // A-11 + A-12 (24-Aug sheet). TWO separate lies lived in this one cell.
+                //   A-12: `attendance_days` used to arrive as 0 whether the centre had logged nothing
+                //   or had genuinely logged zero days, and this cell printed a bold "0 days ours"
+                //   either way. On live -244 that was FOUR rows — three Completed-and-certified
+                //   batches and one still Active — each sitting beside a full portal import. The API
+                //   now sends `null` for never-logged, and this cell says so in words instead of
+                //   inventing a count. `attendance_last` was already null in exactly this case.
+                //   A-11: the student figure was a count of attendance ROWS, so it multiplied by the
+                //   number of imports — "129 students" and "130 students" on batches capped at 45.
+                //   `portal_students` is people. The guard beside it is the cheap one the report asked
+                //   for: a portal count above the batch target is always wrong, so the cell says so
+                //   rather than printing it straight-faced.
+                filterText: (r: any) => (r.attendance_days != null || r.portal_as_of)
+                  ? `${r.attendance_days == null ? "not logged here" : `${r.attendance_days} days ours`}${r.portal_as_of ? ` ${r.portal_days ?? 0} days portal ${r.portal_students ?? 0} students` : ""}`
+                  : "none yet",
+                render: (r: any) => (r.attendance_days != null || r.portal_as_of) ? (() => {
+                  const students = r.portal_students ?? 0;
+                  const overTarget = !!r.target_size && students > r.target_size;
+                  return (
                   <span className="text-xs leading-4">
-                    {r.attendance_days > 0
-                      ? <span className="font-medium">{r.attendance_days} day{r.attendance_days === 1 ? "" : "s"} <span className="font-normal text-gray-500">ours</span></span>
-                      : <span className={r.portal_days > 0 ? "text-gray-500" : "text-gray-400"} title="Day-wise logs marked in this system">0 days ours</span>}
+                    {r.attendance_days == null
+                      ? <span className="text-gray-400" title="No day-wise attendance has ever been logged in this system for this batch. That is not the same as a logged zero — it means the centre records attendance somewhere else, most likely only on the government portal.">not logged here</span>
+                      : r.attendance_days > 0
+                        ? <span className="font-medium">{r.attendance_days} day{r.attendance_days === 1 ? "" : "s"} <span className="font-normal text-gray-500">ours</span></span>
+                        : <span className={r.portal_days > 0 ? "text-gray-500" : "text-gray-400"} title="Day-wise logs marked in this system">0 days ours</span>}
                     {r.attendance_last && <span className="text-gray-500"> · last {fmtDate(r.attendance_last)}</span>}
-                    {r.portal_as_of && <div className="text-blue-700" title={`Government portal working days, imported ${fmtDate(r.portal_as_of)}`}>
+                    {r.portal_as_of && <div className={overTarget ? "text-amber-700" : "text-blue-700"} title={overTarget
+                      ? `The portal reports ${students} students against a batch target of ${r.target_size}. A batch cannot have more students than seats, so this import is matching people who do not belong to this batch — open Govt Attendance and re-check the match.`
+                      : `Government portal working days, imported ${fmtDate(r.portal_as_of)}`}>
                       {r.portal_days > 0
-                        ? <><span className="font-medium">portal {r.portal_days} day{r.portal_days === 1 ? "" : "s"}</span>{r.portal_rows ? ` · ${r.portal_rows} student${r.portal_rows === 1 ? "" : "s"}` : ""}</>
-                        : <>portal {fmtDate(r.portal_as_of)}{r.portal_rows ? ` (${r.portal_rows} student${r.portal_rows === 1 ? "" : "s"})` : ""}</>}
+                        ? <><span className="font-medium">portal {r.portal_days} day{r.portal_days === 1 ? "" : "s"}</span>{students ? ` · ${students} student${students === 1 ? "" : "s"}` : ""}</>
+                        : <>portal {fmtDate(r.portal_as_of)}{students ? ` (${students} student${students === 1 ? "" : "s"})` : ""}</>}
+                      {overTarget && <span className="ml-1 font-semibold" title={`more students than the batch's ${r.target_size} seats`}>⚠ over target</span>}
                     </div>}
-                  </span>
-                ) : <span className="text-xs text-gray-400">— none yet</span> },
+                  </span>);
+                })() : <span className="text-xs text-gray-400">— none yet</span> },
               { key: "trainer", label: "Trainer", sortable: true, sortValue: (r: any) => r.trainer?.name ?? null, render: (r: any) => r.trainer?.name ?? "—" },
               { key: "planned_start", label: "Start", sortable: true, sortValue: (r: any) => r.planned_start ? new Date(r.planned_start).getTime() : null, render: (r: any) => fmtDate(r.planned_start) },
               // 2026-08-13 (Manish): source link per row — click lands on that sheet tab.
@@ -1031,6 +1074,9 @@ const PLAN_COLUMN_SOURCE: Record<string, string> = {
 function PlanningTable({ rows, onSaved, onError }: { rows: any[] | null; onSaved: () => void; onError: (m: string) => void }) {
   const [editing, setEditing] = useState<{ id: string; field: string } | null>(null);
   const [value, setValue] = useState("");
+  // QA-765: which batches have their roz-basis mobilisation opened. Per batch id, not per row index -
+  // the table sorts and filters, and an index would follow the position instead of the batch.
+  const [openMob, setOpenMob] = useState<Record<string, boolean>>({});
   // -196 (Umesh, 2026-08-22): "edit ka button nhi aa rha yaha par". Three cells have been clickable
   // since -171 and nothing on screen said so, so nobody found them. The switch is the whole answer:
   // OFF the table reads like a report, ON every writable cell is visibly writable. It is shown to
@@ -1189,13 +1235,42 @@ function PlanningTable({ rows, onSaved, onError }: { rows: any[] | null; onSaved
     { key: "trainer_mapped_sidh", label: "Trainer mapped on SIDH portal", minWidth: 202, render: (r: any) => mcell(r, "trainer_mapped_sidh", "trainer_mapped_sidh") },
     // Derived from the roster and never typed — `trainers_required` already carries the comment
     // explaining why a count kept in two places is a count that disagrees with itself.
+    // QA-765. The day-by-day series opens INSIDE this cell rather than as a new column: the grid is
+    // already 18 wide, and QA-580 was caused by one Columns-picker entry welding two dates together.
+    // A cell that expands adds no picker entry and no header.
     { key: "mobilization", label: "Mobilisation done for this batch", minWidth: 206, filterText: (r: any) => r.mobilization?.status ?? "",
-      render: (r: any) => (
-        <span title={editMode ? "Counted from the batch roster — enrol candidates onto the batch and this fills itself." : undefined}
-          className={editMode ? "text-gray-500" : undefined}>
-          {r.mobilization.status}{r.mobilization.count > 0 && <span className="text-gray-400"> · {r.mobilization.count}</span>}
-        </span>
-      ) },
+      render: (r: any) => {
+        const days: any[] = r.mobilization?.days ?? [];
+        const id = String(r.batch?._id ?? r.sl);
+        const open = !!openMob[id];
+        return (
+          <div className={editMode ? "text-gray-500" : undefined}>
+            <button type="button" disabled={!days.length}
+              onClick={() => setOpenMob((st) => ({ ...st, [id]: !st[id] }))}
+              className={"text-left " + (days.length ? "hover:underline" : "cursor-default")}
+              title={days.length
+                ? (open ? "Roz-basis chhupao" : "Roz-basis kholo — kis din kitne jude")
+                : "Counted from the batch roster — enrol candidates onto the batch and this fills itself."}>
+              {days.length > 0 && <span className="text-gray-400">{open ? "▾ " : "▸ "}</span>}
+              {r.mobilization.status}{r.mobilization.count > 0 && <span className="text-gray-400"> · {r.mobilization.count}</span>}
+            </button>
+            {open && days.length > 0 && (
+              <div className="mt-1 border-t border-gray-100 pt-1 text-[11px] leading-tight">
+                {days.map((d) => (
+                  <div key={d.date} className="flex justify-between gap-3 tabular-nums">
+                    <span className="text-gray-500">{d.date}</span>
+                    <span><span className="text-gray-400">+{d.joined}</span> <b className="text-gray-900">{d.cumulative}</b></span>
+                  </div>
+                ))}
+                {/* The last cumulative IS the count in the closed cell - same rows, one query. */}
+                <div className="mt-0.5 border-t border-gray-100 pt-0.5 text-[10px] text-gray-400">
+                  {days.length} din · kul {r.mobilization.count}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      } },
     { key: "enrollment_done", label: "Registration & enrolment done on SIDH", minWidth: 250, render: (r: any) => mcell(r, "enrollment_done", "enrollment_done") },
     { key: "planned_start", label: "Expected batch start date", minWidth: 176, sortable: true, sortValue: (r: any) => r.planned_start ?? "", render: (r: any) => bcell(r, "planned_start") },
     // Rule 15 recomputes this on the server when the start moves, so a start edit refreshes both.

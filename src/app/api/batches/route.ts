@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, requireRole, locationFilter, assertLocationInScope, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
-import { AuditLog, Batch, BatchMember, Candidate, Closure, DailyLog, GovtAttendanceRow, Invoice, Location, Notification, Program, Trainer } from "@/models";
+import { AuditLog, Batch, BatchMember, CandidateResult, Candidate, Closure, DailyLog, GovtAttendanceRow, Invoice, Location, Notification, Program, Trainer } from "@/models";
 import { assertLocationOperational, earliestPossibleStart, earliestStartNote, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, createBatchWithCode, deriveTrainerStatus, settlementStage, trainerBookingWarnings, trainerForLogin } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
@@ -61,6 +61,22 @@ export const GET = apiHandler(async (req: NextRequest) => {
     { $group: { _id: "$batch", roster: { $sum: 1 }, enrolled: { $sum: { $cond: [{ $eq: ["$enrollment_status", "Completed"] }, 1, 0] } } } },
   ]);
   const byBatch = new Map(counts.map((c) => [String(c._id), c]));
+  // Umesh, 2026-08-25, looking at the Batches list: "Enrolled / Roster / Target — isme ek passed
+  // bhi add kar do". The passed figure is the one number that column could not answer: a row could
+  // say 45/45/45 and still not say how many of those 45 actually cleared the assessment, which on a
+  // Completed batch is the only count anyone is asking about.
+  //
+  // Counted from CandidateResult.result === "Pass", which is the SAME record the Closure tab marks
+  // and the same one `certification`/`settlementStage` already read — not a second derivation.
+  // Deliberately NOT filtered on `left_on: null` the way roster/enrolled are: a Pass is a fact about
+  // an assessment that happened, and a student who passed and then left the roster still passed.
+  // That also means passed_count can exceed a shrunken roster, which is correct and is why the cell
+  // prints four independent numbers rather than a percentage.
+  const passCounts = await CandidateResult.aggregate([
+    { $match: { batch: { $in: items.map((b) => b._id) }, result: "Pass" } },
+    { $group: { _id: "$batch", passed: { $sum: 1 } } },
+  ]);
+  const passByBatch = new Map(passCounts.map((c) => [String(c._id), c.passed as number]));
   // QA-048: the post-Completed money chain, visible per row (derived from Closure+Invoice).
   const doneIds = items.filter((b) => ["Completed", "Closed"].includes(b.status)).map((b) => b._id);
   const closures = doneIds.length ? await Closure.find({ batch: { $in: doneIds } }).select("batch certification_status dues_settled").lean<any[]>() : [];
@@ -77,7 +93,19 @@ export const GET = apiHandler(async (req: NextRequest) => {
     // "kitne din" — a portal-only batch read "0 days" in bold next to 36 matched rows. The
     // portal's own working-day meter (total_working_days, the same figure the batch page
     // shows) is aggregated here so the list column can say "portal 13 days (36 students)".
-    GovtAttendanceRow.aggregate([{ $match: { batch: { $in: ids }, match_status: "Matched" } }, { $group: { _id: "$batch", as_of: { $max: "$createdAt" }, rows: { $sum: 1 }, days: { $max: "$total_working_days" }, present_max: { $max: "$total_days_present" } } }]),
+    // A-11 (24-Aug sheet, Manish + Shiv clips; measured on live -244): `rows: { $sum: 1 }` counted
+    // attendance ROWS and the column called them STUDENTS. Every re-import of the same batch adds a
+    // fresh row per student, so the figure grew with the number of IMPORTS and not with the number of
+    // people: CHI-ITI-RPLAVP-BSRT-01 had 3 imports and read "129 students" against 45 seats;
+    // BHA-ITI-RPLHSL-SPIT-01 had 2 and read 56; the one row that read correctly (28) had exactly one
+    // import. A batch capped at 45 cannot have 130 students attending it, and the product said so on
+    // three of five rows. Counting DISTINCT candidates is the whole fix — `students` is now the number
+    // of people, which is what the word on screen has always claimed.
+    //
+    // `rows` is kept beside it and still means rows, because the two are genuinely different questions
+    // ("how many people" vs "how much did the portal send us") and the batch page's own header asks the
+    // second one. Naming them apart is what stops the next reader collapsing them again.
+    GovtAttendanceRow.aggregate([{ $match: { batch: { $in: ids }, match_status: "Matched" } }, { $group: { _id: "$batch", as_of: { $max: "$createdAt" }, rows: { $sum: 1 }, students: { $addToSet: "$candidate" }, days: { $max: "$total_working_days" }, present_max: { $max: "$total_days_present" } } }]),
   ]);
   const logByB = new Map(logAgg.map((a: any) => [String(a._id), a]));
   const portalByB = new Map(portalAgg.map((a: any) => [String(a._id), a]));
@@ -98,11 +126,22 @@ export const GET = apiHandler(async (req: NextRequest) => {
     ...b,
     roster_count: byBatch.get(String(b._id))?.roster ?? 0,
     enrolled_count: byBatch.get(String(b._id))?.enrolled ?? 0,
+    passed_count: passByBatch.get(String(b._id)) ?? 0,
     settlement_stage: settlementStage(b.status, clByB.get(String(b._id)), invByB.get(String(b._id))),
-    attendance_days: logByB.get(String(b._id))?.days ?? 0,
+    // A-12 (24-Aug sheet; live -244 shows it on FOUR rows, one of them still Active): this read
+    // `?? 0`, so a centre that has never logged a single day here was indistinguishable from one that
+    // logged zero. Three certified batches and one running batch all printed a bold "0 days ours"
+    // beside a full portal import, and the same figure feeds the variance comparisons — a real zero
+    // and a never-counted are not the same claim. `null` now means "nothing was ever logged here";
+    // `0` is reserved for a batch that genuinely has a log document and no days, which cannot occur
+    // today but stops the distinction being re-lost if it ever can. `attendance_last` next to it has
+    // always been `null` in exactly this case, so the row is internally consistent for the first time.
+    attendance_days: logByB.has(String(b._id)) ? (logByB.get(String(b._id))?.days ?? 0) : null,
     attendance_last: logByB.get(String(b._id))?.last ?? null,
     portal_as_of: portalByB.get(String(b._id))?.as_of ?? null,
     portal_rows: portalByB.get(String(b._id))?.rows ?? 0,
+    // A-11: the count the column means when it prints "N students".
+    portal_students: (portalByB.get(String(b._id))?.students ?? []).length,
     portal_days: portalByB.get(String(b._id))?.days ?? 0,
     portal_days_present_max: portalByB.get(String(b._id))?.present_max ?? 0,
     // QA-957: the roster rule's own answer, so the screen stops guessing it from a date.
