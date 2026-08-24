@@ -1026,7 +1026,7 @@ const PLAN_COLUMN_SOURCE: Record<string, string> = {
   // batch. It is ours, and saying so is more honest than inventing a heading for it.
 };
 
-// 2026-08-24 (QA-894): `role` left this signature when the delete gate stopped being a role test.
+// 2026-08-24 (QA-904): `role` left this signature when the delete gate stopped being a role test.
 // Removed rather than left dangling - a prop nothing reads is a question the next reader has to answer.
 function PlanningTable({ rows, onSaved, onError }: { rows: any[] | null; onSaved: () => void; onError: (m: string) => void }) {
   const [editing, setEditing] = useState<{ id: string; field: string } | null>(null);
@@ -1204,7 +1204,7 @@ function PlanningTable({ rows, onSaved, onError }: { rows: any[] | null; onSaved
   // -196: "batch ko delete krne k liye kuch nhi hai". DELETE /api/batches/:id counts everything
   // hanging off the batch before it goes; the column only appears in Edit mode, so nobody meets a
   // delete button while reading.
-  // 2026-08-24 (QA-894, Umesh: "vo bhi respective acess wale persons"): the gate was the Admin role
+  // 2026-08-24 (QA-904, Umesh: "vo bhi respective acess wale persons"): the gate was the Admin role
   // and is now the togglable `batches.delete` right, so Operations - who plan the batches - can clear
   // their own empty shells without an Admin. The server refuses independently; this only decides who
   // is offered the button.

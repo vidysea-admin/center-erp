@@ -540,7 +540,7 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   ok("QA-130 rider: created_by rides on the row (schema stopped dropping it)", !!got.data.item?.created_by, JSON.stringify(got.data.item?.created_by ?? null));
 
   ok("QA-130: Location SPOC cannot delete a trainer", (await req(spoc, "DELETE", `/api/trainers/${tid}`)).status === 403);
-  // QA-894 (2026-08-24): this line used to read "Operations cannot delete either - Admin-only verb".
+  // QA-904 (2026-08-24): this line used to read "Operations cannot delete either - Admin-only verb".
   // Umesh reversed that: delete follows a togglable right now, and Operations holds `trainers.delete`
   // by default. The assertion is UPDATED rather than deleted, because what it guards is still real -
   // it just guards the new rule. It gets its OWN throwaway trainer: letting it delete `tid` would
@@ -548,7 +548,7 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   // rule changed underneath it.
   {
     const own = await req(admin, "POST", "/api/trainers", { name: `Q894 Ops ${stamp61}`, phone: p130(7), skills: ["Q894"], home_location: jpr._id });
-    ok("QA-894: Operations CAN delete a junk trainer now - it follows trainers.delete, not the Admin role",
+    ok("QA-904: Operations CAN delete a junk trainer now - it follows trainers.delete, not the Admin role",
       own.status === 201 && (await req(ops, "DELETE", `/api/trainers/${own.data.item._id}`)).status === 200,
       `create=${own.status}`);
   }
@@ -868,7 +868,7 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
     // it must carry the role and the togglable keys the route rules read (attendance.govt,
     // costs.manage, sheet.sources), and say nothing for a right the person does not hold.
     // -84 said "candidate delete is Admin-only - Operations gets 403 even though they manage
-    // candidates". QA-894 (2026-08-24) reversed that on Umesh's instruction: Operations holds
+    // candidates". QA-904 (2026-08-24) reversed that on Umesh's instruction: Operations holds
     // `candidates.delete` by default now. Updated, not removed - and the SEPARATION is what is worth
     // asserting, so Enrollment (who also manage candidates, and were never granted the delete) is
     // checked in the same breath. If one right ever silently opened another, this is the line that
@@ -878,16 +878,16 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
       const mkProbe = async (n) => (await req(admin, "POST", "/api/candidates", { name: "Del Probe " + n + s25, phone: "9700" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0"), location: jpr._id, program: progId }, 201)).data.item;
       const c1 = await mkProbe("A");
       if (c1?._id) {
-        ok("QA-894: Operations CAN delete a candidate now (candidates.delete, not the Admin role)",
+        ok("QA-904: Operations CAN delete a candidate now (candidates.delete, not the Admin role)",
           (await req(ops, "DELETE", `/api/candidates/${c1._id}`)).status === 200);
-      } else ok("QA-894: fixture candidate created", false, JSON.stringify(c1));
+      } else ok("QA-904: fixture candidate created", false, JSON.stringify(c1));
       const c2 = await mkProbe("B");
       if (c2?._id) {
-        ok("QA-894: Enrollment still CANNOT - they manage candidates but were never given the delete",
+        ok("QA-904: Enrollment still CANNOT - they manage candidates but were never given the delete",
           (await req(enroll, "DELETE", `/api/candidates/${c2._id}`)).status === 403);
-        ok("QA-894: ...and an Admin still can, without holding the right explicitly",
+        ok("QA-904: ...and an Admin still can, without holding the right explicitly",
           (await req(admin, "DELETE", `/api/candidates/${c2._id}`)).status === 200);
-      } else ok("QA-894: second fixture candidate created", false, JSON.stringify(c2));
+      } else ok("QA-904: second fixture candidate created", false, JSON.stringify(c2));
     }
     const meTr = await req(trainer, "GET", "/api/permissions/me");
     ok("QA-153: a trainer's effective rights carry no attendance.govt / costs.manage / sheet.sources (so Govt Attendance, Costs, Sheet Sync do not exist for them)",
@@ -1537,7 +1537,7 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   }
 }
 
-// ---- QA-894 (Umesh 2026-08-24): three delete rights, not one Admin role ----
+// ---- QA-904 (Umesh 2026-08-24): three delete rights, not one Admin role ----
 // "koi galti se candidate delete krr diyaa tho delete krne ka option dena hai team ko … esse hi
 // trainer ko bhi delete kr skte hai and batch ko bhi delete krr skte hai but vo bhi respective
 // acess wale persons."
@@ -1556,7 +1556,7 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   const opsBase = setOf("Operations");
   const catalogKeys = (permsSnap.catalog ?? []).map((c) => c.key);
 
-  ok("QA-894: the three delete rights are in the permissions catalogue, so an Admin can see them",
+  ok("QA-904: the three delete rights are in the permissions catalogue, so an Admin can see them",
     ["candidates.delete", "trainers.delete", "batches.delete"].every((k) => catalogKeys.includes(k)),
     JSON.stringify(catalogKeys.filter((k) => k.endsWith(".delete"))));
 
@@ -1576,15 +1576,15 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   {
     const c = await mkJunkCand();
     const del = await req(ops, "DELETE", `/api/candidates/${c._id}`);
-    ok("QA-894: a NON-ADMIN holding candidates.delete can remove a junk candidate row",
+    ok("QA-904: a NON-ADMIN holding candidates.delete can remove a junk candidate row",
       del.status === 200, `status=${del.status} ${JSON.stringify(del.data).slice(0, 140)}`);
   }
   {
     const t = (await req(admin, "POST", "/api/trainers", { name: "Junk Trainer " + s9, phone: "8" + String(Math.floor(Math.random() * 1e9)).padStart(9, "0") })).data.item;
     const del = await req(ops, "DELETE", `/api/trainers/${t._id}`);
-    ok("QA-894: ...and the SAME user, without trainers.delete, is refused on a trainer",
+    ok("QA-904: ...and the SAME user, without trainers.delete, is refused on a trainer",
       del.status === 403, `status=${del.status} ${JSON.stringify(del.data).slice(0, 140)}`);
-    ok("QA-894: ...and the refusal names the right to ask an Admin for, not just 'forbidden'",
+    ok("QA-904: ...and the refusal names the right to ask an Admin for, not just 'forbidden'",
       /right/i.test(String(del.data?.error ?? "")), String(del.data?.error ?? "").slice(0, 120));
     await req(admin, "DELETE", `/api/trainers/${t._id}`); // tidy up as Admin
   }
@@ -1596,22 +1596,22 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
     const b = (await req(admin, "POST", "/api/batches", { location: loc9._id, program: prog9._id, planned_start: "2027-06-01", target_size: 5 })).data.item;
     await req(admin, "POST", `/api/batches/${b._id}/members`, { candidate: c._id });
     const del = await req(ops, "DELETE", `/api/candidates/${c._id}`);
-    ok("QA-894: a candidate WITH batch history is still refused - a real person is Dropped, not erased",
+    ok("QA-904: a candidate WITH batch history is still refused - a real person is Dropped, not erased",
       del.status === 409, `status=${del.status}`);
-    ok("QA-894: ...and the refusal says to drop them instead",
+    ok("QA-904: ...and the refusal says to drop them instead",
       /drop/i.test(String(del.data?.error ?? "")), String(del.data?.error ?? "").slice(0, 120));
 
     // and the batch that now carries a member cannot be deleted either, by anyone
     await req(admin, "PUT", "/api/permissions", { role: "Operations", permissions: [...opsBase.filter((k) => !String(k).endsWith(".delete")), "candidates.delete", "batches.delete"] }, 200);
     await new Promise((r) => setTimeout(r, 5500));
     const delB = await req(ops, "DELETE", `/api/batches/${b._id}`);
-    ok("QA-894: a batch carrying recorded work is still refused - it is Cancelled, never deleted",
+    ok("QA-904: a batch carrying recorded work is still refused - it is Cancelled, never deleted",
       delB.status === 409, `status=${delB.status} ${JSON.stringify(delB.data).slice(0, 140)}`);
   }
   {
     const b2 = (await req(admin, "POST", "/api/batches", { location: loc9._id, program: prog9._id, planned_start: "2027-07-01", target_size: 5 })).data.item;
     const delB2 = await req(ops, "DELETE", `/api/batches/${b2._id}`);
-    ok("QA-894: an EMPTY batch shell can be deleted by a non-Admin holding batches.delete",
+    ok("QA-904: an EMPTY batch shell can be deleted by a non-Admin holding batches.delete",
       delB2.status === 200, `status=${delB2.status} ${JSON.stringify(delB2.data).slice(0, 140)}`);
   }
 
@@ -1621,7 +1621,7 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   {
     const c = await mkJunkCand();
     const del = await req(ops, "DELETE", `/api/candidates/${c._id}`);
-    ok("QA-894: revoking candidates.delete closes the door again",
+    ok("QA-904: revoking candidates.delete closes the door again",
       del.status === 403, `status=${del.status}`);
     await req(admin, "DELETE", `/api/candidates/${c._id}`);
   }
@@ -1631,14 +1631,14 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   {
     const c = await mkJunkCand();
     const del = await req(admin, "DELETE", `/api/candidates/${c._id}`);
-    ok("QA-894: an Admin still deletes without holding the right explicitly (role bypass intact)",
+    ok("QA-904: an Admin still deletes without holding the right explicitly (role bypass intact)",
       del.status === 200, `status=${del.status}`);
   }
 
   // restore Operations exactly as found, so no later suite inherits this block's grants
   await req(admin, "PUT", "/api/permissions", { role: "Operations", permissions: opsBase }, 200);
   const restored = ((await req(admin, "GET", "/api/permissions")).data.roles ?? []).find((r) => r.role === "Operations")?.permissions ?? [];
-  ok("QA-894: Operations' rights are restored exactly as found - this block leaves no residue",
+  ok("QA-904: Operations' rights are restored exactly as found - this block leaves no residue",
     JSON.stringify([...restored].sort()) === JSON.stringify([...opsBase].sort()),
     JSON.stringify({ was: opsBase.length, now: restored.length }));
 }

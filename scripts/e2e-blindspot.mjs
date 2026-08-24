@@ -292,7 +292,7 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
     ok("QA-869: ...and a candidate can still register through it",
       legacyPost.status === 201, `status=${legacyPost.status}`);
 
-    // ---- QA-893 (Umesh 2026-08-24): the Aadhaar number, on all three intake doors ----
+    // ---- QA-903 (Umesh 2026-08-24): the Aadhaar number, on all three intake doors ----
     // This product deliberately did NOT hold one until today: models/index.ts labelled id_reference
     // "NOT the Aadhaar number itself", and export-sidh shipped its aadhaar column blank on purpose.
     // Umesh reversed that and chose the full number on all three doors, so these pins guard the
@@ -312,26 +312,26 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
 
     {
       const r = await mkCand({ aadhaar_no: "2341 2341 2346" });
-      ok("QA-893: a valid Aadhaar is accepted and stored as bare 12 digits (spaces normalise away)",
+      ok("QA-903: a valid Aadhaar is accepted and stored as bare 12 digits (spaces normalise away)",
         r.status === 201 && r.data.item?.aadhaar_no === AAD_OK, `status=${r.status} stored=${r.data.item?.aadhaar_no}`);
     }
-    ok("QA-893: a one-digit typo is refused - the check digit is the whole point",
+    ok("QA-903: a one-digit typo is refused - the check digit is the whole point",
       (await mkCand({ aadhaar_no: AAD_BAD })).status === 400);
-    ok("QA-893: two swapped digits are refused",
+    ok("QA-903: two swapped digits are refused",
       (await mkCand({ aadhaar_no: AAD_SWAP })).status === 400);
     {
       const r = await mkCand({ aadhaar_no: "23412341234" });
-      ok("QA-893: 11 digits is refused and the message says how many were given",
+      ok("QA-903: 11 digits is refused and the message says how many were given",
         r.status === 400 && /11/.test(String(r.data?.error ?? "")), JSON.stringify(r.data).slice(0, 120));
     }
-    ok("QA-893: a number beginning 0 or 1 is refused - UIDAI never issues one",
+    ok("QA-903: a number beginning 0 or 1 is refused - UIDAI never issues one",
       (await mkCand({ aadhaar_no: "034123412346" })).status === 400);
     {
       const r = await mkCand({ aadhaar_no: AAD_BAD });
-      ok("QA-893: the refusal never calls a real person's Aadhaar 'invalid'",
+      ok("QA-903: the refusal never calls a real person's Aadhaar 'invalid'",
         !/invalid/i.test(String(r.data?.error ?? "")), String(r.data?.error ?? "").slice(0, 100));
     }
-    ok("QA-893: Aadhaar stays OPTIONAL - a candidate with none is still created",
+    ok("QA-903: Aadhaar stays OPTIONAL - a candidate with none is still created",
       (await mkCand({})).status === 201);
 
     // THE QA-726 REGRESSION, guarded from the start rather than after it bites. -210 validated a
@@ -344,15 +344,15 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
       await mc.db(DBNAME).collection("candidates")
         .updateOne({ _id: new ObjectId(String(c._id)) }, { $set: { aadhaar_no: "999999999999" } });
       const emailOnly = await req(admin, "PATCH", `/api/candidates/${c._id}`, { email: "still" + stamp + "@test.local" });
-      ok("QA-893: a record already holding a bad Aadhaar can still have its OTHER fields edited",
+      ok("QA-903: a record already holding a bad Aadhaar can still have its OTHER fields edited",
         emailOnly.status === 200, `status=${emailOnly.status} ${JSON.stringify(emailOnly.data).slice(0, 120)}`);
       const resend = await req(admin, "PATCH", `/api/candidates/${c._id}`, { aadhaar_no: "999999999999", email: "again" + stamp + "@test.local" });
-      ok("QA-893: ...even when the drawer re-sends that same bad value unchanged",
+      ok("QA-903: ...even when the drawer re-sends that same bad value unchanged",
         resend.status === 200, `status=${resend.status}`);
       const fix = await req(admin, "PATCH", `/api/candidates/${c._id}`, { aadhaar_no: AAD_OK });
-      ok("QA-893: ...and correcting it to a good one is accepted", fix.status === 200, `status=${fix.status}`);
+      ok("QA-903: ...and correcting it to a good one is accepted", fix.status === 200, `status=${fix.status}`);
       const clear = await req(admin, "PATCH", `/api/candidates/${c._id}`, { aadhaar_no: "" });
-      ok("QA-893: ...and clearing it is possible - that is how a wrong one is removed",
+      ok("QA-903: ...and clearing it is possible - that is how a wrong one is removed",
         clear.status === 200 && !clear.data.item?.aadhaar_no, `status=${clear.status} v=${clear.data.item?.aadhaar_no}`);
     }
 
@@ -364,18 +364,18 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
       const rows = await mc.db(DBNAME).collection("auditlogs")
         .find({ entity: "Candidate", field: "aadhaar_no" }).sort({ _id: -1 }).limit(6).toArray();
       const leaked = rows.filter((r) => /[0-9]{12}/.test(JSON.stringify([r.old_value, r.new_value, r.oldValue, r.newValue])));
-      ok("QA-893: the audit log records THAT the Aadhaar changed, never the number itself",
+      ok("QA-903: the audit log records THAT the Aadhaar changed, never the number itself",
         rows.length > 0 && leaked.length === 0, `rows=${rows.length} leaked=${leaked.length}`);
     }
     {
       const { readFileSync } = await import("node:fs");
       const src = readFileSync("scripts/mirror-prod.mjs", "utf8");
-      ok("QA-893: mirror-prod redacts Aadhaar, so no local mirror carries live ones (QA-536's lesson)",
+      ok("QA-903: mirror-prod redacts Aadhaar, so no local mirror carries live ones (QA-536's lesson)",
         /candidates:\s*\[[^\]]*aadhaar_no/.test(src));
     }
     {
       const res = await fetch(BASE + `/api/candidates/export-sidh?location=${loc._id}&all=1`, { headers: { cookie: admin } });
-      ok("QA-893: the SIDH export still builds now it carries the column it used to ship blank",
+      ok("QA-903: the SIDH export still builds now it carries the column it used to ship blank",
         res.status === 200, `status=${res.status}`);
     }
 
@@ -383,10 +383,10 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
     // -116/QA-275 shape, and it is silent - the value looks saved and is not.
     {
       const pubBad = await pubPost(regTok.token, { name: "AadPub " + stamp, phone: "7996" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0"), email: "aadpub" + stamp + "@test.local", aadhaar_no: AAD_BAD });
-      ok("QA-893: the public self-registration door refuses a mistyped Aadhaar too",
+      ok("QA-903: the public self-registration door refuses a mistyped Aadhaar too",
         pubBad.status === 400, `status=${pubBad.status}`);
       const pubOk = await pubPost(regTok.token, { name: "AadPub2 " + stamp, phone: "7995" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0"), email: "aadpub2" + stamp + "@test.local", aadhaar_no: "9999 4105 7058" });
-      ok("QA-893: ...and accepts a good one through the public door",
+      ok("QA-903: ...and accepts a good one through the public door",
         pubOk.status === 201, `status=${pubOk.status}`);
     }
 

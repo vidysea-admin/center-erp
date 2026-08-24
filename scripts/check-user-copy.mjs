@@ -1421,14 +1421,14 @@ for (const file of walk(root)) {
   // 6. Delete on the row, gated by the RIGHT and by Edit mode. DELETE /api/batches/:id refuses
   //    anyone without the right anyway; showing the button teaches people to click into a 403.
   //
-  //    QA-894 (2026-08-24): this pin used to require the literal `editMode && role === "Admin"`.
+  //    QA-904 (2026-08-24): this pin used to require the literal `editMode && role === "Admin"`.
   //    Umesh moved delete off the Admin role onto a togglable right ("vo bhi respective acess wale
   //    persons"), so that spelling is now the WRONG thing to demand - the pin would have forced the
   //    old rule back. UPDATED rather than deleted: what it guards is still real (a delete verb exists
   //    on the row, and it is gated), only the gate's name changed. A pin rewritten to match whatever
   //    the code now says would be worthless, so it still demands BOTH halves - a gate, and editMode.
   if (/method: "DELETE"/.test(src) && /canRightP\("batches\.delete", "edit"\)/.test(src) && /editMode && rightsLoadedP && canRightP\("batches\.delete", "edit"\)/.test(src)) passed++;
-  else { failed++; pushStructural('app/(app)/batches/page.tsx: the Planning table has no permission-gated delete on the row, gated by Edit mode - "batch ko delete krne k liye kuch nhi hai" (QA-894: the gate is `batches.delete`, not the Admin role).'); }
+  else { failed++; pushStructural('app/(app)/batches/page.tsx: the Planning table has no permission-gated delete on the row, gated by Edit mode - "batch ko delete krne k liye kuch nhi hai" (QA-904: the gate is `batches.delete`, not the Admin role).'); }
 
   // ---- -197: the three things the -196 checker found that no pin above could have caught ----
 

@@ -69,7 +69,7 @@ function TrainersInner() {
   // edit-flag on, and not a role whose writes are refused (Enrollment/Trainer).
   const { data: session } = useSession();
   const su: any = session?.user ?? {};
-  // 2026-08-24 (QA-894): who may DELETE a trainer follows the togglable right, not a role name.
+  // 2026-08-24 (QA-904): who may DELETE a trainer follows the togglable right, not a role name.
   // `loaded` matters: before the rights arrive `can()` answers false for everyone, and a button that
   // appears a moment later is better than one that flickers away from somebody mid-click.
   const { can: canRight, loaded: rightsLoaded } = usePerms();
