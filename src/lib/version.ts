@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-231";
+export const RELEASE = "2026.08.14-236";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -42,6 +42,26 @@ const RELEASE_NOTE_ARCHIVE_230 =
   "Someone who genuinely joined mid-course can still be given their own date, and a batch that "  +
   "has not started is unaffected.";
 export const RELEASE_NOTE_CURRENT =
+  "-236 is the build production has actually been running, named. Four changes reached it after "  +
+  "the last marker was written and none of them were described from outside, which is the thing "  +
+  "this marker exists to prevent. "  +
+  "Entering a batch that already ran now behaves the same way on the screen as it does on the "  +
+  "server. A batch whose start was recorded after the fact counts its students from the day it "  +
+  "really began, so the attendance a centre already holds can be entered against them; a batch "  +
+  "that simply started earlier and has been running normally does not, and a student added to "  +
+  "one today is counted from today. The confirmation and the note beside each batch now ask the "  +
+  "server that question instead of guessing it from a date, so they no longer promise a "  +
+  "back-dated enrolment the server would refuse. Both ways a start can be recorded after the "  +
+  "fact are covered, including a batch brought to life from imported portal attendance. "  +
+  "On the card where a batch is closed, three number boxes that could still be typed into by "  +
+  "someone with no right to record results are now closed to them: the certificates-issued "  +
+  "count and the two older appeared and passed figures. Six date boxes on the same card were "  +
+  "closed earlier; these three were beside them and were missed. "  +
+  "The sheet-sync inbox gives every row its own actions and its own explanation of what the row "  +
+  "means, instead of one set of controls standing for all of them. "  +
+  "And two long-standing defects are closed at their last remaining edge, where a fix had "  +
+  "covered the reported case and left an adjacent one open.";
+const RELEASE_NOTE_ARCHIVE_231 =
   "-231 records the government APAAR ID for every candidate. It sits beside the portal "  +
   "Candidate ID on the card where a batch is closed, so a centre types both numbers in one "  +
   "place. The new box asks for exactly the same right as the Candidate ID box beside it, so "  +
@@ -407,6 +427,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
+  RELEASE_NOTE_ARCHIVE_231 + " " +
   // -230 was built and never released on its own - -231 carries it. Its note is archived rather
   // than dropped: a note declared and left out of this chain is a dead constant, which is exactly
   // the shape QA-265 records (329 lines of this file were no-op expression statements for an
