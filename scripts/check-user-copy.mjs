@@ -805,8 +805,7 @@ for (const file of walk(root)) {
     // formatting — and it fails in the direction that costs most, blocking a correct release.
     // PARSE, then compare. Unparseable lines are counted and named rather than silently skipped:
     // "I could not read the file" and "the row is not there" are different answers.
-    const chLines = ch.trim().split("
-").filter(Boolean);
+    const chLines = ch.trim().split(String.fromCharCode(10)).map((x) => x.trim()).filter(Boolean);
     let chBad = 0, chHas = false;
     for (const line of chLines) {
       try { if (JSON.parse(line).release === rel) chHas = true; } catch { chBad++; }
