@@ -2,7 +2,7 @@ import { collectionRoutes } from "@/lib/crud";
 import { BatchMember, Candidate, CandidateResult, Location, Program } from "@/models";
 import { assertLocationInScope, HttpError, isScoped } from "@/lib/authz";
 import { looksLikeCan } from "@/lib/govt-attendance";
-import { emailError, canonicalPhone, phoneError } from "@/lib/validate";
+import { aadhaarError, canonicalAadhaar, emailError, canonicalPhone, phoneError } from "@/lib/validate";
 import { candidateEligibility } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { renderMail, sendMail } from "@/lib/mailer";
@@ -18,6 +18,9 @@ export const { GET, POST } = collectionRoutes({
     // -134 (QA-283): the human-applied "documents were done on SIDH" mark. On BOTH doors — a field
     // the item route does not accept looks saved and is gone on the next read (the -116 lesson).
     "sidh_docs_verified",
+    // 2026-08-24 (Umesh): the Aadhaar number. On BOTH candidate doors and both public ones — the
+    // -116 lesson again: a field one door accepts and another drops looks saved and silently is not.
+    "aadhaar_no",
   ],
   // 2026-08-13 (Umesh: "search should allow all the columns"): the global shell search
   // rides this too — alt numbers, mobiliser/campaign and the portal CAN_ id all findable.
@@ -69,6 +72,17 @@ export const { GET, POST } = collectionRoutes({
     }
     const eErr = emailError(data.email, { optional: true });
     if (eErr) throw new HttpError(400, eErr);
+    // 2026-08-24: Aadhaar is optional to SUPPLY but strict once supplied — the same posture as
+    // alt_phone above. Stored canonical (bare 12 digits), so the value on record is the one that was
+    // validated rather than that value plus whatever spacing it was typed with (the QA-730 lesson,
+    // which mattered there because an index was built on the raw string).
+    if (data.aadhaar_no !== undefined && String(data.aadhaar_no).trim() !== "") {
+      const aErr = aadhaarError(data.aadhaar_no, { optional: true });
+      if (aErr) throw new HttpError(400, aErr);
+      data.aadhaar_no = canonicalAadhaar(data.aadhaar_no)!;
+    } else if (data.aadhaar_no !== undefined) {
+      delete data.aadhaar_no; // blank means "not supplied", never an empty string on the record
+    }
     if (data.location) assertLocationInScope(user, String(data.location));
     // -124 (M4-04): the centre is optional now — but only for someone who can see every centre.
     // QA-125's reasoning holds: a scoped user creating an unplaced row would create a person their

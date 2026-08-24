@@ -4,7 +4,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, HttpError } from "@/lib/authz";
 import { rateLimit, clientKey, phoneChallengeGate } from "@/lib/rate-limit";
 import { Candidate, EDUCATION_LEVEL, Location, Notification, Program, PublicToken } from "@/models";
-import { canonicalPhone, emailError, phoneError } from "@/lib/validate";
+import { aadhaarError, canonicalAadhaar, canonicalPhone, emailError, phoneError } from "@/lib/validate";
 import { findDuplicateCandidates } from "@/lib/duplicates";
 import { renderMail, sendMail } from "@/lib/mailer";
 import { sendSms, smsTemplateFor } from "@/lib/sms";
@@ -147,8 +147,18 @@ export const POST = apiHandler(async (req: NextRequest) => {
     if (!loc || ["On Hold", "Stopped", "Closed"].includes(String(loc.operational_status))) {
       throw new HttpError(400, "That centre is not taking registrations right now.");
     }
+    // 2026-08-24 (Umesh): Aadhaar on the OTP door too. -130/QA-275 is the standing lesson about this
+    // exact page: the nine Skill India fields went onto p/register and both internal routes and
+    // stopped there, so a student arriving through THIS link still had to be chased for the data the
+    // fields exist to stop chasing. Optional, validated when supplied.
+    const aadhaarRaw = String((body as any).aadhaar_no ?? "").trim();
+    if (aadhaarRaw) {
+      const aErr = aadhaarError(aadhaarRaw, { optional: true });
+      if (aErr) throw new HttpError(400, aErr);
+    }
     const doc = await Candidate.create({
       name, phone,
+      aadhaar_no: aadhaarRaw ? canonicalAadhaar(aadhaarRaw)! : undefined,
       email: t.purpose === "phone_otp" ? (body.email ? String(body.email).trim().toLowerCase() : undefined) : t.email, // the VERIFIED address on the email path, never a typed-in one
       gender: body.gender || undefined,
       dob: body.dob ? new Date(body.dob) : undefined,

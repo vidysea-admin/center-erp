@@ -8,7 +8,7 @@ import { api } from "@/lib/client";
 // other intake path (p/enrol, the internal drawer) uses these two and shows its own hint. Adopting
 // them here is what removes the bubble; it also ends a real divergence, since the API behind this page
 // re-implemented phone validation as `length >= 10` while the rest of the product uses canonicalPhone.
-import { emailError, phoneError } from "@/lib/validate";
+import { aadhaarError, emailError, phoneError } from "@/lib/validate";
 import { GeographyFields } from "@/components/geography-fields";
 
 const inputCls = "w-full rounded-lg border border-gray-300 px-3 py-2.5 text-[15px] focus:border-blue-500 focus:outline-none";
@@ -151,6 +151,13 @@ export default function PublicRegisterPage({ params }: { params: Promise<{ token
           <F label="Salutation">
             <input className={inputCls} list="reg-salutation" value={form.salutation ?? ""} onChange={(e) => set("salutation", e.target.value)} />
             <datalist id="reg-salutation">{["Mr.", "Mrs.", "Ms.", "Dr."].map((o) => <option key={o} value={o} />)}</datalist>
+          </F>
+          {/* 2026-08-24 (Umesh): "candidate form mai aadhaar number nhi aa rha hai". Optional here like
+              every other field in this block - the person filling it is a student on a phone from a
+              WhatsApp link. Checked WHILE TYPING with the same function the API refuses with, so the
+              hint appears before they press the button rather than after (the QA-141 canon). */}
+          <F label="Aadhaar number" hint={form.aadhaar_no ? aadhaarError(form.aadhaar_no, { optional: true }) ?? undefined : undefined}>
+            <input className={inputCls} inputMode="numeric" placeholder="12 digits" value={form.aadhaar_no ?? ""} onChange={(e) => set("aadhaar_no", e.target.value)} />
           </F>
           <F label="Father&apos;s name"><input className={inputCls} value={form.father_name ?? ""} onChange={(e) => set("father_name", e.target.value)} /></F>
           <F label="Mother&apos;s name"><input className={inputCls} value={form.mother_name ?? ""} onChange={(e) => set("mother_name", e.target.value)} /></F>

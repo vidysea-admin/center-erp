@@ -226,6 +226,19 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
 // cannot. The last two assertions are the other half of the promise: links already in somebody's
 // WhatsApp thread were NOT rotated off, so this pins that they still work rather than asserting it.
 {
+  // QA-887 (found by qa-227's checker): the public register door is rate-limited to 10 posts per
+  // 10 minutes PER CLIENT KEY, and every suite in the wall shares one key ("local") because they all
+  // arrive from the same address. This block took that shared budget from 7/10 to 9/10, and the
+  // checker reproduced three HTTP-429s that read exactly like defects. `clientKey` takes the
+  // RIGHT-MOST x-forwarded-for hop, so a test can take a bucket of its own by naming one. That does
+  // NOT weaken the guard - it is still enforced per key, and the last assertion in this block trips
+  // it deliberately on a key of its own to prove it still bites.
+  let xffN = 0;
+  const pubPost = (token, body) => fetch(BASE + `/api/public/register/${token}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-forwarded-for": `10.99.${(++xffN) % 250}.${xffN % 250}` },
+    body: JSON.stringify(body),
+  });
   const noProg = await req(admin, "POST", "/api/public-tokens", { purpose: "register", location: loc._id });
   ok("QA-869: minting a registration link with no programme is refused",
     noProg.status === 400, `status=${noProg.status}`);
@@ -251,10 +264,7 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
 
   // The token WINS over anything the body carries. Without this the pin is decorative: a student (or
   // anything posting to an unauthenticated door) could name a different job role and be filed under it.
-  const smuggle = await fetch(BASE + `/api/public/register/${regTok.token}`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: "Pin " + stamp, phone: "7998" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0"), email: "pin" + stamp + "@test.local", program: deadProg._id }),
-  });
+  const smuggle = await pubPost(regTok.token, { name: "Pin " + stamp, phone: "7998" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0"), email: "pin" + stamp + "@test.local", program: deadProg._id });
   const smuggled = (await req(admin, "GET", `/api/candidates?limit=2000&location=${loc._id}`)).data.items.find((c) => c.name === "Pin " + stamp);
   ok("QA-869: a programme sent in the body cannot override the one the link pins",
     smuggle.status === 201 && String(smuggled?.program?._id ?? smuggled?.program) === String(prog._id),
@@ -278,12 +288,123 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
     ok("QA-869: a link shared BEFORE this change still opens, and still lets the candidate choose",
       legacyMeta.program_fixed === false && (legacyMeta.programs ?? []).length >= 1,
       JSON.stringify({ fixed: legacyMeta.program_fixed, n: (legacyMeta.programs ?? []).length }));
-    const legacyPost = await fetch(BASE + `/api/public/register/${legacyToken}`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "Legacy " + stamp, phone: "7997" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0"), email: "legacy" + stamp + "@test.local", program: prog._id }),
-    });
+    const legacyPost = await pubPost(legacyToken, { name: "Legacy " + stamp, phone: "7997" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0"), email: "legacy" + stamp + "@test.local", program: prog._id });
     ok("QA-869: ...and a candidate can still register through it",
       legacyPost.status === 201, `status=${legacyPost.status}`);
+
+    // ---- QA-893 (Umesh 2026-08-24): the Aadhaar number, on all three intake doors ----
+    // This product deliberately did NOT hold one until today: models/index.ts labelled id_reference
+    // "NOT the Aadhaar number itself", and export-sidh shipped its aadhaar column blank on purpose.
+    // Umesh reversed that and chose the full number on all three doors, so these pins guard the
+    // reversal AND the PII consequences that come with it.
+    //
+    // 234123412346 is a published Verhoeff-valid sample. The two invalid ones are that same number
+    // with one digit changed and with two adjacent digits swapped - the two ways a hand-typed 12-digit
+    // number actually goes wrong, and exactly what the check digit exists to catch.
+    const AAD_OK = "234123412346", AAD_BAD = "234123412345", AAD_SWAP = "234123412364";
+    const DBNAME = process.env.MONGODB_DB || "center_erp_ci";
+    const { ObjectId } = await import("mongodb");
+    const mkCand = (extra) => req(admin, "POST", "/api/candidates", {
+      name: "Aad " + stamp + Math.random().toString(36).slice(2, 6),
+      phone: "9" + String(Math.floor(Math.random() * 1e9)).padStart(9, "0"),
+      location: loc._id, program: prog._id, ...extra,
+    });
+
+    {
+      const r = await mkCand({ aadhaar_no: "2341 2341 2346" });
+      ok("QA-893: a valid Aadhaar is accepted and stored as bare 12 digits (spaces normalise away)",
+        r.status === 201 && r.data.item?.aadhaar_no === AAD_OK, `status=${r.status} stored=${r.data.item?.aadhaar_no}`);
+    }
+    ok("QA-893: a one-digit typo is refused - the check digit is the whole point",
+      (await mkCand({ aadhaar_no: AAD_BAD })).status === 400);
+    ok("QA-893: two swapped digits are refused",
+      (await mkCand({ aadhaar_no: AAD_SWAP })).status === 400);
+    {
+      const r = await mkCand({ aadhaar_no: "23412341234" });
+      ok("QA-893: 11 digits is refused and the message says how many were given",
+        r.status === 400 && /11/.test(String(r.data?.error ?? "")), JSON.stringify(r.data).slice(0, 120));
+    }
+    ok("QA-893: a number beginning 0 or 1 is refused - UIDAI never issues one",
+      (await mkCand({ aadhaar_no: "034123412346" })).status === 400);
+    {
+      const r = await mkCand({ aadhaar_no: AAD_BAD });
+      ok("QA-893: the refusal never calls a real person's Aadhaar 'invalid'",
+        !/invalid/i.test(String(r.data?.error ?? "")), String(r.data?.error ?? "").slice(0, 100));
+    }
+    ok("QA-893: Aadhaar stays OPTIONAL - a candidate with none is still created",
+      (await mkCand({})).status === 201);
+
+    // THE QA-726 REGRESSION, guarded from the start rather than after it bites. -210 validated a
+    // portal id on EVERY patch that carried the field, and the drawer re-sends every field on every
+    // edit, so a record already holding a bad value became UNEDITABLE - correcting it was the one
+    // thing you could not do. Bulk import writes Aadhaar without refusing rows, so such records will
+    // exist by design, and fixing the phone number on one of them must not be blocked by it.
+    {
+      const c = (await mkCand({ aadhaar_no: AAD_OK })).data.item;
+      await mc.db(DBNAME).collection("candidates")
+        .updateOne({ _id: new ObjectId(String(c._id)) }, { $set: { aadhaar_no: "999999999999" } });
+      const emailOnly = await req(admin, "PATCH", `/api/candidates/${c._id}`, { email: "still" + stamp + "@test.local" });
+      ok("QA-893: a record already holding a bad Aadhaar can still have its OTHER fields edited",
+        emailOnly.status === 200, `status=${emailOnly.status} ${JSON.stringify(emailOnly.data).slice(0, 120)}`);
+      const resend = await req(admin, "PATCH", `/api/candidates/${c._id}`, { aadhaar_no: "999999999999", email: "again" + stamp + "@test.local" });
+      ok("QA-893: ...even when the drawer re-sends that same bad value unchanged",
+        resend.status === 200, `status=${resend.status}`);
+      const fix = await req(admin, "PATCH", `/api/candidates/${c._id}`, { aadhaar_no: AAD_OK });
+      ok("QA-893: ...and correcting it to a good one is accepted", fix.status === 200, `status=${fix.status}`);
+      const clear = await req(admin, "PATCH", `/api/candidates/${c._id}`, { aadhaar_no: "" });
+      ok("QA-893: ...and clearing it is possible - that is how a wrong one is removed",
+        clear.status === 200 && !clear.data.item?.aadhaar_no, `status=${clear.status} v=${clear.data.item?.aadhaar_no}`);
+    }
+
+    // THE PII CONSEQUENCES. Not decoration: without these the number reaches places the record's own
+    // protections never touch.
+    {
+      const c = (await mkCand({ aadhaar_no: AAD_OK })).data.item;
+      await req(admin, "PATCH", `/api/candidates/${c._id}`, { aadhaar_no: "999941057058" });
+      const rows = await mc.db(DBNAME).collection("auditlogs")
+        .find({ entity: "Candidate", field: "aadhaar_no" }).sort({ _id: -1 }).limit(6).toArray();
+      const leaked = rows.filter((r) => /[0-9]{12}/.test(JSON.stringify([r.old_value, r.new_value, r.oldValue, r.newValue])));
+      ok("QA-893: the audit log records THAT the Aadhaar changed, never the number itself",
+        rows.length > 0 && leaked.length === 0, `rows=${rows.length} leaked=${leaked.length}`);
+    }
+    {
+      const { readFileSync } = await import("node:fs");
+      const src = readFileSync("scripts/mirror-prod.mjs", "utf8");
+      ok("QA-893: mirror-prod redacts Aadhaar, so no local mirror carries live ones (QA-536's lesson)",
+        /candidates:\s*\[[^\]]*aadhaar_no/.test(src));
+    }
+    {
+      const res = await fetch(BASE + `/api/candidates/export-sidh?location=${loc._id}&all=1`, { headers: { cookie: admin } });
+      ok("QA-893: the SIDH export still builds now it carries the column it used to ship blank",
+        res.status === 200, `status=${res.status}`);
+    }
+
+    // The PUBLIC doors get the same rule. A field one door validates and another does not is the
+    // -116/QA-275 shape, and it is silent - the value looks saved and is not.
+    {
+      const pubBad = await pubPost(regTok.token, { name: "AadPub " + stamp, phone: "7996" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0"), email: "aadpub" + stamp + "@test.local", aadhaar_no: AAD_BAD });
+      ok("QA-893: the public self-registration door refuses a mistyped Aadhaar too",
+        pubBad.status === 400, `status=${pubBad.status}`);
+      const pubOk = await pubPost(regTok.token, { name: "AadPub2 " + stamp, phone: "7995" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0"), email: "aadpub2" + stamp + "@test.local", aadhaar_no: "9999 4105 7058" });
+      ok("QA-893: ...and accepts a good one through the public door",
+        pubOk.status === 201, `status=${pubOk.status}`);
+    }
+
+    // And the guard itself still bites - proved on a key of this test's own, so it spends no other
+    // suite's budget. Without this, the x-forwarded-for trick above would be indistinguishable from
+    // having quietly switched rate limiting off.
+    {
+      let tripped = 0;
+      for (let i = 0; i < 13; i++) {
+        const r = await fetch(BASE + `/api/public/register/${regTok.token}`, {
+          method: "POST", headers: { "Content-Type": "application/json", "x-forwarded-for": "10.77.77.77" },
+          body: JSON.stringify({ name: "RL " + i, phone: "7000000000" }),
+        });
+        if (r.status === 429) tripped++;
+      }
+      ok("QA-887: the public door's rate limit still trips - per key, so no suite spends another's budget",
+        tripped > 0, `429s=${tripped}`);
+    }
   } finally { await mc.close(); }
 }
 

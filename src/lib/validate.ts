@@ -25,6 +25,65 @@ export function phoneError(v: unknown, opts?: { optional?: boolean }): string | 
   return canonicalPhone(s) ? null : "Phone must be a 10-digit mobile number (+91/0 prefix is fine — it is stored as the bare 10 digits).";
 }
 
+// ---- Aadhaar (2026-08-24, Umesh: "candidate form mai aadhaar number nhi aa rha hai, aadhaar
+// number k liye form mai daal") ----
+//
+// READ THIS BEFORE ASSUMING THE FIELD WAS SIMPLY FORGOTTEN. Until today this product deliberately
+// did NOT hold an Aadhaar number: `models/index.ts` labels `id_reference` "government ID reference
+// (NOT the Aadhaar number itself)", and `api/candidates/export-sidh` ships the `aadhaar_or_vid`
+// column BLANK with the comment "filled by the calling agent, never stored here". Umesh reversed
+// that decision explicitly, and chose the full number on all three intake doors. The comments that
+// asserted the old rule are corrected in the same change, because a comment that outlives its rule
+// is how the next reader gets it wrong (QA-606).
+//
+// Manual entry is STRICT, exactly like phone above: a human is at the keyboard and can fix it. Bulk
+// import keeps the normalize-and-report lane and never drops a row over format.
+//
+// The checksum is the point, not decoration. Aadhaar carries a Verhoeff check digit, which catches
+// every single-digit error and every adjacent transposition - the two ways a hand-typed 12-digit
+// number actually goes wrong. Without it a typo is stored, looks perfectly valid on screen, and is
+// only discovered when the government portal rejects that student weeks later. Same posture as
+// `looksLikeCan` for portal IDs (QA-714): refuse at the door, where somebody can still be told.
+const VERHOEFF_D = [
+  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 0, 6, 7, 8, 9, 5], [2, 3, 4, 0, 1, 7, 8, 9, 5, 6],
+  [3, 4, 0, 1, 2, 8, 9, 5, 6, 7], [4, 0, 1, 2, 3, 9, 5, 6, 7, 8], [5, 9, 8, 7, 6, 0, 4, 3, 2, 1],
+  [6, 5, 9, 8, 7, 1, 0, 4, 3, 2], [7, 6, 5, 9, 8, 2, 1, 0, 4, 3], [8, 7, 6, 5, 9, 3, 2, 1, 0, 4],
+  [9, 8, 7, 6, 5, 4, 3, 2, 1, 0],
+];
+const VERHOEFF_P = [
+  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 5, 7, 6, 2, 8, 3, 0, 9, 4], [5, 8, 0, 3, 7, 9, 6, 1, 4, 2],
+  [8, 9, 1, 6, 0, 4, 3, 5, 2, 7], [9, 4, 5, 3, 1, 2, 6, 8, 7, 0], [4, 2, 8, 6, 5, 7, 3, 9, 0, 1],
+  [2, 7, 9, 3, 8, 0, 6, 4, 1, 5], [7, 0, 4, 6, 9, 1, 3, 2, 5, 8],
+];
+function verhoeffOk(digits: string): boolean {
+  let c = 0;
+  const rev = digits.split("").reverse();
+  for (let i = 0; i < rev.length; i++) c = VERHOEFF_D[c][VERHOEFF_P[i % 8][Number(rev[i])]];
+  return c === 0;
+}
+
+/** 12 bare digits, or null. Spaces and hyphens are how people write it and are not an error. */
+export function canonicalAadhaar(v: unknown): string | null {
+  const digits = String(v ?? "").replace(/[\s-]/g, "");
+  if (!/^\d{12}$/.test(digits)) return null;
+  // UIDAI never issues a number starting 0 or 1 - the first digit is the cheapest real check there
+  // is, and it catches a whole class of made-up values that would otherwise pass the checksum.
+  if (digits[0] === "0" || digits[0] === "1") return null;
+  return verhoeffOk(digits) ? digits : null;
+}
+
+export function aadhaarError(v: unknown, opts?: { optional?: boolean }): string | null {
+  const s = String(v ?? "").trim();
+  if (!s) return opts?.optional ? null : "Aadhaar number is required.";
+  const digits = s.replace(/[\s-]/g, "");
+  if (!/^\d+$/.test(digits)) return "Aadhaar number is 12 digits — letters and symbols are not part of it.";
+  if (digits.length !== 12) return `Aadhaar number must be exactly 12 digits (this has ${digits.length}).`;
+  if (digits[0] === "0" || digits[0] === "1") return "An Aadhaar number never begins with 0 or 1 — check the first digit.";
+  // The message must not say "invalid". The number is almost always a real one typed slightly wrong,
+  // and telling somebody their Aadhaar is invalid is both alarming and usually untrue.
+  return verhoeffOk(digits) ? null : "That Aadhaar number does not check out — one digit is likely mistyped or two are swapped. Please compare it with the card.";
+}
+
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
 export function emailError(v: unknown, opts?: { optional?: boolean }): string | null {

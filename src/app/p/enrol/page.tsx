@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import { BASE_PATH } from "@/lib/base-path";
-import { emailError, phoneError } from "@/lib/validate";
+import { aadhaarError, emailError, phoneError } from "@/lib/validate";
 import { GeographyFields } from "@/components/geography-fields";
 
 // QA-116 — the OTP enrolment path (CEO's "one of the two"; Umesh 16/08: email-OTP, mail is
@@ -161,6 +161,12 @@ export default function EnrolOtpPage() {
             <label className="block text-sm"><span className="mb-1 block text-gray-600">Salutation</span>
               <input className={inputCls} list="enrol-salutation" value={form.salutation ?? ""} onChange={(e) => set("salutation", e.target.value)} />
               <datalist id="enrol-salutation">{["Mr.", "Mrs.", "Ms.", "Dr."].map((o) => <option key={o} value={o} />)}</datalist></label>
+            {/* 2026-08-24 (Umesh): Aadhaar on the OTP door too - QA-275's lesson is that this page gets
+                forgotten precisely because it is the second public door for the same job. */}
+            <label className="block text-sm"><span className="mb-1 block text-gray-600">Aadhaar number</span>
+              <input className={inputCls} inputMode="numeric" placeholder="12 digits" value={form.aadhaar_no ?? ""} onChange={(e) => set("aadhaar_no", e.target.value)} />
+              {form.aadhaar_no && aadhaarError(form.aadhaar_no, { optional: true }) && <span className="mt-1 block text-xs text-red-600">{aadhaarError(form.aadhaar_no, { optional: true })}</span>}
+            </label>
             <label className="block text-sm"><span className="mb-1 block text-gray-600">Father&apos;s name</span>
               <input className={inputCls} value={form.father_name ?? ""} onChange={(e) => set("father_name", e.target.value)} /></label>
             <label className="block text-sm"><span className="mb-1 block text-gray-600">Mother&apos;s name</span>

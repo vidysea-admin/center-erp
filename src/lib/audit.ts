@@ -37,7 +37,23 @@ export async function auditDiff(
     const oldV = before?.[key];
     const newV = after[key];
     if (JSON.stringify(oldV ?? null) !== JSON.stringify(newV ?? null)) {
-      await audit({ entity, entityId, field: key, oldValue: oldV, newValue: newV, actor, actorType });
+      await audit({ entity, entityId, field: key, oldValue: maskSensitive(key, oldV), newValue: maskSensitive(key, newV), actor, actorType });
     }
   }
+}
+
+// 2026-08-24: the audit log records WHAT changed, and for one field that must not mean recording the
+// value. An Aadhaar number written here in full would survive every retention rule the record itself
+// has, sit in a collection nobody redacts, and be copied by anything that reads AuditLog — the audit
+// trail becoming the leak is a familiar way for this to go wrong. "Changed from ****1234 to ****5678"
+// answers every question an audit row is actually asked: who changed it, when, and that it changed.
+//
+// Field-name based, like scripts/mirror-prod.mjs REDACT (QA-536), and for the same stated reason:
+// adding one is then a decision somebody makes, not a pattern that might quietly stop matching.
+const AUDIT_MASK_FIELDS = new Set(["aadhaar_no"]);
+function maskSensitive(field: string, value: unknown): unknown {
+  if (!AUDIT_MASK_FIELDS.has(field)) return value;
+  const s = String(value ?? "");
+  if (!s) return value; // absent stays absent — "" and null are facts worth keeping as themselves
+  return s.length <= 4 ? "****" : "****" + s.slice(-4);
 }

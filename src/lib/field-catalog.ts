@@ -115,7 +115,12 @@ export const FIELD_CATALOG: Record<"Candidate" | "Trainer" | "Location", FieldSp
     // The label carries the warning because the ambiguity is the whole defect: QA-414 measured 55
     // live candidates whose PORTAL id landed here, because this was the closest-looking option on
     // a screen that did not offer the right one.
-    { key: "id_reference", label: "Govt ID reference (NOT the portal candidate ID)", type: "text", aliases: ["id reference", "govt id", "government id", "aadhaar reference", "id proof"] },
+    // 2026-08-24: the Aadhaar number is a real column now, so it gets a real destination. Listed
+    // ABOVE id_reference deliberately - the alias "aadhaar reference" below used to be the closest
+    // match a sheet's Aadhaar column could find, which is precisely how QA-414 put 55 portal ids into
+    // id_reference: the nearest-looking option wins when the right one is not offered.
+    { key: "aadhaar_no", label: "Aadhaar number", type: "text", aliases: ["aadhaar", "aadhar", "adhaar", "adhar", "aadhaar number", "aadhar number", "aadhaar no", "uid", "uid number"] },
+    { key: "id_reference", label: "Govt ID reference (NOT Aadhaar, NOT the portal candidate ID)", type: "text", aliases: ["id reference", "govt id", "government id", "id proof"] },
     { key: "last_training_date", label: "Last training date", type: "date", aliases: ["last training date", "last training", "previous training date"] },
     { key: "interested_programs", label: "Interested programmes (comma-separated)", type: "list", aliases: ["interested programs", "interested programmes", "preferred course", "course interested"] },
     { key: "interested_locations", label: "Interested centres (comma-separated)", type: "list", aliases: ["interested locations", "interested centres", "preferred centre", "preferred location"] },

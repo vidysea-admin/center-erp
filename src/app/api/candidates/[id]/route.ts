@@ -6,7 +6,7 @@ import { getDefaults } from "@/lib/defaults";
 import { HttpError, apiHandler, requireUser, requireEdit } from "@/lib/authz";
 import { dbConnect } from "@/lib/db";
 import { audit } from "@/lib/audit";
-import { emailError, canonicalPhone, phoneError } from "@/lib/validate";
+import { aadhaarError, canonicalAadhaar, emailError, canonicalPhone, phoneError } from "@/lib/validate";
 import { looksLikeCan } from "@/lib/govt-attendance";
 
 export const { GET, PATCH } = itemRoutes({
@@ -21,6 +21,10 @@ export const { GET, PATCH } = itemRoutes({
     // -134 (QA-283): the human-applied "documents were done on SIDH" mark. On BOTH doors — a field
     // the item route does not accept looks saved and is gone on the next read (the -116 lesson).
     "sidh_docs_verified",
+    // 2026-08-24 (Umesh): the Aadhaar number must be EDITABLE, not just creatable — the -116 lesson,
+    // which the wall caught then: a field on the create door alone is typed once and silently dropped
+    // on every later save, which is the worst shape a field can have because nothing on screen says so.
+    "aadhaar_no",
   ],
   readRoles: ["Admin", "Operations", "Location", "Enrollment"], // QA-060/095: not the Trainer's lens
   writeRoles: ["Admin", "Operations", "Location", "Enrollment"],
@@ -81,6 +85,28 @@ export const { GET, PATCH } = itemRoutes({
     if (body.email !== undefined && body.email !== "") {
       const eErr = emailError(body.email, { optional: true });
       if (eErr) throw new HttpError(400, eErr);
+    }
+    // 2026-08-24: Aadhaar, with the QA-726 rule applied from the start rather than after it bites.
+    // -210 validated a portal ID on EVERY patch that carried the field, and the drawer re-sends every
+    // field on every edit — so a record already holding a bad value became UNEDITABLE, and correcting
+    // it was the one thing you could not do. Measured then: changing only the EMAIL of three imported
+    // candidates returned 400 naming an id the operator had not touched.
+    //
+    // So: only when the value actually CHANGED. Bulk import writes this field too and does not refuse
+    // rows over format, so records holding an unvalidatable Aadhaar will exist by design, and fixing
+    // the phone number on one of them must not be blocked by it.
+    if (body.aadhaar_no !== undefined) {
+      const incoming = String(body.aadhaar_no).trim();
+      const current = String((existing as any)?.aadhaar_no ?? "").trim();
+      if (!incoming) {
+        body.aadhaar_no = null; // clearing it must stay possible — that is how a wrong one is removed
+      } else if (incoming !== current) {
+        const aErr = aadhaarError(incoming, { optional: true });
+        if (aErr) throw new HttpError(400, aErr);
+        body.aadhaar_no = canonicalAadhaar(incoming)!;
+      } else {
+        body.aadhaar_no = current; // unchanged: pass through untouched, never re-judged
+      }
     }
   },
   populate: [

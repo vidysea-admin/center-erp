@@ -390,7 +390,18 @@ const CandidateSchema = new Schema({
   // nothing is lost by keeping them — and dropping a column is the one change that cannot be undone.
   address_type: String,               // no longer written by any route
   differently_abled: String,          // no longer written by any route
-  id_reference: String, // government ID reference (NOT the Aadhaar number itself)
+  // 2026-08-24 (Umesh): "candidate form mai aadhaar number nhi aa rha hai, aadhaar number k liye
+  // form mai daal". This REVERSES a standing decision — the line below said "NOT the Aadhaar number
+  // itself" and `export-sidh` shipped its aadhaar column blank on purpose. His call, taken with the
+  // PII consequences named: `scripts/mirror-prod.mjs` redacts it so no local mirror carries live
+  // Aadhaar numbers, the audit log stores only the last four, and it is deliberately NOT in the
+  // list search or any table column — the form and the SIDH export are the only places it appears.
+  // Validated by `aadhaarError` in lib/validate.ts (12 digits + Verhoeff), never stored unvalidated.
+  aadhaar_no: String,
+  // Still a DIFFERENT field, and the distinction is now load-bearing rather than academic: QA-414
+  // measured 55 live candidates whose PORTAL id landed in this box because it was the closest-looking
+  // option on screen. Two government-ID fields side by side is a fresh chance to repeat that.
+  id_reference: String, // some other government ID reference — NOT Aadhaar (that is aadhaar_no) and NOT the portal CAN id (that is sidh_candidate_id)
   // -124 (M4-04): OPTIONAL. A walk-in belongs to no centre until somebody enrols them, and forcing a
   // centre at entry either invents a fact or turns the person away. The centre is set by the first
   // real event instead — see members/route.ts, where a location-less candidate adopts the batch's

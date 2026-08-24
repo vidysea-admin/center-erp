@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, HttpError } from "@/lib/authz";
 import { rateLimit, clientKey } from "@/lib/rate-limit";
-import { canonicalPhone, emailError, phoneError } from "@/lib/validate";
+import { aadhaarError, canonicalAadhaar, canonicalPhone, emailError, phoneError } from "@/lib/validate";
 import { Candidate, EDUCATION_LEVEL, Program, PublicToken } from "@/models";
 import { findDuplicateCandidates } from "@/lib/duplicates";
 import { renderMail, sendMail } from "@/lib/mailer";
@@ -67,6 +67,17 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   const program = body.program && !t.program ? body.program : (t.program?._id ?? body.program);
   if (!program) throw new HttpError(400, "Please choose a program.");
 
+  // 2026-08-24 (Umesh): Aadhaar on all three intake doors. Optional here, like every other government
+  // field on this page — the person filling it is a student on a phone from a WhatsApp link, and a
+  // longer REQUIRED form is a form they abandon (Umesh's own -126 ruling). But if they DO type one it
+  // is checked, because a wrong Aadhaar collected here is discovered by the government portal weeks
+  // later, when nobody remembers typing it.
+  const aadhaarRaw = String(body.aadhaar_no ?? "").trim();
+  if (aadhaarRaw) {
+    const aErr = aadhaarError(aadhaarRaw, { optional: true });
+    if (aErr) throw new HttpError(400, aErr);
+  }
+
   const doc = await Candidate.create({
     name,
     phone,
@@ -83,6 +94,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     ...Object.fromEntries((["salutation", "father_name", "mother_name", "marital_status", "religion",
       "social_category", "state", "district", "sub_district"] as const)
       .map((f) => [f, String(body[f] ?? "").trim() || undefined])),
+    aadhaar_no: aadhaarRaw ? canonicalAadhaar(aadhaarRaw)! : undefined,
     location: t.location._id,
     program,
     source: "Self Registration",

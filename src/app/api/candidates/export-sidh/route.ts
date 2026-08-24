@@ -7,8 +7,10 @@ import { Candidate } from "@/models";
 
 // Export candidates in the SIDH assisted-registration CRM's sheet contract (the D:\crm
 // tool: full_name · mobile · aadhaar_or_vid · qp_code · scheme_id · district). The
-// aadhaar column is left blank on purpose — the ERP does not store Aadhaar numbers; the
-// calling agent fills it during the OTP call.
+// aadhaar column used to be left blank on purpose, because the ERP deliberately did not store
+// Aadhaar numbers. 2026-08-24: Umesh reversed that ("aadhaar number k liye form mai daal"), so the
+// column is filled from the record where we hold one and left blank where we do not — the calling
+// agent still supplies it for the blanks, exactly as before.
 export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
@@ -34,7 +36,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
   const rows = items.map((c) => ({
     full_name: c.name,
     mobile: c.phone,
-    aadhaar_or_vid: "",                       // filled by the calling agent, never stored here
+    aadhaar_or_vid: c.aadhaar_no ?? "",        // 2026-08-24: stored now; blank still means "we do not hold one"
     qp_code: c.program?.code ?? "",
     scheme_id: "",                            // per-course; operator confirms in the CRM console
     district: c.location?.city ?? "",

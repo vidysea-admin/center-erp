@@ -63,6 +63,12 @@ const SKIP = new Set(["sessions", "accounts", "verificationtokens", "auditlogs",
 // silently stop matching. The field is removed, not blanked - a key holding "" still reads as "we
 // store this here", and the next person to look would go find out where the value went.
 const REDACT = {
+  // 2026-08-24: the day this product started storing Aadhaar numbers is the day this line had to
+  // exist. QA-536 is the reason it is here and not "later": the worst secret in this database is a
+  // FIELD, not a collection, and skipping whole collections was already proved insufficient. Without
+  // this, every developer refreshing their local mirror would carry live Aadhaar numbers onto their
+  // own disk, and nothing on screen would say so.
+  candidates: ["aadhaar_no"],
   locations: ["tc_password"],
   locationtargets: ["tc_password"],
   users: ["password_hash"],   // replaced below with a local-only hash; never carried across as-is
