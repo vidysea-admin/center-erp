@@ -161,15 +161,18 @@ async function makeBatch(lc, pc, trainerName, roomIdx, planStartOffset, memberCo
   const pool = candidates[lc].filter((c) => String(c.program) === String(programs[pc]._id)).slice(0, memberCount);
   const memberIds = [];
   const refused = [];
-  // QA-1024. `joined_on: day(planStartOffset)` sent a FUTURE date for every batch planned ahead
-  // (B3 +3, B4 +7), and -240 now refuses that by name: "A candidate cannot join in the future".
-  // The rule is right — a join date after today cannot carry attendance — so the FIXTURE is what
-  // was wrong: somebody who signs up for a batch starting next week joins TODAY, not on its start
-  // date. Clamped, which is also what the screens do (their date input carries max=istTodayInput()).
-  const joinOffset = Math.min(planStartOffset, 0);
+  // QA-1024. This line sends a FUTURE `joined_on` for every batch planned ahead (B3 +3, B4 +7),
+  // and -240's new guard refuses it: "A candidate cannot join in the future".
+  //
+  // I first "fixed" that by clamping the date to today — and that was WRONG, and worth leaving
+  // written down. Pre-registering somebody for a batch that starts next week, dated to that start,
+  // is a REAL thing a centre does; the fixture was expressing it correctly. Clamping would have
+  // made the wall green over a live product regression, which is the most expensive kind of green
+  // there is. The date stays as the fixture meant it. -240's guard is what has to move (its author
+  // is bounding it by the batch's own timeline instead of by "today").
   for (const c of pool) {
     try {
-      const m = (await req("POST", `/api/batches/${b._id}/members`, { candidate: c._id, joined_on: day(joinOffset) })).item;
+      const m = (await req("POST", `/api/batches/${b._id}/members`, { candidate: c._id, joined_on: day(planStartOffset) })).item;
       memberIds.push(m._id);
     } catch (e) {
       // This used to be `catch { /* already active elsewhere */ }` — a comment that GUESSED the
