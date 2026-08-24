@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-239";
+export const RELEASE = "2026.08.14-240";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -41,7 +41,7 @@ const RELEASE_NOTE_ARCHIVE_230 =
   "all. The screen says which day they will be counted from before the enrolment, not after. "  +
   "Someone who genuinely joined mid-course can still be given their own date, and a batch that "  +
   "has not started is unaffected.";
-export const RELEASE_NOTE_CURRENT =
+const RELEASE_NOTE_ARCHIVE_239 =
   "-239 names three changes that reached production without a release describing them, and "  +
   "carries a repair to the screen where sheet changes are reviewed. On that screen every row "  +
   "used to offer the same seven actions, and for any given row at least one of them could not "  +
@@ -58,6 +58,21 @@ export const RELEASE_NOTE_CURRENT =
   "review panel, where it used to print as nothing at all while still being written into the "  +
   "record. Alongside these, two controls on the batch screen now ask for the same right the "  +
   "server asks for, so neither is offered to someone it would refuse.";
+export const RELEASE_NOTE_CURRENT =
+  "-240 gives a cancelled batch a way back, and gives a late joiner the right date. Until now "  +
+  "cancelling a batch was final: there was no route out of the cancelled state at all, and the "  +
+  "batch screen offered no control even to try, so a batch cancelled by mistake stayed cancelled "  +
+  "with its students still on it. An Admin can now restore one - choosing which state it should "  +
+  "return to, giving a reason, and the batch history records both the restore and the reason it "  +
+  "had been cancelled for in the first place. Restoring is only that: it changes no dates, it "  +
+  "cannot be used to start a batch that never ran, and a batch that was completed or settled "  +
+  "still cannot be reopened this way. The second half is the joining date. Adding a student to a "  +
+  "batch that has already run was never blocked, but nobody was ever asked which day that "  +
+  "student joined, so they were recorded as joining on the day someone typed them in - and the "  +
+  "attendance the centre already held for the weeks before that could not be entered against "  +
+  "them at all. Both screens that add students to a batch now ask for the joining date and "  +
+  "offer the day the batch really began. A date in the future, or one before the batch started, "  +
+  "is refused with the reason said out loud.";
 const RELEASE_NOTE_ARCHIVE_238 =
   "-238 moves that question out of a block that called it optional. On both public registration "  +
   "pages the choice between the current intake and a later one had been placed inside the section "  +
@@ -473,7 +488,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
-  RELEASE_NOTE_ARCHIVE_238 + " " +
+  RELEASE_NOTE_ARCHIVE_239 + " " + RELEASE_NOTE_ARCHIVE_238 + " " +
   RELEASE_NOTE_ARCHIVE_237 + " " + RELEASE_NOTE_ARCHIVE_236 + " " +
   RELEASE_NOTE_ARCHIVE_231 + " " +
   // -230 was built and never released on its own - -231 carries it. Its note is archived rather

@@ -91,6 +91,15 @@ export function offerable<T extends { _id?: unknown; active?: boolean }>(list: T
   return (list ?? []).filter((p) => p?.active !== false || keep.has(String(p?._id)));
 }
 
+// -235: this expression already existed TWICE inside batches/[id]/page.tsx (:263 and :1592) and a third
+// copy was about to be written for the roster's join-date box. It is the IST calendar day as the
+// YYYY-MM-DD an <input type="date"> understands — the client-side twin of rules.ts `istToday()`, which is
+// what the server actually compares a submitted date against. Two spellings of "today" on the two sides
+// of one date field is how a `max=` that looks right starts refusing a date the server would have taken.
+export function istTodayInput(): string {
+  return new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
 export function toInputDate(d?: string | Date | null): string {
   if (!d) return "";
   const x = new Date(d);

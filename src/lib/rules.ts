@@ -521,6 +521,27 @@ export async function addMemberChecked(batchId: string, candidateId: string, joi
   // IS the record ... a `backdated: true` column would be a second source of truth for something
   // already written down". So this asks the record rather than inferring from a date.
   const backdated = began ? await startWasRecordedAfterTheFact(batchId) : false;
+  // -235 (Umesh, 24/08): both roster-add screens now let the operator TYPE the join date, because the
+  // default above can only ever GUESS - it reads one audit row (`backdated_start`) and QA-958/965
+  // measured that the other activation path writes `auto_activated`, which that test never reads. A
+  // typed date needs the guards `actual_start` already has (:824) and this parameter has never had:
+  // QA-908 measured `joined_on` thirty days in the FUTURE returning 201, leaving a member on no day's
+  // roster until that date arrived. Nothing warned anyone.
+  //
+  // The guards live HERE and not in either route: both doors pass through this function (REQ-358), and
+  // §3.1 records what happened the one time a join rule shipped on one door and not the other (QA-273).
+  // They sit below rather than in the "preconditions" block above only because they need `began`.
+  if (joined_on) {
+    const requested = dayKey(joined_on);
+    if (isNaN(requested.getTime())) throw new HttpError(400, "The join date is not a valid date.");
+    if (requested > istToday()) throw new HttpError(400, "A candidate cannot join in the future — the join date must be today or earlier.");
+    // Rule 26 counts a member onto the roster for every day from `joined_on` onward, and Rule 28
+    // freezes `roster_count` from exactly that. A join date before the batch began would put someone
+    // on the roster for days the batch did not run.
+    if (began && requested < began) {
+      throw new HttpError(400, `This batch began on ${began.toISOString().slice(0, 10)} — a candidate cannot join before that.`);
+    }
+  }
   const resolvedJoin = joined_on
     ? dayKey(joined_on)
     : backdated && began && began < istToday() ? began : istToday();
@@ -938,6 +959,50 @@ export async function transitionBatch(batchId: string, target: string, opts: {
       if (logCount > 0 && !opts.reason) fail("Rule 19: force-close requires a reason.");
       if (!opts.reason) fail("Cancellation requires a reason.");
       batch.cancel_reason = opts.reason;
+      break;
+    }
+    // -235 (Umesh, 24/08, on MUZ-CHAR-RPLHSL-SPIT-01 again): "Money Sir ne galti se cancel mark kar
+    // diya hai, isko phir se active kar dein." Cancel was a ONE-WAY door - there was no `Cancelled->`
+    // arm at all, so every attempt fell to `default:` and 409'd, and `statusActions` renders not a
+    // single control on a cancelled batch, so the screen could not even say what had happened. One
+    // mis-click on a live batch carrying 33 students was permanent.
+    //
+    // Umesh chose "Admin target khud chune" over a fixed restore point, so all three pre-cancel states
+    // are reachable. ONE fall-through body, not three arms - the same reasoning as -226 (:792): three
+    // copies of the same two guards is precisely how they drift apart.
+    case "Cancelled->Planning":
+    case "Cancelled->Ready":
+    case "Cancelled->Active": {
+      if (!opts.isAdmin) fail("Only an Admin can restore a cancelled batch.");
+      if (!opts.reason) fail("Restoring a cancelled batch needs a reason — it is audited.");
+      // Restoring to Ready runs the SAME Rule 16 chain Planning->Ready runs (:786). Without this,
+      // cancel-then-restore becomes a way to arrive at Ready without ever passing readiness.
+      if (target === "Ready") {
+        const r = await batchReadiness(batchId);
+        if (!r.ready) fail("Rule 16: readiness checks failing: " + Object.entries(r.checks).filter(([, v]) => !v).map(([k]) => k).join(", "));
+      }
+      // The line that keeps this a RESTORE and not a second, ungated Start door. `actual_start` is
+      // stamped by the Active arm above and by activateFromEvidence, and by nothing else - so a batch
+      // carrying one genuinely ran. A batch that never started has no Active state to be put back into,
+      // and letting it jump there would walk past Rule 17 AND -226's backdate_override in one step:
+      // the readiness bypass wearing a costume that :805 exists to refuse.
+      if (target === "Active" && !batch.actual_start) {
+        fail("This batch never started, so there is no Active state to restore — restore it to Planning or Ready and start it with its real date.");
+      }
+      // A restore puts the STATUS back and touches no date. The route forwards `actual_start` for any
+      // target Active, so it can arrive here - and silently dropping it would be the worse failure:
+      // the caller would believe it had corrected a date that never moved. Refused by name instead.
+      if (opts.actual_start || opts.backdate_override === true) {
+        fail("Restoring a cancelled batch puts its status back and changes no dates. Restore it first, then correct the dates.");
+      }
+      // Same shape as -226's row: the audit trail IS the record. The cancel reason is quoted INTO it
+      // because clearing the field on the next line is the only thing that erases it.
+      await audit({
+        entity: "Batch", entityId: batch._id, field: "restored_from_cancelled",
+        newValue: `restored to ${target} (was Cancelled because "${batch.cancel_reason ?? "no reason recorded"}"); reason: ${String(opts.reason).trim()}`,
+        actor: opts.actor ?? null, actorType: opts.actor ? "USER" : "SYSTEM",
+      });
+      batch.set("cancel_reason", undefined);
       break;
     }
     default:

@@ -3,7 +3,7 @@ import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { api, fmtDate, offerable } from "@/lib/client";
+import { api, fmtDate, istTodayInput, offerable } from "@/lib/client";
 import { personLabel } from "@/lib/person";
 import { CANDIDATE_IMPORT_FIELDS } from "@/lib/field-catalog";
 import { aadhaarError, apaarError, emailError, phoneError } from "@/lib/validate";
@@ -55,6 +55,9 @@ function CandidatesInner() {
   const [shareLink, setShareLink] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [drawer, setDrawer] = useState<"" | "add" | "edit" | "import" | "assign" | "health" | "reglink">("");
+  // -235: one join date for the whole selection — the case this exists for is a handful of late
+  // joiners who all belong to the same batch from the same day. Blank keeps the existing default.
+  const [assignJoinOn, setAssignJoinOn] = useState("");
   // 2026-08-24 (Umesh): the self-registration link now pins a PROGRAMME as well as a centre, so
   // minting it is no longer a one-click action on whatever the list filter happens to be — it needs
   // an answer the filter cannot supply. `regShared` carries the two names the panel prints, because
@@ -232,14 +235,22 @@ function CandidatesInner() {
     // at the exact moment the operator is deciding. `start_recorded_after_the_fact` is that same
     // server answer, carried on the row by `GET /api/batches`.
     const isBackdated = batch?.start_recorded_after_the_fact === true;
-    if (isBackdated && !window.confirm(
+    // -235: an explicit date the operator typed beats every derived default, on this door and on the
+    // roster door both — the automatic default can only ever infer, and QA-958/965 measured it missing
+    // the batches that were activated from evidence rather than by the override.
+    const typed = assignJoinOn.trim();
+    if (typed && !window.confirm(
+      `These ${selected.size} candidate(s) will be counted on ${batch.code}'s roster from ${fmtDate(typed)}.\n\n` +
+      `Their attendance can then be entered from that day onward.`,
+    )) return;
+    if (!typed && isBackdated && !window.confirm(
       `${batch.code} already started on ${fmtDate(batch.actual_start)}.\n\n` +
       `These ${selected.size} candidate(s) will be counted on the roster from that day, not from today — ` +
       `so their attendance can be entered for the days the batch actually ran.\n\n` +
-      `If someone genuinely joined later, add them on their own card with their real joining date instead.`,
+      `If someone genuinely joined later, set a joining date at the top of this panel instead.`,
     )) return;
     try {
-      const res = await api("/api/candidates/assign", { method: "POST", json: { batch: batch._id, candidate_ids: [...selected] } });
+      const res = await api("/api/candidates/assign", { method: "POST", json: { batch: batch._id, candidate_ids: [...selected], joined_on: typed || undefined } });
       const failed = res.results.filter((r: any) => !r.ok);
       const notes: string[] = [];
       if (failed.length) notes.push(`${failed.length} failed: ${failed[0].error}`);
@@ -247,7 +258,7 @@ function CandidatesInner() {
       // Say which day they landed on, not just that it worked. On a backdated batch that date is the
       // whole point of the enrolment, and it is the one thing the operator cannot see from the grid.
       const landed = res.results.find((r: any) => r.ok && r.joined_on)?.joined_on;
-      if (isBackdated && landed) notes.push(`counted on the roster from ${fmtDate(landed)}`);
+      if ((isBackdated || typed) && landed) notes.push(`counted on the roster from ${fmtDate(landed)}`);
       if (notes.length) setError(`${res.assigned} assigned. ${notes.join(" | ")}`);
       setSelected(new Set()); setDrawer(""); load();
     } catch (e: any) { setError(e.message); }
@@ -1047,6 +1058,20 @@ function CandidatesInner() {
 
       <Drawer error={error} open={drawer === "assign"} onClose={() => setDrawer("")} title={`Assign ${selected.size} candidates to batch`}>
         <div className="space-y-2">
+          {/* -235: the roster door on the batch screen now asks for this date, and both doors run through
+              addMemberChecked — so leaving it off here would recreate exactly the asymmetry ARCHITECTURE.md
+              §3.1 records from QA-273, where a join rule shipped on one door and not the other. Blank keeps
+              the existing automatic default, so nothing changes for anyone who ignores it. */}
+          <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+            <Field label="Joined on (optional)">
+              <input type="date" className={inputCls} value={assignJoinOn} max={istTodayInput()} onChange={(e) => setAssignJoinOn(e.target.value)} />
+            </Field>
+            <p className="mt-1 text-[11px] text-gray-500">
+              Leave blank and each batch uses its own start date where it has one. Set it for a late joiner
+              whose real joining day is not the day the batch began — the roster, and the days their
+              attendance can be entered for, both count from here.
+            </p>
+          </div>
           {batches.map((b) => (
             <button key={b._id} onClick={() => bulkAssign(b)} className="flex w-full items-center justify-between rounded-lg border px-4 py-3 text-left text-sm hover:bg-blue-50">
               <span>

@@ -1265,5 +1265,148 @@ console.log("\n--- FL18 (qa-232 cycle 3, QA-977): the guard that could not fire 
   await req(admin, "POST", `/api/batches/${b18._id}/transition`, { target: "Cancelled", reason: "FL18 fixture cleanup" }, 200);
 }
 
+console.log("\n--- FL19 (-235): a cancelled batch can be RESTORED, and a typed join date is validated ---");
+{
+  // Umesh, 2026-08-24, on MUZ-CHAR-RPLHSL-SPIT-01: "Money Sir ne galti se cancel mark kar diya hai,
+  // isko phir se active kar dein." Cancel was a ONE-WAY door - there was no `Cancelled->` arm at all,
+  // so every attempt fell to `default:` and 409'd, and `statusActions` renders no control whatsoever
+  // on a cancelled batch. A mis-click on a live batch carrying 33 students was permanent.
+  //
+  // IST, not UTC. FL14's own day() builds from the UTC calendar day while the product decides on the
+  // IST one - qa-226 disclosed that against itself. A pin that is wrong for five hours out of every
+  // day is on its way to being deleted by whoever it wakes at 3am, so this one is right by the clock.
+  const istDay = (n) => new Date(Date.now() + 5.5 * 3600 * 1000 + n * 86400000).toISOString().slice(0, 10);
+
+  // An Operations login: it HOLDS batches.manage, so it clears the route's permission gate and lands
+  // on the arm's own isAdmin check. A Location user would 403 one step earlier and prove nothing.
+  const opsEmail = `test.ops.fl${stamp}@vidysea-test.local`;
+  await req(admin, "POST", "/api/users", {
+    name: "FL19 Ops", email: opsEmail, password: "Test@12345", role: "Operations", can_edit: true, active: true,
+  }, 201);
+  const ops = await login(opsEmail, "Test@12345");
+
+  const mkB = async (start) => (await req(admin, "POST", "/api/batches",
+    { location: loc._id, program: prog._id, planned_start: start, target_size: 20 }, 201)).data.item;
+  const cancelled = async (b) => {
+    await req(admin, "POST", `/api/batches/${b._id}/transition`, { target: "Cancelled", reason: "FL19 fixture" }, 200);
+    return b;
+  };
+
+  // 1. The refusal Umesh actually hit. Before this unit every one of these was the `default:` 409,
+  //    so this assertion is what says the arm exists at all.
+  const b1 = await cancelled(await mkB(istDay(-30)));
+  const restored = await req(admin, "POST", `/api/batches/${b1._id}/transition`,
+    { target: "Planning", reason: "cancelled by mistake" }, 200);
+  ok("FL19: an Admin can restore a cancelled batch to Planning",
+    restored.data?.item?.status === "Planning", JSON.stringify({ s: restored.data?.item?.status }));
+
+  // 2. The cancel reason is cleared - it describes a cancellation that no longer applies. If it
+  //    survived, the next reader would find a live batch carrying a reason for being dead.
+  ok("FL19: the cancel reason is cleared on restore",
+    !restored.data?.item?.cancel_reason, JSON.stringify({ r: restored.data?.item?.cancel_reason }));
+
+  // 3. ...but it is not LOST: it is quoted into the audit row, which is the record.
+  const trail = (await req(admin, "GET", `/api/audit/Batch/${b1._id}`)).data;
+  const rows = trail?.items ?? trail?.rows ?? (Array.isArray(trail) ? trail : []);
+  const rr = rows.find((r) => r.field === "restored_from_cancelled");
+  ok("FL19: an audit row records the restore AND quotes the reason it was cancelled for",
+    !!rr && /FL19 fixture/.test(String(rr.new_value ?? rr.newValue ?? "")),
+    JSON.stringify(rr ?? rows.map((r) => r.field)));
+
+  // 4. And the status row now says what it moved FROM. It hardcoded oldValue: undefined before, so
+  //    the one audit entry that records a status move rendered as `null -> "Planning"`.
+  const st = rows.find((r) => r.field === "status" && (r.new_value ?? r.newValue) === "Planning");
+  ok("FL19: the status audit row carries the previous status, not null",
+    String(st?.old_value ?? st?.oldValue ?? "") === "Cancelled",
+    JSON.stringify({ old: st?.old_value ?? st?.oldValue }));
+
+  // 5. Reason is required - a restore is as auditable as the cancel it undoes.
+  const b2 = await cancelled(await mkB(istDay(-30)));
+  const noWhy = await req(admin, "POST", `/api/batches/${b2._id}/transition`, { target: "Planning" });
+  ok("FL19: restoring without a reason is refused", noWhy.status === 409, `${noWhy.status} ${JSON.stringify(noWhy.data)}`);
+
+  // 6. Admin only. Operations holds batches.manage and still cannot do this one.
+  const notAdmin = await req(ops, "POST", `/api/batches/${b2._id}/transition`, { target: "Planning", reason: "ops try" });
+  ok("FL19: a non-Admin holding batches.manage is still refused",
+    notAdmin.status === 409 && /Only an Admin/i.test(String(notAdmin.data?.error ?? "")),
+    `${notAdmin.status} ${JSON.stringify(notAdmin.data)}`);
+
+  // 7. THE SAFETY PIN, and the most important assertion in this block. Restore-to-Active must not
+  //    become a second, ungated Start door: a batch that never ran has no Active state to be put
+  //    back into, and jumping there would walk past Rule 17 AND -226's backdate_override at once.
+  const neverRan = await req(admin, "POST", `/api/batches/${b2._id}/transition`, { target: "Active", reason: "try to skip the ladder" });
+  ok("FL19: restoring to Active is REFUSED when the batch never started - not a start bypass",
+    neverRan.status === 409 && /never started/i.test(String(neverRan.data?.error ?? "")),
+    `${neverRan.status} ${JSON.stringify(neverRan.data)}`);
+
+  // 8. The one-way ladder is otherwise untouched: Cancelled still cannot jump to a finished state.
+  const toDone = await req(admin, "POST", `/api/batches/${b2._id}/transition`, { target: "Completed", reason: "x" });
+  const toClosed = await req(admin, "POST", `/api/batches/${b2._id}/transition`, { target: "Closed", reason: "x" });
+  ok("FL19: Cancelled -> Completed and Cancelled -> Closed are both still refused",
+    toDone.status === 409 && toClosed.status === 409,
+    JSON.stringify({ completed: toDone.status, closed: toClosed.status }));
+
+  // 9. A restore changes STATUS and no dates. The route forwards actual_start for any target Active,
+  //    so it can arrive here - and silently dropping it would be worse than refusing it: the caller
+  //    would believe it had corrected a date that never moved.
+  const b3 = await cancelled(await mkB(istDay(-30)));
+  const withDate = await req(admin, "POST", `/api/batches/${b3._id}/transition`,
+    { target: "Active", reason: "restore", actual_start: istDay(-30), backdate_override: true });
+  ok("FL19: a restore carrying a date is refused by name, never silently ignored",
+    withDate.status === 409 && /changes no dates/i.test(String(withDate.data?.error ?? "")),
+    `${withDate.status} ${JSON.stringify(withDate.data)}`);
+
+  // ---- the join date the operator now types, and the guards it never had ----
+  // The restore is only half of Umesh's ask: the batch then has to be able to take the students that
+  // were missed. Adding them was never blocked once the batch is out of Cancelled - but the join date
+  // was never ASKED for, so they landed on the day of entry and Rule 26 said they were on no day's
+  // roster while the batch actually ran. QA-908 measured a joined_on 30 days in the FUTURE returning 201.
+  await req(admin, "POST", `/api/batches/${b1._id}/transition`, { target: "Ready" }, 200);
+  await req(admin, "POST", `/api/batches/${b1._id}/transition`,
+    { target: "Active", backdate_override: true, actual_start: istDay(-30), reason: "already ran" }, 200);
+
+  const mkCand = async (nm) => (await req(admin, "POST", "/api/candidates",
+    { name: `FL19 ${nm} ${stamp}`, phone: phone(), location: loc._id, program: prog._id }, 201)).data.item;
+
+  const future = await req(admin, "POST", `/api/batches/${b1._id}/members`,
+    { candidate: (await mkCand("Future"))._id, joined_on: istDay(1) });
+  ok("FL19 (QA-908): a join date in the FUTURE is refused - it used to return 201",
+    future.status === 400 && /cannot join in the future/i.test(String(future.data?.error ?? "")),
+    `${future.status} ${JSON.stringify(future.data)}`);
+
+  const tooEarly = await req(admin, "POST", `/api/batches/${b1._id}/members`,
+    { candidate: (await mkCand("Early"))._id, joined_on: istDay(-60) });
+  ok("FL19: a join date BEFORE the batch began is refused",
+    tooEarly.status === 400 && /cannot join before/i.test(String(tooEarly.data?.error ?? "")),
+    `${tooEarly.status} ${JSON.stringify(tooEarly.data)}`);
+
+  // The whole point of the unit: the late joiner lands on a real training day and can be marked
+  // present for it. This is what "maximum data collect karna hai" actually needs to be true.
+  const late = await mkCand("Late");
+  await req(admin, "POST", `/api/batches/${b1._id}/members`, { candidate: late._id, joined_on: istDay(-20) }, 201);
+  const mem = ((await req(admin, "GET", `/api/batches/${b1._id}/members`)).data.items ?? [])
+    .find((m) => String(m.candidate?._id ?? m.candidate) === String(late._id));
+  ok("FL19: the typed join date is what gets stored",
+    String(mem?.joined_on ?? "").slice(0, 10) === istDay(-20),
+    JSON.stringify({ joined_on: mem?.joined_on, expected: istDay(-20) }));
+
+  const log = await req(admin, "POST", `/api/batches/${b1._id}/logs`,
+    { log_date: istDay(-15), present_member_ids: [String(mem?._id)], actual_topic: "FL19" });
+  ok("FL19: a real training day after that date can be entered with the late joiner present",
+    log.status < 400, `${log.status} ${JSON.stringify(log.data?.error ?? "")}`);
+
+  // The bulk door runs through the same function, so the same guard must hold there. ARCHITECTURE.md
+  // section 3.1 / QA-273 is the record of what happens when a join rule ships on one door only.
+  const bulkFuture = await req(admin, "POST", "/api/candidates/assign",
+    { batch: b1._id, candidate_ids: [(await mkCand("BulkFuture"))._id], joined_on: istDay(2) });
+  const bulkErr = JSON.stringify(bulkFuture.data ?? {});
+  ok("FL19: the BULK door refuses the same future join date - one rule, both doors",
+    /cannot join in the future/i.test(bulkErr), `${bulkFuture.status} ${bulkErr}`);
+
+  await req(admin, "POST", `/api/batches/${b1._id}/transition`, { target: "Cancelled", reason: "FL19 cleanup" }, 200);
+  await req(admin, "POST", `/api/batches/${b3._id}/transition`, { target: "Planning", reason: "FL19 cleanup" }, 200);
+}
+
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

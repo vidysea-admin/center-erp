@@ -3,7 +3,7 @@ import { use, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { api, fmtDate, toInputDate } from "@/lib/client";
+import { api, fmtDate, istTodayInput, toInputDate } from "@/lib/client";
 import { personLabel, personList, personSeparator } from "@/lib/person";
 // -212 (QA-728): the shared portal-CAN helpers, from the PURE module. They used to live only in
 // lib/govt-attendance, which imports the mongoose models, so this screen could not reach them and
@@ -260,7 +260,7 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
   // start has passed is being entered after the fact; Start must carry the REAL date or
   // actual_start is stamped "today" forever (it is not editable afterwards).
   const plannedStartKey = b.planned_start ? String(b.planned_start).slice(0, 10) : "";
-  const todayKey = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10); // IST calendar day
+  const todayKey = istTodayInput(); // IST calendar day
   const beganAlready = !!plannedStartKey && plannedStartKey < todayKey && ["Planning", "Ready"].includes(b.status);
   const [startDate, setStartDate] = useState<string>(plannedStartKey);
   // -226 (Umesh, 24/08): recording a batch that already ran skips the readiness gates, so it opens a
@@ -1041,8 +1041,19 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
   ]).catch((e: any) => setError(e.message)).finally(() => setLoaded(true));
   useEffect(() => { load(); }, [batchId]);
 
+  // -235 (Umesh, 24/08): "batch start ho chuka hai na … humein maximum data collect karna hai." Adding a
+  // late joiner to a batch that already ran was never BLOCKED — but the join date was never ASKED for
+  // either, so they landed on the day someone typed them in, and Rule 26 then says they were on no day's
+  // roster while the batch was actually running. The attendance the centre holds on paper could not be
+  // entered for them at all, and nobody found out until they sat down to enter it weeks later (QA-892).
+  // The automatic default in addMemberChecked can only GUESS — QA-958/965 measured it missing the batches
+  // activated from evidence — so the operator now says the date outright and the server validates it.
+  const batchBegan = batch?.actual_start ? toInputDate(batch.actual_start) : "";
+  const [joinOn, setJoinOn] = useState<string>(batchBegan);
+  useEffect(() => { setJoinOn(batchBegan); }, [batchBegan]);
+
   async function add(candidateId: string) {
-    try { await api(`/api/batches/${batchId}/members`, { method: "POST", json: { candidate: candidateId } }); load(); onChanged(); }
+    try { await api(`/api/batches/${batchId}/members`, { method: "POST", json: { candidate: candidateId, joined_on: joinOn || undefined } }); load(); onChanged(); }
     catch (e: any) { setError(e.message); }
   }
   async function drop() {
@@ -1196,6 +1207,18 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
 
       <Drawer error={error} open={showPool} onClose={() => setShowPool(false)} title="Candidate pool (this location)">
         <div className="space-y-2">
+          {/* -235: one date for everyone added in this sitting — the normal case is a handful of late
+              joiners who all belong to the same batch from the same day. */}
+          <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+            <Field label="Joined on">
+              <input type="date" className={inputCls} value={joinOn} max={istTodayInput()} onChange={(e) => setJoinOn(e.target.value)} />
+            </Field>
+            <p className="mt-1 text-xs text-gray-500">
+              {batchBegan
+                ? <>This batch began on <b>{fmtDate(batch.actual_start)}</b>. Leaving it there puts a late joiner on the roster from the day the batch really ran, so the attendance you already hold for those days can be entered for them.</>
+                : <>This batch has no recorded start yet, so leaving this blank counts them from today. Set it only if they joined earlier.</>}
+            </p>
+          </div>
           {pool.map((c) => (
             <div key={c._id} className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm">
               <span>{c.name} <span className="text-gray-400">· {c.phone}</span></span>
@@ -1589,7 +1612,7 @@ function AttendanceTab({ batchId, batch, role, error, setError }: any) {
   const canMark = role === "Admin" || role === "Operations" || role === "Trainer";
   const { can, loaded: permsLoaded } = usePerms(); // -107: the portal-sheet door follows the RIGHT
   const batchActive = ["Active", "Closing"].includes(batch?.status);
-  const todayKey = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+  const todayKey = istTodayInput();
   const [grid, setGrid] = useState<null | { from: string; to: string; trainer_present: boolean; absent: Record<string, Set<string>> }>(null);
   const [gridBusy, setGridBusy] = useState(false);
   const [gridResult, setGridResult] = useState<any[] | null>(null);

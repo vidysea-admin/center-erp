@@ -50,6 +50,12 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     }
   }
 
+  // -235: this row hardcoded `oldValue: undefined`, so the ONE audit entry that records a status move
+  // rendered as `null → "Completed"` on the Activity tab and never said what it moved FROM. It became
+  // load-bearing here: restoring a mistakenly-cancelled batch has to be able to answer "cancelled from
+  // what?", and the Activity tab was the only place that could ever have known. Read before the write,
+  // because transitionBatch saves the new status onto the same document.
+  const before = await Batch.findById(id).select("status").lean<any>();
   const batch = await transitionBatch(id, target, {
     isAdmin: user.role === "Admin", reason,
     actual_start: target === "Active" ? actual_start : undefined,
@@ -57,6 +63,6 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     backdate_override: backdate_override === true,
     actor: user.id,
   });
-  await audit({ entity: "Batch", entityId: batch._id, field: "status", newValue: target, oldValue: undefined, actor: user.id });
+  await audit({ entity: "Batch", entityId: batch._id, field: "status", newValue: target, oldValue: before?.status, actor: user.id });
   return NextResponse.json({ item: batch });
 });
