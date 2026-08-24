@@ -428,7 +428,7 @@ export async function addMemberChecked(batchId: string, candidateId: string, joi
     throw new HttpError(409, `Rule 20: Candidate already active in batch ${existing.batch?.code ?? existing.batch}.`);
   }
 
-  // QA-907 (-230, Umesh 24/08): "jo future interested hai unka status jab tak update nhi hoga tho vo
+  // QA-945 (-230, Umesh 24/08): "jo future interested hai unka status jab tak update nhi hoga tho vo
   // batch mai register nhi hongee aur select krne mai aana chaiye ki phle status update kro."
   //
   // A candidate who told us they are interested in a FUTURE batch has not agreed to join this one.

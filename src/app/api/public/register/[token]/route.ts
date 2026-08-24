@@ -95,6 +95,10 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
       "social_category", "state", "district", "sub_district"] as const)
       .map((f) => [f, String(body[f] ?? "").trim() || undefined])),
     aadhaar_no: aadhaarRaw ? canonicalAadhaar(aadhaarRaw)! : undefined,
+    // QA-945: the student says whether they want THIS intake or a later one. Anything other than the
+    // literal "Future" falls back to the default - an unauthenticated door must never take a value it
+    // did not offer, and the schema enum would otherwise refuse the whole registration over a typo.
+    batch_interest: body.batch_interest === "Future" ? "Future" : "Current",
     location: t.location._id,
     program,
     source: "Self Registration",

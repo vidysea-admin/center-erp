@@ -159,6 +159,9 @@ export const POST = apiHandler(async (req: NextRequest) => {
     const doc = await Candidate.create({
       name, phone,
       aadhaar_no: aadhaarRaw ? canonicalAadhaar(aadhaarRaw)! : undefined,
+      // QA-945: same question on the OTP door. QA-275's standing lesson is that this page is the one
+      // that gets forgotten, precisely because it is the second public door for the same job.
+      batch_interest: (body as any).batch_interest === "Future" ? "Future" : "Current",
       email: t.purpose === "phone_otp" ? (body.email ? String(body.email).trim().toLowerCase() : undefined) : t.email, // the VERIFIED address on the email path, never a typed-in one
       gender: body.gender || undefined,
       dob: body.dob ? new Date(body.dob) : undefined,

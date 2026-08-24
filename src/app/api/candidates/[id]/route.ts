@@ -26,6 +26,9 @@ export const { GET, PATCH } = itemRoutes({
     // which the wall caught then: a field on the create door alone is typed once and silently dropped
     // on every later save, which is the worst shape a field can have because nothing on screen says so.
     "aadhaar_no",
+    // QA-945 (2026-08-24): "interested in current upcoming batch" vs "future batches". On BOTH
+    // doors - a field the item route does not accept looks saved and is gone on the next read.
+    "batch_interest",
     // 2026-08-24 (Umesh): the APAAR ID must be EDITABLE, not just creatable — the -116 lesson, for
     // the third time in this list. A wrong government id is fixed by correcting it, and a field only
     // the create door accepts cannot be corrected at all.

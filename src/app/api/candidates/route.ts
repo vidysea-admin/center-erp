@@ -21,6 +21,9 @@ export const { GET, POST } = collectionRoutes({
     // 2026-08-24 (Umesh): the Aadhaar number. On BOTH candidate doors and both public ones — the
     // -116 lesson again: a field one door accepts and another drops looks saved and silently is not.
     "aadhaar_no",
+    // QA-945 (2026-08-24): "interested in current upcoming batch" vs "future batches". On BOTH
+    // doors - a field the item route does not accept looks saved and is gone on the next read.
+    "batch_interest",
     // 2026-08-24 (Umesh): the government APAAR ID. On BOTH candidate doors, for the -116 reason
     // spelled out two comments up — a field one door accepts and the other drops looks saved and
     // silently is not.

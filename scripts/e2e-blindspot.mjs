@@ -405,6 +405,89 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
       ok("QA-887: the public door's rate limit still trips - per key, so no suite spends another's budget",
         tripped > 0, `429s=${tripped}`);
     }
+
+    // ---- QA-945 (Umesh 2026-08-24): current intake vs a future batch ----
+    // "jo future interested hai unka status jab tak update nhi hoga tho vo batch mai register nhi
+    // hongee aur select krne mai aana chaiye ki phle status update kro. team ko ye help kregi ki
+    // future interested walo se jitna abhi data possible hai vo le legi aur baad mai dobara call
+    // kreke convert kr skti hai jo ki possible quality lead hogi future ki."
+    //
+    // The refusal lives in `addMemberChecked` part 1, which is the ONE function both roster-add doors
+    // pass through. The assertion that matters most below is therefore a DISAGREEMENT test, in the
+    // QA-509 shape: both doors must refuse with the SAME sentence. If they ever diverge, the gate has
+    // two homes, and ARCHITECTURE §3.1 records that this exact pair has already drifted apart once
+    // (QA-273) - one door adopted a centre-less candidate, the other refused them by comparing against
+    // the string "undefined".
+    {
+      const biBatch = (await req(admin, "POST", "/api/batches", { location: loc._id, program: prog._id, planned_start: "2027-11-01", target_size: 8 })).data.item;
+      const mkBI = async (interest) => (await req(admin, "POST", "/api/candidates", {
+        name: "BI " + stamp + Math.random().toString(36).slice(2, 5),
+        phone: "9" + String(Math.floor(Math.random() * 1e9)).padStart(9, "0"),
+        location: loc._id, program: prog._id, ...(interest ? { batch_interest: interest } : {}),
+      })).data.item;
+
+      ok("QA-945: a new candidate defaults to the CURRENT intake",
+        (await mkBI()).batch_interest === "Current");
+      ok("QA-945: ...and Future round-trips through the create door",
+        (await mkBI("Future")).batch_interest === "Future");
+
+      const fut1 = await mkBI("Future");
+      const single = await req(admin, "POST", `/api/batches/${biBatch._id}/members`, { candidate: fut1._id });
+      ok("QA-945: the SINGLE-add door refuses a future-interested candidate",
+        single.status === 409, `status=${single.status} ${JSON.stringify(single.data).slice(0, 120)}`);
+      ok("QA-945: ...and the refusal NAMES THE FIX, not just the rule",
+        /change|current intake/i.test(String(single.data?.error ?? "")), String(single.data?.error ?? "").slice(0, 140));
+
+      // THE SAME candidate through the second door, deliberately. The first version of this block used
+      // two different people and the sentences then differed only by NAME - which made the comparison
+      // below fail while the code was correct. Reusing one candidate is not a weaker test to get past
+      // a red assertion; it is the stronger one, because it removes the only legitimate reason the two
+      // strings could differ. The single-add above REFUSED, so this person is still unenrolled.
+      const bulk = await req(admin, "POST", "/api/candidates/assign", { batch: biBatch._id, candidate_ids: [fut1._id] });
+      const bulkErr = String(bulk.data?.results?.[0]?.error ?? "");
+      // Asserting the REASON, not merely that it failed. The falsification run caught this: with the
+      // schema field removed the single-add SUCCEEDED, so the bulk call then failed with "Rule 20:
+      // already active" - and a bare `ok === false` reported PASS on a build where this gate did not
+      // exist at all. An assertion that cannot tell why it failed is not a pin.
+      ok("QA-945: the BULK-assign door refuses too, and for THIS reason - one gate, both doors (QA-273's lesson)",
+        bulk.data?.results?.[0]?.ok === false && /FUTURE batch/i.test(bulkErr),
+        JSON.stringify(bulk.data?.results?.[0] ?? null).slice(0, 160));
+
+      // THE DISAGREEMENT TEST. Not "both refuse" - both refuse WITH THE SAME SENTENCE. Two doors that
+      // refuse for different-sounding reasons are two implementations waiting to drift.
+      const singleErr = String(single.data?.error ?? "");
+      ok("QA-945: both doors refuse with the SAME sentence - proof the gate has one home, not two",
+        singleErr.length > 0 && bulkErr.length > 0 && singleErr === bulkErr,
+        JSON.stringify({ single: singleErr.slice(0, 70), bulk: bulkErr.slice(0, 70) }));
+
+      // Absent must NOT be read as Future. Every candidate written before this field existed has no
+      // value, and treating them as unavailable would have silently frozen the entire live pool.
+      const legacy = await mkBI();
+      await mc.db(DBNAME).collection("candidates").updateOne(
+        { _id: new ObjectId(String(legacy._id)) }, { $unset: { batch_interest: "" } });
+      const legacyAdd = await req(admin, "POST", `/api/batches/${biBatch._id}/members`, { candidate: legacy._id });
+      ok("QA-945: a candidate with NO batch_interest at all is still enrollable - absent is not Future",
+        legacyAdd.status === 201, `status=${legacyAdd.status} ${JSON.stringify(legacyAdd.data).slice(0, 120)}`);
+
+      // The conversion Umesh described, end to end: the same person becomes enrollable once the
+      // status is updated. Without this the feature is a trap rather than a queue.
+      const conv = await mkBI("Future");
+      const before = await req(admin, "POST", `/api/batches/${biBatch._id}/members`, { candidate: conv._id });
+      const patched = await req(admin, "PATCH", `/api/candidates/${conv._id}`, { batch_interest: "Current" });
+      const after = await req(admin, "POST", `/api/batches/${biBatch._id}/members`, { candidate: conv._id });
+      ok("QA-945: refused while Future, ACCEPTED after the status is moved to Current",
+        before.status === 409 && patched.status === 200 && after.status === 201,
+        `before=${before.status} patch=${patched.status} after=${after.status}`);
+
+      // Both public doors accept the answer, and neither takes a value it did not offer.
+      const pubFut = await pubPost(regTok.token, { name: "BIPub " + stamp, phone: "7994" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0"), email: "bipub" + stamp + "@test.local", batch_interest: "Future" });
+      ok("QA-945: the public self-registration door records a future-batch answer", pubFut.status === 201, `status=${pubFut.status}`);
+      const pubJunk = await pubPost(regTok.token, { name: "BIJunk " + stamp, phone: "7993" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0"), email: "bijunk" + stamp + "@test.local", batch_interest: "Whatever" });
+      const junkRow = (await req(admin, "GET", `/api/candidates?limit=2000&location=${loc._id}`)).data.items.find((c) => c.name === "BIJunk " + stamp);
+      ok("QA-945: ...and a value the door never offered falls back to Current, it is not stored",
+        pubJunk.status === 201 && junkRow?.batch_interest === "Current",
+        `status=${pubJunk.status} stored=${junkRow?.batch_interest}`);
+    }
   } finally { await mc.close(); }
 }
 

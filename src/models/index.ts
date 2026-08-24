@@ -367,6 +367,10 @@ export const EDUCATION_LEVEL = ["Below 10th", "10th Pass", "12th Pass", "Graduat
 // 2026-08-11 (GD-81): "registration ho hi nahi paya, to main time kyun waste karun… main bacche
 // ko drop karke doosri queue mein dalunga" — a failed registration is its own state with its own
 // queue, so nobody plans a batch around a candidate the portal will not take.
+// 2026-08-24 (Umesh): "interested in current upcoming batch" vs "interested in future batches".
+// Two values on purpose - a third ("Not interested") would duplicate the Dropped lifecycle state,
+// which already carries a reason and a stage.
+export const BATCH_INTEREST = ["Current", "Future"] as const;
 export const SIDH_STATUS = ["Not Registered", "Link Sent", "Registered", "Registration Failed"] as const;
 const CandidateSchema = new Schema({
   name: { type: String, required: true },
@@ -413,6 +417,21 @@ const CandidateSchema = new Schema({
   last_training_date: Date, // "last training कब हुई वो date ले लो" — eligibility flips when the cooldown lapses
   interested_programs: [{ type: Schema.Types.ObjectId, ref: "Program" }],
   interested_locations: [{ type: Schema.Types.ObjectId, ref: "Location" }],
+  // 2026-08-24 (Umesh): "candidate form mai candidate k paas hoga option interested in current
+  // upcoming batch ya firr hoga interested in future batches … isse ye hoga ki jo candidates jo abhi
+  // avilable nhi hai but future mai interested hogne, hmare paas unka status hoga."
+  //
+  // A SEPARATE axis from lifecycle_status and from sidh_status, deliberately. Those say how far a
+  // person has come; this says whether they want THIS intake. They are independent: a
+  // future-interested candidate can already be registered on the government portal, and that
+  // combination is exactly the "quality lead" Umesh described - the one worth calling back. Folding
+  // this into the lifecycle enum would have forced a choice between showing their stage and showing
+  // their availability, and would have needed the add->migrate->remove dance LANDMINE 1 describes.
+  //
+  // Default "Current", so every record written before this field existed reads as available - which
+  // they are, and which keeps every existing candidate enrollable exactly as they were. Absent is
+  // never treated as Future anywhere: `addMemberChecked` refuses only on the explicit value.
+  batch_interest: { type: String, enum: BATCH_INTEREST, default: "Current" },
   sidh_status: { type: String, enum: SIDH_STATUS, default: "Not Registered" },
   // -134 (QA-283, Umesh 19/08): "ab document dobara mark nahi kar payenge, SIDH portal pe sab kar
   // liya." For cohorts that ran before this ERP existed, the documents were completed on the

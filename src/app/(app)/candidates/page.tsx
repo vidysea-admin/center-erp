@@ -7,7 +7,7 @@ import { api, fmtDate, offerable } from "@/lib/client";
 import { personLabel } from "@/lib/person";
 import { CANDIDATE_IMPORT_FIELDS } from "@/lib/field-catalog";
 import { aadhaarError, apaarError, emailError, phoneError } from "@/lib/validate";
-import { FRESH_TAGS, JOURNEY_TAGS, isFreshCandidate, freshJourneyOf as sharedFreshJourneyOf, journeyOf as sharedJourneyOf } from "@/lib/candidate-journey";
+import { FRESH_TAGS, JOURNEY_TAGS, isFreshCandidate, freshJourneyOf as sharedFreshJourneyOf, journeyOf as sharedJourneyOf, FUTURE_INTEREST_TAG, isFutureInterest } from "@/lib/candidate-journey";
 import { Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, ShareLinkPanel, SourceCell, copyText, inputCls , Tabs} from "@/components/ui";
 import { useLocationCtx, usePerms } from "@/components/shell";
 import { GeographyFields } from "@/components/geography-fields";
@@ -127,6 +127,11 @@ function CandidatesInner() {
     const tags = [bucket === "Fresh" ? freshJourneyOf(r) : journeyOf(r)];
     if (!progOf(r)) tags.push("No programme");
     if ((r.interested_programs?.length ?? 0) > 1) tags.push("Multi-interest");
+    // QA-945: ADDITIVE, like the two above, never a value in the stage ladder. Where someone has
+    // reached and whether they want this intake are different questions, and a future-interested
+    // candidate can already be Registered on Portal - that combination IS the lead worth calling
+    // back, so both facts have to be visible at once.
+    if (isFutureInterest(r)) tags.push(FUTURE_INTEREST_TAG);
     return tags;
   };
   const tagCount = (t: string) => bucketItems.filter((r) => tagOf(r).includes(t)).length;
@@ -181,6 +186,9 @@ function CandidatesInner() {
       // QA-903: this list IS the edit form. A field the API accepts but openEdit does not load is
       // sent back EMPTY on the next save - the -116 shape, and it is silent.
       aadhaar_no: r.aadhaar_no ?? "",
+      // QA-945: seeded for the same reason as aadhaar_no above - a field the drawer does not load is
+      // sent back at its default on the next save, which would silently flip Future back to Current.
+      batch_interest: r.batch_interest ?? "Current",
       apaar_id: r.apaar_id ?? "",
       // -116 (SS-01): the government-portal fields ride the edit form too, or opening a record and
       // saving it would silently drop everything typed into that section.
@@ -508,6 +516,10 @@ function CandidatesInner() {
           })),
           { value: "No programme", label: "No programme", count: tagCount("No programme") },
           { value: "Multi-interest", label: "Multi-interest", count: tagCount("Multi-interest") },
+          // QA-945 (Umesh): "team ko ye help kregi ki future interested walo se jitna abhi data
+          // possible hai vo le legi aur baad mai dobara call kreke convert kr skti hai."
+          { value: FUTURE_INTEREST_TAG, label: FUTURE_INTEREST_TAG, count: tagCount(FUTURE_INTEREST_TAG),
+            title: "Told us they want a LATER batch. They cannot be enrolled until that is changed — which is the point: they stay in the pool as a lead to call back, instead of being lost or wrongly enrolled." },
         ]} />
       {selected.size > 0 && (
         <div className="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm">
@@ -523,7 +535,15 @@ function CandidatesInner() {
         defaultSort={{ key: "name", dir: "asc" }}
         initialSearch={sp.get("q") ?? ""}
         columns={[
-          { key: "_sel", label: "", mobile: false, render: (r: any) => <input type="checkbox" checked={selected.has(r._id)} onChange={() => toggle(r._id)} onClick={(e) => e.stopPropagation()} disabled={r.lifecycle_status !== "Unassigned" && r.lifecycle_status !== "Dropped"} /> },
+          { key: "_sel", label: "", mobile: false, render: (r: any) => (
+              // QA-945 (Umesh): "select krne mai aana chaiye ki phle status update kro". The server
+              // refuses a Future candidate at `addMemberChecked`, so without this the operator ticks
+              // the box, presses Assign, and meets a 409 they could not have predicted. A disabled
+              // box that explains itself is the difference between a rule and an obstacle.
+              <input type="checkbox" checked={selected.has(r._id)} onChange={() => toggle(r._id)} onClick={(e) => e.stopPropagation()}
+                title={isFutureInterest(r) ? "Interested in a FUTURE batch — change that on their record before adding them to this one." : undefined}
+                disabled={isFutureInterest(r) || (r.lifecycle_status !== "Unassigned" && r.lifecycle_status !== "Dropped")} />
+            ) },
           { key: "name", label: "Name", sortable: true, sortValue: (r: any) => r.name, render: (r: any) => <NameCell name={r.name} sub={r.gender} /> },
           { key: "phone", label: "Phone" },
           {
@@ -661,6 +681,16 @@ function CandidatesInner() {
                       catch (e: any) { setError(e.message); }
                     }}>Reinstate</Btn>
                   : <Btn small kind="ghost" onClick={() => { setDropT(r); setDropForm({}); }}>Drop…</Btn>}
+                {/* QA-945: the conversion Umesh described — "baad mai dobara call kreke convert kr
+                    skti hai". One click on the row, because the alternative is opening a drawer,
+                    finding one select among thirty fields and saving; a call-back queue worked
+                    through twenty at a time will not survive that. */}
+                {isFutureInterest(r) && (
+                  <Btn small kind="ghost" onClick={async () => {
+                    try { await api(`/api/candidates/${r._id}`, { method: "PATCH", json: { batch_interest: "Current" } }); load(); }
+                    catch (e: any) { setError(e.message); }
+                  }}>Move to current intake</Btn>
+                )}
               </span>
             ),
           },
@@ -773,6 +803,19 @@ function CandidatesInner() {
               one says what it is for. QA-414 measured 55 live candidates whose portal id landed in
               "Govt ID reference" because it was the nearest-looking option on a screen that did not
               offer the right one. */}
+          {/* QA-945 (Umesh): "candidate k paas hoga option interested in current upcoming batch ya
+              firr hoga interested in future batches". The wording says what it COSTS them, because
+              the consequence is real: choosing Future keeps them out of every batch until somebody
+              changes it back. */}
+          <Field label="Interested in">
+            <select className={inputCls} value={form.batch_interest ?? "Current"} onChange={(e) => set("batch_interest", e.target.value)}>
+              <option value="Current">The current / upcoming batch</option>
+              <option value="Future">A future batch — not available right now</option>
+            </select>
+            {form.batch_interest === "Future" && (
+              <span className="mt-0.5 block text-[11px] text-amber-700">They will not be selectable for a batch until this is set back to the current intake.</span>
+            )}
+          </Field>
           <Field label="Aadhaar number">
             <input className={inputCls} inputMode="numeric" placeholder="12 digits" value={form.aadhaar_no ?? ""} onChange={(e) => set("aadhaar_no", e.target.value)} />
             {form.aadhaar_no && aadhaarError(form.aadhaar_no, { optional: true }) && <p className="mt-1 text-xs text-red-600">{aadhaarError(form.aadhaar_no, { optional: true })}</p>}

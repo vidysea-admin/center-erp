@@ -10,9 +10,31 @@ export type JourneyInput = {
   sidh_status?: string | null;
   latest_result?: string | null;
   active_batch_status?: string | null;
+  // QA-945 (2026-08-24): "Current" or "Future". Optional because every record written before this
+  // field existed has none, and absent must read as Current — the overwhelmingly common case, and
+  // the one that keeps existing candidates enrollable exactly as they were.
+  batch_interest?: string | null;
 };
 
 export const FRESH_TAGS = ["Fresh Lead", "Portal Link Sent", "Registered on Portal", "Dropped"];
+
+// QA-945 (2026-08-24, Umesh): "team ko ye help kregi ki future interested walo se jitna abhi data
+// possible hai vo le legi aur baad mai dobara call kreke convert kr skti hai jo ki possible quality
+// lead hogi future ki."
+//
+// This is deliberately NOT a value in the FRESH_TAGS ladder above. That ladder is a sequence of
+// mutually exclusive STAGES a person moves along (lead -> link sent -> registered), and where they
+// have reached is a different question from whether they want THIS intake. A future-interested
+// candidate can perfectly well already be registered on the portal - that is precisely the "quality
+// lead" Umesh is describing - and folding the two into one list would have forced a choice between
+// showing their stage and showing their availability. So it rides ALONGSIDE, the way "No programme"
+// and "Multi-interest" already do.
+export const FUTURE_INTEREST_TAG = "Future interested";
+
+/** The gate in rules.ts `addMemberChecked` refuses exactly this. Absent = Current, by design. */
+export function isFutureInterest(r: JourneyInput): boolean {
+  return r.batch_interest === "Future";
+}
 export const JOURNEY_TAGS = ["Enrollment in progress", "Training Ongoing", "Training Completed", "Result Awaited", "Certified", "Dropout", "Failed", "Absent at Assessment"];
 
 // Fresh bucket = never completed an enrollment (a roster drop BEFORE enrollment counts as Fresh).
