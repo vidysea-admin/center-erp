@@ -580,6 +580,18 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
           const src = readFileSync(f, "utf8");
           ok(`QA-945: the ${label} form OFFERS the current-vs-future choice, not just accepts it`,
             /batch_interest/.test(src) && /A future batch/.test(src), `${label} renders no choice`);
+          // ...and it must sit ABOVE the "All optional" government block. It first shipped INSIDE it,
+          // which told the student the one question that decides whether they join this batch was
+          // optional. Found by looking at the live screenshot, not by reading the diff - so this pin
+          // exists because a diff review would not have caught it and did not.
+          // Match the RENDERED markup, not the bare phrase. First version searched for the plain
+          // words and found them in this fix's own COMMENT (which explains the mistake by naming the
+          // block), so the pin failed while the code was right - a check that cannot tell code from a
+          // comment about the code. The `? *` and the `>...<` are what actually reach the student.
+          const iChoice = src.indexOf("Which batch are you interested in? *");
+          const iOptional = src.indexOf(">Government registration details<");
+          ok(`QA-945: ...and on ${label} it sits ABOVE the "All optional" block, not inside it`,
+            iChoice > -1 && iOptional > -1 && iChoice < iOptional, `choice@${iChoice} optional@${iOptional}`);
         }
       }
       const pubJunk = await pubPost(regTok.token, { name: "BIJunk " + stamp, phone: "7993" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0"), email: "bijunk" + stamp + "@test.local", batch_interest: "Whatever" });
