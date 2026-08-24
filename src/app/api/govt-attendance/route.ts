@@ -146,7 +146,20 @@ export const POST = apiHandler(async (req: NextRequest) => {
     // deliberately GLOBAL (-149/QA-334, -151/QA-350 argued and kept it), so a trainer row matches
     // whatever the roster holds. Hence a second count: the claim the screen makes is about STUDENTS,
     // so the number the screen is allowed to lean on has to be about students too.
-    roster_is_empty: batchId ? (await BatchMember.countDocuments({ batch: batchId, left_on: null })) === 0 : false,
+    //
+    // QA-1030, and this is the THIRD time this sentence was false — the checker found it exactly
+    // where the manifest asked to be hit. This counted `{batch, left_on: null}` while matchGovtRows
+    // indexes `{batch}` with NO left_on filter (govt-attendance.ts:359). So on a batch whose whole
+    // roster has LEFT: flag true, and a student row still matches. The red block then printed "no
+    // student row can be matched" over a preview that had just matched one — and because it is the
+    // `?` arm of a ternary it SUPPRESSED the amber note, which was the correct advice. That case is
+    // rarer than the other two and strictly WORSE than what production does today, which is the
+    // reason it was fixed before shipping rather than after.
+    //
+    // One definition of "the roster", and it is the matcher's, because the matcher is what decides
+    // whether anything can match. Departed members stay countable here for the same reason they stay
+    // indexed there: their rows do match, so the batch is not "nobody to match against".
+    roster_is_empty: batchId ? (await BatchMember.countDocuments({ batch: batchId })) === 0 : false,
     matched_student_count: matched.filter((r) => r.match_status === "Matched" && !r.trainer).length,
   };
 

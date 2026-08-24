@@ -2047,6 +2047,40 @@ console.log("\n--- QA-897: empty roster is named, not left to look like a failed
     onFull.data.roster_is_empty === false,
     JSON.stringify({ flag: onFull.data.roster_is_empty, matched: onFull.data.matched_count }));
 
+  // QA-1030 — the THIRD case this sentence was false, and the one that made it worse than shipping
+  // nothing. `roster_is_empty` counted `{batch, left_on: null}`; matchGovtRows indexes `{batch}` with
+  // no left_on filter. A batch whose whole roster has LEFT therefore raised the flag AND still
+  // matched a student row — and since the red block is the `?` arm of a ternary, it suppressed the
+  // amber note that was the right advice. Both now read the same set.
+  {
+    const mk2 = await req(admin, "POST", "/api/batches", {
+      location: loc._id, program: program._id,
+      target_size: 5, planned_start: new Date(Date.now() + 4 * 864e5).toISOString().slice(0, 10),
+    }, 201);
+    const leftBatch = mk2.data.item;
+    // A fresh candidate, not one of `members` — Rule 20 keeps those active on `batch`, so borrowing
+    // one would be refused and the pin would test the refusal instead of the flag.
+    const cand = (await req(admin, "POST", "/api/candidates", {
+      name: `${NAME} Departed`, phone: `9${STAMP.slice(1)}1900`,
+      location: loc._id, program: program._id,
+    }, 201)).data.item;
+    const add = await req(admin, "POST", `/api/batches/${leftBatch._id}/members`, { candidate: cand._id });
+    ok("QA-1030: precondition - a member was actually added before being dropped",
+      add.status === 201 && !!add.data?.item?._id, `${add.status} ${JSON.stringify(add.data).slice(0, 180)}`);
+    const drop = await req(admin, "POST", `/api/members/${add.data.item._id}/drop`,
+      { left_on: new Date().toISOString().slice(0, 10), drop_reason: "QA-1030 pin" }, 200);
+    ok("QA-1030: precondition - and the drop stuck", drop.status === 200, `${drop.status}`);
+
+    const onLeft = await upload(admin, { file: csvFile(), batch: leftBatch._id });
+    // Asserts exactly what it measures: the FLAG. Whether this particular file matches the departed
+    // person is a separate question and the file does not carry their name — naming the pin after a
+    // match it never checks is how a pin comes to mean less than its own sentence (QA-1006, -238).
+    ok("QA-1030: a batch whose roster has LEFT does not raise roster_is_empty",
+      onLeft.data.roster_is_empty === false,
+      JSON.stringify({ flag: onLeft.data.roster_is_empty, students: onLeft.data.matched_student_count }));
+    await req(admin, "POST", `/api/batches/${leftBatch._id}/transition`, { target: "Cancelled", reason: "QA-1030 fixture cleanup" }, 200);
+  }
+
   await req(admin, "POST", `/api/batches/${emptyBatch._id}/transition`, { target: "Cancelled", reason: "QA-897 fixture cleanup" }, 200);
 }
 
