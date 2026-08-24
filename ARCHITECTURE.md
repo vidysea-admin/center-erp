@@ -27,7 +27,7 @@ page.** It imports models, so client components can't import it — client-safe 
 | Trainer identity | `trainerForLogin` (35) | The ONE place a login becomes a Trainer (link → email → self-heal) |
 | Scheme hours | `minAttendancePctForScheme` (121) · `assessmentHoursBar` (2000) · `requiredAssessmentHours` (1983) | QA-093/119 — scheme master's absolute hours win |
 | Dates | `addDays` · `dayStart` · `parseSheetDate` (159) · `istToday` (189) · `dayKey` · `dayRange` | **Rule 53** · `istToday()` is THE definition of "today" |
-| Planning | `computePlannedEnd` · `capacitySummary` · `planBatchBackward` · `planArtifact` · `nextBatchCode` | **Rule 15**; codes `CENTRE-PROGRAMCODE-NN` via `counters` |
+| Planning | `computePlannedEnd` · `capacitySummary` · `planBatchBackward` · `planArtifact` · `nextBatchCode` · `createBatchWithCode` | **Rule 15**; codes `CENTRE-PROGRAMCODE-NN`, the number **derived from the batches on record** (`counters` no longer governs them, -225). `createBatchWithCode` is the ONLY place a batch is written — the code is minted after validation |
 | Trainer booking | `assertSlotWithinGuidelines` · `assertTrainerAvailableForBatch` · `trainerBookingWarnings` · `deriveTrainerStatus` · `assertRoomFreeForBatch` | **Rules 10–14** · QA-144 `max_daily_hours` |
 | Roster | `rosterOnDate` · `activeRoster` · `addMemberChecked` (400) · `updateEnrollment` · `dropMemberChecked` | **Rules 20–26, 48, 54** |
 | Batch lifecycle | `batchReadiness` (543) · `activateFromEvidence` (605) · `transitionBatch` (639, edge `switch` at :650) | **Rules 16–19, 47, 52** |
@@ -396,6 +396,36 @@ client component, the same wall `DOC_TYPES` hits in 3.7. **The copy is pinned**:
 the six ever reaches the plain `PATCH /api/trainers/[id]` allow-list (3.9), which is what qa-196's
 ratified invariant I2 rests on. These six are written **only** through
 `/api/trainers/[id]/transition` — `POST` stamps them on a stage move, `PATCH` corrects them after.
+
+### 3.11 How the batch-code PREFIX is spelled — 3 writers, 2 of them byte-identical (added -225)
+`nextBatchCode` builds `${Location.code}-${Program.code}-NN`, and **both of those codes are minted
+upstream by the same three pieces of logic, written out twice**:
+
+| Concept | App copy | Script copy |
+|---|---|---|
+| `slug()` — institution → centre code (`"Govt. ITI Charthwal, Muzaffarnagar"` → `MUZ-CHAR`) | `api/admin/avpl-rebase/route.ts:38-43` | `scripts/seed-rpl.mjs:46-51` |
+| `JOB_ROLE_CODES` (DST · BSRT · SPIT · DSWT) | `avpl-rebase/route.ts:28-33` | `seed-rpl.mjs:36-41` |
+| programme-code formula (scheme letters, first 6, + job-role code) | `avpl-rebase/route.ts:139` | `seed-rpl.mjs:182` |
+
+They are byte-identical apart from TypeScript annotation, and the route's own header admits the
+arrangement: *"the parsing rules are kept in lockstep with that script."* Kept in lockstep **by
+hand** is what this whole section is a list of. **They cannot be collapsed** — a Next route cannot
+import from `scripts/`, and the script cannot import the route — so they are **pinned** by
+`check-user-copy.mjs` (all three branches proved to go red under mutation before the pin shipped),
+the same answer `reparse-govt-hours`' `hhmmssToMinutes` copy got.
+
+**Why a drift here is expensive and silent:** it re-partitions every prefix in the product. The same
+institution begins minting under a different centre code, its existing batches keep the old prefix,
+and the numbering restarts at `-01` — with nothing on any screen saying why. Note the same hazard
+without any drift at all: `Location.code` and `Program.code` are **PATCHable**
+(`api/locations/[id]/route.ts`, `api/programs/[id]/route.ts`), so editing either has exactly this
+effect deliberately.
+
+**A THIRD writer bypasses both:** `scripts/seed-avpl-master.mjs:244,426` takes the batch code
+**verbatim from the client's workbook column** and upserts **by code** — so it can create a batch
+under a code our own minter would never issue (the legacy three-part `GGM-DST-01` shape), and it is
+the reason a rename in Mongo alone is dangerous: re-running that seeder afterwards creates a SECOND
+batch under the old code.
 
 ### 3.10 Other predicates with more than one copy
 **`totNeeded` — 4 copies of "does this trainer still need a TOT"**: `rules.ts:1865`

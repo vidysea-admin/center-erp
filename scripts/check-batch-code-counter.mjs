@@ -5,6 +5,14 @@
 // READ-ONLY. This answers the question rather than assuming it, because the obvious fix would be the
 // actual bug.
 //
+// -225 (2026-08-24) NOTE, and this script is deliberately UNCHANGED below it: `counters` no longer
+// governs new codes. nextBatchCode now derives the number from the batches on record (Umesh's call,
+// on AVP-GURU-RPLAVP-DST-04 holding three batches), so on a -225 machine the `counters` rows are
+// dead history. This script still reports the counter-vs-batches gap EXACTLY as before, and that is
+// the point: production is what you point it at, production is still on the old build until -225
+// ships, and the gap it prints is the evidence that decides whether an existing row needs a manual
+// correction at all. After -225 the answer for most prefixes is "no" - the next create self-heals.
+//
 // What the code already does (rules.ts nextBatchCode): the prefix is centre code + FULL programme
 // code, and the counter is a per-prefix document in `counters` — `_id: batch|CHI-ITI-RPLAVP-DST`,
 // $inc with upsert. So Gurugram's two do NOT push Chitrakoot to 3; those are different counters.

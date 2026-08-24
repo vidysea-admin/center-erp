@@ -561,7 +561,15 @@ console.log("\n--- FL10: batch import (QA-028) — centres/roles by name, unknow
     prev.data.valid === 1 && prev.data.skipped_count === 3, JSON.stringify({ v: prev.data.valid, s: prev.data.skipped_count }));
   ok("FL10: the unknown centre and role are named", (prev.data.location_unmatched ?? []).includes("No Such Centre") && (prev.data.program_unmatched ?? []).includes("No Such Role"), JSON.stringify([prev.data.location_unmatched, prev.data.program_unmatched]));
   const conf = await multipart(admin, "/api/batches/import", { file, mapping, confirm: "1" }, 201);
-  ok("FL10: confirm creates exactly the one valid batch with a minted code", (conf.data.created ?? []).length === 1 && /^B\d+/.test(conf.data.created[0] ?? "") || (conf.data.created ?? []).length === 1, JSON.stringify(conf.data));
+  // -225: this line used to read `len === 1 && /^B\d+/.test(code) || len === 1`, which is just
+  // `len === 1` - the code half could never fail it. That is how the importer shipped a whole
+  // release minting LEGACY B### codes (its Location select omitted `code`, so nextBatchCode fell
+  // into the global-counter branch) with the wall green the entire time. The dead `/^B\d+/` branch
+  // suggests someone SAW B### here and encoded it as acceptable. Now it is exact, and the legacy
+  // shape is precisely what it refuses.
+  ok("FL10 (-225): the imported batch carries the CENTRE-PROGRAMME-NN code, never the legacy B### fallback",
+    (conf.data.created ?? []).length === 1 && new RegExp(`^${loc.code}-${prog.code}-\d{2,}$`).test(conf.data.created[0] ?? ""),
+    JSON.stringify(conf.data));
   const listed = ((await req(admin, "GET", "/api/batches?limit=2000", undefined, 200)).data.items ?? []).find((b) => b.code === conf.data.created[0]);
   ok("FL10: the imported batch carries creator + file provenance",
     !!listed && listed.created_by?.name && /^Import: batches-probe\.xlsx$/.test(listed.source ?? ""), JSON.stringify({ code: listed?.code, by: listed?.created_by?.name, src: listed?.source }));
@@ -711,6 +719,58 @@ console.log("\n--- -155 (QA-427): the portal-ID health screen - see it, select i
   // An empty selection is a mistake, not a mass-fix.
   const empty = await req(admin, "POST", "/api/candidates/portal-id-health", {});
   ok("-155 (QA-427): an empty selection is refused - nothing is applied wholesale", empty.status === 400, `got ${empty.status}`);
+}
+
+console.log("\n--- FL13 (-225): the batch code's number is the count of batches for that centre x programme ---");
+{
+  // Umesh, 2026-08-24, on AVP-GURU-RPLAVP-DST-04 holding three batches: "the code must be location
+  // wise and program wise". Its OWN centre + programme pair, because `loc` x `prog` above already
+  // carries batches from FL10 and other blocks, so a sequence asserted there would be guesswork.
+  const nLoc = (await req(admin, "POST", "/api/locations", {
+    code: `TEST-NM${stamp}`, name: `TEST Numbering Centre ${stamp}`, city: "Test", state: "UP",
+    approval_status: "Approved", operational_status: "Active",
+  }, 201)).data.item;
+  const nProg = (await req(admin, "POST", "/api/programs", {
+    code: `TEST-NP${stamp}`, name: `TEST Numbering Role ${stamp}`, trainer_skill: `nm${stamp}`,
+    duration_days: 30, buffer_days: 5, default_batch_size: 30, completion_deadline_days: 120,
+  }, 201)).data.item;
+  const P = `${nLoc.code}-${nProg.code}`;
+  const mk = async (expect = 201) => (await req(admin, "POST", "/api/batches",
+    { location: nLoc._id, program: nProg._id, planned_start: "2027-06-01", target_size: 20 }, expect)).data.item;
+
+  const b1 = await mk(), b2 = await mk(), b3 = await mk();
+  ok("FL13: the first batch for this centre x programme is -01", b1?.code === `${P}-01`, String(b1?.code));
+  ok("FL13: the second is -02", b2?.code === `${P}-02`, String(b2?.code));
+  ok("FL13: the third is -03", b3?.code === `${P}-03`, String(b3?.code));
+
+  // THE LEAK, reproduced. `planned_start: "not-a-date"` passes the required-field check in the create
+  // route, becomes an Invalid Date, survives computePlannedEnd, and dies inside the write. Before
+  // -225 the code was minted as an ARGUMENT to Batch.create, so the number was already gone by then:
+  // no delete, no cancel, one malformed POST, one number burned. That is how a prefix reaches -04
+  // with three batches on record.
+  await req(admin, "POST", "/api/batches",
+    { location: nLoc._id, program: nProg._id, planned_start: "not-a-date", target_size: 20 }, 400);
+  const b4 = await mk();
+  ok("FL13: a REFUSED create consumes no number - the next batch is -04, not -05", b4?.code === `${P}-04`, String(b4?.code));
+
+  // Contiguity, and its honest cost, asserted rather than footnoted. A hard delete is Admin-only and
+  // is refused for any batch carrying a member, log, result, cost, closure, portal row or invoice -
+  // b2 is an empty shell, which is the only kind of number that can ever come back.
+  await req(admin, "DELETE", `/api/batches/${b2._id}`, undefined, 200);
+  const b5 = await mk();
+  ok("FL13: Umesh's rule - the number counts the batches on record, so a deleted shell's number returns",
+    b5?.code === `${P}-02`, String(b5?.code));
+
+  // A CANCELLED batch keeps its row and its code, so it still counts. This is the line that keeps
+  // contiguity safe: a batch that ever held anything can only be cancelled, never deleted.
+  await req(admin, "POST", `/api/batches/${b3._id}/transition`, { target: "Cancelled", reason: "FL13 fixture" }, 200);
+  const b6 = await mk();
+  ok("FL13: a CANCELLED batch keeps its number - the next is -05, and -03 is never reissued",
+    b6?.code === `${P}-05`, String(b6?.code));
+
+  for (const b of [b1, b4, b5, b6]) {
+    await req(admin, "POST", `/api/batches/${b._id}/transition`, { target: "Cancelled", reason: "FL13 fixture cleanup" }, 200);
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

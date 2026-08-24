@@ -2081,6 +2081,50 @@ for (const file of walk(root)) {
       structuralIdx.add(hits.length - 1);
     }
   }
+// ---- -225: how the BATCH-CODE PREFIX is spelled - two byte-identical copies, and the map did not
+// know. nextBatchCode() builds `${Location.code}-${Program.code}-NN`, and both of those codes are
+// MINTED upstream by the same three pieces of logic written out TWICE: the app route
+// api/admin/avpl-rebase and the script scripts/seed-rpl.mjs. The route's own header admits it -
+// "the parsing rules are kept in lockstep with that script" - and "kept in lockstep" by hand is the
+// disease ARCHITECTURE section 3 is a list of. A drift in either copy silently re-partitions every
+// prefix in the product: the same institution starts minting under a different centre code, its old
+// batches keep the old prefix, and the numbering restarts at -01 with nothing on any screen to say
+// why. They CANNOT be collapsed - a Next route cannot import from scripts/ and the script cannot
+// import the route - so they are pinned, exactly as reparse-govt-hours' hhmmssToMinutes copy is.
+{
+  const routeRel = "app/api/admin/avpl-rebase/route.ts";
+  const routeSrc = fs.readFileSync(path.join(root, routeRel), "utf-8");
+  const seedRel = "scripts/seed-rpl.mjs";
+  const seedSrc = fs.readFileSync(path.join(root, "..", "scripts", "seed-rpl.mjs"), "utf-8");
+  // The only legitimate difference between the two is TypeScript annotation, so strip exactly that
+  // before comparing - never normalise anything that could hide a real change.
+  const deTs = (t) => t.replace(/: Record<string, (?:string|number)>/g, "").replace(/\((\w+): (?:string|unknown)\)/g, "($1)");
+  let bad = 0;
+
+  // (a) JOB_ROLE_CODES - the second half of every programme code (DST, BSRT, SPIT, DSWT).
+  const roles = (t) => ((t.split("JOB_ROLE_CODES")[1] ?? "").split("};")[0].match(/"([^"]+)":\s*"([^"]+)"/g) ?? []).join("|");
+  if (!roles(routeSrc) || roles(routeSrc) !== roles(seedSrc)) {
+    bad++;
+    pushStructural(routeRel + ": JOB_ROLE_CODES has drifted from " + seedRel + " - the two mint different programme codes, so the same job role would get two different batch-code prefixes");
+  }
+
+  // (b) slug() - the centre code itself ("Govt. ITI Charthwal, Muzaffarnagar" -> "MUZ-CHAR").
+  const slugBody = (t) => deTs((t.split("const slug = ")[1] ?? "").split("};")[0]).replace(/\s+/g, " ").trim();
+  if (!slugBody(routeSrc) || slugBody(routeSrc) !== slugBody(seedSrc)) {
+    bad++;
+    pushStructural(routeRel + ": slug() has drifted from " + seedRel + " - the two mint different CENTRE codes, which silently re-partitions every batch-code prefix");
+  }
+
+  // (c) the programme-code formula itself (scheme letters, first 6, + the job-role code).
+  const formula = (t) => (t.match(/code:\s*`\$\{scheme[^`]*`/) ?? [""])[0].replace(/\s+/g, " ");
+  if (!formula(routeSrc) || formula(routeSrc) !== formula(seedSrc)) {
+    bad++;
+    pushStructural(routeRel + ": the programme-code formula has drifted from " + seedRel);
+  }
+
+  if (bad) failed++; else passed++;
+}
+
   // -175: every finding, printed once, AFTER every check has had its say. See the note where this
   // loop used to live.
   for (const h of hits) console.log("  ✗ " + h);

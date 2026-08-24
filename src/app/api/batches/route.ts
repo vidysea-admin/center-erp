@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, requireRole, locationFilter, assertLocationInScope, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, BatchMember, Candidate, Closure, DailyLog, GovtAttendanceRow, Invoice, Location, Notification, Program, Trainer } from "@/models";
-import { assertLocationOperational, earliestPossibleStart, earliestStartNote, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, nextBatchCode, settlementStage, trainerBookingWarnings, trainerForLogin } from "@/lib/rules";
+import { assertLocationOperational, earliestPossibleStart, earliestStartNote, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, createBatchWithCode, deriveTrainerStatus, settlementStage, trainerBookingWarnings, trainerForLogin } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
 import { mailUsersByRole } from "@/lib/mailer";
@@ -127,8 +127,12 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // proved the location exists and is operational). Name rides along for the
   // batch-created notification below.
   const locDoc = await Location.findById(location).select("code name").lean<any>();
-  const doc = await Batch.create({
-    code: await nextBatchCode(locDoc, program),
+  // -225: the code is minted INSIDE createBatchWithCode, after mongoose has validated this document.
+  // It used to be `code: await nextBatchCode(...)` right here - an ARGUMENT, so the number was taken
+  // before anything was checked, and a planned_start that is not a date (it survives the required
+  // check at the top of this route, then dies on the cast) consumed one and returned 400. That is a
+  // burned number with no delete and no cancel behind it.
+  const doc = await createBatchWithCode({
     location, program: programId, trainer: trainer || undefined, room: room || undefined,
     session,
     slot_start: slot.slot_start || undefined, slot_end: slot.slot_end || undefined,
@@ -143,7 +147,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
     milestones: [],
     plan_enabled: false,
     created_by: user.id,
-  });
+  }, locDoc, program);
   if (trainer) await deriveTrainerStatus(trainer); // Rule 12
   // 2026-08-11: booking a not-yet-Ready trainer, or one not capable at this location,
   // warns but does not block (Rule 11 gates the actual start).

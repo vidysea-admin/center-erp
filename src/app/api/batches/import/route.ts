@@ -5,7 +5,7 @@ import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError 
 import { requirePerm } from "@/lib/permissions";
 import { Batch, Location, Program } from "@/models";
 import { audit } from "@/lib/audit";
-import { computePlannedEnd, nextBatchCode, parseSheetDate } from "@/lib/rules";
+import { computePlannedEnd, createBatchWithCode, parseSheetDate } from "@/lib/rules";
 
 // Batch bulk import (QA-028's second half — "bulk upload in every module"). Batch_Master
 // format: Centre + Job Role + Planned Start (+ Target Size, Session). Same contract as the
@@ -55,7 +55,14 @@ export const POST = apiHandler(async (req: NextRequest) => {
     }
     return m;
   };
-  const locByName = byName(await Location.find({}).select("name approval_status operational_status").lean<any[]>());
+  // `code` rides along ON PURPOSE. nextBatchCode() takes the CENTRE CODE, and this select omitted
+  // it — so `b.location.code` was undefined at the create below, nextBatchCode fell into its legacy
+  // branch, and every bulk-imported batch got a `B###` code instead of CENTRE-PROGRAMME-NN. That
+  // contradicted this file's own header ("Codes are minted by the same counter the single-batch form
+  // uses") for a whole release, and the one assertion that would have caught it was a tautology
+  // (e2e-flows-blindspot.mjs FL10). It is the identical mistake the comment on the next line already
+  // records for Program — one line apart, same lesson, only one of them had been learned.
+  const locByName = byName(await Location.find({}).select("name code approval_status operational_status").lean<any[]>());
   // Full program docs on purpose: computePlannedEnd needs duration_days + buffer_days, and a
   // partial select fed it undefined — planned_end cast to Invalid Date (caught by FL10).
   const progByName = byName(await Program.find({}).lean<any[]>());
@@ -125,8 +132,9 @@ export const POST = apiHandler(async (req: NextRequest) => {
         duration_days: b.program.duration_days ?? 0,
         buffer_days: b.program.buffer_days ?? 0,
       });
-      const doc = await Batch.create({
-        code: await nextBatchCode(b.location, b.program),
+      // -225: minted inside, after validation. Before this, the number was taken as an ARGUMENT to
+      // Batch.create, so EVERY row that ended up in `refused` below had already consumed one.
+      const doc = await createBatchWithCode({
         location: b.location._id, program: b.program._id,
         session: b.session, target_size: b.target_size,
         planned_start: b.planned_start, planned_end: isNaN(end.getTime()) ? b.planned_start : end,
@@ -134,7 +142,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
         created_by: user.id,
         source: `Import: ${file.name}`,
         custom_fields: b.custom_fields,
-      });
+      }, b.location, b.program);
       created.push(doc.code);
       if (!firstId) firstId = doc._id;
     } catch (e: any) {

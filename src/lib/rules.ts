@@ -2041,25 +2041,79 @@ export async function earliestPossibleStart(
 // AVP-GURU-RPLAVP-DST-01. One counter per prefix in the same `counters` collection; the
 // legacy global "batch" counter stays parked — old codes on old paper never collide.
 export async function nextBatchCode(location?: { code?: string } | null, program?: { code?: string } | null): Promise<string> {
-  const db = Batch.db;
   const locCode = String(location?.code ?? "").trim().toUpperCase();
   const progAbbr = String(program?.code ?? "").trim().toUpperCase();
-  if (locCode && progAbbr) {
-    const prefix = `${locCode}-${progAbbr}`;
-    const res = await db.collection("counters").findOneAndUpdate(
-      { _id: `batch|${prefix}` as any }, { $inc: { seq: 1 } }, { upsert: true, returnDocument: "after" },
-    );
-    const seq = (res as any)?.seq ?? (res as any)?.value?.seq ?? 1;
-    return `${prefix}-${String(seq).padStart(2, "0")}`;
+  if (!locCode || !progAbbr) {
+    // 2026-08-24 (Umesh): this used to fall back to a global "B###" counter whenever either code was
+    // missing. Location.code and Program.code are BOTH required:true (models/index.ts), so the only
+    // way to arrive here is a caller that failed to PROJECT the field - which is exactly what the
+    // batch importer did, for a whole release, while producing codes that looked perfectly fine. A
+    // silent second format is worse than a refusal because it is unfindable: nobody reports a code
+    // that looks like a code. Old B### codes already on old rows stay valid and are never re-minted.
+    throw new HttpError(500, locCode
+      ? "Batch code cannot be minted: the programme code was not loaded."
+      : "Batch code cannot be minted: the centre code was not loaded.");
   }
-  // Legacy fallback — only for a caller with no centre/programme context.
-  const res = await db.collection("counters").findOneAndUpdate(
-    { _id: "batch" as any },
-    { $inc: { seq: 1 } },
-    { upsert: true, returnDocument: "after" },
-  );
-  const seq = (res as any)?.seq ?? (res as any)?.value?.seq ?? 1;
-  return "B" + String(seq).padStart(3, "0");
+  const prefix = `${locCode}-${progAbbr}`;
+  // 2026-08-24 (Umesh, on AVP-GURU-RPLAVP-DST-04 with three batches on record): "the code must be
+  // location wise and program wise" - the trailing number IS the count of batches for that centre x
+  // programme, so it is DERIVED from the batches on record rather than from a `counters` document.
+  //
+  // What the counter cost, and why the scope was never the bug: the prefix has always been per
+  // centre x programme, so Gurugram's drone batches never pushed Chitrakoot's. What drifted was the
+  // counter itself - it is monotonic, and it was consumed as an ARGUMENT to Batch.create(), so it
+  // committed before mongoose validated the document. One malformed POST (planned_start that is not
+  // a date survives the truthiness check and dies on the cast) burned a number with no delete and no
+  // cancel; in the importer every refused row burned one. That is how a prefix reaches -04 holding
+  // three batches, and a monotonic counter can never give the number back.
+  //
+  // Honest cost of deriving instead: a number freed by a HARD delete is reissued. Bounded on purpose
+  // - a hard delete is Admin-only and refused outright for any batch carrying a member, log, result,
+  // cost, closure, portal row or invoice (api/batches/[id]/route.ts), and a CANCELLED batch keeps its
+  // row and its code, so this scan still counts it. The only reusable number therefore belongs to an
+  // empty shell that never held a roster, let alone reached a government form. Umesh chose this with
+  // that cost written in front of him (2026-08-24); it supersedes the monotonic rationale that this
+  // function and scripts/check-batch-code-counter.mjs used to carry.
+  //
+  // A STRING RANGE, not a regex. `code` carries a unique index, so [prefix- , prefix-\uffff) is an
+  // index range scan - and unlike an anchored regex it needs no escaping of the prefix, which is
+  // operator-supplied (Location.code and Program.code are both editable through their PATCH routes).
+  // The range cannot leak into a longer sibling prefix: "AVP-GURU-RPLAVP-DSTX-01" sorts ABOVE
+  // "AVP-GURU-RPLAVP-DST-\uffff" because "X" > "-". The all-digits test below is what makes the tail
+  // a number rather than an assumption.
+  const mine = await Batch.find({ code: { $gte: `${prefix}-`, $lt: `${prefix}-\uffff` } })
+    .select("code").lean<{ code: string }[]>();
+  const max = mine.reduce((m, b) => {
+    const tail = String(b.code).slice(prefix.length + 1);
+    return /^\d+$/.test(tail) ? Math.max(m, Number(tail)) : m;
+  }, 0);
+  // padStart(2) stays: String(100).padStart(2,"0") is "100", so the series widens by itself at -99
+  // -> -100. padStart(3) would put -004 beside an existing -04 and make two shapes of one code.
+  return `${prefix}-${String(max + 1).padStart(2, "0")}`;
+}
+
+// The ONE place a batch is written. The code is minted LAST - after mongoose has validated
+// everything else - because a code handed to a document that never gets written is a number nobody
+// can account for, which is the whole of the AVP-GURU-RPLAVP-DST-04 report. Two callers: the create
+// door and the importer. Do not build a Batch with a `code` anywhere else.
+export async function createBatchWithCode(
+  fields: Record<string, unknown>,
+  location?: { code?: string } | null,
+  program?: { code?: string } | null,
+) {
+  // Validate WITHOUT the code, so an invalid planned_start or a bad enum fails HERE, before a number
+  // is derived. (Mongoose defers cast errors to validate(), so an Invalid Date surfaces on this line.)
+  await new Batch(fields).validate({ pathsToSkip: ["code"] });
+  // Two creates in the same instant can derive the same number; the unique index on `code` is the
+  // arbiter, and the answer to losing that race is to re-derive, not to reserve in advance.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await Batch.create({ ...fields, code: await nextBatchCode(location, program) });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!(msg.includes("E11000") && msg.includes("code")) || attempt >= 4) throw e;
+    }
+  }
 }
 
 // ---------- Trainer preparation pipeline (2026-08-12, Manish's RPL walkthrough) ----------
