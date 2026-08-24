@@ -156,6 +156,23 @@ export default function PublicRegisterPage({ params }: { params: Promise<{ token
               every other field in this block - the person filling it is a student on a phone from a
               WhatsApp link. Checked WHILE TYPING with the same function the API refuses with, so the
               hint appears before they press the button rather than after (the QA-141 canon). */}
+          {/* QA-945 (Umesh 2026-08-24): "candidate k paas hoga option interested in current upcoming
+              batch ya firr hoga interested in future batches ... vo abhi register krr paauyngee".
+              THE API ACCEPTED THIS FROM DAY ONE AND THIS FORM NEVER OFFERED IT — so the person the
+              option was FOR could not use it, and only staff could set it. That is the -116 shape
+              this codebase keeps paying for: the door takes the field, the screen never asks.
+              Placed high, before the optional government block: it changes what happens to them. */}
+          <F label="Which batch are you interested in? *">
+            <select className={inputCls} value={form.batch_interest ?? "Current"} onChange={(e) => set("batch_interest", e.target.value)}>
+              <option value="Current">The current / upcoming batch</option>
+              <option value="Future">A future batch — I am not available right now</option>
+            </select>
+            {form.batch_interest === "Future" && (
+              <span className="mt-1 block text-xs text-gray-600">
+                Your details are saved and the centre will contact you when a later batch opens. You will not be added to the current one.
+              </span>
+            )}
+          </F>
           <F label="Aadhaar number" hint={form.aadhaar_no ? aadhaarError(form.aadhaar_no, { optional: true }) ?? undefined : undefined}>
             <input className={inputCls} inputMode="numeric" placeholder="12 digits" value={form.aadhaar_no ?? ""} onChange={(e) => set("aadhaar_no", e.target.value)} />
           </F>

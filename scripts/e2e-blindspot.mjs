@@ -566,6 +566,22 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
       // Both public doors accept the answer, and neither takes a value it did not offer.
       const pubFut = await pubPost(regTok.token, { name: "BIPub " + stamp, phone: "7994" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0"), email: "bipub" + stamp + "@test.local", batch_interest: "Future" });
       ok("QA-945: the public self-registration door records a future-batch answer", pubFut.status === 201, `status=${pubFut.status}`);
+      // QA-945 (cycle 3): the API accepted this from the start and NEITHER PUBLIC FORM OFFERED IT,
+      // so the person the option exists for could not use it - only staff could. A source-level pin,
+      // because the wall has no browser: the failure was never in the route, it was that the screen
+      // never asked. Both doors, because QA-275 records that the second one is the one that is
+      // forgotten - and here it was forgotten on both.
+      {
+        const { readFileSync } = await import("node:fs");
+        for (const [label, f] of [
+          ["p/register", "src/app/p/register/[token]/page.tsx"],
+          ["p/enrol", "src/app/p/enrol/page.tsx"],
+        ]) {
+          const src = readFileSync(f, "utf8");
+          ok(`QA-945: the ${label} form OFFERS the current-vs-future choice, not just accepts it`,
+            /batch_interest/.test(src) && /A future batch/.test(src), `${label} renders no choice`);
+        }
+      }
       const pubJunk = await pubPost(regTok.token, { name: "BIJunk " + stamp, phone: "7993" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0"), email: "bijunk" + stamp + "@test.local", batch_interest: "Whatever" });
       const junkRow = (await req(admin, "GET", `/api/candidates?limit=2000&location=${loc._id}`)).data.items.find((c) => c.name === "BIJunk " + stamp);
       ok("QA-945: ...and a value the door never offered falls back to Current, it is not stored",

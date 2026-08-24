@@ -163,6 +163,18 @@ export default function EnrolOtpPage() {
               <datalist id="enrol-salutation">{["Mr.", "Mrs.", "Ms.", "Dr."].map((o) => <option key={o} value={o} />)}</datalist></label>
             {/* 2026-08-24 (Umesh): Aadhaar on the OTP door too - QA-275's lesson is that this page gets
                 forgotten precisely because it is the second public door for the same job. */}
+            {/* QA-945: the same choice on the OTP door. QA-275's standing lesson is that this page
+                is the one that gets forgotten, because it is the second public door for one job —
+                and this field was forgotten on BOTH of them at first. */}
+            <label className="block text-sm"><span className="mb-1 block text-gray-600">Which batch are you interested in? *</span>
+              <select className={inputCls} value={form.batch_interest ?? "Current"} onChange={(e) => set("batch_interest", e.target.value)}>
+                <option value="Current">The current / upcoming batch</option>
+                <option value="Future">A future batch — I am not available right now</option>
+              </select>
+              {form.batch_interest === "Future" && (
+                <span className="mt-1 block text-xs text-gray-600">Your details are saved and the centre will contact you when a later batch opens.</span>
+              )}
+            </label>
             <label className="block text-sm"><span className="mb-1 block text-gray-600">Aadhaar number</span>
               <input className={inputCls} inputMode="numeric" placeholder="12 digits" value={form.aadhaar_no ?? ""} onChange={(e) => set("aadhaar_no", e.target.value)} />
               {form.aadhaar_no && aadhaarError(form.aadhaar_no, { optional: true }) && <span className="mt-1 block text-xs text-red-600">{aadhaarError(form.aadhaar_no, { optional: true })}</span>}
