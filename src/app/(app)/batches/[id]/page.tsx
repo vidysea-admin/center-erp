@@ -247,6 +247,23 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
   const todayKey = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10); // IST calendar day
   const beganAlready = !!plannedStartKey && plannedStartKey < todayKey && ["Planning", "Ready"].includes(b.status);
   const [startDate, setStartDate] = useState<string>(plannedStartKey);
+  // -226 (Umesh, 24/08): recording a batch that already ran skips the readiness gates, so it opens a
+  // confirmation rather than firing on the press - the -207 ruling ("vo double confirmation pop up
+  // card khule properly"), and the same Drawer primitive, because a second overlay would be the
+  // drift ARCHITECTURE.md section 3 catalogues.
+  const [backdateOpen, setBackdateOpen] = useState(false);
+  const [backdateReason, setBackdateReason] = useState("");
+  const [backdating, setBackdating] = useState(false);
+  async function recordBackdatedStart() {
+    if (!startDate) return;
+    setBackdating(true);
+    try {
+      // `extra` is spread last inside transition(), so this reason wins over the page-level one.
+      await transition("Active", { actual_start: startDate, backdate_override: true, reason: backdateReason.trim() || undefined });
+      setBackdateOpen(false); setBackdateReason("");
+    } catch (e: any) { setError(e.message); onChanged(); }
+    finally { setBackdating(false); }
+  }
 
   // QA-150 (Umesh, 15/08): the checklist renders EXACTLY the checks that gate Mark Ready —
   // rules.batchReadiness().checks, in its order — and counts only those. It used to list
@@ -292,11 +309,17 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
     <>
       {b.status === "Planning" && <Btn small onClick={() => transition("Ready")} disabled={!r.ready}>Mark Ready</Btn>}
       {b.status === "Ready" && !beganAlready && <Btn small onClick={() => transition("Active")}>Start Batch</Btn>}
-      {b.status === "Ready" && beganAlready && (
+      {/* -226 (Umesh, 24/08, stuck on MUZ-CHAR-RPLHSL-SPIT-01): this used to be `b.status === "Ready"
+          && beganAlready`, while the banner that NAMES it renders on Planning too. So on a batch
+          entered after it began - which is always in Planning, because Mark Ready is disabled by a
+          roster check that a months-old batch can never satisfy - the screen said "When you Start it,
+          set the real start date" and there was no such button anywhere on the page. `beganAlready`
+          already covers Planning and Ready both; the banner and the control now agree. */}
+      {beganAlready && (
         <span className="inline-flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1">
           <label className="text-xs text-amber-800">Batch already began on</label>
           <input type="date" className="rounded-lg border border-gray-300 px-2 py-1 text-xs" value={startDate} max={todayKey} onChange={(e) => setStartDate(e.target.value)} />
-          <Btn small onClick={() => transition("Active", { actual_start: startDate || undefined })} disabled={!startDate}>Start Batch from that date</Btn>
+          <Btn small onClick={() => setBackdateOpen(true)} disabled={!startDate || backdating}>Record start from that date</Btn>
         </span>
       )}
       {b.status === "Ready" && <Btn small kind="ghost" onClick={() => transition("Planning")}>Back to Planning</Btn>}
@@ -452,7 +475,8 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
         {beganAlready && (
           <p className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
             Planned start {fmtDate(b.planned_start)} has passed — this batch is being entered after it began.
-            When you Start it, set the real start date so attendance can be recorded from that day.
+            Set the real start date below and record it. The checks that are not met are kept on the
+            record; they do not stop you.
           </p>
         )}
         <ul className="space-y-2 text-sm">
@@ -504,6 +528,39 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
           drift ARCHITECTURE.md section 3 is a catalogue of. It opens for anyone who can see the
           button; the door itself is Admin-only and the panel says so, rather than the screen hiding
           a control and explaining nothing. */}
+      {/* -226: told ONCE, and then not stopped - Umesh's own words were "just notify them once that
+          this is a past date but dont stop them". Everything that is not met is named here, in the
+          same wording the checklist above uses (CHECKS, so there is no second copy of it on the
+          client), and the press goes through. The reason box is optional on purpose: every other
+          override in this product demands one, but demanding one here would be the stopping he
+          asked us not to do. */}
+      <Drawer open={backdateOpen && beganAlready} onClose={() => setBackdateOpen(false)} title={`Record ${b.code} as already started`} error={error}>
+        <div className="text-sm">
+          <div className="font-semibold text-amber-900">This batch is being recorded after it began</div>
+          <p className="mt-1 text-amber-800">
+            It will be recorded as having started on <b>{startDate ? fmtDate(startDate) : "—"}</b>, so attendance can be
+            entered from that day. The start date cannot be changed afterwards.
+          </p>
+          {CHECKS.some(([, , okv]) => !okv) || !r.enrollment_ok ? (
+            <div className="mt-2 space-y-1 text-amber-800">
+              <p className="font-medium">Not met — recorded as it stands, not fixed:</p>
+              <ul className="list-disc space-y-0.5 pl-5 text-xs">
+                {CHECKS.filter(([, , okv]) => !okv).map(([k, label]) => <li key={k}>{label}</li>)}
+                {!r.enrollment_ok && <li>For Start: enrolled ≥ threshold ({r.enrolled_count}/{r.enrollment_threshold})</li>}
+                {r.location_halted && <li>This centre is not operational today</li>}
+              </ul>
+              <p className="text-xs">A batch that already ran cannot pass checks that describe preparing for one that has not — so these are written to the batch history with your name instead of blocking you.</p>
+            </div>
+          ) : (
+            <p className="mt-2 text-amber-800">Every readiness check is met — this simply records the real start date.</p>
+          )}
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <input className={inputCls + " max-w-md"} placeholder="Reason (optional — kept on the batch history)" value={backdateReason} onChange={(e) => setBackdateReason(e.target.value)} />
+            <Btn onClick={recordBackdatedStart} disabled={backdating || !startDate}>{backdating ? "Recording…" : "Record it"}</Btn>
+            <Btn kind="ghost" onClick={() => setBackdateOpen(false)}>Cancel</Btn>
+          </div>
+        </div>
+      </Drawer>
       <Drawer open={completeOpen && ["Active", "Closing"].includes(b.status)} onClose={() => setCompleteOpen(false)} title={`Complete ${b.code}`} error={error}>
         <div className="text-sm">
           <div className="font-semibold text-amber-900">Complete this batch now</div>
