@@ -1361,7 +1361,9 @@ console.log("\n--- FL19 (-235): a cancelled batch can be RESTORED, and a typed j
   // were missed. Adding them was never blocked once the batch is out of Cancelled - but the join date
   // was never ASKED for, so they landed on the day of entry and Rule 26 said they were on no day's
   // roster while the batch actually ran. QA-908 measured a joined_on 30 days in the FUTURE returning 201.
-  await req(admin, "POST", `/api/batches/${b1._id}/transition`, { target: "Ready" }, 200);
+  // Straight Planning -> Active with the override, NOT via Ready. My first draft walked through Ready
+  // and the suite failed it: this fixture has an empty roster, so Rule 16 refuses Mark Ready - which is
+  // exactly the dead end -226 was written to get around, and I had just re-created it in my own test.
   await req(admin, "POST", `/api/batches/${b1._id}/transition`,
     { target: "Active", backdate_override: true, actual_start: istDay(-30), reason: "already ran" }, 200);
 

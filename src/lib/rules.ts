@@ -986,14 +986,19 @@ export async function transitionBatch(batchId: string, target: string, opts: {
       // carrying one genuinely ran. A batch that never started has no Active state to be put back into,
       // and letting it jump there would walk past Rule 17 AND -226's backdate_override in one step:
       // the readiness bypass wearing a costume that :805 exists to refuse.
-      if (target === "Active" && !batch.actual_start) {
-        fail("This batch never started, so there is no Active state to restore — restore it to Planning or Ready and start it with its real date.");
-      }
       // A restore puts the STATUS back and touches no date. The route forwards `actual_start` for any
       // target Active, so it can arrive here - and silently dropping it would be the worse failure:
       // the caller would believe it had corrected a date that never moved. Refused by name instead.
+      //
+      // This is checked BEFORE the "never started" guard below, and the order is the fix to a pin that
+      // caught me: a caller sending BOTH a date and a batch that never ran can be refused for either
+      // reason, and whichever guard runs first decides which sentence they read. Answer the thing they
+      // actually got wrong in the request before the thing that is wrong about the batch.
       if (opts.actual_start || opts.backdate_override === true) {
         fail("Restoring a cancelled batch puts its status back and changes no dates. Restore it first, then correct the dates.");
+      }
+      if (target === "Active" && !batch.actual_start) {
+        fail("This batch never started, so there is no Active state to restore — restore it to Planning or Ready and start it with its real date.");
       }
       // Same shape as -226's row: the audit trail IS the record. The cancel reason is quoted INTO it
       // because clearing the field on the next line is the only thing that erases it.
