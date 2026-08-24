@@ -147,19 +147,32 @@ export const POST = apiHandler(async (req: NextRequest) => {
     // whatever the roster holds. Hence a second count: the claim the screen makes is about STUDENTS,
     // so the number the screen is allowed to lean on has to be about students too.
     //
-    // QA-1030, and this is the THIRD time this sentence was false — the checker found it exactly
-    // where the manifest asked to be hit. This counted `{batch, left_on: null}` while matchGovtRows
-    // indexes `{batch}` with NO left_on filter (govt-attendance.ts:359). So on a batch whose whole
-    // roster has LEFT: flag true, and a student row still matches. The red block then printed "no
-    // student row can be matched" over a preview that had just matched one — and because it is the
-    // `?` arm of a ternary it SUPPRESSED the amber note, which was the correct advice. That case is
-    // rarer than the other two and strictly WORSE than what production does today, which is the
-    // reason it was fixed before shipping rather than after.
+    // QA-897 → QA-1030 → QA-1041: the same sentence was wrong three times, each time one layer
+    // down, and the third one is the reason there are now TWO flags instead of one.
     //
-    // One definition of "the roster", and it is the matcher's, because the matcher is what decides
-    // whether anything can match. Departed members stay countable here for the same reason they stay
-    // indexed there: their rows do match, so the batch is not "nobody to match against".
-    roster_is_empty: batchId ? (await BatchMember.countDocuments({ batch: batchId })) === 0 : false,
+    // The screen was asking a single boolean to answer two different questions:
+    //   (a) can a student row in this file match ANYTHING here?  — that is the matcher's index,
+    //       which is `{batch}` with no left_on filter (govt-attendance.ts:359)
+    //   (b) does this batch have anybody on it right now?        — that is REQ-119's roster,
+    //       `{batch, left_on: null}`, the definition `rules.ts:385 rosterOnDate` uses and the one
+    //       eleven other counts in this codebase use
+    // One boolean can only get one of those right. QA-1030 was (a) answered with (b)'s count;
+    // e239139 flipped it to (b) answered with (a)'s count, and the checker caught that the lie had
+    // simply changed sides: a batch everyone had LEFT, whose file names none of them, went back to
+    // blaming the portal Candidate ID — on a batch its own screen was calling empty in the same
+    // breath. Fixing a false sentence by making a different one false is not a fix.
+    //
+    // So: both counts, from one read, and the screen picks the message. `roster_is_empty` keeps the
+    // matcher's meaning (nothing here can EVER match); `roster_all_departed` carries the other case,
+    // which needs its own sentence because neither of the existing two is true in it.
+    ...(await (async () => {
+      if (!batchId) return { roster_is_empty: false, roster_all_departed: false };
+      const rosterRows = await BatchMember.find({ batch: batchId }).select("left_on").lean<any[]>();
+      return {
+        roster_is_empty: rosterRows.length === 0,
+        roster_all_departed: rosterRows.length > 0 && rosterRows.every((m) => m.left_on),
+      };
+    })()),
     matched_student_count: matched.filter((r) => r.match_status === "Matched" && !r.trainer).length,
   };
 

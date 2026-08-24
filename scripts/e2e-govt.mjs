@@ -2047,38 +2047,81 @@ console.log("\n--- QA-897: empty roster is named, not left to look like a failed
     onFull.data.roster_is_empty === false,
     JSON.stringify({ flag: onFull.data.roster_is_empty, matched: onFull.data.matched_count }));
 
-  // QA-1030 — the THIRD case this sentence was false, and the one that made it worse than shipping
-  // nothing. `roster_is_empty` counted `{batch, left_on: null}`; matchGovtRows indexes `{batch}` with
-  // no left_on filter. A batch whose whole roster has LEFT therefore raised the flag AND still
-  // matched a student row — and since the red block is the `?` arm of a ternary, it suppressed the
-  // amber note that was the right advice. Both now read the same set.
+  // QA-1041 — the same sentence, a THIRD time, and the checker's charge was that the fix "did not
+  // remove the false sentence, it moved it to the other side". It was right, so these four pins now
+  // hold the WHOLE truth table instead of one corner of it. Two questions were being answered by one
+  // boolean: "can anything in this file match here?" (the matcher's index, `{batch}`) and "is anybody
+  // on this batch right now?" (REQ-119's roster, `{batch, left_on: null}`). Each of the three
+  // messages belongs to exactly one row below; the fourth row is the control that keeps them honest.
   {
-    const mk2 = await req(admin, "POST", "/api/batches", {
-      location: loc._id, program: program._id,
-      target_size: 5, planned_start: new Date(Date.now() + 4 * 864e5).toISOString().slice(0, 10),
-    }, 201);
-    const leftBatch = mk2.data.item;
-    // A fresh candidate, not one of `members` — Rule 20 keeps those active on `batch`, so borrowing
-    // one would be refused and the pin would test the refusal instead of the flag.
-    const cand = (await req(admin, "POST", "/api/candidates", {
+    const mkLeft = async (label) => {
+      const mk = await req(admin, "POST", "/api/batches", {
+        location: loc._id, program: program._id,
+        target_size: 5, planned_start: new Date(Date.now() + 4 * 864e5).toISOString().slice(0, 10),
+      }, 201);
+      return mk.data.item;
+    };
+    // A departed member whose name the FILE DOES NOT CARRY. Fresh candidate, not one of `members` —
+    // Rule 20 keeps those active on `batch`, so borrowing one would test the refusal, not the flag.
+    const bNoneInFile = await mkLeft();
+    const candOut = (await req(admin, "POST", "/api/candidates", {
       name: `${NAME} Departed`, phone: `9${STAMP.slice(1)}1900`,
       location: loc._id, program: program._id,
     }, 201)).data.item;
-    const add = await req(admin, "POST", `/api/batches/${leftBatch._id}/members`, { candidate: cand._id });
-    ok("QA-1030: precondition - a member was actually added before being dropped",
-      add.status === 201 && !!add.data?.item?._id, `${add.status} ${JSON.stringify(add.data).slice(0, 180)}`);
-    const drop = await req(admin, "POST", `/api/members/${add.data.item._id}/drop`,
-      { left_on: new Date().toISOString().slice(0, 10), drop_reason: "QA-1030 pin" }, 200);
-    ok("QA-1030: precondition - and the drop stuck", drop.status === 200, `${drop.status}`);
+    const addOut = await req(admin, "POST", `/api/batches/${bNoneInFile._id}/members`, { candidate: candOut._id });
+    ok("QA-1041: precondition - a member was actually added before being dropped",
+      addOut.status === 201 && !!addOut.data?.item?._id, `${addOut.status} ${JSON.stringify(addOut.data).slice(0, 160)}`);
+    const dropOut = await req(admin, "POST", `/api/members/${addOut.data.item._id}/drop`,
+      { left_on: new Date().toISOString().slice(0, 10), drop_reason: "QA-1041 pin" }, 200);
+    ok("QA-1041: precondition - and the drop stuck", dropOut.status === 200, `${dropOut.status}`);
 
-    const onLeft = await upload(admin, { file: csvFile(), batch: leftBatch._id });
-    // Asserts exactly what it measures: the FLAG. Whether this particular file matches the departed
-    // person is a separate question and the file does not carry their name — naming the pin after a
-    // match it never checks is how a pin comes to mean less than its own sentence (QA-1006, -238).
-    ok("QA-1030: a batch whose roster has LEFT does not raise roster_is_empty",
-      onLeft.data.roster_is_empty === false,
-      JSON.stringify({ flag: onLeft.data.roster_is_empty, students: onLeft.data.matched_student_count }));
-    await req(admin, "POST", `/api/batches/${leftBatch._id}/transition`, { target: "Cancelled", reason: "QA-1030 fixture cleanup" }, 200);
+    // A departed member whose name the FILE DOES CARRY. `${NAME} Alpha` is a row in the fixture CSV,
+    // and matchGovtRows indexes per batch, so the same name living on `batch` cannot make this one
+    // Ambiguous. This is the case e239139 was flipped FOR — and cycle 2 found it had no pin at all.
+    const bInFile = await mkLeft();
+    const candIn = (await req(admin, "POST", "/api/candidates", {
+      name: `${NAME} Alpha`, phone: `9${STAMP.slice(1)}1901`,
+      location: loc._id, program: program._id,
+    }, 201)).data.item;
+    const addIn = await req(admin, "POST", `/api/batches/${bInFile._id}/members`, { candidate: candIn._id });
+    ok("QA-1041: precondition - the in-file member was added",
+      addIn.status === 201 && !!addIn.data?.item?._id, `${addIn.status} ${JSON.stringify(addIn.data).slice(0, 160)}`);
+    const dropIn = await req(admin, "POST", `/api/members/${addIn.data.item._id}/drop`,
+      { left_on: new Date().toISOString().slice(0, 10), drop_reason: "QA-1041 pin" }, 200);
+    ok("QA-1041: precondition - and that drop stuck too", dropIn.status === 200, `${dropIn.status}`);
+
+    const upNever    = await upload(admin, { file: csvFile(), batch: emptyBatch._id });
+    const upNoneInFile = await upload(admin, { file: csvFile(), batch: bNoneInFile._id });
+    const upInFile   = await upload(admin, { file: csvFile(), batch: bInFile._id });
+    const upActive   = await upload(admin, { file: csvFile(), batch: batch._id });
+
+    // ROW 1 — nobody ever joined. "Add the students first." Nothing here can ever match.
+    ok("QA-1041 [1/4] never had a member: roster_is_empty true, all_departed false",
+      upNever.data.roster_is_empty === true && upNever.data.roster_all_departed === false,
+      JSON.stringify({ empty: upNever.data.roster_is_empty, departed: upNever.data.roster_all_departed }));
+
+    // ROW 2 — everyone left, and the file names none of them. THE CASE CYCLE 2 CHARGED: this used to
+    // fall through to "set the portal Candidate ID", which cannot help and points at the wrong screen.
+    ok("QA-1041 [2/4] all departed, none of them in the file: its OWN message, not the portal-ID note",
+      upNoneInFile.data.roster_is_empty === false
+        && upNoneInFile.data.roster_all_departed === true
+        && upNoneInFile.data.matched_student_count === 0,
+      JSON.stringify({ empty: upNoneInFile.data.roster_is_empty, departed: upNoneInFile.data.roster_all_departed, students: upNoneInFile.data.matched_student_count }));
+
+    // ROW 3 — everyone left, but the file DOES name one of them, so rows really match and the
+    // portal-ID note is the right advice for the rest. The red block must NOT appear here.
+    ok("QA-1041 [3/4] all departed but one IS in the file: rows match, so the portal-ID note stands",
+      upInFile.data.roster_all_departed === true && upInFile.data.matched_student_count >= 1,
+      JSON.stringify({ departed: upInFile.data.roster_all_departed, students: upInFile.data.matched_student_count }));
+
+    // ROW 4 — the control. A live roster raises neither flag; without this a pair of always-true
+    // flags would pass rows 1-3 and mean nothing.
+    ok("QA-1041 [4/4] control - a batch with a live roster raises neither flag",
+      upActive.data.roster_is_empty === false && upActive.data.roster_all_departed === false,
+      JSON.stringify({ empty: upActive.data.roster_is_empty, departed: upActive.data.roster_all_departed, students: upActive.data.matched_student_count }));
+
+    await req(admin, "POST", `/api/batches/${bNoneInFile._id}/transition`, { target: "Cancelled", reason: "QA-1041 fixture cleanup" }, 200);
+    await req(admin, "POST", `/api/batches/${bInFile._id}/transition`, { target: "Cancelled", reason: "QA-1041 fixture cleanup" }, 200);
   }
 
   await req(admin, "POST", `/api/batches/${emptyBatch._id}/transition`, { target: "Cancelled", reason: "QA-897 fixture cleanup" }, 200);

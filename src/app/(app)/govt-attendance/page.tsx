@@ -325,10 +325,20 @@ function Inner() {
                 against — and the note below then blames the portal Candidate ID, which is the wrong
                 fix and sends the operator to the wrong screen. The roster is the actual answer, so
                 it is said first and the other note is suppressed while it applies. */}
+            {/* QA-1041: THREE states, because there are three different things that can be true and
+                only one of them is a portal-Candidate-ID problem. Two of these were previously
+                collapsed into one boolean and the wrong advice fell out of whichever way it leaned. */}
             {upload.roster_is_empty ? (
               <p className="rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-800">
                 This batch has no students on its roster yet, so no student row in this file can be matched to anyone.
                 The upload itself is fine — add the students to the batch first, then import this file again.
+                {upload.matched_student_count === 0 && upload.matched_count > 0 && " (Trainer rows are matched separately and are unaffected.)"}
+              </p>
+            ) : upload.roster_all_departed && upload.matched_student_count === 0 ? (
+              <p className="rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-800">
+                Everyone who was on this batch has left it, and none of the students in this file are among them.
+                Setting portal Candidate IDs will not change that — check whether this file belongs to a different
+                batch, or whether these students still need to be added to this one.
                 {upload.matched_student_count === 0 && upload.matched_count > 0 && " (Trainer rows are matched separately and are unaffected.)"}
               </p>
             ) : !!upload.unmatched_count && (
