@@ -457,6 +457,46 @@ does not — and every role on production already has a stored row. The three ne
 in the matrix (`PUT /api/permissions`) and read back, or Operations and Location see exactly the missing
 buttons they see today.
 
+### 3.2c A comment does not enforce the rule it states — and the author is the least protected
+
+**Four times on 2026-08-24, in three different sessions, someone wrote a true sentence beside code
+that contradicted it — and in every case the person who wrote the sentence was the one who broke it.**
+This is not a documentation problem. Every one of these shipped or nearly shipped, and none was caught
+by a type checker, a lint rule, or a wall, because nothing in the toolchain compares prose to code.
+
+| What the words said | What the code did | Found by |
+|---|---|---|
+| `validate.ts`: "bulk import keeps the normalize-and-report lane" | there was **no such lane** for that field; a checksum failure and the literal `NOT-AN-AADHAAR` both imported silently | checker, QA-941 |
+| Import warning: "the SIDH export will carry it as-is" | the **same commit** made the export carry nothing (QA-942) | checker, QA-971 |
+| `validate.ts`, in capitals: APAAR must NOT go through the Aadhaar rules, because a real APAAR begins with 1 | the comparison was routed through `canonicalAadhaar()`, which refuses leading 0/1 — so the guard **could not fire on the live sample number** | checker |
+| A commit message: "placed above the optional government block" | it was **inside** that block, under a heading reading *"All optional"* — on the one question that decides whether a candidate joins the batch | **a live screenshot**, not a diff |
+
+**Why the author is the worst-placed person to catch it:** they read their own intent. The sentence
+describes what they meant to build; the code is what they built; and re-reading the pair confirms the
+intent both times. QA-727 is the earliest instance on this ledger — an excuse that named a safeguard
+which did not exist — and it was repeated one release later **by someone who had read QA-727 and
+quoted it in the commit message**.
+
+**What actually catches it, in the order they proved effective:**
+
+1. **A pin on the SENTENCE.** Where a message states what another part of the system will do, assert
+   the string. `e2e-blindspot.mjs` now asserts the import warning does not say `carry it as-is` and
+   does say `blank` — a string assertion, because no behaviour changed and only a string was wrong.
+2. **Reading the published page, not the diff.** The placement fault was invisible in review and
+   obvious in one screenshot. A rendered page answers "where is this, and what is it next to"; a diff
+   cannot.
+3. **A fresh reader who has no access to the intent.** Three of the four were found by a checker.
+4. **Writing the history rather than a clean sentence.** When one of these is corrected, leave the
+   correction visible — `validate.ts` keeps *why* its claim was once false. The failure was never the
+   missing code; it was asserting the code existed, and a tidied comment erases the only evidence of
+   that.
+
+**A pin on prose has its own trap, and it bit within the hour.** The first placement pin searched for
+the bare phrase `Government registration details` — and matched the fix's own COMMENT, which names
+that block while explaining the mistake. The pin failed while the code was right. **Match the rendered
+markup (`? *`, `>...<`), never the bare words:** a check that cannot tell code from a comment about the
+code is not a check.
+
 ### 3.3 `public/trainer-apply` never adopted `lib/validate` — **live hole, QA-274**
 `:26` `S(body.phone).replace(/\D/g,"").slice(-10)` + `:56` `length !== 10` + `:58` its own email regex.
 `99999999999999` → last ten → passes. This is exactly what -126 fixed on `p/register`, whose comment
