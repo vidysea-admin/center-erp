@@ -33,6 +33,40 @@ const SUITES = [
   "e2e-eval-data.mjs",
 ];
 
+// QA-851 (2026-08-24): the database HOST, which nothing guarded. CLAUDE.md pins the database NAME
+// ("MONGODB_DB=center_erp_ci, never center_erp") and says nothing about WHICH MACHINE that name
+// lives on - while `.env.local` resolves MONGODB_URL to the PRODUCTION Mongo at 13.202.206.101,
+// the host QA-545 records as answering without authentication. So the default local path puts the
+// suites on localhost and the server they are testing on production. On 2026-08-24 that split
+// killed 15 of 17 suites at "FATAL: cannot log in" - a table indistinguishable from a real
+// regression. Unlike the version check below this IS a refusal: no test suite has a reason to open
+// the production database. WALL_ALLOW_REMOTE_DB=1 exists for the documented remote-server case and
+// still never permits `center_erp`.
+{
+  const url = process.env.MONGODB_URL || "mongodb://127.0.0.1:27017";
+  const db = process.env.MONGODB_DB || "center_erp_ci";
+  const host = url.replace(/^mongodb(\+srv)?:\/\//, "").replace(/^[^@]*@/, "").split("/")[0].split("?")[0];
+  const loopback = /^(localhost|127\.0\.0\.1|\[::1\]|::1|host\.docker\.internal)(:\d+)?$/i.test(host);
+  const die = (why) => {
+    console.error("");
+    console.error("################################################################");
+    console.error("##  WALL REFUSED TO START (QA-851)");
+    console.error("##  " + why);
+    console.error("##  MONGODB_URL host: " + host);
+    console.error("##  MONGODB_DB:       " + db);
+    console.error("##  Pin them explicitly, e.g.");
+    console.error("##    MONGODB_URL=mongodb://127.0.0.1:27017 MONGODB_DB=center_erp_ci_<slug>");
+    console.error("################################################################");
+    console.error("");
+    process.exit(2);
+  };
+  if (db === "center_erp") die("MONGODB_DB is the PRODUCTION database. This is never a test target.");
+  if (!loopback && !process.env.WALL_ALLOW_REMOTE_DB) {
+    die("MONGODB_URL does not point at a loopback host, so this run would read/write a REMOTE database.");
+  }
+  if (!loopback) console.log("WALL: remote database permitted by WALL_ALLOW_REMOTE_DB - host " + host + ", db " + db);
+}
+
 // QA-638 / QA-645 (-197): BEFORE any suite runs, prove the server at BASE_URL is the build in this
 // working tree. On 2026-08-22 a wall reported "45 failed, 2 crashed" about a build it never started:
 // a `next start` from an earlier session held the port, `npm start` died with EADDRINUSE into a log
@@ -58,6 +92,29 @@ const SUITES = [
     } catch (e) { got = `(unreachable: ${String(e?.message ?? e).slice(0, 60)})`; }
     if (got === want) {
       console.log(`server at ${base} is running ${got} — matches this tree`);
+      // QA-852 (2026-08-24): the SERVER's own env decides whether this wall can pass. With
+      // STORAGE_DISABLE unset the build reaches for GCS, WIF impersonation 403s off a developer
+      // machine, and /api/upload + the certificate preview return 500 - which crashes e2e.mjs and
+      // e2e-sync.mjs outright. That produced "4 failed, 3 crashed" on 2026-08-24 and read exactly
+      // like broken code. The server reports which backend it chose, so ask it rather than guess.
+      try {
+        const vres = await fetch(`${base}/api/public/version`, { signal: AbortSignal.timeout(15000) });
+        const st = (await vres.json())?.evidence_storage;
+        if (st && st !== "local-ephemeral") {
+          console.log("");
+          console.log("################################################################");
+          console.log(`##  WALL WARNING: server reports evidence_storage="${st}"`);
+          console.log("##  The suites expect STORAGE_DISABLE=1 on the SERVER (see ci.yml).");
+          console.log("##  Without it, upload/certificate suites fail or crash for ENVIRONMENT");
+          console.log("##  reasons, and those failures are NOT code defects.");
+          console.log("################################################################");
+          console.log("");
+        }
+      } catch { /* the version fetch already succeeded above; a second failure is not fatal */ }
+      // The rest of the canonical wall environment lives in .github/workflows/ci.yml - keep in step.
+      for (const [k, v] of [["SYNC_ALLOW_TEST_SOURCES", "1"], ["SMS_DAILY_CAP", "6"], ["SMS_DISABLED", "1"]]) {
+        if (!process.env[k]) console.log(`WALL NOTE: ${k} is unset - ci.yml sets it to "${v}"; some pins will not be exercised.`);
+      }
     } else {
       console.log("");
       console.log("################################################################");
