@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-244";
+export const RELEASE = "2026.08.14-245";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -59,6 +59,21 @@ const RELEASE_NOTE_ARCHIVE_239 =
   "record. Alongside these, two controls on the batch screen now ask for the same right the "  +
   "server asks for, so neither is offered to someone it would refuse.";
 export const RELEASE_NOTE_CURRENT =
+  "-245 corrects a number that could be typed as nonsense and kept, and repairs three places "  +
+  "where the screen and the server disagreed about who may do what. A government attendance "  +
+  "figure entered alongside a present list was checked only for being too large. A negative "  +
+  "figure, or one with a decimal point, was accepted and stored, and the day then read back as "  +
+  "something like minus four out of two. Entered on its own the same figure had always been "  +
+  "refused; both routes now ask the same three questions, and a refusal no longer writes "  +
+  "anything before it refuses. On the batches screen, the count of batches shown against a "  +
+  "centre grew on every import of the same file, and a genuine zero was left out of the list "  +
+  "entirely rather than shown as zero; both are fixed, and the counts now say what period they "  +
+  "cover. The controls that cancel, close or reopen a batch now ask for exactly the right the "  +
+  "server asks for, so none of them is offered to someone it would refuse. Summary cards on the "  +
+  "home and sync screens now open the list of records they are counting instead of being "  +
+  "unclickable. Nothing on this release changes who may see a candidate, a trainer or a batch.";
+
+const RELEASE_NOTE_ARCHIVE_244 =
   "-244 puts back two things a pair of well-meant guards had taken away, both of which stopped "  +
   "ordinary work that had been possible the day before. Adding someone to a batch that has not "  +
   "started yet was refused whenever their joining date was earlier than the date the batch is "  +
@@ -569,7 +584,7 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
-  RELEASE_NOTE_ARCHIVE_243 + " " + RELEASE_NOTE_ARCHIVE_242 + " " + RELEASE_NOTE_ARCHIVE_241 + " " + RELEASE_NOTE_ARCHIVE_240 + " " + RELEASE_NOTE_ARCHIVE_239 + " " + RELEASE_NOTE_ARCHIVE_238 + " " +
+  RELEASE_NOTE_ARCHIVE_244 + " " + RELEASE_NOTE_ARCHIVE_243 + " " + RELEASE_NOTE_ARCHIVE_242 + " " + RELEASE_NOTE_ARCHIVE_241 + " " + RELEASE_NOTE_ARCHIVE_240 + " " + RELEASE_NOTE_ARCHIVE_239 + " " + RELEASE_NOTE_ARCHIVE_238 + " " +
   RELEASE_NOTE_ARCHIVE_237 + " " + RELEASE_NOTE_ARCHIVE_236 + " " +
   RELEASE_NOTE_ARCHIVE_231 + " " +
   // -230 was built and never released on its own - -231 carries it. Its note is archived rather
