@@ -1588,8 +1588,17 @@ console.log("\n--- FL19 (-235): a cancelled batch can be RESTORED, and a typed j
   await req(admin, "PATCH", `/api/logs/${stale._id}`, { govt_present: Number(stale.roster_count) }, 200);
   const overCeiling = await req(admin, "PATCH", `/api/logs/${stale._id}`,
     { present_member_ids: beforeMembers, govt_present: Number(stale.roster_count) + 3 });
-  ok("FL19 (QA-1106): a figure the caller SENT is refused in Rule 30's own words",
-    overCeiling.status === 400 && /Rule 30/i.test(String(overCeiling.data?.error ?? "")),
+  // This asserted `/Rule 30/i` on the RESPONSE, and it could never pass: `apiHandler`
+  // (authz.ts:105-108) runs every HttpError through `plain()`, and stripping ledger codes is that
+  // chokepoint's whole purpose — "the ledger codes stay in code and audit, never on a screen".
+  // The thrown text at rules.ts:1141 really does say "Rule 30: govt_present cannot exceed roster
+  // count."; the caller receives it with the code already gone. So the pin was measuring the one
+  // thing the architecture guarantees is absent, and it went red the moment it was written.
+  // What is actually worth holding here is the same thing in observable terms: the refusal is a
+  // 400, it carries NO ledger code (that is `-111`'s promise, and worth a live assertion rather
+  // than only a static one), and — the assertion below — it does not blame a stored value.
+  ok("FL19 (QA-1106): a figure the caller SENT is refused, and the refusal carries no ledger code",
+    overCeiling.status === 400 && !/\b(Rule|DEC|QA)[-\s]?\d+/i.test(String(overCeiling.data?.error ?? "")),
     `${overCeiling.status} ${JSON.stringify(overCeiling.data)}`);
   ok("FL19 (QA-1106): ...and that refusal does NOT blame a stored value, because none was at fault",
     !/already recorded/i.test(String(overCeiling.data?.error ?? "")),

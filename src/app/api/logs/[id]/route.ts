@@ -93,7 +93,14 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
       const stored = gSent === undefined || gSent === null;
       const origin = stored
         ? `The government attendance already recorded for this day (${g}) `
-        : `Rule 30: government attendance (${g}) `;
+        // QA-1106 ka jumla, bina ledger code ke. `Rule 30: ` yahan likhne ka koi faayda tha hi
+        // nahi: `apiHandler` (authz.ts:105-108) har HttpError ko `plain()` se guzarta hai aur
+        // ledger code wahin gir jaata hai — chokepoint ka poora maqsad yahi hai. To wo code kabhi
+        // kisi user tak pahuncha hi nahi; usne sirf do kaam kiye — `-111` ka static wall check
+        // toda (kyunki ye literal ek const me jaata hai, seedha throw me nahi, is liye pin use
+        // "thrown" nahi pehchaan paata), aur FL19 ko ek aisi string par khada kar diya jo
+        // architecture ke hisaab se response me aa hi nahi sakti thi.
+        : `Government attendance (${g}) `;
       const repair = stored ? " Correct that figure in the same edit to save this day." : "";
       if (!Number.isInteger(g) || g < 0) {
         throw new HttpError(400, `${origin}must be a whole number of zero or more.${repair}`);
