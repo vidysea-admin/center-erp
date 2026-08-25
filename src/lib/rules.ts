@@ -3360,11 +3360,18 @@ export async function trainerTiesFor(locIds: unknown[], progIds?: unknown[]) {
   // centre x job role" is exactly the second copy this function was extracted to remove, so the
   // names come from here or the migration is only half done.
   const out = new Map<string, { nominated: number; certified: number; in_pipeline: number;
-    trainers: { _id: string; name: string; stage: string }[] }>();
+    in_pipeline_nominated: number; trainers: { _id: string; name: string; stage: string }[] }>();
   if (!locIds.length) return out;
 
   const nomMatch: Record<string, unknown> = { nominated_for_location: { $in: locIds }, active: true };
-  const batchMatch: Record<string, unknown> = { location: { $in: locIds }, trainer: { $ne: null }, status: { $ne: "Cancelled" } };
+  // QA-1307 (checker, cycle 1): this said `{ $ne: "Cancelled" }`, so a Completed or Closed batch
+  // still counted its trainer as one of the centre's. The checker put my own sentence back to me:
+  // the reason for excluding Cancelled - "a cancelled batch is not a trainer working at a centre" -
+  // applies word for word to a batch that FINISHED, and the column is headed "Trainers (ours, live)".
+  // So the tie is the batches that represent work now or work coming: Planning, Ready, Active,
+  // Closing. History does not make a trainer present.
+  const batchMatch: Record<string, unknown> = { location: { $in: locIds }, trainer: { $ne: null },
+    status: { $in: ["Planning", "Ready", "Active", "Closing"] } };
   if (progIds) { nomMatch.nominated_for_program = { $in: progIds }; batchMatch.program = { $in: progIds }; }
 
   const [nominatedRows, batches] = await Promise.all([
@@ -3389,27 +3396,46 @@ export async function trainerTiesFor(locIds: unknown[], progIds?: unknown[]) {
     if (!seen.has(k)) seen.set(k, new Map());
     seen.get(k)!.set(id, status);
   };
+  // QA-1306 (checker, cycle 1) - and this is the one that cost something LIVE, so it gets its own
+  // set. `in_pipeline` answers TWO different questions and I let one answer serve both:
+  //   (a) the screen's "N nominated, M in pipeline" - here the batch tie BELONGS, because a trainer
+  //       running a batch at this centre is one of this centre's trainers. That is the whole defect.
+  //   (b) from-shortfall's "is hiring already underway for this VACANCY?" - here the batch tie is
+  //       WRONG, because nobody nominated them. Somebody working here is not somebody being hired
+  //       for the empty seat.
+  // Widening (a) silently switched off (b): a centre whose only tie was a batch-tied `Fresh Lead`
+  // stopped raising a trainer request AND stopped recording a reason - the checker measured a twin
+  // pair, control {created:1} against {created:0, skipped:0}, and it is live on -249.
+  // So the nomination-only figure is kept ALONGSIDE rather than the screen being made wrong again.
+  const nominatedOnly = new Set<string>();
+  for (const t of nominatedRows) {
+    if (!t.nominated_for_location || !t.nominated_for_program) continue;
+    nominatedOnly.add(`${String(t.nominated_for_location)}|${String(t.nominated_for_program)}|${String(t._id)}`);
+  }
   for (const t of nominatedRows) add(t.nominated_for_location, t.nominated_for_program, String(t._id), String(t.pipeline_status ?? ""));
   for (const b of batches) add(b.location, b.program, String(b.trainer), statusById.get(String(b.trainer)));
 
   for (const [k, trainers] of seen) {
-    let nominated = 0, certified = 0, in_pipeline = 0;
+    let nominated = 0, certified = 0, in_pipeline = 0, in_pipeline_nominated = 0;
     const people: { _id: string; name: string; stage: string }[] = [];
     for (const [id, st] of trainers) {
       if ((NOMINATED_STATES as readonly string[]).includes(st)) nominated++;
       if (st === "Certified") certified++;
-      if (st !== "Certified" && st !== "Dropped") in_pipeline++;
+      if (st !== "Certified" && st !== "Dropped") {
+        in_pipeline++;
+        if (nominatedOnly.has(`${k}|${id}`)) in_pipeline_nominated++;
+      }
       people.push({ _id: id, name: nameById.get(id) ?? "", stage: st });
     }
     people.sort((a, b) => a.name.localeCompare(b.name));
-    out.set(k, { nominated, certified, in_pipeline, trainers: people });
+    out.set(k, { nominated, certified, in_pipeline, in_pipeline_nominated, trainers: people });
   }
   return out;
 }
 
 export async function trainerCountsFor(locationId: unknown, programId: unknown) {
   const ties = await trainerTiesFor([locationId], [programId]);
-  return ties.get(`${String(locationId)}|${String(programId)}`) ?? { nominated: 0, certified: 0, in_pipeline: 0 };
+  return ties.get(`${String(locationId)}|${String(programId)}`) ?? { nominated: 0, certified: 0, in_pipeline: 0, in_pipeline_nominated: 0, trainers: [] };
 }
 
 // Rule T8 - can this centre x job role actually start a batch? The three-way mapping Manish
@@ -4058,10 +4084,13 @@ export async function mappingReadinessBulk(targetFilter: Record<string, unknown>
 
   return targets.filter((t) => t.location && t.program).map((t) => {
     const k = key(t.location._id, t.program._id);
-    const tc = byTrainer.get(k) ?? { nominated: 0, certified: 0, in_pipeline: 0, trainers: [] };
+    const tc = byTrainer.get(k) ?? { nominated: 0, certified: 0, in_pipeline: 0, in_pipeline_nominated: 0, trainers: [] };
     const cc = byCand.get(k) ?? { pool: 0, registered: 0 };
     const needed = t.program.default_batch_size ?? 30;
-    const counts = { nominated: tc.nominated, certified: tc.certified, in_pipeline: tc.in_pipeline };
+    // QA-1306: `in_pipeline_nominated` travels WITH `in_pipeline`, because the two answer different
+    // questions and from-shortfall needs the narrower one. See trainerTiesFor.
+    const counts = { nominated: tc.nominated, certified: tc.certified, in_pipeline: tc.in_pipeline,
+      in_pipeline_nominated: tc.in_pipeline_nominated ?? 0 };
     const rc = byRoom.get(String(t.location._id)) ?? { rooms: 0, labs: 0 };
     // 2026-08-13 (Manish: "31 approved"): the government approves each centre×job-role ROW with
     // its own TC ID — a per-target TC wins over the centre-level one when the target carries it.

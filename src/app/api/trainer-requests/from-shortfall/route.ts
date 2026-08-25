@@ -33,8 +33,22 @@ export const POST = apiHandler(async (req: NextRequest) => {
   for (const r of rows) {
     const name = { location: r.location?.name, program: r.program?.name };
     const certified = r.trainers?.certified ?? 0;
-    const inPipeline = r.trainers?.in_pipeline ?? 0;
-    if (certified >= 1 || inPipeline > 0) continue; // no shortfall, or hiring already underway — not even "skipped"
+    // QA-1306 (checker on qa-1262 cycle 1, LIVE on -249): this read `in_pipeline`, and QA-1262
+    // widened that to include a trainer tied only by a BATCH - somebody working here, whom nobody
+    // nominated. The question on THIS line is not "is anyone working here", it is "is hiring already
+    // underway for this empty seat", and that is a nomination question. The widening silently
+    // switched the door off: a centre whose only tie was a batch-tied `Fresh Lead` stopped raising a
+    // request. Measured as a twin pair - control {created:1} against {created:0, skipped:0}.
+    const inPipeline = r.trainers?.in_pipeline_nominated ?? 0;
+    if (certified >= 1) continue; // already staffed - no shortfall to raise
+    if (inPipeline > 0) {
+      // QA-1306, the OTHER half, and it is why the switch-off was invisible: this used to be a bare
+      // `continue`. No request, no notification, NO REASON RECORDED - the caller got
+      // {created:0, skipped:0} and nothing to read. A decision not to act is still a decision, and
+      // the screen that shows `skipped` is the only place anyone would ever see it.
+      skipped.push({ ...name, reason: `hiring already underway - ${inPipeline} nominated trainer(s) in the pipeline for this job role` });
+      continue;
+    }
     if (HALTED_LOCATION_STATUSES.includes(String(r.location?.operational_status))) {
       skipped.push({ ...name, reason: `centre is ${r.location.operational_status} (F-B5: a halted centre does not hire)` });
       continue;

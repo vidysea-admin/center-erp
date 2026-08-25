@@ -417,4 +417,43 @@ ok("[best] each row names its blockers + next action + trainer/candidate counts"
     (afterBatch?.trainers_nominated_total ?? 0) > 0, JSON.stringify({ got: afterBatch?.trainers_nominated_total }));
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// QA-1307 + QA-1306 — the two the cycle-1 checker measured against QA-1262, both LIVE on -249.
+{
+  // QA-1307: a FINISHED batch is history, not presence. My own reason for excluding Cancelled -
+  // "a cancelled batch is not a trainer working at a centre" - applies word for word to a batch
+  // that completed, and the column is headed "Trainers (ours, live)".
+  const before = (await fetchRow())?.trainers_nominated_total ?? 0;
+  const fTr = (await req(admin, "POST", "/api/trainers", { name: "TEST-EL Finished " + s, phone: phone("94"), skills: ["ELSkill" + s], pipeline_status: "TOT In Progress" }, 201)).data.item;
+  const fRoom = (await req(admin, "POST", `/api/locations/${loc._id}/rooms`, { name: "EL Fin Room " + s, type: "Classroom", capacity: 25 }, 201)).data.item;
+  const fBatch = (await req(admin, "POST", "/api/batches", { location: loc._id, program: prog._id, trainer: fTr._id, room: fRoom._id, planned_start: today(), target_size: 1 }, 201)).data.item;
+  const mid = (await fetchRow())?.trainers_nominated_total ?? 0;
+  ok("QA-1307 [precondition] a PLANNING batch does count, so the next assertion is not vacuous",
+    mid === before + 1, JSON.stringify({ before, mid }));
+  await req(admin, "PATCH", `/api/batches/${fBatch._id}`, { status: "Completed" }, 200).catch(() => {});
+  const after = (await fetchRow())?.trainers_nominated_total ?? 0;
+  ok("QA-1307: once that batch is FINISHED the trainer stops counting as this centre's",
+    after === before, JSON.stringify({ before, mid, after }));
+}
+{
+  // QA-1306 — the one that cost something live. A centre whose ONLY tie is a batch-tied trainer
+  // nobody nominated must STILL be treated as unstaffed by from-shortfall, because "is hiring
+  // underway for this seat" is a nomination question. And if it ever does decline, it must SAY SO:
+  // the old bare `continue` returned {created:0, skipped:0} with no reason anywhere.
+  const qProg = (await req(admin, "POST", "/api/programs", { code: "Q" + s, name: "ShortfallProg " + s, trainer_skill: "QSkill" + s }, 201)).data.item;
+  const qLoc = (await req(admin, "POST", "/api/locations", { code: "QL" + s, name: "TEST-Shortfall " + s, approval_status: "Approved", operational_status: "Active", city: "Meerut" }, 201)).data.item;
+  await req(admin, "POST", `/api/locations/${qLoc._id}/targets`, { program: qProg._id, trainers_required: 1, approved_target: 30, tc_status: "Approved" }, 201).catch(() => {});
+  const qRoom = (await req(admin, "POST", `/api/locations/${qLoc._id}/rooms`, { name: "Q Room " + s, type: "Classroom", capacity: 25 }, 201)).data.item;
+  const qTr = (await req(admin, "POST", "/api/trainers", { name: "TEST-Q BatchOnly " + s, phone: phone("93"), skills: ["QSkill" + s], pipeline_status: "Fresh Lead" }, 201)).data.item;
+  await req(admin, "POST", "/api/batches", { location: qLoc._id, program: qProg._id, trainer: qTr._id, room: qRoom._id, planned_start: today(), target_size: 1 }, 201);
+  const res = (await req(admin, "POST", "/api/trainer-requests/from-shortfall", { location: qLoc._id }, 200)).data;
+  const createdN = res.summary?.created ?? 0;
+  const skippedN = (res.skipped ?? []).length;
+  ok("QA-1306: a centre whose only trainer is batch-tied and NOT nominated is still unstaffed - the request gets raised",
+    createdN >= 1, JSON.stringify({ created: createdN, skipped: res.skipped }));
+  ok("QA-1306: and nothing is ever declined in SILENCE - every non-creation carries a reason",
+    createdN >= 1 || skippedN >= 1, JSON.stringify({ created: createdN, skippedCount: skippedN, skipped: res.skipped }));
+}
+
 finish();
