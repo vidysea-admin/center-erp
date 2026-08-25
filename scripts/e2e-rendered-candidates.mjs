@@ -31,6 +31,10 @@
 // carries an unknown status and needs a fixture this unit does not build. That gap is named in the
 // manifest rather than papered over.
 import { chromium } from "playwright";
+import * as XLSX from "xlsx";
+import { writeFileSync as wfs } from "node:fs";
+import { tmpdir } from "node:os";
+import { join as pjoin } from "node:path";
 import { ok, req, adminLogin, finish, stamp, phone, today, BASE, ADMIN_PASSWORD } from "./e2e-lib.mjs";
 
 const JOURNEY_TAGS = ["Enrollment in progress", "Training Ongoing", "Training Completed", "Result Awaited",
@@ -232,6 +236,84 @@ if (await card.count() > 0) {
     ok("[REQ-367b] the 'does not recognise' warning is outside every card as well", !closed2.unrecInsideCard, JSON.stringify(closed2));
   } else {
     console.log("NOTE  [REQ-367b] the QA-552 'does not recognise' line is NOT rendered on this dataset, so its half of the criterion was NOT exercised. It needs sheet data carrying an unknown status; named as an open gap in the manifest, not counted as a pass.");
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// QA-1268 (qa-1191 cycle-3 checker). THE IMPORT PREVIEW'S OWN WARNINGS, READ OFF THE SCREEN.
+//
+// This assertion used to live in scripts/e2e-blindspot.mjs as a SOURCE-TEXT search of
+// candidates/page.tsx, and it was blind TWICE IN A ROW. Cycle 2's version matched the fix's own
+// COMMENT and passed with the render deleted. Cycle 3 "fixed" that by stripping comments - but only
+// LINE-START ones, and page.tsx carries 38 multi-line {/* ... */} blocks. The checker deleted the
+// render, left the multi-line comment above it, and the pin still reported PASS 124/0; with a
+// one-line comment as control it correctly went RED. The second pin was exactly as blind as the
+// first, and its own comment claimed it was not.
+//
+// The lesson is NOT "strip comments better". A string search over source cannot answer "does this
+// render" - it can only approximate it, and every tightening buys one new hole and one new false
+// red. QA-1091 -> QA-1127 -> QA-1141 -> QA-1184 -> QA-1214 is that exact ladder, already walked
+// once in this repo for a different pin.
+//
+// So the question moves to the instrument that answers it directly: the DOM. Deleting the render
+// fails this. No comment, in any shape, can pass it.
+{
+  const bad = { interest: "maybe later idk", edu: "not-a-level" };
+  const rows = [
+    { Name: "TEST-IP " + s + " A", Phone: phone("77"), Interest: "The current batch", Edu: "10th Pass" },
+    { Name: "TEST-IP " + s + " B", Phone: phone("77"), Interest: bad.interest, Edu: bad.edu },
+  ];
+  // tmpdir, NOT the tree. The cycle-3 checker put a temporary path inside the checkout and Turbopack
+  // failed the build on it - a self-inflicted error that reads exactly like broken code.
+  const xlsx = pjoin(tmpdir(), "erp-import-" + s + ".xlsx");
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Sheet1");
+  wfs(xlsx, XLSX.write(wb, { type: "buffer", bookType: "xlsx" }));
+
+  let reached = false;
+  try {
+    await page.goto(BASE + "/candidates", { waitUntil: "domcontentloaded" });
+    await settled();
+    await page.getByRole("button", { name: "Import Excel" }).click();
+    await page.waitForSelector('input[type="file"]', { timeout: 15000 });
+    const gate = page.locator("select");
+    const gn = await gate.count();
+    for (let i = 0; i < Math.min(gn, 2); i++) await gate.nth(i).selectOption({ index: 1 }).catch(() => {});
+    await page.locator('input[type="file"]').last().setInputFiles(xlsx);
+    await page.waitForFunction(() => /Interest/.test(document.body.innerText), undefined, { timeout: 20000 });
+    for (const field of ["name", "phone", "batch_interest", "education"]) {
+      const sel = page.locator('select:has(option[value="' + field + '"])');
+      const n = await sel.count();
+      for (let i = 0; i < n; i++) {
+        const cur = await sel.nth(i).inputValue().catch(() => "x");
+        if (!cur) { await sel.nth(i).selectOption(field).catch(() => {}); break; }
+      }
+    }
+    await page.getByRole("button", { name: /^Preview/ }).click();
+    await page.waitForFunction((e) => document.body.innerText.includes(e), bad.edu, { timeout: 25000 });
+    reached = true;
+  } catch (e) {
+    // NOT a skip. A flow that never reached the preview verified nothing, and says so in red.
+    ok("[QA-1268] the import preview was reachable in a browser", false, String((e && e.message) || e).slice(0, 200));
+  }
+
+  if (reached) {
+    const text = await page.locator("body").innerText();
+    // THE CONTROL, and it is what makes the next assertion mean anything. Cycle 1's real defect was
+    // that education rendered and batch interest did not - so "the interest value appears" alone
+    // would pass on a screen that renders everything, and prove nothing about the fix.
+    ok("[QA-1268 control] the preview names an unreadable EDUCATION value - proof the drawer renders warnings at all",
+      text.includes(bad.edu), text.slice(0, 200));
+    ok("[QA-1268] ...and it names the unreadable BATCH INTEREST value too - read off the DOM, so no comment can fake it",
+      text.includes(bad.interest), (text.match(/Batch interest[^\n]*/) || ["(no batch-interest line rendered)"])[0]);
+    ok("[QA-1268] ...under its own heading, so the operator is told WHICH column is wrong",
+      /Batch interest not recognised/i.test(text), (text.match(/Batch interest[^\n]*/) || ["(heading absent)"])[0]);
+    // QA-1267's regression guard, on the screen where it was found: a mapping entry whose
+    // destination is the empty string - what the drawer's own "Ignore" writes - must never produce a
+    // warning that names no column at all.
+    ok("[QA-1267] no blank-column warning names NOTHING - 'the column mapped to .' is a report lane lying about a column",
+      !/mapped to\s*\.(\s|$)/m.test(text),
+      (text.match(/[^\n]*mapped to[^\n]*/) || ["(no blank-column warning at all)"])[0]);
   }
 }
 

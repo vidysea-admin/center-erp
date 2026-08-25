@@ -1043,22 +1043,24 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
         // Matched on the RENDERED expression, not the bare key - a bare-key search would also match
         // the comment that explains the fix, which is a trap this suite has already sprung once.
         {
-          const { readFileSync: rf } = await import("node:fs");
-          const page = rf("src/app/(app)/candidates/page.tsx", "utf8");
-          // QA-1268 (checker, cycle 2): the two strings below both survive INSIDE A COMMENT, so
-          // deleting the render entirely and leaving the explanatory comment kept this green - the
-          // very trap its own comment claimed to dodge, and the third time this suite has met it.
-          // Fixed by measuring the file with its comments STRIPPED: a claim about what renders must
-          // be made against what renders.
-          // Comments are stripped with plain string ops, deliberately: the first attempt used a
-          // regex whose escaping did not survive being written to disk, and a pin that cannot even
-          // be parsed is worth less than no pin.
-          const isComment = (t) => t.startsWith("//") || t.startsWith("*") || t.startsWith("/*") || t.startsWith("{/*");
-          const code = page.split(String.fromCharCode(10)).filter((l) => !isComment(l.trim())).join(String.fromCharCode(10));
-          ok("QA-1235: the import drawer actually RENDERS batch_interest_unmatched - measured with comments stripped, because a comment about a render is not a render",
-            code.includes("importState.preview?.batch_interest_unmatched?.length > 0")
-              && code.includes("importState.preview.batch_interest_unmatched.join"),
-            code.includes("batch_interest_unmatched") ? "key present in code but not rendered" : "absent from the screen's CODE (comments do not count)");
+          // QA-1268 (qa-1191 cycle-3 checker): THIS PIN IS GONE, ON PURPOSE, AND IT IS NOT COMING BACK
+          // IN THIS SHAPE. It searched candidates/page.tsx for the rendered expression, and it was
+          // blind twice. Cycle 2's version matched the fix's own COMMENT. Cycle 3 stripped comments -
+          // but only LINE-START ones, and that file has 38 multi-line {/* ... */} blocks, so the
+          // checker deleted the render, kept the comment, and this still said PASS 124/0. A one-line
+          // comment as control went correctly RED, which is how the hole was proved rather than
+          // guessed.
+          //
+          // A string search over source cannot answer "does this render". Every tightening buys one
+          // hole and one false red - QA-1091 -> QA-1127 -> QA-1141 -> QA-1184 -> QA-1214 walked that
+          // exact ladder for another pin before this one. A pin that gives false assurance is worse
+          // than no pin, so this does not get a fourth attempt here.
+          //
+          // THE ASSERTION MOVED TO WHERE IT CAN BE TRUE: scripts/e2e-rendered-candidates.mjs opens
+          // the import drawer in a real browser, uploads a sheet with an unreadable interest value,
+          // and reads the drawer's innerText - with an unreadable EDUCATION value as the positive
+          // control, so a screen that renders everything cannot pass it either. Deleting the render
+          // fails it; no comment can.
 
           // QA-1267 (checker, cycle 2): an "Ignore"d column must produce no blank_by_field entry at
           // all. Driven through the API the way the drawer posts it - destination "" - because that
