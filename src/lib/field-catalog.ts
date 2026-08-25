@@ -127,7 +127,7 @@ export const FIELD_CATALOG: Record<"Candidate" | "Trainer" | "Location", FieldSp
     // id_reference: the nearest-looking option wins when the right one is not offered.
     { key: "aadhaar_no", label: "Aadhaar number", type: "text", aliases: ["aadhaar", "aadhar", "adhaar", "adhar", "aadhaar number", "aadhar number", "aadhaar no", "uid", "uid number"] },
     // QA-945: sheets from mobilisers carry an availability column often enough to be worth mapping.
-    { key: "batch_interest", label: "Interested in (Current / Upcoming batch)", type: "enum", enum: ["Current", "Future"], aliases: ["batch interest", "interested in", "availability", "current or future", "future batch", "current or upcoming", "upcoming batch", "upcoming"] },
+    { key: "batch_interest", label: "Interested in (Current / Upcoming batch)", type: "enum", enum: ["Current", "Future"], aliases: ["batch interest", "interested in", "availability", "current or future", "future batch", "current or upcoming", "upcoming batch"] },
     { key: "id_reference", label: "Govt ID reference (NOT Aadhaar, NOT the portal candidate ID)", type: "text", aliases: ["id reference", "govt id", "government id", "id proof"] },
     { key: "last_training_date", label: "Last training date", type: "date", aliases: ["last training date", "last training", "previous training date"] },
     { key: "interested_programs", label: "Interested programmes (comma-separated)", type: "list", aliases: ["interested programs", "interested programmes", "preferred course", "course interested"] },

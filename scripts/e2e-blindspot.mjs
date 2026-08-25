@@ -745,6 +745,31 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
         }
         ok('QA-1190: nothing in src/ still says "future batch" or "current intake" - the rename reached every screen, not only the dropdown',
           stale.length === 0, stale.slice(0, 6).join(" | ") || "clean");
+
+        // QA-1205 (checker, qa-1190 cycle 1). THE BLACKLIST ABOVE HAS A HOLE, and the checker did not
+        // suspect it - it PROVED it: on the fixed tree it reverted ONLY the import label and this pin
+        // still reported GREEN, exit 0. The reason is that the list is `String.includes` and
+        // case-SENSITIVE, and the label's own spelling is "Interested in (Current / Future batch)" -
+        // capital F, matching neither "A future batch" nor "FUTURE batch". Five of the six renamed
+        // files were guarded; the sixth, the one a mobiliser's sheet is mapped through, was not.
+        //
+        // A blacklist can only ever ban the spellings somebody thought of. So the label is asserted
+        // POSITIVELY - the same tightening the two form pins got, and for the same reason: say what
+        // must be there, not merely what must not.
+        const catalog = readFileSync("src/lib/field-catalog.ts", "utf8");
+        ok("QA-1205: the Excel import label IS the renamed one - asserted positively, because a blacklist cannot guard a spelling nobody predicted",
+          catalog.includes('label: "Interested in (Current / Upcoming batch)"')
+            && !/Interested in \(Current \/ Future batch\)/i.test(catalog),
+          catalog.match(/label: "Interested in [^"]*"/)?.[0] ?? "no batch_interest label found");
+
+        // QA-1206 (same verdict): the bare "upcoming" alias was greedy enough to capture a column
+        // that has nothing to do with batch interest. Bounded - the Excel import screen does not use
+        // aliases at all and the sheet-sync path coerces enums - so the worst case was a
+        // mis-suggestion a human sees. Removed anyway; the two-word forms cover the real headers.
+        ok("QA-1206: the batch_interest aliases keep the two-word forms and no longer claim a bare \"upcoming\"",
+          /"upcoming batch"/.test(catalog) && /"current or upcoming"/.test(catalog)
+            && !/"upcoming"\s*\]/.test(catalog) && !/, "upcoming",/.test(catalog),
+          catalog.match(/aliases: \[[^\]]*"upcoming[^\]]*\]/)?.[0]?.slice(0, 160) ?? "aliases not found");
       }
       const pubJunk = await pubPost(regTok.token, { name: "BIJunk " + stamp, phone: "7993" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0"), email: "bijunk" + stamp + "@test.local", batch_interest: "Whatever" });
       const junkRow = (await req(admin, "GET", `/api/candidates?limit=2000&location=${loc._id}`)).data.items.find((c) => c.name === "BIJunk " + stamp);
