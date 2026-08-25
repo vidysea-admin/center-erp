@@ -3325,6 +3325,57 @@ for (const file of walk(root)) {
   }
 }
 
+// ---- QA-496: the target MOVE has to be reachable, and gated by the right the SERVER asks ----
+// -163 shipped `PATCH /api/locations/[id]/targets {from_program,to_program,reason}` to repair a row
+// filed under a job role its own source sheet does not name. It shipped with NO SCREEN: a grep for
+// `from_program` across every .tsx returned nothing for the whole life of the door, so the one
+// defect it exists to fix - 560 of government-approved target sitting on PMKVYB-DST, a programme
+// the client workbook has no row for - could not be repaired by any person using the product.
+// A verb nobody can press is a verb that does not exist; this file already carries six findings of
+// that shape (QA-798 / QA-1144 and their relatives), and this one had the added twist that the
+// route's own tests were green the entire time.
+//
+// Pinned as a TRIO because any one alone is passable by something useless:
+//   - the verb alone would pass on a button that opens nothing;
+//   - the call alone would pass on a call no screen can reach;
+//   - the gate alone would pass on a screen with no verb at all.
+{
+  const rel = "app/(app)/locations/[id]/page.tsx";
+  const src = stripComments(fs.readFileSync(path.join(root, rel), "utf-8"));
+  const scan = blankStrings(src);
+
+  // 1. the verb is on the screen. Text match on the raw source, because the label is the thing a
+  //    person looks for and blankStrings would erase it.
+  const hasVerb = /Move job role/.test(src);
+  // 2. it actually drives the move door - all three fields, since the route 400s without any of
+  //    them and a call missing `reason` would be a button that always refuses.
+  //    READ `src`, NOT `scan`, and this pin got it wrong on its first run: blankStrings() hollows
+  //    out every string literal, so `method: "PATCH"` became `method: "     "` and the check
+  //    reported false against code that was right in front of it. `src` is already comment-
+  //    stripped, so matching it cannot be satisfied by a comment.
+  const callsDoor = /from_program/.test(src) && /to_program/.test(src) && /reason/.test(src)
+    && /method:\s*"PATCH"/.test(src);
+  // 3. and it decides from the PERMISSION the route asks for, not from a role name. The route is
+  //    `requirePerm(user, "locations.manage")`; a role blacklist here is wrong in both directions
+  //    the moment an Admin edits the matrix, which the product supports. Same reason as above for
+  //    reading `src`: the right's NAME only exists inside a string literal.
+  const gateDecl = /const canMove = ([^;]*);/.exec(src);
+  const gateSrc = gateDecl ? gateDecl[1] : "";
+  const gateRight = !!gateSrc && /locations\.manage/.test(gateSrc) && !/\brole\b/.test(gateSrc);
+
+  if (hasVerb && callsDoor && gateRight) passed++;
+  else {
+    failed++;
+    pushStructural(rel + ": the targets card cannot move a row to another job role"
+      + " (verb on screen=" + hasVerb + ", calls the move door=" + callsDoor
+      + ", gated on locations.manage=" + gateRight + (gateRight ? "" : " -> " + JSON.stringify(gateSrc.trim().slice(0, 90))) + ")"
+      + " - without all three, a target filed under the wrong job role can be created by an import"
+      + " and never corrected by a person: PUT upserts on {location, program} so sending the right"
+      + " programme ADDS a second row rather than moving the first, and there is no delete. That is"
+      + " QA-496, and it is 560 of approved target reading in the wrong column of the CEO's report.");
+  }
+}
+
   // -175: every finding, printed once, AFTER every check has had its say. See the note where this
   // loop used to live.
   for (const h of hits) console.log("  ✗ " + h);

@@ -2,8 +2,9 @@
 import { Suspense, use, useEffect, useState } from "react";
 import { api, fmtDate, offerable } from "@/lib/client";
 import { useSearchParams } from "next/navigation";
-import { BackLink, Btn, Chip, CopyBtn, DataTable, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
+import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
 import { Activity } from "@/components/activity";
+import { usePerms } from "@/components/shell";
 import Link from "next/link";
 
 // -115 (QA-221): a RETIRED programme (active === false) leaves the pickers where something new is
@@ -223,6 +224,21 @@ function Targets({ locationId, setError }: any) {
   const [items, setItems] = useState<any[]>([]);
   const [programs, setPrograms] = useState<any[]>([]);
   const [form, setForm] = useState<any>({});
+  // QA-496: the row that is on the WRONG job role, and where it should go. The move door
+  // (PATCH .../targets) shipped in -163 and has had no screen since — `grep from_program
+  // --include=*.tsx` returned nothing — so the one defect it was built to repair (560 of
+  // government-approved target filed under a job role the client sheet does not even have) could
+  // not be repaired by anybody. A verb nobody can press is a verb that does not exist.
+  const [mv, setMv] = useState<any>(null);
+  const [mvTo, setMvTo] = useState("");
+  const [mvReason, setMvReason] = useState("");
+  const [mvBusy, setMvBusy] = useState(false);
+  const [mvErr, setMvErr] = useState("");
+  // The SAME right the route asks for (requirePerm(user, "locations.manage")), not a role literal —
+  // QA-798 / QA-1144 are the standing rows for controls that decide from a role while the server
+  // decides from a permission, and they disagree the moment the matrix is edited.
+  const { can, loaded: permsLoaded } = usePerms();
+  const canMove = !permsLoaded || can("locations.manage", "edit");
 
   const load = () => Promise.all([
     api(`/api/locations/${locationId}/targets`).then((d) => setItems(d.items)),
@@ -237,6 +253,24 @@ function Targets({ locationId, setError }: any) {
       if (res?.queued) setError(`Sent to the Admin for approval — the target updates once approved.`);
       setForm({}); load();
     } catch (e: any) { setError(e.message); }
+  }
+
+  // QA-496: a MOVE, not a delete-and-retype — the row carries its own tc_id, tc_status and the
+  // sheet's claimed counts, and re-keying it by hand would lose all of that. The refusal the server
+  // gives when the destination already has a row is shown VERBATIM and nothing is decided here:
+  // merging two government targets is a decision about which figures survive, and that belongs to
+  // the person, not to write order.
+  async function moveRow() {
+    if (!mv) return;
+    setMvErr(""); setMvBusy(true);
+    try {
+      await api(`/api/locations/${locationId}/targets`, {
+        method: "PATCH",
+        json: { from_program: mv.program?._id ?? mv.program, to_program: mvTo, reason: mvReason.trim() },
+      });
+      setMv(null); setMvTo(""); setMvReason(""); load();
+    } catch (e: any) { setMvErr(e.message); }
+    finally { setMvBusy(false); }
   }
 
   return (
@@ -316,6 +350,17 @@ function Targets({ locationId, setError }: any) {
                 ),
             },
             { key: "capacity", label: "Capacity math", mobile: false, render: (r: any) => <span className="text-xs text-gray-600">{r.capacity?.sentence ?? "—"}</span> },
+            {
+              // QA-496: the repair for a row filed under the wrong job role. It sits ON the row
+              // because that is the only place a person can see WHICH row is wrong — the job role,
+              // its TC ID and its verdict are all one line to the left.
+              key: "_move", label: "", render: (r: any) => (
+                <Btn small kind="ghost" disabled={!canMove}
+                  onClick={() => { setMv(r); setMvTo(""); setMvReason(""); setMvErr(""); }}>
+                  Move job role
+                </Btn>
+              ),
+            },
           ]}
           empty="No targets yet."
         />
@@ -338,6 +383,36 @@ function Targets({ locationId, setError }: any) {
           <div className="flex items-end"><Btn onClick={save} disabled={!form.program}>Save target</Btn></div>
         </div>
       </Section>
+      {/* QA-496. The drawer says what is actually happening — a government approval is being moved
+          from one job role to another — because "Move job role" on its own reads like a typo fix. */}
+      <Drawer open={!!mv} onClose={() => setMv(null)} error={mvErr}
+        title={`Move ${mv?.program?.name ?? "this target"} to another job role`}>
+        <div className="space-y-3">
+          <p className="text-sm text-gray-600">
+            This moves the SAME row — its TC ID{mv?.tc_id ? ` (${mv.tc_id})` : ""}, its government
+            verdict{mv?.tc_status ? ` (${mv.tc_status})` : ""} and the sheet&apos;s reported figures all travel
+            with it. The centre&apos;s total does not change; only which job role holds
+            {typeof mv?.approved_target === "number" ? ` these ${mv.approved_target}` : " this target"}.
+          </p>
+          <Field label="Move it to" required>
+            <select className={inputCls} value={mvTo} onChange={(e) => setMvTo(e.target.value)}>
+              <option value="">Select the job role the sheet actually names…</option>
+              {offerable(programs, mvTo)
+                .filter((p: any) => String(p._id) !== String(mv?.program?._id ?? mv?.program))
+                .map((p: any) => <option key={p._id} value={p._id}>{p.name}{p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}</option>)}
+            </select>
+          </Field>
+          {/* The server refuses without this and says why; the form asks for it up front rather
+              than letting the person write the whole thing and then be told. */}
+          <Field label="Reason" required>
+            <input className={inputCls} value={mvReason} onChange={(e) => setMvReason(e.target.value)}
+              placeholder="e.g. the client sheet names this centre Drone Software Technician, never Drone Service" />
+          </Field>
+          <Btn onClick={moveRow} disabled={mvBusy || !mvTo || !mvReason.trim()}>
+            {mvBusy ? "Moving…" : "Move this target"}
+          </Btn>
+        </div>
+      </Drawer>
     </div>
   );
 }
