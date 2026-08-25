@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-252";
+export const RELEASE = "2026.08.14-253";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -117,6 +117,16 @@ const RELEASE_NOTE_ARCHIVE_249 =
   "name, so a roster that has never carried that ID no longer reports every row as matched.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-253 closes a door the client asked about directly on a call. Three places that move a "  +
+  "student through enrolment - marking a step done, doing that for a whole roster at once, and "  +
+  "taking a student off a roster - asked only whether the signed-in person was allowed to make "  +
+  "changes at all, never whether they specifically held the right to touch enrolment. The two "  +
+  "doors that ADD a student to a roster in the first place already asked for that right; these "  +
+  "three, right next to them, did not. All three now ask the same question the doors beside "  +
+  "them already ask, so a login that can put someone on a roster and a login that can carry "  +
+  "them through it are the same login, by design, not by accident.";
+
+const RELEASE_NOTE_ARCHIVE_252 =
   "-252 closes one more door on the same shared save path -251 fixed on two doors already. "  +
   "Editing a centre, a trainer or a job role's contract used to hand the person making that "  +
   "one edit the full unmasked record back in the reply to their own save, including a live "  +
@@ -754,7 +764,7 @@ const RELEASE_NOTE_ARCHIVE =
   // QA-265 records, one release after the comment above was written warning about it. tsc stayed
   // silent because tsconfig.json does not set noUnusedLocals. Both -246 and the orphaned -245 are
   // wired in here; adding a note to this chain is the second half of every bump, not an optional one.
-  RELEASE_NOTE_ARCHIVE_251 + " " + RELEASE_NOTE_ARCHIVE_250 + " " + RELEASE_NOTE_ARCHIVE_249 + " " + RELEASE_NOTE_ARCHIVE_248 + " " + RELEASE_NOTE_ARCHIVE_247 + " " + RELEASE_NOTE_ARCHIVE_246 + " " + RELEASE_NOTE_ARCHIVE_245 + " " +
+  RELEASE_NOTE_ARCHIVE_252 + " " + RELEASE_NOTE_ARCHIVE_251 + " " + RELEASE_NOTE_ARCHIVE_250 + " " + RELEASE_NOTE_ARCHIVE_249 + " " + RELEASE_NOTE_ARCHIVE_248 + " " + RELEASE_NOTE_ARCHIVE_247 + " " + RELEASE_NOTE_ARCHIVE_246 + " " + RELEASE_NOTE_ARCHIVE_245 + " " +
   RELEASE_NOTE_ARCHIVE_244 + " " + RELEASE_NOTE_ARCHIVE_243 + " " + RELEASE_NOTE_ARCHIVE_242 + " " + RELEASE_NOTE_ARCHIVE_241 + " " + RELEASE_NOTE_ARCHIVE_240 + " " + RELEASE_NOTE_ARCHIVE_239 + " " + RELEASE_NOTE_ARCHIVE_238 + " " +
   RELEASE_NOTE_ARCHIVE_237 + " " + RELEASE_NOTE_ARCHIVE_236 + " " +
   RELEASE_NOTE_ARCHIVE_231 + " " +
