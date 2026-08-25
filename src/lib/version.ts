@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-245";
+export const RELEASE = "2026.08.14-246";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -59,6 +59,24 @@ const RELEASE_NOTE_ARCHIVE_239 =
   "record. Alongside these, two controls on the batch screen now ask for the same right the "  +
   "server asks for, so neither is offered to someone it would refuse.";
 export const RELEASE_NOTE_CURRENT =
+  "-246 closes something the reports screen was giving away, and stops one upload message from "  +
+  "arguing with the screen it sits on. Anyone who opened Reports could read the name of the "  +
+  "connected spreadsheet, whether it was syncing, and the text of its last error - including "  +
+  "staff who are refused that same screen everywhere else in the product. Reports now asks for "  +
+  "the same right the sync screen asks for, and shows the counts without the source behind them. "  +
+  "Second, uploading government attendance for a batch whose students have all left it used to "  +
+  "say that nobody in the file belonged to the batch - printed directly above a note offering to "  +
+  "match those very people by hand. Where two students share a name, the file cannot tell them "  +
+  "apart on its own and the screen offers to let a person choose; in that case it now says "  +
+  "nothing and shows the preview, because the person doing the upload can already see what to do. "  +
+  "Third, the controls that move a batch through its stages - Mark Ready, Start, Record start "  +
+  "date, Assessment done, Complete, Cancel, and the room picker - now ask the same permission the "  +
+  "server asks, instead of deciding from a list of role names. Nothing changes for anyone holding "  +
+  "the normal rights; what changes is that a person who has had that right taken away no longer "  +
+  "sees a button that refuses them on press. This release also carries corrections to four "  +
+  "counts on the batch screens that stated more than they had measured, and a refusal message "  +
+  "that named an internal rule number to the person reading it.";
+const RELEASE_NOTE_ARCHIVE_245 =
   "-245 corrects a number that could be typed as nonsense and kept, and repairs three places "  +
   "where the screen and the server disagreed about who may do what. A government attendance "  +
   "figure entered alongside a present list was checked only for being too large. A negative "  +
