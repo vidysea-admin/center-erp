@@ -237,6 +237,15 @@ async function attachPairs(opts: {
     try {
       let resultId: string;
       if (lateCreate) {
+        // QA-1212: this is the ONE door that creates a Pass without going through
+        // `upsertCandidateResult`, so it is the one Pass that carries no A-09 eligibility record.
+        // That is deliberate, and it is written here so "every Pass carries a reason" is never
+        // over-claimed from the guard's side. It fires only on `!row && batch.status === "Completed"`
+        // - a legacy batch closed in batch-level mode with no per-candidate rows at all - where
+        // upsertCandidateResult would refuse outright under Rule 41, and where the arriving NSDC
+        // certificate IS the external pass evidence the guard would otherwise be asking someone to
+        // retype. It is audited as `late_certificate` in words, below.
+        // If this branch ever stops being Completed-only, it needs the guard.
         const doc = await new CandidateResult({
           batch: id, candidate: member.candidate?._id ?? member.candidate, batch_member: member._id,
           result: "Pass", certificate_file: url, certificate_status: "Issued",

@@ -192,8 +192,17 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     });
     sendMail({ to: email, subject: "Your training registration is received", html, text, entity: "Candidate", entity_id: doc._id }).catch(() => {});
   }
+  // QA-1239: the second half of the same finding. When a batch-pinned link could NOT seat them,
+  // the refusal used to reach the audit trail and nobody else - the student got the same
+  // "Thank you! Your details are registered" as somebody who had just been put on a roster. They
+  // opened a link that named a batch, so the one thing they will want to know is whether they are
+  // on it. This does not blame them and does not name the batch's internal state; it says what
+  // happened and who will be in touch.
+  const batchMissed = !!t.batch && !joinedBatch;
   return NextResponse.json({ ok: true, batch: joinedBatch,
     message: joinedBatch
       ? `Thank you! Your details are registered and you are on batch ${joinedBatch}. The team will contact you about the next steps.`
-      : "Thank you! Your details are registered — the team will contact you." }, { status: 201 });
+      : batchMissed
+        ? "Thank you! Your details are registered. This batch could not take a new registration, so the centre will contact you about the next one."
+        : "Thank you! Your details are registered — the team will contact you." }, { status: 201 });
 });

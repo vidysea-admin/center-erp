@@ -3124,6 +3124,68 @@ for (const file of walk(root)) {
 }
 
 
+// ---- QA-1242: the base path has ONE spelling, and this is the check that says so ----
+// QA-1188 fixed a hardcoded "/erp" at the line it named, and its evidence said "a grep for a
+// hardcoded /erp/ across all of src/ returns exactly one hit, and it is this line". That was untrue
+// when it was written: the grep pattern only matched a backtick-template opening `/erp/, so it
+// missed two more template forms AND a plain double-quoted href. The finding closed while three
+// instances stood.
+// A pattern that decides whether a claim is true is part of the claim. This one asks for any quote
+// character followed by /erp, which is every form the earlier greps could take between them, and it
+// is a check rather than a one-off grep so the next instance is caught by the wall instead of by a
+// checker reading a release. base-path.ts is where the constant is DEFINED, so it is the one file
+// allowed to spell it.
+{
+  const bad = [];
+  for (const file of walk(root)) {
+    if (!/[.](tsx?|jsx?)$/.test(file)) continue;
+    const rel = path.relative(root, file).split(path.sep).join("/");
+    if (rel === "lib/base-path.ts") continue;
+    const src = fs.readFileSync(file, "utf8");
+    // split without a backslash escape on purpose - a generator collapsed one here and wrote a
+    // real control byte into this file, which is the second time that has happened to it (-144).
+    src.split(String.fromCharCode(10)).forEach((line, i) => {
+      if (/['"`]\/erp(\/|['"`]|\$)/.test(line)) bad.push(`${rel}:${i + 1}: ${line.trim().slice(0, 110)}`);
+    });
+  }
+  if (bad.length === 0) passed++;
+  else {
+    failed++;
+    for (const b of bad) {
+      pushStructural(
+        `${b}
+      hardcoded "/erp" - import BASE_PATH from "@/lib/base-path" instead. `
+        + "The prefix is a deployment fact, not a string: when it moves, every copy of it that is not "
+        + "BASE_PATH becomes a dead link, and dead links are found by users rather than by builds.",
+      );
+    }
+  }
+}
+
+// ---- QA-1239 (the UI half): the register form must not promise a seat it cannot promise ----
+// The server payload has carried `batch.status` all along; this page only ever asked `batch.full`.
+// A batch cancelled AFTER its link went out is not full - it is simply gone - so the "you will be
+// added to this batch" line kept rendering to somebody who could not be. The behaviour half of this
+// finding is pinned in e2e-blindspot; this is the half no API call can see.
+{
+  const f = path.join(root, "app", "p", "register", "[token]", "page.tsx");
+  const src = fs.readFileSync(f, "utf8");
+  const readsStatus = /batch[?][.]status/.test(src);
+  const closedFirst = src.indexOf("Cancelled") >= 0
+    && src.indexOf("Cancelled") < src.indexOf("meta.batch?.full");
+  if (readsStatus && closedFirst) passed++;
+  else {
+    failed++;
+    pushStructural(
+      `p/register/[token]: the form decides what to promise from \`full\` alone `
+      + `(reads-status:${readsStatus} closed-asked-first:${closedFirst}). A batch that is closed or `
+      + "cancelled is not full, so it still reads \"you will be added to this batch\" to somebody who "
+      + "cannot be - and the closed case has to be asked FIRST, or a batch that is both is described "
+      + "by the condition that is not the one stopping it.",
+    );
+  }
+}
+
   // -175: every finding, printed once, AFTER every check has had its say. See the note where this
   // loop used to live.
   for (const h of hits) console.log("  ✗ " + h);

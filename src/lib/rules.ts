@@ -1639,9 +1639,36 @@ export async function upsertCandidateResult(batchId: string, memberId: string, p
     throw new HttpError(409,
       "Assessment was already completed with batch-level figures. Reopen the assessment before marking candidates individually, so the totals are rebuilt from the roster rather than overwritten.");
   }
-  const member = await BatchMember.findById(memberId).select("batch candidate").lean<any>();
+  const member = await BatchMember.findById(memberId).select("batch candidate left_on").lean<any>();
   if (!member) throw new HttpError(404, "Batch member not found");
   if (String(member.batch) !== String(batchId)) throw new HttpError(400, "Member belongs to a different batch.");
+
+  // 2026-08-25 (Umesh, on Ashish Rana / AVP-GURU-RPLAVP-DST-03): "log rakho candidate wale mai but
+  // baaki jagah se tho data naa dikhee." A member who has LEFT keeps every result already on record
+  // - dropMemberChecked deliberately does not delete it, and this guard does not either - and takes
+  // no NEW one and no edit to the old one.
+  //
+  // It lives HERE and not in the route because all three roster-marking callers pass through this
+  // function: the closure card and the bulk button via bulkMarkResults, the per-result PATCH, and
+  // the force-complete path. A rule written in one of a set is the QA-273 shape.
+  //
+  // It also makes a sentence on the closure screen TRUE for the first time. That tab has told the
+  // operator "a member who has left cannot be marked" since -246, in a tooltip sitting directly
+  // above live Pass/Fail/Absent buttons that would happily mark one.
+  //
+  // The name costs a second query and only on the refusal path, exactly as validateDailyLog does
+  // above - populating it on the main read would turn member.candidate into an object and break the
+  // two CandidateResult lookups immediately below.
+  //
+  // FORCE-COMPLETE IS UNAFFECTED, measured not assumed: outstanding() in the complete route builds
+  // its unmarked list from activeRoster, so a departed member is never in it and closing a batch
+  // cannot trip this.
+  if (member.left_on) {
+    const who = (await Candidate.findById(member.candidate).select("name").lean<any>())?.name ?? "That candidate";
+    throw new HttpError(409,
+      `${who} left this batch on ${new Date(member.left_on).toLocaleDateString("en-IN")}. `
+      + "Their result stays on record exactly as it is and cannot be changed here. Nothing has been saved.");
+  }
 
   const row = (await CandidateResult.findOne({ batch: batchId, candidate: member.candidate }))
     ?? new CandidateResult({ batch: batchId, candidate: member.candidate, batch_member: memberId });
@@ -1669,6 +1696,7 @@ export async function upsertCandidateResult(batchId: string, memberId: string, p
   // The reason is demanded by the SERVER, not by the screen, because Umesh's answer to "who may do
   // this" was "anyone who can mark" - no role gate - so the record is the only thing standing
   // between an override and an invisible one. A screen can be bypassed by anything that can POST.
+  let overrideAudit: string | null = null;
   if (patch.result === "Pass" && row.result !== "Pass") {
     const map = verdicts ?? await eligibilityByMember(batchId);
     const v = map.get(String(memberId));
@@ -1682,8 +1710,14 @@ export async function upsertCandidateResult(batchId: string, memberId: string, p
       row.eligibility_override_reason = reason;
       row.eligibility_override_by = userId as any;
       row.eligibility_override_at = new Date();
-      await audit({ entity: "CandidateResult", entityId: row._id, field: "eligibility_override", actor: userId,
-        newValue: `Passed despite Not eligible (${v.detail ?? "attendance bar not met"}) — ${reason}` });
+      // QA-1213: this audit used to be written HERE, before the save it describes. Nothing between
+      // the two can throw today (the Rule 45 branch below cannot fire while patch.result is "Pass"),
+      // so it was an ordering smell rather than an observed failure - but the trail is the ONLY
+      // record standing behind an override that has no role gate, and "the reason was recorded" has
+      // to mean the row carrying it actually landed. If row.save() ever threw, bulkMarkResults would
+      // report that candidate in errors[] while the trail asserted the override had succeeded.
+      // Held until after the write instead.
+      overrideAudit = `Passed despite Not eligible (${v.detail ?? "attendance bar not met"}) — ${reason}`;
     }
   }
   // Rule 45: a certificate already in flight pins the result at Pass.
@@ -1699,6 +1733,11 @@ export async function upsertCandidateResult(batchId: string, memberId: string, p
   row.marked_by = userId as any;
   row.marked_at = new Date();
   await row.save();
+  // QA-1213: audited only now that the save has actually landed.
+  if (overrideAudit) {
+    await audit({ entity: "CandidateResult", entityId: row._id, field: "eligibility_override", actor: userId,
+      newValue: overrideAudit });
+  }
   await recomputeClosureAggregates(batchId, userId);
   return row;
 }

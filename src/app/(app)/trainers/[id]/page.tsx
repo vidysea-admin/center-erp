@@ -1,5 +1,6 @@
 "use client";
 import { use, useEffect, useState } from "react";
+import { BASE_PATH } from "@/lib/base-path";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
 import { api, fmtDate, istTodayInput, pipelineLabel, offerable } from "@/lib/client";
@@ -498,7 +499,7 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
               { key: "status", label: "Status", render: (r: any) => <Chip value={r.status} /> },
               { key: "planned_start", label: "Starts", render: (r: any) => fmt(r.planned_start), mobile: false },
             ]}
-            onRowClick={(r: any) => { window.location.href = `/erp/batches/${r._id}`; }}
+            onRowClick={(r: any) => { window.location.href = `${BASE_PATH}/batches/${r._id}`; }}
             empty="Not assigned to any batch yet."
           />
         </Section>

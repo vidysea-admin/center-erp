@@ -5,6 +5,7 @@
 // entity writes happen only through approved tab mappings ("Map tabs"), and even those route
 // changes to existing records through the Sync Inbox for a human OK.
 import { useEffect, useState } from "react";
+import { BASE_PATH } from "@/lib/base-path";
 import { api, fmtDT } from "@/lib/client";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, RouteTabs, inputCls } from "@/components/ui";
 import { SheetSources } from "@/components/sheet-sources";
@@ -271,7 +272,7 @@ function VersionHistory({ setError }: any) {
                   <span className="text-gray-500"> · {when(v.taken_at)} · {v.rows} rows · {v.columns} columns</span>
                 </span>
                 <a className="text-xs font-medium text-blue-700 hover:underline"
-                  href={`/erp/api/sync-sources/${src}/snapshots?snap=${v._id}&format=csv`}>Download CSV</a>
+                  href={`${BASE_PATH}/api/sync-sources/${src}/snapshots?snap=${v._id}&format=csv`}>Download CSV</a>
               </li>
             ))}
           </ul>

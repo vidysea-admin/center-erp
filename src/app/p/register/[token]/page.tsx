@@ -155,7 +155,19 @@ export default function PublicRegisterPage({ params }: { params: Promise<{ token
                   the person still joins the roster - exactly as a staff-added member would - but
                   saying "you will be added" to somebody who will be over target is a promise this
                   page is not in a position to make. */}
-              {meta.batch?.full ? (
+              {/* QA-1239: `full` was the ONLY thing this branch asked, so a batch CANCELLED or
+                  COMPLETED after its link went out still read "you will be added to this batch" to
+                  somebody who could not be. The mint-time refusal cannot cover that window - the
+                  batch was open when the link was made - and the payload has carried `status` all
+                  along; this page simply never read it. A link that can no longer seat anyone now
+                  says so, whatever the reason it cannot, and the closed case is asked FIRST so a
+                  batch that is both closed and full is described by the one that actually stops it. */}
+              {["Completed", "Cancelled", "Closed"].includes(String(meta.batch?.status ?? "")) ? (
+                <span className="mt-1 block text-xs text-amber-700">
+                  Set by the link you opened. This batch is no longer taking registrations, so your
+                  details will be saved and the centre will contact you about the next one.
+                </span>
+              ) : meta.batch?.full ? (
                 <span className="mt-1 block text-xs text-amber-700">
                   Set by the link you opened. This batch has already reached its planned size, so your
                   registration will be recorded and the centre will confirm your place with you.

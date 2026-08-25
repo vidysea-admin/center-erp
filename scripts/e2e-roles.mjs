@@ -1779,6 +1779,101 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
     JSON.stringify({ was: opsBase.length, now: restored.length }));
 }
 
+// ---- QA-1211: the CREATE door validated two fields and then threw them away ----
+// `POST /api/users` read `body.extra_permissions` to decide whether the request needed an Admin
+// (the escalation guard), and then `User.create` did not list it. Same for `revoked_permissions`.
+// So the field was checked for danger and then discarded: 201 back, a user holding nothing, and no
+// hint that anything had been dropped - while the SAME admin drawer, on EDIT, stored both correctly
+// (`users/[id]/route.ts` loops a list containing them). Ticking "Special rights" while creating a
+// user was a dead input reporting success.
+//
+// Why this survived a suite with nine extra_permissions assertions in it: every single one of them
+// granted through PATCH. Not one granted at creation. The door nobody tested is the door that broke.
+//
+// These pins assert BEHAVIOUR, not storage - a stored array nothing consults would be the same bug
+// one layer down. The granted right must actually open a door, and the revoked one must actually
+// close one.
+{
+  const s1211 = Date.now().toString().slice(-6);
+  const jpr1211 = (await req(spoc, "GET", "/api/locations?limit=1")).data.items[0];
+  const em1211 = `q1211.${s1211}@vidysea-test.local`;
+  const pw1211 = "Q1211pass!xyz";
+
+  // Enrollment holds `candidates.manage` by role and does NOT hold `costs.manage`.
+  // So this one create both GRANTS a right the role lacks and REVOKES one the role has.
+  const mk = await req(admin, "POST", "/api/users", {
+    name: "Q1211 Rights", email: em1211, password: pw1211, role: "Enrollment",
+    location_scope: [jpr1211._id], can_edit: true,
+    extra_permissions: ["costs.manage:view"],
+    revoked_permissions: ["candidates.manage"],
+  });
+  ok("QA-1211: the create itself succeeds (it always did - that is what made this invisible)",
+    mk.status === 201, `got ${mk.status}`);
+  const uid1211 = mk.data.item?._id;
+
+  ok("QA-1211: THE DEFECT - the 201 reports back the special rights it was given, instead of an empty list",
+    (mk.data.item?.extra_permissions ?? []).includes("costs.manage:view"),
+    JSON.stringify({ extra: mk.data.item?.extra_permissions ?? null }));
+  ok("QA-1211: ...and the revoked list too - the other half of the same dropped pair",
+    (mk.data.item?.revoked_permissions ?? []).includes("candidates.manage"),
+    JSON.stringify({ revoked: mk.data.item?.revoked_permissions ?? null }));
+
+  // and it is really on the record, not just echoed back out of the request body.
+  // NB: there is no GET /api/users/:id - the item route is PATCH/DELETE only - so the read door
+  // here is the LIST route, which returns every field but the password hash.
+  const listed = ((await req(admin, "GET", "/api/users")).data.items ?? [])
+    .find((u) => String(u._id) === String(uid1211));
+  ok("QA-1211: ...and a fresh READ of the user still has both - the 201 was not just echoing my own payload",
+    (listed?.extra_permissions ?? []).includes("costs.manage:view")
+      && (listed?.revoked_permissions ?? []).includes("candidates.manage"),
+    JSON.stringify({ found: !!listed, extra: listed?.extra_permissions ?? null, revoked: listed?.revoked_permissions ?? null }));
+
+  // THE POINT: rights granted at creation must actually WORK, and revoked ones must actually BITE.
+  const u1211 = await login(em1211, pw1211);
+  ok("QA-1211: the new user signs in", !!u1211);
+  if (u1211) {
+    ok("QA-1211: the right GRANTED at creation opens the door it names (costs ledger reads)",
+      (await req(u1211, "GET", "/api/costs")).status === 200);
+    ok("QA-1211: ...and it is a :view grant, so it still cannot WRITE - the level survived the create too",
+      (await req(u1211, "POST", "/api/costs", { entry_date: "2026-08-16", location: jpr1211._id, amount: 1, category: "000000000000000000000000" })).status === 403);
+    const revoked = await req(u1211, "POST", "/api/candidates",
+      { name: `Q1211 Cand ${s1211}`, phone: "7391" + s1211, location: jpr1211._id });
+    ok("QA-1211: the right REVOKED at creation is really gone - a role right the user no longer has",
+      revoked.status === 403, `got ${revoked.status}: ${JSON.stringify(revoked.data?.error ?? revoked.data ?? null).slice(0, 200)}`);
+  }
+
+  // REGRESSION GUARD (green before the fix as well as after): storing these fields must not have
+  // widened who may set them. The escalation guard is the whole reason this door reads
+  // `extra_permissions` at all, and a fix that stored the value by loosening the gate would be a
+  // far worse bug than the one it closed.
+  const emEsc = `q1211esc.${s1211}@vidysea-test.local`;
+  const mkEsc = await req(admin, "POST", "/api/users", {
+    name: "Q1211 Escalator", email: emEsc, password: pw1211, role: "Enrollment",
+    location_scope: [jpr1211._id], can_edit: true,
+  });
+  await req(admin, "PATCH", `/api/users/${mkEsc.data.item?._id}`, { extra_permissions: ["users.manage"] });
+  const esc = await login(emEsc, pw1211);
+  ok("QA-1211 guard: the non-Admin users.manage holder signs in", !!esc);
+  if (esc) {
+    // scoped and role-Enrollment, so the ONLY arm of the guard this can trip is extra_permissions
+    const attempt = await req(esc, "POST", "/api/users", {
+      name: "Q1211 Minted", email: `q1211mint.${s1211}@vidysea-test.local`, password: pw1211,
+      role: "Enrollment", location_scope: [jpr1211._id], can_edit: true,
+      extra_permissions: ["costs.manage"],
+    });
+    ok("QA-1211 guard: a non-Admin still cannot GRANT special rights through the create door (403)",
+      attempt.status === 403, `got ${attempt.status}`);
+    // NOT can_edit - `can_edit === true` is itself one of the guard's elevated arms, so a create
+    // carrying it is refused for that reason alone and would prove nothing about this one.
+    const plain = await req(esc, "POST", "/api/users", {
+      name: "Q1211 Plain", email: `q1211plain.${s1211}@vidysea-test.local`, password: pw1211,
+      role: "Enrollment", location_scope: [jpr1211._id],
+    });
+    ok("QA-1211 guard: ...but the same holder CAN still create an ordinary user - the gate did not widen",
+      plain.status === 201, `got ${plain.status}`);
+  }
+}
+
 // unauthenticated → 401
 const anon = await fetch(BASE + "/api/locations");
 ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}`);

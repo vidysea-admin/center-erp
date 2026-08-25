@@ -53,6 +53,17 @@ export const POST = apiHandler(async (req: NextRequest) => {
     location_scope: body.location_scope ?? [],
     can_edit: body.can_edit ?? false,
     active: body.active ?? true,
+    // QA-1211: these two were MISSING from this list, and the way they were missing is the
+    // interesting part - the escalation guard eighteen lines up READS `body.extra_permissions` to
+    // decide whether the request needs Admin, and then `User.create` threw the value away. The
+    // field was checked for danger and then discarded. So an Admin ticking "Special rights" while
+    // CREATING a user got 201, a user holding nothing, and no hint that anything had been dropped -
+    // while the SAME drawer, on edit, stored them correctly (`users/[id]/route.ts:70` loops over a
+    // list containing both). A control that reports success and does nothing is the dead-input class
+    // this project has paid for under QA-712, QA-723 and QA-754; this is the same shape with a 201
+    // instead of a 403.
+    extra_permissions: body.extra_permissions ?? [],
+    revoked_permissions: body.revoked_permissions ?? [],
     // 2026-08-14: self-signup is closed, so a known-but-not-yet-cleared person is entered
     // by the Admin as Pending and approved through the same queue as before.
     approval_status: body.approval_status,

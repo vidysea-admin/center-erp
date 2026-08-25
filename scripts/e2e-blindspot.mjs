@@ -361,6 +361,62 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
     JSON.stringify({ warning: roomyTok.data?.warning ?? null, full: roomyMeta.batch?.full }));
 }
 
+// ---- QA-1239: the window a mint-time refusal cannot reach ----
+// Minting a register link for an already-closed batch is refused at mint (409). That refusal cannot
+// cover the case this pins: the batch was OPEN when the link was made and was cancelled afterwards.
+// The link is already out. The form kept branching on `full` alone, so it went on saying "you will
+// be added to this batch" to somebody who could not be, and the submit answered with the same
+// "Thank you! Your details are registered" a person gets when they HAVE just joined a roster. The
+// batch's refusal reached the audit trail and nobody else - least of all the one person who opened
+// a link that named a batch and wants to know whether they are on it.
+{
+  const cBatch = (await req(admin, "POST", "/api/batches",
+    { location: loc._id, program: prog._id, planned_start: "2027-11-01", target_size: 30 })).data.item;
+  const cTok = await req(admin, "POST", "/api/public-tokens",
+    { purpose: "register", location: loc._id, batch: cBatch._id }, 201);
+  ok("QA-1239: precondition - the batch has ROOM when the link is minted, so nothing is refused at mint",
+    cTok.status === 201 && !cTok.data?.warning, JSON.stringify({ s: cTok.status, warning: cTok.data?.warning ?? null }));
+
+  const openMeta = await (await fetch(BASE + `/api/public/register/${cTok.data.item.token}`)).json();
+  ok("QA-1239: precondition - and the form is promising a seat it CAN honour at this point",
+    openMeta.batch?.full === false && !["Completed", "Cancelled", "Closed"].includes(String(openMeta.batch?.status)),
+    JSON.stringify({ batch: openMeta.batch }));
+
+  // the batch is cancelled AFTER the link is in somebody's hands - the window the 409 cannot cover
+  const killed = await req(admin, "POST", `/api/batches/${cBatch._id}/transition`, { target: "Cancelled" });
+  ok("QA-1239: the batch is cancelled after its link went out", killed.status === 200, `got ${killed.status}`);
+
+  const deadMeta = await (await fetch(BASE + `/api/public/register/${cTok.data.item.token}`)).json();
+  ok("QA-1239: the form payload carries the batch STATUS - the page has everything it needs without fetching anything",
+    String(deadMeta.batch?.status) === "Cancelled", JSON.stringify({ batch: deadMeta.batch }));
+  ok("QA-1239: ...and `full` is still false, which is exactly why a page reading only `full` says the wrong thing",
+    deadMeta.batch?.full === false, JSON.stringify({ full: deadMeta.batch?.full }));
+
+  const ph1239 = "7743" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0");
+  const sub = await fetch(BASE + `/api/public/register/${cTok.data.item.token}`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "Dead Link " + stamp, phone: ph1239, email: "dead" + stamp + "@test.local" }) });
+  const subBody = await sub.json();
+  ok("QA-1239: the registration is still KEPT - a cancelled batch is the centre's problem, never the student's",
+    sub.status === 201, `got ${sub.status}`);
+  ok("QA-1239: ...they are told the batch could not take them, instead of being thanked as though it had",
+    subBody.batch === null && /could not take/.test(String(subBody.message ?? "")),
+    JSON.stringify({ batch: subBody.batch, message: subBody.message }));
+
+  // and the ordinary path must not have picked up the new sentence
+  const okTok = await req(admin, "POST", "/api/public-tokens",
+    { purpose: "register", location: loc._id, batch: (await req(admin, "POST", "/api/batches",
+      { location: loc._id, program: prog._id, planned_start: "2027-11-15", target_size: 30 })).data.item._id }, 201);
+  const ph1239b = "7744" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0");
+  const good = await fetch(BASE + `/api/public/register/${okTok.data.item.token}`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "Live Link " + stamp, phone: ph1239b, email: "live" + stamp + "@test.local" }) });
+  const goodBody = await good.json();
+  ok("QA-1239: a registration that DID join a live batch still gets the joining message, not the refusal one",
+    good.status === 201 && !!goodBody.batch && /you are on batch/.test(String(goodBody.message ?? "")),
+    JSON.stringify({ batch: goodBody.batch, message: String(goodBody.message ?? "").slice(0, 90) }));
+}
+
 // ---- QA-869 (Umesh 2026-08-24): the self-registration link pins its PROGRAMME, not just its centre ----
 // "it should confirm location and program too jisse jo candidate register krega uska location and
 // program pre fixed rhegaa. vo khud nhi select krega."
