@@ -577,12 +577,26 @@ for (const file of walk(root)) {
   const summary = ((bp.split("Attendance hours (bar ")[1] ?? "").split("</p>")[0]) ?? "";
   const inclLine = summary.split(/\r?\n/).find((l) => /\.includes\(k\)/.test(l)) ?? "";
   const excluded = [...inclLine.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
-  // a state is "named" when the sentence reads its own count - either the bucket
-  // (verdict_counts.no_hours) or a count of its own beside the buckets (attMeta.awaiting_match_rows).
-  const named = new Set([
-    ...[...summary.matchAll(/verdict_counts\.([a-z_]+)/g)].map((m) => m[1]),
-    ...[...summary.matchAll(/attMeta\.([a-z_]+)_rows/g)].map((m) => m[1]),
-  ]);
+  // QA-1165: a state is "named" ONLY when the sentence reads THAT STATE'S OWN BUCKET.
+  //
+  // This used to accept `attMeta.<state>_rows` as a phrase too, and that one line is why this pin
+  // could not fail on the defect it exists for. The page says it plainly two comments below:
+  // `awaiting_match_rows` is NOT `verdict_counts.awaiting_match`. The bucket is journey-gated; the
+  // rows count is ungated and CUTS ACROSS the buckets ("every name in it is ALSO counted in one of
+  // the groups above"). They are different numbers about different sets.
+  //
+  // So a sentence could exclude `awaiting_match` from the generic arm, give it no phrase at all, and
+  // still pass here because a DIFFERENT number happened to carry a similar name. That is precisely
+  // what shipped: on CHI-ITI-RPLAVP-BSRT-01 the line read "0 qualified - 41 still short - 2 not
+  // enrolled yet" = 43 under a chip saying "All 45", with the missing 2 being that bucket - live,
+  // under a green pin. A checker proved it by mutation twice (pre-fix page: 297/0; post-fix minus
+  // only the new branch: 297/0), which is the only way this class of hole ever shows itself.
+  //
+  // A cross-cutting count is not a bucket's phrase. If a future line wants to name one, it must
+  // still print the bucket as well.
+  const named = new Set(
+    [...summary.matchAll(/verdict_counts\.([a-z_]+)/g)].map((m) => m[1]),
+  );
   const droppedSilently = excluded.filter((k) => !named.has(k));
   const printedTwice = [...named].filter((k) => !excluded.includes(k));
   const why = !summary ? "the sentence anchor 'Attendance hours (bar ' is gone, so this check has no subject"
