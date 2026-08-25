@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-249";
+export const RELEASE = "2026.08.14-250";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -99,7 +99,7 @@ const RELEASE_NOTE_ARCHIVE_247 =
   "now ask it the same way, which is what stops two of them quietly disagreeing about the same "  +
   "candidate.";
 
-export const RELEASE_NOTE_CURRENT =
+const RELEASE_NOTE_ARCHIVE_249 =
   "-249 is about counts and controls that were reading only part of the picture. The Locations "  +
   "screen shows how many of our own trainers a centre has for a job role, and it was counting "  +
   "only the trainers who had been nominated to that centre by name. Putting a trainer on a batch "  +
@@ -115,6 +115,29 @@ export const RELEASE_NOTE_CURRENT =
   "somebody who passed and then left can still have the certificate they earned attached. Third, "  +
   "government attendance files are now matched on the portal Candidate ID rather than on the "  +
   "name, so a roster that has never carried that ID no longer reports every row as matched.";
+
+export const RELEASE_NOTE_CURRENT =
+  "-250 finishes three things -249 started and closes one gap the client found on a call. The "  +
+  "Locations screen learned in -249 to count a trainer through the batch they are running, not "  +
+  "only through a nomination typed against their name; the hiring board beside it had not "  +
+  "learned the same thing, so the two screens could report different numbers of trainers for "  +
+  "the same centre and job role. They read one shared count now, a trainer who is both "  +
+  "nominated and on a batch is still counted once, and the people behind the number are named "  +
+  "from that same place, so a slot can no longer show a count of one above an empty line. The "  +
+  "trainer roster gained the column that was actually being looked for - which centre and job "  +
+  "role a trainer is up for, rather than only the town they live in - and a centre can now "  +
+  "nominate a trainer from its own screen instead of opening each trainer in turn. "  +
+  "Two dates that can only be known after a batch finishes - the day certificates were handed "  +
+  "out, and the day the result was uploaded to the government portal - were being refused "  +
+  "BECAUSE the batch had finished, and the screen gave no reason at all. Both can be recorded "  +
+  "now, while every other closure date stays locked once a batch is signed off, and the screen "  +
+  "says which is which. "  +
+  "The client sheet and this system can finally be compared. A row whose registration number "  +
+  "cell was left blank used to be dropped in silence and the read still reported itself clean; "  +
+  "it is now named like every other kind of row that could not be read. And the report states "  +
+  "what the client sheet itself adds up to, what this system counts, and where each part of "  +
+  "the difference went - including a line for whatever the named reasons do not account for, "  +
+  "so it can never claim to have explained more of the gap than it has.";
 
 const RELEASE_NOTE_ARCHIVE_248 =
   "-248 is mostly about a secret that was readable from the wrong side, and about one question "  +
@@ -676,7 +699,7 @@ const RELEASE_NOTE_ARCHIVE =
   // QA-265 records, one release after the comment above was written warning about it. tsc stayed
   // silent because tsconfig.json does not set noUnusedLocals. Both -246 and the orphaned -245 are
   // wired in here; adding a note to this chain is the second half of every bump, not an optional one.
-  RELEASE_NOTE_ARCHIVE_248 + " " + RELEASE_NOTE_ARCHIVE_247 + " " + RELEASE_NOTE_ARCHIVE_246 + " " + RELEASE_NOTE_ARCHIVE_245 + " " +
+  RELEASE_NOTE_ARCHIVE_249 + " " + RELEASE_NOTE_ARCHIVE_248 + " " + RELEASE_NOTE_ARCHIVE_247 + " " + RELEASE_NOTE_ARCHIVE_246 + " " + RELEASE_NOTE_ARCHIVE_245 + " " +
   RELEASE_NOTE_ARCHIVE_244 + " " + RELEASE_NOTE_ARCHIVE_243 + " " + RELEASE_NOTE_ARCHIVE_242 + " " + RELEASE_NOTE_ARCHIVE_241 + " " + RELEASE_NOTE_ARCHIVE_240 + " " + RELEASE_NOTE_ARCHIVE_239 + " " + RELEASE_NOTE_ARCHIVE_238 + " " +
   RELEASE_NOTE_ARCHIVE_237 + " " + RELEASE_NOTE_ARCHIVE_236 + " " +
   RELEASE_NOTE_ARCHIVE_231 + " " +
