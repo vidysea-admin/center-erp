@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-246";
+export const RELEASE = "2026.08.14-247";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -58,7 +58,7 @@ const RELEASE_NOTE_ARCHIVE_239 =
   "review panel, where it used to print as nothing at all while still being written into the "  +
   "record. Alongside these, two controls on the batch screen now ask for the same right the "  +
   "server asks for, so neither is offered to someone it would refuse.";
-export const RELEASE_NOTE_CURRENT =
+const RELEASE_NOTE_ARCHIVE_246 =
   "-246 closes something the reports screen was giving away, and stops one upload message from "  +
   "arguing with the screen it sits on. Anyone who opened Reports could read the name of the "  +
   "connected spreadsheet, whether it was syncing, and the text of its last error - including "  +
@@ -76,6 +76,25 @@ export const RELEASE_NOTE_CURRENT =
   "sees a button that refuses them on press. This release also carries corrections to four "  +
   "counts on the batch screens that stated more than they had measured, and a refusal message "  +
   "that named an internal rule number to the person reading it.";
+
+export const RELEASE_NOTE_CURRENT =
+  "-247 is mostly about screens that answered a question with the wrong half of an answer. "  +
+  "Opening a summary card on the candidates screen used to be able to land you on a list that "  +
+  "announced a count and then showed nothing under it, together with an invitation to add or "  +
+  "import the very people it had just counted; -246 fixed that for three of the values those "  +
+  "cards use and left it in place for the rest, so a link built on any of the remaining journey "  +
+  "labels still opened an empty screen. A card now opens the list of the records it counted, on "  +
+  "every value. Second, the two batch-interest choices are now called what the client calls "  +
+  "them - The current batch and Upcoming batch - and they are called that everywhere the second "  +
+  "one appears: the row tag and its filter, both hover labels, the amber hint, the row action, "  +
+  "the refusal an operator reads when enrolment is declined, and the spreadsheet import column. "  +
+  "Stored records are untouched; only the words changed. Third, marking a candidate Not eligible "  +
+  "and then passing them no longer happens without a recorded reason, and the decision that "  +
+  "governs it now lives in one place instead of four. Fourth, a save on the candidate details "  +
+  "panel that had always worked but never said so now confirms itself, so nobody presses it "  +
+  "twice wondering. And four separate doors that each asked whether a certificate is settled "  +
+  "now ask it the same way, which is what stops two of them quietly disagreeing about the same "  +
+  "candidate.";
 const RELEASE_NOTE_ARCHIVE_245 =
   "-245 corrects a number that could be typed as nonsense and kept, and repairs three places "  +
   "where the screen and the server disagreed about who may do what. A government attendance "  +
@@ -603,6 +622,12 @@ const RELEASE_NOTE_ARCHIVE_HEAD =
 
 // The archive. Everything this product has shipped, newest first.
 const RELEASE_NOTE_ARCHIVE =
+  // -247: ARCHIVE_245 was DECLARED by the -246 bump and then never added to this chain, so for one
+  // whole release it was a dead constant and -245's note was published nowhere - the exact shape
+  // QA-265 records, one release after the comment above was written warning about it. tsc stayed
+  // silent because tsconfig.json does not set noUnusedLocals. Both -246 and the orphaned -245 are
+  // wired in here; adding a note to this chain is the second half of every bump, not an optional one.
+  RELEASE_NOTE_ARCHIVE_246 + " " + RELEASE_NOTE_ARCHIVE_245 + " " +
   RELEASE_NOTE_ARCHIVE_244 + " " + RELEASE_NOTE_ARCHIVE_243 + " " + RELEASE_NOTE_ARCHIVE_242 + " " + RELEASE_NOTE_ARCHIVE_241 + " " + RELEASE_NOTE_ARCHIVE_240 + " " + RELEASE_NOTE_ARCHIVE_239 + " " + RELEASE_NOTE_ARCHIVE_238 + " " +
   RELEASE_NOTE_ARCHIVE_237 + " " + RELEASE_NOTE_ARCHIVE_236 + " " +
   RELEASE_NOTE_ARCHIVE_231 + " " +
