@@ -275,10 +275,21 @@ if (await card.count() > 0) {
     await page.goto(BASE + "/candidates", { waitUntil: "domcontentloaded" });
     await settled();
     await page.getByRole("button", { name: "Import Excel" }).click();
+    // ORDER MATTERS, and getting it wrong is what made this pin RED against a perfectly good
+    // screen on its first run: candidates/page.tsx:1167 gates the file input on
+    // importState.location && importState.program, so waiting for input[type=file] BEFORE
+    // choosing those two waits for something that cannot exist yet. The pin reported the product
+    // broken when the harness was. Doubt the instrument first - that is this repo's own rule and
+    // I broke it inside the very pin written to stop a blind check.
+    const dlg = page.locator("div.fixed").filter({ hasText: "Import candidates from Excel" }).last();
+    await dlg.waitFor({ timeout: 15000 });
+    // Scoped to the DRAWER, not the page: /candidates carries its own "All locations" filter
+    // select, so page.locator("select").nth(0) picks THAT one - which would leave the drawer's
+    // Location empty, the file input unrendered, and the failure pointing at the wrong thing.
+    const drawerSel = dlg.locator("select");
+    await drawerSel.nth(0).selectOption({ index: 1 });
+    await drawerSel.nth(1).selectOption({ index: 1 });
     await page.waitForSelector('input[type="file"]', { timeout: 15000 });
-    const gate = page.locator("select");
-    const gn = await gate.count();
-    for (let i = 0; i < Math.min(gn, 2); i++) await gate.nth(i).selectOption({ index: 1 }).catch(() => {});
     await page.locator('input[type="file"]').last().setInputFiles(xlsx);
     await page.waitForFunction(() => /Interest/.test(document.body.innerText), undefined, { timeout: 20000 });
     for (const field of ["name", "phone", "batch_interest", "education"]) {
