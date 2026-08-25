@@ -2357,6 +2357,44 @@ for (const file of walk(root)) {
 // mechanism behind the counting defects. (c) The "No portal ID" pill's own title used to end
 // "including students who have left" - true when written, made FALSE by this change. Nothing in this
 // toolchain compares prose to behaviour, so a prose pin is the only thing that can hold it.
+// QA-1265 (2026-08-25, Umesh's own decision amending DEC-6): the two dates that can only be KNOWN
+// after a batch completes - certificate distribution and the SIDH portal upload - must be gated on
+// the PERMISSION half alone, never on completion. `closed` in this file is
+// `statusClosedTab || !mayMarkTab`; these two fields must keep the second and drop the first.
+//
+// THIS PIN EXISTS BECAUSE A COMMENT DID NOT SURVIVE ONE AFTERNOON. The change shipped with a
+// paragraph above it explaining exactly this, and a few hours later a reader saw `!mayMarkTab`,
+// read it as a gate that had gone missing, and put `disabled={closed}` back (389b9b9, "do closure
+// date box apna gate kho baithe the"). They were acting correctly on what they could see: nothing
+// in the toolchain disagreed with them, so the revert was green. Prose cannot defend a deliberate
+// asymmetry; only something that turns red can.
+//
+// It asserts the ABSENCE of the wrong form as well as the presence of the right one. Asserting only
+// the presence would stay green if someone added a third, wrongly-gated copy of the field - which is
+// the QA-785 mistake on this very file.
+{
+  const rel = "app/(app)/batches/[id]/page.tsx";
+  const src = stripComments(fs.readFileSync(path.join(root, rel), "utf-8"));
+  const AFTER_COMPLETION = ["certificate_distribution_date", "sidh_uploaded_on"];
+  const bad = [];
+  for (const f of AFTER_COMPLETION) {
+    // The <Field> for this name, as one line - both forms live on a single line in this file.
+    const line = src.split("\n").find((l) => l.includes("form." + f) && l.includes("<input"));
+    if (!line) { bad.push(`${f}: no input line found at all`); continue; }
+    if (/disabled=\{closed\}/.test(line)) bad.push(`${f} is gated on \`closed\`, which includes completion`);
+    else if (!/disabled=\{!mayMarkTab\}/.test(line)) bad.push(`${f} is not gated on \`!mayMarkTab\``);
+  }
+  if (!bad.length) passed++;
+  else {
+    failed++;
+    pushStructural(rel + ": a date that can only be known AFTER completion is disabled BY completion"
+      + " (" + bad.join("; ") + ")"
+      + " - QA-1265 is Umesh's amendment to DEC-6 and it is deliberately narrow: ONLY these two"
+      + " fields lose the completion half, and only they. The other four closure dates stay frozen."
+      + " If this needs to change, it is a decision, not a cleanup.");
+  }
+}
+
 {
   const rel = "app/(app)/batches/[id]/page.tsx";
   const src = stripComments(fs.readFileSync(path.join(root, rel), "utf-8"));
@@ -2377,14 +2415,27 @@ for (const file of walk(root)) {
   const oneShownPopulation = /const shown = visible\.filter\(/.test(body)
     && /count: visible\.filter\(f\.test\)\.length/.test(body);
   const staleProse = /including students who have left/.test(body);
-  if (bareClosed === 0 && readOnlyDerivesFromLeft && oneShownPopulation && !staleProse) passed++;
+  // QA-1304 (S3, checker on cycle 2): the whole QA-1278 fix is two label strings in a 4,400-line
+  // client file, and neither was held by anything - both revert silently, and the screen goes back
+  // to printing three denominators of which only one names its population. The stale-prose check
+  // above asserts an ABSENCE; these assert the PRESENCE of the words that replaced it. Both are
+  // needed: dropping the label and dropping the correction are two different regressions.
+  //
+  // Matched on the distinguishing PHRASE, not the whole sentence, so ordinary rewording does not
+  // redden this while a silent revert still does.
+  const headerNamesItsPopulation = /still on the batch marked/.test(body);
+  const portalLineNamesItsPopulation = /s roster carry a portal ID/.test(src);
+  if (bareClosed === 0 && readOnlyDerivesFromLeft && oneShownPopulation && !staleProse
+    && headerNamesItsPopulation && portalLineNamesItsPopulation) passed++;
   else {
     failed++;
     pushStructural(rel + ": a Closure control or count still ignores that the member has left"
       + " (bare disabled={closed} inside CandidateResults=" + bareClosed
       + ", readOnly derives from left_on=" + readOnlyDerivesFromLeft
       + ", grid and pills share one population=" + oneShownPopulation
-      + ", stale 'including students who have left' prose still present=" + staleProse + ")"
+      + ", stale 'including students who have left' prose still present=" + staleProse
+      + ", header names its population=" + headerNamesItsPopulation
+      + ", portal-ID line names its population=" + portalLineNamesItsPopulation + ")"
       + " - a control whose only possible outcome is a refusal is the dead-control class this tab has"
       + " now shipped twice, and a pill that counts rows the grid cannot show is the counting class."
       + " Certificate controls are DELIBERATELY not on readOnly: a candidate who passed and then left"
@@ -3238,6 +3289,46 @@ for (const file of walk(root)) {
         + "BASE_PATH becomes a dead link, and dead links are found by users rather than by builds.",
       );
     }
+  }
+}
+
+// ---- QA-1166: a filter pill must not print a number its own label has already broken down ----
+// FilterPills renders `{label}{count != null ? " " + count : ""}`. When the roster chip's LABEL was
+// changed to read "All 6 active - 1 left", the appended count came out behind it and the pill
+// rendered "All 6 active - 1 left 7" - an unlabelled roster total trailing a label that had just
+// split that same roster into its parts. On a screen whose entire complaint is numbers that do not
+// reconcile, that is the complaint.
+//
+// This pins the INVARIANT, not either fix for it. Two different repairs are possible - suppress the
+// appended count for a self-counting label, or keep every label wordless and let the count be the
+// only number - and this check is deliberately blind to which one is in force. It asks the one
+// question that makes the bug impossible either way: while this call site appends a count, no label
+// in the list may interpolate a number of its own.
+{
+  const pageFile = path.join(root, "app", "(app)", "batches", "[id]", "page.tsx");
+  const src = fs.readFileSync(pageFile, "utf8");
+  const start = src.indexOf("const CARD_FILTERS");
+  const end = src.indexOf("const q = cardSearch", start);
+  const appendsCount = /options=[{]CARD_FILTERS[.]map[(][^]{0,400}?count:/.test(src);
+  const labels = [];
+  if (start >= 0 && end > start) {
+    for (const m of src.slice(start, end).matchAll(/label: ([^,]+),/g)) labels.push(m[1].trim());
+  }
+  const numeric = labels.filter((l) => l.includes("${"));
+  if (start < 0 || end < 0) {
+    failed++;
+    pushStructural("batches/[id]: CARD_FILTERS could not be located - this pin has stopped asking its question and needs re-anchoring, not deleting.");
+  } else if (!appendsCount || numeric.length === 0) {
+    passed++;
+  } else {
+    failed++;
+    pushStructural(
+      `batches/[id] card filters: ${numeric.length} pill label(s) interpolate their own numbers while the `
+      + `call site still appends a count after them - ${numeric.join(" | ").slice(0, 160)}. `
+      + 'That renders as "All 6 active - 1 left 7": a third number nobody asked for, on the one screen '
+      + "whose complaint was numbers that do not add up. Either drop the count for that pill or keep the "
+      + "label wordless - not both.",
+    );
   }
 }
 
