@@ -4,7 +4,7 @@ import { apiHandler, requireUser, requireEdit, isScoped, HttpError } from "@/lib
 import { requirePerm, requireView } from "@/lib/permissions";
 import { Batch, BatchMember, Candidate, DailyLog, GovtAttendanceImport, GovtAttendanceRow } from "@/models";
 import { audit } from "@/lib/audit";
-import { importInScope, isTrainerRow } from "@/lib/govt-attendance";
+import { importInScope, isTrainerRow, nameKey, portalIdKey } from "@/lib/govt-attendance";
 
 async function loadRow(id: string, rowId: string, user: Awaited<ReturnType<typeof requireUser>>) {
   const imp = await GovtAttendanceImport.findById(id).populate("location", "name").lean<any>();
@@ -38,8 +38,11 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     throw new HttpError(400, "That row is a trainer's attendance, not a candidate's - a trainer's hours are their own delivery record, so there is no student to pick.");
   }
 
-  const nameKey = (s: unknown) => String(s ?? "").toLowerCase()
-    .replace(/\b(mr|mrs|ms|md|shri|smt|kumari)\.?\s+/g, " ").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+  // -248 (QA-1217): this WAS a hand-typed second copy of `nameKey`, in the one screen whose entire
+  // job is adjudicating same-name collisions. `nameKey` was exported for this exact reason (-153,
+  // QA-393) and ARCHITECTURE.md section 3 lists it as a concept with more than one home. A drift
+  // here does not throw — it silently changes which options are flagged `collides: "same name"`,
+  // so the drawer and the importer would disagree about one student while both looked right.
 
   let members: any[] = [];
   if (imp.batch) {
@@ -52,13 +55,20 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
       .populate("candidate", "name phone sidh_candidate_id").populate("batch", "code").lean<any[]>();
   }
 
-  const gid = String(row.govt_candidate_id ?? "").trim().toUpperCase();
+  // -248: `portalIdKey`, not a raw uppercase compare — the SAME key the importer's index uses, so
+  // this drawer and the matcher can never disagree about who collides. A candidate stored as
+  // `CAN41088877` against a file saying `CAN_41088877` is ONE person, and this drawer used to show
+  // them as an ordinary unrelated option with no "same portal ID" flag at all.
+  // Cycle 2 (QA-1226): `portalIdKey` and not the bare `normalizeCan` cycle 1 used here, because the
+  // bare matcher cannot read `CAN_ED…` — this screen would then have stopped flagging an EXACT id
+  // collision, on the one screen whose entire job is telling the operator which candidate is which.
+  const gid = portalIdKey(row.govt_candidate_id);
   const nk = nameKey(row.name);
   const options = members
     .filter((m) => m.candidate)
     .map((m) => {
       const c = m.candidate;
-      const sameId = !!gid && String(c.sidh_candidate_id ?? "").trim().toUpperCase() === gid;
+      const sameId = !!gid && portalIdKey(c.sidh_candidate_id) === gid;
       const sameName = !!nk && nameKey(c.name) === nk;
       return {
         candidate: c._id, name: c.name, phone: c.phone ?? null,

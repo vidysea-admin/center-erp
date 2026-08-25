@@ -6,7 +6,7 @@ import { BatchMember, Candidate, GovtAttendanceImport, GovtAttendanceRow, Notifi
 import { activateFromEvidence } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 import {
-  parseGovtAttendance, matchGovtRows, reconcileAgainstLogs, resolveLocationFromFile, shiftSignature,
+  parseGovtAttendance, matchGovtRows, reconcileAgainstLogs, resolveLocationFromFile, shiftSignature, portalIdKey,
   importLocationForWrite, scopedImportOr,
 } from "@/lib/govt-attendance";
 
@@ -118,6 +118,24 @@ export const POST = apiHandler(async (req: NextRequest) => {
   }
 
   const matched = await reconcileAgainstLogs(await matchGovtRows(parsed.rows, { batchId, locationId }));
+  // -248 (QA-1217 / QA-416, Umesh 25/08). A row that CARRIES a portal Candidate ID and was still
+  // placed by NAME is the case this gate is about. It is not an error — matching by name is how a
+  // roster that has never held portal IDs gets linked at all, and -108 deliberately kept it — but
+  // it is a GUESS made on a string that repeats within every centre, and until now it was committed
+  // in silence. Umesh's Chitrakoot export carries two "Sandeep Kumar" rows under different IDs.
+  //
+  // Derived, never stored: no new match_status, no schema change, and a legacy export with no
+  // Candidate ID column does not trip it (portalIdKey of nothing is null). Cycle 2 (QA-1226): this
+  // asks "does this row CARRY an id", and with the bare `normalizeCan` a row carrying an unreadable
+  // `CAN_ED…` answered no — so the one row shape most likely to fall to a name match was the one
+  // shape the gate stayed silent about. The contradiction case
+  // is NOT here — matchGovtRows refuses that outright, because nobody can consent to overruling an
+  // ID already on record.
+  const nameMatchedRows = matched.filter(
+    (r) => r.match_status === "Matched" && r.match_by === "Name" && portalIdKey(r.govt_candidate_id),
+  );
+  const nameMatchSuspected = nameMatchedRows.length > 0;
+  const acceptNameMatch = form.get("accept_name_match") === "1";
   const counts = {
     row_count: matched.length,
     matched_count: matched.filter((r) => r.match_status === "Matched").length,
@@ -202,6 +220,15 @@ export const POST = apiHandler(async (req: NextRequest) => {
         rows: parsed.rows.length, days_present_empty: dpEmpty,
         distinct_working_days: wdDistinct.slice(0, 12),
       } } : {}),
+      // -248 (QA-1217 / QA-416): named on the PREVIEW with the portal ID beside the name, because
+      // the ID is the thing the operator has to look at to decide - the name is what is in doubt.
+      name_match_suspected: nameMatchSuspected,
+      ...(nameMatchSuspected ? { name_match_detail: {
+        count: nameMatchedRows.length,
+        rows: nameMatchedRows.slice(0, 50).map((r) => ({
+          name: r.name, id: r.govt_candidate_id, sl_no: r.sl_no ?? null,
+        })),
+      } } : {}),
     });
   }
 
@@ -209,6 +236,21 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // (the report stays a report; the WRITE waits for an explicit, informed confirmation) - the
   // operator is never trapped, but a silent pass is exactly what put two qualified students below
   // the bar on 20-08.
+  // -248 (QA-1217 / QA-416, Umesh 25/08: "candidate id ke basis par wo karna chahiye, otherwise
+  // issue aata rahega"). Same shape as the column-shift gate directly below: the report stays a
+  // report, the WRITE waits for an informed confirmation. Checked FIRST because it is the one Umesh
+  // raised, and because a file can trip both.
+  //
+  // The remedies are named because "match them by ID instead" is not actionable on its own - the
+  // operator has to be told WHERE the ID goes. Both doors already exist: the candidate import maps a
+  // "Portal candidate ID" column (field-catalog.ts, CANDIDATE_IMPORT_FIELDS), and the batch screen
+  // has "Link portal IDs" for rosters whose IDs this system already holds on earlier imports.
+  if (nameMatchSuspected && !acceptNameMatch) {
+    const sample = nameMatchedRows.slice(0, 5).map((r) => `${r.name} (${r.govt_candidate_id})`).join(", ");
+    throw new HttpError(400,
+      `${nameMatchedRows.length} of ${matched.length} rows carry a portal Candidate ID, but no candidate here holds that ID - so they were placed by NAME instead: ${sample}${nameMatchedRows.length > 5 ? `, and ${nameMatchedRows.length - 5} more` : ""}. Names repeat within a centre, so each of those is a guess. Put the IDs on the candidates first - the candidate import reads a "Portal candidate ID" column, and the batch screen's "Link portal IDs" fills in the ones this system already holds - then import again and they will match on the ID. If you have checked the register yourself and these are right, confirm the checkbox on the preview and import again.`);
+  }
+
   if (columnShiftSuspected && !acceptShift) {
     throw new HttpError(400,
       `This file looks column-shifted: ${dpEmpty} of ${parsed.rows.length} rows have nothing in "Total Days Present" while "Total Working days" differs per student (${wdDistinct.slice(0, 6).join(", ")}${wdDistinct.length > 6 ? ", …" : ""}) - a genuine export carries ONE working-day figure for the whole batch. This is the layout that read two qualified students as below the 60-hour bar on 20-08. Check the file's columns before importing; if it really is right, confirm the checkbox on the preview and import again.`);

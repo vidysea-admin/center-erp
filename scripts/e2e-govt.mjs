@@ -39,6 +39,23 @@ async function req(cookie, method, p, body) {
 
 async function upload(cookie, fields) {
   const fd = new FormData();
+  // -248 (QA-1217): committing now HOLDS when rows that CARRY a portal Candidate ID were placed by
+  // NAME instead. The fixture's Charlie is exactly such a row BY DESIGN (the roster gives him no
+  // portal ID, the file gives him CAN_...0003), so every commit in this suite would start returning
+  // 400 — and every one of those tests was written to assert something else entirely. The helper
+  // consents on their behalf so they keep testing what they were written for.
+  //
+  // This does NOT weaken the gate's coverage, and the reason is narrower than the one cycle 1 gave.
+  // It is gated on `confirm === "1"`, so it NEVER touches a preview - every `name_match_suspected`
+  // assertion below sees ungated truth. On the commit path exactly ONE test opts out, by passing
+  // accept_name_match "0", and it proves the refusal still fires and still writes nothing.
+  //
+  // Cycle 1's comment claimed THREE such tests. There is one (`grep -c 'accept_name_match: "0"'`).
+  // The checker counted; I had not. A default that silences a guard everywhere is only safe if the
+  // count of tests that turn it back on is a measured number, not a remembered one.
+  if (fields.confirm === "1" && fields.accept_name_match === undefined) {
+    fields = { ...fields, accept_name_match: "1" };
+  }
   for (const [k, v] of Object.entries(fields)) fd.append(k, v);
   const res = await fetch(BASE + "/api/govt-attendance", { method: "POST", headers: { cookie }, body: fd });
   return { status: res.status, data: await res.json().catch(() => ({})) };
@@ -59,6 +76,12 @@ const NAME = `G${STAMP}`;
 const csvText = readFileSync(path.join(HERE, "fixtures", "govt-attendance-sample.csv"), "utf8")
   .replaceAll("TC999001", TC).replaceAll("GOVT Test", NAME).replaceAll("CAN_TEST", `CAN_${STAMP}`);
 const csvFile = () => new File([Buffer.from(csvText)], "govt-attendance-sample.csv", { type: "text/csv" });
+// -248 (QA-1217): the OTHER shape SIDH serves under this feature — an "Attendance Report" stating the
+// QP entitlement and the AEBAS attendance side by side. Same identifiers, same stamping, so it can be
+// filed against the same roster as the AEBAS fixture and the two shapes compared directly.
+const sidhText = readFileSync(path.join(HERE, "fixtures", "govt-attendance-sidh-report.csv"), "utf8")
+  .replaceAll("GOVT Test", NAME).replaceAll("CAN_TEST", `CAN_${STAMP}`);
+const sidhFile = (n = "sidh-report.csv") => new File([Buffer.from(sidhText)], n, { type: "text/csv" });
 
 // ---------------------------------------------------------------- setup
 // A dedicated centre carrying the fixture's TC ID, so auto-detection is what is actually tested.
@@ -1891,6 +1914,228 @@ ok("removal is real", (await req(admin, "GET", `/api/sync-sources/${srcId}`)).st
   ok("-154 (QA-438): a genuine export is not flagged (column_shift_suspected === false)",
     gPre.status === 200 && gPre.data.column_shift_suspected === false,
     JSON.stringify({ s: gPre.data.column_shift_suspected }));
+}
+
+// ---------------------------------------------------------------- -248 (QA-1217): ID over name
+// Umesh, 25/08, on the Chitrakoot export: "candidate id ke basis par wo karna chahiye, otherwise
+// issue aata rahega". Two defects under one ask, plus the shape the ask arrived in.
+{
+  const impCount = async () => ((await req(admin, "GET", "/api/govt-attendance")).data.items ?? []).length;
+
+  // 1. THE SHAPE. Pre-fix this file's "Total Days Attended" was claimed by total_working_days (the
+  //    bare "total days" alias), days-present came back null on every row, and that null-everywhere
+  //    column IS the column-shift signature - so a perfectly good file was refused with a diagnosis
+  //    ("looks column-shifted") that was both wrong and unactionable. Strict === false / === 18.
+  const sPre = await upload(admin, { file: sidhFile(), batch: batch._id });
+  const sAlpha = (sPre.data.preview ?? []).find((r) => r.name === `${NAME} Alpha`);
+  ok("-248 (QA-1217): the SIDH 'Attendance Report' shape parses - days-present read, not null",
+    sPre.status === 200 && !(sPre.data.missing_columns ?? []).includes("Total Days Present")
+      && sAlpha?.total_days_present === 1,
+    JSON.stringify({ missing: sPre.data.missing_columns, alpha: sAlpha?.total_days_present }));
+  ok("-248 (QA-1217): ...and 'Total Training Days (QP)' is the denominator, not the attended count",
+    sAlpha?.total_working_days === 18, JSON.stringify({ wd: sAlpha?.total_working_days }));
+  ok("-248 (QA-1217): ...so it is NOT misdiagnosed as column-shifted (it was, on all 45 live rows)",
+    sPre.data.column_shift_suspected === false, JSON.stringify({ s: sPre.data.column_shift_suspected }));
+
+  // 2. THE GATE NAMES IT.
+  //
+  //    NOT reusing the fixture's Charlie, and the reason is worth writing down: Charlie starts with
+  //    no portal ID, but the AEBAS imports earlier in THIS suite already stamped CAN_...0003 onto
+  //    him — that is the -108 write-back doing exactly its job. So by the time this block runs he
+  //    matches by Portal ID and the gate correctly does not fire. A test that depended on that
+  //    ordering measured the suite, not the product; it failed here first as `s:false` and the
+  //    honest fix is a candidate this block owns.
+  const gateCand = (await req(admin, "POST", "/api/candidates", {
+    name: `${NAME} Gatecheck`, phone: `9${STAMP.slice(1)}7001`, location: loc._id, program: program._id,
+  })).data.item;
+  // joined_on is TODAY, not back-dated: this batch went Active earlier in this suite, which stamps
+  // actual_start = today, and addMemberChecked refuses a join before a batch began (the QA-892/907
+  // predicate). The original roster could back-date because it was enrolled BEFORE the transition.
+  // Getting this wrong returns 400 silently, the candidate never reaches the roster, and the row
+  // comes back Unmatched - which looks identical to the gate being broken.
+  const gateMem = await req(admin, "POST", `/api/batches/${batch._id}/members`, {
+    candidate: gateCand?._id, joined_on: localDate(),
+  });
+  // The ENROLMENT is asserted, not just the candidate. A candidate who is not on the roster is
+  // invisible to the matcher's index, so his row comes back Unmatched and the gate correctly stays
+  // quiet - which reads exactly like "the gate is broken" and is how the first version of this test
+  // misread itself.
+  ok("-248 (QA-1217): a candidate with NO portal ID is ON THE ROSTER for the gate to bite on",
+    !!gateCand?._id && !gateCand?.sidh_candidate_id && !!gateMem.data?.item?._id,
+    JSON.stringify({ cand: !!gateCand?._id, can: gateCand?.sidh_candidate_id, memberStatus: gateMem.status, member: !!gateMem.data?.item?._id, err: String(gateMem.data?.error ?? "").slice(0, 160) }));
+
+  //    Alpha and Bravo hold their IDs and match on them; only Gatecheck is a name guess.
+  // 6301/6302 deliberately: 7777 and 9999 are already minted elsewhere in this suite (the backfill
+  // fixture holds CAN_<STAMP>7777), and a colliding id fails the stamp on the UNIQUE partial index
+  // with 'That sidh candidate id is already in use' - a 409 that reads exactly like the gate being
+  // broken. Measured, not guessed: it cost a full wall run to find.
+  const gateHdr = "S.No,Candidate Name,Candidate ID,Total Training Days (QP),Total Hours Attended,Total Days Attended";
+  const gateCsv = [
+    gateHdr,
+    `1,${NAME} Alpha,CAN_${STAMP}0001,18,7.05,1`,
+    `2,${NAME} Bravo,CAN_${STAMP}0002,18,27.33,4`,
+    `3,${NAME} Gatecheck,CAN_${STAMP}6301,18,12.63,3`,
+  ].join("\n");
+  const gateFile = (n = "gate.csv") => new File([Buffer.from(gateCsv)], n, { type: "text/csv" });
+
+  const gPre = await upload(admin, { file: gateFile(), batch: batch._id });
+  const named = (gPre.data.name_match_detail?.rows ?? []).map((r) => r.name);
+  ok("-248 (QA-1217 / QA-416): the preview NAMES every row placed by name while carrying an ID",
+    gPre.data.name_match_suspected === true && named.includes(`${NAME} Gatecheck`)
+      && !named.includes(`${NAME} Alpha`) && !named.includes(`${NAME} Bravo`),
+    JSON.stringify({ s: gPre.data.name_match_suspected, rows: gPre.data.name_match_detail?.rows,
+      gatecheckRow: (gPre.data.preview ?? []).filter((r) => String(r.name).includes("Gatecheck"))
+        .map((r) => ({ st: r.match_status, by: r.match_by, id: r.govt_candidate_id, note: String(r.match_note ?? "").slice(0, 90) })) }));
+  ok("-248 (QA-1217): ...with the portal ID beside the name - the ID is the evidence, the name is the doubt",
+    (gPre.data.name_match_detail?.rows ?? []).some((r) => r.name === `${NAME} Gatecheck` && r.id === `CAN_${STAMP}6301`),
+    JSON.stringify(gPre.data.name_match_detail?.rows));
+
+  // 3. THE GATE HOLDS, and writes nothing. accept_name_match "0" opts out of the helper's default.
+  const before = await impCount();
+  const held = await upload(admin, { file: gateFile("held.csv"), batch: batch._id, confirm: "1", accept_name_match: "0", period_label: `name-gate ${STAMP}` });
+  const after = await impCount();
+  ok("-248 (QA-1217 / QA-416): the commit is REFUSED without consent, and says where the ID goes",
+    held.status === 400 && /placed by NAME/i.test(String(held.data.error ?? ""))
+      && /Portal candidate ID/.test(String(held.data.error ?? ""))
+      && /Link portal IDs/.test(String(held.data.error ?? "")),
+    JSON.stringify({ status: held.status, error: String(held.data.error ?? "").slice(0, 200) }));
+  ok("-248 (QA-1217): ...and the refusal wrote NOTHING (import count unchanged)",
+    after === before, JSON.stringify({ before, after }));
+
+  // 4. The operator is never trapped. Paired with #3 - alone it passes pre-fix trivially.
+  const consented = await upload(admin, { file: gateFile("consented.csv"), batch: batch._id, confirm: "1", accept_name_match: "1", period_label: `name-gate-ok ${STAMP}` });
+  ok("-248 (QA-1217, paired with the refusal above): explicit consent still imports",
+    consented.status === 201 && !!consented.data._id,
+    JSON.stringify({ status: consented.status, error: String(consented.data?.error ?? "").slice(0, 200), data: JSON.stringify(consented.data).slice(0, 200) }));
+  if (consented.data._id) await req(admin, "DELETE", `/api/govt-attendance/${consented.data._id}`);
+
+  // 5. THE SILENT ONE, and the reason this unit exists. Alpha IS on record - as CAN_...0001. A file
+  //    that names Alpha but gives a DIFFERENT id used to match him anyway, by name, and stamp
+  //    nothing (the stamp is conditional on the candidate having no id) - so one student's hours
+  //    landed on another student's record with no warning and no trace, forever indistinguishable
+  //    from a correct row. This is the Sandeep Kumar case from Umesh's own file.
+  //    PRE-FIX this row comes back Matched/Name. Post-fix it must be Unmatched.
+  const contra = [
+    "S.No,Candidate Name,Candidate ID,Total Training Days (QP),Total Hours Attended,Total Days Attended",
+    `1,${NAME} Alpha,CAN_${STAMP}6302,18,7.05,1`,
+  ].join("\n");
+  const cPre = await upload(admin, { file: new File([Buffer.from(contra)], "contradiction.csv", { type: "text/csv" }), batch: batch._id });
+  const cRow = (cPre.data.preview ?? [])[0];
+  ok("-248 (QA-1217): a name match onto a candidate already on record under a DIFFERENT portal ID is REFUSED",
+    cRow?.match_status === "Unmatched",
+    JSON.stringify({ status: cRow?.match_status, by: cRow?.match_by, note: String(cRow?.match_note ?? "").slice(0, 160) }));
+  ok("-248 (QA-1217): ...and the note names BOTH ids, so the operator can see which is which",
+    String(cRow?.match_note ?? "").includes(`CAN_${STAMP}6302`) && String(cRow?.match_note ?? "").includes(`CAN_${STAMP}0001`),
+    String(cRow?.match_note ?? "").slice(0, 200));
+
+  // 6. ONE MATCHER, NOT TWO. The old index keyed on String(x).trim().toUpperCase(), so a file
+  //    written CAN41088877 could not find a candidate stored CAN_41088877 - two spellings of one
+  //    identity, both legal under the partial-unique index because they are different STRINGS.
+  //    normalizeCan reads only the digits. Pre-fix this row falls through to the NAME branch.
+  const spell = [
+    "S.No,Candidate Name,Candidate ID,Total Training Days (QP),Total Hours Attended,Total Days Attended",
+    `1,Someone Else Entirely,CAN${STAMP}0001,18,7.05,1`,
+  ].join("\n");
+  const spPre = await upload(admin, { file: new File([Buffer.from(spell)], "spelling.csv", { type: "text/csv" }), batch: batch._id });
+  const spRow = (spPre.data.preview ?? [])[0];
+  ok("-248 (QA-1217): an ID spelled without the underscore still matches the same person, by ID",
+    spRow?.match_status === "Matched" && spRow?.match_by === "Portal ID",
+    JSON.stringify({ status: spRow?.match_status, by: spRow?.match_by }));
+
+  // 7. THE PIN THAT KEEPS THE GATE HONEST: a file every row of which matches on its ID must NOT be
+  //    flagged. Strict === false, so it also fails pre-fix (the field is undefined there) while
+  //    post-fix it proves the gate cannot bite an import that did exactly what was asked of it.
+  const clean = [
+    "S.No,Candidate Name,Candidate ID,Total Training Days (QP),Total Hours Attended,Total Days Attended",
+    `1,${NAME} Alpha,CAN_${STAMP}0001,18,7.05,1`,
+    `2,${NAME} Bravo,CAN_${STAMP}0002,18,27.33,4`,
+  ].join("\n");
+  const clPre = await upload(admin, { file: new File([Buffer.from(clean)], "all-by-id.csv", { type: "text/csv" }), batch: batch._id });
+  ok("-248 (QA-1217): a file whose every row matches on its portal ID is NOT flagged",
+    clPre.status === 200 && clPre.data.name_match_suspected === false,
+    JSON.stringify({ s: clPre.data.name_match_suspected, preview: (clPre.data.preview ?? []).map((r) => r.match_by) }));
+
+  // 8. CYCLE 2 (QA-1226, raised by the checker against cycle 1 and correct).
+  //
+  //    `normalizeCan` reads only the DIGITS after CAN, so it returns null for `CAN_ED…` — a shape
+  //    `looksLikeCan` accepts and this product stores (QA-714/-210). Cycle 1 keyed the ID index on
+  //    the bare matcher, which dropped those candidates out of ID matching ENTIRELY: file and
+  //    candidate carrying the IDENTICAL string went Matched/"Portal ID" -> Unmatched, and the note
+  //    said "No candidate named X in this batch" about a candidate who was in the batch holding
+  //    that exact id.
+  //
+  //    Nothing in this suite covered the shape, which is why a 3,916-green wall was silent about it.
+  //    These four go RED on cycle 1 and on any future build that narrows the key again.
+  const edId = `CAN_ED${STAMP}`;                 // looksLikeCan: true. normalizeCan: null.
+  const edCand = (await req(admin, "POST", "/api/candidates", {
+    name: `${NAME} Edshape`, phone: `9${STAMP}201`, location: loc._id, program: program._id,
+    sidh_candidate_id: edId,
+  })).data.item;
+  const edMem = await req(admin, "POST", `/api/batches/${batch._id}/members`, {
+    candidate: edCand?._id, joined_on: localDate(),
+  });
+  ok("-248 cycle 2 (QA-1226): a candidate CAN hold an id normalizeCan cannot read - the door accepts it",
+    !!edCand?._id && edCand?.sidh_candidate_id === edId && !!edMem.data?.item?._id,
+    JSON.stringify({ id: !!edCand?._id, stored: edCand?.sidh_candidate_id, member: !!edMem.data?.item?._id,
+      err: String(edCand ? "" : "").slice(0, 120) }));
+
+  //    DIFFERENT name on purpose: the name branch must not be what rescues this row. If the id is
+  //    not doing the matching, this row cannot match at all.
+  const edCsv = [
+    "S.No,Candidate Name,Candidate ID,Total Training Days (QP),Total Hours Attended,Total Days Attended",
+    `1,Totally Different Person,${edId},18,7.05,1`,
+  ].join("\n");
+  const edPre = await upload(admin, { file: new File([Buffer.from(edCsv)], "ed-shape.csv", { type: "text/csv" }), batch: batch._id });
+  const edRow = (edPre.data.preview ?? [])[0];
+  ok("-248 cycle 2 (QA-1226): an id normalizeCan CANNOT read still matches on the id when both sides carry it verbatim",
+    edRow?.match_status === "Matched" && edRow?.match_by === "Portal ID",
+    JSON.stringify({ st: edRow?.match_status, by: edRow?.match_by, note: String(edRow?.match_note ?? "").slice(0, 130) }));
+
+  //    ...and the row must NOT be described with a sentence that is false about the only fact the
+  //    operator can act on.
+  ok("-248 cycle 2 (QA-1226): ...so it is never told 'No candidate named X' about a candidate who is right there holding that id",
+    !/No candidate named/i.test(String(edRow?.match_note ?? "")),
+    JSON.stringify({ note: String(edRow?.match_note ?? "").slice(0, 160) }));
+
+  //    The contradiction refusal must reach this shape too. Cycle 1 read an unreadable stored id as
+  //    "no id on record", so a file naming that person with a DIFFERENT readable id sailed through
+  //    as a name match - the very mis-attribution QA-1218 exists to stop, still open for one shape.
+  const edContra = [
+    "S.No,Candidate Name,Candidate ID,Total Training Days (QP),Total Hours Attended,Total Days Attended",
+    `1,${NAME} Edshape,CAN_${STAMP}6303,18,7.05,1`,
+  ].join("\n");
+  const ecPre = await upload(admin, { file: new File([Buffer.from(edContra)], "ed-contra.csv", { type: "text/csv" }), batch: batch._id });
+  const ecRow = (ecPre.data.preview ?? [])[0];
+  ok("-248 cycle 2 (QA-1226/QA-1218): a candidate holding an UNREADABLE id is still 'on record' - a different id cannot name-match onto them",
+    ecRow?.match_status === "Unmatched",
+    JSON.stringify({ st: ecRow?.match_status, by: ecRow?.match_by, note: String(ecRow?.match_note ?? "").slice(0, 160) }));
+
+  //    And the consent gate has to SEE such a row as carrying an id. Cycle 1's filter asked
+  //    `normalizeCan(...)`, so the row shape most likely to fall to a name match was the one shape
+  //    the gate stayed silent about.
+  //    A candidate this assertion OWNS. Gatecheck cannot serve here: test 4 above committed an
+  //    import that stamped CAN_<STAMP>6301 onto him, so a file naming him with a different id is
+  //    now correctly REFUSED by the QA-1218 contradiction guard and never reaches the gate at all.
+  //    That is the guard working - and it made the first version of this assertion measure the
+  //    wrong thing. Caught by the wall, not by review.
+  const gate2 = (await req(admin, "POST", "/api/candidates", {
+    name: `${NAME} Gatetwo`, phone: `9${STAMP}202`, location: loc._id, program: program._id,
+  })).data.item;
+  const gate2Mem = await req(admin, "POST", `/api/batches/${batch._id}/members`, {
+    candidate: gate2?._id, joined_on: localDate(),
+  });
+  ok("-248 cycle 2 (QA-1226): a second un-stamped candidate is on the roster for the gate assertion",
+    !!gate2?._id && !gate2?.sidh_candidate_id && !!gate2Mem.data?.item?._id,
+    JSON.stringify({ cand: !!gate2?._id, can: gate2?.sidh_candidate_id, member: !!gate2Mem.data?.item?._id }));
+  const edGate = [
+    "S.No,Candidate Name,Candidate ID,Total Training Days (QP),Total Hours Attended,Total Days Attended",
+    `1,${NAME} Gatetwo,CAN_ED${STAMP}77,18,12.63,3`,
+  ].join("\n");
+  const egPre = await upload(admin, { file: new File([Buffer.from(edGate)], "ed-gate.csv", { type: "text/csv" }), batch: batch._id });
+  ok("-248 cycle 2 (QA-1226): the consent gate counts a row carrying an id normalizeCan cannot read",
+    egPre.data.name_match_suspected === true
+      && (egPre.data.name_match_detail?.rows ?? []).some((r) => r.id === `CAN_ED${STAMP}77`),
+    JSON.stringify({ s: egPre.data.name_match_suspected, rows: egPre.data.name_match_detail?.rows }));
 }
 
 // ---------------------------------------------------------------- SSRF guard (2026-08-12 security review)

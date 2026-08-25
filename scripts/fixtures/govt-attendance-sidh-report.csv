@@ -1,0 +1,5 @@
+S.No,Candidate Name,Candidate ID,Classroom Training Hours (QP),OJT Hours (QP),Total Training Hours (QP),Total Training Days (QP),Classroom Hours Attended (AEBAS),OJT Hours Attended,Total Hours Attended,Total Days Attended,Hours Attendance %,Days Attendance %,Eligible for Assessment
+1,GOVT Test Alpha,CAN_TEST0001,120,0,120,18,7.05,0,7.05,1,5.88%,5.56%,No
+2,GOVT Test Bravo,CAN_TEST0002,120,0,120,18,27.33,0,27.33,4,22.78%,22.22%,No
+3,GOVT Test Charlie,CAN_TEST0003,120,0,120,18,75.84,0,75.84,10,63.20%,55.56%,Yes
+4,GOVT Test Twin,CAN_TEST0005,120,0,120,18,12.63,0,12.63,3,10.53%,16.67%,No

@@ -37,6 +37,7 @@ function Inner() {
   const [upload, setUpload] = useState<any>(null); // { file, preview, counts… }
   // -154 (QA-438): the operator's explicit "yes, import the suspicious layout anyway".
   const [acceptShift, setAcceptShift] = useState(false);
+  const [acceptNameMatch, setAcceptNameMatch] = useState(false); // -248 (QA-1217): the name-match gate
   const [busy, setBusy] = useState(false);
   const [resolve, setResolve] = useState<any>(null); // -102: the Ambiguous/Unmatched row being resolved
   // 2026-08-13: per-batch import ("har batch ke andar daily basis pe upload attendance") —
@@ -75,6 +76,7 @@ function Inner() {
       const res = await api("/api/govt-attendance", { method: "POST", body: fd });
       setUpload({ file, ...res });
       setAcceptShift(false); // a fresh file starts with no override, whatever the last one did
+      setAcceptNameMatch(false); // -248: same reason — consent is per-file, never sticky
     } catch (e: any) { setError(e.message); setUpload(null); }
     setBusy(false);
   }
@@ -84,6 +86,7 @@ function Inner() {
     const fd = new FormData();
     fd.append("file", upload.file); fd.append("confirm", "1");
     if (acceptShift) fd.append("accept_column_shift", "1");
+    if (acceptNameMatch) fd.append("accept_name_match", "1");
     if (batchParam) fd.append("batch", batchParam);
     if (manualLoc) fd.append("location", manualLoc);
     if (upload.period_label) fd.append("period_label", upload.period_label);
@@ -398,6 +401,35 @@ function Inner() {
                 bar because its days-attended column sat in the working-days field - and nothing
                 said a word until the count moved. The import button holds until the box is
                 ticked; a genuine file never shows this block at all. */}
+            {/* -248 (QA-1217 / QA-416, Umesh 25/08). These rows carry a portal Candidate ID and were
+                still placed by NAME, because no candidate here holds that ID. Names repeat within a
+                centre — Umesh's own Chitrakoot export has two "Sandeep Kumar" rows under different
+                IDs — so each of these is a guess, and it used to be committed without a word. The ID
+                is printed beside the name because the ID is the evidence; the name is what is in
+                doubt. */}
+            {upload.name_match_suspected && (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+                <b>
+                  {upload.name_match_detail?.count ?? 0} of {upload.row_count} rows were matched by NAME, not by their portal Candidate ID.
+                </b>{" "}
+                Those rows carry an ID, but no candidate here holds it — so the system fell back to the name, and names
+                repeat within a centre. Put the IDs on the candidates first and they will match on the ID: the candidate
+                import reads a <b>Portal candidate ID</b> column, and the batch screen&apos;s <b>Link portal IDs</b> fills
+                in the ones this system already holds from earlier imports.
+                <ul className="mt-2 max-h-40 list-disc overflow-auto pl-5">
+                  {(upload.name_match_detail?.rows ?? []).map((r: any, i: number) => (
+                    <li key={i}>{r.name} — <code>{r.id}</code>{r.sl_no != null ? ` (row ${r.sl_no})` : ""}</li>
+                  ))}
+                </ul>
+                {(upload.name_match_detail?.count ?? 0) > (upload.name_match_detail?.rows?.length ?? 0) && (
+                  <p className="mt-1">…and {(upload.name_match_detail?.count ?? 0) - (upload.name_match_detail?.rows?.length ?? 0)} more.</p>
+                )}
+                <label className="mt-2 flex cursor-pointer items-center gap-2 font-medium">
+                  <input type="checkbox" checked={acceptNameMatch} onChange={(e) => setAcceptNameMatch(e.target.checked)} />
+                  I have checked the register — these are the right students, import by name
+                </label>
+              </div>
+            )}
             {upload.column_shift_suspected && (
               <div className="rounded-lg border border-red-300 bg-red-50 p-3 text-xs text-red-900">
                 <b>This file looks column-shifted — check it before importing.</b>{" "}
@@ -432,7 +464,9 @@ function Inner() {
                 </tbody>
               </table>
             </div>
-            <Btn onClick={commit} disabled={busy || (upload.column_shift_suspected && !acceptShift)}>{busy ? "Importing…" : upload.column_shift_suspected && !acceptShift ? "Held — check the red box above" : `Import ${upload.row_count} rows`}</Btn>
+            {/* -248 (QA-1217): two independent gates now, so the held-reason has to name the one that
+                is actually holding — "check the box above" is useless when there are two boxes. */}
+            <Btn onClick={commit} disabled={busy || (upload.column_shift_suspected && !acceptShift) || (upload.name_match_suspected && !acceptNameMatch)}>{busy ? "Importing…" : upload.column_shift_suspected && !acceptShift ? "Held — check the red box above" : upload.name_match_suspected && !acceptNameMatch ? "Held — check the name-match box above" : `Import ${upload.row_count} rows`}</Btn>
           </div>
         )}
       </Drawer>

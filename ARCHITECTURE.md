@@ -243,7 +243,13 @@ invalid recipient) and **always** write a MailLog row. Bounces: SNS → `public/
   bug both ways:**
   - `normalizeCan(s)` — the **matcher**. Reads only the DIGITS after CAN, returns `CAN<digits>` or
     null. Everything that decides *who matches whom* uses this: the certification gate
-    (`enrolledWithoutCan`), the certificate matcher, the health screen, `link-portal-ids`.
+    (`enrolledWithoutCan`), the certificate matcher, the health screen, `link-portal-ids`, and
+    **since -248 (QA-1217) the government-attendance importer and its row-resolve drawer** — which
+    had been the one set of deciders that did NOT, keying instead on `String(x).trim().toUpperCase()`.
+    That near-copy read `CAN_41088877` and `CAN41088877` as two different people (both spellings pass
+    the partial-unique index, being different strings), so a candidate stored in one spelling was
+    invisible to a file written in the other and the row silently fell through to the NAME branch.
+    This bullet says "never write a near-copy of that regex"; the importer had one for six months.
   - `looksLikeCan(s)` — the **shape test** for a hand-typed value (begins with CAN, has a digit).
     Used only by the two candidate write doors. Using `normalizeCan` here instead refused
     `CAN_ED0711202`, a shape this product stores — eleven wall assertions, -210 run 1.
@@ -738,8 +744,15 @@ removes three milestones from every future plan.
 `planArtifact` is served through the **public plan-token door**, so a correction changes the payload
 of a link already sent outside the company.
 
-`nameKey` for match normalisation (×4: `govt-attendance.ts:207`, the row-match route, `locations/page.tsx:53`,
-inline in `trainers/page.tsx:140`) · `offerable()` retired-programme filter declared **three times**
+`nameKey` for match normalisation (**×3 since -248**: defined in `lib/govt-attendance.ts`, exported
+beside `portalIdKey` — deliberately named by SYMBOL and not by line. This census said `:207`; -248
+cycle 1 "corrected" it to `:214` and its own ~23 inserted lines moved the function to `:237` in the
+same change, so the correction was stale before it was committed (QA-1227, found by the checker).
+A line number in this file is a fact with a half-life measured in commits; a symbol name is not; readers are `locations/page.tsx:53` (`normName`, a different question — SPOC names)
+and inline in `trainers/page.tsx:140`. **The row-match route's copy is GONE** (QA-1217): it was a
+hand-typed twin sitting in the one screen whose whole job is adjudicating same-name collisions, so a
+drift there would have made the drawer and the importer disagree about one student while both looked
+right. It imports the shared one now.) · `offerable()` retired-programme filter declared **three times**
 (`batches/page.tsx:16`, `candidates/page.tsx:18`, `locations/[id]/page.tsx:12`) · the ledger-code
 stripping regex (`user-copy.ts` + copy-pasted into three scripts) · hardcoded
 `https://www.vidysea.com/erp…` in five places that bypass `BASE_PATH`.

@@ -13,6 +13,12 @@
 // "Total Days Present" to "Days Present" still imports.
 import * as XLSX from "xlsx";
 import { parseCsv } from "@/lib/sync";
+// -248 (QA-1217): the matcher below decides WHO MATCHES WHOM, and ARCHITECTURE.md section 3 names
+// `normalizeCan` as the one test every such decision uses. This file already RE-EXPORTS it (see the
+// `export { normalizeCan, looksLikeCan, storedCanIsUnreadable }` line below),
+// but a re-export puts nothing in local scope — which is how this module ended up with its own
+// weaker near-copy (`.trim().toUpperCase()`) doing the deciding. Imported here so there is one.
+import { normalizeCan } from "@/lib/validate";
 import { Batch, BatchMember, Candidate, DailyLog, GovtAttendanceRow, Location, Trainer } from "@/models";
 
 export type GovtRow = {
@@ -39,7 +45,7 @@ const norm = (s: unknown) => String(s ?? "").replace(/ /g, " ").trim().toLowerC
 // First alias that the header cell *starts with* wins — "total days came after 00:00:00" carries a
 // clock value in the header itself, so exact equality would fail on every portal export.
 const COLUMNS: Record<keyof GovtRow | "came_after" | "going_before", string[]> = {
-  sl_no: ["sl no", "s no", "sr no", "serial no", "#"],
+  sl_no: ["sl no", "s no", "s.no", "sr no", "serial no", "#"],
   org_name: ["org name", "organisation name", "organization name", "tc name", "centre name", "center name"],
   tc_id: ["tc id", "tc code", "centre id", "center id"],
   attendance_id: ["attendance id", "attendance"],
@@ -47,9 +53,27 @@ const COLUMNS: Record<keyof GovtRow | "came_after" | "going_before", string[]> =
   govt_candidate_id: ["candidate id", "candidate code", "can id", "sdms id", "candidate reference"],
   candidate_type: ["candidate type", "type", "user type"],
   designation: ["user's designation", "users designation", "designation", "role"],
-  total_working_days: ["total working days", "working days", "total days"],
-  total_days_present: ["total days present", "days present", "present days", "no of days present"],
-  total_hours_minutes: ["total hours spent", "hours spent", "total hours"],
+  // -248 (QA-1219, Umesh 25/08, Chitrakoot "Attendance Report 22-08-2026"): the portal serves TWO
+  // shapes under one feature. The raw AEBAS register ("Total Working days" / "Total Days Present" /
+  // "Total Hours Spent") is the one this table was written for; SIDH also emits an "Attendance
+  // Report" that states the QP entitlement and the AEBAS attendance side by side ("Total Training
+  // Days (QP)" / "Total Days Attended" / "Total Hours Attended").
+  //
+  // Read `resolveHeader` above before touching the ORDER here. It sorts each field's aliases
+  // LONGEST FIRST, and its `findIndex` skips any column an earlier field already claimed, so the
+  // new aliases are
+  // load-bearing in two directions:
+  //   - "total training days" (19) must beat the bare "total days" (10), or `total_working_days`
+  //     claims "Total Days Attended" — which is exactly what it did on Umesh's file: the batch
+  //     denominator read 0/1/2 (a per-student attended count) instead of 18, and `total_days_present`
+  //     then found nothing left and came back null on all 45 rows.
+  //   - a null days-present column on every row is ALSO the column-shift signature (`shiftSignature`), so the import was refused with "this file looks column-shifted". It is not shifted.
+  //     A wrong diagnosis an operator cannot act on is worse than none.
+  // On a genuine AEBAS export none of the three new aliases exist, so each falls through to the
+  // alias it always used. That is asserted, not assumed — the fixture's parse is pinned byte-for-byte.
+  total_working_days: ["total training days", "total working days", "working days", "total days"],
+  total_days_present: ["total days attended", "total days present", "days present", "present days", "no of days present"],
+  total_hours_minutes: ["total hours attended", "total hours spent", "hours spent", "total hours"],
   total_hours_raw: [],
   average_per_day_raw: ["average per day", "avg per day", "average hours per day"],
   not_closed: ["not closed", "not closed days"],
@@ -211,6 +235,42 @@ export function parseGovtAttendance(buf: Buffer, fileName = ""): ParsedFile {
 // only honest way to ask it is with the identical normalisation the matcher itself used to decide
 // the row was ambiguous. A second, near-enough copy of this regex is how two screens start
 // disagreeing about one student.
+/**
+ * -248 cycle 2 (QA-1226, raised by the CHECKER against cycle 1 — and it was right).
+ *
+ * Cycle 1 keyed the portal-ID index on `normalizeCan` alone. That is the shared matcher and using it
+ * was the point of the unit, but it is `/CAN[\s_-]*(\d+)/i` — it reads only DIGITS after CAN, and
+ * returns null for `CAN_ED0711202`, a shape `looksLikeCan` accepts and this product demonstrably
+ * stores (QA-714, -210, and four e2e suites use it as a real portal id). So cycle 1 dropped those
+ * candidates out of the index entirely and LOST AN EXACT MATCH THAT PREVIOUSLY WORKED: file and
+ * candidate carrying the identical string `CAN_ED0711202` went from `Matched / Portal ID` to
+ * `Unmatched`, told "No candidate named X in this batch" while that candidate was in the batch
+ * holding that exact id. It failed in the safe direction and no assertion covered the shape, which
+ * is why a 3,916-green wall said nothing about it.
+ *
+ * The fix is NOT to widen `normalizeCan`. Widening it changes who matches whom across imports,
+ * health and certificates — that is QA-719 and it is Umesh's decision, not a side effect of this
+ * unit. So: canonical key when the matcher can read the id, and the id's own exact text when it
+ * cannot. The `RAW:` prefix is load-bearing — it makes the two key spaces disjoint, so an
+ * unreadable id can never collide with a canonical `CAN<digits>` one.
+ *
+ * What this preserves and what it adds. Cycle 2 stated this as "nothing matches that did not match
+ * before" and the CHECKER measured that false (QA-1251), so here is the true version:
+ *   - an UNREADABLE id matches exactly as it did before this unit — byte-for-byte after trim/upper;
+ *   - a READABLE one now matches across spellings, which is the fix;
+ *   - and because `normalizeCan` reads the digit run and stops, a stored `CAN_41088877X` now folds
+ *     onto a file's `CAN_41088877` and MATCHES, where the old raw compare kept them apart. That is a
+ *     match this unit CREATES. It is deliberate and consistent — it is what the certificate matcher,
+ *     the health screen and `link-portal-ids` have always done with `normalizeCan` — but it is not
+ *     "nothing new", and a comment that says so would hide the one direction this change widens.
+ */
+export const portalIdKey = (s: unknown): string | null => {
+  const canon = normalizeCan(s);
+  if (canon) return canon;
+  const raw = String(s ?? "").trim().toUpperCase();
+  return raw ? "RAW:" + raw : null;
+};
+
 export const nameKey = (s: string | undefined) =>
   String(s ?? "").toLowerCase().replace(/\b(mr|mrs|ms|md|shri|smt|kumari)\.?\s+/g, " ")
     .replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
@@ -371,10 +431,16 @@ export async function matchGovtRows(
   for (const m of members) {
     const c = m.candidate;
     if (!c) continue;
-    if (c.sidh_candidate_id) {
-      const k = String(c.sidh_candidate_id).trim().toUpperCase();
-      byGovtId.set(k, [...(byGovtId.get(k) ?? []), m]);
-    }
+    // -248 (QA-1217): was `String(...).trim().toUpperCase()`. That is a SECOND, weaker definition of
+    // "is this the same portal ID", and ARCHITECTURE.md section 3 forbids exactly this: `normalizeCan`
+    // is the matcher, and it reads only the digits after CAN. The raw form keyed `CAN_41088877` and
+    // `CAN41088877` as two different people — both spellings pass the partial-unique index because
+    // they are different strings — so a candidate stored in one spelling was invisible to a file
+    // written in the other, and the row fell through to the NAME branch below. A candidate whose
+    // stored id this cannot read is deliberately left out of the index rather than keyed on garbage:
+    // that is `storedCanIsUnreadable`, and the screens already say so out loud.
+    const canKey = portalIdKey(c.sidh_candidate_id);
+    if (canKey) byGovtId.set(canKey, [...(byGovtId.get(canKey) ?? []), m]);
     const nk = nameKey(c.name);
     if (nk) byName.set(nk, [...(byName.get(nk) ?? []), m]);
   }
@@ -404,7 +470,8 @@ export async function matchGovtRows(
   for (const t of trainers) {
     const nk = nameKey(t.name);
     if (nk) trainerByName.set(nk, [...(trainerByName.get(nk) ?? []), t]);
-    if (t.govt_candidate_id) trainerByGovtId.set(String(t.govt_candidate_id).trim().toUpperCase(), t);
+    const tCan = portalIdKey(t.govt_candidate_id); // -248: same one key as the candidate index
+    if (tCan) trainerByGovtId.set(tCan, t);
   }
 
   const out: MatchedRow[] = [];
@@ -420,7 +487,9 @@ export async function matchGovtRows(
     // and reused -- rather than patching the one line that was reported, which would have left the
     // same inconsistency for the next reader to trip over.
     const rawGid = String(r.govt_candidate_id ?? "").trim();
-    const gid = rawGid.toUpperCase();
+    // -248: `gid` is the KEY (canonical, for deciding who matches whom); `rawGid` stays the portal's
+    // own spelling and is what gets displayed and stamped — a government ID is stored as issued.
+    const gid = portalIdKey(rawGid);
     const nk = nameKey(r.name);
     const isTrainer = isTrainerRow(r);
 
@@ -441,14 +510,48 @@ export async function matchGovtRows(
     else if (nk && byName.has(nk)) { hits = byName.get(nk)!; by = "Name"; }
 
     if (hits.length === 1) {
+      // Only the UNAMBIGUOUS branch stamps (the `hits.length > 1` path below never does), and the
+      // caller refuses to overwrite an id that already exists — a government ID is identity data.
+      const cand = hits[0].candidate;
+
+      // -248 (QA-1218, Umesh 25/08: "candidate id ke basis par wo karna chahiye, otherwise issue
+      // aata rahega"). THE SILENT ONE. A name hit onto a candidate who is ALREADY on record under a
+      // DIFFERENT portal ID is not a match — it is this function overruling the two identity
+      // documents in front of it with a string that repeats within every centre.
+      //
+      // It was silent by construction, which is why it survived: the stamp on the line below is
+      // conditional on the candidate having NO id (`!cand?.sidh_candidate_id`), so in exactly this
+      // case nothing is written, nothing warns, and the row stores as an ordinary `Matched` — one
+      // student's hours on another student's record, indistinguishable from a correct row forever
+      // after. Umesh's own Chitrakoot file is the shape that produces it: two "Sandeep Kumar" rows,
+      // CAN_40829333 and CAN_40818046, where only one of the two is on the roster.
+      //
+      // Unconditional, and NOT part of the consent gate the import route adds: the operator can
+      // reasonably consent to "I checked the register, match these by name". Nobody can consent to
+      // contradicting a portal ID that is already on record — the answer is on the record already.
+      // `portalIdKey` on both sides. For a READABLE id a spelling difference is never read as a
+      // disagreement. For an UNREADABLE one it can be: `CAN_ED123` and `CAN ED123` are different RAW
+      // keys, so one person written two ways is refused as a contradiction (QA-1250, found by the
+      // checker). That fails safe — it asks a human instead of guessing — and closing it means
+      // deciding what an unreadable id's equivalence class IS, which is QA-719 and Umesh's call.
+      // -248 cycle 2 (QA-1226): `portalIdKey` on both sides, not `normalizeCan`. With the bare
+      // matcher a candidate holding an UNREADABLE id read as "no id on record", so a file naming
+      // them with a completely different readable id sailed through as a name match — the exact
+      // silent mis-attribution this branch exists to stop, still open for one id shape.
+      const onRecord = portalIdKey(cand?.sidh_candidate_id);
+      if (by === "Name" && gid && onRecord && onRecord !== gid) {
+        out.push({
+          ...r, match_status: "Unmatched", match_by: "",
+          match_note: `This file gives ${rawGid} for "${r.name}", but the only "${r.name}" here is on record as ${cand.sidh_candidate_id}. Two different portal IDs cannot be one person, so this row is left for you to place — click it to pick the right student, or add the candidate this ID belongs to.`,
+        });
+        continue;
+      }
+
       // -108: the portal ID finally travels BACK to the candidate. This function has always READ
       // `sidh_candidate_id` to match on and never written it, which is the whole reason Manish's
       // eight correctly-named certificates all failed: the Gurugram roster carried no portal IDs,
       // so the certificate matcher's lookup was empty and every file "matched no candidate" — while
       // this very function had already worked out, by name, which candidate each CAN id belongs to.
-      // Only the UNAMBIGUOUS branch stamps (the `hits.length > 1` path below never does), and the
-      // caller refuses to overwrite an id that already exists — a government ID is identity data.
-      const cand = hits[0].candidate;
       const stamp = gid && !cand?.sidh_candidate_id ? rawGid : undefined;
       out.push({
         ...r, candidate: cand?._id ?? hits[0].candidate, batch: hits[0].batch, batch_member: hits[0]._id,
