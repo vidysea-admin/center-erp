@@ -643,7 +643,17 @@ undone, owned by `revert/route.ts:21`), deliberately excluded from the pin rathe
 Byte-identical duplicated lists in `locations`, `programs`, `sync-sources`. Deliberate differences in
 `candidates` (create carries `lifecycle_status`) and `trainers` (create carries `pipeline_status`;
 stages otherwise move only through `/transition`). **Divergent by omission:** `batches` PATCH accepts
-`govt_batch_id`, `drive_folder_url`, `planned_end`; POST accepts none.
+`govt_batch_id`, `drive_folder_url`, `planned_end`; POST accepts **`govt_batch_id` only** (QA-1287,
+2026-08-25) — `drive_folder_url` and `planned_end` are still PATCH-only.
+
+**QA-1287 is the row that shows what this section is FOR, and what it cannot do on its own.** The
+`govt_batch_id` half of this line sat here as a *documented fact* while a client could not do the
+thing it describes: record the portal's batch id at the moment the batch is created. Nobody read it
+as a defect, and no search would have raised it — the field name is in the model, in two routes, on
+two screens and in this file, so every grep for it succeeds. The hole was only visible by driving the
+create door and reading the value back, which is now pinned by `scripts/e2e-govt-batch-id.mjs`.
+**A concept listed here as "divergent" is a defect waiting for someone to ask for it.** The remaining
+two are named above so the next reader knows they are still open, not resolved by association.
 **The one place this is done right:** `trainers/route.ts:21` exports `SENSITIVE_FIELDS` +
 `maskTrainerSecrets` and `[id]/route.ts:10` imports them, with a comment saying they had drifted before.
 
