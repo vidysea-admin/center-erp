@@ -1104,7 +1104,14 @@ export async function applySheetChange(changeId: string, action: string, note: s
     }
   }
   await change.save();
-  if (loc) await audit({ entity: "Location", entityId: loc._id, field: "sheet_change_action", oldValue: change.old_value, newValue: `${action}: ${change.new_value}`, actor: actorId, actorType: "EXTERNAL_SYNC" });
+  // QA-1318/QA-1331(b): this used to audit under field: "sheet_change_action" — a synthetic name
+  // AUDIT_SECRET_FIELDS cannot match, so both old and new tc_password values went into AuditLog in
+  // the clear beside a correctly-masked "tc_password" row written two lines up in the "Apply value"
+  // case above. REQ-432 rules out adding "sheet_change_action" to the secret-field set as the fix
+  // (a name-based allowlist cannot match a name nobody thought to add); this reuses the mask that
+  // is already proven to work by auditing under the row's REAL field name instead of a label for
+  // the action taken.
+  if (loc) await audit({ entity: "Location", entityId: loc._id, field: change.field_name, oldValue: change.old_value, newValue: `${action}: ${change.new_value}`, actor: actorId, actorType: "EXTERNAL_SYNC" });
   return { change, followUps };
 }
 

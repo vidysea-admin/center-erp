@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
-import { applySheetChange } from "@/lib/sync";
+import { applySheetChange, isSecretSheetField, maskSheetChange } from "@/lib/sync";
 import { requireApproval } from "@/lib/approvals";
 import { SheetChange, Location } from "@/models";
 
@@ -33,7 +33,15 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     const parked = await requireApproval(needs, user, {
       entity: "SheetChange",
       entity_id: id,
-      summary: `${action} — ${loc?.name ?? "unmatched location"} (from the Sync Inbox: ${change.field_name} → ${change.new_value ?? ""})`,
+      // QA-1331(c): `action` comes straight from the request body with nothing checking it is
+      // semantically valid for THIS row's field — so a client can reach this branch on a
+      // tc_password-field row (a Close/Stop location action makes no sense for a password field,
+      // but nothing here refuses it). The summary used to embed change.new_value raw, and
+      // requireApproval writes it verbatim into the ApprovalRequest doc, a notification, an email
+      // subject+body, and its own audit() call — four plaintext copies from one unmasked template
+      // literal. Masked at the source with the same predicate maskSheetChange uses, so every
+      // downstream copy is safe without a second fix.
+      summary: `${action} — ${loc?.name ?? "unmatched location"} (from the Sync Inbox: ${change.field_name} → ${isSecretSheetField(change.field_name) ? (change.new_value ? "(set)" : "") : (change.new_value ?? "")})`,
       payload: { changeId: id, action, note },
       location: change.location,
     });
@@ -41,5 +49,12 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   }
 
   const result = await applySheetChange(id, action, note, user.id);
-  return NextResponse.json(result);
+  // QA-1316/QA-1331(a): this used to hand back `result.change` raw — old_value, new_value AND
+  // impact_snapshot.{apply,revert} — to anyone holding sheet.approve, a PERMISSION and not a role.
+  // Masked with the same helper and the same hardcoded `false` the revert door already uses two
+  // files over: this door is gated on sheet.approve alone, deliberately, because applying is an
+  // operational act a non-Admin reviewer is meant to perform — what must not follow from that
+  // right is READING the credential. An Admin who wants the plaintext still reads it from the LIST
+  // door, which computes canSeeSecrets from the caller's role.
+  return NextResponse.json({ ...result, change: maskSheetChange(result.change.toObject(), false) });
 });

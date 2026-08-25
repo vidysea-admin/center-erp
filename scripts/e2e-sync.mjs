@@ -29,6 +29,23 @@ const loginRes = await fetch(BASE + "/api/auth/callback/credentials", {
 const session = (loginRes.headers.getSetCookie?.() ?? [loginRes.headers.get("set-cookie")]).flat().filter(Boolean).map((c) => c.split(";")[0]).find((c) => c.includes("session-token"));
 cookie = [csrfCookie, session].join("; ");
 
+// QA-1316/QA-1318/QA-1331: this whole file has only ever driven the ADMIN session. Proving a
+// non-Admin sheet.approve holder cannot reach a live tc_password needs a SECOND, real login — the
+// exact same handshake as above, parameterised, rather than a synthetic cookie or a role override.
+async function loginAs(email, password) {
+  const csrf2 = await fetch(BASE + "/api/auth/csrf");
+  const { csrfToken: t2 } = await csrf2.json();
+  const csrfCookie2 = csrf2.headers.get("set-cookie").split(";")[0];
+  const login2 = await fetch(BASE + "/api/auth/callback/credentials", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", cookie: csrfCookie2 },
+    body: new URLSearchParams({ csrfToken: t2, email, password }),
+    redirect: "manual",
+  });
+  const session2 = (login2.headers.getSetCookie?.() ?? [login2.headers.get("set-cookie")]).flat().filter(Boolean).map((c) => c.split(";")[0]).find((c) => c.includes("session-token"));
+  return [csrfCookie2, session2].join("; ");
+}
+
 const stamp = "S" + Date.now().toString().slice(-6);
 
 // Build an in-memory xlsx and hand it to the watcher as a data: URL — lets the tab
@@ -1458,6 +1475,116 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
   const rvOk = await req("POST", `/api/sheet-changes/${city8._id}/revert`, {}, 200);
   ok("QA-989: …and it really reverts",
     rvOk.status === 200, JSON.stringify(rvOk.data).slice(0, 140));
+}
+
+// ---- QA-1316 / QA-1318 / QA-1331 (S1) — the APPLY door: a third and fourth surface onto the
+// same tc_password leak, filed against `sec-1-teesra-darwaza-ek-gate`'s cycle-3 checker verdict,
+// which STALLED at its cycle limit with these three still open. Contract:
+// qa/REQUIREMENTS-2026-08-25-CREDENTIAL-EGRESS.md (REQ-430…REQ-435).
+//
+// QA-1231 above already proves the LIST/landing-page surfaces mask a tc_password row for an
+// Admin-vs-Operations control. This block is the first non-Admin PROBE this file has ever run —
+// every other assertion here drives the admin session — because that is exactly what the three
+// leaks needed and never got: `POST .../apply` handed back the whole SheetChange document raw,
+// `applySheetChange`'s closing audit() call wrote it under a field name the name-based mask
+// cannot match, and the approval-parking summary (reachable on ANY row regardless of whether the
+// action makes sense for that field) embedded it into an ApprovalRequest, a notification, and an
+// email in the clear. All three are traced to one unmasked template literal or one wrong field
+// name each — see the comments at the three edit sites.
+{
+  const sA = "APD" + Date.now().toString().slice(-6);
+  const mkUpA = async (csv, name) => {
+    const f = new FormData();
+    f.append("file", new File([csv], name, { type: "text/csv" }));
+    return (await req("POST", "/api/upload", f, 200)).data;
+  };
+
+  // A non-Admin probe: Operations (never Admin, so requireApproval can never treat it as the
+  // escape-hatch approver) holding sheet.approve — the exact population all three findings name.
+  const emA = `apd.probe.${sA}@vidysea-test.local`;
+  const pwA = "ApdProbe" + sA + "!pass";
+  const mkUserA = await req("POST", "/api/users",
+    { name: "Apd Probe " + sA, email: emA, password: pwA, role: "Operations", location_scope: [], can_edit: true }, 201);
+  await req("PATCH", `/api/users/${mkUserA.data.item._id}`, { extra_permissions: ["sheet.approve"] }, 200);
+  const probeCookie = await loginAs(emA, pwA);
+  ok("QA-1316 setup: the probe user signs in", !!probeCookie && probeCookie.includes("session-token"));
+
+  // ---- Fix A (QA-1316/QA-1331a): the apply door's 200 reply must not carry the plaintext ----
+  {
+    const pA = (await req("POST", "/api/programs", { code: "PA" + sA, name: "Apd Prog A " + sA, trainer_skill: "ApdSkillA" + sA }, 201)).data.item;
+    const lA = (await req("POST", "/api/locations", { code: "LA" + sA, name: "Apd Loc A " + sA, external_id: "A" + sA, approval_status: "Approved", city: "Jaipur" }, 201)).data.item;
+    const uA = await mkUpA(`Center ID,TC Password\nA${sA},OLDPW-${sA}\n`, "apdA" + sA + ".csv");
+    const srcA = (await req("POST", "/api/sync-sources", {
+      name: "Apd A " + sA, source_url: new URL(uA.url, BASE).href,
+      field_mappings: { "Center ID": "external_id", "TC Password": "tc_password" },
+    }, 201)).data.item;
+    await req("POST", `/api/sync-sources/${srcA._id}/run`, undefined, 200);
+    const pwRowA = ((await req("GET", "/api/sheet-changes?status=Open")).data.items ?? [])
+      .find((c) => String(c.location?._id ?? c.location) === String(lA._id) && c.field_name === "tc_password");
+    ok("QA-1316 precondition: the row exists and Admin can still see the real value (control)",
+      pwRowA?.new_value === `OLDPW-${sA}`, JSON.stringify(pwRowA?.new_value));
+
+    const applyRes = await fetch(BASE + `/api/sheet-changes/${pwRowA._id}/apply`, {
+      method: "POST", headers: { "Content-Type": "application/json", cookie: probeCookie },
+      body: JSON.stringify({ action: "Apply value" }),
+    });
+    const applyBody = await applyRes.json().catch(() => ({}));
+    ok("QA-1316: a non-Admin sheet.approve holder CAN apply the row (that right is real and unchanged)",
+      applyRes.status === 200, `got ${applyRes.status}: ${JSON.stringify(applyBody).slice(0, 160)}`);
+    const applyJson = JSON.stringify(applyBody?.change ?? applyBody);
+    ok("QA-1316: …but the plaintext password is NOT anywhere in the reply",
+      !applyJson.includes(`OLDPW-${sA}`), `raw value present in apply reply: ${applyJson.slice(0, 220)}`);
+    ok("QA-1316: …and the row is masked, not silently dropped — the reviewer still sees WHICH field changed",
+      applyBody?.change?.field_name === "tc_password" && applyBody?.change?.old_value !== undefined,
+      JSON.stringify({ field: applyBody?.change?.field_name, old: applyBody?.change?.old_value, new: applyBody?.change?.new_value }));
+
+    // ---- Fix B (QA-1318/QA-1331b): the audit trail this apply just wrote must not carry the
+    // plaintext under ANY field name — not just the one AUDIT_SECRET_FIELDS happens to know ----
+    const auditRes = await fetch(BASE + `/api/audit/Location/${lA._id}`, { headers: { cookie: probeCookie } });
+    const auditBody = await auditRes.json().catch(() => ({}));
+    ok("QA-1318 precondition: this non-Admin can read the audit trail (the reachability the finding measured — Operations is not scoped)",
+      auditRes.status === 200, `got ${auditRes.status}`);
+    const auditJson = JSON.stringify(auditBody);
+    ok("QA-1318: …and NO row in it — under 'tc_password' or any other field name — carries the plaintext password",
+      !auditJson.includes(`OLDPW-${sA}`), `raw value present in the audit trail: ${auditJson.slice(0, 320)}`);
+  }
+
+  // ---- Fix C (QA-1331c): an approval-parking summary must not carry the plaintext, even for an
+  // action that has nothing to do with the field carrying it — this branch runs BEFORE
+  // applySheetChange's own per-action validation, so it is reachable regardless of whether "Close
+  // location" would eventually make sense for a tc_password row ----
+  {
+    await req("PUT", "/api/approvals", { action: "location.close", enabled: true, approver_role: "Operations" });
+    const pC = (await req("POST", "/api/programs", { code: "PC" + sA, name: "Apd Prog C " + sA, trainer_skill: "ApdSkillC" + sA }, 201)).data.item;
+    const lC = (await req("POST", "/api/locations", { code: "LC" + sA, name: "Apd Loc C " + sA, external_id: "C" + sA, approval_status: "Approved", city: "Jaipur" }, 201)).data.item;
+    const uC = await mkUpA(`Center ID,TC Password\nC${sA},CLOSEPW-${sA}\n`, "apdC" + sA + ".csv");
+    const srcC = (await req("POST", "/api/sync-sources", {
+      name: "Apd C " + sA, source_url: new URL(uC.url, BASE).href,
+      field_mappings: { "Center ID": "external_id", "TC Password": "tc_password" },
+    }, 201)).data.item;
+    await req("POST", `/api/sync-sources/${srcC._id}/run`, undefined, 200);
+    const pwRowC = ((await req("GET", "/api/sheet-changes?status=Open")).data.items ?? [])
+      .find((c) => String(c.location?._id ?? c.location) === String(lC._id) && c.field_name === "tc_password");
+    ok("QA-1331c precondition: the second row exists with its own real value",
+      pwRowC?.new_value === `CLOSEPW-${sA}`, JSON.stringify(pwRowC?.new_value));
+
+    const parkRes = await fetch(BASE + `/api/sheet-changes/${pwRowC._id}/apply`, {
+      method: "POST", headers: { "Content-Type": "application/json", cookie: probeCookie },
+      body: JSON.stringify({ action: "Close location" }),
+    });
+    ok("QA-1331c: 'Close location' on a tc_password row is PARKED for approval, not refused or applied",
+      parkRes.status === 202, `got ${parkRes.status}`);
+
+    const mineRes = await fetch(BASE + "/api/approvals?mine=1", { headers: { cookie: probeCookie } });
+    const mineBody = await mineRes.json().catch(() => ({}));
+    ok("QA-1331c: the parked request is on the initiator's own queue",
+      mineRes.status === 200 && Array.isArray(mineBody?.items) && mineBody.items.some((i) => String(i.entity_id) === String(pwRowC._id)),
+      `got ${mineRes.status}, items=${(mineBody?.items ?? []).length}`);
+    ok("QA-1331c: …and its summary — which also goes into a notification, an email, and its own audit row — does NOT carry the plaintext password",
+      !JSON.stringify(mineBody).includes(`CLOSEPW-${sA}`), `raw value present in the parked summary: ${JSON.stringify(mineBody).slice(0, 320)}`);
+
+    await req("PUT", "/api/approvals", { action: "location.close", enabled: false });
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
