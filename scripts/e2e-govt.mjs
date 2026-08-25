@@ -344,7 +344,14 @@ ok("all 7 rows persisted", detail.data.rows?.length === 7, `got ${detail.data.ro
 {
   const before = ((await req(admin, "GET", "/api/batches?limit=2000")).data.items ?? []).find((b) => String(b._id) === String(batch._id));
   // A THIRD confirmed import of the SAME people onto the SAME batch. Nobody new arrives.
-  await upload(admin, { file: csvFile(), batch: batch._id, confirm: "1", period_label: `A-11 re-import ${STAMP}` });
+  // ITS OWN FILE NAME, and the reason is a defect this pin caused in cycle 1 (QA-1098). Written as
+  // `csvFile()` it uploaded `govt-attendance-sample.csv` onto the suite-wide batch — which is exactly
+  // the item the `-108` assertion 400 lines below asserts CANNOT exist
+  // (`file_name === "govt-attendance-sample.csv" && batch === batch._id`). A confirmed import here
+  // therefore turned a pre-existing assertion red, and the cycle-1 manifest then explained that
+  // redness away as somebody else's. Same bytes, same people, same batch - only the name differs, so
+  // what this pin measures is unchanged and it can no longer collide with shared suite state.
+  await upload(admin, { file: new File([Buffer.from(csvText)], "a11-reimport.csv", { type: "text/csv" }), batch: batch._id, confirm: "1", period_label: `A-11 re-import ${STAMP}` });
   const after = ((await req(admin, "GET", "/api/batches?limit=2000")).data.items ?? []).find((b) => String(b._id) === String(batch._id));
 
   ok("A-11: the list carries a STUDENT count as its own number, not the row count wearing that label",
