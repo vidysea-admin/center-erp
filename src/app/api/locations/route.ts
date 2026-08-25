@@ -8,11 +8,31 @@ import { tcVerdict, trainerTiesFor } from "@/lib/rules";
 // password sat in plain text for exactly the logins it should be hidden from. The gate is
 // the ROLE now, same as the Sheet Watch column: Admin sees it, nobody else does.
 const SECRET_FIELDS = ["tc_password"];
-export function maskLocationSecrets(items: any[], isAdmin: boolean) {
-  if (isAdmin) return items;
+// -251 (QA-289, S1): "A live credential is not on screen unless somebody asks for it." Role-masking
+// was the OLD fix and it answered the wrong question — it decided WHO may see the password, never
+// WHETHER it should be on screen unasked. For an Admin the answer stayed "always": a column nobody
+// has to open, on a grid of every centre, travelling in every screenshot and screen-share.
+//
+// `reveal` is now about the DOOR, not the person. The list route passes false unconditionally, so
+// the LIST payload never carries a credential for anyone. The single-record route still passes the
+// role, because opening one centre IS the asking.
+//
+// `canReveal` exists so the screen can avoid shipping a dead control — this codebase has five rows
+// on buttons that render and then refuse (QA-712, QA-723, QA-754, QA-775, QA-785). The client has no
+// role of its own on this page, so the server says whether a reveal would succeed rather than
+// letting the UI guess. `tc_password_set` is the other half: after masking, "no password" and
+// "hidden password" are indistinguishable, and a screen that cannot tell them apart will invent an
+// answer.
+export function maskLocationSecrets(items: any[], reveal: boolean, canReveal = reveal) {
+  if (reveal) return items;
   return items.map((l) => {
     const safe = { ...l };
-    for (const f of SECRET_FIELDS) delete safe[f];
+    for (const f of SECRET_FIELDS) {
+      const had = !!safe[f];
+      delete safe[f];
+      safe[`${f}_set`] = had;
+      safe[`${f}_revealable`] = had && canReveal;
+    }
     return safe;
   });
 }
@@ -38,7 +58,8 @@ export const { GET, POST } = collectionRoutes({
   // derived per centre×job-role from Trainer rows (same $group as mappingReadinessBulk),
   // so the list updates the moment a trainer's pipeline moves. Never stored.
   async mapItems(items, user) {
-    const masked = maskLocationSecrets(items, user.role === "Admin"); // QA-088
+    // -251 (QA-289): `false` UNCONDITIONALLY — the list never carries the credential, Admin included.
+    const masked = maskLocationSecrets(items, false, user.role === "Admin"); // QA-088 + QA-289
     const locIds = items.map((l: any) => l._id);
     const [targets, trainerRows] = await Promise.all([
       LocationTarget.find({ location: { $in: locIds } })

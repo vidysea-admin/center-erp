@@ -352,11 +352,24 @@ export const GET = apiHandler(async () => {
     .sort({ updatedAt: -1 }).limit(20).lean();
 
   // Queue 5: pending follow-ups — sync workflow belongs to Admin/Operations (Rule 40)
-  const followUps = ["Admin", "Operations"].includes(user.role)
+  // -251 (QA-1319, S1): this populated `source_change` WHOLE - no `select`, no mask - so every
+  // pending follow-up carried its SheetChange's `old_value`/`new_value`, and for a `tc_password` row
+  // that is a live government portal credential. On the LANDING PAGE. Reachable by Operations, not
+  // just Admin, and the screen renders only `source_change.location.name` - so the value was never
+  // on screen and always in the payload. Same shape as QA-289 one screen over: THE SCREEN IS NOT THE
+  // BOUNDARY, the response is.
+  //
+  // Masked unconditionally rather than by role, which is QA-289's rule: a landing page is the most
+  // unasked surface there is, and the Sync Inbox is where someone goes to ask. `maskSheetChange` is
+  // the one shared definition (lib/sync.ts) - it also covers `impact_snapshot` and the legacy revert
+  // notes, which is exactly the count a per-route spread gets wrong.
+  const followUpsRaw = ["Admin", "Operations"].includes(user.role)
     ? await FollowUpAction.find({ status: "Pending" })
         .populate({ path: "source_change", populate: { path: "location", select: "name code" } })
         .limit(20).lean()
     : [];
+  const followUps = followUpsRaw.map((f: any) =>
+    f?.source_change ? { ...f, source_change: maskSheetChange(f.source_change, false) } : f);
 
   // Queue 6: invoices pending
   const invoices = ["Admin", "Operations"].includes(user.role)

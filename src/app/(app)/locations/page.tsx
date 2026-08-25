@@ -51,6 +51,10 @@ function LocationsInner() {
     const prev = ctx && ctx.index > 0 ? ctx.rows[ctx.index - 1] : null;
     return !prev || String(prev.loc?._id) !== String(r.loc?._id);
   };
+  // -251 (QA-289): revealed credentials, per centre, for this page view only. Never persisted,
+  // never put in a URL, and gone on reload — a reveal is an act, not a setting.
+  const [revealedPw, setRevealedPw] = useState<Record<string, string>>({});
+
   const rep = (ctx: any, r: any, v: any) => firstOfCentre(ctx, r) ? (v ?? <span className="text-gray-400">—</span>) : <span className="text-gray-300">〃</span>;
 
   // 2026-08-14 (CEO 09:46: "Om Prakash das mat banana — ek SPOC, multiple locations pe
@@ -206,7 +210,31 @@ function LocationsInner() {
           { key: "tc_id", label: "TC ID", mobile: false, filterText: (r: any) => r.jr?.tc_id ?? "", render: (r: any) => r.jr?.tc_id ? <span className="font-mono text-xs">{r.jr.tc_id}</span> : <span className="text-gray-400">—</span> },
           {
             key: "tc_password", label: "TC Password", mobile: false, filterable: false,
-            render: (r: any, ctx: any) => r.loc.tc_password ? rep(ctx, r, <span className="font-mono text-xs">{r.loc.tc_password}</span>) : <span className="text-gray-300">—</span>,
+            // -251 (QA-289, S1): the list payload no longer CARRIES this value for anyone, Admin
+            // included, so there is nothing here to print. `tc_password_set` says a credential
+            // exists; `tc_password_revealable` says this login could open it. Both come from the
+            // server because this page has no role of its own — guessing it in the client is how
+            // a control renders and then refuses (QA-712, QA-723, QA-754, QA-775, QA-785).
+            render: (r: any, ctx: any) => {
+              const id = String(r.loc._id);
+              if (!r.loc.tc_password_set) return <span className="text-gray-300">—</span>;
+              const shown = revealedPw[id];
+              if (shown !== undefined) return rep(ctx, r, <span className="font-mono text-xs">{shown}</span>);
+              if (!r.loc.tc_password_revealable) return rep(ctx, r, <span className="font-mono text-xs text-gray-400">••••••••</span>);
+              return rep(ctx, r, (
+                <button type="button" className="font-mono text-xs text-blue-700 underline underline-offset-2"
+                  onClick={async () => {
+                    setRevealedPw((m) => ({ ...m, [id]: "…" }));
+                    try {
+                      const d: any = await api(`/api/locations/${id}`);
+                      setRevealedPw((m) => ({ ...m, [id]: d?.item?.tc_password ?? "—" }));
+                    } catch {
+                      // The refusal is shown in the cell that asked, not as a page-level banner.
+                      setRevealedPw((m) => ({ ...m, [id]: "(refused)" }));
+                    }
+                  }}>••••••••  Show</button>
+              ));
+            },
           },
           { key: "tc_status", label: "TC Status", filterable: true, filterText: (r: any) => r.jr?.tc_status ?? "", render: (r: any) => r.jr?.tc_status ? <Chip value={r.jr.tc_status} /> : <span className="text-gray-400">—</span> },
           // QA-223 (Manish 17/08 M4-08: "ye trainer required — aise click kara to yahan pe koi field hai

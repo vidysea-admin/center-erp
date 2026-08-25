@@ -189,6 +189,20 @@ for (const file of walk(root)) {
   if (rel && curNote.includes(tag)) passed++;
   else { failed++; pushStructural(`lib/version.ts: the published note does not mention ${tag} — RELEASE was bumped without writing what changed`); }
 
+  // -251 (QA-1319, S1): both doors onto FollowUpAction must MASK the SheetChange they populate.
+  // They populated `source_change` whole - no select, no mask - so a live tc_password reached a
+  // non-Admin Operations login on the LANDING PAGE, with nothing opened. The behavioural pins for
+  // this live in e2e-roles.mjs and are VACUOUS on a fixture with no pending secret-bearing
+  // follow-up, which this project has no API to create. So the guard that cannot go vacuous is
+  // this one: the call has to be there, in both files, or the leak is back and nothing says so.
+  for (const rel of ["app/api/home/route.ts", "app/api/follow-ups/route.ts"]) {
+    const s = fs.readFileSync(path.join(root, rel), "utf-8");
+    const populatesSourceChange = /populate\(\s*\{[^}]*path:\s*"source_change"/.test(s);
+    const masks = /maskSheetChange\s*\(/.test(s);
+    if (!populatesSourceChange || masks) passed++;
+    else { failed++; pushStructural(`${rel}: populates source_change without calling maskSheetChange — a live tc_password rides out of this list (QA-1319)`); }
+  }
+
   // -128: and the archive must NOT ride along. QA-265 split the note in two precisely so the
   // unauthenticated build marker publishes what THIS build changed rather than forty releases of
   // internal commentary — and then the very next bump spliced the old note into CURRENT instead of
