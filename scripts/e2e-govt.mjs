@@ -2181,6 +2181,44 @@ console.log("\n--- QA-897: empty roster is named, not left to look like a failed
       upActive.data.roster_is_empty === false && upActive.data.roster_all_departed === false,
       JSON.stringify({ empty: upActive.data.roster_is_empty, departed: upActive.data.roster_all_departed, students: upActive.data.matched_student_count }));
 
+    // ROW 5 — QA-1067, the case the cycle-3 checker found and the four rows above could not see.
+    // TWO departed members who SHARE a name the file carries come back `Ambiguous`, not `Matched`.
+    // `matched_student_count` counts only "Matched", so it stays 0 — byte-identical to row 2's
+    // reading — and the red block fired, telling the operator that none of the students in this
+    // file are among them, two lines under a chip reading "2 ambiguous" and a row note saying
+    // "click this row to pick the right one". Its next sentence was the exact inverse of the truth.
+    //
+    // Umesh, 2026-08-25: "hn tho preview screen de doo naa baaki jo upload krr rha hai vo manual
+    // mapping krr lenge" — when a manual mapping route is OPEN, this screen gives no advice at all.
+    {
+      const bTwins = await mkLeft();
+      const twinIds = [];
+      for (const n of [2, 3]) {
+        const c = (await req(admin, "POST", "/api/candidates", {
+          name: `${NAME} Twin`, phone: `9${STAMP.slice(1)}19${n}`,
+          location: loc._id, program: program._id,
+        }, 201)).data.item;
+        const a = await req(admin, "POST", `/api/batches/${bTwins._id}/members`, { candidate: c._id });
+        twinIds.push(a.data?.item?._id);
+        await req(admin, "POST", `/api/members/${a.data.item._id}/drop`,
+          { left_on: localDate(), drop_reason: "QA-1067 pin" }, 200);
+      }
+      ok("QA-1067: precondition - both same-named members were added and dropped",
+        twinIds.length === 2 && twinIds.every(Boolean), JSON.stringify(twinIds.map(Boolean)));
+
+      const onTwins = await upload(admin, { file: csvFile(), batch: bTwins._id });
+      // The precondition FOR the case: the rows really are Ambiguous, and the count the old
+      // condition leaned on really is 0. Without this, row 5 could pass on a batch where nothing
+      // matched for some other reason entirely.
+      ok("QA-1067: precondition - the shared name comes back Ambiguous, and matched_student_count is 0",
+        onTwins.data.ambiguous_count >= 2 && onTwins.data.matched_student_count === 0,
+        JSON.stringify({ amb: onTwins.data.ambiguous_count, students: onTwins.data.matched_student_count }));
+      ok("QA-1067 [5/5] all departed AND ambiguous rows present: the flags still say departed, so the SCREEN must not advise",
+        onTwins.data.roster_all_departed === true && onTwins.data.ambiguous_count > 0,
+        JSON.stringify({ departed: onTwins.data.roster_all_departed, amb: onTwins.data.ambiguous_count, students: onTwins.data.matched_student_count }));
+      await req(admin, "POST", `/api/batches/${bTwins._id}/transition`, { target: "Cancelled", reason: "QA-1067 fixture cleanup" }, 200);
+    }
+
     await req(admin, "POST", `/api/batches/${bNoneInFile._id}/transition`, { target: "Cancelled", reason: "QA-1041 fixture cleanup" }, 200);
     await req(admin, "POST", `/api/batches/${bInFile._id}/transition`, { target: "Cancelled", reason: "QA-1041 fixture cleanup" }, 200);
   }

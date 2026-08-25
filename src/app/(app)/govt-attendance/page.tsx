@@ -334,7 +334,21 @@ function Inner() {
                 The upload itself is fine — add the students to the batch first, then import this file again.
                 {upload.matched_student_count === 0 && upload.matched_count > 0 && " (Trainer rows are matched separately and are unaffected.)"}
               </p>
-            ) : upload.roster_all_departed && upload.matched_student_count === 0 ? (
+            ) : upload.roster_all_departed && upload.matched_student_count === 0 && !upload.ambiguous_count ? (
+              /* QA-1067 — Umesh, 2026-08-25, after the checker found this on the fourth case:
+                 "hn tho preview screen de doo naa baaki jo upload krr rha hai vo manual mapping krr lenge".
+                 Two departed students who share a name that the file carries come back Ambiguous, not
+                 Matched, so `matched_student_count` stays 0 and this block fired — telling the operator
+                 that none of the students in this file are on this batch, two lines under a chip that
+                 says "2 ambiguous" and a row note that says "click this row to pick the right one". Its
+                 next sentence, "Setting portal Candidate IDs will not change that", was the exact
+                 inverse: the checker set them and 0 matched students became 2.
+                 The narrow reading is "add `&& !ambiguous_count`". Umesh's reading is larger and it is
+                 the one implemented: when a manual mapping route is OPEN, this screen must not hand out
+                 advice at all — it should show the preview and let the person doing the upload map the
+                 rows. So an Ambiguous row does not merely disable the sentence, it means the whole
+                 advisory arm is the wrong thing to render, and the amber note (which is about the rows
+                 the operator can act on) is allowed through instead. */
               <p className="rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-800">
                 Everyone who was on this batch has left it, and none of the students in this file are among them.
                 Setting portal Candidate IDs will not change that — check whether this file belongs to a different

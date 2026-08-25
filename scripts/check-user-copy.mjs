@@ -1966,6 +1966,53 @@ for (const file of walk(root)) {
   }
 }
 
+// ---- QA-1067 / QA-1042: the govt-attendance advisory arm must not fire over a mapping route ----
+// Two checkers in a row said the same thing about this unit: NO PIN READS THE RENDERED SENTENCE.
+// Four API pins held the flag truth table and were all green on a case where the screen printed
+// "none of the students in this file are among them" two lines under a chip reading "2 ambiguous"
+// and a row note saying "click this row to pick the right one" — because two departed members who
+// share a name come back `Ambiguous`, never `Matched`, so `matched_student_count` stays 0 and reads
+// byte-identical to the case the arm was written for. The API was right; the SCREEN lied.
+//
+// Umesh, 2026-08-25: "hn tho preview screen de doo naa baaki jo upload krr rha hai vo manual
+// mapping krr lenge" — where a manual mapping route is open, this screen gives no advice at all.
+// So the rule pinned here is not "add a token": the advisory arm must be conditioned on there being
+// NO ambiguous rows, because an ambiguous row IS the mapping route.
+{
+  const rel = "app/(app)/govt-attendance/page.tsx";
+  const gpath = path.join(root, "app/(app)/govt-attendance/page.tsx");
+  const gsrc = fs.existsSync(gpath) ? fs.readFileSync(gpath, "utf-8") : "";
+  if (!gsrc) { failed++; pushStructural(rel + ": file not found - the QA-1067 pin cannot run."); }
+  else {
+    // `stripComments`, NOT `blankStrings`. blankStrings treats `'` and a backtick as string
+    // delimiters, and this page is JSX full of apostrophes in prose ("batch's", "don't") — one of
+    // them flips its quote state and blanks everything after it, so the arm below simply is not
+    // found and the pin reports `arm found=false` on correct code. That is exactly the failure this
+    // file has caught in other people's pins twice; it caught mine on the first run.
+    // stripComments keeps code and string CONTENTS and removes only comments, which is what is
+    // wanted here: a commented-out copy of the condition must not satisfy this pin.
+    const gscan = stripComments(gsrc);
+    // The arm is the ternary branch that carries `roster_all_departed`. Read its CONDITION only —
+    // everything up to the `?` — so wording changes in the message never turn this red, and a
+    // condition change always does.
+    const armIdx = gscan.indexOf("upload.roster_all_departed");
+    const cond = armIdx < 0 ? "" : gscan.slice(Math.max(0, armIdx - 40), gscan.indexOf("?", armIdx) + 1);
+    const guardsAmbiguous = /!\s*upload\.ambiguous_count/.test(cond);
+    const guardsStudents = /upload\.matched_student_count\s*===\s*0/.test(cond);
+    if (armIdx >= 0 && guardsAmbiguous && guardsStudents) passed++;
+    else {
+      failed++;
+      pushStructural(rel + ": the 'everyone has left' advisory renders without excluding ambiguous"
+        + " rows (arm found=" + (armIdx >= 0) + ", excludes ambiguous=" + guardsAmbiguous
+        + ", still checks matched_student_count=" + guardsStudents + ") -> "
+        + JSON.stringify(cond.trim().slice(0, 140))
+        + " - two departed students who share a name come back Ambiguous, so matched_student_count"
+        + " stays 0 and this arm fires, printing 'none of the students in this file are among them'"
+        + " over a preview that is showing '2 ambiguous' and offering to map them by hand. QA-1067.");
+    }
+  }
+}
+
 // ---- -208: the portal-ID gap is ONE widget, mounted where the work happens ----
 // Umesh, 23/08: "even attendance wale tab me bhi vo kar de, yeh closer wale me kar dhe." Two places
 // is what he asked for; two COPIES is what this repo's ARCHITECTURE.md section 3 is a catalogue of,
