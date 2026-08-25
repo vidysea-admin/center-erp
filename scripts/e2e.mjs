@@ -4132,7 +4132,9 @@ ok("version endpoint is public and names the release", verRes.status === 200 && 
 // string `-246` truthfully named two different trees in one afternoon - one where QA-1145 was a
 // live defect and one where it was fixed - so every validated_on_release stamp in that window is
 // unfalsifiable. `build_id` comes from .next/BUILD_ID, which Next rewrites on EVERY build, so two
-// responses sharing a `release` and differing in `build_id` are two different trees.
+// responses sharing a `release` and differing in `build_id` are two different BUILDS - a rebuild of
+// the same commit changes it too, so it proves a redeploy happened, NOT that the source moved
+// (-250, QA-1270: cycle 1 said "trees" and the checker disproved it on byte-identical source).
 // Strict !== null: on the pre-fix build this field does not exist at all, so this pin goes red there.
 ok("-249 (QA-1202): the version endpoint identifies the BUILD, not just the hand-bumped release name",
   verBody.build_id !== null && verBody.build_id !== undefined && String(verBody.build_id).length > 0,
@@ -4143,6 +4145,17 @@ ok("-249 (QA-1202): the version endpoint identifies the BUILD, not just the hand
 ok("-249 (QA-1202): ...and still carries the commit slot for when CodeBuild passes the SHA",
   Object.prototype.hasOwnProperty.call(verBody, "commit"),
   `keys=${Object.keys(verBody).join(",")}`);
+// -250 (QA-1309): `commit` is null OR a real sha - never "". -249's own Dockerfile made the variable
+// ALWAYS set (ARG GIT_COMMIT="" + ENV GIT_COMMIT=$GIT_COMMIT), and `??` does not collapse an empty
+// string, so live production answered `"commit":""` while this file, route.ts and OPERATIONS.md all
+// promised `null`, and wait-for-release.mjs printed a blank where it used to print "(not set)".
+// HONEST LIMIT, stated rather than implied: the wall's own server runs with GIT_COMMIT UNSET, so this
+// passes on BOTH builds here and does NOT discriminate locally. What discriminates is the live
+// measurement (prod on -249 returned "") and the three-state proof: unset->null both ways,
+// ""->"" old vs ""->null new, sha->sha both ways. Recorded so nobody counts this as a pin it is not.
+ok("-250 (QA-1309): commit is null or a real sha, never an empty string",
+  verBody.commit === null || (typeof verBody.commit === "string" && verBody.commit.length > 0),
+  `commit=${JSON.stringify(verBody.commit)}`);
 // QA-099 (15/08): the app sends security headers now — frame-deny, sniff-deny, HSTS.
 ok("QA-099: X-Frame-Options DENY", verRes.headers.get("x-frame-options") === "DENY", String(verRes.headers.get("x-frame-options")));
 ok("QA-099: nosniff", verRes.headers.get("x-content-type-options") === "nosniff");

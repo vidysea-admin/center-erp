@@ -26,6 +26,39 @@ Verify what is deployed at any time, no login needed:
 - **Build marker:** `src/lib/version.ts` → `RELEASE`. Bump it every meaningful release; the
   release-stamp curl above is the ONLY reliable way to confirm a deploy landed — never infer
   from pipeline/workflow status.
+- **Which TREE is live (-249, QA-1202).** `RELEASE` is hand-typed, so it says what the last person
+  to edit `version.ts` intended, not what is running. On 2026-08-25 production served **four
+  commits past its own marker**, and the string `-246` truthfully named two different trees inside
+  one afternoon — one where QA-1145 was a live defect and one where it was fixed. Both claims cited
+  `-246`; both were right. Every `validated_on_release` written in that window is unfalsifiable.
+  The endpoint now also returns **`build_id`**, read from `.next/BUILD_ID`, which Next rewrites on
+  every build and the Dockerfile already copies into the image. **Two responses with the same
+  `release` and a different `build_id` are two different BUILDS.** Confirm a deploy by watching
+  `build_id` change, not `release`.
+- **What `build_id` does NOT tell you (-250, QA-1270).** Next generates it per BUILD, not per commit,
+  so **rebuilding the same commit changes it too** — a CodeBuild retry moves `build_id` while the
+  source has not moved an inch. Measured: three builds of byte-identical source produced three
+  different ids. So a changed `build_id` proves *something was redeployed*; it does **not** prove the
+  code changed. Only `commit` answers that, and only once the buildspec passes it. Cycle 1 of this
+  unit shipped the stronger claim — *"two different trees, full stop"* — into this very file, and a
+  checker disproved it using the unit's own verification step. Chasing a source difference that does
+  not exist is the same species of wasted hunt QA-1202 was raised to end.
+- **`commit` is `null` until the buildspec passes a SHA, and closing that is a DEVOPS action, not a
+  code change.** (`-249` briefly answered `""` instead of `null`: that release added
+  `ARG GIT_COMMIT=""` + `ENV GIT_COMMIT=$GIT_COMMIT`, so the variable is now ALWAYS set and the
+  route's `??` did not collapse an empty string. `-250` reads `|| null`. QA-1309.) The image
+  cannot derive its own SHA — `.dockerignore` excludes `.git` — so it must be handed in at build
+  time. The `Dockerfile` now declares `ARG GIT_COMMIT` in both stages and sets `ENV GIT_COMMIT` in
+  the runtime stage, so the only thing missing is **one line in the CodeBuild buildspec** (which
+  lives in AWS, not in this repo):
+
+  ```
+  docker build --build-arg GIT_COMMIT=$CODEBUILD_RESOLVED_SOURCE_VERSION ...
+  ```
+
+  Verified locally end-to-end: with `GIT_COMMIT` set in the environment the endpoint returns the
+  full SHA alongside `build_id`; with it unset it returns `null` and `build_id` still identifies
+  the build. Nothing breaks either way.
 - **Database:** MongoDB at `mongodb://13.202.206.101:27017`, db `center_erp`. (Auth on the DB and
   file/upload storage are tracked as deferred infra — see DEFERRED.)
 - **CI (verification only, not deployment):** `.github/workflows/ci.yml` builds AND runs

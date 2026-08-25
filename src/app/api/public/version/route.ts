@@ -12,7 +12,7 @@ import { storageHealth } from "@/lib/storage";
 // QA-1145 was a live defect and one where it was fixed. Both claims cited `-246` and both were
 // right. Every `validated_on_release` stamp written in that window is unfalsifiable.
 //
-// `commit` has been in this payload all along and has always been null, because nothing ever set
+// `commit` has been in this payload all along and was null until -249, because nothing ever set
 // GIT_COMMIT: `.dockerignore` excludes `.git`, so the image genuinely cannot derive it, and the
 // buildspec that could pass it lives in AWS CodeBuild, not in this repo. That is a devops action;
 // the Dockerfile now declares the ARG so it is a one-line change whenever someone takes it.
@@ -51,9 +51,25 @@ export function GET() {
     // its own words above, is "which build is actually running right now?", so it answers exactly
     // that: what THIS build changed. The archive stays in the bundle for anyone with the source.
     note: RELEASE_NOTE_CURRENT,
-    commit: process.env.GIT_COMMIT ?? null,
+    // -250 (QA-1309, the checker's cycle-2 FAIL): `??` only catches null/undefined, and -249's own
+    // Dockerfile change made this variable ALWAYS SET — `ARG GIT_COMMIT=""` plus
+    // `ENV GIT_COMMIT=$GIT_COMMIT` means an unwired pipeline exports an EMPTY STRING, not nothing.
+    // So production on -249 answered `"commit":""` while this file, OPERATIONS.md and e2e.mjs all
+    // said it answers `null`, and wait-for-release.mjs printed a blank where it used to print
+    // "(not set)". `||` collapses the empty string back to null, which is both what those three
+    // documents promise and the honest reading: a variable set to nothing is not a commit.
+    // The unit that introduced the empty string is the unit that documented it as null — the fix
+    // shipped and the sentence describing it did not move.
+    commit: process.env.GIT_COMMIT || null,
     // -249 (QA-1202): changes on every build even when `release` and `commit` do not. Two responses
-    // with the same `release` and different `build_id` are two different trees, full stop.
+    // with the same `release` and a different `build_id` are two different BUILDS.
+    // -250 (QA-1270, the checker's FAIL against cycle 1): this said "two different TREES, full stop",
+    // and the checker disproved it with this unit's own headline step - three builds of byte-identical
+    // source gave three different ids. Next generates the id per BUILD, so a CodeBuild retry of the
+    // same commit changes it while the source has not moved. Different id => rebuilt/redeployed;
+    // it does NOT mean the code changed. Only `commit` answers that, and only once CodeBuild passes
+    // it. A unit whose whole purpose is making deploy claims falsifiable must not ship an
+    // unfalsifiable rule about its own signal.
     build_id: BUILD_ID,
     server_time: new Date().toISOString(),
     // QA-145: is evidence storage durable on this build? No secrets — lets a read-only smoke (and
