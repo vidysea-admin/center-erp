@@ -224,7 +224,16 @@ export function itemRoutes(cfg: CrudConfig) {
     await existing.save({ validateModifiedOnly: true });
     await auditDiff(cfg.entity, existing._id, before, data, user.id); // audit each field (Rule 27 spirit)
     if (cfg.afterWrite) await cfg.afterWrite(existing, user);
-    return NextResponse.json({ item: existing, ...(ignored.length ? { ignored_fields: ignored } : {}) });
+    // QA-1350 (S1, checker on qa-289): GET calls cfg.mapItems (three of the four itemRoutes entities
+    // use it to mask a real secret - locations' tc_password, trainers' SENSITIVE_FIELDS, programs'
+    // contract_amount) and this PATCH reply never did, so a non-Admin who edits their own record gets
+    // the raw secret back in the response body of their OWN write - a live government portal password
+    // for a Location PATCH, pay data for a Trainer PATCH. The screen never displayed it; the payload
+    // always carried it. Same shape as QA-289/QA-1319 one door over, on the shared crud.ts surface
+    // every itemRoutes entity rides on - fixed once, here, rather than per-route.
+    let out: any = existing;
+    if (cfg.mapItems) out = (await cfg.mapItems([existing.toObject()], user))[0];
+    return NextResponse.json({ item: out, ...(ignored.length ? { ignored_fields: ignored } : {}) });
   });
 
   return { GET, PATCH };

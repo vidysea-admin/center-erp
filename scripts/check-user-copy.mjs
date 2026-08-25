@@ -237,6 +237,37 @@ for (const file of walk(root)) {
     else { failed++; pushStructural(`${rel}: populates source_change without calling maskSheetChange — a live tc_password rides out of this list (QA-1319)`); }
   }
 
+  // -251 (QA-1350, S1): crud.ts's itemRoutes PATCH replied with the raw saved document while its
+  // own GET, three lines above it, ran the same record through cfg.mapItems first. Three of the
+  // four itemRoutes entities use mapItems to mask a real secret - locations' tc_password, trainers'
+  // SENSITIVE_FIELDS, programs' contract_amount - so any PATCH through this shared door handed the
+  // writer their own edit back WITH the secret unmasked, even when their role could not see it via
+  // GET (writeRoles and the mask's reveal check are separate axes here: locations gates the WRITE
+  // on the togglable `locations.manage` permission but gates the REVEAL on `role === "Admin"`, so a
+  // non-Admin holder of that permission could write and get the password back in the same response
+  // that never appears on any screen they can open). Fixed once, in the shared function, rather than
+  // per-route - the region below is `const PATCH = apiHandler(` through its matching `return { GET,
+  // PATCH };`, so a fix landing on a DIFFERENT entity's route file cannot satisfy this pin.
+  {
+    const crudSrc = fs.readFileSync(path.join(root, "lib/crud.ts"), "utf-8");
+    const start = crudSrc.indexOf("const PATCH = apiHandler(");
+    const end = crudSrc.indexOf("return { GET, PATCH };", start);
+    const region = start >= 0 && end > start ? stripComments(crudSrc.slice(start, end)) : "";
+    // Anchored to the RETURN, not just "mentions mapItems anywhere" - QA-1351's exact lesson one
+    // pin up: cfg.mapItems is already read once above (for beforeUpdate-adjacent logic in some
+    // configs is not the case here, but the principle holds) so a bare substring match would be
+    // satisfied by an unrelated read. The return statement must build its `item` from a variable
+    // that mapItems assigned to, not from `existing` directly.
+    // Broadened after my OWN mutation caught it: this first required literally `if (cfg.mapItems)`,
+    // which false-reds a correct `cfg.mapItems ? await cfg.mapItems(...) : existing` ternary rewrite -
+    // a shape difference, not a behaviour difference. What matters is that mapItems gets AWAITED
+    // somewhere in the region and the reply does not build `item` from `existing` directly.
+    const callsMapItems = /await\s+cfg\.mapItems\(/.test(region);
+    const returnsRaw = /NextResponse\.json\(\{\s*item:\s*existing\b/.test(region);
+    if (region.length > 0 && callsMapItems && !returnsRaw) passed++;
+    else { failed++; pushStructural(`lib/crud.ts: itemRoutes' PATCH must run its saved record through cfg.mapItems before replying, the same as its own GET does — otherwise a masked secret (locations' tc_password, trainers' pay fields, programs' contract_amount) rides out in the writer's own PATCH response (QA-1350)`); }
+  }
+
   // -128: and the archive must NOT ride along. QA-265 split the note in two precisely so the
   // unauthenticated build marker publishes what THIS build changed rather than forty releases of
   // internal commentary — and then the very next bump spliced the old note into CURRENT instead of
