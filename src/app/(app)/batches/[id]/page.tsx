@@ -9,8 +9,11 @@ import { personLabel, personList, personSeparator } from "@/lib/person";
 // lib/govt-attendance, which imports the mongoose models, so this screen could not reach them and
 // grew its own inline copy of the regex instead - the fifth spelling of one concept.
 import { normalizeCan, storedCanIsUnreadable, apaarError, storedApaarIsUnreadable } from "@/lib/validate";
+// QA-1198: the settled-certificate predicate, from the PURE module — this screen cannot reach
+// rules.ts (mongoose), which is exactly why the definition lives in lib/candidate-journey.ts.
+import { isCertificateSettled } from "@/lib/candidate-journey";
 import { trainerSelectGroups } from "@/lib/trainer-select";
-import { slotHoursPerDay } from "@/lib/slot-rules";
+import { slotGuidelineErrors, slotHoursPerDay } from "@/lib/slot-rules";
 import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthBanner, NameCell, Notice, Section, ShareLinkPanel, Tabs, inputCls, statusLabel } from "@/components/ui";
 import { Activity } from "@/components/activity";
 import { usePerms } from "@/components/shell";
@@ -884,21 +887,32 @@ function EditDetails({ b, onChanged, error, setError }: any) {
   const [rooms, setRooms] = useState<any[]>([]);
   const [allLocations, setAllLocations] = useState<any[]>([]);
   const [allPrograms, setAllPrograms] = useState<any[]>([]);
-  const [form, setForm] = useState<any>({
-    trainer: b.trainer?._id ?? "", room: b.room?._id ?? "", session: b.session,
-    planned_start: toInputDate(b.planned_start), planned_end: toInputDate(b.planned_end), target_size: b.target_size,
-    slot_start: b.slot_start ?? "", slot_end: b.slot_end ?? "",
-    relevant_skills: b.relevant_skills ?? [],
+  // ONE shape for "what this form holds", used both to seed it and to RE-seed it from the server's
+  // own answer after a save. `refOf` reads an id off a populated ref OR off a bare ObjectId,
+  // because the two doors this form talks to return the same field in two shapes: GET
+  // /api/batches/[id] populates location/program/trainer/room, PATCH returns the raw document.
+  const refOf = (v: any) => (v == null ? "" : String(v?._id ?? v));
+  const formFrom = (x: any) => ({
+    trainer: refOf(x.trainer), room: refOf(x.room), session: x.session,
+    planned_start: toInputDate(x.planned_start), planned_end: toInputDate(x.planned_end), target_size: x.target_size,
+    slot_start: x.slot_start ?? "", slot_end: x.slot_end ?? "",
+    relevant_skills: x.relevant_skills ?? [],
     // QA-749: `drive_folder_url` deliberately NOT carried on this form any more. PATCH is partial,
     // so leaving it out means every link already in the database stays exactly as it is - the field
     // is invisible, not deleted. Carrying it would have meant re-sending it on every Details save
     // for a box nobody can see.
-    govt_batch_id: b.govt_batch_id ?? "",
-    location: b.location?._id ?? b.location ?? "", program: b.program?._id ?? b.program ?? "",
+    govt_batch_id: x.govt_batch_id ?? "",
+    location: refOf(x.location), program: refOf(x.program),
   });
+  const [form, setForm] = useState<any>(() => formFrom(b));
+  const [defaults, setDefaults] = useState<any>(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState("");
+  const [warn, setWarn] = useState("");
   const planning = b.status === "Planning";
   useEffect(() => {
     api("/api/trainers?limit=2000").then((d) => setTrainers(d.items)).catch(() => {});
+    api("/api/defaults").then((d) => setDefaults(d.item)).catch(() => {});
     const locId = b.location?._id ?? b.location;
     api(`/api/locations/${locId}/rooms`).then((d) => setRooms(d.items)).catch(() => {});
     if (planning) {
@@ -908,15 +922,29 @@ function EditDetails({ b, onChanged, error, setError }: any) {
   }, [b]);
 
   async function save() {
+    setError(""); setSaved(""); setWarn(""); setSaving(true);
     try {
       const json: any = { ...form, trainer: form.trainer || null, room: form.room || null };
       // location/program travel only when actually changed — otherwise every ordinary save on a
       // Planning batch with a roster would trip the empty-roster guard on the API.
       if (json.location === String(b.location?._id ?? b.location ?? "")) delete json.location;
       if (json.program === String(b.program?._id ?? b.program ?? "")) delete json.program;
-      await api(`/api/batches/${b._id}`, { method: "PATCH", json });
+      const res = await api(`/api/batches/${b._id}`, { method: "PATCH", json });
+      // MEASURED on an isolated copy 2026-08-25, because this was reported as "details save nahi ho
+      // rahi" and the save was never the thing that was broken: the PATCH persists every field on
+      // this form and answers 200. What it ALSO does is hand back a `warning` on virtually every
+      // save — the trainer's portal standing, and how early the start really is ("kam se kam 15
+      // din lagenge, is kaaran se") — and this function used to discard the entire response and
+      // render nothing at all. So a save that WORKED and a save that did nothing were byte-for-byte
+      // identical from the operator's seat, and the only reasonable conclusion to draw was the
+      // wrong one. The create drawer has surfaced this since it was written (batches/page.tsx:238);
+      // this is the second copy, and it never got it.
+      if (res?.item) setForm(formFrom(res.item));
+      setSaved("Saved.");
+      if (res?.warning) setWarn(res.warning);
       onChanged();
     } catch (e: any) { setError(e.message); }
+    finally { setSaving(false); }
   }
 
   const idOf = (v: any) => (v?._id ?? v) as string | undefined;
@@ -932,6 +960,11 @@ function EditDetails({ b, onChanged, error, setError }: any) {
     ...trainers.flatMap((t: any) => t.skills ?? []),
     ...(form.relevant_skills ?? []),
   ])).sort();
+  // QA-138 pulled this check out CLIENT-SAFE precisely so a form could show the same errors while
+  // the operator types instead of springing them on save. The create drawer took it
+  // (batches/page.tsx:233); this form — the other place the very same slot is edited — did not,
+  // so an identical 5-hour slot is accepted here without a word and then refused by the API.
+  const slotErrs = slotGuidelineErrors({ slot_start: form.slot_start, slot_end: form.slot_end }, defaults ?? {});
 
   return (
     <div className="space-y-3">
@@ -1003,7 +1036,25 @@ function EditDetails({ b, onChanged, error, setError }: any) {
         </Field>
       </div>
       <div className="text-xs text-gray-500">Actual: {fmtDate(b.actual_start)} → {fmtDate(b.actual_end)}</div>
-      <Btn onClick={save}>Save details</Btn>
+      {/* QA-138: the same errors the API would refuse with, shown while typing. */}
+      {slotErrs.length > 0 && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          {slotErrs.map((e: string) => <div key={e}>⚠ {e}</div>)}
+        </div>
+      )}
+      {/* The answer to "did that save?" belongs BESIDE the button that asked the question. `error`
+          does render page-level at :86 — but that is ABOVE the tab strip, and this card ends about
+          a thousand pixels below it with no scrollIntoView, so a refusal was invisible from the
+          only seat that could act on it. This is a second home for it, not a replacement: the
+          Drawers on this same page already render `error` twice for exactly this reason. */}
+      <ErrorBanner msg={error} onDismiss={() => setError("")} />
+      {saved && <Notice kind="success" onDismiss={() => setSaved("")}>{saved}</Notice>}
+      {warn && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          ⚠ {warn} <button className="ml-2 font-bold" onClick={() => setWarn("")}>×</button>
+        </div>
+      )}
+      <Btn onClick={save} disabled={saving}>{saving ? "Saving…" : "Save details"}</Btn>
     </div>
   );
 }
@@ -3322,7 +3373,7 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
     // gate (a filter that hides a student you can still see on the card would be worse); it NAMES its
     // own population instead, so the two numbers read as the two different facts they are.
     { value: "nocan", label: "No portal ID (all rows)", title: "Every row on this roster with no portal Candidate ID, or one the certification gate cannot read - including students who have left. The panel below counts only the ENROLLED students certification is actually held up on, so these two numbers can differ and both be right.", test: (i) => portalIdState(i.candidate?.sidh_candidate_id) !== "ok" },
-    { value: "nocert", label: "Passed, no certificate", title: "Passed but the certificate is not settled yet", test: (i) => i.result?.result === "Pass" && !["Issued", "Not Issued"].includes(i.result?.certificate_status) },
+    { value: "nocert", label: "Passed, no certificate", title: "Passed but the certificate is not settled yet", test: (i) => i.result?.result === "Pass" && !isCertificateSettled(i.result?.certificate_status) },
     { value: "mock", label: "Mock: not qualified", title: "Sat the mock test and did not clear it", test: (i) => i.result?.mock_appeared === true && i.result?.mock_qualified !== true },
   ];
   const q = cardSearch.trim().toLowerCase();

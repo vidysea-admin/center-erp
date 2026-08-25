@@ -4038,6 +4038,54 @@ ok("…with the contact details an approver needs", !!queued && queued.phone ===
   ok("QA-115: non-admin test-email → 403", denied.status === 403, String(denied.status));
 }
 
+// ---- QA-1195: the Details save now SPEAKS, and these pin the SERVER half it speaks from ----
+// Reported by Umesh (25/08) as "details save nahi ho rahi" and measured to be the opposite: the
+// PATCH persists every field on that form and answers 200, while the screen rendered NOTHING -
+// no success line, no error, and the `warning` this route computes was thrown away by
+// EditDetails. So a save that worked and a save that did nothing were identical from the seat.
+//
+// HONEST SCOPE, because a pin that overclaims is worse than none (REQ-388, QA-696): the FIX is a
+// client render and these two assertions do NOT prove it - they were green before the fix and the
+// proof of the fix is a real-browser A/B recorded in the manifest. What they DO hold is the
+// contract the new render depends on: if this route stops answering with a warning, or stops
+// moving the field, the screen goes silent again and nothing else in this suite would notice.
+{
+  const dLoc = (await req("POST", "/api/locations", { code: "QL" + stamp, name: "QA1195 Loc " + stamp, external_id: "QX" + stamp, approval_status: "Approved", spoc_name: "S", principal_name: "P" }, 201)).data.item;
+  const dRoom = (await req("POST", `/api/locations/${dLoc._id}/rooms`, { name: "QA1195 Room", type: "Classroom", capacity: 30 }, 201)).data.item;
+  const dTr = (await req("POST", "/api/trainers", { name: "QA1195 Tr " + stamp, phone: "955" + stamp.padEnd(7, "0").slice(0, 7), skills: ["TestSkill" + stamp] }, 201)).data.item;
+  const dProgB = (await req("POST", "/api/programs", { code: "QP" + stamp, name: "QA1195 Prog B " + stamp, trainer_skill: "TestSkill" + stamp, duration_days: 15, buffer_days: 5, default_batch_size: 30, completion_deadline_days: 90 }, 201)).data.item;
+  const _f = new Date(Date.now() + 45 * 86400000);
+  const fStart = `${_f.getFullYear()}-${String(_f.getMonth() + 1).padStart(2, "0")}-${String(_f.getDate()).padStart(2, "0")}`;
+  const dB = (await req("POST", "/api/batches", { location: dLoc._id, program: prog._id, trainer: dTr._id, room: dRoom._id, planned_start: fStart, target_size: 5 }, 201)).data.item;
+
+  // The EXACT payload EditDetails sends on an ordinary click, with NOTHING on the form changed -
+  // location/program are dropped by the form's own unchanged-guard, so they are absent here too.
+  const unchanged = {
+    trainer: dB.trainer ? String(dB.trainer) : null,
+    room: dB.room ? String(dB.room) : null,
+    session: dB.session,
+    planned_start: fStart,
+    planned_end: String(dB.planned_end ?? "").slice(0, 10),
+    target_size: dB.target_size,
+    slot_start: dB.slot_start ?? "",
+    slot_end: dB.slot_end ?? "",
+    relevant_skills: dB.relevant_skills ?? [],
+    govt_batch_id: dB.govt_batch_id ?? "",
+  };
+  const q = await req("PATCH", `/api/batches/${dB._id}`, unchanged, 200);
+  ok("QA-1195: an ordinary Details save answers WITH the warning the form now prints - this trainer is not certified and carries no TR ID for the portal",
+    typeof q.data?.warning === "string" && q.data.warning.trim().length > 0,
+    JSON.stringify(q.data?.warning ?? null).slice(0, 180));
+
+  // ...and the save it was accused of not doing really does move the field. Planning + empty
+  // roster is exactly the pair route.ts:104 requires, and it is the state Umesh's batch was in.
+  await req("PATCH", `/api/batches/${dB._id}`, { ...unchanged, program: dProgB._id }, 200);
+  const dRe = (await req("GET", `/api/batches/${dB._id}`, undefined, 200)).data.item;
+  ok("QA-1195: changing the job role on a Planning batch with an empty roster really persists - the save was never the broken half",
+    String(dRe?.program?._id ?? dRe?.program) === String(dProgB._id),
+    JSON.stringify({ wanted: String(dProgB._id), got: String(dRe?.program?._id ?? dRe?.program) }));
+}
+
 // ---- public build marker (deploy verification, no auth) ----
 const verRes = await fetch(BASE + "/api/public/version");
 const verBody = await verRes.json().catch(() => ({}));
