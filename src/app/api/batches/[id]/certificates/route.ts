@@ -7,6 +7,7 @@ import { requirePerm } from "@/lib/permissions";
 import { BASE_PATH } from "@/lib/base-path";
 import { Batch, BatchMember, CandidateResult, Closure, StoredFile } from "@/models";
 import { normalizeCan } from "@/lib/validate";
+import { hasRecordedResult, showsAfterLeaving } from "@/lib/candidate-journey";
 import { putFile, removeStoredFile } from "@/lib/storage";
 import { assertBatchInScope, isCertificateSettled, recomputeClosureAggregates, upsertCandidateCertificate } from "@/lib/rules";
 import { audit } from "@/lib/audit";
@@ -149,7 +150,13 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     staged, rejected, discarded_stale,
     // Everything the mapping picker needs, so it does not have to fetch the roster separately —
     // and Pass-with-no-certificate first, because that is who a certificate can go to today.
-    candidates: members.filter((m) => m.candidate).map((m) => {
+    // 2026-08-25 (Umesh): a departed member appears only where a record of their own exists. On the
+    // picker that means the SAME test the closure cards use - a decided result. Somebody who passed
+    // and then left is still offered here, because the certificate they earned still has to be
+    // attachable; somebody who left with nothing recorded is not a certificate candidate and was
+    // only ever a name in this list.
+    candidates: members.filter((m) => m.candidate
+      && showsAfterLeaving(m, hasRecordedResult(resultByCandidate.get(String(m.candidate._id))))).map((m) => {
       const row = resultByCandidate.get(String(m.candidate._id));
       return {
         member: String(m._id), name: m.candidate.name, phone: m.candidate.phone ?? null,

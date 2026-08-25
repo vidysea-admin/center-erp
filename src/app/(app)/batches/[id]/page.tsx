@@ -3003,9 +3003,17 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
       <Section title={`Certification — ${closure?.certification_status ?? "Pending"}`}>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Certification date"><input type="date" disabled={closed} className={inputCls} value={toInputDate(form.certification_date)} onChange={(e) => setForm({ ...form, certification_date: e.target.value })} /></Field>
-          {/* -120 (M4-14): the two dates after certification that his chain ends on. */}
-          <Field label="Certificate distribution date"><input type="date" disabled={closed} className={inputCls} value={toInputDate(form.certificate_distribution_date)} onChange={(e) => setForm({ ...form, certificate_distribution_date: e.target.value })} /></Field>
-          <Field label="Uploaded to SIDH portal on"><input type="date" disabled={closed} className={inputCls} value={toInputDate(form.sidh_uploaded_on)} onChange={(e) => setForm({ ...form, sidh_uploaded_on: e.target.value })} /></Field>
+          {/* -120 (M4-14): the two dates after certification that his chain ends on.
+              QA-1265 (client call 25/08, Umesh decided the same day): these two are gated on the
+              RIGHT alone, never on completion. `closed` conflates two questions — "is this batch
+              finished" and "may this person mark" — and for these two fields only the second one is
+              a reason to refuse. Certificates are distributed AFTER the batch completes and the SIDH
+              upload happens after that, so completion is precisely the wrong thing to lock them on:
+              "Yeh Monday ko humne certificate distribute kar diye ... toh ab kaise dalu? Yeh add hi
+              nahi ho raha hai." The split is the same one QA-785 already made further down this file
+              (batchClosedByStatus vs mayMark); the server half is POST_COMPLETION_WRITABLE. */}
+          <Field label="Certificate distribution date"><input type="date" disabled={!mayMarkTab} className={inputCls} value={toInputDate(form.certificate_distribution_date)} onChange={(e) => setForm({ ...form, certificate_distribution_date: e.target.value })} /></Field>
+          <Field label="Uploaded to SIDH portal on"><input type="date" disabled={!mayMarkTab} className={inputCls} value={toInputDate(form.sidh_uploaded_on)} onChange={(e) => setForm({ ...form, sidh_uploaded_on: e.target.value })} /></Field>
           {legacy && !perCandidate
             ? <Field label="Certificates issued"><input type="number" disabled={closed} className={inputCls} value={form.certificates_issued ?? ""} onChange={(e) => setForm({ ...form, certificates_issued: +e.target.value })} /></Field>
             : <Field label="Certificates issued"><div className={inputCls + " bg-gray-50 text-gray-700"}>{closure?.certificates_issued ?? 0} <span className="text-xs text-gray-400">derived</span></div></Field>}
@@ -3013,9 +3021,24 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
         {!legacy && summary && summary.passed > summary.certificates_issued && (
           <p className="mt-2 text-xs text-amber-700">{summary.passed - summary.certificates_issued} passed candidate(s) still need an issued certificate.</p>
         )}
+        {/* QA-1265: this section had NO frozen sentence at all while the Assessment section above
+            has one, so a Completed batch showed three greyed boxes, a greyed Save, and not one word
+            of explanation — the client's "yaha pe mujhe yeh default mujhe bola bhi nahi". It says
+            both halves now: what stays open, and what does not and how to reopen it. */}
+        {statusClosedTab && (
+          <p className="mt-2 text-xs text-gray-600">
+            The batch is finished. <b>Certificate distribution and the SIDH upload date can still be recorded</b> — they
+            happen after a batch completes. The certification date itself is frozen; an Admin can Reopen the batch from
+            the Overview tab to change it.
+          </p>
+        )}
         <div className="mt-3 flex items-start gap-2">
           <span className="inline-flex flex-col gap-0.5">
-            <Btn small kind="ghost" disabled={closed}
+            {/* QA-1265: Save carries the two post-completion dates, so completion must not disable
+                it — otherwise the boxes above accept a value that has no way to reach the server.
+                The permission half still refuses. Unchanged frozen dates ride along at their stored
+                values and the server treats them as the no-ops they are (sameStoredValue). */}
+            <Btn small kind="ghost" disabled={!mayMarkTab}
               onClick={() => saveClosure({ ...closureDatePatch(form), ...(legacy ? { certificates_issued: form.certificates_issued } : {}) })}>Save</Btn>
             <span className="text-[10px] font-medium text-gray-500">saves the dates — not a sign-off</span>
           </span>
@@ -3731,7 +3754,17 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
       // on the batch INCLUDING members who have left, while the denominator has always been the
       // active roster - so this read "18/54" with an 18 that silently counted departed people. The
       // numbers on this screen are the whole subject of this unit; this one cannot stay mixed.
-      title={`Candidate results — ${active.filter((i) => hasRecordedResult(i.result)).length}/${active.length} marked${summary?.pending ? ` · ${summary.pending} pending` : ""}`}
+      //
+      // QA-1278 (-250 cycle 2, checker): matching the two halves to each other was necessary and not
+      // sufficient. Rendered, this read "Candidate results - 0/2 marked" directly above a pill saying
+      // "All 3" and a visible tick-Pass card - because the grid shows `visible` (people still on the
+      // batch PLUS anyone who left with a result already recorded) while this header counts only the
+      // people still on it. Both numbers are right and they answer different questions, which is
+      // QA-778's shape exactly, and QA-778 settled the remedy: NAME the population, do not force the
+      // numbers to agree. Re-pointing this at `visible` would be worse - it would tell an operator
+      // that somebody who has left is work still to do, and the bulk buttons below (correctly) cannot
+      // touch them. So the header says whose count it is, and the pill already says whose it is.
+      title={`Candidate results — ${active.filter((i) => hasRecordedResult(i.result)).length} of the ${active.length} still on the batch marked${summary?.pending ? ` · ${summary.pending} pending` : ""}`}
       actions={<Btn small kind="ghost" onClick={() => setView(view === "mark" ? "review" : "mark")}>{view === "mark" ? "Review table" : "Mark results"}</Btn>}
     >
       {pending.length > 0 && (
@@ -3812,7 +3845,12 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
                 explained Manish's eight red lines: the files were right, the roster had no IDs. */}
           {linkPlan && (linkPlan.without_portal_id > 0 || linkPlan.linkable?.length > 0) && (
             <div className={`rounded-lg border px-3 py-2 text-xs ${linkPlan.with_portal_id === 0 ? "border-amber-300 bg-amber-50 text-amber-900" : "border-blue-200 bg-blue-50 text-blue-900"}`}>
-              <b>{linkPlan.with_portal_id} of {linkPlan.roster} candidates carry a portal ID.</b>{" "}
+              {/* QA-1278 (-250 cycle 2, checker): this sat four lines above a pill reading "No portal
+                  ID (shown rows) 3" and said "0 of 4", because `linkPlan.roster` is the WHOLE roster
+                  and the pill counts what this screen shows. Third population on one screen; the pill
+                  named itself and this did not. Same remedy as QA-709 two comments down and QA-778
+                  before it - each set states itself. */}
+              <b>{linkPlan.with_portal_id} of {linkPlan.roster} on this batch{String.fromCharCode(8217)}s roster carry a portal ID.</b>{" "}
               {linkPlan.with_portal_id === 0
                 ? "Automatic matching by filename cannot work at all until at least one does — a correctly named file will still be reported as “matches no candidate”."
                 : ""}
