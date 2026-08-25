@@ -378,6 +378,46 @@ ok("all 7 rows persisted", detail.data.rows?.length === 7, `got ${detail.data.ro
     JSON.stringify({ batches: all.length, missing_the_field: missing.map((b) => b.code),
       over_target: over.map((b) => ({ code: b.code, students: b.portal_students, target: b.target_size })) }));
 
+  // ---- A-04 + A-05 (24-Aug issues sheet): the buckets must account for EVERY member ----
+  // The report filed these as two rows. They are one defect, and it is not the missing portal ID it
+  // reasoned from: `verdict_counts` filters `!left_on`, so it partitions the ACTIVE roster, while
+  // the tab chip on the same screen counts the WHOLE roster. On live -244,
+  // BHA-ITI-RPLHSL-SPIT-01 printed "23 qualified - 17 with no portal hours imported - 5 not
+  // eligible" = 45 under a chip reading "All 46". Exactly one member had left. (That batch also has
+  // exactly one candidate with no portal ID - two unrelated 1s, which is what made the wrong guess
+  // look right.) The payload now carries roster_count and left_count so every surface can state the
+  // whole roster without widening the buckets, which the -109 partition invariant forbids.
+  {
+    const att0 = (await req(admin, "GET", `/api/batches/${batch._id}/attendance`)).data;
+    ok("A-04/A-05: the attendance payload states the WHOLE roster, not only the part it bucketed",
+      typeof att0.roster_count === "number" && typeof att0.left_count === "number",
+      JSON.stringify({ roster_count: att0.roster_count, left_count: att0.left_count }));
+
+    const sum0 = Object.values(att0.verdict_counts ?? {}).reduce((a, b) => a + b, 0);
+    ok("A-04: buckets + members who left account for every member on the roster (nobody falls in no bucket)",
+      typeof att0.roster_count === "number" && sum0 + (att0.left_count ?? 0) === att0.roster_count,
+      JSON.stringify({ buckets: sum0, left: att0.left_count, roster: att0.roster_count }));
+
+    const mems = ((await req(admin, "GET", `/api/batches/${batch._id}/members`)).data.items ?? []);
+    const victim = mems.find((m) => !m.left_on);
+    ok("A-04 fixture: a member to drop", !!victim, String(mems.length) + " members");
+    await req(admin, "POST", `/api/members/${victim._id}/drop`,
+      { left_on: localDate(Date.now()), drop_reason: `A-04 fixture ${STAMP}` }, 200);
+
+    const att1 = (await req(admin, "GET", `/api/batches/${batch._id}/attendance`)).data;
+    const sum1 = Object.values(att1.verdict_counts ?? {}).reduce((a, b) => a + b, 0);
+    ok("A-04/A-05: after a member LEAVES, the roster is unchanged, left_count moves, and the sum still accounts for everyone",
+      att1.roster_count === att0.roster_count
+        && (att1.left_count ?? -1) === (att0.left_count ?? 0) + 1
+        && sum1 + (att1.left_count ?? 0) === att1.roster_count,
+      JSON.stringify({ roster_before: att0.roster_count, roster_after: att1.roster_count,
+        left_before: att0.left_count, left_after: att1.left_count, buckets_after: sum1 }));
+
+    ok("A-05: the departed member is OUT of the buckets - that is what the header and the bulk button count",
+      sum1 === sum0 - 1,
+      JSON.stringify({ buckets_before: sum0, buckets_after: sum1 }));
+  }
+
   // A-12: never-logged and logged-zero must be distinguishable on the payload the list reads.
   ok("A-12: a batch WITH day-wise logs still reports a real number, so null means absence and nothing else",
     after?.attendance_days === 1,
@@ -2193,18 +2233,28 @@ console.log("\n--- QA-897: empty roster is named, not left to look like a failed
     {
       const bTwins = await mkLeft();
       const twinIds = [];
+      const twinFail = [];
+      // `190${n}` — TEN digits. The first version wrote `19${n}`, which is NINE, so every create was
+      // refused and `c` came back undefined; the suite then died on `c._id` before a single pin ran,
+      // and the whole file contributed ZERO counts to the wall. The precondition pin that should
+      // have named this sat AFTER the loop, so it never executed — a precondition that runs after
+      // the thing it guards is not a precondition. Each step is now checked where it happens, and a
+      // refusal is carried out of the loop instead of thrown.
       for (const n of [2, 3]) {
-        const c = (await req(admin, "POST", "/api/candidates", {
-          name: `${NAME} Twin`, phone: `9${STAMP.slice(1)}19${n}`,
+        const cr = await req(admin, "POST", "/api/candidates", {
+          name: `${NAME} Twin`, phone: `9${STAMP.slice(1)}190${n}`,
           location: loc._id, program: program._id,
-        }, 201)).data.item;
-        const a = await req(admin, "POST", `/api/batches/${bTwins._id}/members`, { candidate: c._id });
-        twinIds.push(a.data?.item?._id);
-        await req(admin, "POST", `/api/members/${a.data.item._id}/drop`,
+        });
+        if (cr.status !== 201 || !cr.data?.item?._id) { twinFail.push(`create ${n}: ${cr.status} ${JSON.stringify(cr.data).slice(0, 90)}`); continue; }
+        const a = await req(admin, "POST", `/api/batches/${bTwins._id}/members`, { candidate: cr.data.item._id });
+        if (a.status !== 201 || !a.data?.item?._id) { twinFail.push(`add ${n}: ${a.status} ${JSON.stringify(a.data).slice(0, 90)}`); continue; }
+        const d = await req(admin, "POST", `/api/members/${a.data.item._id}/drop`,
           { left_on: localDate(), drop_reason: "QA-1067 pin" }, 200);
+        if (d.status !== 200) { twinFail.push(`drop ${n}: ${d.status} ${JSON.stringify(d.data).slice(0, 90)}`); continue; }
+        twinIds.push(a.data.item._id);
       }
       ok("QA-1067: precondition - both same-named members were added and dropped",
-        twinIds.length === 2 && twinIds.every(Boolean), JSON.stringify(twinIds.map(Boolean)));
+        twinIds.length === 2, twinFail.length ? twinFail.join(" | ") : JSON.stringify(twinIds.map(Boolean)));
 
       const onTwins = await upload(admin, { file: csvFile(), batch: bTwins._id });
       // The precondition FOR the case: the rows really are Ambiguous, and the count the old
