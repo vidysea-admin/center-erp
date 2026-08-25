@@ -1842,9 +1842,23 @@ for (const file of walk(root)) {
     // comment — `hasDecl` above already proves the declaration is code). The permission NAME only
     // exists in the raw text, so it is read off `src`, from the same declaration. A comment cannot
     // fake it, because the declaration itself had to be found in the stripped source first.
-    const rawDecl = /const canTransition = ([^;]*);/.exec(src);
+    // CYCLE 3 (QA-1127/1128/1129, checker on cycle 2). Cycle 2 pinned the SHAPE and closed the four
+    // evasions — and then the checker walked the ORIGINAL defect past it with a decoy: this regex
+    // had no `g` and no scope anchor, so in a 4,000-line file it read the FIRST `const canTransition`
+    // it met. Put one correct-but-unused declaration in the outer component, leave the real guard in
+    // `Overview` as the role blacklist, and the pin reads the decoy: 288/0, build 0, tsc 0, and the
+    // dead control visible in a browser. A guard-pin that does not say WHICH guard is not a pin.
+    //
+    // So: scoped to `Overview`'s own body via `fnBody` (the helper this file already uses at :1474,
+    // :1731, :1969), and it additionally refuses if MORE THAN ONE declaration exists anywhere —
+    // because a second one is either a decoy or a genuine second spelling, and both are findings.
+    const ovRaw = fnBody(src, "Overview");
+    const ovScan = fnBody(scan, "Overview");
+    const declCount = (src.match(/const\s+canTransition\s*=/g) || []).length;
+    const rawDecl = /const\s+canTransition\s*=\s*([^;]*);/.exec(ovRaw);
     const guardRaw = rawDecl ? rawDecl[1] : "";
-    const rolyLiteral = /\brole\b/.test(guardSrc);
+    const scanDecl = /const\s+canTransition\s*=\s*([^;]*);/.exec(ovScan);
+    const rolyLiteral = /\brole\b/.test(scanDecl ? scanDecl[1] : guardSrc);
     // CYCLE 2 (QA-1091, checker on cycle 1). Cycle 1 asked "does the text CONTAIN the permission",
     // and the checker walked FOUR rewrites straight past it, all green at 285/0:
     //     can("batches.manage","view")      <- controls hidden from people who may use them...
@@ -1863,17 +1877,57 @@ for (const file of walk(root)) {
     // The two identifiers must be the ones this component actually destructured from `usePerms()`,
     // which is what stops `!somethingElse || can(...)` reading as permissive-while-loading when it
     // is really permissive-always.
-    const shape = /^\s*!\s*([A-Za-z_$][\w$]*)\s*\|\|\s*([A-Za-z_$][\w$]*)\s*\(\s*"batches\.manage"\s*,\s*"edit"\s*\)\s*$/.exec(guardRaw);
-    const hookOk = !!shape && new RegExp(
-      "const\\s*\\{[^}]*\\bcan\\s*:\\s*" + shape[2] + "\\b[^}]*\\bloaded\\s*:\\s*" + shape[1] + "\\b[^}]*\\}\\s*=\\s*usePerms\\(\\)"
-    ).test(src);
-    const asksPerm = !!shape && hookOk;
+    // QA-1129: cycle 2's single regex was a whitelist of ONE spelling, so `Boolean(...)`, `!!`,
+    // `?.()`, single quotes, a trailing comma and a swapped destructure order all went red on code
+    // that means exactly the same thing. A pin that reds correct work gets deleted by the next
+    // person, and then it guards nothing. So the guard is NORMALISED first, and only the DECISION
+    // is judged — not the typing.
+    const norm = guardRaw
+      .replace(/\s+/g, "")
+      .replace(/'/g, '"')
+      .replace(/Boolean\(/g, "(")
+      .replace(/!!/g, "")
+      .replace(/\?\./g, "")
+      .replace(/,\)/g, ")");
+    const peel = (s) => { let t = s; while (/^\((.*)\)$/.test(t)) { const i = t.slice(1, -1); let d = 0, ok = true; for (const ch of i) { if (ch === "(") d++; else if (ch === ")") d--; if (d < 0) { ok = false; break; } } if (!ok || d !== 0) break; t = i; } return t; };
+    const parts = norm.split("||");
+    let shape = null;
+    if (parts.length === 2 && !/&&/.test(norm) && !/\b(true|false)\b/.test(norm)) {
+      // `true ||` and a dead `&&` operand both die here: no boolean literal may appear anywhere in
+      // the decision, and there is exactly one operator. That is what makes this a DECISION test
+      // and not a text test — a constant cannot hide inside an expression that admits no constants.
+      const left = peel(parts[0]);
+      const right = peel(parts[1]);
+      const l = /^!([A-Za-z_$][\w$]*)$/.exec(left);
+      const r = /^([A-Za-z_$][\w$]*)\("batches\.manage","edit"\)$/.exec(right);
+      if (l && r) shape = [norm, l[1], r[1]];
+    }
+    // The two identifiers must be bound by a `usePerms()` destructure IN THIS COMPONENT — either
+    // order (QA-1129: `loaded:` first is the same code).
+    const hookOk = !!shape && (() => {
+      const re = /const\s*\{([^}]*)\}\s*=\s*usePerms\(\)/g;
+      let m;
+      while ((m = re.exec(ovRaw))) {
+        const inner = m[1];
+        if (new RegExp("\\bcan\\s*:\\s*" + shape[2] + "\\b").test(inner)
+          && new RegExp("\\bloaded\\s*:\\s*" + shape[1] + "\\b").test(inner)) return true;
+      }
+      return false;
+    })();
+    const asksPerm = !!shape && hookOk && declCount === 1;
     if (asksPerm && !rolyLiteral) passed++;
     else {
       failed++;
-      pushStructural(rel + ": the batch status controls decide by ROLE NAME, not by the permission"
-        + " the server asks (asks batches.manage=" + asksPerm + ", still has a role literal=" + rolyLiteral
-        + ") -> " + JSON.stringify(guardSrc.trim().slice(0, 110))
+      // QA-1128: this used to print `guardSrc` — the STRING-BLANKED source — so `batches.delete` and
+      // `batches.manage` with `"view"` came out byte-identical (14 chars / 4 chars), and the reader
+      // could not tell which of five different wrongs they were looking at. It also said "ROLE NAME"
+      // for four of the five, none of which contain a role name. Print the RAW guard, and say which
+      // half actually failed.
+      pushStructural(rel + ": the batch status controls do not decide by the permission the server"
+        + " asks (declarations found=" + declCount + " [must be exactly 1 — a second one is a decoy"
+        + " or a second spelling], shape ok=" + (!!shape) + ", identifiers bound by usePerms() in"
+        + " Overview=" + hookOk + ", mentions `role`=" + rolyLiteral
+        + ") -> " + JSON.stringify(String(guardRaw).trim().slice(0, 130))
         + " - `transition/route.ts` and `api/batches/[id]/route.ts:75` both call"
         + " requirePerm(user,\"batches.manage\"), so any principal the matrix moves across that line"
         + " sees Mark Ready / Start / Record start date / Back to Planning / Assessment done /"
