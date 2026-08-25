@@ -6,6 +6,7 @@ import { requirePerm } from "@/lib/permissions";
 import { Batch, Location, Program } from "@/models";
 import { audit } from "@/lib/audit";
 import { computePlannedEnd, createBatchWithCode, parseSheetDate } from "@/lib/rules";
+import { readUploadedWorkbook } from "@/lib/workbook";
 
 // Batch bulk import (QA-028's second half — "bulk upload in every module"). Batch_Master
 // format: Centre + Job Role + Planned Start (+ Target Size, Session). Same contract as the
@@ -29,7 +30,9 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const mappingRaw = form.get("mapping");
 
   const buf = Buffer.from(await file.arrayBuffer());
-  const wb = XLSX.read(buf, { type: "buffer" });
+  // QA-1023: CSV date cells are coerced US-style at READ time; readUploadedWorkbook keeps them as
+  // text so parseSheetDate can apply the template's own DD-MM-YYYY rule. See lib/workbook.ts.
+  const wb = readUploadedWorkbook(buf, file.name);
   const rows: Record<string, unknown>[] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: "" });
   if (!rows.length) throw new HttpError(400, "Sheet is empty");
   const columns = Object.keys(rows[0]);

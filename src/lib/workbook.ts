@@ -187,6 +187,44 @@ export async function fetchWorkbook(rawUrl: string): Promise<XLSX.WorkBook> {
   return XLSX.read(buf, { type: "buffer" }); // handles xlsx, xls and csv alike
 }
 
+/**
+ * QA-1023 (S2, found by the qa-232 cycle-3 checker and NOT charged to that unit — it predates it).
+ * The ONE way an uploaded spreadsheet buffer is turned into a workbook when its rows carry DATES.
+ *
+ * THE DEFECT, measured: in a **.csv**, SheetJS converts a date-looking cell to an Excel serial at
+ * READ time using a **US MM-DD** reading, before any of our code sees it. So the shipped template's
+ * own format — its header literally says `DOB (DD-MM-YYYY)` — is silently transposed:
+ *
+ *     "05-06-2001"  ->  serial 37017  ->  6 MAY 2001      (the sheet said 5 June)
+ *     "25-12-1999"  ->  "25-12-1999"  ->  25 Dec 1999     (survives ONLY because 25 cannot be a month)
+ *
+ * That second line is why this went unseen for so long, including in our own sample file: the defect
+ * is invisible in any sheet whose visible rows happen to use a day above 12. And `parseSheetDate`
+ * cannot rescue it — QA-097 gave that function a DD-MM-YYYY branch for exactly this, but the branch
+ * only runs on a STRING, and by then the value is already a number. A silently wrong date of birth
+ * changes who counts as eligible.
+ *
+ * `raw: true` keeps the cell as the text the file actually contains, and `parseSheetDate` then
+ * applies the template's rule. Verified it costs nothing else: phone cells still read back as their
+ * digits, blanks stay blank, ISO dates still parse, and a real .xlsx is unaffected either way
+ * (a workbook stores the string as a string, so only the CSV parser was coercing).
+ *
+ * Applied only where dates are actually parsed. The three other `XLSX.read` call sites
+ * (trainers/import, govt-attendance, the sync fetch above) carry no `parseSheetDate` today, so they
+ * cannot be bitten by this yet — but they are the next copies, and the moment one of them grows a
+ * date column it should call this instead of growing a fifth spelling.
+ */
+export function readUploadedWorkbook(buf: Buffer, filename?: string): XLSX.WorkBook {
+  // Sniff as well as trust the name: an upload can arrive without a usable filename, and the two
+  // binary spreadsheet formats are unambiguous — .xlsx is a zip ("PK"), legacy .xls is an OLE2
+  // compound file (D0 CF 11 E0). Anything else is text, which is where the coercion happens.
+  const isZip = buf[0] === 0x50 && buf[1] === 0x4b;                     // PK
+  const isOle = buf[0] === 0xd0 && buf[1] === 0xcf && buf[2] === 0x11;  // OLE2
+  const isText = !isZip && !isOle;
+  const isCsv = /\.(csv|txt)$/i.test(String(filename ?? "")) || isText;
+  return XLSX.read(buf, { type: "buffer", ...(isCsv ? { raw: true } : {}) });
+}
+
 // ---- snapshot shape ----
 type SnapRow = { key: string; cells: Record<string, string> };
 type TabSnap = { header: string[]; header_row: number; rows: SnapRow[]; hash: string };
