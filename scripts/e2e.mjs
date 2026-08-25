@@ -2496,38 +2496,61 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
     // The CEO put this ABOVE reverse planning: "kitne candidate mobilise ho gaye, ek ek ke, abhi
     // tak, ROZ BASIS pe". Every read below is guarded before it is used - in a pre-fix run
     // `days` is undefined, and asserting on undefined.length is a suite crash, not a red pin.
+    //
+    // CYCLE 2, and this is the correction that matters. Cycle 1's version of this block made
+    // e2e.mjs MACHINE-DEPENDENT for the first time - 1282/0 in IST, 1281/1 under TZ=UTC (QA-1132),
+    // while the parent commit was 1266/0 in BOTH zones. The bucketing was never the problem: the
+    // checker read the SAME stored rows through an IST server and a UTC server and got a
+    // byte-identical payload (same md5). The problem was that my fixture wrote its rows over HTTP,
+    // and the WRITE path is zone-dependent - the members route hands addMemberChecked a Date and
+    // dayKey() reads LOCAL getters, so one HTTP body stores 2029-02-25 on an IST server and
+    // 2029-02-24 on a UTC one. My pin therefore exercised write+read while its NAME claimed only
+    // the read. A pin must claim exactly what it proves, so the timezone row is now SEEDED
+    // DIRECTLY as a fixed BSON instant (the pattern this file already uses at :197 and :233) and
+    // the assertion is named for the read. The write path's own zone-dependence is not this unit's
+    // and stays on QA-1132's row rather than being smuggled into a rename.
     {
+      const { MongoClient, ObjectId } = await import("mongodb");
+      const mcQ = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+      await mcQ.connect();
+      const dbQ = mcQ.db(process.env.MONGODB_DB || "center_erp_ci");
       const dCand = async (nm) => (await req("POST", "/api/candidates", {
         name: nm, phone: "9" + String(Date.now()).slice(-9), location: loc._id, program: prog._id,
       }, 201)).data.item;
-      // Two on one day, one on the next, and ONE whose UTC day and IST day differ: 20:00Z on the
-      // 24th is 01:30 IST on the 25th. That last row is the whole timezone pin - dayKey() in node
-      // reads LOCAL getFullYear/getMonth/getDate, so bucketing there would put this row on the 24th
-      // under TZ=UTC and the 25th under TZ=IST, and the wall would be green on one machine only.
-      // QA-1065 cost us a production push on exactly that class of mistake tonight.
+
       // tkA is planned to start 2029-03-01, and the server REFUSES a joining date after a batch's
       // planned start - correctly, because mobilisation happens BEFORE a batch begins, which is the
-      // whole reason this view exists. My first fixture had them the wrong way round and all four
-      // adds came back 400; these sit before the start where real ones do.
-      const joins = ["2029-02-20T06:00:00Z", "2029-02-20T07:00:00Z", "2029-02-22T06:00:00Z", "2029-02-24T20:00:00Z"];
+      // whole reason this view exists. These three go through the real door at 06:00Z, the same
+      // calendar day in both zones (06:00 UTC / 11:30 IST), so the fixture itself cannot drift.
+      const joins = ["2029-02-20T06:00:00Z", "2029-02-20T07:00:00Z", "2029-02-22T06:00:00Z"];
       let added = 0;
       for (let i = 0; i < joins.length; i++) {
         const c = await dCand("QA765 Mob " + i + " " + String(Date.now()).slice(-5));
         const r = await req("POST", `/api/batches/${tkA._id}/members`, { candidate: c._id, joined_on: joins[i] }, 201).catch(() => null);
         if (r) added++;
       }
+      // The timezone row, seeded as a FIXED INSTANT so no server's clock can move it: 20:00 UTC on
+      // the 24th IS 01:30 IST on the 25th. What this proves is the READ - that the bucketing asks
+      // mongo for +05:30 and never consults the node process zone.
+      const tzCand = await dCand("QA765 TZ " + String(Date.now()).slice(-5));
+      await dbQ.collection("batchmembers").insertOne({
+        batch: new ObjectId(String(tkA._id)), candidate: new ObjectId(String(tzCand._id)),
+        joined_on: new Date("2029-02-24T20:00:00Z"), left_on: null,
+        createdAt: new Date(), updatedAt: new Date(),
+      });
+
       const tkD = (await req("GET", "/api/plan-tracker", undefined, 200)).data;
       const rowD = (tkD.rows ?? []).find((r) => String(r.batch?._id) === String(tkA._id));
       const days = Array.isArray(rowD?.mobilization?.days) ? rowD.mobilization.days : null;
 
-      ok("QA-765 fixture guard: four roster rows really landed on the tracker batch (without this the assertions below prove nothing)",
-        added === 4 && (rowD?.mobilization?.count ?? 0) >= 4,
+      ok("QA-765 fixture guard: three roster rows through the door plus one seeded instant really landed on the tracker batch",
+        added === 3 && (rowD?.mobilization?.count ?? 0) >= 4,
         JSON.stringify({ added, count: rowD?.mobilization?.count }));
 
       // 1. The series exists at all. FAILS before this unit - column 15 carried only
       //    {status, count} and nothing in the product could answer "kis din kitne".
       ok("QA-765: column 15 carries a day-by-day series, not just a total",
-        !!days && days.length > 0 && days.every((d) => typeof d.date === "string" && typeof d.joined === "number"),
+        !!days && days.length > 0 && days.every((d) => typeof d.joined === "number"),
         JSON.stringify(days));
 
       // 2. THE assertion the design turns on. The opened cell and the closed cell are ONE query,
@@ -2545,14 +2568,15 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
         JSON.stringify((days ?? []).map((d) => [d.date, d.joined, d.cumulative])));
 
       // 4. Ascending, so the curve reads left to right without the screen re-sorting it.
-      ok("QA-765: days come back oldest-first",
-        !!days && days.every((d, i) => i === 0 || days[i - 1].date < d.date),
+      ok("QA-765: dated days come back oldest-first",
+        !!days && days.filter((d) => d.date).every((d, i, a) => i === 0 || a[i - 1].date < d.date),
         JSON.stringify((days ?? []).map((d) => d.date)));
 
-      // 5. THE TIMEZONE PIN. 2029-03-05T20:00:00Z is 2029-03-06 01:30 IST. This assertion has the
-      //    SAME answer under TZ=UTC and TZ=IST only because the bucketing happens in mongo with an
-      //    explicit +05:30. Move it into node and this pin splits by machine - which is the bug.
-      ok("QA-765: a candidate who joined at 20:00 UTC is counted on the IST day (the 25th), not the UTC day (the 24th) - same answer under TZ=UTC and TZ=IST",
+      // 5. THE READ IS ZONE-PROOF. The row above was stored as a fixed instant, so this assertion
+      //    has the same answer on an IST machine and a UTC one - which is what cycle 1's version
+      //    CLAIMED in its name and did not deliver (QA-1132). Bucketing happens in mongo with a
+      //    literal +05:30; move it into node's dayKey() and this splits by machine again.
+      ok("QA-765: a roster row STORED at 20:00 UTC on the 24th is read onto the IST day (the 25th), not the UTC day (the 24th) - the bucketing does not consult the node process zone",
         !!days && days.some((d) => d.date === "2029-02-25") && !days.some((d) => d.date === "2029-02-24"),
         JSON.stringify({ tz: process.env.TZ ?? "(unset)", offsetMin: -new Date().getTimezoneOffset(), dates: (days ?? []).map((d) => d.date) }));
 
@@ -2560,6 +2584,31 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
       ok("QA-765: two candidates joining on one day make ONE row of 2",
         !!days && (days.find((d) => d.date === "2029-02-20")?.joined ?? 0) === 2,
         JSON.stringify(days?.find((d) => d.date === "2029-02-20")));
+
+      // 7. QA-1133 (checker, cycle 1): $dateToString THROWS on a non-Date, and cycle 1's version
+      //    let that throw take the WHOLE tracker down - every row, every user, plus the export that
+      //    shares the function. At the parent this row was harmless because the group stage never
+      //    looked at joined_on. Seeded on tkB so tkA's series above is untouched, and removed after.
+      // Its OWN candidate: BatchMember carries a partial-unique index on {candidate} where
+      // left_on is null (models:588), so one person can be active on only one batch. Reusing
+      // tzCand here threw E11000 and took the suite down - my mistake, caught by the index doing
+      // exactly its job.
+      const badCand = await dCand("QA765 Bad " + String(Date.now()).slice(-5));
+      const badId = (await dbQ.collection("batchmembers").insertOne({
+        batch: new ObjectId(String(tkB._id)), candidate: new ObjectId(String(badCand._id)),
+        joined_on: "2029-01-05", left_on: null, createdAt: new Date(), updatedAt: new Date(),
+      })).insertedId;
+      const hurt = await req("GET", "/api/plan-tracker");
+      const rowB = (hurt.data?.rows ?? []).find((r) => String(r.batch?._id) === String(tkB._id));
+      const daysB = Array.isArray(rowB?.mobilization?.days) ? rowB.mobilization.days : null;
+      ok("QA-1133: one roster row with an unreadable joining date costs THAT ROW, not the whole tracker - the screen still answers 200",
+        hurt.status === 200, JSON.stringify({ status: hurt.status }));
+      ok("QA-1133: the undated row is still COUNTED (count === sum of days holds) and its date comes back null, for the screen to name in words rather than print as 'null'",
+        !!daysB && daysB.reduce((a, d) => a + d.joined, 0) === rowB.mobilization.count
+          && daysB.some((d) => d.date === null),
+        JSON.stringify({ days: daysB, count: rowB?.mobilization?.count }));
+      await dbQ.collection("batchmembers").deleteOne({ _id: badId });
+      await mcQ.close();
     }
 
     // ---- -174 (QA-526): the planning table downloads ----

@@ -72,7 +72,8 @@ export const GET = apiHandler(async (_req: NextRequest) => {
     "Mobilised count": r.mobilization?.count ?? 0,
     // QA-765: the screen can OPEN this cell, so the file has to carry the same days or the two
     // answer his question differently - and the export is where a disagreement is found last.
-    "Mobilised by day": (r.mobilization?.days ?? []).map((x: any) => x.date + " +" + x.joined).join(" · "),
+    "Mobilised by day": (r.mobilization?.days ?? [])
+      .map((x: any) => (x.date ? x.date : "joining date not recorded") + " +" + x.joined).join(" · "),
     "Registration & enrolment done on SIDH": d(r.enrollment_done),
     "Expected batch start date": d(r.planned_start),
     "Expected batch end date": d(r.planned_end),

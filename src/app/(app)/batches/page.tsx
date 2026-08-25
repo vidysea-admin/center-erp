@@ -1257,8 +1257,11 @@ function PlanningTable({ rows, onSaved, onError }: { rows: any[] | null; onSaved
             {open && days.length > 0 && (
               <div className="mt-1 border-t border-gray-100 pt-1 text-[11px] leading-tight">
                 {days.map((d) => (
-                  <div key={d.date} className="flex justify-between gap-3 tabular-nums">
-                    <span className="text-gray-500">{d.date}</span>
+                  <div key={d.date ?? "undated"} className="flex justify-between gap-3 tabular-nums">
+                    {/* QA-1133: a row whose joining date could not be read still counts, so it has to
+                        be SAID rather than printed as "null" - the reader needs to know the total
+                        includes someone whose date is missing. */}
+                    <span className={d.date ? "text-gray-500" : "text-amber-700"}>{d.date ?? "joining date not recorded"}</span>
                     <span><span className="text-gray-400">+{d.joined}</span> <b className="text-gray-900">{d.cumulative}</b></span>
                   </div>
                 ))}

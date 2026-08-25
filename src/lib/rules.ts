@@ -3171,17 +3171,32 @@ export async function planTrackerRows(scope: Record<string, unknown> = {}) {
   const memberRows = await BatchMember.aggregate([
     { $match: { batch: { $in: ids }, left_on: null } },
     { $group: {
-      _id: { b: "$batch", d: { $dateToString: { format: "%Y-%m-%d", date: "$joined_on", timezone: "+05:30" } } },
+      // QA-1133 (checker, cycle 1): $dateToString THROWS on a value that is not a Date, and the
+      // throw takes the WHOLE tracker down - every row, every user - plus the .xlsx that shares this
+      // function. At the parent commit the group stage was {_id:"$batch"} and never looked at
+      // joined_on, so a malformed row was harmless; adding the date to the key is what made one bad
+      // row fatal. joined_on is {type:Date, required:true} and no writer in this repo can produce
+      // anything else, so this is a guard against data that arrives some other way (a restore, a
+      // migration, a hand edit) - not against our own doors. One bad row should cost that row.
+      _id: { b: "$batch", d: { $cond: [
+        { $eq: [{ $type: "$joined_on" }, "date"] },
+        { $dateToString: { format: "%Y-%m-%d", date: "$joined_on", timezone: "+05:30" } },
+        null,
+      ] } },
       n: { $sum: 1 },
     } },
     { $sort: { "_id.d": 1 } },
   ]);
-  const dayBy = new Map<string, { date: string; joined: number }[]>();
+  const dayBy = new Map<string, { date: string | null; joined: number }[]>();
   for (const r of memberRows as any[]) {
     const k = String(r._id.b);
     if (!dayBy.has(k)) dayBy.set(k, []);
-    dayBy.get(k)!.push({ date: r._id.d, joined: r.n });
+    dayBy.get(k)!.push({ date: r._id.d ?? null, joined: r.n });
   }
+  // A row we could not date still COUNTS - dropping it would break the one invariant this feature
+  // rests on (count === sum of days) and would hide a person from the CEO's roster total. It sorts
+  // last and the screen and the export both name it in words rather than printing "null".
+  for (const ds of dayBy.values()) ds.sort((a, b) => (a.date === null ? 1 : b.date === null ? -1 : a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   // He asked for "kitne mobilise ho gaye ABHI TAK", so each day carries the running total as well
   // as that day's intake - the reader should not have to add the column up to answer his question.
   const mobDays = (id: unknown) => {
