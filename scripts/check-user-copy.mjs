@@ -834,6 +834,63 @@ for (const file of walk(root)) {
       );
     }
   }
+  // QA-1123 (DRY roadmap unit D3, 2026-08-25): "the IST calendar day" is written in exactly TWO
+  // places and they are DIFFERENT FUNCTIONS on purpose - lib/client.ts istTodayInput (what a date
+  // input's max= wants) and lib/rules.ts istToday (what the server compares against). They are the
+  // two sides of ONE date field: pinned EQUAL, never merged (the client cannot import rules.ts -
+  // mongoose). A FOURTH inline copy of the client side was written in -235's own aftermath, in a
+  // file already importing from lib/client, using the OTHER spelling of the same shift (330*60_000
+  // vs 5.5*3600*1000) - so a grep for either function's body missed it. Three assertions:
+  // (a) census - istTodayInput declared once, in lib/client.ts;
+  // (b) no inline IST-shift (any spelling: 330*60_000, 5.5*3600*1000, bare 19800000) outside
+  //     lib/client.ts and lib/rules.ts - rules.ts is a NAMED exclusion, it is the server twin
+  //     (DO-NOT-MERGE list; an unnamed exclusion is how a pin gets narrowed to green, 3.0b);
+  // (c) equality - the shift constants inside istTodayInput and istToday multiply out to the SAME
+  //     milliseconds, so the two sides of the date field cannot drift apart silently.
+  {
+    const DECL = /(?:^|[^.\w])(?:export\s+)?(?:function\s+istTodayInput\s*\(|const\s+istTodayInput\s*=)/;
+    const SHIFT = /Date\.now\(\)\s*\+\s*(330\s*\*\s*60_?000|5\.5\s*\*\s*3600\s*\*\s*1000|19_?800_?000)/;
+    const declHomes = [];
+    const inlineShifts = [];
+    for (const abs of walk(root)) {
+      const rel = path.relative(root, abs).split(path.sep).join("/");
+      if (SKIP_FILES.has(rel)) continue;
+      const code = stripComments(fs.readFileSync(abs, "utf-8"));
+      if (DECL.test(code)) declHomes.push(rel);
+      if (rel !== "lib/client.ts" && rel !== "lib/rules.ts" && SHIFT.test(code)) inlineShifts.push(rel);
+    }
+    if (declHomes.length === 1 && declHomes[0] === "lib/client.ts") passed++;
+    else {
+      failed++;
+      pushStructural(
+        `istTodayInput is declared in [${declHomes.join(", ") || "nowhere"}] - its only home is lib/client.ts. A local copy is how the fourth one hid: written in the OTHER shift spelling, in a file already importing from that module (QA-1123).`,
+      );
+    }
+    if (!inlineShifts.length) passed++;
+    else {
+      failed++;
+      pushStructural(
+        `${inlineShifts.length} file(s) write an inline IST shift (330*60_000 / 5.5*3600*1000 / 19800000) instead of calling istTodayInput from @/lib/client: ${inlineShifts.join(", ")}. lib/rules.ts is the one named exclusion (istToday, the server twin) (QA-1123).`,
+      );
+    }
+    const shiftMs = (file, fnRe) => {
+      const code = stripComments(fs.readFileSync(path.join(root, file), "utf-8"));
+      const i = code.search(fnRe);
+      if (i < 0) return null;
+      const m = code.slice(i, i + 400).match(/Date\.now\(\)\s*\+\s*([\d._*\s]+?)\)/);
+      if (!m) return null;
+      return m[1].replace(/_/g, "").split("*").map((s) => Number(s.trim())).reduce((a, b) => a * b, 1);
+    };
+    const clientMs = shiftMs("lib/client.ts", /function istTodayInput/);
+    const rulesMs = shiftMs("lib/rules.ts", /function istToday\s*\(/);
+    if (clientMs !== null && rulesMs !== null && clientMs === rulesMs) passed++;
+    else {
+      failed++;
+      pushStructural(
+        `the two sides of "the IST calendar day" disagree or cannot be read: istTodayInput (lib/client.ts) shifts by ${clientMs} ms, istToday (lib/rules.ts) by ${rulesMs} ms. Equal or red - a max= that refuses a date the server would take is how this class of bug reads to an operator (QA-1123).`,
+      );
+    }
+  }
   const tips = bp.split(/\r?\n/).filter((l) => /title=/.test(l) && /awaiting_match/.test(l));
   const tipFaults = [];
   if (tips.length < 3) tipFaults.push(`app/(app)/batches/[id]/page.tsx: only ${tips.length} of the three awaiting-match tooltips (Candidates chip, Attendance chip, Closure summary) can be found - this check has lost a subject rather than passed (QA-434)`);

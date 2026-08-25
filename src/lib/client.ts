@@ -96,6 +96,11 @@ export function offerable<T extends { _id?: unknown; active?: boolean }>(list: T
 // YYYY-MM-DD an <input type="date"> understands — the client-side twin of rules.ts `istToday()`, which is
 // what the server actually compares a submitted date against. Two spellings of "today" on the two sides
 // of one date field is how a `max=` that looks right starts refusing a date the server would have taken.
+// 2026-08-25 (QA-1123): the sentence above did not hold — a FOURTH copy was written anyway, in
+// trainers/[id]/page.tsx, in a file that already imported from this module (its author used the
+// 330*60_000 spelling, so no grep for this function's own body would have found it). Collapsed, and
+// the census is now a check-user-copy.mjs pin: one declaration here, no inline IST-shift outside
+// this file and rules.ts's istToday (the server twin — pinned EQUAL to this one, never merged).
 export function istTodayInput(): string {
   return new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
 }

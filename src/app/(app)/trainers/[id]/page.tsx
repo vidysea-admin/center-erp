@@ -2,7 +2,7 @@
 import { use, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
-import { api, fmtDate, pipelineLabel, offerable } from "@/lib/client";
+import { api, fmtDate, istTodayInput, pipelineLabel, offerable } from "@/lib/client";
 import { BackLink, Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
 import { Activity } from "@/components/activity";
 import { uploadWithRetry } from "@/lib/upload";
@@ -43,11 +43,11 @@ const PIPELINE_DATES: [string, string][] = [
   ["tot_done_on", "TOT completed"],
 ];
 
-// What a <input type="date"> wants, and the latest day it may offer. IST, because that is the day
-// the server compares against (istToday) — an hour either side of midnight the browser's own date
-// and the server's disagree, and the refusal would look arbitrary.
+// What a <input type="date"> wants. istTodayInput comes from @/lib/client — a FOURTH local copy
+// of it sat on the next line until 2026-08-25 (QA-1123), written AFTER -235's collapse note in
+// client.ts said the concept was closed, in a file that already imported from that module. The
+// census is now pinned in check-user-copy.mjs rather than hoped about.
 const dayInput = (d?: string | null) => (d ? new Date(d).toISOString().slice(0, 10) : "");
-const istTodayInput = () => new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10);
 
 export default function TrainerDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
