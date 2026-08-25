@@ -150,7 +150,19 @@ export default function PublicRegisterPage({ params }: { params: Promise<{ token
                   </span>
                 )}
               </div>
-              <span className="mt-1 block text-xs text-gray-500">Set by the link you opened — you will be added to this batch.</span>
+              {/* QA-1187: this line used to promise a seat unconditionally, on a form that can be
+                  opened for a batch already at its target. The registration still goes through and
+                  the person still joins the roster - exactly as a staff-added member would - but
+                  saying "you will be added" to somebody who will be over target is a promise this
+                  page is not in a position to make. */}
+              {meta.batch?.full ? (
+                <span className="mt-1 block text-xs text-amber-700">
+                  Set by the link you opened. This batch has already reached its planned size, so your
+                  registration will be recorded and the centre will confirm your place with you.
+                </span>
+              ) : (
+                <span className="mt-1 block text-xs text-gray-500">Set by the link you opened — you will be added to this batch.</span>
+              )}
             </F>
           ) : (
             <F label="Which batch are you interested in? *">

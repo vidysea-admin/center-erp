@@ -1070,6 +1070,7 @@ function Roster({ batchId, batch, error, setError, onChanged }: any) {
   const [attLinks, setAttLinks] = useState<any[] | null>(null);
   // A-03
   const [regLink, setRegLink] = useState<string | null>(null);
+  const [regWarning, setRegWarning] = useState<string | null>(null);   // QA-1187
   const [regBusy, setRegBusy] = useState(false);
   const [attBusy, setAttBusy] = useState(false);
 
@@ -1083,7 +1084,12 @@ function Roster({ batchId, batch, error, setError, onChanged }: any) {
     setRegBusy(true);
     try {
       const res = await api("/api/public-tokens", { method: "POST", json: { purpose: "register", location: batch?.location?._id ?? batch?.location, batch: batchId } });
-      setRegLink(res.link ?? res.url ?? (res.item?.token ? `${window.location.origin}/erp/p/register/${res.item.token}` : null));
+      setRegLink(res.link ?? res.url ?? (res.item?.token ? `${window.location.origin}${BASE_PATH}/p/register/${res.item.token}` : null));
+      // QA-1187: a link for a batch already at target used to be minted in complete silence, while
+      // the form it opens went on telling the student they would be added. The link is still made -
+      // a batch can empty by tomorrow, and a dead link explains nothing to whoever holds it
+      // (REQ-393) - but the person about to paste it into a WhatsApp thread is told first.
+      setRegWarning(res.warning ?? null);
     } catch (e: any) { setError(e.message); }
     setRegBusy(false);
   }
@@ -1161,6 +1167,11 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
       {/* A-03: the link, once made. Shown with the batch named in the label so it can never be
           confused with the centre-wide intake link on the Candidates page - copying the wrong one is
           exactly how every self-registered candidate ended up on the pool instead of a roster. */}
+      {regLink && regWarning && (
+        <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <b>Before you send this link:</b> {regWarning}
+        </div>
+      )}
       {regLink && (
         <ShareLinkPanel label={`Registration link for ${batch?.code ?? "this batch"}`} link={regLink}
           hint="Whoever fills this form is registered AND added to this batch. The centre-wide link on the Candidates page does not do that — it leaves them on the pool."

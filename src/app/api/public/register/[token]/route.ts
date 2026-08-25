@@ -50,7 +50,13 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     // A-03: when the link names a batch, the student is not choosing anything - not the programme
     // and not the intake. The form shows both, filled in and not editable, and the "current or a
     // future batch" question is dropped, because it cannot mean anything once the link has decided.
-    batch: t.batch ? { code: t.batch.code, status: t.batch.status, planned_start: t.batch.planned_start } : null,
+    // QA-1187: `full` is not a refusal - the student is still registered and still joins the roster,
+    // exactly as a staff-added member would. It is here so the form can stop promising a seat it
+    // cannot promise, which is what it was doing.
+    batch: t.batch ? {
+      code: t.batch.code, status: t.batch.status, planned_start: t.batch.planned_start,
+      full: !!(t.batch.target_size && (await BatchMember.countDocuments({ batch: t.batch._id, left_on: null })) >= t.batch.target_size),
+    } : null,
     batch_fixed: !!t.batch,
     education_levels: EDUCATION_LEVEL,
   });
@@ -145,16 +151,26 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
       await audit({ entity: "Candidate", entityId: doc._id, field: "batch_link_refused", actorType: "EXTERNAL_SYNC",
         newValue: `${t.batch.code} is ${t.batch.status} — the link still registered ${name}, but nobody can be enrolled into a finished batch. They are on the pool.` });
     } else {
-      const roster = await BatchMember.countDocuments({ batch: t.batch._id, left_on: null });
-      if (t.batch.target_size && roster >= t.batch.target_size) {
-        await audit({ entity: "Candidate", entityId: doc._id, field: "batch_link_refused", actorType: "EXTERNAL_SYNC",
-          newValue: `${t.batch.code} is full (${roster} of ${t.batch.target_size}) — the link still registered ${name}. They are on the pool.` });
-      } else {
+      // QA-1187 — MY OWN CAPACITY CHECK IS GONE FROM HERE, and it was wrong in kind, not only in
+      // place. This route used to refuse the join when the roster had reached target_size. The
+      // product does not work that way and never did: `addMemberChecked` WARNS and admits
+      // ("Roster is now N of target M — enrolment will be capped at M"), while Rule 48 in
+      // `updateEnrollment` REFUSES only when somebody tries to COMPLETE enrolment past the target.
+      // Joining a roster and being enrolled are two different events with two different rules, and
+      // that is deliberate. My refusal invented a THIRD answer, on the one door a member of the
+      // public uses — so an anonymous registrant was turned away from a roster a staff member could
+      // have added them to.
+      // The whole point of routing through addMemberChecked was to inherit its rules rather than
+      // re-state them, and this was the one place I re-stated one anyway, one function away.
+      // What was actually missing is not a refusal but the WARNING reaching somebody: it is carried
+      // on the audit trail below, surfaced to the operator when the link is minted, and shown to the
+      // student on the form. See QA-1187.
+      {
         try {
-          await addMemberChecked(String(t.batch._id), String(doc._id));
+          const m: any = await addMemberChecked(String(t.batch._id), String(doc._id));
           joinedBatch = t.batch.code;
           await audit({ entity: "Candidate", entityId: doc._id, field: "enrolled", actorType: "EXTERNAL_SYNC",
-            newValue: `enrolled into ${t.batch.code} by the batch registration link` });
+            newValue: `enrolled into ${t.batch.code} by the batch registration link${m?.warning ? ` — ${m.warning}` : ""}` });
         } catch (e: any) {
           await audit({ entity: "Candidate", entityId: doc._id, field: "batch_link_refused", actorType: "EXTERNAL_SYNC",
             newValue: `${t.batch.code}: ${e?.message ?? "enrolment refused"} — ${name} is registered and on the pool.` });

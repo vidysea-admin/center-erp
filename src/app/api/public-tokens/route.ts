@@ -59,6 +59,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
 
   if (purpose === "register") {
     if (!body.location) throw new HttpError(400, "Choose the centre this link registers candidates into.");
+    let mintWarning: string | undefined;   // QA-1187
     assertLocationInScope(user, String(body.location));
     // 2026-08-24 (Umesh): "candidate k self registration link mai abhi bss location confirm hoti hai,
     // it should confirm location and program too jisse jo candidate register krega uska location and
@@ -85,6 +86,17 @@ export const POST = apiHandler(async (req: NextRequest) => {
       }
       if (["Completed", "Cancelled", "Closed"].includes(b.status)) {
         throw new HttpError(409, `${b.code} is ${b.status} — a registration link cannot be created for a batch nobody can join.`);
+      }
+      // QA-1187: a link for a batch that is ALREADY at its target was minted in complete silence,
+      // and the form it opens still tells the student they will be added to that batch. Whoever
+      // copies that link into a WhatsApp thread has no way to know.
+      // It is still MINTED, not refused - a batch can empty again by tomorrow, and killing the link
+      // would be the REQ-393 mistake (a dead link explains nothing to whoever is holding it). What
+      // changes is that the operator is TOLD, in the same reply, in words.
+      const seated = await BatchMember.countDocuments({ batch: b._id, left_on: null });
+      if (b.target_size && seated >= b.target_size) {
+        mintWarning = `${b.code} already has ${seated} on its roster against a target of ${b.target_size}. `
+          + "The link still works and anyone who fills it will be added, but they will be over target and Rule 48 will not let them complete enrolment until a place frees up.";
       }
       body.program = String(b.program);
     }
@@ -116,7 +128,9 @@ export const POST = apiHandler(async (req: NextRequest) => {
     const batchCode = body.batch ? (await Batch.findById(String(body.batch)).select("code").lean<any>())?.code : null;
     await audit({ entity: "PublicToken", entityId: doc._id, field: "create", actor: user.id,
       newValue: `register link (${loc?.name ?? "centre"} / ${prog.name}${batchCode ? ` / batch ${batchCode}` : " / centre-wide, no batch"})` });
-    return NextResponse.json({ item: doc }, { status: 201 });
+    // QA-1187: the warning rides the same reply, so the screen that minted the link can say it
+    // without a second round trip - the shape the roster doors already use for their own warning.
+    return NextResponse.json({ item: doc, ...(mintWarning ? { warning: mintWarning } : {}) }, { status: 201 });
   }
 
   if (purpose === "feedback" || purpose === "attendance") {

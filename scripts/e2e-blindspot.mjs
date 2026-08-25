@@ -293,6 +293,74 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
   }
 }
 
+// ---- QA-1187: "is there room on this roster" must have ONE answer, and somebody must be told ----
+// Filed by the qa-247 checker against my own unit. A-03's register door refused the join once the
+// roster reached target_size. The product does not work that way and never did: `addMemberChecked`
+// WARNS and admits ("Roster is now N of target M - enrolment will be capped at M"), and Rule 48 in
+// `updateEnrollment` REFUSES only when somebody tries to COMPLETE enrolment past the target. Joining
+// and enrolling are two events with two rules, deliberately. My refusal was a THIRD answer, and it
+// landed on the one door a member of the public uses - so an anonymous registrant was turned away
+// from a roster a staff member could have added them to.
+// What was genuinely missing was not a refusal but the warning REACHING somebody: the link for a
+// full batch was minted in silence and the form went on promising a seat.
+{
+  const fBatch = (await req(admin, "POST", "/api/batches",
+    { location: loc._id, program: prog._id, planned_start: "2027-10-01", target_size: 1 })).data.item;
+
+  const mk = async (tag) => (await req(admin, "POST", "/api/candidates",
+    { name: `Cap ${tag} ${stamp}`, phone: "76" + String(Math.floor(Math.random() * 1e8)).padStart(8, "0"),
+      location: loc._id, program: prog._id }, 201)).data.item;
+
+  // fill it to target through the STAFF door
+  const c1 = await mk("A");
+  await req(admin, "POST", `/api/batches/${fBatch._id}/members`, { candidate: c1._id }, 201);
+
+  // THE STAFF DOOR'S ANSWER, established first so the public door can be compared against it.
+  const c2 = await mk("B");
+  const staff = await req(admin, "POST", `/api/batches/${fBatch._id}/members`, { candidate: c2._id }, 201);
+  ok("QA-1187: the STAFF roster door admits an over-target member and WARNS - it does not refuse",
+    staff.status === 201 && /target 1/.test(String(staff.data?.warning ?? "")),
+    JSON.stringify({ s: staff.status, warning: staff.data?.warning }));
+
+  // MINTING a link for a batch already over target: still minted, but the operator is TOLD.
+  const fullTok = await req(admin, "POST", "/api/public-tokens",
+    { purpose: "register", location: loc._id, batch: fBatch._id }, 201);
+  ok("QA-1187: a link for an already-full batch is still MINTED - killing it would strand whoever holds it (REQ-393)",
+    fullTok.status === 201 && !!fullTok.data.item?.token, JSON.stringify({ s: fullTok.status }));
+  ok("QA-1187: …but the operator is WARNED in the same reply, with the batch and the numbers named",
+    /already has/.test(String(fullTok.data?.warning ?? "")) && String(fullTok.data?.warning ?? "").includes(fBatch.code),
+    JSON.stringify({ warning: fullTok.data?.warning }));
+
+  // and the form stops promising a seat it cannot promise
+  const fullMeta = await (await fetch(BASE + `/api/public/register/${fullTok.data.item.token}`)).json();
+  ok("QA-1187: the public form is TOLD the batch is full, so it can stop promising a seat",
+    fullMeta.batch?.full === true, JSON.stringify({ batch: fullMeta.batch }));
+
+  // THE POINT OF THE WHOLE ROW: the two doors now give the SAME answer.
+  const ph = "7742" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0");
+  const joined = await fetch(BASE + `/api/public/register/${fullTok.data.item.token}`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "Cap Public " + stamp, phone: ph, email: "cap" + stamp + "@test.local" }) });
+  const jBody = await joined.json();
+  ok("QA-1187: the PUBLIC link admits them too, exactly as the staff door did - one answer to 'is there room', not two",
+    joined.status === 201 && jBody.batch === fBatch.code,
+    JSON.stringify({ s: joined.status, batch: jBody.batch }));
+  const fRoster = (await req(admin, "GET", `/api/batches/${fBatch._id}/members`)).data.items ?? [];
+  ok("QA-1187: …and they are really on that roster, not quietly left on the pool",
+    fRoster.some((m) => String(m.candidate?.name ?? "").startsWith("Cap Public")),
+    JSON.stringify({ roster: fRoster.length, names: fRoster.map((m) => m.candidate?.name) }));
+
+  // a batch with room must NOT carry the warning - or it becomes noise nobody reads
+  const roomy = (await req(admin, "POST", "/api/batches",
+    { location: loc._id, program: prog._id, planned_start: "2027-10-15", target_size: 30 })).data.item;
+  const roomyTok = await req(admin, "POST", "/api/public-tokens",
+    { purpose: "register", location: loc._id, batch: roomy._id }, 201);
+  const roomyMeta = await (await fetch(BASE + `/api/public/register/${roomyTok.data.item.token}`)).json();
+  ok("QA-1187: a batch with room carries NO warning and is not marked full - the caution stays rare enough to read",
+    !roomyTok.data?.warning && roomyMeta.batch?.full === false,
+    JSON.stringify({ warning: roomyTok.data?.warning ?? null, full: roomyMeta.batch?.full }));
+}
+
 // ---- QA-869 (Umesh 2026-08-24): the self-registration link pins its PROGRAMME, not just its centre ----
 // "it should confirm location and program too jisse jo candidate register krega uska location and
 // program pre fixed rhegaa. vo khud nhi select krega."
