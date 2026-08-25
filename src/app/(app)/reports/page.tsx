@@ -80,7 +80,17 @@ function ReportsInner() {
     const c = r.total ?? {};
     return known ? { label, ...known } : {
       label, cls: "bg-amber-100 text-amber-800",
-      title: `Approved ${c.approved}, not approved ${c.not_approved}, no verdict ${c.unknown}, of ${c.target}. Filter a job role column to see which one.`,
+      // QA-762 (CEO, on this screen): "jab approved dekh rahe ho to approved SAARE programme aane
+      // chahiye usme." A centre like this one HAS approved targets — they are the `approved` figure
+      // right here — but its Status word is "Mixed", so filtering Status = Approved drops the whole
+      // row AND the approved targets inside it. The seven Mixed centres carry the largest targets
+      // (Madihan 1,090, Mirzapur 1,045, Khurja 910), which is why the loss is so visible. The tile
+      // is the control that answers his question — it opens the rows its own figure was summed
+      // from, Mixed centres included — so the chip now says so instead of leaving him to discover
+      // that the obvious control answers a different question.
+      title: `Approved ${c.approved}, not approved ${c.not_approved}, no verdict ${c.unknown}, of ${c.target}. `
+        + `The Status filter matches this whole word, so filtering "Approved" hides this centre along with its ${c.approved} approved. `
+        + `To see every approved target, click the Approved tile above instead.`,
     };
   };
   const columns: any[] = [
@@ -120,8 +130,29 @@ function ReportsInner() {
     key: "verdict", label: "Status", minWidth: 132, sortable: true, filterable: true,
     sortValue: (r: any) => verdictOf(r).label,
     filterText: (r: any) => verdictOf(r).label,
+    // QA-762: this funnel matches the centre's WHOLE word, so "Approved" means "every job role here
+    // is approved" and not "show me the approved". Saying that in the header is the cheapest half of
+    // the fix; the expensive half — making the funnel match the verdicts INSIDE a centre — changes
+    // what a filter means on the screen the CEO reads, and is his call, not the maker's.
+    hint: "The centre's overall verdict. Filtering here matches the whole word: \"Approved\" means every job role at that centre is approved, so centres reading Mixed drop out even though they hold approved targets. To see every approved target, click the Approved tile.",
     render: (r: any) => { const v = verdictOf(r); return v.label ? <span className={"rounded px-1.5 py-0.5 text-[11px] font-semibold " + v.cls} title={v.title}>{v.label}</span> : null; },
-    total: (rs: any[]) => <span className="text-xs font-normal text-gray-500">{rs.length} shown</span>,
+    // QA-762: the tile said 7,315 and this footer said 4,110 two inches below it, with nothing on
+    // the screen explaining the gap — which reads as a broken report rather than as a filter doing
+    // its job. QA-524 already decided the footer follows the filter ("a total that ignored the
+    // filter would describe something the reader is not looking at"); the tiles never got that
+    // sentence applied to them and still show the unfiltered totals. Rather than quietly moving the
+    // tiles — which would make the screen agree with a filter that is answering the wrong question —
+    // the footer now names the gap while it exists.
+    total: (rs: any[]) => {
+      const all = data?.rows?.length ?? rs.length;
+      if (rs.length === all) return <span className="text-xs font-normal text-gray-500">{rs.length} shown</span>;
+      return (
+        <span className="whitespace-nowrap text-xs font-normal text-amber-700"
+          title={`A filter is on. The figures in this row are summed over the ${rs.length} centres you can see; the tiles at the top of the page still count all ${all}. That is why the two disagree.`}>
+          {rs.length} of {all} — tiles still count all {all}
+        </span>
+      );
+    },
   });
   for (const role of roles) {
     columns.push(
