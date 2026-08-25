@@ -3177,7 +3177,11 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
     api(`/api/batches/${batchId}/results`).then((d) => { setItems(d.items); setSummary(d.summary); }),
     api("/api/master-lists/failure-reasons").then((d) => setReasons(d.items)).catch(() => setReasons([])),
     api(`/api/batches/${batchId}/attendance`).then((d) => {
-      setAttMeta({ required_hours: d.required_hours, course_finished: d.course_finished, portal_working_days: d.portal_working_days, verdict_counts: d.verdict_counts ?? {}, awaiting_match_rows: d.awaiting_match_rows ?? 0 });
+      // A-04: this picker is an ALLOW-LIST, so a field the server starts sending is a field the
+      // screen silently never sees. `roster_count` and `left_count` were added to the route and the
+      // sentence below was written to print them - and rendered nothing, because they stopped here.
+      // Found by looking at the screen, not by the pins: the API assertions passed the whole time.
+      setAttMeta({ required_hours: d.required_hours, course_finished: d.course_finished, portal_working_days: d.portal_working_days, verdict_counts: d.verdict_counts ?? {}, awaiting_match_rows: d.awaiting_match_rows ?? 0, roster_count: d.roster_count ?? null, left_count: d.left_count ?? 0 });
       setHoursBy(new Map((d.members ?? []).map((m: any) => [String(m.member_id), { qualified: m.qualified, attended_hours: m.attended_hours, basis: m.basis, required_hours: d.required_hours, verdict: m.verdict }])));
     }).catch(() => {}),
   ]).catch((e: any) => setError(e.message)).finally(() => setLoaded(true));
