@@ -457,6 +457,22 @@ ok("all 7 rows persisted", detail.data.rows?.length === 7, `got ${detail.data.ro
     ok("A-05 guard: the departed member is OUT of the buckets - that is what the header and the bulk button count",
       sum1 === sum0 - 1,
       JSON.stringify({ buckets_before: sum0, buckets_after: sum1 }));
+    // ---- -250 OVER-REACH GUARD: the CLIENT hides the departed row, the SERVER must not ----
+    // Umesh, 25/08: "log rakho candidate wale mai but baaki jagah se tho data naa dikhee." The
+    // obvious way to satisfy that is a `left_on: null` filter in this route, and it is the wrong
+    // way. Three things read this payload and need the departed member IN it:
+    //   - the batch screen decides a batch really ran from `members.some(m => m.govt)`, and a
+    //     departed student's matched portal row is exactly that evidence;
+    //   - the A-04 partition above is `sum(verdict_counts) + left_count === roster_count`, which
+    //     cannot be checked if the members it counts are not on the payload;
+    //   - the closure card KEEPS a departed member who already has a result, and reads their hours
+    //     from here.
+    // So this pin fails in the direction the fix could plausibly drift: server-side filtering.
+    ok("-250: the payload still carries the member who LEFT - hiding them is the client's job, not this route's",
+      att1.members.length === att1.roster_count && att1.members.filter((m) => m.left_on).length === (att1.left_count ?? 0),
+      JSON.stringify({ members: att1.members.length, roster_count: att1.roster_count,
+        with_left_on: att1.members.filter((m) => m.left_on).length, left_count: att1.left_count }));
+
   }
 
   // A-12: never-logged and logged-zero must be distinguishable on the payload the list reads.

@@ -43,7 +43,19 @@ export default function PublicAttendancePage({ params }: { params: Promise<{ tok
         </div>
       )}
 
-      {state === "ok" && data && (
+      {/* Not red, and not the "invalid" card: this is not an error and the link is not broken. The
+          header above still names their programme and batch, so they can see the page really is
+          theirs. */}
+      {state === "ok" && data?.left_on && (
+        <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm leading-5 text-gray-700">
+          You are no longer on this batch. Our records show you left on{" "}
+          <b>{new Date(data.left_on).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</b>,
+          so this page no longer shows attendance, hours or exam details.
+          If that is not right, please contact your training centre.
+        </div>
+      )}
+
+      {state === "ok" && data && !data.left_on && (
         <div className="space-y-5">
           {/* The training itself — centre, trainer, dates, registration */}
           <div className="rounded-lg border border-gray-200 p-4 text-sm">

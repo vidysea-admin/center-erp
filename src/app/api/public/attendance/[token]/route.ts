@@ -39,6 +39,28 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   const m = t.batch_member;
   const batch = m.batch;
 
+  // 2026-08-25 (Umesh, on Ashish Rana / AVP-GURU-RPLAVP-DST-03): "aur jagah se remove ho jaaye uske
+  // traces." A link minted BEFORE somebody left goes on serving them a live eligibility verdict -
+  // "60 plus hona mandatory hai" - for a course they are no longer on. Minting already filters
+  // { batch, left_on: null }; nothing re-asked at READ time, and dropMemberChecked does not touch
+  // PublicToken, so every link handed out before the drop stayed live.
+  //
+  // The token is NOT killed, and that is the decision rather than the shortcut. Switching the token
+  // off makes the lookup above miss, which 404s, which the page renders as "this link is not valid
+  // or has expired" - and a dead link explains nothing to whoever is holding it. The person holding
+  // THIS link is the one human in the system who cannot ask anybody what happened. So the page still
+  // answers: their own name and batch, the date they left, and nothing that implies they are still
+  // training. Returning early also spares five queries they have no business generating.
+  if (m.left_on) {
+    return NextResponse.json({
+      candidate: m.candidate?.name ?? null,
+      batch: batch?.code ?? null,
+      program: batch?.program?.name ?? null,
+      centre: batch?.location?.name ?? null,
+      left_on: m.left_on,
+    });
+  }
+
   const logs = await DailyLog.find({ batch: batch._id }).select("log_date present_member_ids").sort({ log_date: 1 }).lean<any[]>();
   const days = logs.map((l) => ({
     date: l.log_date,

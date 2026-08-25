@@ -132,3 +132,75 @@ export const SETTLED_CERTIFICATE_STATUSES = ["Issued", "Not Issued"];
 export function isCertificateSettled(status?: string | null): boolean {
   return SETTLED_CERTIFICATE_STATUSES.includes(String(status ?? ""));
 }
+
+// ---------------------------------------------------------------------------
+// "Has this member LEFT the batch, and where are they still allowed to appear?"
+// ---------------------------------------------------------------------------
+//
+// 2026-08-25 (Umesh, on candidate Ashish Rana / CAN_14318483, batch AVP-GURU-RPLAVP-DST-03 —
+// dropped 25 Aug with reason "Not interested"):
+//
+//     "log rakho candidate wale mai but baaki jagah se tho data naa dikhee.
+//      aur jagah se remove ho jaaye uske traces."
+//
+// Asked to state the rule in one line, he chose these words, and `showsAfterLeaving` below IS
+// that sentence in code:
+//
+//     A left member appears only where they have a record of their own;
+//     where they are just a name, they are gone.
+//
+// WHY THESE LIVE HERE, AND WHY THEY EXIST AT ALL.
+// `BatchMember.left_on` (models/index.ts) is the only marker and `dropMemberChecked` (rules.ts)
+// the only writer, but the QUESTION "is this one gone" had no shared name anywhere - so grepping
+// for it found nothing and ARCHITECTURE 3 never listed it. A census of the BEHAVIOUR found six
+// hand-written client copies inside batches/[id]/page.tsx alone, ~20 inline `left_on: null` Mongo
+// literals on the server, two server helpers (`rosterOnDate`, `activeRoster`) - and zero
+// client-safe predicate. That is ARCHITECTURE 3.0c's lesson landing again: searching for a NAME
+// is not a census.
+//
+// Same home and same reason as `isCertificateSettled` above: this module imports NOTHING, so a
+// "use client" screen can reach it while rules.ts (which pulls mongoose) can not be reached back.
+// The ~20 server query literals are deliberately NOT collapsed here - those are Mongo query
+// fragments, not a predicate, and re-pointing nine routes is its own unit.
+//
+// The defect class this closes is not "a screen showed one extra row". It is that every surface
+// answered this question differently and each answer was defensible on its own: the attendance
+// buckets filtered departed members while the chip above them counted the whole roster (QA-1157),
+// one screen gave three different totals for "unmarked" and the bulk action silently used the
+// smallest (QA-1158), and the closure card offered live Pass/Fail buttons beside a tooltip
+// promising that "a member who has left cannot be marked". One predicate, read by all of them.
+
+/** True when this batch member has left the batch — `left_on` is set. */
+export function hasLeft(m: { left_on?: unknown } | null | undefined): boolean {
+  return !!(m && m.left_on);
+}
+
+/** The members still on the batch. The client-side twin of rules.ts `activeRoster`. */
+export function activeOnly<T extends { left_on?: unknown }>(xs: T[] | null | undefined): T[] {
+  return (xs ?? []).filter((x) => !hasLeft(x));
+}
+
+// "Pending" is NOT a record. It is the absence of one — the row exists because somebody opened the
+// screen, not because anybody decided anything. Treating it as a record would keep exactly the
+// cards Umesh asked to disappear, since an unmarked departed member is the common case.
+/** True when a final assessment result has actually been decided for this row. */
+export function hasRecordedResult(r: { result?: string | null } | null | undefined): boolean {
+  const v = String(r?.result ?? "").trim();
+  return !!v && v !== "Pending";
+}
+
+// The rule itself. `ownRecord` is whatever "a record of their own" means ON THAT SURFACE, and it
+// differs on purpose — a decided result on the closure cards and the certificate picker, a
+// submitted feedback row on the feedback tab, nothing at all on the attendance table (a departed
+// member has no record of their own there, which is why they vanish from it entirely).
+//
+// Two surfaces deliberately do NOT call this and must not be "harmonised" into it:
+//   - the batch Candidates/roster tab, which shows every member always with the leave date and
+//     reason — it IS the log, and preserving it is the whole point of the rule;
+//   - the government-attendance row-match dropdown, which shows departed candidates always,
+//     labelled, because the portal export carries their pre-departure days and hiding them would
+//     strand those rows unresolvable forever (QA-1041, QA-1067).
+/** Umesh's rule: a departed member renders only where a record of their own exists. */
+export function showsAfterLeaving(m: { left_on?: unknown } | null | undefined, ownRecord: boolean): boolean {
+  return !hasLeft(m) || ownRecord;
+}

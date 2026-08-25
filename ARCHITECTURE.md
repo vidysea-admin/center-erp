@@ -752,6 +752,57 @@ choose a late joiner's default `joined_on`. Get it wrong in the permissive direc
 enrolled today is written weeks early (QA-907); get it wrong in the strict direction and a real July
 batch cannot have its attendance entered at all (QA-892). Both have happened.
 
+### 3.14 "Has this member LEFT?" — and WHERE a departed member is allowed to appear (added -250)
+
+`BatchMember.left_on` (`models/index.ts`) is the only marker and `dropMemberChecked` (`rules.ts`) the
+only writer. Two server helpers — `rosterOnDate` (Rule 26) and `activeRoster` — plus **~20 inline
+`left_on: null` query literals** across `rules.ts` and nine routes. Those literals are Mongo query
+fragments, not a predicate, and are deliberately NOT collapsed here; that is its own unit.
+
+**What WAS collapsed in -250: the CLIENT side, which had zero shared definitions and SIX
+hand-written copies**, all inside `batches/[id]/page.tsx` (roster, enrollment, daily execution,
+attendance, and the closure `active`/`left` pair). A grep for a shared name found nothing, because
+the six copies shared no identifier — **section 3.0c's census lesson landing a third time: searching
+for a NAME is not a census.** SoT is now `lib/candidate-journey.ts` — `hasLeft` · `activeOnly` ·
+`hasRecordedResult` · `showsAfterLeaving` — the same pure module `isCertificateSettled` lives in and
+for the same reason (`rules.ts` pulls mongoose; every one of these screens is `"use client"`).
+
+**`showsAfterLeaving` is a RULE, not a helper.** Umesh, 2026-08-25, on candidate Ashish Rana /
+AVP-GURU-RPLAVP-DST-03: *"log rakho candidate wale mai but baaki jagah se tho data naa dikhee"* —
+**a left member appears only where they have a record of their own; where they are just a name, they
+are gone.** Per surface, because the answer differs and each difference is a decision:
+
+| Surface | Departed member | Why |
+|---|---|---|
+| Batch → Candidates roster | **always**, with date + reason | it IS the log |
+| Batch → Attendance table | **never** | no record of their own there |
+| Batch → Closure cards | **only** with a decided result — labelled, assessment controls read-only | Rule 42 keeps the result |
+| Certificates mapping picker | same test as Closure | one rule, not two |
+| Feedback tab | **always** (the row that exists) | a submitted feedback row IS their record |
+| Govt-attendance match dropdown | **always**, labelled | the portal export carries their pre-departure days; hiding them strands those rows forever (QA-1041, QA-1067) — **do not harmonise this one** |
+
+**The certificate controls are deliberately NOT gated on `left_on`.** `certPatch` → `PATCH
+/api/results/[id]` → `CERT_FIELDS` → `upsertCandidateCertificate`, a different function the new
+`upsertCandidateResult` refusal never touches. Somebody who passed and then left keeps their card
+precisely so the certificate they earned can still be attached. `passes` on that tab therefore stays
+over `items`, not `active` — narrowing it would take the certificate door away with them.
+
+**The PAYLOADS did NOT shrink, and that is enforced.** `GET /attendance` and `GET /results` still
+ship every member with `left_on`. Three things need them there: the batch screen reads
+`att.members.some(m => m.govt)` as evidence a batch actually ran, and a departed student's matched
+portal row is exactly that evidence; the A-04 partition is
+`sum(verdict_counts) + left_count === roster_count`, which cannot be checked over members the payload
+omits; and the closure card keeps a departed member who has a result and reads their hours from
+there. **The server states the whole roster; the client decides what to render.** A pin in
+`e2e-govt.mjs` goes red if that ever drifts into a server-side filter.
+
+**Two doors, not one.** `upsertCandidateResult` refuses a departed member (409, naming them and the
+date) — that is the door the card, the bulk button, the per-result PATCH and force-complete all pass
+through. But `results/route.ts` writes `sidh_candidate_id`/`apaar_id` in a **separate loop**, and on
+a multi-row save `updated > 0` means the refusal never fires. Measured with both guards removed: the
+dropped candidate was marked Absent (**200**) and their APAAR ID was rewritten
+(`before=null after=123456789012`). A UI-only fix would have closed neither.
+
 ### 3.10 Other predicates with more than one copy
 **`totNeeded` — 4 copies of "does this trainer still need a TOT"**: `rules.ts:1865`
 (`planBatchBackward`) · `rules.ts:2587` (`planTrackerRows`, flips six of the 18 columns to

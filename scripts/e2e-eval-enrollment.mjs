@@ -99,6 +99,56 @@ ok("[best] the roster worklist no longer counts the dropped member as live", aft
 const droppedCand = (await req(admin, "GET", `/api/candidates/${cands[3]._id}`, undefined, 200)).data.item;
 ok("[best] dropped candidate returns to the pool as Dropped", droppedCand.lifecycle_status === "Dropped", droppedCand.lifecycle_status);
 
+// ---- -250 (Umesh, 25/08, on Ashish Rana / AVP-GURU-RPLAVP-DST-03): a member who LEFT is read-only ----
+// "log rakho candidate wale mai but baaki jagah se tho data naa dikhee." Until this unit the closure
+// card offered live Pass/Fail/Absent buttons for a departed student and the SERVER took them: the
+// batch status was checked, the member was checked, Rule 44 was checked, the A-09 eligibility gate
+// was checked, and `left_on` was never asked about anywhere. The tab meanwhile carried a tooltip
+// promising "a member who has left cannot be marked".
+//
+// The NEGATIVE CONTROL runs FIRST and on purpose. Without it this whole block passes just as well on
+// a door that refuses everybody, which is the shape QA-1165 is on the ledger for - "the pin that
+// could not fail on this defect, before or after the fix".
+{
+  const okMark = await req(admin, "PUT", `/api/batches/${batch._id}/results`, { rows: [{ member: m0._id, result: "Absent" }] });
+  ok("[best] control: an ACTIVE member can still be marked", okMark.status === 200, `got ${okMark.status}: ${JSON.stringify(okMark.data).slice(0, 160)}`);
+
+  const marked = await req(admin, "PUT", `/api/batches/${batch._id}/results`, { rows: [{ member: m3._id, result: "Absent" }] });
+  const msg = JSON.stringify(marked.data ?? {});
+  ok("[worst] a member who has left cannot be marked", marked.status >= 400, `got ${marked.status}: ${msg.slice(0, 200)}`);
+  // The STATUS alone is worthless here: a 500 satisfies it, and so does an unrelated refusal. What
+  // the operator needs is WHO and WHEN, and that is what is asserted.
+  ok("[worst] the refusal names the candidate", msg.includes(cands[3].name), msg.slice(0, 240));
+  ok("[worst] the refusal names the date they left", msg.includes(new Date(today()).toLocaleDateString("en-IN")), msg.slice(0, 240));
+
+  // The guard sits AHEAD of Rule 44, so a Fail with no reason on a departed member is answered by
+  // the departure, not by the missing reason. If this ever starts returning Rule 44's wording the
+  // guard has drifted below the checks it is supposed to precede.
+  const failNoReason = await req(admin, "PUT", `/api/batches/${batch._id}/results`, { rows: [{ member: m3._id, result: "Fail" }] });
+  ok("[worst] the departure is the answer, ahead of the failure-reason rule",
+    JSON.stringify(failNoReason.data ?? {}).includes("left this batch on"), JSON.stringify(failNoReason.data ?? {}).slice(0, 200));
+
+  // Rule 42 survives: the record Umesh asked to KEEP is still there, still carrying its leave date.
+  const resAfter = (await req(admin, "GET", `/api/batches/${batch._id}/results`, undefined, 200)).data.items ?? [];
+  const dropRow = resAfter.find((i) => String(i.member) === String(m3._id));
+  ok("[best] the departed member is still IN the results payload, with left_on", !!dropRow && !!dropRow.left_on, JSON.stringify(dropRow ?? null).slice(0, 200));
+  ok("[best] and the payload carries the drop reason for the card to print", dropRow?.drop_reason === "Family relocation", String(dropRow?.drop_reason));
+
+  // The SECOND door on the same route. `sidh_candidate_id` / `apaar_id` are written by their own
+  // loop, independently of the marking call - so on a multi-row save where one member has left,
+  // `updated > 0` means the throw never fires and the identity write would have gone through for
+  // somebody the screen no longer offers. One valid active row rides along on purpose: this must
+  // SKIP the departed row, not refuse the whole save.
+  const beforeApaar = (await req(admin, "GET", `/api/candidates/${cands[3]._id}`, undefined, 200)).data.item.apaar_id ?? null;
+  const mixed = await req(admin, "PUT", `/api/batches/${batch._id}/results`, { rows: [
+    { member: m0._id, result: "Absent" },
+    { member: m3._id, apaar_id: "123456789012" },
+  ] });
+  ok("[avg] a mixed save still succeeds for the active rows", mixed.status === 200, `got ${mixed.status}: ${JSON.stringify(mixed.data).slice(0, 160)}`);
+  const afterApaar = (await req(admin, "GET", `/api/candidates/${cands[3]._id}`, undefined, 200)).data.item.apaar_id ?? null;
+  ok("[worst] the departed member's identity fields were NOT rewritten", afterApaar === beforeApaar, `before=${beforeApaar} after=${afterApaar}`);
+}
+
 // teardown so later suites see clean KPIs
 await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Cancelled", reason: "eval fixture teardown" });
 

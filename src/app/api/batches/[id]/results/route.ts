@@ -27,6 +27,10 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     candidate: m.candidate,
     joined_on: m.joined_on,
     left_on: m.left_on,
+    // 2026-08-25: rides beside left_on so the closure card can name the leave the way the Candidates
+    // roster already does - "left 25 Aug 2026 (Not interested)" - instead of a bare "dropped". Same
+    // event, two screens, one sentence.
+    drop_reason: m.drop_reason ?? null,
     enrollment_status: m.enrollment_status,
     result: byCandidate.get(String(m.candidate?._id ?? m.candidate)) ?? null,
   }));
@@ -144,8 +148,18 @@ export const PUT = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   // be dealt with here rather than left for whoever adds field three.
   const docs = new Map<string, any>();
   for (const w of wants) {
-    const m = await BatchMember.findOne({ _id: w.member, batch: id }).select("candidate").lean<any>();
+    const m = await BatchMember.findOne({ _id: w.member, batch: id }).select("candidate left_on").lean<any>();
     if (!m?.candidate) continue;
+    // 2026-08-25: the SECOND door on this route. These two id fields are written here, independently
+    // of bulkMarkResults - so on a multi-row save where one member has left, res.updated is still > 0,
+    // the throw below never fires, and the departed member's identity fields would be rewritten by
+    // a request the screen no longer offers. The closure card is read-only for them; a scripted POST
+    // gets the same answer.
+    //
+    // A skip, NOT a throw, and deliberately: this loop refuses the WHOLE request before writing
+    // anything, so turning one departed row into a hard 400 would drop a forty-six-row save on
+    // account of a row nobody was shown.
+    if (m.left_on) continue;
     const cid = String(m.candidate);
     let cand = docs.get(cid);
     if (!cand) {

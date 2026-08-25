@@ -11,7 +11,7 @@ import { personLabel, personList, personSeparator } from "@/lib/person";
 import { normalizeCan, storedCanIsUnreadable, apaarError, storedApaarIsUnreadable } from "@/lib/validate";
 // QA-1198: the settled-certificate predicate, from the PURE module — this screen cannot reach
 // rules.ts (mongoose), which is exactly why the definition lives in lib/candidate-journey.ts.
-import { isCertificateSettled } from "@/lib/candidate-journey";
+import { activeOnly, hasLeft, hasRecordedResult, isCertificateSettled, showsAfterLeaving } from "@/lib/candidate-journey";
 import { trainerSelectGroups } from "@/lib/trainer-select";
 import { slotGuidelineErrors, slotHoursPerDay } from "@/lib/slot-rules";
 import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthBanner, NameCell, Notice, Section, ShareLinkPanel, Tabs, inputCls, statusLabel } from "@/components/ui";
@@ -142,7 +142,7 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
       {tab === "Candidates" && <Roster batchId={id} batch={b} error={error} setError={setError} onChanged={load} />}
       {tab === "Enrollment" && <Enrollment batchId={id} error={error} setError={setError} />}
       {tab === "Daily Execution" && <DailyExecution batchId={id} batch={b} role={role} error={error} setError={setError} />}
-      {tab === "Attendance" && <AttendanceTab batchId={id} batch={data.item} role={role} error={error} setError={setError} />}
+      {tab === "Attendance" && <AttendanceTab batchId={id} batch={data.item} role={role} error={error} setError={setError} onGo={setTab} />}
       {tab === "Closure" && <ClosureTab batchId={id} batch={b} role={role} error={error} setError={setError} onChanged={load} />}
       {tab === "Feedback" && <FeedbackTab batchId={id} error={error} setError={setError} />}
       {tab === "Costs" && role === "Admin" && <CostsTab batchId={id} batch={b} error={error} setError={setError} />}
@@ -1161,7 +1161,7 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
     } catch (e: any) { setError(e.message); }
   }
 
-  const active = members.filter((m) => !m.left_on);
+  const active = activeOnly(members);
   return (
     <div className="space-y-4">
       {/* A-03: the link, once made. Shown with the batch named in the label so it can never be
@@ -1473,7 +1473,7 @@ function Enrollment({ batchId, error, setError }: any) {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkMsg, setBulkMsg] = useState("");
 
-  const load = () => api(`/api/batches/${batchId}/members`).then((d) => setMembers(d.items.filter((m: any) => !m.left_on))).catch((e: any) => setError(e.message));
+  const load = () => api(`/api/batches/${batchId}/members`).then((d) => setMembers(activeOnly(d.items))).catch((e: any) => setError(e.message));
   useEffect(() => { load(); }, [batchId]);
 
   async function update(m: any, patch: any) {
@@ -1717,7 +1717,7 @@ function PortalIdGaps({ batchId, onChanged }: any) {
   );
 }
 
-function AttendanceTab({ batchId, batch, role, error, setError }: any) {
+function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
   const [data, setData] = useState<any>(null);
   const load = () => api(`/api/batches/${batchId}/attendance`).then(setData).catch((e: any) => setError(e.message));
   useEffect(() => { load(); }, [batchId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1766,7 +1766,10 @@ function AttendanceTab({ batchId, batch, role, error, setError }: any) {
   const openBacklog: string[] = batch?.actual_start
     ? walkRange(String(batch.actual_start).slice(0, 10), todayKey).open
     : [];
-  const activeMembers = (data?.members ?? []).filter((m: any) => !m.left_on);
+  const activeMembers = activeOnly(data?.members ?? []);
+  // Shipped by the attendance route since A-04/A-05 (roster_count / left_count) - this tab hides the
+  // departed rows now, so it counts what it SHOWS and states the rest in words below the chips.
+  const leftCount: number = data?.left_count ?? 0;
   const toggleAbsent = (day: string, memberId: string) => {
     if (!grid) return;
     const next = { ...grid, absent: { ...grid.absent } };
@@ -1818,7 +1821,21 @@ function AttendanceTab({ batchId, batch, role, error, setError }: any) {
       <p className="p-6 text-center text-sm text-gray-400">No students on the roster yet.</p>
     </div>
   );
-  const portalAsOf = data.members.map((m: any) => m.govt?.as_of).filter(Boolean).sort().pop();
+  // A roster that is entirely departed is NOT an empty roster, and the two must not say the same
+  // thing. The government-attendance route carries a whole separate flag for this state
+  // (roster_is_empty vs roster_all_departed) because one boolean answering both questions gave the
+  // wrong answer three releases running. Without this branch, hiding the departed rows would leave a
+  // headed table with nothing under it - the shape QA-1145 shipped in.
+  if (!activeMembers.length) return (
+    <div className="space-y-3">
+      {importLink && <div className="flex justify-end">{importLink}</div>}
+      <p className="p-6 text-center text-sm text-gray-400">
+        Everyone on this batch{String.fromCharCode(8217)}s roster has left. Their records are on the Candidates tab.
+      </p>
+      {onGo && <div className="flex justify-center"><Btn small kind="ghost" onClick={() => onGo("Candidates")}>Open Candidates</Btn></div>}
+    </div>
+  );
+  const portalAsOf = activeMembers.map((m: any) => m.govt?.as_of).filter(Boolean).sort().pop();
   return (
     <div className="space-y-3">
       {/* -208 (Umesh, 23/08): "even attendance wale tab me bhi vo kar de". Same component as the
@@ -1832,10 +1849,10 @@ function AttendanceTab({ batchId, batch, role, error, setError }: any) {
             two meters, named apart: OUR day-wise logs vs the PORTAL's cumulative import. */}
         <span className="rounded-full bg-gray-100 px-2 py-0.5" title="Day-wise logs marked in this system (Daily Execution / bulk grid)">Our logs: {data.days_held} day{data.days_held === 1 ? "" : "s"}</span>
         {(() => {
-          const withPortal = (data.members ?? []).filter((m: any) => m.govt);
+          const withPortal = activeMembers.filter((m: any) => m.govt);
           const wd = Math.max(0, ...withPortal.map((m: any) => Number(m.govt?.working_days ?? 0)));
           return withPortal.length
-            ? <span className="rounded-full bg-blue-50 px-2 py-0.5 text-blue-700" title="Skill India portal export, cumulative per student">Portal: {wd || "?"} working day{wd === 1 ? "" : "s"} · {withPortal.length}/{data.members.length} students · as of {fmtDate(portalAsOf)}</span>
+            ? <span className="rounded-full bg-blue-50 px-2 py-0.5 text-blue-700" title="Skill India portal export, cumulative per student">Portal: {wd || "?"} working day{wd === 1 ? "" : "s"} · {withPortal.length}/{activeMembers.length} students · as of {fmtDate(portalAsOf)}</span>
             : <span className="rounded-full bg-gray-100 px-2 py-0.5 text-gray-500">Portal: not imported yet</span>;
         })()}
         <span className="rounded-full bg-green-100 px-2 py-0.5 font-medium text-green-700">{data.qualified_count} qualified for assessments</span>
@@ -1860,6 +1877,20 @@ function AttendanceTab({ batchId, batch, role, error, setError }: any) {
           {importLink}
         </span>
       </div>
+      {/* 2026-08-25 (Umesh, on Ashish Rana / AVP-GURU-RPLAVP-DST-03): "log rakho candidate wale mai
+          but baaki jagah se tho data naa dikhee." The departed rows are gone from the table below,
+          so every number on this tab now counts 54 where it used to count 55 - and the Candidates
+          tab still says "55 total". A screen that quietly drops a person and never says so is how
+          three separate counting defects got filed in one week (the buckets summed to one less than
+          the chip above them and there was no bucket to put that person in). The row leaves; the
+          FACT stays, in words, with somewhere to go and read it. */}
+      {leftCount > 0 && (
+        <p className="text-[11px] text-gray-500">
+          {leftCount} student{leftCount === 1 ? "" : "s"} left this batch and {leftCount === 1 ? "is" : "are"} not shown
+          here — their record{leftCount === 1 ? " is" : "s are"} on the Candidates tab
+          {onGo && <> · <button type="button" className="underline hover:text-gray-700" onClick={() => onGo("Candidates")}>open it</button></>}
+        </p>
+      )}
       {grid && (
         <div className="space-y-2 rounded-xl border border-blue-200 bg-blue-50/50 p-3">
           <div className="flex flex-wrap items-end gap-3 text-xs">
@@ -1939,7 +1970,7 @@ function AttendanceTab({ batchId, batch, role, error, setError }: any) {
           )}
         </div>
       )}
-      <DataTable rows={data.members}
+      <DataTable rows={activeMembers}
         cardTitle={(r: any) => r.name}
         defaultSort={{ key: "name", dir: "asc" }}
         columns={[
@@ -1979,9 +2010,14 @@ function AttendanceTab({ batchId, batch, role, error, setError }: any) {
             // the one screen that clears it. The complaint this closes was that the operator was
             // told to go and fetch a file that had already been imported three times.
             filterText: (r: any) => (r.qualified ? "Qualified" : r.basis === "portal" ? "Below threshold" : r.awaiting_match ? "Match pending" : "Awaiting portal hours"),
-            render: (r: any) => r.left_on
-              ? <Chip value="Dropout" />
-              : r.qualified
+            // 2026-08-25: a "Dropout" arm used to sit here, rendering a MEMBERSHIP fact inside the
+            // ELIGIBILITY column - the one place on this screen that says whether a student may sit
+            // the assessment. It is gone with the rows it described: this table shows the active
+            // roster only. It was already half-broken, which is the part worth recording - filterText
+            // directly above has no Dropout branch, so the funnel filter and the chip gave a departed
+            // row two different answers. Do not re-add it here; the departed member is named in the
+            // line under the chips, and their record is on the Candidates tab.
+            render: (r: any) => r.qualified
                 ? <span className="rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-semibold text-green-700" title={`Portal-verified: ${r.govt?.hours} of ${data.required_hours} hrs`}>✓ Qualified for assessments</span>
                 : r.basis === "portal"
                   ? <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600" title="Portal hours below the threshold">{r.attended_hours} / {data.required_hours} hrs</span>
@@ -2002,7 +2038,7 @@ function AttendanceTab({ batchId, batch, role, error, setError }: any) {
               </div>
             ),
           },
-        ]} empty="No students on the roster." />
+        ]} empty="No students on this batch’s active roster." />
     </div>
   );
 }
@@ -2025,7 +2061,7 @@ function DailyExecution({ batchId, batch, role, error, setError }: any) {
   const [recOpen, setRecOpen] = useState(false); // -91: in-app recorder
   const load = () => Promise.all([
     api(`/api/batches/${batchId}/logs`).then((d) => setLogs(d.items)),
-    api(`/api/batches/${batchId}/members`).then((d) => setMembers(d.items.filter((m: any) => !m.left_on))),
+    api(`/api/batches/${batchId}/members`).then((d) => setMembers(activeOnly(d.items))),
   ]).catch((e: any) => setError(e.message)).finally(() => setLoaded(true));
   useEffect(() => { load(); setQueued(getQueue(batchId).length); }, [batchId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -3345,11 +3381,23 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
     finally { setCertBusy(null); }
   }
 
-  const active = items.filter((i) => !i.left_on);
+  const active = activeOnly(items);
   // A-05: named beside `active` rather than derived twice, because every count on this screen that
   // disagreed with another one disagreed about exactly this set.
-  const left = items.filter((i) => i.left_on);
+  const left = items.filter(hasLeft);
+  // 2026-08-25 (Umesh): "log rakho candidate wale mai but baaki jagah se tho data naa dikhee." The
+  // rule he gave, asked to state it in one line, is "a left member appears only where they have a
+  // record of their own; where they are just a name, they are gone." On THIS screen a record of
+  // their own means a DECIDED result - so the two halves of `left` are not the same thing and must
+  // not share a name. A-05 above learned that lesson once and needed two names; this needs four.
+  const leftShown = left.filter((i) => hasRecordedResult(i.result));
+  const leftHidden = left.filter((i) => !hasRecordedResult(i.result));
   const pending = active.filter((i) => !i.result || i.result.result === "Pending");
+  // The ONE population every count, every pill and the card grid on this screen reads. Every
+  // counting defect this tab has been filed for - three different answers to "how many unmarked" on
+  // one screen, a pill counting rows the grid could not show - was two surfaces each deriving their
+  // own. There is one now, and it is this.
+  const visible = items.filter((i) => showsAfterLeaving(i, hasRecordedResult(i.result)));
 
   // QA-748 (-214, Umesh 23/08): "yeh joh saare candidate cards hai, inke upar bhi filter hona
   // chahiye... kisiko sirf pass wale candidate dekhne toh woh us card ke through hi filter laga de,
@@ -3363,6 +3411,16 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
   // already carries every row - no new API.
   const [cardFilter, setCardFilter] = useState("all");
   const [cardSearch, setCardSearch] = useState("");
+  // QA-1166 was a `selfCounted` flag here, suppressing FilterPills' appended count on the one pill
+  // whose LABEL already carried numbers - because "All 6 active - 1 left" plus an appended 7 read as
+  // three numbers on a screen whose entire complaint is numbers that do not reconcile.
+  //
+  // 2026-08-25: the flag is GONE, and this is the better fix rather than a second one. No label on
+  // this strip states its own numbers any more, so there is nothing to suppress. One label, one
+  // count, and the count is the number of cards the grid will actually render. A suppression flag
+  // that no pill sets is dead scaffolding, and dead scaffolding is what the next reader mistakes for
+  // a rule. The two-population fact Umesh asked for on 24 Aug ("show both, side by side") is not
+  // lost - it moved into the hover text and the line under this strip, which say it in words.
   const CARD_FILTERS: { value: string; label: string; title: string; test: (i: any) => boolean }[] = [
     // A-05 (24-Aug issues sheet): this chip said "All 46" while the header said "45 not marked yet"
     // and the bulk button said "Mark 45 pending as Pass" - three numbers, one screen, one batch. The
@@ -3370,7 +3428,11 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
     // have LEFT, and this chip counted everyone. Umesh, asked which number is the true one, chose
     // "show both, side by side" - so nobody silently disappears from a screen and no number hides
     // arithmetic. The chip still SELECTS everyone; it just stops implying they are all markable.
-    { value: "all", label: left.length ? `All ${active.length} active · ${left.length} left` : "All", title: left.length ? `${items.length} on the roster: ${active.length} still in the batch and ${left.length} who left. The header and the bulk actions count the ${active.length} - a member who has left cannot be marked.` : "Everyone on the roster", test: () => true },
+    { value: "all", label: "All", title: left.length
+      ? `${items.length} on the roster. This screen shows ${visible.length}: the ${active.length} still in the batch${leftShown.length ? ` and ${leftShown.length} who left with a result already on record, kept read-only` : ""}.`
+        + (leftHidden.length ? ` ${leftHidden.length} who left with no result recorded ${leftHidden.length === 1 ? "is" : "are"} not shown - their record is on the Candidates tab.` : "")
+        + " A member who has left cannot be marked."
+      : "Everyone on the roster", test: () => true },
     { value: "Pass", label: "Pass", title: "Marked Pass", test: (i) => i.result?.result === "Pass" },
     { value: "Fail", label: "Fail", title: "Marked Fail", test: (i) => i.result?.result === "Fail" },
     { value: "Absent", label: "Absent", title: "Marked Absent", test: (i) => i.result?.result === "Absent" },
@@ -3383,17 +3445,32 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
     // two numbers, in a release whose own job was to stop that. The pill is not re-pointed at the
     // gate (a filter that hides a student you can still see on the card would be worse); it NAMES its
     // own population instead, so the two numbers read as the two different facts they are.
-    { value: "nocan", label: "No portal ID (all rows)", title: "Every row on this roster with no portal Candidate ID, or one the certification gate cannot read - including students who have left. The panel below counts only the ENROLLED students certification is actually held up on, so these two numbers can differ and both be right.", test: (i) => portalIdState(i.candidate?.sidh_candidate_id) !== "ok" },
+    // 2026-08-25: this title used to end "- including students who have left". That sentence was
+    // true when it was written and this change makes it FALSE: a student who left with no result is
+    // not on this screen at all any more. Editing it is not tidying. Four times in one day this
+    // project has shipped a true sentence sitting beside the code that contradicted it, each time
+    // written by the person who broke it, and nothing in the toolchain compares prose to behaviour -
+    // so the pin that holds this string is in check-user-copy, not here.
+    { value: "nocan", label: "No portal ID (shown rows)", title: "Every row shown on this screen with no portal Candidate ID, or one the certification gate cannot read. The panel below counts only the ENROLLED students certification is actually held up on, so these two numbers can differ and both be right.", test: (i) => portalIdState(i.candidate?.sidh_candidate_id) !== "ok" },
     { value: "nocert", label: "Passed, no certificate", title: "Passed but the certificate is not settled yet", test: (i) => i.result?.result === "Pass" && !isCertificateSettled(i.result?.certificate_status) },
     { value: "mock", label: "Mock: not qualified", title: "Sat the mock test and did not clear it", test: (i) => i.result?.mock_appeared === true && i.result?.mock_qualified !== true },
   ];
   const q = cardSearch.trim().toLowerCase();
   const matchesSearch = (i: any) => !q || [i.candidate?.name, i.candidate?.phone, i.candidate?.sidh_candidate_id, i.candidate?.apaar_id]
     .some((v) => String(v ?? "").toLowerCase().includes(q));
-  const shown = items.filter((i) => (CARD_FILTERS.find((f) => f.value === cardFilter)?.test ?? (() => true))(i) && matchesSearch(i));
+  const shown = visible.filter((i) => (CARD_FILTERS.find((f) => f.value === cardFilter)?.test ?? (() => true))(i) && matchesSearch(i));
   // QA-779: narrowing the list must put the pager back at the start, or the phone view opens on
   // whatever index the previous filter happened to be sitting at.
   useEffect(() => { setIdx(0); }, [cardFilter, cardSearch]);
+  // DELIBERATELY `items`, not `active` or `visible`, and this was a decision rather than an
+  // oversight. A candidate who passed and THEN left keeps their card here (that is what `visible`
+  // is for) precisely so the certificate they earned can still be attached to it - certificate
+  // fields route through upsertCandidateCertificate, which the new left_on refusal does not touch.
+  // Narrowing this line would drop them out of certReady/certDone, the expected-filenames list and
+  // the mapping drawer, and take the certificate door away with them.
+  // KNOWN DISAGREEMENT, left standing rather than silently resolved: certificationCompleteness on
+  // the server excludes dropped passes from the gate, so the "Issue certificates" offer here can
+  // count somebody the gate says is not blocking. That predates this change and is Umesh's call.
   const passes = items.filter((i) => i.result?.result === "Pass");
   // -108: the pre-flight numbers, in the words the panel says them in.
   const certReady = passes.filter((i) => !i.result?.certificate_file);
@@ -3425,7 +3502,13 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
   // The prompt is a courtesy, not the gate. The server refuses a Pass on a not-eligible candidate
   // without a reason whatever the screen does - which is the only arrangement that survives anything
   // that can POST. Cancelling here sends nothing at all, so a hesitant operator changes nothing.
-  const ResultButtons = ({ i }: any) => (
+  const ResultButtons = ({ i }: any) => {
+    // 2026-08-25: a member who has LEFT keeps the result already on record and takes no new one.
+    // The server refuses it now (upsertCandidateResult), so leaving these enabled would render a
+    // control whose only outcome is a 409 - the dead-control class this file has paid for five
+    // times (QA-712, QA-723, QA-754, QA-775, QA-785), twice on this very tab.
+    const readOnly = closed || hasLeft(i);
+    return (
     <div className="flex flex-wrap gap-1.5">
       {["Pass", "Fail", "Absent"].map((r) => {
         const on = i.result?.result === r;
@@ -3434,7 +3517,7 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
         const notEligible = hoursBy.get(String(i.member))?.verdict?.state === "not_eligible";
         const overriding = r === "Pass" && notEligible && i.result?.result !== "Pass";
         return (
-          <button key={r} disabled={closed}
+          <button key={r} disabled={readOnly}
             title={overriding ? `${i.candidate?.name ?? "This candidate"} did not meet the attendance requirement. Passing them is allowed, but you will be asked why, and it is recorded against them.` : undefined}
             onClick={() => {
               if (r === "Fail") return mark(i.member, { result: "Fail", failure_reason: i.result?.failure_reason || reasons[0]?.name || "Below cut-off" });
@@ -3453,16 +3536,24 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
         );
       })}
     </div>
-  );
+    );
+  };
 
   const Card = ({ i }: any) => {
     const h = hoursBy.get(String(i.member));
+    // Umesh's rule on this screen: a departed member is here ONLY because a result is already on
+    // record. Every ASSESSMENT control is therefore read-only for them. The CERTIFICATE controls
+    // below are deliberately NOT - certificate fields route through upsertCandidateCertificate, the
+    // left_on refusal does not touch that door, and being able to attach the certificate they earned
+    // is the reason their card was kept at all.
+    const leftOn = i.left_on;
+    const readOnly = closed || !!leftOn;
     return (
     <div className="space-y-2 rounded-xl border bg-white p-3">
       <div className="flex items-center justify-between">
         <div>
           <div className="font-medium">{i.candidate?.name}</div>
-          <div className="text-xs text-gray-500">{i.candidate?.phone}{i.left_on ? " · dropped" : ""}</div>
+          <div className="text-xs text-gray-500">{i.candidate?.phone}{leftOn ? ` · left ${fmtDate(leftOn)}${i.drop_reason ? ` (${i.drop_reason})` : ""}` : ""}</div>
         </div>
         <span className="flex items-center gap-1.5">
           {/* QA-070: the qualification verdict RIGHT where results are marked. */}
@@ -3499,7 +3590,7 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
         {[["mock_appeared", "Appeared"], ["mock_qualified", "Qualified"]].map(([f, label]) => {
           const on = i.result?.[f] === true;
           return (
-            <button key={f} disabled={closed}
+            <button key={f} disabled={readOnly}
               onClick={() => mark(i.member, { [f]: !on, ...(f === "mock_appeared" && on ? { mock_qualified: false } : {}) })}
               className={`rounded-full border px-2 py-0.5 font-medium disabled:opacity-50 ${on ? (f === "mock_qualified" ? "border-green-300 bg-green-50 text-green-700" : "border-blue-200 bg-blue-50 text-blue-700") : "border-gray-200 bg-white text-gray-500"}`}>
               {on ? "✓ " : ""}{label}
@@ -3507,7 +3598,7 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
           );
         })}
         {i.result?.mock_appeared === true && i.result?.mock_qualified !== true && (
-          <input placeholder="Why not qualified?" disabled={closed}
+          <input placeholder="Why not qualified?" disabled={readOnly}
             className="w-44 rounded-lg border border-gray-300 px-2 py-0.5"
             defaultValue={i.result?.mock_note ?? ""}
             onBlur={(e) => e.target.value !== String(i.result?.mock_note ?? "") && mark(i.member, { mock_note: e.target.value })} />
@@ -3526,7 +3617,7 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
             <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-900"
               title="Stored on this candidate, but certification cannot read it as a portal ID.">not readable</span>
           )}
-          <input placeholder="Candidate ID" disabled={closed}
+          <input placeholder="Candidate ID" disabled={readOnly}
             className={`w-40 rounded-lg border px-2 py-0.5 ${portalIdState(i.candidate?.sidh_candidate_id) === "ok" ? "border-gray-300" : "border-amber-300 bg-amber-50"}`}
             title="The portal Candidate ID from SIDH — the only key the certificate matcher joins on."
             defaultValue={i.candidate?.sidh_candidate_id ?? ""}
@@ -3545,7 +3636,7 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
               `mark()` on `closure.manage` — so a Trainer can fill one in, exactly as Umesh asked for
               the Candidate ID box ("Trainer bhi bhar sake") and repeated here ("admin, ops team, and
               those all who can push the batch data"). */}
-          <input placeholder="APAAR ID" disabled={closed} inputMode="numeric"
+          <input placeholder="APAAR ID" disabled={readOnly} inputMode="numeric"
             className={`w-40 rounded-lg border px-2 py-0.5 ${apaarIdState(i.candidate?.apaar_id) === "ok" ? "border-gray-300" : apaarIdState(i.candidate?.apaar_id) === "unreadable" ? "border-amber-300 bg-amber-50" : "border-gray-300"}`}
             title="The government APAAR ID — the student's 12-digit academic account number. Not the Aadhaar number: they are both 12 digits and are different numbers."
             defaultValue={i.candidate?.apaar_id ?? ""}
@@ -3553,6 +3644,14 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
               && mark(i.member, { apaar_id: e.target.value })} />
         </span>
       </div>
+      {/* Where it cannot act, it must say why rather than render nothing. A door that silently
+          vanishes teaches nobody anything; a door that refuses out loud does. */}
+      {leftOn && (
+        <div className="rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5 text-[11px] leading-4 text-gray-600">
+          Read-only — this student left the batch on {fmtDate(leftOn)}. Their result stays on record exactly as it is.
+          The certificate can still be attached.
+        </div>
+      )}
       <ResultButtons i={i} />
       {/* -224: the refusal for THIS candidate, on THIS card. A message in the panel header is right
           for a bulk action; a per-candidate mark that fails needs to name the person it failed for,
@@ -3567,12 +3666,12 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
         </div>
       )}
       <div className="flex flex-wrap items-center gap-2">
-        <input type="number" placeholder="Score" disabled={closed}
+        <input type="number" placeholder="Score" disabled={readOnly}
           className="w-24 rounded-lg border border-gray-300 px-2 py-1 text-sm"
           defaultValue={i.result?.score ?? ""}
           onBlur={(e) => e.target.value !== String(i.result?.score ?? "") && mark(i.member, { score: +e.target.value })} />
         {i.result?.result === "Fail" && (
-          <select className="rounded-lg border border-gray-300 px-2 py-1 text-sm" disabled={closed}
+          <select className="rounded-lg border border-gray-300 px-2 py-1 text-sm" disabled={readOnly}
             value={i.result?.failure_reason ?? ""}
             onChange={(e) => mark(i.member, { result: "Fail", failure_reason: e.target.value })}>
             {reasons.map((r) => <option key={r._id}>{r.name}</option>)}
@@ -3628,7 +3727,11 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
 
   return (
     <Section
-      title={`Candidate results — ${summary?.final ?? 0}/${active.length} marked${summary?.pending ? ` · ${summary.pending} pending` : ""}`}
+      // Both halves from the SAME set. `summary.final` is derived server-side over every result row
+      // on the batch INCLUDING members who have left, while the denominator has always been the
+      // active roster - so this read "18/54" with an 18 that silently counted departed people. The
+      // numbers on this screen are the whole subject of this unit; this one cannot stay mixed.
+      title={`Candidate results — ${active.filter((i) => hasRecordedResult(i.result)).length}/${active.length} marked${summary?.pending ? ` · ${summary.pending} pending` : ""}`}
       actions={<Btn small kind="ghost" onClick={() => setView(view === "mark" ? "review" : "mark")}>{view === "mark" ? "Review table" : "Mark results"}</Btn>}
     >
       {pending.length > 0 && (
@@ -3918,14 +4021,31 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
               at-a-glance summary - "45 me se kitne kya" without opening anything. */}
           <div className="mb-3 space-y-2">
             <FilterPills active={cardFilter} onChange={setCardFilter}
-              options={CARD_FILTERS.map((f) => ({ value: f.value, label: f.label, title: f.title, count: items.filter(f.test).length }))} />
+              options={CARD_FILTERS.map((f) => ({ value: f.value, label: f.label, title: f.title, count: visible.filter(f.test).length }))} />
+            {/* The two-population fact, in WORDS, under the strip whose numbers it explains.
+                `attMeta.left_count` a few lines down answers a different question - "how many left
+                the batch" - and that one belongs to the attendance partition. This one answers "of
+                those, how many can you see here and how many can you not", which is the question a
+                reader of THIS grid actually has. A-04's whole lesson was that a number cutting across
+                a partition has to say so. */}
+            {(leftHidden.length > 0 || leftShown.length > 0) && (
+              <p className="text-[11px] leading-4 text-gray-500">
+                {leftHidden.length > 0 && (
+                  <>{leftHidden.length} student{leftHidden.length === 1 ? "" : "s"} who left this batch {leftHidden.length === 1 ? "is" : "are"} not shown
+                    {" "}— no result was recorded, so their record lives on the Candidates tab.{" "}</>
+                )}
+                {leftShown.length > 0 && (
+                  <>{leftShown.length} card{leftShown.length === 1 ? "" : "s"} below belong{leftShown.length === 1 ? "s" : ""} to {leftShown.length === 1 ? "a student" : "students"} who left — kept because a result is on record, and read-only.</>
+                )}
+              </p>
+            )}
             <div className="flex flex-wrap items-center gap-2">
               <input className="w-64 rounded-lg border border-gray-300 px-2 py-1 text-sm"
                 placeholder="Search name, phone, Candidate ID or APAAR ID…"
                 value={cardSearch} onChange={(e) => setCardSearch(e.target.value)} />
               {(cardFilter !== "all" || q) && (
                 <>
-                  <span className="text-xs text-gray-500">showing {shown.length} of {items.length}</span>
+                  <span className="text-xs text-gray-500">showing {shown.length} of {visible.length}</span>
                   <button type="button" className="text-xs font-medium text-blue-700 hover:underline"
                     onClick={() => { setCardFilter("all"); setCardSearch(""); }}>clear</button>
                 </>
@@ -4025,7 +4145,7 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
                           <option key={c.member} value={c.member}>
                             {c.name}{c.portal_id ? ` · ${c.portal_id}` : ""}{c.phone ? ` · ${c.phone}` : ""}
                             {c.result === "Pass" ? (c.has_certificate ? " · Pass, has one" : " · Pass") : c.result ? ` · ${c.result}` : " · not marked"}
-                            {c.left_on ? " · dropped" : ""}
+                            {c.left_on ? ` · left ${fmtDate(c.left_on)}` : ""}
                           </option>
                         ))}
                       </select>

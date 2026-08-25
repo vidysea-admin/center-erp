@@ -1426,9 +1426,46 @@ const mem4 = (await req("POST", `/api/batches/${batch2._id}/members`, { candidat
 // Complete the enrollment first — the CEO's Dropout is "enrolled but did not complete the
 // training", so the fixture must actually enroll before leaving (also stamps enrolled_at).
 await req("PATCH", `/api/members/${mem4._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+// -250: mint the student's attendance link BEFORE the drop, so the pin below can read the SAME
+// token afterwards. This is the whole point - minting already filters { batch, left_on: null }, so
+// a link minted AFTER a drop was never the bug. The bug is the link the student already has.
+const attTok = (await req("POST", "/api/public-tokens", { purpose: "attendance", batch: batch2._id }, 201))
+  .data.items.find((t) => String(t.batch_member?._id ?? t.batch_member) === String(mem4._id));
+ok("-250: an attendance link exists for the member before they leave", !!attTok?.token, JSON.stringify(attTok ?? null).slice(0, 120));
+{
+  const live = await req("GET", `/api/public/attendance/${attTok.token}`, undefined, 200);
+  ok("-250 control: while they are ON the batch the link serves a live verdict",
+    typeof live.data?.eligible === "boolean" && typeof live.data?.required_hours === "number",
+    JSON.stringify(live.data ?? {}).slice(0, 200));
+}
 await req("POST", `/api/members/${mem4._id}/drop`, { left_on: today }, 400); // Rule 25: reason required
 await req("POST", `/api/members/${mem4._id}/drop`, { left_on: "2030-01-01", drop_reason: "Other" }, 400); // future date
 await req("POST", `/api/members/${mem4._id}/drop`, { left_on: today, drop_reason: "Other" }, 200);
+
+// ---- -250 (Umesh, 25/08): the link a departed student is still holding ----
+// "aur jagah se remove ho jaaye uske traces." dropMemberChecked does not touch PublicToken and the
+// token lookup never asked about left_on, so every attendance link handed out before a drop went on
+// serving that student a LIVE eligibility verdict for a course they had left.
+//
+// The token is deliberately NOT killed. Switching it off 404s, and the page renders a 404 as "this
+// link is not valid or has expired" - and a dead link explains nothing to whoever is holding it,
+// which is REQ-393's own lesson. So 200-not-404 is asserted EXPLICITLY: it is the half of this fix
+// that a careless later change would quietly undo.
+//
+// The FIELDS are asserted, not the status. `status !== 200` would be satisfied by a 500.
+{
+  const after = await req("GET", `/api/public/attendance/${attTok.token}`, undefined, 200);
+  const d = after.data ?? {};
+  ok("-250: the departed student's link still answers, it is not dead", after.status === 200, `got ${after.status}`);
+  ok("-250: and it tells them the date they left", !!d.left_on, JSON.stringify(d).slice(0, 200));
+  ok("-250: their own name and batch are still there, so the page is visibly theirs",
+    !!d.candidate && !!d.batch, JSON.stringify(d).slice(0, 200));
+  const leaked = ["eligible", "required_hours", "attended_hours", "days_held", "govt", "days", "result"]
+    .filter((k) => d[k] !== undefined);
+  ok("-250: no attendance, hours, eligibility or exam data is served to them any more",
+    leaked.length === 0, "still present: " + JSON.stringify(leaked));
+}
+
 const cand4b = (await req("GET", `/api/candidates/${cand4._id}`)).data.item;
 ok("Rule 21: dropped candidate lifecycle", cand4b.lifecycle_status === "Dropped", cand4b.lifecycle_status);
 // CEO 14/08 [28:12] "the word is drop out": a Dropped candidate who HAD enrolled keeps the
@@ -4090,6 +4127,22 @@ ok("…with the contact details an approver needs", !!queued && queued.phone ===
 const verRes = await fetch(BASE + "/api/public/version");
 const verBody = await verRes.json().catch(() => ({}));
 ok("version endpoint is public and names the release", verRes.status === 200 && !!verBody.release, `status=${verRes.status} ${JSON.stringify(verBody).slice(0, 80)}`);
+// -249 (QA-1202): `release` is HAND-BUMPED, so it names what the last editor of version.ts intended,
+// not what is running. On 2026-08-25 production served four commits past its own marker and the
+// string `-246` truthfully named two different trees in one afternoon - one where QA-1145 was a
+// live defect and one where it was fixed - so every validated_on_release stamp in that window is
+// unfalsifiable. `build_id` comes from .next/BUILD_ID, which Next rewrites on EVERY build, so two
+// responses sharing a `release` and differing in `build_id` are two different trees.
+// Strict !== null: on the pre-fix build this field does not exist at all, so this pin goes red there.
+ok("-249 (QA-1202): the version endpoint identifies the BUILD, not just the hand-bumped release name",
+  verBody.build_id !== null && verBody.build_id !== undefined && String(verBody.build_id).length > 0,
+  `build_id=${JSON.stringify(verBody.build_id)} release=${JSON.stringify(verBody.release)}`);
+// The commit stays null until CodeBuild passes --build-arg GIT_COMMIT (a devops action, and the
+// Dockerfile now declares the ARG for it). Asserting the KEY is present keeps the contract visible
+// without pretending the pipeline is wired - and turns red if someone deletes the field.
+ok("-249 (QA-1202): ...and still carries the commit slot for when CodeBuild passes the SHA",
+  Object.prototype.hasOwnProperty.call(verBody, "commit"),
+  `keys=${Object.keys(verBody).join(",")}`);
 // QA-099 (15/08): the app sends security headers now — frame-deny, sniff-deny, HSTS.
 ok("QA-099: X-Frame-Options DENY", verRes.headers.get("x-frame-options") === "DENY", String(verRes.headers.get("x-frame-options")));
 ok("QA-099: nosniff", verRes.headers.get("x-content-type-options") === "nosniff");
