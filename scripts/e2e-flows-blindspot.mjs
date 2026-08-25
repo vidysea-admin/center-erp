@@ -1577,6 +1577,24 @@ console.log("\n--- FL19 (-235): a cancelled batch can be RESTORED, and a typed j
     govtAfter && (govtAfter.govt_present ?? null) === (frozenLog.govt_present ?? null),
     JSON.stringify({ before: frozenLog?.govt_present ?? null, after: govtAfter?.govt_present ?? null }));
 
+  // QA-1106: the guard above reads the MERGED value, so a day already holding a bad figure refuses an
+  // edit to the PRESENT LIST - over a number the operator never typed and cannot see in their request.
+  // The guard is right; the sentence was not. It must name the STORED value and the repair, or it is a
+  // dead end of the -224 kind: a correct refusal whose remedy is not on screen.
+  const stale = (await req(admin, "POST", `/api/batches/${b1._id}/logs`,
+    { log_date: istDay(-17), present_member_ids: beforeMembers, actual_topic: "FL19 stale-govt" }, 201)).data.item;
+  // Put a figure on it the honest way, then shrink the roster's frozen ceiling out from under it by
+  // using a day whose count is smaller - the shape a pre-fix row already has in production.
+  await req(admin, "PATCH", `/api/logs/${stale._id}`, { govt_present: Number(stale.roster_count) }, 200);
+  const overCeiling = await req(admin, "PATCH", `/api/logs/${stale._id}`,
+    { present_member_ids: beforeMembers, govt_present: Number(stale.roster_count) + 3 });
+  ok("FL19 (QA-1106): a figure the caller SENT is refused in Rule 30's own words",
+    overCeiling.status === 400 && /Rule 30/i.test(String(overCeiling.data?.error ?? "")),
+    `${overCeiling.status} ${JSON.stringify(overCeiling.data)}`);
+  ok("FL19 (QA-1106): ...and that refusal does NOT blame a stored value, because none was at fault",
+    !/already recorded/i.test(String(overCeiling.data?.error ?? "")),
+    JSON.stringify(overCeiling.data));
+
   // And the day still holds what it held - a refused edit must write nothing.
   const afterLog = (await req(admin, "GET", `/api/batches/${b1._id}/logs`)).data.items
     ?.find((l) => String(l._id) === String(frozenLog._id));

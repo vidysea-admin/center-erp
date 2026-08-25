@@ -79,12 +79,27 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
     // (-200%)". 1.5 stored the same way. Both halves live in the `else if` below and only one made the
     // journey. That is the fourth time today a guard was written down and then walked past, and the
     // third time it was me. Both branches now ask the same three questions, in the same order.
-    const gWith = (patch.govt_present as number | null | undefined) ?? log.govt_present;
+    // QA-1106: the merged read is deliberate — `validateDailyLog` above judges the merged value too, so
+    // guarding only what was SENT would let this route accept a day the validator would reject. But the
+    // consequence I had not thought through: a log already holding a bad figure — one this very bug
+    // wrote before it was fixed — then refuses an edit to the PRESENT LIST, over a number the operator
+    // did not type and cannot see in their own request. "Cannot exceed" about someone else's mistake is
+    // the hour-costing kind of refusal. So the guard stays, and the message changes: when the offending
+    // value is the STORED one, say that, and name the repair.
+    const gSent = patch.govt_present as number | null | undefined;
+    const gWith = gSent ?? log.govt_present;
     if (gWith !== undefined && gWith !== null) {
       const g = Number(gWith);
-      if (!Number.isInteger(g) || g < 0) throw new HttpError(400, "Rule 30: government attendance must be a whole number of zero or more.");
+      const stored = gSent === undefined || gSent === null;
+      const origin = stored
+        ? `The government attendance already recorded for this day (${g}) `
+        : `Rule 30: government attendance (${g}) `;
+      const repair = stored ? " Correct that figure in the same edit to save this day." : "";
+      if (!Number.isInteger(g) || g < 0) {
+        throw new HttpError(400, `${origin}must be a whole number of zero or more.${repair}`);
+      }
       if (g > log.roster_count) {
-        throw new HttpError(400, `Rule 30: government attendance (${g}) cannot exceed the ${log.roster_count} on the roster that day.`);
+        throw new HttpError(400, `${origin}cannot exceed the ${log.roster_count} on the roster that day.${repair}`);
       }
     }
     // Rule 28: roster_count stays frozen — deliberately NOT recomputed
