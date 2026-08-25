@@ -134,17 +134,37 @@ export default function PublicRegisterPage({ params }: { params: Promise<{ token
               that is NOT optional in meaning, because it decides whether the student joins this batch
               at all. Found by looking at the live screenshot, not by reading the diff. It belongs with
               Programme: those two together are what the student is signing up for. */}
-          <F label="Which batch are you interested in? *">
-            <select className={inputCls} value={form.batch_interest ?? "Current"} onChange={(e) => set("batch_interest", e.target.value)}>
-              <option value="Current">The current / upcoming batch</option>
-              <option value="Future">A future batch — I am not available right now</option>
-            </select>
-            {form.batch_interest === "Future" && (
-              <span className="mt-1 block text-xs text-gray-600">
-                Your details are saved and the centre will contact you when a later batch opens. You will not be added to the current one.
-              </span>
-            )}
-          </F>
+          {/* A-03 (24-Aug sheet, Shiv, spoken): "Batch four ke liye main candidate ko
+              self-registration ki link bhej raha hoon... wo direct batch four mein hi assign ho jaana
+              chahiye." When the link names a batch the student is not choosing an intake, so the
+              question is REPLACED by the answer rather than hidden — the same courtesy the programme
+              above already gets, and for the same reason: nobody should be put on a government roster
+              for a batch they were never shown. */}
+          {meta.batch_fixed ? (
+            <F label="Batch">
+              <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-[15px] text-gray-800">
+                {meta.batch?.code ?? "—"}
+                {meta.batch?.planned_start && (
+                  <span className="ml-2 text-sm text-gray-500">
+                    starts {new Date(meta.batch.planned_start).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+                  </span>
+                )}
+              </div>
+              <span className="mt-1 block text-xs text-gray-500">Set by the link you opened — you will be added to this batch.</span>
+            </F>
+          ) : (
+            <F label="Which batch are you interested in? *">
+              <select className={inputCls} value={form.batch_interest ?? "Current"} onChange={(e) => set("batch_interest", e.target.value)}>
+                <option value="Current">The current / upcoming batch</option>
+                <option value="Future">A future batch — I am not available right now</option>
+              </select>
+              {form.batch_interest === "Future" && (
+                <span className="mt-1 block text-xs text-gray-600">
+                  Your details are saved and the centre will contact you when a later batch opens. You will not be added to the current one.
+                </span>
+              )}
+            </F>
+          )}
 
           <F label="Gender">
             <select className={inputCls} value={form.gender ?? ""} onChange={(e) => set("gender", e.target.value)}>

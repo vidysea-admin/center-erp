@@ -11,7 +11,7 @@ import { personLabel, personList, personSeparator } from "@/lib/person";
 import { normalizeCan, storedCanIsUnreadable, apaarError, storedApaarIsUnreadable } from "@/lib/validate";
 import { trainerSelectGroups } from "@/lib/trainer-select";
 import { slotHoursPerDay } from "@/lib/slot-rules";
-import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthBanner, NameCell, Notice, Section, Tabs, inputCls, statusLabel } from "@/components/ui";
+import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthBanner, NameCell, Notice, Section, ShareLinkPanel, Tabs, inputCls, statusLabel } from "@/components/ui";
 import { Activity } from "@/components/activity";
 import { usePerms } from "@/components/shell";
 import { compressImage, flushQueue, fmtBytes, getLastUploadInfo, getQueue, pickRecorderMime, uploadWithRetry, videoKnobs, type VideoKnobs } from "@/lib/upload";
@@ -1017,10 +1017,26 @@ function Roster({ batchId, batch, error, setError, onChanged }: any) {
   const [dropForm, setDropForm] = useState<any>({});
   const [dropReasons, setDropReasons] = useState<any[]>([]);
   const [attLinks, setAttLinks] = useState<any[] | null>(null);
+  // A-03
+  const [regLink, setRegLink] = useState<string | null>(null);
+  const [regBusy, setRegBusy] = useState(false);
   const [attBusy, setAttBusy] = useState(false);
 
   // 2026-08-13 (Manish): "bacche baar-baar puchte hain sir mera kitna ho gaya attendance" —
   // one capability link per active member, student sees their own days/hours/eligibility.
+  // A-03: the batch decides the centre AND the programme, so neither is asked for here - the mint
+  // route reads both off the batch. A refusal (batch finished, or at another centre) surfaces on the
+  // page rather than being swallowed, because a link that silently never appeared is the shape this
+  // screen has produced too many times.
+  async function mintBatchRegLink() {
+    setRegBusy(true);
+    try {
+      const res = await api("/api/public-tokens", { method: "POST", json: { purpose: "register", location: batch?.location?._id ?? batch?.location, batch: batchId } });
+      setRegLink(res.link ?? res.url ?? (res.item?.token ? `${window.location.origin}/erp/p/register/${res.item.token}` : null));
+    } catch (e: any) { setError(e.message); }
+    setRegBusy(false);
+  }
+
   async function generateAttendanceLinks() {
     setAttBusy(true);
     try {
@@ -1091,8 +1107,22 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
   const active = members.filter((m) => !m.left_on);
   return (
     <div className="space-y-4">
+      {/* A-03: the link, once made. Shown with the batch named in the label so it can never be
+          confused with the centre-wide intake link on the Candidates page - copying the wrong one is
+          exactly how every self-registered candidate ended up on the pool instead of a roster. */}
+      {regLink && (
+        <ShareLinkPanel label={`Registration link for ${batch?.code ?? "this batch"}`} link={regLink}
+          hint="Whoever fills this form is registered AND added to this batch. The centre-wide link on the Candidates page does not do that — it leaves them on the pool."
+          onDismiss={() => setRegLink(null)} />
+      )}
       <Section title={`Roster (${active.length} active / ${members.length} total)`} actions={
         <div className="flex items-center gap-2">
+          {/* A-03 (24-Aug sheet, Shiv, spoken): "Batch four ke liye main candidate ko
+              self-registration ki link bhej raha hoon... wo direct batch four mein hi assign ho jaana
+              chahiye." It is minted HERE, beside the roster it fills, and not on the Candidates page
+              where the centre-wide link lives - because the two are different things and the whole
+              defect was that only one of them existed. The labels say which is which. */}
+          <Btn small kind="ghost" disabled={regBusy} onClick={mintBatchRegLink}>{regBusy ? "Making…" : "Registration link"}</Btn>
           <Btn small kind="ghost" disabled={attBusy} onClick={generateAttendanceLinks}>Attendance links</Btn>
           <Btn small onClick={() => setShowPool(true)}>Add from pool</Btn>
         </div>

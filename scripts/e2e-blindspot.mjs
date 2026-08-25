@@ -216,6 +216,83 @@ ok("public registration works (location Not Started — advance pooling)", pubRe
 const shortPhone = await fetch(BASE + `/api/public/register/${regTok.token}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "Pub short", phone: "123456789" }) });
 ok("public registration rejects <10-digit phone", shortPhone.status === 400, `status=${shortPhone.status}`);
 
+// ---- A-03 (24-Aug issues sheet, Shiv, SPOKEN): the link must be able to carry a BATCH ----
+// "Batch four ke liye main candidate ko self-registration ki link bhej raha hoon... aur maine usko
+// yahan se link copy karke jaise hi send kiya hai, toh phir wo direct batch four mein hi assign ho
+// jaana chahiye."
+// Before this, the register purpose never read the token's `batch` field (which has existed since
+// the record was written, used only by plan and attendance links), so every self-registered
+// candidate was created lifecycle_status "Unassigned" and had to be found and enrolled by hand -
+// which is why AVP-GURU-RPLAVP-DST-04 sat at 0/41 enrolled on live.
+{
+  const aBatch = (await req(admin, "POST", "/api/batches",
+    { location: loc._id, program: prog._id, planned_start: "2027-11-01", target_size: 2 })).data.item;
+
+  const bTokRes = await req(admin, "POST", "/api/public-tokens",
+    { purpose: "register", location: loc._id, batch: aBatch._id });
+  ok("A-03: a registration link can be minted against a BATCH, and does not ask for the programme twice",
+    bTokRes.status === 201 && !!bTokRes.data.item?.token && String(bTokRes.data.item.batch) === String(aBatch._id)
+      && String(bTokRes.data.item.program) === String(prog._id),
+    JSON.stringify({ s: bTokRes.status, batch: bTokRes.data.item?.batch, program: bTokRes.data.item?.program }));
+  // If the mint refuses, every assertion below is about a token that does not exist. On the pre-fix
+  // build that is exactly what happens (400: the route demanded a programme and had no idea what a
+  // batch was), and an unguarded block CRASHED the whole suite there. A regression should read as a
+  // failure, not kill the run and take 80 unrelated assertions with it.
+  const bTok = bTokRes.data.item?.token;
+  if (!bTok) {
+    ok("A-03: the public form is TOLD which batch (not run - the link could not be minted)", false, JSON.stringify(bTokRes.data));
+    ok("A-03: registering through a batch link SAYS which batch they joined (not run)", false, "no token");
+    ok("A-03: and they are actually ON that batch's roster (not run)", false, "no token");
+    ok("A-03: a batch-pinned link records batch_interest Current (not run)", false, "no token");
+    ok("A-03: a centre-wide link is untouched (not run)", false, "no token");
+    ok("A-03: a finished batch refuses a new registration link (not run)", false, "no token");
+  } else {
+
+  const meta = await (await fetch(BASE + `/api/public/register/${bTok}`)).json();
+  ok("A-03: the public form is TOLD which batch, and that it is pinned - so it can show it instead of asking",
+    meta.batch_fixed === true && meta.batch?.code === aBatch.code,
+    JSON.stringify({ batch_fixed: meta.batch_fixed, batch: meta.batch }));
+
+  const ph = "7391" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0");
+  const reg = await fetch(BASE + `/api/public/register/${bTok}`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "A03 Joiner " + stamp, phone: ph, email: "a03" + stamp + "@test.local" }) });
+  const regBody = await reg.json();
+  ok("A-03: registering through a batch link SAYS which batch they joined",
+    reg.status === 201 && regBody.batch === aBatch.code, JSON.stringify({ s: reg.status, batch: regBody.batch }));
+
+  // THE WHOLE POINT: they are ON the roster, not on the pool.
+  const roster = (await req(admin, "GET", `/api/batches/${aBatch._id}/members`)).data.items ?? [];
+  ok("A-03: and they are actually ON that batch's roster - which is the entire ask",
+    roster.some((m) => m.candidate?.phone === ph || String(m.candidate?.name ?? "").startsWith("A03 Joiner")),
+    JSON.stringify({ roster: roster.length, names: roster.map((m) => m.candidate?.name) }));
+
+  // A link that names a batch has already settled the intake, so the current-vs-future question is
+  // not asked - and must not be answerable, because "Future" would make addMemberChecked refuse.
+  const cand = roster.find((m) => String(m.candidate?.name ?? "").startsWith("A03 Joiner"))?.candidate;
+  const candRow = cand ? (await req(admin, "GET", `/api/candidates/${cand._id}`)).data.item : null;
+  ok("A-03: a batch-pinned link records batch_interest Current, never Future - or the enrolment it just did could not have happened",
+    candRow?.batch_interest === "Current", JSON.stringify({ batch_interest: candRow?.batch_interest }));
+
+  // AND THE OLD LINKS MUST NOT CHANGE. A link already sitting in somebody's WhatsApp thread keeps
+  // behaving exactly as it did - the REQ-393 lesson: a dead link explains nothing to whoever holds it.
+  const centreTok = (await req(admin, "POST", "/api/public-tokens",
+    { purpose: "register", location: loc._id, program: prog._id })).data.item;
+  const centreMeta = await (await fetch(BASE + `/api/public/register/${centreTok.token}`)).json();
+  ok("A-03: a centre-wide link (no batch) is untouched - not pinned, and still asks the current-vs-future question",
+    centreMeta.batch_fixed === false && centreMeta.batch === null,
+    JSON.stringify({ batch_fixed: centreMeta.batch_fixed, batch: centreMeta.batch }));
+
+  // A link cannot be made for a batch nobody can join, and the refusal names it.
+  await req(admin, "POST", `/api/batches/${aBatch._id}/transition`, { target: "Cancelled", reason: "A-03 pin" }, 200);
+  const deadTok = await req(admin, "POST", "/api/public-tokens",
+    { purpose: "register", location: loc._id, batch: aBatch._id }, 409);
+  ok("A-03: a finished batch refuses a new registration link, and the refusal NAMES the batch",
+    deadTok.status === 409 && String(deadTok.data?.error ?? "").includes(aBatch.code),
+    JSON.stringify({ s: deadTok.status, e: deadTok.data?.error }));
+  }
+}
+
 // ---- QA-869 (Umesh 2026-08-24): the self-registration link pins its PROGRAMME, not just its centre ----
 // "it should confirm location and program too jisse jo candidate register krega uska location and
 // program pre fixed rhegaa. vo khud nhi select krega."

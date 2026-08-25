@@ -74,6 +74,20 @@ export const POST = apiHandler(async (req: NextRequest) => {
     // token still renders its picker, because rotating them off would kill a link somebody is holding
     // right now to punish a defect that was never theirs (the REQ-393 lesson: a dead link explains
     // nothing to the person holding it).
+    // A-03 (24-Aug sheet, Shiv, spoken): a link may now also name a BATCH, and when it does the
+    // programme is not asked for twice - the batch already has one, and letting the caller send a
+    // different one would create a link whose two halves disagree. The batch decides.
+    if (body.batch) {
+      const b = await Batch.findById(String(body.batch)).select("code status location program target_size").lean<any>();
+      if (!b) throw new HttpError(404, "That batch no longer exists — pick another one.");
+      if (String(b.location) !== String(body.location)) {
+        throw new HttpError(409, `${b.code} belongs to a different centre. A link cannot register candidates into a batch at another centre.`);
+      }
+      if (["Completed", "Cancelled", "Closed"].includes(b.status)) {
+        throw new HttpError(409, `${b.code} is ${b.status} — a registration link cannot be created for a batch nobody can join.`);
+      }
+      body.program = String(b.program);
+    }
     if (!body.program) {
       throw new HttpError(400, "Choose the programme this link registers candidates into. The candidate does not pick their own — the link decides it.");
     }
@@ -89,11 +103,19 @@ export const POST = apiHandler(async (req: NextRequest) => {
     const doc = await PublicToken.create({
       token: crypto.randomBytes(16).toString("hex"),
       purpose, location: body.location, program: body.program,
+      // A-03: the field has existed on this record since it was written; only the register purpose
+      // never set it. Absent means exactly what it meant before - a centre-wide intake link - and
+      // every link already in a WhatsApp thread keeps behaving the way it always did.
+      ...(body.batch ? { batch: body.batch } : {}),
       created_by: user.id,
     });
     // The audit row names BOTH, because "register link" alone cannot answer the only question anybody
     // asks of it later: which centre and which job role did this link put people into.
-    await audit({ entity: "PublicToken", entityId: doc._id, field: "create", newValue: `register link (${loc?.name ?? "centre"} / ${prog.name})`, actor: user.id });
+    // A-03: and the BATCH, when there is one — otherwise the trail cannot answer the question this
+    // link now decides, which is not only "which centre and job role" but "whose roster".
+    const batchCode = body.batch ? (await Batch.findById(String(body.batch)).select("code").lean<any>())?.code : null;
+    await audit({ entity: "PublicToken", entityId: doc._id, field: "create", actor: user.id,
+      newValue: `register link (${loc?.name ?? "centre"} / ${prog.name}${batchCode ? ` / batch ${batchCode}` : " / centre-wide, no batch"})` });
     return NextResponse.json({ item: doc }, { status: 201 });
   }
 
