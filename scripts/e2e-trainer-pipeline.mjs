@@ -98,7 +98,33 @@ ok("re-uploading a document replaces it instead of stacking duplicates",
 }
 
 await req("POST", T, { target: "Documents Completed" }, 200);
+
+// ---- QA-1284: the Locations grid's own "Nominated to NSDC" figure ----
+// Client, 2026-08-25, on Basti: "NSDC ko toh yeh TOT in progress hai ... toh apne ko is wale me
+// locations me Basti wale me apne ko dikhni chahiye Nominated. Yeh update nahi ho raha sir."
+// Until this release that column carried ONLY the number typed into the client's workbook, so a
+// nomination we had actually sent moved nothing. The assertion is a BEFORE/AFTER across one
+// transition, because a bare "it is 1" would also pass if the field counted the wrong thing.
+const nsdcOf = async () => {
+  const rows = (await req("GET", "/api/locations?limit=2000")).data.items ?? [];
+  const jr = (rows.find((l) => String(l._id) === String(loc._id))?.job_roles ?? [])
+    .find((j) => String(j.program_id) === String(prog._id));
+  return jr ?? {};
+};
+const beforeNsdc = await nsdcOf();
+ok("QA-1284: a trainer at Documents Completed is nominated to the centre but has NOT reached NSDC",
+  (beforeNsdc.trainers_nominated ?? 0) === 1 && (beforeNsdc.trainers_nsdc ?? 0) === 0,
+  JSON.stringify({ nominated: beforeNsdc.trainers_nominated, nsdc: beforeNsdc.trainers_nsdc }));
+
 await req("POST", T, { target: "Sent to NSDC" }, 200);
+
+const afterNsdc = await nsdcOf();
+ok("QA-1284: sending that same trainer to NSDC moves the centre's own Nominated-to-NSDC figure",
+  (afterNsdc.trainers_nsdc ?? 0) === 1,
+  JSON.stringify({ nominated: afterNsdc.trainers_nominated, nsdc: afterNsdc.trainers_nsdc }));
+// QA-1283's sibling: the grid also needs the in-pipeline figure it was already computing and dropping.
+ok("QA-1284: the in-pipeline figure reaches the grid too",
+  (afterNsdc.trainers_in_pipeline ?? 0) >= 1, JSON.stringify({ in_pipeline: afterNsdc.trainers_in_pipeline }));
 
 // ---- the NSDC round-trip: rejection must carry remarks, and must be recoverable ----
 await req("POST", T, { target: "NSDC Rejected" }, 400); // no remarks

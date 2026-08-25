@@ -3326,6 +3326,23 @@ export function courseIsFinished(batch: any, portalWorkingDays: number | null | 
 export const NOMINATED_STATES = ["Documents Completed", "Sent to NSDC", "NSDC Approved", "NSDC Rejected",
   "TOT Payment Done", "TOT Scheduled", "TOT In Progress", "Certified"];
 
+// QA-1284 (client call 2026-08-25): "jaise NSDC wale mein aa gaye, Nominated to NSDC to wo aa gaye
+// yahan pe." The client's workbook column S counts nominations that actually REACHED NSDC, which is
+// a narrower question than NOMINATED_STATES answers — a trainer whose documents are complete has
+// been nominated to a centre but has not been put in front of NSDC.
+//
+// DERIVED from NOMINATED_STATES rather than hand-listed, and that is the whole point: the word
+// "nominated" is already spelled three different ways in this codebase (this constant, the buckets
+// the hiring board used to keep, and api/home/route.ts's "any trainer carrying a nominated_for_
+// program", which counts Fresh Leads). A fourth hand-written list is exactly how section 3 of
+// ARCHITECTURE.md reproduces. Writing it as a filter states the ONE difference between the two sets
+// in a form that cannot drift: everything nominated, except the stage before submission.
+//
+// "NSDC Rejected" IS included, deliberately — a rejection is a nomination that happened and came
+// back, and the client's sheet counts it as sent. Excluding it would make our figure disagree with
+// theirs for a reason neither column explains.
+export const NSDC_REACHED_STATES = NOMINATED_STATES.filter((s) => s !== "Documents Completed");
+
 // QA-1262 (client call 2026-08-25). The client put a trainer on a Basti batch, the nomination had
 // already gone to NSDC, and the Locations grid still read "TRAINERS (OURS, LIVE) 0 / 2":
 //
@@ -3359,7 +3376,7 @@ export async function trainerTiesFor(locIds: unknown[], progIds?: unknown[]) {
   // had its own single-link aggregation to get them. Two aggregations answering "who is tied to this
   // centre x job role" is exactly the second copy this function was extracted to remove, so the
   // names come from here or the migration is only half done.
-  const out = new Map<string, { nominated: number; certified: number; in_pipeline: number;
+  const out = new Map<string, { nominated: number; certified: number; nsdc: number; in_pipeline: number;
     in_pipeline_nominated: number; trainers: { _id: string; name: string; stage: string }[] }>();
   if (!locIds.length) return out;
 
@@ -3416,10 +3433,13 @@ export async function trainerTiesFor(locIds: unknown[], progIds?: unknown[]) {
   for (const b of batches) add(b.location, b.program, String(b.trainer), statusById.get(String(b.trainer)));
 
   for (const [k, trainers] of seen) {
-    let nominated = 0, certified = 0, in_pipeline = 0, in_pipeline_nominated = 0;
+    let nominated = 0, certified = 0, in_pipeline = 0, in_pipeline_nominated = 0, nsdc = 0;
     const people: { _id: string; name: string; stage: string }[] = [];
     for (const [id, st] of trainers) {
       if ((NOMINATED_STATES as readonly string[]).includes(st)) nominated++;
+      // QA-1284: our own answer to the client's "Nominated to NSDC" column, counted from the
+      // trainer's real stage rather than read out of their workbook.
+      if ((NSDC_REACHED_STATES as readonly string[]).includes(st)) nsdc++;
       if (st === "Certified") certified++;
       if (st !== "Certified" && st !== "Dropped") {
         in_pipeline++;
@@ -3428,14 +3448,14 @@ export async function trainerTiesFor(locIds: unknown[], progIds?: unknown[]) {
       people.push({ _id: id, name: nameById.get(id) ?? "", stage: st });
     }
     people.sort((a, b) => a.name.localeCompare(b.name));
-    out.set(k, { nominated, certified, in_pipeline, in_pipeline_nominated, trainers: people });
+    out.set(k, { nominated, certified, nsdc, in_pipeline, in_pipeline_nominated, trainers: people });
   }
   return out;
 }
 
 export async function trainerCountsFor(locationId: unknown, programId: unknown) {
   const ties = await trainerTiesFor([locationId], [programId]);
-  return ties.get(`${String(locationId)}|${String(programId)}`) ?? { nominated: 0, certified: 0, in_pipeline: 0, in_pipeline_nominated: 0, trainers: [] };
+  return ties.get(`${String(locationId)}|${String(programId)}`) ?? { nominated: 0, certified: 0, nsdc: 0, in_pipeline: 0, in_pipeline_nominated: 0, trainers: [] };
 }
 
 // Rule T8 - can this centre x job role actually start a batch? The three-way mapping Manish

@@ -144,7 +144,22 @@ export const RELEASE_NOTE_CURRENT =
   "screen showed that a decision had been taken. That centre asks for a trainer again, and if it "  +
   "ever declines to, it now says why. And trainers whose batch at a centre has already finished no "  +
   "longer count towards that centre's live trainer numbers; the column reports who is there now, "  +
-  "not who has been.";
+  "not who has been. "  +
+  "Three more from the same call. The government portal's own batch number can now be typed in "  +
+  "when the batch is created. The field existed and the screen to edit it existed, but the form "  +
+  "that creates a batch never offered it, so the number had to be added afterwards from a "  +
+  "different screen - and nothing asked for it until months later, when the batch was closing. "  +
+  "If the same portal number is already recorded against another batch, saving still works and "  +
+  "the screen names the batch that already has it, rather than refusing: the portal is not ours "  +
+  "to argue with, and a refusal would make a real situation unrecordable. "  +
+  "On the Locations screen, the total underneath the live trainer column read zero no matter what "  +
+  "the column above it said - it was adding up a figure that was never sent to it. It adds up the "  +
+  "one on the screen now. And the two nomination columns on that screen carried only the numbers "  +
+  "typed into the client's own workbook, with nothing of ours beside them, so a nomination this "  +
+  "system had actually sent changed nothing there. Each now shows our own live figure under the "  +
+  "sheet's, counted from where each trainer has actually reached - and a trainer who has been put "  +
+  "in front of the government body counts as having been, whether they were approved or turned "  +
+  "down, which is how the client's own sheet counts it.";
 
 const RELEASE_NOTE_ARCHIVE_248 =
   "-248 is mostly about a secret that was readable from the wrong side, and about one question "  +

@@ -144,9 +144,21 @@ function LocationsInner() {
             ["Total target", sum((jr) => jr.approved_target)],
             ["Trainer required", sum((jr) => jr.trainers_required)],
             ["Nomination received (sheet)", sum((jr) => jr.nominations_received_reported)],
+            // QA-1284: ours beside the sheet's, in the totals strip as well as in the cells -
+            // a footer that only ever showed the client's own numbers could not show a gap closing.
+            ["Nomination received (ours)", sum((jr) => jr.trainers_nominated)],
             ["Nominated to NSDC (sheet)", sum((jr) => jr.nominated_nsdc_reported)],
+            ["Nominated to NSDC (ours)", sum((jr) => jr.trainers_nsdc)],
             ["Trainer certified (sheet)", sum((jr) => jr.trainers_certified_reported)],
-            ["Trainers (ours, live)", sum((jr) => jr.trainers_ours)],
+            // QA-1283: this summed `jr.trainers_ours`, a field NO API has ever sent — the payload
+            // carries `trainers_certified` / `trainers_nominated` (api/locations/route.ts). So
+            // `Number(undefined) || 0` made this cell read 0 for every dataset that has ever
+            // existed, directly under a column that was showing the right number. The column's
+            // `key` happens to be the string "trainers_ours" and its render reads
+            // `trainers_certified`; the key and the field looked like one concept and were two.
+            // It survived QA-294, QA-295, QA-1262 and the whole of -249, which shipped to fix
+            // exactly this figure — a total that cannot be non-zero is worse than no total.
+            ["Trainers (ours, live)", sum((jr) => jr.trainers_certified)],
           ];
           return (
             <span className="flex flex-wrap items-center gap-x-4 gap-y-1 tabular-nums">
@@ -208,8 +220,38 @@ function LocationsInner() {
                 {r.jr?.trainers_required ?? <span className="text-amber-700">set →</span>}
               </Link>
             ) },
-          { key: "nom_recv", label: "Nomination Received (sheet)", mobile: false, render: (r: any) => r.jr?.nominations_received_reported ?? "—" },
-          { key: "nom_nsdc", label: "Nominated to NSDC (sheet)", mobile: false, render: (r: any) => r.jr?.nominated_nsdc_reported ?? "—" },
+          // QA-1284: these two carried the client's typed-in sheet figure and NOTHING of ours, so a
+          // nomination we had actually sent changed nothing here — which is what the client was
+          // looking at when he said "Yeh update nahi ho raha sir" about Basti.
+          //
+          // Umesh's constraint, same day: "Sirf ginti sahi karo, naye column nahi" — so this is NOT
+          // two more columns and NOT a `sheet − ours` delta (Certified Δ stays the only one). The
+          // sheet number keeps the headline, and our own live figure sits under it in the muted
+          // sub-line, exactly the shape "Trainers (ours, live)" already uses two columns along.
+          {
+            key: "nom_recv", label: "Nomination Received (sheet)", mobile: false,
+            sortable: true, sortValue: (r: any) => r.jr?.nominations_received_reported ?? -1,
+            render: (r: any) => r.jr ? (
+              <span>
+                {r.jr.nominations_received_reported ?? "—"}
+                <span className="block font-normal text-gray-400" title="Trainers nominated to this centre × job role in OUR records, at any pipeline stage.">
+                  {r.jr.trainers_nominated ?? 0} ours
+                </span>
+              </span>
+            ) : <span className="text-gray-400">—</span>,
+          },
+          {
+            key: "nom_nsdc", label: "Nominated to NSDC (sheet)", mobile: false,
+            sortable: true, sortValue: (r: any) => r.jr?.nominated_nsdc_reported ?? -1,
+            render: (r: any) => r.jr ? (
+              <span>
+                {r.jr.nominated_nsdc_reported ?? "—"}
+                <span className="block font-normal text-gray-400" title="Trainers of ours whose pipeline has actually reached NSDC — Sent to NSDC or beyond. A rejection counts: it is a nomination that happened and came back, which is how the client's sheet counts it too.">
+                  {r.jr.trainers_nsdc ?? 0} ours
+                </span>
+              </span>
+            ) : <span className="text-gray-400">—</span>,
+          },
           { key: "cert_sheet", label: "Trainer Certified (sheet)", mobile: false, render: (r: any) => r.jr?.trainers_certified_reported ?? "—" },
           {
             // Umesh (voice note): live per-ROW fulfilment — sheet-grain makes this exact now.

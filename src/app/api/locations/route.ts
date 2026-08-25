@@ -74,6 +74,13 @@ export const { GET, POST } = collectionRoutes({
         trainers_certified_reported: t.trainers_certified_reported ?? null,
         trainers_nominated: ours?.nominated ?? 0,
         trainers_certified: ours?.certified ?? 0,
+        // QA-1284 (client call 2026-08-25): "location mein jo jo nomination mein hai unka yahan
+        // update ho jaye, jaise NSDC wale mein aa gaye, Nominated to NSDC to wo aa gaye yahan pe."
+        // Until now this row carried the client's OWN typed-in figures for these two columns and
+        // nothing of ours beside them, so a nomination we actually sent changed nothing on screen.
+        // `trainerTiesFor` had already computed both of these and the route dropped them.
+        trainers_nsdc: ours?.nsdc ?? 0,
+        trainers_in_pipeline: ours?.in_pipeline ?? 0,
       }]);
     }
     const sum = (rows: any[], k: string) => rows.reduce((s, r) => s + (r[k] ?? 0), 0);

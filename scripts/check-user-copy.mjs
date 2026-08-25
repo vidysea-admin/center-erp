@@ -1137,6 +1137,47 @@ for (const file of walk(root)) {
   if (!exportOnly.length) passed++;
   else { failed++; pushStructural("app/api/plan-tracker/export: " + exportOnly.length + " screen column(s) are named differently in the download: " + JSON.stringify(exportOnly.slice(0, 4)) + " - QA-640 / QA-565. Downloading the table should not rename its columns."); }
 
+  // QA-1283 - A CLASS PIN, not a pin on one line. The Locations totals strip summed
+  // `jr.trainers_ours`, a field no API has ever emitted, so that cell read 0 for every dataset that
+  // has ever existed - directly under a column that was showing the right number. Nothing caught it
+  // through QA-294, QA-295, QA-1262 and the whole of -249, which shipped to fix that very figure.
+  //
+  // Why no other kind of check could: `jr` is `any`, so TypeScript is silent; the column's own `key`
+  // is the string "trainers_ours" while its render reads `trainers_certified`, so a grep for the
+  // name SUCCEEDS and looks correct; and the wrong answer is 0, which on a sparse row is exactly
+  // what a right answer looks like. A total that cannot be non-zero is worse than no total.
+  //
+  // So this asserts the JOIN rather than any one field: every `jr.<field>` the totals strip sums
+  // must be a key the locations route actually puts on a job_roles entry.
+  {
+    // stripComments on BOTH sides matters: the fix for this defect writes the field names into a
+    // comment, and a check that can match its own explanation always comes back green.
+    const locPage = stripComments(fs.readFileSync(path.join(root, "app/(app)/locations/page.tsx"), "utf8"));
+    const locApi = stripComments(fs.readFileSync(path.join(root, "app/api/locations/route.ts"), "utf8"));
+    const totalsStart = locPage.indexOf("const cells: [string, number][] = [");
+    if (totalsStart === -1) {
+      failed++; pushStructural("app/(app)/locations: could not find the totals strip (`const cells: [string, number][]`) - QA-1283's pin cannot run, and a pin that silently stops running is worse than none. If the strip was renamed, repoint this check.");
+    } else {
+      const block = locPage.slice(totalsStart, locPage.indexOf("];", totalsStart));
+      const summed = [...new Set([...block.matchAll(/jr\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]))];
+      // Scoped to the job_roles object literal itself (`byLoc.set(...{ ... }])`), because that is
+      // exactly the shape `jr` has. An earlier version of this check anchored keys to the start of a
+      // line and reported `approved_target` as phantom - it is emitted, but it shares a line with
+      // two other keys, so the anchor never saw it. The instrument was wrong, not the product.
+      const emitStart = locApi.indexOf("byLoc.set(");
+      const emitBlock = emitStart === -1 ? "" : locApi.slice(emitStart, locApi.indexOf("}]);", emitStart));
+      const emitted = new Set([...emitBlock.matchAll(/([a-z_][A-Za-z0-9_]*)\s*:/g)].map((m) => m[1]));
+      const phantom = summed.filter((f) => !emitted.has(f));
+      if (summed.length && !phantom.length) passed++;
+      else {
+        failed++;
+        pushStructural("app/(app)/locations: the totals strip sums " + JSON.stringify(phantom)
+          + " which api/locations/route.ts never emits, so " + (phantom.length === 1 ? "that total is" : "those totals are")
+          + " permanently 0 - QA-1283. `jr` is `any`, so nothing else will tell you: not tsc, not a grep for the name, and not the number itself, because the wrong answer is zero.");
+      }
+    }
+  }
+
   // The card itself, closed by default - it is reference, consulted once, not a warning.
   const planCard = /<details[^>]*>[\s\S]{0,400}?Which column of the planning sheet is which/.test(planSrc)
     && /PLAN_COLUMN_SOURCE\[c\.key\]/.test(planSrc)
