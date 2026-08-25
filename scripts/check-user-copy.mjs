@@ -920,6 +920,51 @@ for (const file of walk(root)) {
       );
     }
   }
+  // QA-1153 (DRY roadmap unit D5, 2026-08-25): CHIP_COLORS is a PROJECTION of TRAINER_PIPELINE,
+  // not a copy of it — it also colours batch statuses, candidate journey states and schemes, so
+  // "import the enum" is not the fix here (and ui.tsx is a client component; @/models pulls
+  // mongoose). What IS checkable is TOTALITY, both directions:
+  //   (1) every TRAINER_PIPELINE stage has a colour — a stage added to the enum and missed here
+  //       greys out silently, which is the quieter and worse failure (the QA-946 lesson);
+  //   (2) no CHIP_COLORS key LOOKS like a retired pipeline stage — three did until today
+  //       ("Docs Requested", "Nominated to NSDC", "TOT Passed", all removed from the enum in the
+  //       2026-08-14 rename), and they were the standing evidence that nobody was checking.
+  // Direction (2) can only be a NAMED list, not a pattern: CHIP_COLORS legitimately holds dozens of
+  // non-pipeline keys and no regex can tell "Result Awaited" (a real candidate state) from
+  // "TOT Passed" (a retired stage). A named list is honest about being a named list.
+  {
+    const uiSrc = stripComments(fs.readFileSync(path.join(root, "components/ui.tsx"), "utf-8"));
+    const modelsSrc = stripComments(fs.readFileSync(path.join(root, "models/index.ts"), "utf-8"));
+    const pipeM = modelsSrc.match(/export const TRAINER_PIPELINE = \[([\s\S]*?)\]/);
+    const chipM = uiSrc.match(/CHIP_COLORS:\s*Record<string,\s*string>\s*=\s*\{([\s\S]*?)\n\};/);
+    if (!pipeM || !chipM) {
+      failed++;
+      pushStructural(`the CHIP_COLORS/TRAINER_PIPELINE totality check cannot find its subject (pipeline=${!!pipeM}, chips=${!!chipM}) - a parser that has lost its place must go RED, never green (QA-1153).`);
+    } else {
+      const stages = [...pipeM[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+      const chipKeys = new Set([...chipM[1].matchAll(/"([^"]+)"\s*:/g)].map((m) => m[1]));
+      const uncoloured = stages.filter((s) => !chipKeys.has(s));
+      if (stages.length >= 8 && !uncoloured.length) passed++;
+      else {
+        failed++;
+        pushStructural(
+          uncoloured.length
+            ? `${uncoloured.length} TRAINER_PIPELINE stage(s) have no CHIP_COLORS entry and will render GREY with no error: ${uncoloured.join(", ")} (QA-1153).`
+            : `TRAINER_PIPELINE parsed to only ${stages.length} stages - the check has lost its subject rather than passed (QA-1153).`,
+        );
+      }
+      // (2) retired stage names, by name — extend this list when a stage is renamed out of the enum.
+      const RETIRED = ["Docs Requested", "Nominated to NSDC", "TOT Passed", "Ready to Train"];
+      const zombies = RETIRED.filter((k) => chipKeys.has(k));
+      if (!zombies.length) passed++;
+      else {
+        failed++;
+        pushStructural(
+          `CHIP_COLORS still colours ${zombies.length} RETIRED trainer stage(s): ${zombies.join(", ")}. They colour nothing and are the evidence that this map is not being read against the enum (QA-1153).`,
+        );
+      }
+    }
+  }
   const tips = bp.split(/\r?\n/).filter((l) => /title=/.test(l) && /awaiting_match/.test(l));
   const tipFaults = [];
   if (tips.length < 3) tipFaults.push(`app/(app)/batches/[id]/page.tsx: only ${tips.length} of the three awaiting-match tooltips (Candidates chip, Attendance chip, Closure summary) can be found - this check has lost a subject rather than passed (QA-434)`);

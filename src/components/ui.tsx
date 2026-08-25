@@ -71,13 +71,19 @@ const CHIP_COLORS: Record<string, string> = {
   "Dropout": "bg-red-100 text-red-700", // ("Failed" already maps red above)
   "No programme": "bg-amber-100 text-amber-700",
   "Under preparation": "bg-amber-100 text-amber-700",
+  // QA-1153 (2026-08-25): three keys deleted here — "Docs Requested", "Nominated to NSDC" and
+  // "TOT Passed" were stage names REMOVED from TRAINER_PIPELINE in the 2026-08-14 rename and had
+  // coloured nothing since. Harmless (an unknown key falls through to grey) but they were the
+  // standing evidence that nothing checked this map against the enum: a stage ADDED to
+  // TRAINER_PIPELINE and missed here greys out silently, which is the quieter and worse failure.
+  // check-user-copy.mjs now asserts totality both ways. NOTE "Nominated to NSDC (sheet)" in
+  // locations/page.tsx is a SHEET COLUMN LABEL, not a pipeline stage — different thing, left alone.
   "Fresh Lead": "bg-amber-100 text-amber-700", "Shortlisted": "bg-amber-100 text-amber-700",
-  "Docs Requested": "bg-amber-100 text-amber-700",
-  "Documents Completed": "bg-amber-100 text-amber-700", "Nominated to NSDC": "bg-amber-100 text-amber-700",
+  "Documents Completed": "bg-amber-100 text-amber-700",
   "Sent to NSDC": "bg-amber-100 text-amber-700",
   "NSDC Approved": "bg-blue-100 text-blue-700", "TOT Payment Done": "bg-blue-100 text-blue-700",
   "TOT Scheduled": "bg-blue-100 text-blue-700", "TOT In Progress": "bg-blue-100 text-blue-700",
-  "TOT Passed": "bg-blue-100 text-blue-700", "Certified": "bg-green-100 text-green-700",
+  "Certified": "bg-green-100 text-green-700",
   "NSDC Rejected": "bg-red-100 text-red-700",
   // 2026-08-13: schemes are shown as chips wherever a job role appears — one colour per scheme
   // so "which scheme is this" is answerable at a glance (Manish: "scheme ke bina confuse ho jate hain").
