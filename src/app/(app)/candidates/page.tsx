@@ -922,7 +922,7 @@ function CandidatesInner() {
               <option value="Future">Upcoming batch</option>
             </select>
             {form.batch_interest === "Future" && (
-              <span className="mt-0.5 block text-[11px] text-amber-700">They will not be selectable for a batch until this is set back to "The current batch".</span>
+              <span className="mt-0.5 block text-[11px] text-amber-700">They will not be selectable for a batch until this is set back to “The current batch”.</span>
             )}
           </Field>
           <Field label="Aadhaar number">
