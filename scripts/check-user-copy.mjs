@@ -1734,7 +1734,29 @@ for (const file of walk(root)) {
     const rawDecl = /const canTransition = ([^;]*);/.exec(src);
     const guardRaw = rawDecl ? rawDecl[1] : "";
     const rolyLiteral = /\brole\b/.test(guardSrc);
-    const asksPerm = /can\w*\(\s*"batches\.manage"/.test(guardRaw);
+    // CYCLE 2 (QA-1091, checker on cycle 1). Cycle 1 asked "does the text CONTAIN the permission",
+    // and the checker walked FOUR rewrites straight past it, all green at 285/0:
+    //     can("batches.manage","view")      <- controls hidden from people who may use them...
+    //                                          or, on a door whose server asks edit, shown to
+    //                                          people who may not. The dead control, restored.
+    //     true || can("batches.manage",...) <- the permission never evaluated
+    //     <live> && (dead && can(...))      <- present in the text, unreachable in the run
+    //     owner_role !== "Location" && ...  <- a role blacklist renamed past the `\brole\b` test
+    // The middle two defeat exactly the evasion the pair was built to close, so "contains" was
+    // never the right question.
+    //
+    // So this pins the SHAPE, not the vocabulary: the guard must be `!<flag> || <fn>("batches.manage","edit")`
+    // and nothing else — the same shape `mayMark` (:3027) and `mayMarkTab` (:2652) already use.
+    // A whitelisted shape cannot carry a dead operand, cannot carry a constant disjunct, and cannot
+    // carry a second predicate of any spelling, because there is nowhere left to put one.
+    // The two identifiers must be the ones this component actually destructured from `usePerms()`,
+    // which is what stops `!somethingElse || can(...)` reading as permissive-while-loading when it
+    // is really permissive-always.
+    const shape = /^\s*!\s*([A-Za-z_$][\w$]*)\s*\|\|\s*([A-Za-z_$][\w$]*)\s*\(\s*"batches\.manage"\s*,\s*"edit"\s*\)\s*$/.exec(guardRaw);
+    const hookOk = !!shape && new RegExp(
+      "const\\s*\\{[^}]*\\bcan\\s*:\\s*" + shape[2] + "\\b[^}]*\\bloaded\\s*:\\s*" + shape[1] + "\\b[^}]*\\}\\s*=\\s*usePerms\\(\\)"
+    ).test(src);
+    const asksPerm = !!shape && hookOk;
     if (asksPerm && !rolyLiteral) passed++;
     else {
       failed++;
