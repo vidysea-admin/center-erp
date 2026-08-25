@@ -159,7 +159,19 @@ export const RELEASE_NOTE_CURRENT =
   "system had actually sent changed nothing there. Each now shows our own live figure under the "  +
   "sheet's, counted from where each trainer has actually reached - and a trainer who has been put "  +
   "in front of the government body counts as having been, whether they were approved or turned "  +
-  "down, which is how the client's own sheet counts it.";
+  "down, which is how the client's own sheet counts it. "  +
+  "One more, and it is about a password. A centre signs in to the government portal with a "  +
+  "password of its own, and those passwords pass through this system whenever the client's "  +
+  "sheet changes one. Anyone who could open the sheet-review queue could read them - and not "  +
+  "only in the queue: also in the reply sent back when a change was undone, in the note that "  +
+  "undo left behind, in the record of the change itself, and in the summary of what the change "  +
+  "would affect, each of which had to be closed separately and one of which was found only "  +
+  "after the others were shut. They are shown to an administrator alone now, everywhere they "  +
+  "appear, and undoing a password change records that the old one was put back without "  +
+  "repeating it. The home page no longer prints a pending password change in the clear either. "  +
+  "Passwords written into older records before today are still in those records; this release "  +
+  "stops new ones being written and stops the old ones being handed out, which is not the same "  +
+  "as removing them, and removing them is a separate job.";
 
 const RELEASE_NOTE_ARCHIVE_248 =
   "-248 is mostly about a secret that was readable from the wrong side, and about one question "  +
