@@ -8,7 +8,7 @@ import {
 import { audit, auditDiff } from "@/lib/audit";
 import { currentStageOf } from "@/lib/candidate-journey";
 import { getDefaults } from "@/lib/defaults";
-import { normalizeCan } from "@/lib/govt-attendance";
+import { nameKey, normalizeCan, unresolvedPortalRowsByName } from "@/lib/govt-attendance";
 import { HttpError, isScoped } from "@/lib/authz";
 // QA-1074: which pending sheet changes can actually move the report's figures. IMPORTED, never
 // re-listed — this is the predicate the apply door and the Sync Inbox screen already share
@@ -1613,7 +1613,12 @@ const CERT_FLOW: Record<string, string[]> = {
 };
 
 // Rules 41, 42, 44, 45 — mark or update one candidate's assessment result.
-export async function upsertCandidateResult(batchId: string, memberId: string, patch: Record<string, any>, userId: string) {
+export async function upsertCandidateResult(batchId: string, memberId: string, patch: Record<string, any>, userId: string,
+  // A-09: the batch's verdicts, when the caller already has them. `bulkMarkResults` computes them
+  // ONCE per batch and hands them down - a bulk "mark 45 pending as Pass" must not assemble the
+  // whole attendance picture 45 times. Absent, this function fetches them itself, so the two colder
+  // callers (the per-result PATCH and the force-complete path) need to know nothing about it.
+  verdicts?: Map<string, any>) {
   const batch = await Batch.findById(batchId).select("status").lean<any>();
   if (!batch) throw new HttpError(404, "Batch not found");
   if (["Completed", "Cancelled"].includes(batch.status)) {
@@ -1642,6 +1647,38 @@ export async function upsertCandidateResult(batchId: string, memberId: string, p
   const wantsReassessment = patch.reassessment_required ?? row.reassessment_required;
   if (wantsReassessment && !(patch.reassessment_date ?? row.reassessment_date)) {
     throw new HttpError(400, "Rule 44: reassessment required means a reassessment date is required.");
+  }
+
+  // A-09 (24-Aug issues sheet). The guard the "Not eligible" pill never had.
+  //
+  // It lives HERE and not in a route because all three roster-marking callers pass through this
+  // function - the card and the bulk button via `bulkMarkResults`, the per-result PATCH, and the
+  // force-complete path. A rule written in one of a set is the QA-273 shape, and this file is where
+  // ARCHITECTURE.md 3.1 says it belongs.
+  //
+  // Only a PASS is gated, and only a NEW one. Fail and Absent on a not-eligible candidate are the
+  // ordinary outcome and need no ceremony; and a row already sitting at Pass is not re-gated, or
+  // every later edit to a score or a certificate would demand the reason again.
+  //
+  // The reason is demanded by the SERVER, not by the screen, because Umesh's answer to "who may do
+  // this" was "anyone who can mark" - no role gate - so the record is the only thing standing
+  // between an override and an invisible one. A screen can be bypassed by anything that can POST.
+  if (patch.result === "Pass" && row.result !== "Pass") {
+    const map = verdicts ?? await eligibilityByMember(batchId);
+    const v = map.get(String(memberId));
+    if (v?.state === "not_eligible") {
+      const reason = String(patch.eligibility_override_reason ?? "").trim();
+      if (!reason) {
+        throw new HttpError(400,
+          `${v.name ?? "This candidate"} is Not eligible${v.detail ? ` — ${v.detail}` : " — they did not meet the attendance requirement"}. `
+          + "Passing them anyway is allowed, but the reason has to be recorded first.");
+      }
+      row.eligibility_override_reason = reason;
+      row.eligibility_override_by = userId as any;
+      row.eligibility_override_at = new Date();
+      await audit({ entity: "CandidateResult", entityId: row._id, field: "eligibility_override", actor: userId,
+        newValue: `Passed despite Not eligible (${v.detail ?? "attendance bar not met"}) — ${reason}` });
+    }
   }
   // Rule 45: a certificate already in flight pins the result at Pass.
   if (row.result === "Pass" && nextResult !== "Pass" && row.certificate_status !== "Pending") {
@@ -1754,11 +1791,15 @@ export async function startReassessment(resultId: string, reassessment_date: Dat
 export async function bulkMarkResults(batchId: string, rows: any[], userId: string) {
   const errors: { member: string; error: string }[] = [];
   let updated = 0;
+  // A-09: computed ONCE for the whole batch, not once per row. "Mark 45 pending as Pass" would
+  // otherwise assemble the entire attendance picture 45 times. Only fetched when a Pass is actually
+  // in the request, so marking a batch Fail/Absent costs nothing extra.
+  const verdicts = rows.some((r) => r?.result === "Pass") ? await eligibilityByMember(batchId) : undefined;
   for (const r of rows) {
     try {
       const { member, ...patch } = r;
       delete patch.source; // §7: provenance is never client-declared
-      await upsertCandidateResult(batchId, member, patch, userId);
+      await upsertCandidateResult(batchId, member, patch, userId, verdicts);
       updated++;
     } catch (e) {
       errors.push({ member: r.member, error: e instanceof Error ? e.message : String(e) });
@@ -3057,6 +3098,104 @@ export function eligibilityVerdict(opts: {
 
 // Has this cohort finished teaching? Either the batch has left Active, or the portal's own
 // working-day count has reached the programme's length — whichever says "over" first.
+// A-09 (24-Aug issues sheet). THE ONE PLACE the per-member eligibility verdict is assembled.
+//
+// Until this existed, `eligibilityVerdict` above was a pure function that anybody could call - and
+// exactly one caller knew how to feed it. `api/batches/[id]/attendance/route.ts` assembled its eight
+// inputs (the hours bar, slot hours per day, the newest matched portal row per candidate, the
+// day-wise logs, the unattached-rows-by-name map, the same-name count, the portal working days and
+// whether the course is over) inline in the route. So the SCREEN could say "Not eligible" while the
+// door that decides a Pass had no way to ask the same question.
+//
+// That is why the not-eligible Pass had no guard: writing one meant assembling those eight inputs a
+// second time, in a second place, which is the drift ARCHITECTURE.md 3.1 catalogues (QA-273 is the
+// same shape - two doors, one rule, and they disagreed). Extracted here so the route and the write
+// door read ONE derivation. The route's output is unchanged; it now calls this and spreads the rows.
+export async function batchAttendanceRows(batchId: string) {
+  const batch = await Batch.findById(batchId).populate("program", "name hours duration_days scheme").lean<any>();
+  if (!batch) throw new HttpError(404, "Batch not found");
+
+  const [members, logs, defaults] = await Promise.all([
+    BatchMember.find({ batch: batchId }).populate("candidate", "name phone sidh_candidate_id sidh_status").lean<any[]>(),
+    DailyLog.find({ batch: batchId }).select("log_date present_member_ids").sort({ log_date: 1 }).lean<any[]>(),
+    getDefaults(),
+  ]);
+
+  const { requiredHours, minPct, source: minPctSource } =
+    await assessmentHoursBar(batch.program?.scheme, batch.program, defaults.min_attendance_pct ?? 50);
+  const hoursPerDay = slotHoursPerDay(batch);
+
+  const candIds = members.map((m) => m.candidate?._id).filter(Boolean);
+  const govtRows = await GovtAttendanceRow.find({ candidate: { $in: candIds }, match_status: "Matched" })
+    .sort({ createdAt: 1 })
+    .select("candidate total_days_present total_working_days total_hours_minutes total_hours_raw createdAt")
+    .lean<any[]>();
+  const govtByCand = new Map(govtRows.map((r) => [String(r.candidate), r]));
+
+  const awaitingByName = await unresolvedPortalRowsByName({ batchId, locationId: batch.location });
+  const sameNameCount = new Map<string, number>();
+  for (const m of members) {
+    if (m.left_on) continue;
+    const nk = nameKey(m.candidate?.name);
+    if (nk) sameNameCount.set(nk, (sameNameCount.get(nk) ?? 0) + 1);
+  }
+
+  const portalWorkingDays = Math.max(0, ...govtRows.map((r) => Number(r.total_working_days ?? 0)));
+  const finished = courseIsFinished(batch, portalWorkingDays);
+
+  const days = logs.map((l) => l.log_date);
+  const rows = members.map((m) => {
+    const mid = String(m._id);
+    const presentByDay = logs.map((l) => (l.present_member_ids ?? []).some((x: unknown) => String(x) === mid));
+    const internalDays = presentByDay.filter(Boolean).length;
+    const g = m.candidate ? govtByCand.get(String(m.candidate._id)) : undefined;
+    const h = memberAttendedHours({ internalDays, hoursPerDay, govtMinutes: g?.total_hours_minutes, requiredHours });
+    const awaiting = awaitingMatchFor({ basis: h.basis, hit: awaitingByName.get(nameKey(m.candidate?.name)) });
+    return {
+      member_id: mid,
+      candidate_id: m.candidate?._id ?? null,
+      name: m.candidate?.name ?? "(removed)",
+      sidh_candidate_id: m.candidate?.sidh_candidate_id ?? null,
+      phone: m.candidate?.phone ?? null,
+      left_on: m.left_on ?? null,
+      present_by_day: presentByDay,
+      internal_days: internalDays,
+      our_hours: h.our_hours,
+      govt: g ? {
+        days_present: g.total_days_present ?? null,
+        working_days: g.total_working_days ?? null,
+        hours: h.govt_hours,
+        hours_raw: g.total_hours_raw ?? null,
+        as_of: g.createdAt,
+      } : null,
+      attended_hours: h.attended_hours,
+      basis: h.basis,
+      qualified: h.qualified,
+      verdict: eligibilityVerdict({
+        enrollmentStatus: m.enrollment_status,
+        sidhStatus: m.candidate?.sidh_status,
+        attendedHours: h.attended_hours,
+        requiredHours,
+        basis: h.basis,
+        courseFinished: finished,
+        awaitingMatch: awaiting,
+        sameNameMembers: sameNameCount.get(nameKey(m.candidate?.name)) ?? 1,
+      }),
+      awaiting_match: awaiting,
+      enrollment_status: m.enrollment_status ?? null,
+    };
+  });
+
+  return { batch, days, rows, requiredHours, minPct, minPctSource, hoursPerDay, portalWorkingDays, finished, govtRows };
+}
+
+// A-09: the verdict per member, for any door that has to ASK rather than display. Computed once per
+// batch and handed down, because a bulk mark of 45 candidates must not assemble this 45 times.
+export async function eligibilityByMember(batchId: string): Promise<Map<string, any>> {
+  const { rows } = await batchAttendanceRows(batchId);
+  return new Map(rows.map((r) => [String(r.member_id), { ...r.verdict, name: r.name }]));
+}
+
 export function courseIsFinished(batch: any, portalWorkingDays: number | null | undefined): boolean {
   if (["Closing", "Completed", "Closed", "Cancelled"].includes(String(batch?.status))) return true;
   const days = Number(batch?.program?.duration_days ?? 0);

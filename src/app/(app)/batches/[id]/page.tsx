@@ -3355,17 +3355,38 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
     })
     .filter(Boolean) as { name: string; file: string }[];
 
+  // A-09 (24-Aug issues sheet): a card carrying the red "Not eligible" pill kept a fully live Pass
+  // button - no confirmation, nothing recorded. Umesh's answer to "who may override" was "anyone who
+  // can mark", so the button stays exactly where it is for everybody; what changes is that pressing
+  // it on a not-eligible candidate now ASKS, and the answer is stored against them.
+  //
+  // The prompt is a courtesy, not the gate. The server refuses a Pass on a not-eligible candidate
+  // without a reason whatever the screen does - which is the only arrangement that survives anything
+  // that can POST. Cancelling here sends nothing at all, so a hesitant operator changes nothing.
   const ResultButtons = ({ i }: any) => (
     <div className="flex flex-wrap gap-1.5">
       {["Pass", "Fail", "Absent"].map((r) => {
         const on = i.result?.result === r;
         const tone = r === "Pass" ? "border-green-300 bg-green-50 text-green-700"
           : r === "Fail" ? "border-red-300 bg-red-50 text-red-700" : "border-amber-300 bg-amber-50 text-amber-700";
+        const notEligible = hoursBy.get(String(i.member))?.verdict?.state === "not_eligible";
+        const overriding = r === "Pass" && notEligible && i.result?.result !== "Pass";
         return (
           <button key={r} disabled={closed}
-            onClick={() => r === "Fail" ? mark(i.member, { result: "Fail", failure_reason: i.result?.failure_reason || reasons[0]?.name || "Below cut-off" }) : mark(i.member, { result: r })}
-            className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium disabled:opacity-50 ${on ? tone : "border-gray-200 bg-white text-gray-500"}`}>
-            {on ? "✓ " : ""}{r}
+            title={overriding ? `${i.candidate?.name ?? "This candidate"} did not meet the attendance requirement. Passing them is allowed, but you will be asked why, and it is recorded against them.` : undefined}
+            onClick={() => {
+              if (r === "Fail") return mark(i.member, { result: "Fail", failure_reason: i.result?.failure_reason || reasons[0]?.name || "Below cut-off" });
+              if (!overriding) return mark(i.member, { result: r });
+              const gap = "\n\n";
+              const why = window.prompt(
+                `${i.candidate?.name ?? "This candidate"} is marked NOT ELIGIBLE — they did not meet the ${attMeta?.required_hours ?? 60}-hour attendance bar.` + gap
+                + "A Pass is what unlocks their certificate, so this is an override. It is allowed, and it will be recorded against them with your name." + gap
+                + "Why are they being passed anyway?");
+              if (!why?.trim()) return;
+              return mark(i.member, { result: r, eligibility_override_reason: why.trim() });
+            }}
+            className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium disabled:opacity-50 ${on ? tone : overriding ? "border-red-300 bg-white text-red-700" : "border-gray-200 bg-white text-gray-500"}`}>
+            {on ? "✓ " : ""}{r}{overriding ? " ⚠" : ""}
           </button>
         );
       })}

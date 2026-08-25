@@ -6,7 +6,11 @@ import { Batch, CandidateResult, Closure } from "@/models";
 import { assertResultInScope, recomputeClosureAggregates, upsertCandidateCertificate, upsertCandidateResult } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
-const ASSESSMENT_FIELDS = ["result", "score", "max_score", "assessed_on", "assessor", "failure_reason", "failure_note", "reassessment_required", "reassessment_date", "evidence_file"];
+// A-09: `eligibility_override_reason` rides here too. This is the SECOND door onto the same write
+// function, and the guard it enforces is not the route's - it is upsertCandidateResult's. If only
+// one of the two doors carried the field, a Pass that succeeds from the card would be refused from
+// here with a message the operator had already answered. Both doors, one rule.
+const ASSESSMENT_FIELDS = ["result", "score", "max_score", "assessed_on", "assessor", "failure_reason", "failure_note", "reassessment_required", "reassessment_date", "evidence_file", "eligibility_override_reason"];
 const CERT_FIELDS = ["certificate_status", "certificate_no", "certificate_date", "certificate_file", "certificate_rejection_reason"];
 
 // PATCH one candidate's row. Assessment and certificate fields are routed to their own

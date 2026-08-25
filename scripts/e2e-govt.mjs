@@ -911,6 +911,103 @@ ok("the first import is still intact", (await req(admin, "GET", `/api/govt-atten
     g.data.not_eligible_count === 0, String(g.data.not_eligible_count));
 }
 
+// ---- A-09 (24-Aug issues sheet): a NOT ELIGIBLE candidate cannot be Passed without a reason ----
+// Screen-read, nobody raised it aloud. Cards carrying the red "Not eligible" pill - students who did
+// not make the attendance bar - kept a fully live Pass button with no confirmation and nothing
+// recorded. A Pass is what unlocks a certificate, so that was the route by which somebody who did
+// not do the hours ends up certified with no trace that anyone decided it.
+// Umesh, asked directly on 2026-08-25 who may override: "anyone who can mark". So there is NO role
+// gate, and the whole weight falls on the record - which is why the reason is demanded by the
+// server rather than by the screen.
+//
+// OWN BATCH, OWN CANDIDATES, OWN FILE NAME. This block marks results and drops nobody into shared
+// state; QA-1098 and the qa-246 shared-batch drop were both this mistake and both cost a wall run.
+{
+  const nlA = String.fromCharCode(10);
+  // A batch whose course is OVER while it is still markable - the only shape in which "not eligible"
+  // is a verdict at all. courseIsFinished() turns true once the portal's own working days reach the
+  // programme duration (15), so the file below reports 20 while the batch stays Active.
+  const eBatch = (await req(admin, "POST", "/api/batches",
+    { location: loc._id, program: program._id, target_size: 3, planned_start: localDate(Date.now() - 20 * 86400_000) })).data.item;
+  const eCands = [];
+  for (const n of [1, 2]) {
+    const c = (await req(admin, "POST", "/api/candidates",
+      { name: `${NAME} Elig${n}`, phone: `9${STAMP.slice(1)}80${n}0`, location: loc._id, program: program._id,
+        sidh_candidate_id: `CAN_${STAMP}88${n}` }, 201)).data.item;
+    const m = (await req(admin, "POST", `/api/batches/${eBatch._id}/members`, { candidate: c._id }, 201)).data.item;
+    // ENROLLED, and that is not decoration. The -109 journey gate answers BEFORE the hours question:
+    // a member who has not finished enrolling gets "not enrolled yet" as their verdict, never
+    // "not eligible". The first draft of this block skipped these three steps and the fixture pin
+    // caught it - state came back `not_enrolled` and the whole point of the block would have been
+    // untested while looking green. Rule 24 derives Completed from the three steps.
+    await req(admin, "PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+    eCands.push({ c, m });
+  }
+
+  // Alpha's row spans three lines in the fixture (a quoted multi-line Details cell), so it is lifted
+  // whole and renamed - the same shape the -88 block uses.
+  const lines = csvText.split(nlA);
+  const at = lines.findIndex((l) => l.includes(`${NAME} Alpha`));
+  const eCsv = [lines[0], lines[at], lines[at + 1], lines[at + 2]].join(nlA)
+    .replace(`${NAME} Alpha`, `${NAME} Elig1`)
+    .replace(`CAN_${STAMP}0001`, `CAN_${STAMP}881`)
+    .replace(",11,1,1,0,", ",20,1,1,0,");   // 20 working days > the 15-day programme => course over
+  await upload(admin, { file: new File([Buffer.from(eCsv)], "a09-eligibility.csv", { type: "text/csv" }),
+    batch: eBatch._id, confirm: "1", period_label: `A-09 ${STAMP}` });
+
+  const att = (await req(admin, "GET", `/api/batches/${eBatch._id}/attendance`)).data;
+  const row1 = (att.members ?? []).find((m) => m.name === `${NAME} Elig1`);
+  ok("A-09 fixture: the course reads FINISHED (portal working days passed the programme duration), which is the only state in which 'not eligible' is a verdict",
+    att.course_finished === true, JSON.stringify({ course_finished: att.course_finished, portal_working_days: att.portal_working_days }));
+  ok("A-09 fixture: and a student below the bar is therefore NOT ELIGIBLE",
+    row1?.verdict?.state === "not_eligible",
+    JSON.stringify({ name: row1?.name, hours: row1?.attended_hours, bar: att.required_hours, state: row1?.verdict?.state }));
+
+  const mem1 = eCands[0].m._id, mem2 = eCands[1].m._id;
+
+  // THE DEFECT: this used to be a plain 200.
+  const noReason = await req(admin, "PUT", `/api/batches/${eBatch._id}/results`,
+    { rows: [{ member: mem1, result: "Pass" }] });
+  const after1 = ((await req(admin, "GET", `/api/batches/${eBatch._id}/results`)).data.items ?? [])
+    .find((i) => String(i.member) === String(mem1));
+  ok("A-09: passing a NOT ELIGIBLE candidate with no reason is REFUSED, and the refusal names them and why",
+    noReason.status >= 400 || (noReason.data?.errors ?? []).length > 0,
+    JSON.stringify({ s: noReason.status, e: JSON.stringify(noReason.data).slice(0, 220) }));
+  ok("A-09: …and NOTHING was written - a refused override leaves no result behind",
+    !after1?.result || after1.result.result !== "Pass",
+    JSON.stringify({ result: after1?.result?.result ?? null }));
+
+  // The override itself: allowed for anyone who can mark, but recorded.
+  const withReason = await req(admin, "PUT", `/api/batches/${eBatch._id}/results`,
+    { rows: [{ member: mem1, result: "Pass", eligibility_override_reason: "Portal hours arrived late; centre has the signed register." }] }, 200);
+  const after2 = ((await req(admin, "GET", `/api/batches/${eBatch._id}/results`)).data.items ?? [])
+    .find((i) => String(i.member) === String(mem1));
+  ok("A-09: with a reason the Pass goes through - the override is allowed, not blocked",
+    withReason.status === 200 && after2?.result?.result === "Pass",
+    JSON.stringify({ s: withReason.status, result: after2?.result?.result }));
+  ok("A-09: and the reason, WHO overrode and WHEN are stored on the row - which is the whole point",
+    !!after2?.result?.eligibility_override_reason && !!after2?.result?.eligibility_override_by && !!after2?.result?.eligibility_override_at,
+    JSON.stringify({ reason: after2?.result?.eligibility_override_reason,
+      by: !!after2?.result?.eligibility_override_by, at: after2?.result?.eligibility_override_at }));
+
+  const aud = ((await req(admin, "GET", `/api/audit/CandidateResult/${after2.result._id}`)).data.items ?? []);
+  ok("A-09: …and it is on the audit trail in words, not only on the row",
+    aud.some((a) => a.field === "eligibility_override" && /Not eligible/i.test(String(a.new_value ?? ""))),
+    JSON.stringify(aud.map((a) => a.field)));
+
+  // Editing that row again must NOT re-demand the reason, or every later score edit would.
+  const edit = await req(admin, "PUT", `/api/batches/${eBatch._id}/results`,
+    { rows: [{ member: mem1, result: "Pass", score: 71 }] }, 200);
+  ok("A-09: a row ALREADY passed under an override is not re-gated - a later score edit does not ask again",
+    edit.status === 200, JSON.stringify({ s: edit.status }));
+
+  // Fail and Absent are the ordinary outcome for a not-eligible student and need no ceremony.
+  const fail = await req(admin, "PUT", `/api/batches/${eBatch._id}/results`,
+    { rows: [{ member: mem2, result: "Fail", failure_reason: "Below cut-off" }] }, 200);
+  ok("A-09: marking a not-eligible candidate FAIL needs no reason - only a Pass is an override",
+    fail.status === 200, JSON.stringify({ s: fail.status }));
+}
+
 // ---- -102: an Ambiguous row can be EXPLAINED and RESOLVED ----
 // [11:34] "ambiguous name pe aisa hona chahiye ki wo click ho to uske baare me pata chal jaye ki
 // kya issue hai" · [11:29] "usko hum manual bhi verify kar hi chuke hai".

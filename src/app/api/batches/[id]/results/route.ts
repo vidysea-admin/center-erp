@@ -47,7 +47,14 @@ export const PUT = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   const allowed = ["member", "result", "score", "max_score", "assessed_on", "assessor", "failure_reason", "failure_note", "reassessment_required", "reassessment_date", "evidence_file",
     // -120 (M4-14): the mock test and the roll number, per candidate. The -116 lesson applies — a
     // field the route does not accept is a field that silently drops on save.
-    "mock_appeared", "mock_qualified", "mock_score", "mock_note", "roll_no"];
+    "mock_appeared", "mock_qualified", "mock_score", "mock_note", "roll_no",
+    // A-09: this list is an ALLOW-LIST, so a field it does not name is a field that never reaches
+    // the rule. The guard in upsertCandidateResult demands this reason before it will Pass a
+    // not-eligible candidate; without it here the reason would be stripped in transit and every
+    // override would be refused with an error the operator had already answered. qa-246 shipped
+    // exactly this shape in the other direction (the server sent a field the screen's picker
+    // dropped) - same lesson, opposite end of the wire.
+    "eligibility_override_reason"];
   const rows = body.rows.map((r: Record<string, unknown>) =>
     Object.fromEntries(Object.entries(r).filter(([k]) => allowed.includes(k))));
 

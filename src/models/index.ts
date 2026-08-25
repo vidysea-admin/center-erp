@@ -744,6 +744,15 @@ const CandidateResultSchema = new Schema({
   assessor: String,
   failure_reason: String,
   failure_note: String,
+  // A-09 (24-Aug issues sheet, screen-read - nobody raised it aloud). A card carrying the red
+  // "Not eligible" pill kept a fully live Pass button: no confirmation, no guard, and nothing
+  // recorded that an override had happened. A Pass is what unlocks a certificate, so that was the
+  // route by which somebody who did not do the 60 hours ends up certified with no trace of a
+  // decision. Umesh, asked directly on 2026-08-25 who may do it: "anyone who can mark" - so this is
+  // NOT gated on role, and the whole weight falls on the record instead.
+  eligibility_override_reason: String,
+  eligibility_override_by: oid("User"),
+  eligibility_override_at: Date,
   reassessment_required: { type: Boolean, default: false },
   reassessment_date: Date,
   evidence_file: String,
