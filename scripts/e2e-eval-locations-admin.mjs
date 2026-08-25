@@ -437,12 +437,39 @@ ok("[best] each row names its blockers + next action + trainer/candidate counts"
   // not drop, and the assertion below failed pointing at the PRODUCT. The test hid its own broken
   // precondition and then blamed the code. Every step is asserted now, and the state is READ BACK -
   // if the batch never reaches Completed, that is what goes red, by name.
-  const fMem = (await req(admin, "POST", `/api/batches/${fBatch._id}/members`, { candidate: fresh[0]._id }, 201)).data.item;
+  // QA-1321 cycle 2 — a NAME COLLISION, and it crashed the whole suite rather than reddening one
+  // assertion. `fresh` is declared 235 lines up as a LOGIN COOKIE (`const fresh = await login(...)`),
+  // and this line read it as an array of candidates: `fresh[0]._id` is `undefined`, the members door
+  // correctly answered 400 "Candidate is required", `fMem` was undefined, and the next line threw
+  // `Cannot read properties of undefined (reading '_id')` — no counts from this suite at all.
+  //
+  // A CRASHED suite is not a red wall and it is certainly not a green one: it contributes no numbers,
+  // so a TOTAL line above it can read clean while nineteen assertions were never asked. That is the
+  // same shape as the `.catch(() => {})` this block already exists to have removed — a setup step
+  // that fails without saying so — which is why the candidate is now created HERE and ASSERTED,
+  // rather than borrowed from a variable that happened to be in scope.
+  const fCand = (await req(admin, "POST", "/api/candidates", { name: "TEST-EL Fin Cand " + s, phone: phone("95"), location: loc._id, program: prog._id }, 201)).data.item;
+  ok("QA-1307 [precondition] a real candidate exists for the roster (else every step below is about nothing)",
+    !!fCand?._id, JSON.stringify({ got: fCand?._id ?? null }));
+  const fMem = (await req(admin, "POST", `/api/batches/${fBatch._id}/members`, { candidate: fCand._id }, 201)).data.item;
+  ok("QA-1307 [precondition] and that candidate is on the roster, so the 80% gate can pass",
+    !!fMem?._id, JSON.stringify({ got: fMem?._id ?? null }));
   await req(admin, "PATCH", `/api/members/${fMem._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
   await req(admin, "POST", `/api/batches/${fBatch._id}/transition`, { target: "Ready" }, 200);
   await req(admin, "POST", `/api/batches/${fBatch._id}/transition`, { target: "Active", actual_start: today() }, 200);
-  await req(admin, "POST", `/api/batches/${fBatch._id}/transition`, { target: "Closing" }, 200);
-  await req(admin, "POST", `/api/batches/${fBatch._id}/transition`, { target: "Completed", actual_end: today() }, 200);
+  // The ladder does NOT go Active -> Closing here, and the read-back assertion below is what proved
+  // it: Rule 18 refuses Closing until assessment is Completed ("Assessment must be Completed before
+  // Closing."), and Rule 43 will not let assessment complete while any roster member has no final
+  // result. Active -> Completed is not a legal edge at all. So the honest way to finish a batch that
+  // still has outstanding rows is the door the product built for exactly that — the Admin
+  // force-complete, which settles the unmarked rows as Fail with the reason recorded against every
+  // one of them, and is refused without a reason.
+  //
+  // This fixture only needs a FINISHED batch; it does not care how it finished. Using the real door
+  // is both shorter and truer than walking assessment + certification by hand — and if that door ever
+  // stops completing the batch, the precondition below says so by name instead of the assertion after
+  // it blaming the counting code.
+  await req(admin, "POST", `/api/batches/${fBatch._id}/complete`, { force: true, reason: "EL fixture: finishing the batch so the trainer-tie count can be measured after completion" }, 200);
   const fState = (await req(admin, "GET", `/api/batches/${fBatch._id}`, undefined, 200)).data.item;
   ok("QA-1307 [precondition] the batch really reached Completed (else the assertion below is about nothing)",
     fState?.status === "Completed", JSON.stringify({ status: fState?.status }));
