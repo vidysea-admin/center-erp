@@ -443,7 +443,12 @@ ok("[best] each row names its blockers + next action + trainer/candidate counts"
   // the old bare `continue` returned {created:0, skipped:0} with no reason anywhere.
   const qProg = (await req(admin, "POST", "/api/programs", { code: "Q" + s, name: "ShortfallProg " + s, trainer_skill: "QSkill" + s }, 201)).data.item;
   const qLoc = (await req(admin, "POST", "/api/locations", { code: "QL" + s, name: "TEST-Shortfall " + s, approval_status: "Approved", operational_status: "Active", city: "Meerut" }, 201)).data.item;
-  await req(admin, "POST", `/api/locations/${qLoc._id}/targets`, { program: qProg._id, trainers_required: 1, approved_target: 30, tc_status: "Approved" }, 201).catch(() => {});
+  // The targets route exports GET, PUT and PATCH - there is no POST, so this asked for a 405 and
+  // got one. Every other suite creates a target with PUT ... 200 (e2e.mjs, e2e-roles.mjs), and
+  // PUT is an upsert keyed on {location, program} returning `{item}` at 200. The .catch() hid the
+  // throw but not the failure, and with no target created the two QA-1306 assertions below and
+  // QA-1307 all fell over behind it - four reds from one wrong verb.
+  await req(admin, "PUT", `/api/locations/${qLoc._id}/targets`, { program: qProg._id, trainers_required: 1, approved_target: 30, tc_status: "Approved" }, 200).catch(() => {});
   const qRoom = (await req(admin, "POST", `/api/locations/${qLoc._id}/rooms`, { name: "Q Room " + s, type: "Classroom", capacity: 25 }, 201)).data.item;
   const qTr = (await req(admin, "POST", "/api/trainers", { name: "TEST-Q BatchOnly " + s, phone: phone("93"), skills: ["QSkill" + s], pipeline_status: "Fresh Lead" }, 201)).data.item;
   await req(admin, "POST", "/api/batches", { location: qLoc._id, program: qProg._id, trainer: qTr._id, room: qRoom._id, planned_start: today(), target_size: 1 }, 201);
