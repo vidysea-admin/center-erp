@@ -3150,11 +3150,40 @@ export async function planTrackerRows(scope: Record<string, unknown> = {}) {
   // carries the comment explaining why ("the two sheets already disagree with each other... which
   // is exactly what happens when a count is kept in more than one place").
   const ids = batches.map((b) => b._id);
+  // QA-765. The CEO put this ABOVE reverse planning: "saaton batch jo aap chalu kar rahe ho uski
+  // DATE aur kitne candidate mobilise ho gaye, ek ek ke, abhi tak, ROZ BASIS pe - wo main kaise
+  // dekhu". The count and its day-by-day expansion come from ONE query on purpose, so the closed
+  // cell and the opened one cannot disagree: `count` is SUMMED from `days` below rather than
+  // counted separately. A second query here would be a second number for one concept, which is
+  // what ARCHITECTURE section 3 is a list of.
+  //
+  // The day is bucketed with an explicit +05:30 INSIDE mongo, never with dayKey() in node.
+  // dayKey reads getFullYear/getMonth/getDate, which are LOCAL. Measured, not asserted: a row
+  // joined 2029-03-05T20:00:00Z buckets to 2029-03-05 under TZ=UTC and 2029-03-06 under TZ=IST,
+  // so the same wall would be green on one machine and red on another. That is the class of
+  // defect QA-1065 cost a production push for. Bucketing here is +05:30 in mongo, so it does not
+  // consult the node process zone at all - the two runs return byte-identical days.
   const memberRows = await BatchMember.aggregate([
     { $match: { batch: { $in: ids }, left_on: null } },
-    { $group: { _id: "$batch", n: { $sum: 1 } } },
+    { $group: {
+      _id: { b: "$batch", d: { $dateToString: { format: "%Y-%m-%d", date: "$joined_on", timezone: "+05:30" } } },
+      n: { $sum: 1 },
+    } },
+    { $sort: { "_id.d": 1 } },
   ]);
-  const memberBy = new Map(memberRows.map((r: any) => [String(r._id), r.n]));
+  const dayBy = new Map<string, { date: string; joined: number }[]>();
+  for (const r of memberRows as any[]) {
+    const k = String(r._id.b);
+    if (!dayBy.has(k)) dayBy.set(k, []);
+    dayBy.get(k)!.push({ date: r._id.d, joined: r.n });
+  }
+  // He asked for "kitne mobilise ho gaye ABHI TAK", so each day carries the running total as well
+  // as that day's intake - the reader should not have to add the column up to answer his question.
+  const mobDays = (id: unknown) => {
+    let run = 0;
+    return (dayBy.get(String(id)) ?? []).map((d) => ({ ...d, cumulative: (run += d.joined) }));
+  };
+  const memberBy = new Map([...dayBy].map(([k, ds]) => [k, ds.reduce((a, d) => a + d.joined, 0)]));
 
   const ms = (b: any, key: string) => (b.milestones ?? []).find((m: any) => m.key === key) ?? null;
   // "Not needed" is his own word for the TOT columns of a batch whose trainer is already certified -
@@ -3187,6 +3216,7 @@ export async function planTrackerRows(scope: Record<string, unknown> = {}) {
       mobilization: {                                                            // 15
         status: mob?.done_on ? "Yes" : mob ? "In progress" : "Not started",
         count: memberBy.get(String(b._id)) ?? 0,
+        days: mobDays(b._id),                                                    // 15, QA-765
       },
       enrollment_done: ms(b, "enrollment_done")?.done_on ?? ms(b, "enrollment_done")?.due_date ?? null, // 16
       planned_start: b.planned_start ?? null,                                    // 17

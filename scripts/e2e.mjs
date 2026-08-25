@@ -2492,6 +2492,76 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
       scopedTk.status === 200 && !scopedBatches.includes(String(tkA._id)),
       JSON.stringify({ status: scopedTk.status, n: scopedBatches.length, leaked: scopedBatches.includes(String(tkA._id)) }));
 
+    // ---- QA-765: roz-basis mobilisation, inside column 15 ----
+    // The CEO put this ABOVE reverse planning: "kitne candidate mobilise ho gaye, ek ek ke, abhi
+    // tak, ROZ BASIS pe". Every read below is guarded before it is used - in a pre-fix run
+    // `days` is undefined, and asserting on undefined.length is a suite crash, not a red pin.
+    {
+      const dCand = async (nm) => (await req("POST", "/api/candidates", {
+        name: nm, phone: "9" + String(Date.now()).slice(-9), location: loc._id, program: prog._id,
+      }, 201)).data.item;
+      // Two on one day, one on the next, and ONE whose UTC day and IST day differ: 20:00Z on the
+      // 24th is 01:30 IST on the 25th. That last row is the whole timezone pin - dayKey() in node
+      // reads LOCAL getFullYear/getMonth/getDate, so bucketing there would put this row on the 24th
+      // under TZ=UTC and the 25th under TZ=IST, and the wall would be green on one machine only.
+      // QA-1065 cost us a production push on exactly that class of mistake tonight.
+      // tkA is planned to start 2029-03-01, and the server REFUSES a joining date after a batch's
+      // planned start - correctly, because mobilisation happens BEFORE a batch begins, which is the
+      // whole reason this view exists. My first fixture had them the wrong way round and all four
+      // adds came back 400; these sit before the start where real ones do.
+      const joins = ["2029-02-20T06:00:00Z", "2029-02-20T07:00:00Z", "2029-02-22T06:00:00Z", "2029-02-24T20:00:00Z"];
+      let added = 0;
+      for (let i = 0; i < joins.length; i++) {
+        const c = await dCand("QA765 Mob " + i + " " + String(Date.now()).slice(-5));
+        const r = await req("POST", `/api/batches/${tkA._id}/members`, { candidate: c._id, joined_on: joins[i] }, 201).catch(() => null);
+        if (r) added++;
+      }
+      const tkD = (await req("GET", "/api/plan-tracker", undefined, 200)).data;
+      const rowD = (tkD.rows ?? []).find((r) => String(r.batch?._id) === String(tkA._id));
+      const days = Array.isArray(rowD?.mobilization?.days) ? rowD.mobilization.days : null;
+
+      ok("QA-765 fixture guard: four roster rows really landed on the tracker batch (without this the assertions below prove nothing)",
+        added === 4 && (rowD?.mobilization?.count ?? 0) >= 4,
+        JSON.stringify({ added, count: rowD?.mobilization?.count }));
+
+      // 1. The series exists at all. FAILS before this unit - column 15 carried only
+      //    {status, count} and nothing in the product could answer "kis din kitne".
+      ok("QA-765: column 15 carries a day-by-day series, not just a total",
+        !!days && days.length > 0 && days.every((d) => typeof d.date === "string" && typeof d.joined === "number"),
+        JSON.stringify(days));
+
+      // 2. THE assertion the design turns on. The opened cell and the closed cell are ONE query,
+      //    so the increments cannot fail to add up to the number printed beside them. An
+      //    implementation that counted twice would drift the first time a member was dropped.
+      ok("QA-765: the day increments sum EXACTLY to the count in the closed cell - one query, not two",
+        !!days && days.length > 0 && days.reduce((a, d) => a + d.joined, 0) === rowD.mobilization.count,
+        JSON.stringify({ sum: (days ?? []).reduce((a, d) => a + d.joined, 0), count: rowD?.mobilization?.count }));
+
+      // 3. Cumulative is a real running total and ends on the count - he asked for "abhi tak",
+      //    not for a column the reader has to add up themselves.
+      ok("QA-765: cumulative is the running total and its last value IS the count",
+        !!days && days.length > 0 && days.every((d, i) => d.cumulative === days.slice(0, i + 1).reduce((a, x) => a + x.joined, 0))
+          && days[days.length - 1].cumulative === rowD.mobilization.count,
+        JSON.stringify((days ?? []).map((d) => [d.date, d.joined, d.cumulative])));
+
+      // 4. Ascending, so the curve reads left to right without the screen re-sorting it.
+      ok("QA-765: days come back oldest-first",
+        !!days && days.every((d, i) => i === 0 || days[i - 1].date < d.date),
+        JSON.stringify((days ?? []).map((d) => d.date)));
+
+      // 5. THE TIMEZONE PIN. 2029-03-05T20:00:00Z is 2029-03-06 01:30 IST. This assertion has the
+      //    SAME answer under TZ=UTC and TZ=IST only because the bucketing happens in mongo with an
+      //    explicit +05:30. Move it into node and this pin splits by machine - which is the bug.
+      ok("QA-765: a candidate who joined at 20:00 UTC is counted on the IST day (the 25th), not the UTC day (the 24th) - same answer under TZ=UTC and TZ=IST",
+        !!days && days.some((d) => d.date === "2029-02-25") && !days.some((d) => d.date === "2029-02-24"),
+        JSON.stringify({ tz: process.env.TZ ?? "(unset)", offsetMin: -new Date().getTimezoneOffset(), dates: (days ?? []).map((d) => d.date) }));
+
+      // 6. Two on one day is ONE row carrying 2, not two rows - a bucket, not a log.
+      ok("QA-765: two candidates joining on one day make ONE row of 2",
+        !!days && (days.find((d) => d.date === "2029-02-20")?.joined ?? 0) === 2,
+        JSON.stringify(days?.find((d) => d.date === "2029-02-20")));
+    }
+
     // ---- -174 (QA-526): the planning table downloads ----
     // The report got an export in -170 because Manish sir asked. Nobody asked for this one, and
     // that is the reason it exists: Karunn sir keeps this table in a SPREADSHEET today, so a

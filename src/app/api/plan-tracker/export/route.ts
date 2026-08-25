@@ -70,6 +70,9 @@ export const GET = apiHandler(async (_req: NextRequest) => {
     "Trainer mapped on SIDH portal": d(r.trainer_mapped_sidh),
     "Mobilisation done for this batch": r.mobilization?.status ?? "",
     "Mobilised count": r.mobilization?.count ?? 0,
+    // QA-765: the screen can OPEN this cell, so the file has to carry the same days or the two
+    // answer his question differently - and the export is where a disagreement is found last.
+    "Mobilised by day": (r.mobilization?.days ?? []).map((x: any) => x.date + " +" + x.joined).join(" · "),
     "Registration & enrolment done on SIDH": d(r.enrollment_done),
     "Expected batch start date": d(r.planned_start),
     "Expected batch end date": d(r.planned_end),
@@ -84,6 +87,7 @@ export const GET = apiHandler(async (_req: NextRequest) => {
     { Note: "Every trainer column is read from the trainer record, not from the batch. A trainer running two batches shows the SAME dates on both rows because it is the same trainer, not two copies." },
     { Note: "\"Not needed\" means the trainer is already certified, so that step does not apply to this batch. It is not a blank waiting to be filled." },
     { Note: "Mobilised count is counted from the batch roster each time this file is made. It is not stored anywhere." },
+    { Note: "\"Mobilised by day\" is the same roster, split by the day each candidate joined (IST). Its increments add up to Mobilised count - they are one query, not two." },
   ]), "how to read this");
 
   const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
