@@ -1,6 +1,6 @@
 import { collectionRoutes } from "@/lib/crud";
-import { Location, LocationTarget, Trainer } from "@/models";
-import { NOMINATED_STATES, tcVerdict } from "@/lib/rules";
+import { Location, LocationTarget } from "@/models";
+import { tcVerdict, trainerTiesFor } from "@/lib/rules";
 
 // 2026-08-12: tc_password is a LIVE government portal credential — "us location ke TC ID aur
 // password se login karunga". QA-088 (checker, 14/08): the gate used to be
@@ -45,18 +45,14 @@ export const { GET, POST } = collectionRoutes({
         .select("location program tc_status tc_id approved_target trainers_required enrolled_reported pending_reported nominations_received_reported nominated_nsdc_reported trainers_certified_reported")
         .populate("program", "name code scheme")
         .lean<any[]>(),
-      Trainer.aggregate([
-        { $match: { nominated_for_location: { $in: locIds }, active: true } },
-        { $group: {
-          _id: { l: "$nominated_for_location", p: "$nominated_for_program" },
-          nominated: { $sum: { $cond: [{ $in: ["$pipeline_status", NOMINATED_STATES] }, 1, 0] } },
-          certified: { $sum: { $cond: [{ $eq: ["$pipeline_status", "Certified"] }, 1, 0] } },
-        } },
-      ]),
+      // QA-1262 (client call 2026-08-25, "Zero zero dikh raha hai. Aur nomination ja chuka tha
+      // iska."): this was its own aggregate on `nominated_for_location` alone — one of THREE copies
+      // of the same derivation, all reading the same single tie. A trainer put on a batch at this
+      // centre never sets that field, so the grid read 0 for a centre that had trainers working in
+      // it. It now goes through the one shared derivation, which counts the batch tie too.
+      trainerTiesFor(locIds),
     ]);
-    const tcounts = new Map<string, { nominated: number; certified: number }>(
-      trainerRows.map((r: any) => [`${String(r._id.l)}|${String(r._id.p)}`, { nominated: r.nominated, certified: r.certified }]),
-    );
+    const tcounts = trainerRows;
     const byLoc = new Map<string, any[]>();
     for (const t of targets) {
       const k = String(t.location);

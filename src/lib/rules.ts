@@ -3256,14 +3256,81 @@ export function courseIsFinished(batch: any, portalWorkingDays: number | null | 
 export const NOMINATED_STATES = ["Documents Completed", "Sent to NSDC", "NSDC Approved", "NSDC Rejected",
   "TOT Payment Done", "TOT Scheduled", "TOT In Progress", "Certified"];
 
-export async function trainerCountsFor(locationId: unknown, programId: unknown) {
-  const base = { nominated_for_location: locationId, nominated_for_program: programId, active: true };
-  const [nominated, certified, inPipeline] = await Promise.all([
-    Trainer.countDocuments({ ...base, pipeline_status: { $in: NOMINATED_STATES } }),
-    Trainer.countDocuments({ ...base, pipeline_status: "Certified" }),
-    Trainer.countDocuments({ ...base, pipeline_status: { $nin: ["Certified", "Dropped"] } }),
+// QA-1262 (client call 2026-08-25). The client put a trainer on a Basti batch, the nomination had
+// already gone to NSDC, and the Locations grid still read "TRAINERS (OURS, LIVE) 0 / 2":
+//
+//   "humne Basti me trainer dal rakhe hai... maine ek batch banaya, usme trainer dala hua hai"
+//   "Zero zero dikh raha hai. Aur nomination ja chuka tha iska."
+//
+// The count read exactly ONE of the ways a trainer is tied to a centre - `nominated_for_location` -
+// and putting a trainer on a batch never writes that field (`grep nominated_for_location
+// src/app/api/batches/**` = 0 hits). Worse, trainer-select.ts:32-41 DELIBERATELY offers trainers
+// with no nomination, so the ordinary path creates exactly the state the count cannot see.
+//
+// UMESH'S DECISION, asked with the file:line evidence and answered 2026-08-25: "Dono" - count the
+// BATCH tie as well as the nomination, AND give the Locations screen its own way to nominate.
+// `home_location` and `capable_locations` stay OUT: QA-125 already ruled `capable_locations` a
+// *teaching* tie, not a fulfilment one, and `home_location` is where the trainer lives (the client
+// said it himself: "Kanpur centre nahi, woh toh home location hai").
+// He also refused the shortcut: do NOT auto-write `nominated_for_location` when a trainer is put on
+// a batch. This is a COUNT DERIVATION, not a data migration, and Rule T3 stays intact.
+//
+// `Batch.location` and `Batch.program` are BOTH required (models/index.ts:521-522), so a batch is an
+// EXACT (centre x job role) tie - the same key this count is grouped by. Cancelled batches do not
+// count; a cancelled batch is not a trainer working at a centre.
+//
+// THIS IS THE ONE PLACE. The same derivation existed in THREE copies - here, the readiness rollup
+// (`Trainer.aggregate` further down this file), and `api/locations/route.ts` - all three reading
+// only the nomination, so a fix in one would have left two lying. ARCHITECTURE section 3 exists for
+// exactly that; both bulk callers now go through `trainerTiesFor` and this function is a wrapper
+// over it, so they cannot disagree by construction.
+export async function trainerTiesFor(locIds: unknown[], progIds?: unknown[]) {
+  const out = new Map<string, { nominated: number; certified: number; in_pipeline: number }>();
+  if (!locIds.length) return out;
+
+  const nomMatch: Record<string, unknown> = { nominated_for_location: { $in: locIds }, active: true };
+  const batchMatch: Record<string, unknown> = { location: { $in: locIds }, trainer: { $ne: null }, status: { $ne: "Cancelled" } };
+  if (progIds) { nomMatch.nominated_for_program = { $in: progIds }; batchMatch.program = { $in: progIds }; }
+
+  const [nominatedRows, batches] = await Promise.all([
+    Trainer.find(nomMatch).select("_id pipeline_status nominated_for_location nominated_for_program").lean<any[]>(),
+    Batch.find(batchMatch).select("location program trainer").lean<any[]>(),
   ]);
-  return { nominated, certified, in_pipeline: inPipeline };
+  // The batch only carries the trainer's id; its pipeline_status decides which counter it lands in.
+  const batchTrainerIds = [...new Set(batches.map((b) => String(b.trainer)))];
+  const batchTrainers = batchTrainerIds.length
+    ? await Trainer.find({ _id: { $in: batchTrainerIds }, active: true }).select("_id pipeline_status").lean<any[]>()
+    : [];
+  const statusById = new Map(batchTrainers.map((t) => [String(t._id), String(t.pipeline_status ?? "")]));
+
+  // Keyed per (centre x job role) then per TRAINER, so a trainer who is both nominated here and
+  // running a batch here counts ONCE. A union that double-counted would replace one wrong number
+  // with another, and this row is what the client reconciles his sheet against.
+  const seen = new Map<string, Map<string, string>>();
+  const add = (l: unknown, p: unknown, id: string, status: string | undefined) => {
+    if (!l || !p || !id || status === undefined) return;
+    const k = `${String(l)}|${String(p)}`;
+    if (!seen.has(k)) seen.set(k, new Map());
+    seen.get(k)!.set(id, status);
+  };
+  for (const t of nominatedRows) add(t.nominated_for_location, t.nominated_for_program, String(t._id), String(t.pipeline_status ?? ""));
+  for (const b of batches) add(b.location, b.program, String(b.trainer), statusById.get(String(b.trainer)));
+
+  for (const [k, trainers] of seen) {
+    let nominated = 0, certified = 0, in_pipeline = 0;
+    for (const st of trainers.values()) {
+      if ((NOMINATED_STATES as readonly string[]).includes(st)) nominated++;
+      if (st === "Certified") certified++;
+      if (st !== "Certified" && st !== "Dropped") in_pipeline++;
+    }
+    out.set(k, { nominated, certified, in_pipeline });
+  }
+  return out;
+}
+
+export async function trainerCountsFor(locationId: unknown, programId: unknown) {
+  const ties = await trainerTiesFor([locationId], [programId]);
+  return ties.get(`${String(locationId)}|${String(programId)}`) ?? { nominated: 0, certified: 0, in_pipeline: 0 };
 }
 
 // Rule T8 - can this centre x job role actually start a batch? The three-way mapping Manish
@@ -3860,16 +3927,12 @@ export async function mappingReadinessBulk(targetFilter: Record<string, unknown>
   const locIds = [...new Set(targets.map((t) => t.location?._id).filter(Boolean))];
   const progIds = [...new Set(targets.map((t) => t.program?._id).filter(Boolean))];
 
-  const [trainerRows, candRows, roomRows] = await Promise.all([
-    Trainer.aggregate([
-      { $match: { nominated_for_location: { $in: locIds }, nominated_for_program: { $in: progIds }, active: true } },
-      { $group: {
-        _id: { l: "$nominated_for_location", p: "$nominated_for_program" },
-        nominated: { $sum: { $cond: [{ $in: ["$pipeline_status", NOMINATED_STATES] }, 1, 0] } },
-        certified: { $sum: { $cond: [{ $eq: ["$pipeline_status", "Certified"] }, 1, 0] } },
-        in_pipeline: { $sum: { $cond: [{ $in: ["$pipeline_status", ["Certified", "Dropped"]] }, 0, 1] } },
-      } },
-    ]),
+  // QA-1262: this used to be its own `Trainer.aggregate` on `nominated_for_location` alone — the
+  // second of three copies of the same derivation. It now goes through `trainerTiesFor`, which also
+  // counts the BATCH tie, so this readiness view and the Locations grid can no longer disagree
+  // about how many of our trainers a centre × job role has.
+  const [trainerTies, candRows, roomRows] = await Promise.all([
+    trainerTiesFor(locIds, progIds),
     Candidate.aggregate([
       { $match: { location: { $in: locIds }, program: { $in: progIds }, lifecycle_status: "Unassigned" } },
       { $group: {
@@ -3888,7 +3951,10 @@ export async function mappingReadinessBulk(targetFilter: Record<string, unknown>
     ]),
   ]);
 
-  const byTrainer = new Map(trainerRows.map((r) => [key(r._id.l, r._id.p), r]));
+  // QA-1262: `trainerTiesFor` already returns a Map on the SAME `loc|prog` key this file's `key()`
+  // builds, so there is nothing left to re-shape here — the local re-map was the thing that made
+  // this look like an independent derivation.
+  const byTrainer = trainerTies;
   const byCand = new Map(candRows.map((r) => [key(r._id.l, r._id.p), r]));
   const byRoom = new Map(roomRows.map((r) => [String(r._id), r]));
 

@@ -363,4 +363,58 @@ ok("[best] each row names its blockers + next action + trainer/candidate counts"
     (await req(admin, "GET", `/api/locations/${junk._id}`, undefined, 200)).data.item.active === true);
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// QA-1262 — the client's own case, from the 2026-08-25 call. He put a trainer on a Basti batch,
+// the nomination had already gone to NSDC, and the grid still read "TRAINERS (OURS, LIVE) 0 / 2":
+//     "maine ek batch banaya, usme trainer dala hua hai... Zero zero dikh raha hai.
+//      Aur nomination ja chuka tha iska."
+// The count read ONE of the ways a trainer is tied to a centre. Putting a trainer on a batch never
+// writes `nominated_for_location`, and trainer-select DELIBERATELY offers un-nominated trainers, so
+// the ordinary path creates exactly the state the count could not see.
+//
+// This is a BEHAVIOURAL test on purpose. The same defect class survived FIVE static pins in
+// check-user-copy.mjs this month (QA-1091 -> QA-1127 -> QA-1141 -> QA-1184 -> QA-1214), each
+// tightening buying one new hole and one new false red. A number that moves when the product moves
+// is the only guard that has held.
+{
+  const before = await fetchRow();
+  const beforeNom = before?.trainers_nominated_total ?? 0;
+
+  // A trainer with NO nomination to anywhere - the state the batch door actually creates.
+  const bTr = (await req(admin, "POST", "/api/trainers", { name: "TEST-EL BatchTie " + s, phone: phone("96"), skills: ["ELSkill" + s], pipeline_status: "TOT In Progress" }, 201)).data.item;
+  const afterTrainer = await fetchRow();
+  ok("QA-1262: a trainer tied to NO centre does not count for this one (else the tie means nothing)",
+    (afterTrainer?.trainers_nominated_total ?? 0) === beforeNom,
+    JSON.stringify({ beforeNom, after: afterTrainer?.trainers_nominated_total }));
+
+  // ...now put them on a batch AT THIS centre x job role. Batch.location and Batch.program are both
+  // required, so this is an exact tie - and it is the tie the client actually made.
+  const bRoom = (await req(admin, "POST", `/api/locations/${loc._id}/rooms`, { name: "EL Tie Room " + s, type: "Classroom", capacity: 25 }, 201)).data.item;
+  await req(admin, "POST", "/api/batches", { location: loc._id, program: prog._id, trainer: bTr._id, room: bRoom._id, planned_start: today(), target_size: 1 }, 201);
+  const afterBatch = await fetchRow();
+  ok("QA-1262: putting that trainer on a batch here MAKES THE COUNT MOVE - the client's exact case",
+    (afterBatch?.trainers_nominated_total ?? 0) === beforeNom + 1,
+    JSON.stringify({ beforeNom, expected: beforeNom + 1, got: afterBatch?.trainers_nominated_total }));
+
+  // DEDUP - my own claim, so it gets its own assertion. The trainer certified earlier is ALREADY
+  // counted through the nomination tie; putting them on a batch here too must not count them twice.
+  // A union that double-counted would swap one wrong number for another, and this row is what the
+  // client reconciles his sheet against.
+  const dupBefore = await fetchRow();
+  const dRoom = (await req(admin, "POST", `/api/locations/${loc._id}/rooms`, { name: "EL Dup Room " + s, type: "Classroom", capacity: 25 }, 201)).data.item;
+  await req(admin, "POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trEl._id, room: dRoom._id, planned_start: today(), target_size: 1 }, 201);
+  const dupAfter = await fetchRow();
+  ok("QA-1262: a trainer counted through BOTH ties still counts ONCE",
+    (dupAfter?.trainers_nominated_total ?? 0) === (dupBefore?.trainers_nominated_total ?? 0)
+      && (dupAfter?.trainers_certified_total ?? 0) === (dupBefore?.trainers_certified_total ?? 0),
+    JSON.stringify({ nomBefore: dupBefore?.trainers_nominated_total, nomAfter: dupAfter?.trainers_nominated_total,
+      certBefore: dupBefore?.trainers_certified_total, certAfter: dupAfter?.trainers_certified_total }));
+
+  // ...and the number must not be vacuous: if the count were 0 throughout, every check above passes
+  // for the wrong reason. This is the QA-1245 lesson, applied before it can bite here.
+  ok("QA-1262 [precondition] the count under test is above zero, so the assertions above are not vacuous",
+    (afterBatch?.trainers_nominated_total ?? 0) > 0, JSON.stringify({ got: afterBatch?.trainers_nominated_total }));
+}
+
 finish();

@@ -217,6 +217,26 @@ invalid recipient) and **always** write a MailLog row. Bounces: SNS → `public/
 
 ### 3.0 Collapsed in -155 (2026-08-20) — one definition each, do not re-grow the copies
 
+- **"how many of OUR trainers are tied to this centre × job role" (QA-1262, 2026-08-25):**
+  was THREE copies — `rules.ts trainerCountsFor` (single pair), the readiness rollup's own
+  `Trainer.aggregate` in the same file, and a third `Trainer.aggregate` in
+  `api/locations/route.ts`. All three read exactly ONE of the ties (`nominated_for_location`),
+  so the Locations grid showed **0 trainers for a centre that had trainers working in it** — the
+  client's own call: *"maine ek batch banaya, usme trainer dala hua hai… Zero zero dikh raha hai.
+  Aur nomination ja chuka tha iska."* Putting a trainer on a batch never writes that field
+  (`grep nominated_for_location src/app/api/batches/**` = 0 hits) and `trainer-select.ts:32-41`
+  deliberately offers un-nominated trainers, so the ordinary path CREATED the invisible state.
+  **`trainerTiesFor(locIds, progIds?)` in `rules.ts` is now the only definition**; it unions the
+  nomination tie with the BATCH tie (`Batch.location` + `Batch.program`, both required, so the
+  key is exact; Cancelled excluded) and de-duplicates per trainer. `trainerCountsFor` is a thin
+  wrapper over it and both bulk callers call it directly. `home_location` / `capable_locations`
+  stay OUT by decision — QA-125 already ruled `capable_locations` a *teaching* tie, and
+  `home_location` is where the trainer lives. Umesh also refused auto-writing
+  `nominated_for_location` on batch assign: this is a count derivation, not a data migration,
+  and Rule T3 stays intact. Guarded behaviourally in `e2e-eval-locations-admin.mjs` (the count
+  MOVES when a trainer joins a batch, counts ONCE when both ties apply, and a precondition
+  refuses to let those pass while the number is zero) — not by a source-text pin, because five
+  of those in a row failed to hold this defect class (QA-1091 → QA-1214).
 - **"the fields a Candidate has" (import surface):** was FIVE hand-typed copies (FIELD_CATALOG,
   the candidates-page mapping dropdown, the import writer, both drawer routes). The dropdown and
   the writer now BOTH read `CANDIDATE_IMPORT_FIELDS` (`field-catalog.ts`) — cost of the drift was
