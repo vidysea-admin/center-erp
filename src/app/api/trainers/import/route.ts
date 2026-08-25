@@ -7,6 +7,7 @@ import { JobRole, Location, Program, Trainer, TRAINER_PIPELINE } from "@/models"
 import { audit } from "@/lib/audit";
 import { normalizePhone } from "@/lib/duplicates";
 import { canonicalPhone } from "@/lib/validate";
+import { HALTED_LOCATION_STATUSES } from "@/lib/rules";
 import { personLabel } from "@/lib/person";
 
 // F-TRAINER-IMPORT (2026-08-14): Manish's stage-wise trainer sheet (qa/templates #3)
@@ -180,7 +181,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
         if (field === "nominated_for_location" && raw) {
           const hits = locByName.get(raw.toLowerCase()) ?? [];
           if (hits.length === 1) {
-            if (["On Hold", "Stopped", "Closed"].includes(String(hits[0].operational_status))) {
+            if (HALTED_LOCATION_STATUSES.includes(String(hits[0].operational_status))) {
               warnings.push(`${t.name ?? r[nameCol]}: centre "${hits[0].name}" is ${hits[0].operational_status} — nomination left blank (F-B5: a halted centre does not hire)`);
             } else t.nominated_for_location = hits[0]._id;
           } else centreUnmatched.push(raw);

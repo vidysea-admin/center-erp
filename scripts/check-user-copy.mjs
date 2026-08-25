@@ -891,6 +891,35 @@ for (const file of walk(root)) {
       );
     }
   }
+  // QA-1135 (DRY roadmap unit D4, 2026-08-25): which statuses HALT a centre (Rule 1) is ONE list,
+  // exported from lib/rules.ts. Five inline copies existed only because the const was private.
+  // NAMED exclusions this pin's regex cannot hit but the next person must not "fix": the 5-value
+  // OPERATIONAL_STATUS in models/index.ts and its rendered copy in locations/[id]/page.tsx answer
+  // a DIFFERENT question (what a status may be SET to - DO-NOT-MERGE #9); both begin with
+  // "Not Started" so the exact 3-element literal below does not match them, and widening this
+  // regex to catch subsequences would make it fail on those non-defects - which is how a pin gets
+  // narrowed to uselessness by the next person (3.0b).
+  {
+    if (/(?:^|[^.\w])export\s+const\s+HALTED_LOCATION_STATUSES\s*=/.test(stripComments(fs.readFileSync(path.join(root, "lib/rules.ts"), "utf-8")))) passed++;
+    else {
+      failed++;
+      pushStructural(`lib/rules.ts no longer EXPORTS HALTED_LOCATION_STATUSES - five importers depend on it; un-exporting strands them or, worse, invites the inline copies back (QA-1135).`);
+    }
+    const LIT = /\[\s*"On Hold"\s*,\s*"Stopped"\s*,\s*"Closed"\s*\]/;
+    const copies = [];
+    for (const abs of walk(root)) {
+      const rel = path.relative(root, abs).split(path.sep).join("/");
+      if (rel === "lib/rules.ts" || SKIP_FILES.has(rel)) continue;
+      if (LIT.test(stripComments(fs.readFileSync(abs, "utf-8")))) copies.push(rel);
+    }
+    if (!copies.length) passed++;
+    else {
+      failed++;
+      pushStructural(
+        `${copies.length} file(s) write the halted-statuses literal ["On Hold","Stopped","Closed"] by hand instead of importing HALTED_LOCATION_STATUSES from @/lib/rules: ${copies.join(", ")}. The recorded failure of this class is a status added to the canon that silently does not halt one door (QA-1135).`,
+      );
+    }
+  }
   const tips = bp.split(/\r?\n/).filter((l) => /title=/.test(l) && /awaiting_match/.test(l));
   const tipFaults = [];
   if (tips.length < 3) tipFaults.push(`app/(app)/batches/[id]/page.tsx: only ${tips.length} of the three awaiting-match tooltips (Candidates chip, Attendance chip, Closure summary) can be found - this check has lost a subject rather than passed (QA-434)`);

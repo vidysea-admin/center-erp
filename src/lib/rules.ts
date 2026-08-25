@@ -23,7 +23,12 @@ export const ACTIVE_BATCH_STATUSES = ["Planning", "Ready", "Active", "Closing"];
 // Rule 1 (RPL M1/M10): no operational activity at a location that has been stopped.
 // "Not Started" is deliberately allowed — centres are planned before they open, which is
 // the whole point of advance batch planning.
-const HALTED_LOCATION_STATUSES = ["On Hold", "Stopped", "Closed"];
+// QA-1135 (DRY roadmap D4, 2026-08-25): exported — five inline copies of this list existed (two in
+// enrol-otp, trainers/import, trainer-requests/from-shortfall, and one 3,000 lines below in this
+// very file) because a private const cannot be imported. The copies were not laziness; they were
+// unavoidable. NOT the same list as models OPERATIONAL_STATUS (what a status may BE, 5 values) —
+// this is which of those halt operations (Rule 1). check-user-copy.mjs pins the literal.
+export const HALTED_LOCATION_STATUSES = ["On Hold", "Stopped", "Closed"];
 
 export async function assertLocationOperational(locationId: unknown, action = "This action") {
   const loc = await Location.findById(locationId).select("name operational_status").lean<any>();
@@ -3096,7 +3101,7 @@ function readinessBlockers(
   if (!loc.tc_id) blockers.push("no TC ID on record");
   else if (loc.tc_status && loc.tc_status !== "Approved") blockers.push(`TC status is "${loc.tc_status}"`);
   if (loc.approval_status !== "Approved") blockers.push("centre not approved");
-  if (["On Hold", "Stopped", "Closed"].includes(String(loc.operational_status))) blockers.push(`centre is ${loc.operational_status}`);
+  if (HALTED_LOCATION_STATUSES.includes(String(loc.operational_status))) blockers.push(`centre is ${loc.operational_status}`);
   if (counts.certified < 1) {
     blockers.push(counts.in_pipeline > 0
       ? `no certified trainer yet (${counts.in_pipeline} in the pipeline)`

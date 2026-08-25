@@ -6,6 +6,7 @@ import { rateLimit, clientKey, phoneChallengeGate } from "@/lib/rate-limit";
 import { Candidate, EDUCATION_LEVEL, Location, Notification, Program, PublicToken } from "@/models";
 import { aadhaarError, canonicalAadhaar, canonicalPhone, emailError, phoneError } from "@/lib/validate";
 import { findDuplicateCandidates } from "@/lib/duplicates";
+import { HALTED_LOCATION_STATUSES } from "@/lib/rules";
 import { renderMail, sendMail } from "@/lib/mailer";
 import { sendSms, smsTemplateFor } from "@/lib/sms";
 import { audit } from "@/lib/audit";
@@ -34,7 +35,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
   const t = await PublicToken.findOne({ token, purpose: { $in: ["email_otp", "phone_otp"] }, active: true, otp_verified: true }).lean<any>();
   if (!t) throw new HttpError(404, "This code session is not valid — request a new code.");
   const [locations, programs] = await Promise.all([
-    Location.find({ operational_status: { $nin: ["On Hold", "Stopped", "Closed"] } }).select("name city state").sort({ name: 1 }).lean(),
+    Location.find({ operational_status: { $nin: HALTED_LOCATION_STATUSES } }).select("name city state").sort({ name: 1 }).lean(),
     Program.find({ active: true }).select("name code scheme").sort({ name: 1 }).lean(),
   ]);
   return NextResponse.json({ email: t.email ?? null, phone: t.phone ?? null, channel: t.purpose === "phone_otp" ? "sms" : "email", locations, programs, education_levels: EDUCATION_LEVEL });
@@ -144,7 +145,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
     if (!body.location) throw new HttpError(400, "Please choose your training centre.");
     if (!body.program) throw new HttpError(400, "Please choose a program.");
     const loc = await Location.findById(body.location).select("name operational_status").lean<any>();
-    if (!loc || ["On Hold", "Stopped", "Closed"].includes(String(loc.operational_status))) {
+    if (!loc || HALTED_LOCATION_STATUSES.includes(String(loc.operational_status))) {
       throw new HttpError(400, "That centre is not taking registrations right now.");
     }
     // 2026-08-24 (Umesh): Aadhaar on the OTP door too. -130/QA-275 is the standing lesson about this

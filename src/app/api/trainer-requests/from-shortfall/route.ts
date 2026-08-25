@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, locationFilter, assertLocationInScope } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Notification, TrainerRequest } from "@/models";
-import { mappingReadinessBulk, addDays } from "@/lib/rules";
+import { mappingReadinessBulk, addDays, HALTED_LOCATION_STATUSES } from "@/lib/rules";
 import { mailUsersByRole } from "@/lib/mailer";
 
 // F-A9 (Manish): the readiness screen already knows exactly which centre × job role has
@@ -35,7 +35,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
     const certified = r.trainers?.certified ?? 0;
     const inPipeline = r.trainers?.in_pipeline ?? 0;
     if (certified >= 1 || inPipeline > 0) continue; // no shortfall, or hiring already underway — not even "skipped"
-    if (["On Hold", "Stopped", "Closed"].includes(String(r.location?.operational_status))) {
+    if (HALTED_LOCATION_STATUSES.includes(String(r.location?.operational_status))) {
       skipped.push({ ...name, reason: `centre is ${r.location.operational_status} (F-B5: a halted centre does not hire)` });
       continue;
     }
