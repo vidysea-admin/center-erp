@@ -31,7 +31,50 @@ const SUITES = [
   "e2e-eval-enrollment.mjs",
   "e2e-eval-locations-admin.mjs",
   "e2e-eval-data.mjs",
+  // QA-573 (2026-08-25, Umesh approved): the FIRST suite here that asserts what the SCREEN does
+  // rather than what a source file spells. It drives a real chromium (`playwright` is a
+  // devDependency now) and holds one operator-facing invariant: a screen that announces a count
+  // above zero must render rows, and must never tell a centre with candidates to "add or import".
+  // It exists because QA-1145 shipped live, was found by a person opening the app, and then survived
+  // FIVE static pins in check-user-copy.mjs (QA-1091 -> QA-1127 -> QA-1141 -> QA-1184 -> QA-1214),
+  // each of which bought exactly one new hole and one new false red. It is last in the list because
+  // it is the slowest, and its preconditions are ASSERTIONS not skips - a browser that will not
+  // launch turns this suite red rather than quietly green.
+  "e2e-rendered-candidates.mjs",
 ];
+
+// QA-1096 (2026-08-25): this file's guards protected `npm test` and NOTHING ELSE. All fifteen
+// `npm run test:*` scripts ran `node scripts/<suite>.mjs` directly, so a single-suite run was refused
+// nothing - not the production-database check below, not the server-identity check under it, and not
+// the timezone refusal that had just been added for QA-1065. We run single suites constantly while
+// iterating, which is exactly when a wrong answer is cheapest to believe.
+//
+// It was worse than a gap. Once `npm test` refuses a run in the wrong timezone, a single-suite green
+// beside it reads as MORE authoritative, not less - the loud guard makes the unguarded path look
+// deliberate.
+//
+// The fix is NOT a copy of the predicate in each suite. It is that every documented way of running a
+// suite comes through this file: `package.json` now spells them `run-e2e.mjs <suite>.mjs`. One
+// predicate, one place - the same reasoning db-guard.mjs states in its own header, and the failure
+// ARCHITECTURE section 3 exists to name.
+{
+  const asked = process.argv.slice(2).filter((a) => !a.startsWith("-"));
+  if (asked.length) {
+    const unknown = asked.filter((a) => !SUITES.includes(a));
+    if (unknown.length) {
+      console.error("");
+      console.error("run-e2e: unknown suite(s): " + unknown.join(", "));
+      console.error("Known suites (the list lives here, so this is the whole set):");
+      for (const s of SUITES) console.error("    " + s);
+      console.error("");
+      process.exit(2);
+    }
+    SUITES.length = 0;
+    SUITES.push(...asked);
+    console.log("run-e2e: running " + asked.length + " of the full wall - " + asked.join(", "));
+    console.log("  (a subset is not a wall. Its green is evidence about these suites only.)");
+  }
+}
 
 // QA-851 (2026-08-24): the database HOST, which nothing guarded. CLAUDE.md pins the database NAME
 // ("MONGODB_DB=center_erp_ci, never center_erp") and says nothing about WHICH MACHINE that name

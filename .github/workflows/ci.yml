@@ -73,6 +73,17 @@ jobs:
       - run: npm ci
       - run: npm run build
 
+      # QA-573 (2026-08-25, Umesh approved): e2e-rendered-candidates.mjs drives a real browser, so
+      # the chromium build has to be here. `npm ci` installs the `playwright` PACKAGE; it does not
+      # download a browser. On a developer machine the build is usually already in ms-playwright and
+      # this step is a no-op; on a fresh ubuntu-latest runner it is a real download, and that cost is
+      # the price of the first suite in this wall that can see what the screen actually renders.
+      # --with-deps installs the shared libraries headless chromium needs on ubuntu-latest.
+      # If this step is ever removed, the suite goes RED with "run `npx playwright install chromium`"
+      # rather than quietly passing - its preconditions are assertions, not skips (QA-1214's lesson).
+      - name: Install the chromium build the rendered-state suite drives
+        run: npx playwright install --with-deps chromium
+
       - name: Seed core data
         run: npm run seed
 
