@@ -2037,17 +2037,46 @@ for (const file of walk(root)) {
   if (!csrc) { failed++; pushStructural(rel + ": file not found - the QA-1145 pin cannot run."); }
   else {
     const cscan = stripComments(csrc);
-    const init = /const\s*\[\s*tag\s*,\s*setTag\s*\]\s*=\s*useState\(([\s\S]*?)\);/.exec(cscan);
-    const body = init ? init[1] : "";
-    const readsUrl = /lifecycle_status/.test(body);
-    const guardsAgainstLists = /FRESH_TAGS/.test(body) && /JOURNEY_TAGS/.test(body);
+    // CYCLE 2 (QA-1184, checker on cycle 1). Cycle 1 read only INSIDE the `useState(...)` parens and
+    // keyed on the state variable being named `tag`. Both were wrong, and the checker proved it with
+    // a mutation matrix against my own commit:
+    //   - the fix itself HOISTS the url read into `presetTag`, OUTSIDE the parens, so `readsUrl` was
+    //     false and the pin passed WITHOUT EVER REQUIRING THE LISTS. It never guarded the very fix
+    //     it shipped with. Three wrong rewrites (same bug hoisted / dead branch / behind a helper)
+    //     all went 298/0 SILENT.
+    //   - and a CORRECT rename (`[tag,setTag]` -> `[pill,setPill]`) went red with a false message.
+    // A pin that fails open is worse than no pin: it reports a guarantee it is not making.
+    //
+    // So the REGION is what is read, bounded by the two things this decision is actually made of —
+    // the first `lifecycle_status` read, and the bucket's own `useState`. The state variable's name
+    // is not part of the invariant and is no longer part of the test.
+    const urlAt = cscan.indexOf("lifecycle_status");
+    const bucketAt = cscan.search(/useState<\s*"Fresh"\s*\|\s*"Enrolled"\s*>/);
+    const region = urlAt >= 0 && bucketAt > urlAt ? cscan.slice(urlAt, bucketAt) : "";
+    const readsUrl = urlAt >= 0;
+    // QA-1183: the union of both lists is NOT the right set — only the RESOLVED bucket's pills are
+    // rendered. So the guard must name both lists AND choose between them, and the chosen list must
+    // be the thing the preset is tested against.
+    const namesBothLists = /FRESH_TAGS/.test(region) && /JOURNEY_TAGS/.test(region);
+    const choosesList = /\?\s*FRESH_TAGS\s*:\s*JOURNEY_TAGS|\?\s*JOURNEY_TAGS\s*:\s*FRESH_TAGS/.test(region.replace(/\s+/g, " "));
+    const testsMembership = /\.includes\(/.test(region);
+    // ...and the membership test must actually DECIDE. `true || (…).includes(x)` names both lists,
+    // chooses between them and calls .includes — and never evaluates any of it. I closed this exact
+    // hole on the QA-798 pin one cycle earlier and then shipped it again here, which is why it is
+    // written out rather than just fixed: a constant short-circuit is the cheapest way past every
+    // structural pin in this file, and it must be refused by name in each of them.
+    const shortCircuited = /(^|[^\w.])true\s*\|\||\|\|\s*true([^\w]|$)|(^|[^\w.])false\s*&&|&&\s*false([^\w]|$)/
+      .test(region.replace(/\s+/g, " "));
+    const guardsAgainstLists = namesBothLists && choosesList && testsMembership && !shortCircuited;
+    const init = region.length > 0;
     if (init && (!readsUrl || guardsAgainstLists)) passed++;
     else {
       failed++;
       pushStructural(rel + ": the tag pill is preset from the URL without checking it is a pill"
-        + " (initialiser found=" + !!init + ", reads lifecycle_status=" + readsUrl
-        + ", consults FRESH_TAGS and JOURNEY_TAGS=" + guardsAgainstLists + ") -> "
-        + JSON.stringify(body.trim().replace(/\s+/g, " ").slice(0, 140))
+        + " (region found=" + init + ", reads lifecycle_status=" + readsUrl
+        + ", names both lists=" + namesBothLists + ", CHOOSES between them=" + choosesList
+        + ", tests membership=" + testsMembership + ", short-circuited by a constant=" + shortCircuited + ") -> "
+        + JSON.stringify(region.trim().replace(/\s+/g, " ").slice(0, 160))
         + " - `lifecycle_status` is a STORED value (\"Enrolled\", \"Assigned\", \"Completed\") and the"
         + " pills are JOURNEY labels; \"Enrolled\" is in neither list, so the filter matches nothing"
         + " and the card opens its own list showing the count above zero rows and an empty state"

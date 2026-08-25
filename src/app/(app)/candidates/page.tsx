@@ -59,14 +59,33 @@ function CandidatesInner() {
   // The bucket line below already reads the same parameter and resolves it correctly, so the
   // deep link keeps working; only the pill is dropped when the value is not a pill. A value that
   // cannot select anything must select nothing, not everything-filtered-to-empty.
+  // QA-1183 (checker on cycle 1). Cycle 1 whitelisted the preset against the UNION of both pill
+  // lists — and only ONE bucket's pills are rendered (:159), while the bucket is chosen separately.
+  // `"Failed"` is the only value in both lists, so SEVEN of the eight JOURNEY_TAGS still preset a
+  // pill that the visible bucket does not carry. The checker drove it: `?lifecycle_status=Certified`
+  // landed on the Fresh tab reading "All 185" above ZERO rows and the same "No candidates — add or
+  // import." sentence, while 28 Certified candidates sat in the tab beside it. That is QA-1145
+  // byte-for-byte on a different value — the union was the wrong set to test against.
+  //
+  // The two decisions are made TOGETHER now, in the order they actually depend on each other:
+  // first WHICH bucket the deep link means, then whether the value is a pill THAT bucket renders.
+  // A journey label implies the Enrolled bucket — that is where journey pills live — so it now
+  // selects that bucket instead of falling through to Fresh and filtering to nothing.
   const presetTag = sp.get("lifecycle_status") ?? "";
+  // `lifecycle_status` carries STORED values ("Assigned", "Enrolled", "Completed", "Failed") and
+  // deep links also arrive carrying JOURNEY labels. Both belong to the Enrolled side.
+  const initialBucket: "Fresh" | "Enrolled" =
+    sp.get("bucket") === "Enrolled"
+      || ["Assigned", "Enrolled", "Completed", "Failed"].includes(presetTag)
+      || JOURNEY_TAGS.includes(presetTag)
+      ? "Enrolled" : "Fresh";
+  // ...and only then: is it a pill THIS bucket shows? If not, drop the pill and show the bucket.
+  // A value that cannot select anything must select nothing, never everything-filtered-to-empty.
   const [tag, setTag] = useState(
-    [...FRESH_TAGS, ...JOURNEY_TAGS].includes(presetTag)
+    (initialBucket === "Fresh" ? FRESH_TAGS : JOURNEY_TAGS).includes(presetTag)
       ? presetTag
       : (sp.get("program") === "null" ? "No programme" : ""));
-  // Bucket deep-links: /candidates?bucket=Enrolled, and lifecycle presets pick their bucket.
-  const [bucket, setBucket] = useState<"Fresh" | "Enrolled">(
-    sp.get("bucket") === "Enrolled" || ["Assigned", "Enrolled", "Completed", "Failed"].includes(sp.get("lifecycle_status") ?? "") ? "Enrolled" : "Fresh");
+  const [bucket, setBucket] = useState<"Fresh" | "Enrolled">(initialBucket);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [shareLink, setShareLink] = useState("");
@@ -591,7 +610,7 @@ function CandidatesInner() {
           // QA-945 (Umesh): "team ko ye help kregi ki future interested walo se jitna abhi data
           // possible hai vo le legi aur baad mai dobara call kreke convert kr skti hai."
           { value: FUTURE_INTEREST_TAG, label: FUTURE_INTEREST_TAG, count: tagCount(FUTURE_INTEREST_TAG),
-            title: "Told us they want a LATER batch. They cannot be enrolled until that is changed — which is the point: they stay in the pool as a lead to call back, instead of being lost or wrongly enrolled." },
+            title: "Told us they want the Upcoming batch. They cannot be enrolled until that is changed — which is the point: they stay in the pool as a lead to call back, instead of being lost or wrongly enrolled." },
         ]} />
       {selected.size > 0 && (
         <div className="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm">
@@ -613,7 +632,7 @@ function CandidatesInner() {
               // the box, presses Assign, and meets a 409 they could not have predicted. A disabled
               // box that explains itself is the difference between a rule and an obstacle.
               <input type="checkbox" checked={selected.has(r._id)} onChange={() => toggle(r._id)} onClick={(e) => e.stopPropagation()}
-                title={isFutureInterest(r) ? "Interested in a FUTURE batch — change that on their record before adding them to this one." : undefined}
+                title={isFutureInterest(r) ? "Interested in the Upcoming batch — change that on their record before adding them to this one." : undefined}
                 disabled={isFutureInterest(r) || (r.lifecycle_status !== "Unassigned" && r.lifecycle_status !== "Dropped")} />
             ) },
           { key: "name", label: "Name", sortable: true, sortValue: (r: any) => r.name, render: (r: any) => <NameCell name={r.name} sub={r.gender} /> },
@@ -670,7 +689,7 @@ function CandidatesInner() {
                 <span className="flex flex-wrap items-center gap-1">
                   {stage}
                   <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800"
-                    title="Told us they want a LATER batch. They cannot be added to one until this is changed — the row action does it in a click.">
+                    title="Told us they want the Upcoming batch. They cannot be added to one until this is changed — the row action does it in a click.">
                     {FUTURE_INTEREST_TAG}
                   </span>
                 </span>
@@ -779,7 +798,7 @@ function CandidatesInner() {
                   <Btn small kind="ghost" onClick={async () => {
                     try { await api(`/api/candidates/${r._id}`, { method: "PATCH", json: { batch_interest: "Current" } }); load(); }
                     catch (e: any) { setError(e.message); }
-                  }}>Move to current intake</Btn>
+                  }}>Move to the current batch</Btn>
                 )}
               </span>
             ),
@@ -899,11 +918,11 @@ function CandidatesInner() {
               changes it back. */}
           <Field label="Interested in">
             <select className={inputCls} value={form.batch_interest ?? "Current"} onChange={(e) => set("batch_interest", e.target.value)}>
-              <option value="Current">The current / upcoming batch</option>
-              <option value="Future">A future batch — not available right now</option>
+              <option value="Current">The current batch</option>
+              <option value="Future">Upcoming batch</option>
             </select>
             {form.batch_interest === "Future" && (
-              <span className="mt-0.5 block text-[11px] text-amber-700">They will not be selectable for a batch until this is set back to the current intake.</span>
+              <span className="mt-0.5 block text-[11px] text-amber-700">They will not be selectable for a batch until this is set back to "The current batch".</span>
             )}
           </Field>
           <Field label="Aadhaar number">
