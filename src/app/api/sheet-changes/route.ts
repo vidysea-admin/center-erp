@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser } from "@/lib/authz";
-import { hasPermission, requirePerm, requireView } from "@/lib/permissions";
+import { requirePerm, requireView } from "@/lib/permissions";
 import { FollowUpAction, LocationTarget, Program, SheetChange } from "@/models";
 import { canRevert, classifyChange, targetRowField } from "@/lib/sync";
 
@@ -32,8 +32,25 @@ export const GET = apiHandler(async (req: NextRequest) => {
     .lean<any[]>();
   // 2026-08-13: tc_password became mappable, so a change row can now carry a live portal
   // credential. Sheet Watch already masks the same column; the reviewer inbox must not be the
-  // door that stays open. Only a holder of locations.manage sees the values.
-  const canSeeSecrets = await hasPermission(user, "locations.manage");
+  // door that stays open.
+  //
+  // QA-1220 (2026-08-25): the gate WAS `hasPermission(user, "locations.manage")` — the exact right
+  // QA-088 removed from the Locations route for being too broad, left standing here in the second
+  // door. The saved matrix grants locations.manage to Operations AND to every SPOC, so anyone given
+  // sheet.approve to empty the review queue was also handed every centre's live portal password,
+  // old and new, with no second decision. QA-088's own verdict says why in one line: that right is
+  // held by exactly the logins it should be hidden from, "which is exactly why it leaked".
+  //
+  // The gate is the ROLE, matching both siblings: api/locations/route.ts:41
+  // (`maskLocationSecrets(items, user.role === "Admin")`) and api/workbook-changes/route.ts:34
+  // (`user.role !== "Admin"` on the sheet's credential COLUMNS). Three doors, one gate.
+  //
+  // NOT fixed here and deliberately so: QA-289 (S1, still Open) and QA-1026 (S1) ask for something
+  // further — "a live credential is not on screen unless somebody asks for it" — which no screen
+  // does today, Locations included. Admin still sees both values by default on this list. That is
+  // one requirement across two screens and needs its own unit; narrowing WHO can see it does not
+  // answer WHETHER it should be on screen unasked.
+  const canSeeSecrets = user.role === "Admin";
 
   // QA-988 (checker on qa-234 cycle 1): `targetRowField` only proves the field NAME parses. The
   // apply door additionally requires the LocationTarget row to already exist for tc_status / tc_id
