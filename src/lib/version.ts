@@ -90,9 +90,12 @@ export const RELEASE_NOTE_CURRENT =
   "the refusal an operator reads when enrolment is declined, and the spreadsheet import column. "  +
   "Stored records are untouched; only the words changed. Third, marking a candidate Not eligible "  +
   "and then passing them no longer happens without a recorded reason, and the decision that "  +
-  "governs it now lives in one place instead of four. Fourth, a save on the candidate details "  +
+  "governs it now lives in one place instead of four. Fourth, a save on a batch's details "  +
   "panel that had always worked but never said so now confirms itself, so nobody presses it "  +
-  "twice wondering. And four separate doors that each asked whether a certificate is settled "  +
+  "twice wondering - and it also shows the answer the server had been working out and throwing "  +
+  "away every time: whether the trainer on the batch is actually cleared for the portal, and "  +
+  "whether the start date is earlier than the centre can realistically manage, with the reasons. "  +
+  "And four separate doors that each asked whether a certificate is settled "  +
   "now ask it the same way, which is what stops two of them quietly disagreeing about the same "  +
   "candidate.";
 const RELEASE_NOTE_ARCHIVE_245 =
