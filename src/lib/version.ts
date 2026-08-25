@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-250";
+export const RELEASE = "2026.08.14-251";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -117,6 +117,18 @@ const RELEASE_NOTE_ARCHIVE_249 =
   "name, so a roster that has never carried that ID no longer reports every row as matched.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-251 closes a live credential that a signed-in Operations login could reach without asking. "  +
+  "The centre list used to hand every government portal password to whoever loaded it, an Admin "  +
+  "included, and answered a different question than the one that mattered - who is ALLOWED to see "  +
+  "it, not whether it belongs on a screen nobody opened. It no longer does; the password stays "  +
+  "hidden behind a dots-and-Show control that only asks for a centre's own record when someone "  +
+  "actually presses it. The same password was also riding out through two other doors nobody "  +
+  "thought to check - the home page's pending-action list and the follow-ups screen - both open "  +
+  "to Operations, both showing only a centre name, both carrying the credential anyway in what "  +
+  "the screen never displayed. Both are closed the same way. One related leak on a shared save "  +
+  "path stays open and is recorded for its own release.";
+
+const RELEASE_NOTE_ARCHIVE_250 =
   "-250 finishes three things -249 started and closes one gap the client found on a call. The "  +
   "Locations screen learned in -249 to count a trainer through the batch they are running, not "  +
   "only through a nomination typed against their name; the hiring board beside it had not "  +
@@ -733,7 +745,7 @@ const RELEASE_NOTE_ARCHIVE =
   // QA-265 records, one release after the comment above was written warning about it. tsc stayed
   // silent because tsconfig.json does not set noUnusedLocals. Both -246 and the orphaned -245 are
   // wired in here; adding a note to this chain is the second half of every bump, not an optional one.
-  RELEASE_NOTE_ARCHIVE_249 + " " + RELEASE_NOTE_ARCHIVE_248 + " " + RELEASE_NOTE_ARCHIVE_247 + " " + RELEASE_NOTE_ARCHIVE_246 + " " + RELEASE_NOTE_ARCHIVE_245 + " " +
+  RELEASE_NOTE_ARCHIVE_250 + " " + RELEASE_NOTE_ARCHIVE_249 + " " + RELEASE_NOTE_ARCHIVE_248 + " " + RELEASE_NOTE_ARCHIVE_247 + " " + RELEASE_NOTE_ARCHIVE_246 + " " + RELEASE_NOTE_ARCHIVE_245 + " " +
   RELEASE_NOTE_ARCHIVE_244 + " " + RELEASE_NOTE_ARCHIVE_243 + " " + RELEASE_NOTE_ARCHIVE_242 + " " + RELEASE_NOTE_ARCHIVE_241 + " " + RELEASE_NOTE_ARCHIVE_240 + " " + RELEASE_NOTE_ARCHIVE_239 + " " + RELEASE_NOTE_ARCHIVE_238 + " " +
   RELEASE_NOTE_ARCHIVE_237 + " " + RELEASE_NOTE_ARCHIVE_236 + " " +
   RELEASE_NOTE_ARCHIVE_231 + " " +
