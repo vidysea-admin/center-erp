@@ -26,6 +26,14 @@ export const POST = apiHandler(async (_req: NextRequest, ctx: { params: Promise<
   const revertable = canRevert(change);
   if (!revertable.ok) throw new HttpError(400, revertable.why);
 
+  // QA-1062 cycle 2: whether THIS row carries a credential. The list route decides the same thing
+  // at sheet-changes/route.ts and the two must not drift, so the field name is the single test in
+  // both places. Note this door is gated on sheet.approve ALONE — deliberately, because reverting
+  // is an operational act a non-Admin reviewer is meant to perform. What must not follow from that
+  // right is READING the credential, which is what the three copies below were handing over.
+  const secretField = change.field_name === "tc_password";
+  const maskChangeSecrets = (c: any) => ({ ...c, old_value: c.old_value ? "••••••" : "", new_value: c.new_value ? "••••••" : "" });
+
   // Generic field write — put back exactly what was there (the resolved old value when the
   // tab-mapping engine stored one, else the sheet's old text; blank means unset).
   if (change.action_taken === "Apply value") {
@@ -39,7 +47,18 @@ export const POST = apiHandler(async (_req: NextRequest, ctx: { params: Promise<
     const restore = snap && snap.revert !== undefined ? snap.revert : (change.old_value ?? "");
     doc.set(change.field_name, restore === "" ? undefined : restore);
     await doc.save({ validateModifiedOnly: true });
-    change.note = `${change.note ? change.note + " | " : ""}Reverted to "${change.old_value ?? ""}" by ${user.email ?? user.id}`;
+    // QA-1062 cycle 2 (2026-08-25): this note used to embed the restored value, and for a
+    // tc_password row that PERSISTED a live portal credential into a field the list route's mask
+    // does not cover (it masks old_value/new_value only) — so the door reopened everything the gate
+    // had just closed, one field over. A checker proved it end to end.
+    // The value is already on the row in old_value; repeating it in prose bought nothing and
+    // escaped the mask, so this note records the ACT and not the value — for every field on THIS
+    // branch, not only secret ones, because a note that sometimes quotes and sometimes does not is
+    // a rule the next reader has to remember. QA-805 already put the fact in `reverted_at`.
+    // The target-row branch further down still quotes its old value: that branch only ever handles
+    // `approved_target:<CODE>`, i.e. a whole number, so nothing there is a credential. Said out
+    // loud because "for every field" would have been a false universal one branch away.
+    change.note = `${change.note ? change.note + " | " : ""}Reverted by ${user.email ?? user.id}`;
     change.reverted_at = new Date(); // QA-805: the fact, so no screen has to grep a note for it
     change.status = "Ignored";
     await change.save();
@@ -48,7 +67,13 @@ export const POST = apiHandler(async (_req: NextRequest, ctx: { params: Promise<
       oldValue: change.new_value, newValue: change.old_value,
       actor: user.id, actorType: "EXTERNAL_SYNC",
     });
-    return NextResponse.json({ item: change, reverted_to: change.old_value ?? null });
+    // ...and the RESPONSE was the third copy: `reverted_to` handed back the raw old value, and
+    // `item` is the unmasked document. Both are gated on sheet.approve alone, so the login the
+    // gate fix was written for could read the password out of the reply. A secret field now
+    // reports that it was restored, not what to.
+    return NextResponse.json(secretField
+      ? { item: maskChangeSecrets(change.toObject()), reverted_to: change.old_value ? "(restored)" : null }
+      : { item: change, reverted_to: change.old_value ?? null });
   }
   if (!change.location) throw new HttpError(400, "Change has no matched location.");
 

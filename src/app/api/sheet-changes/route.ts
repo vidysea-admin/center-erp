@@ -34,7 +34,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
   // credential. Sheet Watch already masks the same column; the reviewer inbox must not be the
   // door that stays open.
   //
-  // QA-1220 (2026-08-25): the gate WAS `hasPermission(user, "locations.manage")` — the exact right
+  // QA-1062 (2026-08-25): the gate WAS `hasPermission(user, "locations.manage")` — the exact right
   // QA-088 removed from the Locations route for being too broad, left standing here in the second
   // door. The saved matrix grants locations.manage to Operations AND to every SPOC, so anyone given
   // sheet.approve to empty the review queue was also handed every centre's live portal password,
@@ -43,7 +43,14 @@ export const GET = apiHandler(async (req: NextRequest) => {
   //
   // The gate is the ROLE, matching both siblings: api/locations/route.ts:41
   // (`maskLocationSecrets(items, user.role === "Admin")`) and api/workbook-changes/route.ts:34
-  // (`user.role !== "Admin"` on the sheet's credential COLUMNS). Three doors, one gate.
+  // (`user.role !== "Admin"` on the sheet's credential COLUMNS).
+  //
+  // THIS COMMENT SAID "Three doors, one gate" AND THAT WAS WRONG — there is a FOURTH, and a checker
+  // reached the live credential through it while this mask worked perfectly a metre away:
+  // `[id]/revert` handed the same non-Admin login the old value back three ways (its response, a
+  // `note` it PERSISTED past this mask, and the audit trail). Fixed in the same cycle, but the
+  // lesson is the count: a route that masks a field is not the only route that reads it, and
+  // "three doors" was a number I had not gone and looked for.
   //
   // NOT fixed here and deliberately so: QA-289 (S1, still Open) and QA-1026 (S1) ask for something
   // further — "a live credential is not on screen unless somebody asks for it" — which no screen
