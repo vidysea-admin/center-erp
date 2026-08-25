@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-247";
+export const RELEASE = "2026.08.14-248";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -77,7 +77,7 @@ const RELEASE_NOTE_ARCHIVE_246 =
   "counts on the batch screens that stated more than they had measured, and a refusal message "  +
   "that named an internal rule number to the person reading it.";
 
-export const RELEASE_NOTE_CURRENT =
+const RELEASE_NOTE_ARCHIVE_247 =
   "-247 is mostly about screens that answered a question with the wrong half of an answer. "  +
   "Opening a summary card on the candidates screen used to be able to land you on a list that "  +
   "announced a count and then showed nothing under it, together with an invitation to add or "  +
@@ -98,6 +98,24 @@ export const RELEASE_NOTE_CURRENT =
   "And four separate doors that each asked whether a certificate is settled "  +
   "now ask it the same way, which is what stops two of them quietly disagreeing about the same "  +
   "candidate.";
+
+export const RELEASE_NOTE_CURRENT =
+  "-248 is mostly about a secret that was readable from the wrong side, and about one question "  +
+  "that three screens answered differently. The portal password a centre signs in with was being "  +
+  "written into the audit trail in full. Restricting who can open the sync queue did nothing "  +
+  "about that, because the trail is a separate collection that nothing redacts and anything can "  +
+  "read - so the masking now sits on the single path every audit write already goes through, "  +
+  "rather than on one caller that half of them never used, and a fourth door that could still "  +
+  "reach the raw value has the gate the other three already had. Second, \"is there room at this "  +
+  "centre for another batch\" now gets the same answer wherever it is asked, and - the half that "  +
+  "was actually missing - that answer now reaches the person who asked instead of being worked "  +
+  "out and dropped. Third, importing a spreadsheet no longer loses the whole file to a single "  +
+  "unreadable cell, and the preview names the cell instead of going quiet. Fourth, the report's "  +
+  "Status filter now says what it matches: it matches a centre's whole verdict, so filtering "  +
+  "Approved hides a centre reading Mixed together with the approved targets inside it - the tile "  +
+  "above the table is the control that opens every approved row, and the column now points at "  +
+  "it. And a warning that quoted an internal rule number at the person reading it no longer "  +
+  "does.";
 const RELEASE_NOTE_ARCHIVE_245 =
   "-245 corrects a number that could be typed as nonsense and kept, and repairs three places "  +
   "where the screen and the server disagreed about who may do what. A government attendance "  +
@@ -630,7 +648,7 @@ const RELEASE_NOTE_ARCHIVE =
   // QA-265 records, one release after the comment above was written warning about it. tsc stayed
   // silent because tsconfig.json does not set noUnusedLocals. Both -246 and the orphaned -245 are
   // wired in here; adding a note to this chain is the second half of every bump, not an optional one.
-  RELEASE_NOTE_ARCHIVE_246 + " " + RELEASE_NOTE_ARCHIVE_245 + " " +
+  RELEASE_NOTE_ARCHIVE_247 + " " + RELEASE_NOTE_ARCHIVE_246 + " " + RELEASE_NOTE_ARCHIVE_245 + " " +
   RELEASE_NOTE_ARCHIVE_244 + " " + RELEASE_NOTE_ARCHIVE_243 + " " + RELEASE_NOTE_ARCHIVE_242 + " " + RELEASE_NOTE_ARCHIVE_241 + " " + RELEASE_NOTE_ARCHIVE_240 + " " + RELEASE_NOTE_ARCHIVE_239 + " " + RELEASE_NOTE_ARCHIVE_238 + " " +
   RELEASE_NOTE_ARCHIVE_237 + " " + RELEASE_NOTE_ARCHIVE_236 + " " +
   RELEASE_NOTE_ARCHIVE_231 + " " +
