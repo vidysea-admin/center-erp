@@ -780,6 +780,60 @@ for (const file of walk(root)) {
       );
     }
   }
+  // QA-1103 (DRY roadmap unit D2, 2026-08-25): parseSheetDate exists TWICE on purpose and the two
+  // disagree on the YEAR. lib/rules.ts:166 handles Excel serials/ISO/day-first, range-validates,
+  // and returns null so the caller can REPORT by row; lib/field-catalog.ts:29 parses "6th July"
+  // and INVENTS the current year. Same name, same signature - a crossed import compiles silently
+  // and changes which year a dob or planned_start lands in. The merge is roadmap unit D12 and is
+  // GATED on two Umesh decisions (D-1 year rule, D-2 module home); until then this pin freezes the
+  // blast radius: the census (exactly these two declarations), the wiring (each caller on its own
+  // parser), and the purity of the SECOND import-free module (field-catalog is client-imported at
+  // candidates/page.tsx - one added import there breaks the candidates page, the same property
+  // the validate.ts pin below guards for the first one).
+  {
+    const DECL = /(?:^|[^.\w])(?:export\s+)?(?:function\s+parseSheetDate\s*\(|const\s+parseSheetDate\s*=)/;
+    const declHomes = [];
+    for (const abs of walk(root)) {
+      const rel = path.relative(root, abs).split(path.sep).join("/");
+      if (SKIP_FILES.has(rel)) continue;
+      const code = stripComments(fs.readFileSync(abs, "utf-8"));
+      if (DECL.test(code)) declHomes.push(rel);
+    }
+    const censusOk = declHomes.length === 2 && declHomes.includes("lib/rules.ts") && declHomes.includes("lib/field-catalog.ts");
+    if (censusOk) passed++;
+    else {
+      failed++;
+      pushStructural(
+        `parseSheetDate is declared in [${declHomes.join(", ") || "nowhere"}] - the census is exactly TWO, lib/rules.ts + lib/field-catalog.ts (deliberately different year semantics, ARCHITECTURE 3.4). A third copy is the seventh-spelling disease; a lost one strands its callers on the wrong parser (QA-1103).`,
+      );
+    }
+    const WIRES = [
+      ["lib/tab-mapping.ts", "@/lib/field-catalog"],
+      ["app/api/candidates/import/route.ts", "@/lib/rules"],
+      ["app/api/batches/import/route.ts", "@/lib/rules"],
+    ];
+    const crossed = [];
+    for (const [rel, want] of WIRES) {
+      const code = stripComments(fs.readFileSync(path.join(root, rel), "utf-8"));
+      const froms = [...code.matchAll(/import\s*(?:type\s*)?\{[^}]*?\bparseSheetDate\b[^}]*?\}\s*from\s*"([^"]+)"/g)].map((m) => m[1]);
+      if (froms.length !== 1 || froms[0] !== want) crossed.push(`${rel} imports parseSheetDate from [${froms.join(", ") || "nowhere"}], expected "${want}"`);
+    }
+    if (!crossed.length) passed++;
+    else {
+      failed++;
+      pushStructural(
+        `parseSheetDate wiring crossed: ${crossed.join("; ")}. The two parsers disagree on which YEAR a spoken date lands in, and a crossed import compiles without a murmur (QA-1103).`,
+      );
+    }
+    const fcCode = stripComments(fs.readFileSync(path.join(root, "lib/field-catalog.ts"), "utf-8"));
+    if (!/^\s*import\s/m.test(fcCode)) passed++;
+    else {
+      failed++;
+      pushStructural(
+        `lib/field-catalog.ts now contains an import statement - it is the SECOND import-free pure module (client screens import it, candidates/page.tsx first among them) and one added import there breaks every one of them at compile (QA-1103; the same charter lib/validate.ts holds).`,
+      );
+    }
+  }
   const tips = bp.split(/\r?\n/).filter((l) => /title=/.test(l) && /awaiting_match/.test(l));
   const tipFaults = [];
   if (tips.length < 3) tipFaults.push(`app/(app)/batches/[id]/page.tsx: only ${tips.length} of the three awaiting-match tooltips (Candidates chip, Attendance chip, Closure summary) can be found - this check has lost a subject rather than passed (QA-434)`);

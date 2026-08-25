@@ -523,10 +523,22 @@ code is not a check.
 `99999999999999` → last ten → passes. This is exactly what -126 fixed on `p/register`, whose comment
 says *"every other path in the product uses lib/validate."* It did not. **SoT:** `validate.ts`.
 
-### 3.4 Two `parseSheetDate`, same name, different semantics
-`rules.ts:159` (Excel serials, ISO, day-first, null on failure) vs `field-catalog.ts:29` (no serials,
-parses "6th July", **defaults the year to the current one**). Callers: the two importers vs the
-automated watch ingest. **SoT:** `rules.ts`; `field-catalog` should delegate and keep only its extension.
+### 3.4 Two `parseSheetDate`, same name, different semantics — wires PINNED 2026-08-25 (QA-1103), and this row's own fix prescription was UNSHIPPABLE
+`rules.ts:166` (Excel serials, ISO, day-first, range-validated, null on failure — "never guess,
+never drop silently") vs `field-catalog.ts:29` (no serials, parses "6th July", **defaults the year
+to the current one**). Callers: the two importers (`candidates/import`, `batches/import` → rules)
+vs the automated watch ingest (`tab-mapping` → field-catalog). Same signature — a crossed import
+compiles silently and changes which YEAR a dob or planned_start lands in.
+**This row used to prescribe:** *"SoT: `rules.ts`; `field-catalog` should delegate and keep only
+its extension."* **That instruction cannot be followed and never could:** `field-catalog.ts` is the
+SECOND import-free pure module — `candidates/page.tsx:8` (a client component) imports it, and
+`rules.ts` pulls the mongoose models, so delegating would drag mongoose into a client page. Kept
+here corrected rather than deleted (§3.2c: the history is the evidence). The real merge is roadmap
+unit **D12** — parser moves DOWN into a pure module, `rules.ts` re-exports (the `normalizeCan`
+shape from §3.0) — and is **gated on two open Umesh decisions**: D-1 (the "6th July" year rule:
+keep the guess, report-by-row, or sheet-anchored) and D-2 (bless `lib/dates.ts` or widen a pure
+module's charter). Until then `check-user-copy.mjs` pins the freeze: exactly TWO declarations
+(rules + field-catalog), each caller wired to its own parser, and `field-catalog.ts` import-free.
 
 ### 3.5 Five phone normalizers — and the SIXTH this row never listed, which was the worst one
 `validate.ts:14` `canonicalPhone` (STRICT — the canon) · `duplicates.ts:7` `normalizePhone` (LOOSE
