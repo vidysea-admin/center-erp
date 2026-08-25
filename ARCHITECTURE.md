@@ -384,7 +384,7 @@ name what was not.
 |---|---|---|
 | Single add | `api/batches/[id]/members/route.ts:87` | `if (cand.location && …)` — **exempt**, and it *sets* the centre + audits it (:99) |
 | Bulk assign | `api/candidates/assign/route.ts:43` | `if (String(c0.location) !== …)` — **refused**: `String(undefined)` = `"undefined"`. No adoption either |
-| **Public batch-registration link** | `api/public/register/[token]/route.ts` (A-03, `-248`) | **calls `addMemberChecked` and nothing else**, so it inherits Rule 20, the QA-945 future-interest gate and the joined-on rule instead of re-stating them |
+| **Public batch-registration link** | `api/public/register/[token]/route.ts` (A-03, `qa-247` / release `-247`) | **calls `addMemberChecked` and nothing else**, so it inherits Rule 20, the QA-945 future-interest gate and the joined-on rule instead of re-stating them |
 
 **SoT:** extract the join-eligibility + adoption block into `rules.ts` beside `addMemberChecked` (:400)
 and have both of the first two routes call it. The third already does — it was written that way
