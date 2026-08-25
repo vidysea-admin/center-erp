@@ -436,6 +436,22 @@ function TrainersInner() {
               // Basti, Azamgarh…), 16 of which name places where we have no centre at all. So this is not
               // dirty data: it is the field doing its job, and the column was simply rendering two
               // different KINDS of fact identically. Name the kind instead of "auditing" honest data.
+              // QA-1262b (client, 25/08). He opened Sushma, saw "Kanpur, no centre", and had to say
+              // it himself: "Kanpur centre nahi, woh toh home location hai." The roster showed where
+              // a trainer LIVES and nowhere showed which centre x job role they are actually up for,
+              // which is the column he was looking for — "Trainers ka location nahi dikh raha yaha
+              // pe kahan assigned hai ye."
+              {
+                key: "nominated_for", label: "Nominated for", sortable: true, filterable: true,
+                sortValue: (r: any) => r.nominated_for_location?.name ?? "",
+                filterText: (r: any) => `${r.nominated_for_location?.name ?? ""} ${r.nominated_for_program?.name ?? ""}`.trim(),
+                render: (r: any) => (r.nominated_for_location || r.nominated_for_program) ? (
+                  <span className="text-xs">
+                    <span className="font-medium text-gray-900">{r.nominated_for_program?.name ?? "job role not set"}</span>
+                    <span className="block text-gray-500">{r.nominated_for_location?.name ?? "centre not set"}</span>
+                  </span>
+                ) : <span className="text-xs text-amber-700">not nominated</span>,
+              },
               { key: "home_location", label: "Home location", sortable: true,
                 sortValue: (r: any) => r.home_location?.name ?? r.home_location_other ?? null,
                 filterText: (r: any) => r.home_location?.name ?? (r.home_location_other ? `${r.home_location_other} (no centre)` : ""),

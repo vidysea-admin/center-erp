@@ -3332,7 +3332,12 @@ export const NOMINATED_STATES = ["Documents Completed", "Sent to NSDC", "NSDC Ap
 // exactly that; both bulk callers now go through `trainerTiesFor` and this function is a wrapper
 // over it, so they cannot disagree by construction.
 export async function trainerTiesFor(locIds: unknown[], progIds?: unknown[]) {
-  const out = new Map<string, { nominated: number; certified: number; in_pipeline: number }>();
+  // QA-1262b: `trainers` is ADDITIVE — Open Positions needs the people, not only the count, and it
+  // had its own single-link aggregation to get them. Two aggregations answering "who is tied to this
+  // centre x job role" is exactly the second copy this function was extracted to remove, so the
+  // names come from here or the migration is only half done.
+  const out = new Map<string, { nominated: number; certified: number; in_pipeline: number;
+    trainers: { _id: string; name: string; stage: string }[] }>();
   if (!locIds.length) return out;
 
   const nomMatch: Record<string, unknown> = { nominated_for_location: { $in: locIds }, active: true };
@@ -3340,15 +3345,16 @@ export async function trainerTiesFor(locIds: unknown[], progIds?: unknown[]) {
   if (progIds) { nomMatch.nominated_for_program = { $in: progIds }; batchMatch.program = { $in: progIds }; }
 
   const [nominatedRows, batches] = await Promise.all([
-    Trainer.find(nomMatch).select("_id pipeline_status nominated_for_location nominated_for_program").lean<any[]>(),
+    Trainer.find(nomMatch).select("_id name pipeline_status nominated_for_location nominated_for_program").lean<any[]>(),
     Batch.find(batchMatch).select("location program trainer").lean<any[]>(),
   ]);
   // The batch only carries the trainer's id; its pipeline_status decides which counter it lands in.
   const batchTrainerIds = [...new Set(batches.map((b) => String(b.trainer)))];
   const batchTrainers = batchTrainerIds.length
-    ? await Trainer.find({ _id: { $in: batchTrainerIds }, active: true }).select("_id pipeline_status").lean<any[]>()
+    ? await Trainer.find({ _id: { $in: batchTrainerIds }, active: true }).select("_id name pipeline_status").lean<any[]>()
     : [];
   const statusById = new Map(batchTrainers.map((t) => [String(t._id), String(t.pipeline_status ?? "")]));
+  const nameById = new Map<string, string>([...nominatedRows, ...batchTrainers].map((t: any) => [String(t._id), String(t.name ?? "")]));
 
   // Keyed per (centre x job role) then per TRAINER, so a trainer who is both nominated here and
   // running a batch here counts ONCE. A union that double-counted would replace one wrong number
@@ -3365,12 +3371,15 @@ export async function trainerTiesFor(locIds: unknown[], progIds?: unknown[]) {
 
   for (const [k, trainers] of seen) {
     let nominated = 0, certified = 0, in_pipeline = 0;
-    for (const st of trainers.values()) {
+    const people: { _id: string; name: string; stage: string }[] = [];
+    for (const [id, st] of trainers) {
       if ((NOMINATED_STATES as readonly string[]).includes(st)) nominated++;
       if (st === "Certified") certified++;
       if (st !== "Certified" && st !== "Dropped") in_pipeline++;
+      people.push({ _id: id, name: nameById.get(id) ?? "", stage: st });
     }
-    out.set(k, { nominated, certified, in_pipeline });
+    people.sort((a, b) => a.name.localeCompare(b.name));
+    out.set(k, { nominated, certified, in_pipeline, trainers: people });
   }
   return out;
 }
@@ -4026,7 +4035,7 @@ export async function mappingReadinessBulk(targetFilter: Record<string, unknown>
 
   return targets.filter((t) => t.location && t.program).map((t) => {
     const k = key(t.location._id, t.program._id);
-    const tc = byTrainer.get(k) ?? { nominated: 0, certified: 0, in_pipeline: 0 };
+    const tc = byTrainer.get(k) ?? { nominated: 0, certified: 0, in_pipeline: 0, trainers: [] };
     const cc = byCand.get(k) ?? { pool: 0, registered: 0 };
     const needed = t.program.default_batch_size ?? 30;
     const counts = { nominated: tc.nominated, certified: tc.certified, in_pipeline: tc.in_pipeline };
@@ -4049,7 +4058,11 @@ export async function mappingReadinessBulk(targetFilter: Record<string, unknown>
       },
       program: { _id: t.program._id, name: t.program.name, code: t.program.code, scheme: t.program.scheme ?? null },
       approved_target: t.approved_target ?? null,
-      trainers: { required: t.trainers_required ?? null, ...counts },
+      // QA-1262b: the PEOPLE, not only the counts. The Location screen's trainer slots named its
+      // occupants from a separate `?nominated_for_location=` call, so the slot count (which came
+      // through trainerTiesFor and already saw the batch tie) could read 1 while the name under it
+      // was blank — the count and the list disagreeing on one card. Same source for both now.
+      trainers: { required: t.trainers_required ?? null, ...counts, people: tc.trainers ?? [] },
       candidates: { pool: cc.pool, registered: cc.registered, needed },
       ready: blockers.length === 0,
       blockers,

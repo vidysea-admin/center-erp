@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, locationFilter } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
-import { LocationTarget, Trainer } from "@/models";
+import { LocationTarget } from "@/models";
+import { trainerTiesFor } from "@/lib/rules"; // QA-1262b: one predicate for "who is tied to this centre x job role"
 
 // Open Positions (CEO, 13/08 walkthrough): "ek tab — kahan-kahan trainer hire karne hain.
 // Location se sort karun toh kaun se program, kitne chahiye, kitne balance; job role select
@@ -50,25 +51,29 @@ export const GET = apiHandler(async (req: NextRequest) => {
     .lean<any[]>();
   const rows = targets.filter((t) => t.program && t.location && (showAll || t.location.approval_status === "Approved"));
 
+  // QA-1262b (2026-08-25): this board ran its OWN `Trainer.aggregate` on `nominated_for_location`
+  // alone, so it and the Locations grid answered "how many trainers does this centre have for this
+  // job role" DIFFERENTLY the moment QA-1262 taught the grid to count the batch tie too. Two
+  // aggregations for one question is the second copy ARCHITECTURE section 3 exists to name, and
+  // leaving this one behind would have shipped the disagreement rather than the fix. It reads
+  // `trainerTiesFor` now — the same function, the same trainer-level de-duplication (a trainer both
+  // nominated here AND running a batch here counts once), and the same `NOMINATED_STATES`.
   const byPosition = new Map<string, { counts: Record<string, number>; names: Record<string, { _id: string; name: string; stage: string }[]> }>();
   if (rows.length) {
-    const agg = await Trainer.aggregate([
-      { $match: { nominated_for_location: { $in: rows.map((t) => t.location._id) }, active: true } },
-      { $group: {
-        _id: { l: "$nominated_for_location", p: "$nominated_for_program" },
-        trainers: { $push: { _id: "$_id", name: "$name", stage: "$pipeline_status" } },
-      } },
-    ]);
-    for (const r of agg) {
+    const ties = await trainerTiesFor(
+      [...new Set(rows.map((t) => t.location._id))],
+      [...new Set(rows.map((t) => t.program._id))],
+    );
+    for (const [k, v] of ties) {
       const counts: Record<string, number> = {};
       const names: Record<string, { _id: string; name: string; stage: string }[]> = {};
-      for (const t of r.trainers) {
-        const bucket = STAGE_BUCKETS[t.stage ?? "Fresh Lead"];
+      for (const t of v.trainers) {
+        const bucket = STAGE_BUCKETS[t.stage || "Fresh Lead"];
         if (!bucket) continue; // Dropped never counts toward a position
         counts[bucket] = (counts[bucket] ?? 0) + 1;
         (names[bucket] ??= []).push(t);
       }
-      byPosition.set(`${String(r._id.l)}|${String(r._id.p)}`, { counts, names });
+      byPosition.set(k, { counts, names });
     }
   }
 

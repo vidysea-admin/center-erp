@@ -423,6 +423,13 @@ function TrainersInfra({ locationId, setError }: any) {
   const [programs, setPrograms] = useState<any[]>([]);
   const [readiness, setReadiness] = useState<any[]>([]);
   const [trainers, setTrainers] = useState<any[]>([]);
+  // QA-1262b: the pool a centre may nominate FROM. The list above is only who is already nominated
+  // here, so it can never answer "who could I put on this vacancy". Server-scoped, so a SPOC sees
+  // their own centres' people and nothing else.
+  const [pool, setPool] = useState<any[]>([]);
+  const [nomPick, setNomPick] = useState<Record<string, string>>({});
+  const [nomBusy, setNomBusy] = useState<string | null>(null);
+  const [nomMsg, setNomMsg] = useState("");
   const [roomForm, setRoomForm] = useState<any>({ type: "Classroom" });
   const [roomEdit, setRoomEdit] = useState<any>(null);
   const [reqForm, setReqForm] = useState<any>({});
@@ -433,6 +440,8 @@ function TrainersInfra({ locationId, setError }: any) {
     api("/api/programs?limit=1000").then((d) => setPrograms(d.items)),
     api(`/api/mapping/readiness?location=${locationId}`).then((d) => setReadiness(d.items ?? [])).catch(() => setReadiness([])),
     api(`/api/trainers?nominated_for_location=${locationId}&limit=1000`).then((d) => setTrainers(d.items ?? [])).catch(() => setTrainers([])),
+    // Silently optional: a role without trainers.manage is 403'd here and simply gets no picker.
+    api("/api/trainers?limit=1000").then((d) => setPool(d.items ?? [])).catch(() => setPool([])),
   ]).catch((e) => setError(e.message));
   useEffect(() => { load(); }, [locationId]);
 
@@ -453,6 +462,24 @@ function TrainersInfra({ locationId, setError }: any) {
   }
   // F-A9: one click turns this centre's empty trainer slots into TrainerRequests —
   // the endpoint refuses halted/unapproved centres and never doubles an Open request.
+  // QA-1262b (client, 25/08): "ab humare paas yaha yeh request aani chahiye, isko add karne ka option
+  // aana chahiye apne paas, edit karne ka. Ki main yaha se bhi kar pau." NO NEW DOOR — this is the
+  // trainer PATCH route the trainer's own page already uses, which accepts these two fields, is
+  // gated on `trainers.manage`, and already runs assertLocationOperational. Rule T3 is untouched: a
+  // nomination is still against one specific vacancy, it is just reachable from the vacancy now.
+  async function nominate(programId: string) {
+    const trainerId = nomPick[programId];
+    if (!trainerId) return;
+    setNomBusy(programId); setNomMsg("");
+    try {
+      await api(`/api/trainers/${trainerId}`, { method: "PATCH", json: { nominated_for_location: locationId, nominated_for_program: programId } });
+      setNomPick({ ...nomPick, [programId]: "" });
+      setNomMsg("Nominated. The slot below and the Locations grid both count it now.");
+      load();
+    } catch (e: any) { setError(e.message); }
+    finally { setNomBusy(null); }
+  }
+
   const [shortfallMsg, setShortfallMsg] = useState("");
   async function raiseShortfall() {
     try {
@@ -471,13 +498,23 @@ function TrainersInfra({ locationId, setError }: any) {
       {readiness.length > 0 && (
         <Section title="Trainer slots — required vs who is actually filling them"
           actions={<span className="flex items-center gap-2">
+            {nomMsg && <span className="text-xs text-green-700">{nomMsg}</span>}
             {shortfallMsg && <span className="text-xs text-green-700">{shortfallMsg}</span>}
             <Btn small kind="ghost" onClick={raiseShortfall}>⚑ Raise requests for gaps</Btn>
           </span>}>
           <div className="space-y-3">
             {readiness.map((r: any) => {
               const progId = r.program?._id;
-              const named = trainers.filter((t: any) => (t.nominated_for_program?._id ?? t.nominated_for_program) === progId && t.pipeline_status !== "Dropped");
+              // QA-1262b (client, 25/08: "jaise hi main is location ko trainer assign karta hu, wo
+              // bhi aa jaye"): the names come from the READINESS row now, which derives them through
+              // `trainerTiesFor` — so a trainer running this centre's batch appears here even with no
+              // nomination, and the count above the list can no longer disagree with the list itself.
+              // Falls back to the separately-loaded nominated set if an older API is answering.
+              const people: any[] = (r.trainers?.people ?? []).length
+                ? r.trainers.people.filter((t: any) => t.stage !== "Dropped")
+                : trainers.filter((t: any) => (t.nominated_for_program?._id ?? t.nominated_for_program) === progId && t.pipeline_status !== "Dropped")
+                    .map((t: any) => ({ _id: t._id, name: t.name, stage: t.pipeline_status }));
+              const named = people;
               const required = r.trainers?.required ?? Math.max(named.length, 1);
               const slots = Array.from({ length: Math.max(required, named.length) }, (_, i) => named[i] ?? null);
               return (
@@ -494,8 +531,8 @@ function TrainersInfra({ locationId, setError }: any) {
                           <Link href={`/trainers/${t._id}`} className="flex items-center gap-1.5 text-blue-700 hover:underline">
                             {t.name}
                             <span className={`rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${
-                              t.pipeline_status === "Certified" ? "border-green-200 bg-green-50 text-green-700" : "border-amber-200 bg-amber-50 text-amber-700"}`}>
-                              {t.pipeline_status}
+                              t.stage === "Certified" ? "border-green-200 bg-green-50 text-green-700" : "border-amber-200 bg-amber-50 text-amber-700"}`}>
+                              {t.stage || "—"}
                             </span>
                           </Link>
                         ) : (
@@ -504,6 +541,31 @@ function TrainersInfra({ locationId, setError }: any) {
                       </li>
                     ))}
                   </ol>
+                  {pool.length > 0 && (
+                    <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-2">
+                      <span className="text-xs text-gray-500">Nominate for this job role:</span>
+                      <select className={inputCls + " h-8 w-auto py-0 text-xs"} value={nomPick[progId] ?? ""}
+                        onChange={(e) => setNomPick({ ...nomPick, [progId]: e.target.value })}>
+                        <option value="">Select a trainer…</option>
+                        {pool
+                          .filter((t: any) => t.active !== false && t.pipeline_status !== "Dropped")
+                          .filter((t: any) => !named.some((n: any) => String(n._id) === String(t._id)))
+                          .map((t: any) => (
+                            <option key={t._id} value={t._id}>
+                              {t.name}{t.pipeline_status ? ` — ${t.pipeline_status}` : ""}
+                              {t.nominated_for_location?.name ? ` (now at ${t.nominated_for_location.name})` : ""}
+                            </option>
+                          ))}
+                      </select>
+                      <Btn small kind="ghost" disabled={!nomPick[progId] || nomBusy === progId} onClick={() => nominate(progId)}>
+                        {nomBusy === progId ? "Saving…" : "Nominate"}
+                      </Btn>
+                      {/* Said out loud rather than left to be discovered: re-pointing a nomination
+                          MOVES it, because a trainer carries one. The option text above already
+                          names the centre they are currently up for. */}
+                      <span className="text-[10px] text-gray-400">a trainer holds one nomination — picking someone already nominated elsewhere moves them here</span>
+                    </div>
+                  )}
                 </div>
               );
             })}
