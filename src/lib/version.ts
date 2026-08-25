@@ -137,7 +137,14 @@ export const RELEASE_NOTE_CURRENT =
   "it is now named like every other kind of row that could not be read. And the report states "  +
   "what the client sheet itself adds up to, what this system counts, and where each part of "  +
   "the difference went - including a line for whatever the named reasons do not account for, "  +
-  "so it can never claim to have explained more of the gap than it has.";
+  "so it can never claim to have explained more of the gap than it has. "  +
+  "Two more, both about a count that had learned to see too much. A centre whose only trainer was "  +
+  "assigned to a batch, and never nominated for the job role, had quietly stopped raising its "  +
+  "trainer request - and stopped recording any reason for not raising one, so nothing on any "  +
+  "screen showed that a decision had been taken. That centre asks for a trainer again, and if it "  +
+  "ever declines to, it now says why. And trainers whose batch at a centre has already finished no "  +
+  "longer count towards that centre's live trainer numbers; the column reports who is there now, "  +
+  "not who has been.";
 
 const RELEASE_NOTE_ARCHIVE_248 =
   "-248 is mostly about a secret that was readable from the wrong side, and about one question "  +
