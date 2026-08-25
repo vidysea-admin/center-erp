@@ -110,7 +110,20 @@ await req("POST", T, { target: "Documents Completed" }, 200);
 // with `{}` because of that, not because the product was wrong. PUT is the verb: the targets route
 // exports GET/PUT/PATCH and no POST, and PUT upserts on {location, program} (the same trap the
 // locations-admin suite hit and fixed in 553fc6e).
-await req("PUT", `/api/locations/${loc._id}/targets`, { program: prog._id, trainers_required: 1, approved_target: 30, tc_status: "Approved" }, 200);
+//
+// DO NOT ADD `tc_status` TO THIS LINE. It carried `tc_status: "Approved"` for one release and that
+// silently broke the R-G block ~70 lines below, which opens by saying "The target above was written
+// WITHOUT a TC approval - the DEFAULT board must not list it". That sentence became false here, so
+// R-G went red on two assertions ("7 rows", "null") and read like an Open Positions defect. It was
+// not: it was this line. R-G's whole narrative is unapproved -> approve -> appears, and it does its
+// own approving at the end. QA-1284 does not need the approval either - its assertions are about
+// `trainers_nominated` / `trainers_nsdc`, and the job_roles row exists because the TARGET exists,
+// not because it is approved.
+//
+// This is the fourth time in one day that fixing a fixture exposed a LATER assertion whose
+// precondition it had quietly destroyed. Writing the dependency down is the only thing that stops
+// the fifth.
+await req("PUT", `/api/locations/${loc._id}/targets`, { program: prog._id, trainers_required: 1, approved_target: 30 }, 200);
 
 const nsdcOf = async () => {
   const rows = (await req("GET", "/api/locations?limit=2000")).data.items ?? [];
