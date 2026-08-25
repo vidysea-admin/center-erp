@@ -1392,6 +1392,53 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   ok("matrix: trainer CANNOT add trainers", (await req(trainer, "POST", "/api/trainers", { name: "x", phone: "9000000000", skills: ["y"] })).status === 403);
   ok("matrix: trainer CANNOT edit candidates", (await req(trainer, "POST", "/api/candidates", { name: "x", phone: "9000000001", location: jpr._id })).status === 403);
 
+  // QA-1290 (client call 2026-08-25, measured live before this fix): PATCH /api/members/[id],
+  // POST .../members/bulk-enroll and POST .../members/[id]/drop held NO permission key at all —
+  // any signed-in, non-view-only user with the row in scope could complete or drop enrolment.
+  // A Trainer login reached bulk-enroll with member_ids omitted (the documented "every active
+  // member" default) and completed the WHOLE roster on a live probe: HTTP 200,
+  // {"requested":1,"updated":1}. The client's own question on that call — "koi aise hi ek baar
+  // mein select kiya aur aise kar diya" — and the answer he was given, "trainer enrollment
+  // thodi na kar dega", were both live claims this door did not hold.
+  //
+  // candidates.assign is the SAME key the two sibling roster-add doors already gate on
+  // (members/route.ts POST, candidates/assign/route.ts) — a Trainer holds it on NEITHER of
+  // those, confirmed against the LIVE saved matrix on 2026-08-25 (qa/prepared/
+  // read-permission-matrix.mjs: Trainer = ["batches.daily_log"] only, is_default=false, i.e. a
+  // stored row, not just the code default). So a Trainer denied here is not a new restriction —
+  // it is the same right the product has always required for the doors either side of these three.
+  if (anyBatch) {
+    const trMembers = await req(admin, "GET", `/api/batches/${anyBatch._id}/members`);
+    const trM = trMembers.data.items?.find((x) => !x.left_on);
+    if (trM) {
+      ok("QA-1290: trainer CANNOT PATCH the enrollment worklist (no candidates.assign)",
+        (await req(trainer, "PATCH", `/api/members/${trM._id}`, { reg_done: true })).status === 403);
+    }
+    const trBulk = await req(trainer, "POST", `/api/batches/${anyBatch._id}/members/bulk-enroll`, { step: "all" });
+    ok("QA-1290: trainer CANNOT bulk-enroll a whole roster (no candidates.assign)", trBulk.status === 403, `got ${trBulk.status}`);
+    if (trM) {
+      ok("QA-1290: trainer CANNOT drop a member (no candidates.assign)",
+        (await req(trainer, "POST", `/api/members/${trM._id}/drop`, { left_on: new Date().toISOString().slice(0, 10), drop_reason: "test" })).status === 403);
+    }
+    // …and the SAME login is accepted once the right is granted — proves the gate DECIDES,
+    // not the role, exactly as -218/QA-806 established for sheet.approve above. Grant, act,
+    // revoke, in that order, so this suite never leaves the matrix altered.
+    if (trM) {
+      const permsNow = (await req(admin, "GET", "/api/permissions")).data;
+      const trainerRow = (permsNow?.roles ?? []).find((r) => r.role === "Trainer");
+      const trainerSetNow = trainerRow?.permissions ?? [];
+      if (!trainerSetNow.includes("candidates.assign")) {
+        await req(admin, "PUT", "/api/permissions", { role: "Trainer", permissions: [...trainerSetNow, "candidates.assign"] }, 200);
+        const grantedTry = await req(trainer, "PATCH", `/api/members/${trM._id}`, { reg_done: true });
+        ok("QA-1290: …WITH candidates.assign the same login is accepted — the RIGHT decides, not the role",
+          grantedTry.status === 200, `status=${grantedTry.status}`);
+        await req(admin, "PUT", "/api/permissions", { role: "Trainer", permissions: trainerSetNow }, 200);
+        const revokedAgain = await req(trainer, "PATCH", `/api/members/${trM._id}`, { reg_done: true });
+        ok("QA-1290: …and revoking it closes the door again", revokedAgain.status === 403, `status=${revokedAgain.status}`);
+      }
+    }
+  }
+
   // Operations: trainer + trainee data updates work.
   if (trAdd.status === 201) {
     ok("matrix: Operations can update trainer data", (await req(ops, "PATCH", `/api/trainers/${trAdd.data.item._id}`, { qualification: "B.Tech" })).status === 200);
@@ -1538,6 +1585,55 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   ok("QA-088: the SPOC of the very centre never sees it", !!asSpoc && asSpoc.tc_password === undefined);
   const listOps = (await req(ops, "GET", "/api/locations?limit=200")).data.items ?? [];
   ok("QA-088: the list masks it for every centre", listOps.every((l) => l.tc_password === undefined));
+
+  // ---- -251 (QA-289, S1): QA-088 answered WHO may see the credential and never WHETHER it should
+  // be on screen unasked - and for an Admin the answer stayed "always". A column nobody has to open,
+  // on a grid of every centre, travelling in every screenshot. These go RED pre-fix: today the
+  // Admin list carries the value.
+  const listAdmin = (await req(admin, "GET", "/api/locations?limit=200")).data.items ?? [];
+  ok("-251 (QA-289): the LIST carries no credential for ANYONE - the Admin included",
+    listAdmin.length > 0 && listAdmin.every((l) => l.tc_password === undefined),
+    JSON.stringify(listAdmin.filter((l) => l.tc_password !== undefined).map((l) => l.code)).slice(0, 200));
+  const jprRow = listAdmin.find((l) => String(l._id) === String(jpr._id));
+  ok("-251 (QA-289): ...and says a credential EXISTS, so the screen need not invent an answer",
+    jprRow?.tc_password_set === true, JSON.stringify({ set: jprRow?.tc_password_set }));
+  ok("-251 (QA-289): ...and tells the Admin a reveal would succeed, so the control is not a dead one",
+    jprRow?.tc_password_revealable === true, JSON.stringify({ revealable: jprRow?.tc_password_revealable }));
+  const jprOpsRow = listOps.find((l) => String(l._id) === String(jpr._id));
+  ok("-251 (QA-289): a non-Admin is told NOT revealable, so no button renders for them",
+    jprOpsRow?.tc_password_revealable === false, JSON.stringify({ revealable: jprOpsRow?.tc_password_revealable }));
+  // Guards the other direction: masking the list must NOT have closed the door that makes the
+  // reveal possible. Opening ONE centre is the asking, and it still answers for the Admin.
+  const reveal = (await req(admin, "GET", `/api/locations/${jpr._id}`)).data.item;
+  ok("-251 (QA-289): opening one centre IS the asking - the single-record door still answers",
+    typeof reveal?.tc_password === "string" && reveal.tc_password.length > 0);
+
+  // ---- -251 (QA-1319, S1): the SAME leak two screens over, and worse - no centre had to be opened
+  // at all. /api/home queue 5 and /api/follow-ups populated `source_change` WHOLE (no select, no
+  // mask), so every pending follow-up carried its SheetChange old_value/new_value, and on a
+  // tc_password row that is a live portal credential. On the LANDING PAGE, for a non-Admin
+  // Operations login. The screen renders only source_change.location.name - the value was never ON
+  // SCREEN and always IN THE PAYLOAD.
+  //
+  // HONEST LIMIT, said out loud rather than implied: these two assertions are VACUOUS when the
+  // fixture has no pending follow-up carrying a secret field, and this suite has no way to create
+  // one (SheetChange rows come from the sync engine, not an API). They therefore catch a REGRESSION
+  // on real data and do NOT prove the fix on their own. What proves it is the structural pin in
+  // check-user-copy.mjs plus the mask being the shared maskSheetChange. Recorded so nobody counts
+  // these as more than they are - the qa-215 lesson (QA-776), where five pins passed pre-fix too.
+  const secretish = (v) => typeof v === "string" && v.length > 0 && v !== "••••••";
+  const leaks = (rows) => (rows ?? []).filter((f) => {
+    const c = f?.source_change;
+    return c && c.field_name === "tc_password" && (secretish(c.old_value) || secretish(c.new_value));
+  });
+  const homeOps = (await req(ops, "GET", "/api/home")).data ?? {};
+  ok("-251 (QA-1319): the landing page carries no live credential in its follow-up queue",
+    leaks(homeOps.follow_ups).length === 0,
+    JSON.stringify(leaks(homeOps.follow_ups).map((f) => f.source_change?.field_name)).slice(0, 160));
+  const fuOps = (await req(ops, "GET", "/api/follow-ups")).data?.items ?? [];
+  ok("-251 (QA-1319): the follow-ups list carries none either - the second door onto the same leak",
+    leaks(fuOps).length === 0,
+    JSON.stringify(leaks(fuOps).map((f) => f.source_change?.field_name)).slice(0, 160));
 }
 
 // ---- R2 (QA-095/091/060/061/083/084/096): the doors are shut on the SERVER now ----

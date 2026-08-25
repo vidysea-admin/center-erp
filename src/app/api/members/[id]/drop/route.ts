@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { requirePerm } from "@/lib/permissions";
 import { assertMemberInScope, dropMemberChecked } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
@@ -9,6 +10,9 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   await dbConnect();
   const user = await requireUser();
   requireEdit(user);
+  // QA-1290: same gate as the other two roster-lifecycle doors, for the same reason - dropping a
+  // member is as much a roster-membership decision as adding or enrolling one.
+  await requirePerm(user, "candidates.assign"); // togglable (2026-08-11)
   const { id } = await ctx.params;
   await assertMemberInScope(user, id); // Rule 38
   const { left_on, drop_reason } = await req.json();

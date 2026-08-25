@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { requirePerm } from "@/lib/permissions";
 import { assertBatchInScope, updateEnrollment } from "@/lib/rules";
 import { BatchMember } from "@/models";
 import { audit } from "@/lib/audit";
@@ -19,6 +20,13 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   await dbConnect();
   const user = await requireUser();
   requireEdit(user);
+  // QA-1290: the whole point of this route is to skip 135 clicks in one request - which is
+  // exactly why the missing gate here mattered more than on the per-member door. Measured live,
+  // 2026-08-25: a Trainer login reached this with no permission at all and completed enrolment
+  // for an entire roster with member_ids omitted (the documented default). Same key as the
+  // per-member door and both sibling roster-add doors, so a bulk verb cannot hold a looser gate
+  // than the one-at-a-time verb it is a shortcut for.
+  await requirePerm(user, "candidates.assign"); // togglable (2026-08-11)
   const { id } = await ctx.params;
   await assertBatchInScope(user, id); // Rule 38
   const body = await req.json().catch(() => ({}));

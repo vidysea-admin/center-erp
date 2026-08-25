@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, requireRole, HttpError } from "@/lib/authz";
+import { requirePerm } from "@/lib/permissions";
 import { assertMemberInScope, updateEnrollment } from "@/lib/rules";
 import { BatchMember, Candidate, CandidateResult, DailyLog, GovtAttendanceRow } from "@/models";
 import { audit } from "@/lib/audit";
@@ -11,6 +12,13 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   await dbConnect();
   const user = await requireUser();
   requireEdit(user);
+  // QA-1290 (client call 2026-08-25): this door held no permission key at all - any signed-in,
+  // non-view-only user with the member in scope could complete enrolment. candidates.assign is
+  // the SAME key the two sibling roster-add doors already gate on (members/route.ts,
+  // candidates/assign/route.ts), so "who may put someone on a roster" and "who may carry them
+  // through it" are one right, not two that could drift apart. Live matrix read 2026-08-25:
+  // Trainer holds candidates.assign nowhere - this is a real gate, not a formality.
+  await requirePerm(user, "candidates.assign"); // togglable (2026-08-11)
   const { id } = await ctx.params;
   await assertMemberInScope(user, id); // Rule 38
   const body = await req.json();
