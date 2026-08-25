@@ -95,8 +95,9 @@ export const POST = apiHandler(async (req: NextRequest) => {
       // changes is that the operator is TOLD, in the same reply, in words.
       const seated = await BatchMember.countDocuments({ batch: b._id, left_on: null });
       if (b.target_size && seated >= b.target_size) {
-        mintWarning = `${b.code} already has ${seated} on its roster against a target of ${b.target_size}. `
-          + "The link still works and anyone who fills it will be added, but they will be over target and Rule 48 will not let them complete enrolment until a place frees up.";
+        mintWarning = `${b.code} already has ${seated} on its roster against a planned size of ${b.target_size}. `
+          + "The link still works and anyone who fills it will be added to the roster, but they will be over the planned size and cannot finish enrolment until a place frees up. "
+          + "Raise the batch size, or drop someone, before sending this to more people.";
       }
       body.program = String(b.program);
     }
