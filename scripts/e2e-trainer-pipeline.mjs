@@ -105,6 +105,13 @@ await req("POST", T, { target: "Documents Completed" }, 200);
 // Until this release that column carried ONLY the number typed into the client's workbook, so a
 // nomination we had actually sent moved nothing. The assertion is a BEFORE/AFTER across one
 // transition, because a bare "it is 1" would also pass if the field counted the wrong thing.
+// This suite had never needed a LocationTarget, and the Locations grid's job_roles rows are BUILT
+// from LocationTarget - no target, no row, and my first version of these three assertions failed
+// with `{}` because of that, not because the product was wrong. PUT is the verb: the targets route
+// exports GET/PUT/PATCH and no POST, and PUT upserts on {location, program} (the same trap the
+// locations-admin suite hit and fixed in 553fc6e).
+await req("PUT", `/api/locations/${loc._id}/targets`, { program: prog._id, trainers_required: 1, approved_target: 30, tc_status: "Approved" }, 200);
+
 const nsdcOf = async () => {
   const rows = (await req("GET", "/api/locations?limit=2000")).data.items ?? [];
   const jr = (rows.find((l) => String(l._id) === String(loc._id))?.job_roles ?? [])
