@@ -5,6 +5,7 @@ import { Batch, BatchMember, Candidate, DailyLog, FollowUpAction, GovtAttendance
 import { Types } from "mongoose";
 import { ACTIVE_BATCH_STATUSES, addDays, dayStart, istToday, missingLogQueue, trainerForLogin } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
+import { maskSheetChange } from "@/lib/sync";
 
 // Home Action Center: the three real conditions by name (§5) + operational queues.
 export const GET = apiHandler(async () => {
@@ -296,8 +297,31 @@ export const GET = apiHandler(async () => {
 
   // Queue 2: sheet changes pending review — Admin only since R-E (CEO 14/08: the sheet
   // machinery leaves every other persona's view).
+  //
+  // QA-1231 (S2, checker on sec-1): this list is rendered on the landing page as
+  // "field: old -> new" in plain text, and `tc_password` is a mappable sheet field - so on the
+  // live Sync Inbox, where QA-1026 measured 19 of 20 default rows as tc_password changes, the first
+  // screen after login carried six LIVE credential pairs that nobody had asked to see.
+  //
+  // THE MASK IS SERVER-SIDE AND THAT IS THE WHOLE POINT. Hiding these on the client would leave the
+  // credential in the JSON this route returns, where anyone with the network tab still has it; a
+  // leak has to be closed before the value leaves the process.
+  //
+  // `false`, NOT `user.role === "Admin"` - and the difference is the finding. This queue is
+  // already Admin-only two lines up, so a role-gated mask here would be a no-op that reads like a
+  // fix. QA-289 and QA-1026 are about WHETHER a live credential renders unasked, not about WHO may
+  // eventually read it: "a column nobody has to open travels in every screenshot", and here nobody
+  // has to open anything at all. An Admin who genuinely needs the value goes to the Sync Inbox,
+  // deliberately, and that door decides for itself.
+  //
+  // Imported, not re-spelled. `maskSheetChange` already exists in lib/sync.ts because QA-1253
+  // cycle 3 collapsed three per-route copies of this decision into one, and it knows about a third
+  // place the credential hides that a hand-written mask here would miss - `impact_snapshot.{apply,
+  // revert}` - plus the legacy revert-note format. A second copy would have been the whole reason
+  // ARCHITECTURE.md section 3 exists.
   const openChanges = user.role === "Admin"
-    ? await SheetChange.find({ status: "Open" }).sort({ detected_at: -1 }).limit(10).populate("location", "name code").lean()
+    ? (await SheetChange.find({ status: "Open" }).sort({ detected_at: -1 }).limit(10).populate("location", "name code").lean())
+        .map((c) => maskSheetChange(c, false))
     : [];
 
   // Queue 3: govt attendance gap (Rule 31) — recent logs where gap ≥ amber

@@ -147,12 +147,32 @@ ok("home: the strip's JSX closes before the trainers-by-role block", stripClose 
     // the real defect standing. It was mutation-proved: re-open `certificates_issued` in that shape
     // and the pin still passed. A tag body cannot contain `<`, so stopping there closes both holes.
     const inputs = [...region.matchAll(/<input[^<]*/g)].map((m) => m[0]);
-    const ungated = inputs.filter((t) => !/disabled=\{closed\}/.test(t));
     const nameOf = (t) => (/value=\{(?:toInputDate\()?form\.(\w+)/.exec(t) || [, "?"])[1];
-    ok("-235 (QA-833/QA-961): EVERY input in the closure cards carries the same gate its Save carries",
-      region.length > 0 && inputs.length >= 6 && ungated.length === 0,
+    // QA-1299 / QA-1265 (-250): this pin demanded the literal token `closed` and, on 2026-08-25, it
+    // went red on a DELIBERATE product decision. Umesh's QA-1265: the two dates that can only be
+    // KNOWN after a batch completes - certificate distribution and SIDH portal upload - must stay
+    // writable after completion, and the server half is POST_COMPLETION_WRITABLE, so their Save is
+    // not dead. The pin's own sentence is "the same gate its Save carries"; `closed` was only ever
+    // the spelling that happened to be true when it was written, and the pin had confused the two.
+    //
+    // A weaker pin was NOT the answer - it would have let anything through. This holds BOTH
+    // decisions instead: everything carries `closed`, except exactly the two fields QA-1265 names,
+    // which must carry `!mayMarkTab`. So a new ungated field still reddens it, AND these two
+    // drifting back to `closed` reddens it too, which is the regression that would silently undo
+    // QA-1265. This pin has now been wrong four times (QA-961, QA-962, QA-982, QA-983); the fifth
+    // was not a hole, it was an invariant that had outlived one of its own terms.
+    const POST_COMPLETION_WRITABLE = ["certificate_distribution_date", "sidh_uploaded_on"];
+    const wrongGate = inputs.filter((t) => {
+      const expected = POST_COMPLETION_WRITABLE.includes(nameOf(t)) ? /disabled=\{!mayMarkTab\}/ : /disabled=\{closed\}/;
+      return !expected.test(t);
+    });
+    // The exception must not become a way to have no fields at all: both named fields have to BE here.
+    const namedPresent = POST_COMPLETION_WRITABLE.filter((f) => inputs.some((t) => nameOf(t) === f));
+    ok("-235 (QA-833/QA-961/QA-1265): EVERY input in the closure cards carries the gate its own Save carries",
+      region.length > 0 && inputs.length >= 6 && wrongGate.length === 0 && namedPresent.length === POST_COMPLETION_WRITABLE.length,
       region.length === 0 ? "could not locate the closure cards"
-        : `${inputs.length} inputs, ${ungated.length} ungated: ${ungated.map(nameOf).join(", ") || "(none)"}`);
+        : `${inputs.length} inputs, ${wrongGate.length} with the wrong gate: ${wrongGate.map(nameOf).join(", ") || "(none)"}`
+          + ` | post-completion fields found: ${namedPresent.join(", ") || "(none)"}`);
   }
 
   // -224 (QA-880, recommended by the cycle-3 checker): the CLASS pin, not another instance pin.

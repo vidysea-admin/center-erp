@@ -1268,6 +1268,39 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
   const pwRow = rows9.find((c) => c.field_name === "tc_password");
   const V = (row, a) => (row?.actions ?? []).find((x) => x.action === a);
 
+  // ---- QA-1231 (S2, checker on sec-1): the LANDING PAGE was the third surface ----
+  // QA-289 and QA-1026 both say the same thing about WHETHER a live credential renders unasked, and
+  // both were written about the Sync Inbox. Nobody had looked at Home. `api/home/route.ts` fetched
+  // the ten most recent Open changes with no mask at all and the dashboard printed each one as
+  // "field: old -> new" in plain text - so on live data, where QA-1026 measured 19 of 20 default
+  // rows as tc_password changes, the first screen after login carried six live credential pairs.
+  //
+  // The CONTROL runs first and it is what makes this a pin rather than a wish: the deliberate door
+  // still hands an Admin the value, so a mask that simply broke everything would fail here too.
+  // Then the landing page must not contain that same string ANYWHERE in its payload - searched over
+  // the whole JSON, not over the field this fix happens to touch, because the credential also lives
+  // in `impact_snapshot.{apply,revert}` and in the legacy revert-note format, and a pin that only
+  // reads `new_value` would go green on a fix that missed those. That is exactly how QA-1253
+  // reached cycle 3.
+  {
+    ok("QA-1231 control: the Sync Inbox still hands an Admin the real value when they ask for it",
+      pwRow?.new_value === `pw${s9}`,
+      JSON.stringify({ field: pwRow?.field_name, value: pwRow?.new_value }));
+
+    const homeBody = (await req("GET", "/api/home", undefined, 200)).data;
+    const homeJson = JSON.stringify(homeBody);
+    const homeRows = homeBody?.queues?.sheet_changes ?? [];
+    const mine = homeRows.find((c) => String(c._id) === String(pwRow?._id));
+
+    ok("QA-1231: the landing page carries the credential row but NOT the credential",
+      !homeJson.includes(`pw${s9}`),
+      `raw value present in /api/home payload; sheet_changes=${homeRows.length}`);
+    ok("QA-1231: ...and it is masked, not dropped - the reviewer still sees there is a change to review",
+      !mine || (mine.field_name === "tc_password" && mine.new_value !== `pw${s9}`),
+      JSON.stringify(mine ? { field: mine.field_name, old: mine.old_value, new: mine.new_value } : "row not in the ten most recent"));
+  }
+
+
   ok("QA-946: every change row ships its own action verdicts, one per schema action",
     rows9.length >= 3 && rows9.every((c) => Array.isArray(c.actions) && c.actions.length === 7),
     JSON.stringify({ rows: rows9.length, first: (rows9[0]?.actions ?? []).length }));
