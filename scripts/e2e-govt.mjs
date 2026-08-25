@@ -387,24 +387,40 @@ ok("all 7 rows persisted", detail.data.rows?.length === 7, `got ${detail.data.ro
   // exactly one candidate with no portal ID - two unrelated 1s, which is what made the wrong guess
   // look right.) The payload now carries roster_count and left_count so every surface can state the
   // whole roster without widening the buckets, which the -109 partition invariant forbids.
+  //
+  // THIS BLOCK BUILDS ITS OWN BATCH, and the reason is a defect this same unit caused twice.
+  // Written against the suite-wide `batch` it DROPPED a member from shared state, and seven later
+  // assertions in this file depend on nobody having been dropped from it ("with nobody dropped,
+  // billable == passed", the trainer-edit roster check, the per-active-member attendance fan-out).
+  // A pin that mutates shared fixtures is not measuring the product, it is breaking the suite -
+  // QA-1098 was exactly this, one block earlier in the same file.
   {
-    const att0 = (await req(admin, "GET", `/api/batches/${batch._id}/attendance`)).data;
+    const aStart = localDate(Date.now() - 2 * 86400_000);
+    const aBatch = (await req(admin, "POST", "/api/batches",
+      { location: loc._id, program: program._id, target_size: 3, planned_start: aStart })).data.item;
+    ok("A-04 fixture: a batch of this block's own", !!aBatch?._id, aBatch?.code);
+    const aMems = [];
+    for (const n of [1, 2, 3]) {
+      const c = (await req(admin, "POST", "/api/candidates",
+        { name: `${NAME} Roster${n}`, phone: `9${STAMP.slice(1)}700${n}`, location: loc._id, program: program._id }, 201)).data.item;
+      aMems.push((await req(admin, "POST", `/api/batches/${aBatch._id}/members`, { candidate: c._id }, 201)).data.item);
+    }
+
+    const att0 = (await req(admin, "GET", `/api/batches/${aBatch._id}/attendance`)).data;
     ok("A-04/A-05: the attendance payload states the WHOLE roster, not only the part it bucketed",
       typeof att0.roster_count === "number" && typeof att0.left_count === "number",
       JSON.stringify({ roster_count: att0.roster_count, left_count: att0.left_count }));
 
     const sum0 = Object.values(att0.verdict_counts ?? {}).reduce((a, b) => a + b, 0);
     ok("A-04: buckets + members who left account for every member on the roster (nobody falls in no bucket)",
-      typeof att0.roster_count === "number" && sum0 + (att0.left_count ?? 0) === att0.roster_count,
+      att0.roster_count === 3 && sum0 + (att0.left_count ?? 0) === att0.roster_count,
       JSON.stringify({ buckets: sum0, left: att0.left_count, roster: att0.roster_count }));
 
-    const mems = ((await req(admin, "GET", `/api/batches/${batch._id}/members`)).data.items ?? []);
-    const victim = mems.find((m) => !m.left_on);
-    ok("A-04 fixture: a member to drop", !!victim, String(mems.length) + " members");
-    await req(admin, "POST", `/api/members/${victim._id}/drop`,
+    // Now make somebody LEAVE - the exact shape that broke on live - on this block's OWN batch.
+    await req(admin, "POST", `/api/members/${aMems[0]._id}/drop`,
       { left_on: localDate(Date.now()), drop_reason: `A-04 fixture ${STAMP}` }, 200);
 
-    const att1 = (await req(admin, "GET", `/api/batches/${batch._id}/attendance`)).data;
+    const att1 = (await req(admin, "GET", `/api/batches/${aBatch._id}/attendance`)).data;
     const sum1 = Object.values(att1.verdict_counts ?? {}).reduce((a, b) => a + b, 0);
     ok("A-04/A-05: after a member LEAVES, the roster is unchanged, left_count moves, and the sum still accounts for everyone",
       att1.roster_count === att0.roster_count
@@ -413,7 +429,9 @@ ok("all 7 rows persisted", detail.data.rows?.length === 7, `got ${detail.data.ro
       JSON.stringify({ roster_before: att0.roster_count, roster_after: att1.roster_count,
         left_before: att0.left_count, left_after: att1.left_count, buckets_after: sum1 }));
 
-    ok("A-05: the departed member is OUT of the buckets - that is what the header and the bulk button count",
+    // A REGRESSION GUARD, not a defect pin - it passes before the fix too, and its job is to catch
+    // the fix over-reaching by quietly pulling departed members back INTO the buckets.
+    ok("A-05 guard: the departed member is OUT of the buckets - that is what the header and the bulk button count",
       sum1 === sum0 - 1,
       JSON.stringify({ buckets_before: sum0, buckets_after: sum1 }));
   }
