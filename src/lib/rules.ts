@@ -3380,14 +3380,28 @@ export type ReportSyncGap = {
   verdict_not_on_row: { rows: number; target: number };
 };
 
-async function reportSyncGap(scope: Record<string, unknown> = {}): Promise<ReportSyncGap> {
+// `showSource` — QA-1104 (checker, cycle 1). The COUNTS below are location-scoped and are the part
+// Umesh asked for; the SOURCE fields (its name, its status, and the sync's own error sentence) are
+// not. `/api/sheet-changes` and `/api/sync-sources` both refuse a user without `sheet.approve` with
+// an explicit 403, so the product has already decided that surface is privileged — and cycle 1
+// handed a piece of it to every authenticated role, a Trainer included, measured by the checker on
+// five logins. `last_error` is the sharp end: `sync.ts:453` assigns it straight from a caught
+// exception, so on a different failure it can carry the workbook URL or the provider's own message.
+//
+// Decided in the ROUTE, not here, and passed in as a plain boolean: rules.ts has no session
+// concept and giving it one to answer this would be a bigger change than the defect.
+async function reportSyncGap(scope: Record<string, unknown> = {}, showSource = false): Promise<ReportSyncGap> {
   // Same `scope` object the targets are read with: it is `{location: {$in: […]}}` or `{}`, and
   // SheetChange carries `location` too, so a centre login is told about its own centres and not
   // about somebody else's. Only `field_name` is selected — nothing here needs a value, and one of
   // these rows is a TC password.
   const open = await SheetChange.find({ ...scope, status: "Open" }).select("field_name").lean<any[]>();
-  const source = await SyncSource.findOne({ active: true }).sort({ last_synced_at: -1 })
-    .select("name last_synced_at last_status last_error").lean<any>();
+  // Not fetched at all when it may not be shown — an omitted field cannot be leaked by a later
+  // renderer, and this one is read straight out of an upstream exception.
+  const source = showSource
+    ? await SyncSource.findOne({ active: true }).sort({ last_synced_at: -1 })
+      .select("name last_synced_at last_status last_error").lean<any>()
+    : null;
   return {
     open_total: open.length,
     open_affecting: open.filter((c) => targetRowField(String(c.field_name ?? ""))).length,
@@ -3404,7 +3418,9 @@ async function reportSyncGap(scope: Record<string, unknown> = {}): Promise<Repor
   };
 }
 
-export async function reportRollup(scope: Record<string, unknown> = {}) {
+// `opts.sheetSource` — QA-1104. Defaults to FALSE, so a caller that says nothing gets the safe
+// answer: the Excel export takes this path and never carried the source fields anyway.
+export async function reportRollup(scope: Record<string, unknown> = {}, opts: { sheetSource?: boolean } = {}) {
   // find() + populate, not an aggregation over the scope filter: authz.ts builds `$in` from
   // `.map(String)`, mongoose casts strings to ObjectId inside find() but NOT inside a pipeline,
   // and four live defects came from exactly that (QA-302, QA-347, QA-350, QA-395). The
@@ -3417,7 +3433,7 @@ export async function reportRollup(scope: Record<string, unknown> = {}) {
     .lean<any[]>();
   // QA-1074: the sync block is computed even when this scope has no targets at all. A centre login
   // with nothing mapped yet is precisely who needs to be told the sheet is only half-read.
-  const sync_gap = await reportSyncGap(scope);
+  const sync_gap = await reportSyncGap(scope, !!opts.sheetSource);
   const measured_at = new Date().toISOString();
   if (!targets.length) {
     return {

@@ -318,6 +318,51 @@ const leaks = [
 ];
 ok("Home queues leak nothing outside SPOC scope", leaks.length === 0, `leaked ${leaks.length}`);
 
+// ---- QA-1104 (checker on qa-1074 cycle 1): the report is not a side door to the sync surface ----
+// The rollup's `sync_gap` block was shipped in cycle 1 to EVERY authenticated role. Three of its
+// fields belong to a surface the product refuses two clicks away: `/api/sheet-changes` and
+// `/api/sync-sources` both 403 a user without `sheet.approve`, in so many words - "You do not have
+// the 'Approve/apply sheet changes' right". The checker measured five logins - SPOC, principal,
+// TRAINER, ops, enrolment - all getting the source's name, its status and the sync's own error
+// sentence out of `/api/reports/rollup`. `last_error` is the sharp end: sync.ts assigns it straight
+// from a caught exception, so on another failure it can carry the workbook URL or the provider's
+// message.
+//
+// Pinned from BOTH sides, because a one-sided version passes if the block disappears for everyone -
+// and the counts are the part Umesh actually asked for and must survive.
+{
+  const rollupOf = async (who) => (await req(who, "GET", "/api/reports/rollup")).data?.sync_gap ?? {};
+  const asSpoc = await rollupOf(spoc);
+  const asTrainer = await rollupOf(trainer);
+  const asAdmin = await rollupOf(admin);
+
+  ok("QA-1104: a scoped login gets NO sync source name / status / error out of the report",
+    !asSpoc.source_name && !asSpoc.last_status && !asSpoc.last_error && !asSpoc.last_synced_at
+    && !asTrainer.source_name && !asTrainer.last_status && !asTrainer.last_error,
+    JSON.stringify({ spoc: asSpoc, trainer: asTrainer }));
+
+  ok("QA-1104: …and it is a GATE, not a deletion - the counts Umesh asked for still reach them",
+    Number.isInteger(asSpoc.open_total) && Number.isInteger(asSpoc.open_affecting)
+    && !!asSpoc.verdict_not_on_row && Number.isInteger(asSpoc.verdict_not_on_row.rows),
+    JSON.stringify(asSpoc));
+
+  // The other side: an Admin DOES get it, so a fix that simply removed the block cannot pass.
+  ok("QA-1104: an Admin still gets the source block - otherwise this pin would pass on a deletion",
+    typeof asAdmin.last_status === "string" && "source_name" in asAdmin && !!asAdmin.last_synced_at,
+    JSON.stringify(asAdmin));
+
+  // And the gate is the SAME question the sync doors ask, not a new one invented here.
+  ok("QA-1104: the roles refused the source block are exactly the roles the sync doors 403",
+    (await req(spoc, "GET", "/api/sheet-changes")).status === 403
+    && (await req(trainer, "GET", "/api/sheet-changes")).status === 403
+    && (await req(admin, "GET", "/api/sheet-changes")).status === 200,
+    JSON.stringify({
+      spoc: (await req(spoc, "GET", "/api/sheet-changes")).status,
+      trainer: (await req(trainer, "GET", "/api/sheet-changes")).status,
+      admin: (await req(admin, "GET", "/api/sheet-changes")).status,
+    }));
+}
+
 // 2026-08-11 routes — scoping and role gates
 // Sheet Watch is Admin/Operations only
 ok("SPOC cannot read workbook changes", (await req(spoc, "GET", "/api/workbook-changes")).status === 403);
