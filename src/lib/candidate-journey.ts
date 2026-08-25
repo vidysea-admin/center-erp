@@ -43,6 +43,40 @@ export const FUTURE_INTEREST_TAG = "Upcoming batch";
 export function isFutureInterest(r: JourneyInput): boolean {
   return r.batch_interest === "Future";
 }
+
+// QA-1191 (2026-08-25). The Excel import wrote this field as RAW SHEET TEXT and never coerced it,
+// unlike `education` and `sidh_status` sitting either side of it in the same loop. MEASURED on the
+// live -247 build, not argued: a three-row sheet whose middle cell said "Upcoming batch" returned
+// preview 200 (silence, on the very screen that exists to report unreadable values), then confirm
+// 400 `batch_interest must be one of: Current, Future` - and ZERO of the three rows landed. A valid
+// value in the same position imported 3 of 3. So one cell killed the whole file.
+//
+// And QA-1190 sharpened the bait rather than causing it: the import screen's own label now reads
+// "Interested in (Current / Upcoming batch)", so "Upcoming batch" is precisely the phrase the screen
+// invites an operator to type - and the refusal then lists the STORED values back at them, which are
+// words that appear nowhere on their screen.
+//
+// IT LIVES HERE, beside FUTURE_INTEREST_TAG, because this file is already the one place where the
+// screen's vocabulary and the stored values meet. A second copy in the import route is how
+// ARCHITECTURE section 3 says this codebase breaks.
+//
+// TIGHT LIST, AND REPORT THE REST - never guess. The two failure directions are not symmetric: a
+// wrong "Future" silently BLOCKS a real person from every batch until somebody notices, while an
+// unrecognised cell simply goes unset, takes the schema default of "Current", and leaves them
+// enrollable exactly as before. So anything not spelled out below is REPORTED, the posture the
+// route's own comment already states for sidh_status: "an unrecognised value is REPORTED, never
+// guessed at".
+const BATCH_INTEREST_WORDS: Record<string, "Current" | "Future"> = {
+  "current": "Current", "current batch": "Current", "the current batch": "Current",
+  "future": "Future", "upcoming": "Future", "upcoming batch": "Future",
+  "the upcoming batch": "Future", "future batch": "Future", "a future batch": "Future",
+};
+
+/** Sheet cell -> stored value, or null when it is not one we recognise (caller REPORTS it). */
+export function coerceBatchInterest(raw: unknown): "Current" | "Future" | null {
+  const s = String(raw ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  return s ? (BATCH_INTEREST_WORDS[s] ?? null) : null;
+}
 export const JOURNEY_TAGS = ["Enrollment in progress", "Training Ongoing", "Training Completed", "Result Awaited", "Certified", "Dropout", "Failed", "Absent at Assessment"];
 
 // Fresh bucket = never completed an enrollment (a roster drop BEFORE enrollment counts as Fresh).

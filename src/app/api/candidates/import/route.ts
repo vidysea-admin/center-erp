@@ -11,6 +11,7 @@ import { audit } from "@/lib/audit";
 import { findDuplicateCandidates, normalizePhone } from "@/lib/duplicates";
 import { canonicalAadhaar, canonicalApaar, canonicalPhone, sameGovtNumber } from "@/lib/validate";
 import { personLabel } from "@/lib/person";
+import { coerceBatchInterest } from "@/lib/candidate-journey";
 import { looksLikeCan, normalizeCan } from "@/lib/govt-attendance";
 
 // -154 (QA-424, REQ-385): the SET of importable fields comes from the catalog; the HANDLING stays
@@ -21,7 +22,10 @@ import { looksLikeCan, normalizeCan } from "@/lib/govt-attendance";
 const TEXT_IMPORT_FIELDS = new Set(
   CANDIDATE_IMPORT_FIELDS.filter((f) => f.type === "text" || f.type === "phone" || f.type === "enum")
     .map((f) => f.key)
-    .filter((k) => k !== "education" && k !== "sidh_status"), // these two are coerced against their enum below
+    // QA-1191: batch_interest joins the two that are COERCED rather than taken as text. It was in
+    // this set, so a sheet cell went in verbatim and mongoose's enum validator then killed the whole
+    // insertMany - preview 200, confirm 400, zero rows written. Measured, not assumed.
+    .filter((k) => k !== "education" && k !== "sidh_status" && k !== "batch_interest"),
 );
 const HANDLED_IMPORT_FIELDS = new Set<string>([
   ...TEXT_IMPORT_FIELDS,
@@ -77,6 +81,9 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // Interest fields (comma-separated centre / job-role NAMES) resolve the same way.
   const eduUnmatched: string[] = [];
   const sidhStatusUnmatched: string[] = [];
+  // QA-1191: NOT `interestUnmatched` below - that one collects unresolved programme and centre NAMES
+  // for interested_programs/interested_locations. Same word, different question.
+  const batchInterestUnmatched: string[] = [];
   const interestUnmatched: string[] = [];
   // QA-097: a date the parser cannot read is REPORTED against its row, never dropped.
   const dateUnparseable: string[] = [];
@@ -157,6 +164,15 @@ export const POST = apiHandler(async (req: NextRequest) => {
           const match = SIDH_STATUS.find((e) => e.toLowerCase() === raw.toLowerCase());
           if (match) c.sidh_status = match;
           else if (raw) sidhStatusUnmatched.push(raw);
+        }
+        // QA-1191: coerced exactly as education and sidh_status above are, and REPORTED when it is
+        // not a spelling we know. Unset is the safe failure: the schema default is "Current", so an
+        // unreadable cell leaves that person enrollable rather than silently frozen out of every batch.
+        if (field === "batch_interest" && r[col]) {
+          const raw = String(r[col]).trim();
+          const match = coerceBatchInterest(raw);
+          if (match) c.batch_interest = match;
+          else if (raw) batchInterestUnmatched.push(raw);
         }
         if (field === "interested_programs" && r[col]) {
           const ids = resolveNames(String(r[col]), progByName);
@@ -350,6 +366,10 @@ export const POST = apiHandler(async (req: NextRequest) => {
       blank_by_field: blankByField,
       row_count: rows.length,
       sidh_status_unmatched: [...new Set(sidhStatusUnmatched)].slice(0, 25),
+      // QA-1191: on the PREVIEW, because the preview answering 200 while the confirm died with 400 was
+      // the cruellest half of this defect - the one screen built to report unreadable values was the
+      // one screen that said nothing.
+      batch_interest_unmatched: [...new Set(batchInterestUnmatched)].slice(0, 25),
       interest_unmatched: [...new Set(interestUnmatched)].slice(0, 25),
       date_unparseable: dateUnparseable.slice(0, 25), date_unparseable_count: dateUnparseable.length,
       phone_invalid: phoneInvalid.slice(0, 25), phone_invalid_count: phoneInvalid.length,
@@ -376,5 +396,5 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // QA-896: the ids, so the screen can offer to put exactly these students on the batch the
   // operator came from. Without them the offer would have to guess "the newest N", which is wrong
   // the moment two people import at once.
-  return NextResponse.json({ imported: docs.length, imported_ids: docs.map((d) => String(d._id)), skipped: rows.length - candidates.length, duplicate_count: duplicates.length, date_unparseable: dateUnparseable.slice(0, 25), date_unparseable_count: dateUnparseable.length, phone_invalid: phoneInvalid.slice(0, 25), phone_invalid_count: phoneInvalid.length, candidate_id_invalid: candidateIdInvalid.slice(0, 25), candidate_id_invalid_count: candidateIdInvalid.length, aadhaar_invalid: aadhaarInvalid.slice(0, 25), aadhaar_invalid_count: aadhaarInvalid.length, apaar_invalid: apaarInvalid.slice(0, 25), apaar_invalid_count: apaarInvalid.length, apaar_duplicate: apaarDuplicate.slice(0, 25), apaar_duplicate_count: apaarDuplicate.length, apaar_same_as_aadhaar: apaarSameAsAadhaar.slice(0, 25), apaar_same_as_aadhaar_count: apaarSameAsAadhaar.length, ignored_columns: acceptUnknown ? [] : unknownCols, unhandled_fields: [...new Set(unhandledFields)], sidh_status_unmatched: [...new Set(sidhStatusUnmatched)].slice(0, 25), blank_by_field: blankByField }, { status: 201 });
+  return NextResponse.json({ imported: docs.length, imported_ids: docs.map((d) => String(d._id)), skipped: rows.length - candidates.length, duplicate_count: duplicates.length, date_unparseable: dateUnparseable.slice(0, 25), date_unparseable_count: dateUnparseable.length, phone_invalid: phoneInvalid.slice(0, 25), phone_invalid_count: phoneInvalid.length, candidate_id_invalid: candidateIdInvalid.slice(0, 25), candidate_id_invalid_count: candidateIdInvalid.length, aadhaar_invalid: aadhaarInvalid.slice(0, 25), aadhaar_invalid_count: aadhaarInvalid.length, apaar_invalid: apaarInvalid.slice(0, 25), apaar_invalid_count: apaarInvalid.length, apaar_duplicate: apaarDuplicate.slice(0, 25), apaar_duplicate_count: apaarDuplicate.length, apaar_same_as_aadhaar: apaarSameAsAadhaar.slice(0, 25), apaar_same_as_aadhaar_count: apaarSameAsAadhaar.length, ignored_columns: acceptUnknown ? [] : unknownCols, unhandled_fields: [...new Set(unhandledFields)], sidh_status_unmatched: [...new Set(sidhStatusUnmatched)].slice(0, 25), batch_interest_unmatched: [...new Set(batchInterestUnmatched)].slice(0, 25), blank_by_field: blankByField }, { status: 201 });
 });

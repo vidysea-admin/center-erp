@@ -776,6 +776,84 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
       ok("QA-945: ...and a value the door never offered falls back to Current, it is not stored",
         pubJunk.status === 201 && junkRow?.batch_interest === "Current",
         `status=${pubJunk.status} stored=${junkRow?.batch_interest}`);
+
+      // ---- QA-1191: the Excel import used to let ONE cell kill the whole file ----
+      // Measured on the live -247 build before the fix, not argued: a three-row sheet whose middle
+      // cell said "Upcoming batch" got preview 200 (silence from the one screen built to report
+      // unreadable values), then confirm 400 "batch_interest must be one of: Current, Future", and
+      // ZERO of the three rows landed. The same sheet with "Future" imported 3 of 3.
+      //
+      // batch_interest was in TEXT_IMPORT_FIELDS, so the raw cell went straight into the document and
+      // mongoose's enum validator failed the whole ordered insertMany. Its two neighbours in the same
+      // loop, education and sidh_status, have always been coerced and REPORTED instead.
+      //
+      // QA-1190 did not cause this, it sharpened the bait: the import label now reads "Interested in
+      // (Current / Upcoming batch)", so "Upcoming batch" is exactly what the screen invites an
+      // operator to type - and the refusal then listed the STORED values back at them, words that
+      // appear nowhere on their screen.
+      {
+        const XLSX2 = await import("xlsx");
+        const sheet = (rows) => {
+          const ws = XLSX2.utils.json_to_sheet(rows);
+          const wb = XLSX2.utils.book_new();
+          XLSX2.utils.book_append_sheet(wb, ws, "Sheet1");
+          return XLSX2.write(wb, { type: "buffer", bookType: "xlsx" });
+        };
+        const ph = (p) => p + String(Math.floor(Math.random() * 1e6)).padStart(6, "0");
+
+        const runImport = async (tag, cell) => {
+          const nm = `BI${tag}${stamp}`;
+          const buf = sheet([
+            { Name: nm + " A", Phone: ph("9881"), Interest: "The current batch" },
+            { Name: nm + " B", Phone: ph("9882"), Interest: cell },
+            { Name: nm + " C", Phone: ph("9883"), Interest: "Current" },
+          ]);
+          const send = async (extra) => {
+            const fd = new FormData();
+            fd.append("file", new Blob([buf]), "bi.xlsx");
+            fd.append("location", String(loc._id));
+            fd.append("program", String(prog._id));
+            fd.append("mapping", JSON.stringify({ Name: "name", Phone: "phone", Interest: "batch_interest" }));
+            fd.append("accept_unknown", "1");
+            for (const [k, v] of Object.entries(extra ?? {})) fd.append(k, v);
+            const r = await fetch(BASE + "/api/candidates/import", { method: "POST", headers: { cookie: admin }, body: fd });
+            return { status: r.status, data: await r.json().catch(() => ({})) };
+          };
+          const preview = await send({});
+          const confirm = await send({ confirm: "1" });
+          const rows = ((await req(admin, "GET", `/api/candidates?limit=2000&q=${encodeURIComponent(nm)}`)).data.items ?? [])
+            .filter((c) => String(c.name).startsWith(nm));
+          const by = (suffix) => rows.find((c) => String(c.name).endsWith(suffix))?.batch_interest;
+          return { preview, confirm, rows, by };
+        };
+
+        // 1. THE REGRESSION PIN. Before the fix this was 0 of 3 and a 400 - assert BOTH the count and
+        //    the status, because either alone can be right for the wrong reason.
+        const up = await runImport("UP", "Upcoming batch");
+        ok("QA-1191: a sheet cell saying \"Upcoming batch\" - the words the import screen itself offers - no longer kills the file",
+          up.confirm.status === 201 && up.rows.length === 3,
+          `status=${up.confirm.status} landed=${up.rows.length}/3 err=${JSON.stringify(up.confirm.data?.error ?? "")}`);
+
+        // 2. ...and it means what the screen says it means. Not merely "did not crash" - the stored
+        //    value has to be the one the operator chose, or the import is quietly lying.
+        ok("QA-1191: ...and the screen's two names land on the right STORED values, not just any value",
+          up.by(" A") === "Current" && up.by(" B") === "Future" && up.by(" C") === "Current",
+          JSON.stringify({ A: up.by(" A"), B: up.by(" B"), C: up.by(" C") }));
+
+        // 3. REPORT, NEVER GUESS - and report it on the PREVIEW, which is where the defect was
+        //    cruellest: preview answered 200 while confirm died.
+        const junk = await runImport("JNK", "maybe later idk");
+        ok("QA-1191: an unrecognised spelling is REPORTED on the PREVIEW, the screen that stayed silent while confirm died",
+          (junk.preview.data?.batch_interest_unmatched ?? []).includes("maybe later idk"),
+          JSON.stringify(junk.preview.data?.batch_interest_unmatched ?? "field absent"));
+
+        // 4. The safe failure direction. A wrong "Future" silently freezes a real person out of every
+        //    batch; an unset cell takes the schema default and leaves them enrollable. So an
+        //    unrecognised value must NOT be guessed into Future - and the file must still import.
+        ok("QA-1191: ...and it is NOT guessed - the row still imports and falls back to Current, the direction that cannot silently block anyone",
+          junk.confirm.status === 201 && junk.rows.length === 3 && junk.by(" B") === "Current",
+          `status=${junk.confirm.status} landed=${junk.rows.length}/3 stored=${junk.by(" B")}`);
+      }
     }
   } finally { await mc.close(); }
 }
