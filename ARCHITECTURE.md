@@ -393,9 +393,15 @@ and have both of the first two routes call it. The third already does — it was
 **QA-1189 — why the heading changed.** This section said "Two" for a release after a third caller
 existed, and the unit that added it (`qa-248`) cited this very section three times as its
 justification for routing through `addMemberChecked`. A map that is cited as a reason and is wrong
-about its own subject is worse than one nobody reads. **One thing it still does not cover:** the
-capacity question — "is there room on this roster" — is answered in the routes, not here, and the
-three doors do not answer it the same way (**QA-1187**).
+about its own subject is worse than one nobody reads. **Capacity, since QA-1187:** "is there room on this
+roster" now has ONE answer and all three doors give it. Joining WARNS and admits
+(`addMemberChecked` :614, `Roster is now N of target M`); only **Rule 48** in `updateEnrollment`
+(:665) REFUSES, and only when somebody tries to *complete* enrolment past the target. Joining and
+enrolling are two events with two rules, deliberately. The public link briefly carried a third
+answer — it refused the join outright — which turned an anonymous registrant away from a roster a
+staff member could have added them to; that is gone. What replaced it is the warning **reaching
+somebody**: the operator is told when a link is minted for a batch already at target, and the form
+stops promising a seat it cannot promise.
 
 ### 3.2 The candidate intake doors — **live gap, QA-275**, and it has now bitten twice more
 
