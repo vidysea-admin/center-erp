@@ -379,13 +379,23 @@ It was asserting closure — on this map, which is the first thing every session
 wrong row here would have told the next reader the concept was safe. Say what was measured, and
 name what was not.
 
-### 3.1 Two roster-add paths that already disagree — **live defect, QA-273**
+### 3.1 THREE roster-add paths — two that already disagree (**live defect, QA-273**) and one that cannot
 | Copy | Where | Walk-in (no centre) |
 |---|---|---|
 | Single add | `api/batches/[id]/members/route.ts:87` | `if (cand.location && …)` — **exempt**, and it *sets* the centre + audits it (:99) |
 | Bulk assign | `api/candidates/assign/route.ts:43` | `if (String(c0.location) !== …)` — **refused**: `String(undefined)` = `"undefined"`. No adoption either |
+| **Public batch-registration link** | `api/public/register/[token]/route.ts` (A-03, `-248`) | **calls `addMemberChecked` and nothing else**, so it inherits Rule 20, the QA-945 future-interest gate and the joined-on rule instead of re-stating them |
+
 **SoT:** extract the join-eligibility + adoption block into `rules.ts` beside `addMemberChecked` (:400)
-and have both routes call it.
+and have both of the first two routes call it. The third already does — it was written that way
+*because* of this row, which is the only reason it is not a fourth disagreement.
+
+**QA-1189 — why the heading changed.** This section said "Two" for a release after a third caller
+existed, and the unit that added it (`qa-248`) cited this very section three times as its
+justification for routing through `addMemberChecked`. A map that is cited as a reason and is wrong
+about its own subject is worse than one nobody reads. **One thing it still does not cover:** the
+capacity question — "is there room on this roster" — is answered in the routes, not here, and the
+three doors do not answer it the same way (**QA-1187**).
 
 ### 3.2 The candidate intake doors — **live gap, QA-275**, and it has now bitten twice more
 
