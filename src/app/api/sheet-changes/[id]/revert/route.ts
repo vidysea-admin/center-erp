@@ -4,7 +4,7 @@ import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Candidate, Location, LocationTarget, Program, SheetChange, Trainer } from "@/models";
 import { audit } from "@/lib/audit";
-import { canRevert } from "@/lib/sync";
+import { canRevert, isSecretSheetField, maskSheetChange } from "@/lib/sync";
 
 // Rollback for an applied sheet change (2026-08-13, Umesh: "hum rollback kar paayein purane data
 // mein"). Scope is deliberately narrow: "Update target" and "Apply value" write a plain value
@@ -26,13 +26,16 @@ export const POST = apiHandler(async (_req: NextRequest, ctx: { params: Promise<
   const revertable = canRevert(change);
   if (!revertable.ok) throw new HttpError(400, revertable.why);
 
-  // QA-1062 cycle 2: whether THIS row carries a credential. The list route decides the same thing
-  // at sheet-changes/route.ts and the two must not drift, so the field name is the single test in
-  // both places. Note this door is gated on sheet.approve ALONE — deliberately, because reverting
-  // is an operational act a non-Admin reviewer is meant to perform. What must not follow from that
-  // right is READING the credential, which is what the three copies below were handing over.
-  const secretField = change.field_name === "tc_password";
-  const maskChangeSecrets = (c: any) => ({ ...c, old_value: c.old_value ? "••••••" : "", new_value: c.new_value ? "••••••" : "" });
+  // Whether THIS row carries a credential. This door is gated on sheet.approve ALONE — deliberately,
+  // because reverting is an operational act a non-Admin reviewer is meant to perform. What must not
+  // follow from that right is READING the credential.
+  //
+  // QA-1253 cycle 3: `secretField` and a private `maskChangeSecrets` used to live here, and that
+  // private copy was the third spread of a document whose value lives in three properties — it
+  // masked two, and `impact_snapshot.{apply,revert}` went out in the clear inside the same reply.
+  // Both the test and the mask are imported now, so the count is one function's job and not the
+  // next author's memory.
+  const secretField = isSecretSheetField(change.field_name);
 
   // Generic field write — put back exactly what was there (the resolved old value when the
   // tab-mapping engine stored one, else the sheet's old text; blank means unset).
@@ -71,8 +74,11 @@ export const POST = apiHandler(async (_req: NextRequest, ctx: { params: Promise<
     // `item` is the unmasked document. Both are gated on sheet.approve alone, so the login the
     // gate fix was written for could read the password out of the reply. A secret field now
     // reports that it was restored, not what to.
+    // NOTE THE ORDER, because getting it wrong writes bullets into a centre's live password: the
+    // restore above reads `snap.revert` from the DOCUMENT, and only this outgoing COPY is masked.
+    // `maskSheetChange` returns a new object and never mutates its input, for exactly this reason.
     return NextResponse.json(secretField
-      ? { item: maskChangeSecrets(change.toObject()), reverted_to: change.old_value ? "(restored)" : null }
+      ? { item: maskSheetChange(change.toObject(), false), reverted_to: change.old_value ? "(restored)" : null }
       : { item: change, reverted_to: change.old_value ?? null });
   }
   if (!change.location) throw new HttpError(400, "Change has no matched location.");

@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser } from "@/lib/authz";
 import { requirePerm, requireView } from "@/lib/permissions";
 import { FollowUpAction, LocationTarget, Program, SheetChange } from "@/models";
-import { canRevert, classifyChange, targetRowField } from "@/lib/sync";
+import { canRevert, classifyChange, maskSheetChange, targetRowField } from "@/lib/sync";
 
 export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
@@ -85,12 +85,11 @@ export const GET = apiHandler(async (req: NextRequest) => {
   }
 
   const withFups = await Promise.all(items.map(async (c) => {
-    const masked = {
-      ...c,
-      ...(canSeeSecrets || c.field_name !== "tc_password"
-        ? {}
-        : { old_value: c.old_value ? "••••••" : "", new_value: c.new_value ? "••••••" : "" }),
-    };
+    // QA-1253 cycle 3: this used to spread the row and rewrite old_value/new_value here, and the
+    // row carries the credential in a THIRD property — `impact_snapshot.{apply,revert}`, written
+    // with the RESOLVED values by tab-mapping.ts. A non-Admin read bullets in two fields and the
+    // live password in the object beside them. One masker now, shared with the revert door.
+    const masked = maskSheetChange(c, canSeeSecrets);
     // QA-986 (S1): Rule 7's count is a fact the predicate needs, not just a badge on the row —
     // "No action" on a change with pending follow-ups orphans them and erases what was applied.
     const pending = await FollowUpAction.countDocuments({ source_change: c._id, status: "Pending" });
