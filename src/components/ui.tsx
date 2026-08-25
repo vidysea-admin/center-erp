@@ -71,7 +71,7 @@ const CHIP_COLORS: Record<string, string> = {
   "Dropout": "bg-red-100 text-red-700", // ("Failed" already maps red above)
   "No programme": "bg-amber-100 text-amber-700",
   "Under preparation": "bg-amber-100 text-amber-700",
-  // QA-1153 (2026-08-25): three keys deleted here — "Docs Requested", "Nominated to NSDC" and
+  // QA-1182 (2026-08-25): three keys deleted here — "Docs Requested", "Nominated to NSDC" and
   // "TOT Passed" were stage names REMOVED from TRAINER_PIPELINE in the 2026-08-14 rename and had
   // coloured nothing since. Harmless (an unknown key falls through to grey) but they were the
   // standing evidence that nothing checked this map against the enum: a stage ADDED to
