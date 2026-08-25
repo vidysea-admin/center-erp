@@ -167,40 +167,69 @@ const card = page.locator("details", { hasText: "Where these numbers come from" 
 ok("[REQ-367b] /reports renders the disclosure card this criterion is about", await card.count() > 0);
 
 if (await card.count() > 0) {
+  // CYCLE 3 - QA-1280 (S2), and the checker proved it with a GREEN scoreboard on a live violation.
+  // It moved the caveat <p>, UNCHANGED, into a SECOND collapsed <details> labelled "Important note",
+  // leaving the named card untouched. That is a warning folded behind a click - exactly what
+  // REQ-367b forbids ("outside ANY disclosure card and ALWAYS visible") - and all ten assertions
+  // still passed, 69/0. Two independent causes, both wrong in the same direction, so neither backed
+  // the other up:
+  //   1. `caveatInsideCard` asked only about the ONE card matched by "Where these numbers come from".
+  //   2. `vis()` was offsetWidth||offsetHeight||getClientRects().length, which CANNOT tell hidden
+  //      content inside a closed <details> from visible content - Chromium hides it with
+  //      content-visibility, which still yields a layout box. Measured on that build: vis()=TRUE
+  //      (offsetWidth 1230) while element.checkVisibility()=FALSE.
+  // A criterion held by a check that cannot fail is the QA-1214 disease, and this suite exists to
+  // end it. All three fixes are here: a semantic hook instead of a colour, closest("details") instead
+  // of one named card, and checkVisibility() instead of a layout-box guess.
   const read = () => page.evaluate(() => {
     const d = [...document.querySelectorAll("details")].find((x) => /Where these numbers come from/i.test(x.innerText));
-    const caveat = [...document.querySelectorAll("p")].find((p) => /amber-800/.test(p.className));
-    const unrec = [...document.querySelectorAll("*")].find((e) => /does not recognise/i.test(e.textContent || "") && e.children.length === 0);
-    const vis = (el) => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+    // QA-1280: `data-warning` says what this element IS. Keying on `text-amber-800` meant one class
+    // rename turned this red with "the caveat is not rendered at all", sending the next reader into
+    // rules.ts over a restyle - QA-1243's disease inside the block that guards REQ-367b.
+    const caveat = document.querySelector('[data-warning="caveat"]');
+    const unrec = document.querySelector('[data-warning="unrecognised-status"]');
+    // QA-1280: ANY disclosure card, not just the named one. A second <details> is the third of the
+    // three defeats QA-567 already recorded against the old static pin.
+    const insideAnyCard = (el) => !!(el && el.closest("details"));
+    // QA-1280: checkVisibility() is the API that answers correctly and was one word away.
+    const vis = (el) => !!el && (typeof el.checkVisibility === "function"
+      ? el.checkVisibility()
+      : !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length));
     return {
       open: !!d?.open,
       definitionsVisible: /Mobilised|In training/i.test(d?.innerText || "") && !!d?.open,
-      caveatFound: !!caveat, caveatVisible: vis(caveat), caveatInsideCard: !!(caveat && d && d.contains(caveat)),
-      unrecFound: !!unrec, unrecInsideCard: !!(unrec && d && d.contains(unrec)),
+      // If the browser lacks checkVisibility the guard silently weakens, so say which one answered.
+      visApi: typeof document.body.checkVisibility === "function" ? "checkVisibility" : "layout-box-fallback",
+      caveatFound: !!caveat, caveatVisible: vis(caveat), caveatInsideCard: insideAnyCard(caveat),
+      unrecFound: !!unrec, unrecInsideCard: insideAnyCard(unrec),
     };
   });
 
   const closed1 = await read();
+  // QA-1280: without this the whole REQ-367b block can quietly fall back to the layout-box guess that
+  // just let a folded warning score 69/0. A guard that weakens itself in silence is the thing being fixed.
+  ok("[precondition] the browser answers element.checkVisibility() (else the visibility half of REQ-367b is a guess)",
+    closed1.visApi === "checkVisibility", JSON.stringify({ visApi: closed1.visApi }));
   ok("[REQ-367b] the card starts CLOSED (it is a disclosure, not a wall of text)", closed1.open === false, JSON.stringify(closed1));
   ok("[REQ-367b] the amber caveat is rendered at all (rules.ts always sets it - if this fails the assertions below are vacuous)", closed1.caveatFound);
   ok("[REQ-367b] with the card CLOSED the caveat is still visible", closed1.caveatVisible, JSON.stringify(closed1));
-  ok("[REQ-367b] the caveat is OUTSIDE the disclosure card, not merely visible by luck", closed1.caveatFound && !closed1.caveatInsideCard, JSON.stringify(closed1));
+  ok("[REQ-367b] the caveat is outside EVERY disclosure card on the page, not merely visible by luck", closed1.caveatFound && !closed1.caveatInsideCard, JSON.stringify(closed1));
 
   await card.locator("summary").first().click();
   await page.waitForFunction(() => [...document.querySelectorAll("details")].some((x) => /Where these numbers come from/i.test(x.innerText) && x.open), undefined, { timeout: 10000 }).catch(() => {});
   const opened = await read();
   ok("[QA-573] the harness can OPEN a <details> and the DOM actually changed state", opened.open === true, JSON.stringify(opened));
   ok("[QA-573] opening it reveals the definitions that were hidden a moment ago", opened.definitionsVisible, JSON.stringify(opened));
-  ok("[REQ-367b] with the card OPEN the caveat is STILL visible and still outside it", opened.caveatVisible && !opened.caveatInsideCard, JSON.stringify(opened));
+  ok("[REQ-367b] with the card OPEN the caveat is STILL visible and still outside every card", opened.caveatVisible && !opened.caveatInsideCard, JSON.stringify(opened));
 
   await card.locator("summary").first().click();
   await page.waitForFunction(() => [...document.querySelectorAll("details")].some((x) => /Where these numbers come from/i.test(x.innerText) && !x.open), undefined, { timeout: 10000 }).catch(() => {});
   const closed2 = await read();
   ok("[QA-573] the harness can CLOSE it again and the DOM actually changed back", closed2.open === false, JSON.stringify(closed2));
-  ok("[REQ-367b] after closing, the caveat is visible in that state too", closed2.caveatVisible && !closed2.caveatInsideCard, JSON.stringify(closed2));
+  ok("[REQ-367b] after closing, the caveat is visible in that state too and still outside every card", closed2.caveatVisible && !closed2.caveatInsideCard, JSON.stringify(closed2));
   // Only asserted when the dataset produces it - and SAID so, rather than passing silently.
   if (closed2.unrecFound) {
-    ok("[REQ-367b] the 'does not recognise' warning is outside the card as well", !closed2.unrecInsideCard, JSON.stringify(closed2));
+    ok("[REQ-367b] the 'does not recognise' warning is outside every card as well", !closed2.unrecInsideCard, JSON.stringify(closed2));
   } else {
     console.log("NOTE  [REQ-367b] the QA-552 'does not recognise' line is NOT rendered on this dataset, so its half of the criterion was NOT exercised. It needs sheet data carrying an unknown status; named as an open gap in the manifest, not counted as a pass.");
   }

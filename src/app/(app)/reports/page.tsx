@@ -343,16 +343,26 @@ function ReportsInner() {
       )}
 
       {/* The caveat is OUTSIDE the card on purpose - see the note above. It is the one line that
-          changes how the figures beside it should be read. */}
+          changes how the figures beside it should be read.
+
+          QA-1280 (checker, qa-573 cycle 2): `data-warning` is a SEMANTIC hook, and it exists because
+          the only handle a test had on this line was `text-amber-800`. The checker changed that one
+          class to `text-orange-800` - caveat still rendered, still visible, still outside the card -
+          and the suite went red saying "the amber caveat is rendered at all... if this fails the
+          assertions below are vacuous", which sends the next reader into rules.ts to find out why the
+          caveat stopped being set. Nothing was wrong with rules.ts. That is QA-1243's disease
+          (meaning expressed only as a colour) relocated into the block that guards REQ-367b. What
+          this element IS - a warning that must stay outside any disclosure card and always visible -
+          is now written down, and a restyle cannot take it away. */}
       {s?.caveat && (
-        <p className="px-1 text-[11px] font-medium leading-relaxed text-amber-800">{s.caveat}</p>
+        <p data-warning="caveat" className="px-1 text-[11px] font-medium leading-relaxed text-amber-800">{s.caveat}</p>
       )}
 
       {/* QA-552: a value the report does not recognise is NAMED, not quietly counted as blank.
           Empty today, and that is exactly why it has to be here - the row that grows a word like
           "Transferable" (Karunn sir's own word at 12:31) is the one nobody would go looking for. */}
       {data?.unrecognised_status?.length > 0 && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+        <div data-warning="unrecognised-status" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
           <b>The client sheet has {data.unrecognised_status.length} status value(s) this report does not recognise.</b>{" "}
           They are counted under <b>{L.unknown?.label ?? "Pending Target"}</b> for now, because guessing what they mean would put words in the client&apos;s mouth:{" "}
           {data.unrecognised_status.map((u: any) => `"${u.value}" (${u.rows} row${u.rows === 1 ? "" : "s"})`).join(" · ")}
