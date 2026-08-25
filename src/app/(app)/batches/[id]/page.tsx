@@ -3012,8 +3012,8 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
               "Yeh Monday ko humne certificate distribute kar diye ... toh ab kaise dalu? Yeh add hi
               nahi ho raha hai." The split is the same one QA-785 already made further down this file
               (batchClosedByStatus vs mayMark); the server half is POST_COMPLETION_WRITABLE. */}
-          <Field label="Certificate distribution date"><input type="date" disabled={!mayMarkTab} className={inputCls} value={toInputDate(form.certificate_distribution_date)} onChange={(e) => setForm({ ...form, certificate_distribution_date: e.target.value })} /></Field>
-          <Field label="Uploaded to SIDH portal on"><input type="date" disabled={!mayMarkTab} className={inputCls} value={toInputDate(form.sidh_uploaded_on)} onChange={(e) => setForm({ ...form, sidh_uploaded_on: e.target.value })} /></Field>
+          <Field label="Certificate distribution date"><input type="date" disabled={closed} className={inputCls} value={toInputDate(form.certificate_distribution_date)} onChange={(e) => setForm({ ...form, certificate_distribution_date: e.target.value })} /></Field>
+          <Field label="Uploaded to SIDH portal on"><input type="date" disabled={closed} className={inputCls} value={toInputDate(form.sidh_uploaded_on)} onChange={(e) => setForm({ ...form, sidh_uploaded_on: e.target.value })} /></Field>
           {legacy && !perCandidate
             ? <Field label="Certificates issued"><input type="number" disabled={closed} className={inputCls} value={form.certificates_issued ?? ""} onChange={(e) => setForm({ ...form, certificates_issued: +e.target.value })} /></Field>
             : <Field label="Certificates issued"><div className={inputCls + " bg-gray-50 text-gray-700"}>{closure?.certificates_issued ?? 0} <span className="text-xs text-gray-400">derived</span></div></Field>}
