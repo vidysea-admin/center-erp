@@ -260,8 +260,8 @@ if (await card.count() > 0) {
 {
   const bad = { interest: "maybe later idk", edu: "not-a-level" };
   const rows = [
-    { Name: "TEST-IP " + s + " A", Phone: phone("77"), Interest: "The current batch", Edu: "10th Pass" },
-    { Name: "TEST-IP " + s + " B", Phone: phone("77"), Interest: bad.interest, Edu: bad.edu },
+    { Name: "TEST-IP " + s + " A", Phone: phone("77"), Interest: "The current batch", Edu: "10th Pass", AltPhone: "", Junk: "" },
+    { Name: "TEST-IP " + s + " B", Phone: phone("77"), Interest: bad.interest, Edu: bad.edu, AltPhone: "", Junk: "" },
   ];
   // tmpdir, NOT the tree. The cycle-3 checker put a temporary path inside the checkout and Turbopack
   // failed the build on it - a self-inflicted error that reads exactly like broken code.
@@ -292,7 +292,7 @@ if (await card.count() > 0) {
     await page.waitForSelector('input[type="file"]', { timeout: 15000 });
     await page.locator('input[type="file"]').last().setInputFiles(xlsx);
     await page.waitForFunction(() => /Interest/.test(document.body.innerText), undefined, { timeout: 20000 });
-    for (const field of ["name", "phone", "batch_interest", "education"]) {
+    for (const field of ["name", "phone", "batch_interest", "education", "alt_phone"]) {
       const sel = page.locator('select:has(option[value="' + field + '"])');
       const n = await sel.count();
       for (let i = 0; i < n; i++) {
@@ -313,18 +313,40 @@ if (await card.count() > 0) {
     // THE CONTROL, and it is what makes the next assertion mean anything. Cycle 1's real defect was
     // that education rendered and batch interest did not - so "the interest value appears" alone
     // would pass on a screen that renders everything, and prove nothing about the fix.
-    ok("[QA-1268 control] the preview names an unreadable EDUCATION value - proof the drawer renders warnings at all",
-      text.includes(bad.edu), text.slice(0, 200));
-    ok("[QA-1268] ...and it names the unreadable BATCH INTEREST value too - read off the DOM, so no comment can fake it",
-      text.includes(bad.interest), (text.match(/Batch interest[^\n]*/) || ["(no batch-interest line rendered)"])[0]);
-    ok("[QA-1268] ...under its own heading, so the operator is told WHICH column is wrong",
-      /Batch interest not recognised/i.test(text), (text.match(/Batch interest[^\n]*/) || ["(heading absent)"])[0]);
-    // QA-1267's regression guard, on the screen where it was found: a mapping entry whose
-    // destination is the empty string - what the drawer's own "Ignore" writes - must never produce a
-    // warning that names no column at all.
-    ok("[QA-1267] no blank-column warning names NOTHING - 'the column mapped to .' is a report lane lying about a column",
-      !/mapped to\s*\.(\s|$)/m.test(text),
-      (text.match(/[^\n]*mapped to[^\n]*/) || ["(no blank-column warning at all)"])[0]);
+    // QA-1341 (checker, cycle 1). THE THREE ASSERTIONS BELOW USED TO BE INDEPENDENT WHOLE-BODY
+    // SUBSTRING TESTS, and the checker showed what that costs: swap the two warning payloads - an
+    // ordinary wrong-variable bug - and all four still passed 74/0 while the screen read
+    //     "Education values not recognised: maybe later idk"
+    //     "Batch interest not recognised: not-a-level"
+    // The assertion whose own sentence promises the operator is told WHICH column is wrong was
+    // green while the operator was being told the wrong column. Presence on a page is not the
+    // claim; PAIRING is. So each value is now asserted on the SAME LINE as its own heading, and
+    // the education mirror is asserted too - one line cannot satisfy both.
+    const lineWith = (re) => (text.split(String.fromCharCode(10)).find((l) => re.test(l)) || "");
+    const iLine = lineWith(/Batch interest not recognised/i);
+    const eLine = lineWith(/Education values not recognised/i);
+    ok("[QA-1268 control] the preview names an unreadable EDUCATION value ON ITS OWN LINE - proof the drawer renders warnings at all",
+      eLine.includes(bad.edu), eLine || "(no education line rendered)");
+    ok("[QA-1268] ...and the BATCH INTEREST heading carries the batch-interest value, not education's - read off the DOM, so no comment can fake it",
+      iLine.includes(bad.interest) && !iLine.includes(bad.edu), iLine || "(no batch-interest line rendered)");
+    ok("[QA-1341] ...and the two are NOT crossed - the education line must not carry the interest value either",
+      !eLine.includes(bad.interest), JSON.stringify({ interestLine: iLine.slice(0, 90), eduLine: eLine.slice(0, 90) }));
+    // QA-1340 (same verdict): the guard below was green by ABSENCE - the old fixture rendered no
+    // "mapped to" line at all, so "no warning names nothing" was true the way it is true of an
+    // empty page. A guard that passes because its subject is missing measures nothing (QA-212).
+    // The fixture now maps AltPhone to a REAL destination and leaves it EMPTY, so the lane must
+    // speak; and it leaves Junk on Ignore and empty, which is the exact state QA-1267 was about.
+    const mapped = text.split(String.fromCharCode(10)).filter((l) => /mapped to/.test(l));
+    ok("[QA-1340] the blank-column lane actually SPEAKS on this fixture - otherwise the guard below is green by absence, not by behaviour",
+      mapped.some((l) => /mapped to alt_phone/.test(l)), JSON.stringify(mapped.slice(0, 3)));
+    // No regex here on purpose. The first version of this line was written through three layers of
+    // shell quoting and arrived as /mapped tos*.(s|$)/ - every backslash eaten, so it matched
+    // "mapped tos" and nothing it was meant to catch. A guard whose PATTERN is silently corrupt is
+    // the same class as a guard that cannot fail, and it is the third escaping casualty in this
+    // file today. Plain string arithmetic cannot be mangled that way.
+    const columnNamed = (l) => l.slice(l.indexOf("mapped to ") + 10).trim().replace(/^[.]+/, "").trim();
+    ok("[QA-1267] ...and no blank-column warning names NOTHING - 'the column mapped to .' is a report lane lying about a column",
+      !mapped.some((l) => columnNamed(l) === ""), JSON.stringify(mapped.slice(0, 3)) || "(no blank-column warning at all)");
   }
 }
 
