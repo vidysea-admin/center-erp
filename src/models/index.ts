@@ -370,6 +370,9 @@ export const EDUCATION_LEVEL = ["Below 10th", "10th Pass", "12th Pass", "Graduat
 // 2026-08-24 (Umesh): "interested in current upcoming batch" vs "interested in future batches".
 // Two values on purpose - a third ("Not interested") would duplicate the Dropped lifecycle state,
 // which already carries a reason and a stage.
+// 2026-08-25 (client call): on screen these two are "The current batch" and "Upcoming batch". The
+// STORED values below are deliberately untouched - see FUTURE_INTEREST_TAG in lib/candidate-journey.ts
+// for why a rename of the words is not a rename of the data.
 export const BATCH_INTEREST = ["Current", "Future"] as const;
 export const SIDH_STATUS = ["Not Registered", "Link Sent", "Registered", "Registration Failed"] as const;
 const CandidateSchema = new Schema({

@@ -155,12 +155,12 @@ export default function PublicRegisterPage({ params }: { params: Promise<{ token
           ) : (
             <F label="Which batch are you interested in? *">
               <select className={inputCls} value={form.batch_interest ?? "Current"} onChange={(e) => set("batch_interest", e.target.value)}>
-                <option value="Current">The current / upcoming batch</option>
-                <option value="Future">A future batch — I am not available right now</option>
+                <option value="Current">The current batch</option>
+                <option value="Future">Upcoming batch</option>
               </select>
               {form.batch_interest === "Future" && (
                 <span className="mt-1 block text-xs text-gray-600">
-                  Your details are saved and the centre will contact you when a later batch opens. You will not be added to the current one.
+                  Your details are saved and the centre will contact you when the upcoming batch opens. You will not be added to the current one.
                 </span>
               )}
             </F>

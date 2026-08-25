@@ -404,7 +404,15 @@ Two fields added 2026-08-24 are the current test of whether this row is being re
 |---|---|---|---|---|---|
 | `aadhaar_no` (QA-903) | yes | yes | yes | yes | yes |
 | `apaar_id` (QA-902) | yes | yes | **no, deliberately** | **no, deliberately** | yes |
-| `batch_interest` (Unit C) | pending | pending | pending | pending | pending |
+| `batch_interest` (QA-945) | yes | yes | yes | yes | yes |
+
+**And `batch_interest` says “Upcoming batch” on screen while it stores `"Future"`.** The client
+renamed the two choices on 2026-08-25 (QA-1190) and Umesh confirmed it as a wording change only:
+the enum values are live data on real candidate records, so renaming one is the add→migrate→remove
+dance of LANDMINE 1, not an edit. The one place the two vocabularies meet is `FUTURE_INTEREST_TAG`
+in `src/lib/candidate-journey.ts` — import it, never re-spell it. `scripts/e2e-blindspot.mjs` pins
+that no file under `src/` still uses the old words (“future batch”, “current intake”), with
+`src/lib/version.ts` excluded because its release notes must keep saying what each release shipped.
 
 **Read `apaar_id`'s two "no"s as a decision, not as this row biting a third time.** Asked directly on
 2026-08-24, Umesh chose the staff doors, the drawer, the Excel import and the batch roster, and did

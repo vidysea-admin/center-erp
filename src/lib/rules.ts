@@ -470,7 +470,7 @@ export async function addMemberChecked(batchId: string, candidateId: string, joi
   // QA-945 (-230, Umesh 24/08): "jo future interested hai unka status jab tak update nhi hoga tho vo
   // batch mai register nhi hongee aur select krne mai aana chaiye ki phle status update kro."
   //
-  // A candidate who told us they are interested in a FUTURE batch has not agreed to join this one.
+  // A candidate who told us they want the Upcoming batch has not agreed to join this one.
   // Enrolling them anyway is not a small slip: it puts a real person on a government roster, and the
   // centre only finds out when that student does not turn up on day one.
   //
@@ -486,8 +486,8 @@ export async function addMemberChecked(batchId: string, candidateId: string, joi
   const cand = await Candidate.findById(candidateId).select("name batch_interest").lean<any>();
   if (cand?.batch_interest === "Future") {
     throw new HttpError(409,
-      `${cand.name ?? "This candidate"} is marked as interested in a FUTURE batch, so they are not being enrolled yet. ` +
-      `Open their record and change "Interested in" to the current intake first — then add them.`);
+      `${cand.name ?? "This candidate"} is marked as interested in the Upcoming batch, so they are not being enrolled yet. ` +
+      `Open their record and change "Interested in" to "The current batch" first — then add them.`);
   }
 
   // ---- 2. context read once, for the checks above and the values below ----

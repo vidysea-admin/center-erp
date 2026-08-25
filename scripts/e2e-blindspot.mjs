@@ -578,7 +578,12 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
         tripped > 0, `429s=${tripped}`);
     }
 
-    // ---- QA-945 (Umesh 2026-08-24): current intake vs a future batch ----
+    // ---- QA-945 (Umesh 2026-08-24): "The current batch" vs "Upcoming batch" ----
+    // QA-1190 (client call 2026-08-25, confirmed by Umesh): the two choices were RENAMED. "The
+    // current / upcoming batch" became "The current batch", and "A future batch - not available
+    // right now" became "Upcoming batch". WORDS ONLY - the stored values are still "Current" and
+    // "Future", so every assertion about BEHAVIOUR below is untouched, and only the assertions about
+    // WORDING moved with the screen.
     // "jo future interested hai unka status jab tak update nhi hoga tho vo batch mai register nhi
     // hongee aur select krne mai aana chaiye ki phle status update kro. team ko ye help kregi ki
     // future interested walo se jitna abhi data possible hai vo le legi aur baad mai dobara call
@@ -607,8 +612,14 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
       const single = await req(admin, "POST", `/api/batches/${biBatch._id}/members`, { candidate: fut1._id });
       ok("QA-945: the SINGLE-add door refuses a future-interested candidate",
         single.status === 409, `status=${single.status} ${JSON.stringify(single.data).slice(0, 120)}`);
-      ok("QA-945: ...and the refusal NAMES THE FIX, not just the rule",
-        /change|current intake/i.test(String(single.data?.error ?? "")), String(single.data?.error ?? "").slice(0, 140));
+      // QA-1190: this was /change|current intake/i - an alternation whose left branch is the bare
+      // word "change", so it passed on almost any refusal sentence. It now demands the remedy
+      // VERBATIM, because the remedy names a control the operator must find on screen: after the
+      // rename there is no option called "the current intake" any more, and a correct guard whose
+      // stated remedy does not exist on screen is the -224 fault this project has already shipped.
+      ok("QA-945: ...and the refusal NAMES THE FIX, in the words the screen now uses",
+        String(single.data?.error ?? "").includes('change "Interested in" to "The current batch"'),
+        String(single.data?.error ?? "").slice(0, 140));
 
       // THE SAME candidate through the second door, deliberately. The first version of this block used
       // two different people and the sentences then differed only by NAME - which made the comparison
@@ -622,7 +633,7 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
       // already active" - and a bare `ok === false` reported PASS on a build where this gate did not
       // exist at all. An assertion that cannot tell why it failed is not a pin.
       ok("QA-945: the BULK-assign door refuses too, and for THIS reason - one gate, both doors (QA-273's lesson)",
-        bulk.data?.results?.[0]?.ok === false && /FUTURE batch/i.test(bulkErr),
+        bulk.data?.results?.[0]?.ok === false && /Upcoming batch/.test(bulkErr),
         JSON.stringify(bulk.data?.results?.[0] ?? null).slice(0, 160));
 
       // THE DISAGREEMENT TEST. Not "both refuse" - both refuse WITH THE SAME SENTENCE. Two doors that
@@ -677,8 +688,14 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
           ["p/enrol", "src/app/p/enrol/page.tsx"],
         ]) {
           const src = readFileSync(f, "utf8");
-          ok(`QA-945: the ${label} form OFFERS the current-vs-future choice, not just accepts it`,
-            /batch_interest/.test(src) && /A future batch/.test(src), `${label} renders no choice`);
+          // QA-1190: matched as RENDERED markup (">...</option>"), never as a bare phrase - the
+          // comment below records that the bare-phrase version of this very pin once matched the
+          // fix's own COMMENT, so it could not tell code from prose about the code.
+          ok(`QA-945: the ${label} form OFFERS both choices by the names the client chose`,
+            /batch_interest/.test(src)
+              && src.includes(">The current batch</option>")
+              && src.includes(">Upcoming batch</option>"),
+            `${label} renders no choice`);
           // ...and it must sit ABOVE the "All optional" government block. It first shipped INSIDE it,
           // which told the student the one question that decides whether they join this batch was
           // optional. Found by looking at the live screenshot, not by reading the diff - so this pin
@@ -692,6 +709,39 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
           ok(`QA-945: ...and on ${label} it sits ABOVE the "All optional" block, not inside it`,
             iChoice > -1 && iOptional > -1 && iChoice < iOptional, `choice@${iChoice} optional@${iOptional}`);
         }
+      }
+
+      // QA-1190: THE "hrr jagah" PIN. Umesh's instruction was "just text update krne hai hrr jagah
+      // bss" - EVERYWHERE, not only in the dropdown. The two pins above prove the two public FORMS
+      // carry the new names; this one proves nothing still speaks the OLD language anywhere in src/,
+      // which is the half that gets forgotten: the row tag, two hover titles, the amber hint, the
+      // row-action button, the enrolment refusal and the import label all said "future" or "current
+      // intake", and no browser test in this wall reaches any of them.
+      // Proven falsifiable BEFORE it was written: run against HEAD it reports 17 sites, against the
+      // fix 0. A pin that cannot fail measures nothing (QA-212).
+      // src/lib/version.ts is EXCLUDED deliberately - it is the release-note history, and what it
+      // says about a past release is the truth about that release. Rewriting it would make the
+      // changelog lie about what shipped.
+      {
+        const { readdirSync, statSync } = await import("node:fs");
+        const { join } = await import("node:path");
+        const STALE = ["A future batch", "Future interested", "LATER batch", "FUTURE batch",
+                       "current intake", "The current / upcoming batch", "later batch"];
+        const walk = (d) => readdirSync(d).flatMap((n) => {
+          const p = join(d, n);
+          return statSync(p).isDirectory() ? walk(p) : [p];
+        });
+        const stale = [];
+        for (const p of walk("src")) {
+          if (!/\.(ts|tsx)$/.test(p)) continue;
+          const rel = p.split("\\").join("/");
+          if (rel === "src/lib/version.ts") continue;
+          readFileSync(p, "utf8").split(/\r?\n/).forEach((line, i) => {
+            for (const phrase of STALE) if (line.includes(phrase)) stale.push(`${rel}:${i + 1} [${phrase}]`);
+          });
+        }
+        ok('QA-1190: nothing in src/ still says "future batch" or "current intake" - the rename reached every screen, not only the dropdown',
+          stale.length === 0, stale.slice(0, 6).join(" | ") || "clean");
       }
       const pubJunk = await pubPost(regTok.token, { name: "BIJunk " + stamp, phone: "7993" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0"), email: "bijunk" + stamp + "@test.local", batch_interest: "Whatever" });
       const junkRow = (await req(admin, "GET", `/api/candidates?limit=2000&location=${loc._id}`)).data.items.find((c) => c.name === "BIJunk " + stamp);

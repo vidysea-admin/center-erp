@@ -157,11 +157,11 @@ export default function EnrolOtpPage() {
                 together are what the student is actually signing up for. */}
             <label className="block text-sm"><span className="mb-1 block text-gray-600">Which batch are you interested in? *</span>
               <select className={inputCls} value={form.batch_interest ?? "Current"} onChange={(e) => set("batch_interest", e.target.value)}>
-                <option value="Current">The current / upcoming batch</option>
-                <option value="Future">A future batch — I am not available right now</option>
+                <option value="Current">The current batch</option>
+                <option value="Future">Upcoming batch</option>
               </select>
               {form.batch_interest === "Future" && (
-                <span className="mt-1 block text-xs text-gray-600">Your details are saved and the centre will contact you when a later batch opens.</span>
+                <span className="mt-1 block text-xs text-gray-600">Your details are saved and the centre will contact you when the upcoming batch opens.</span>
               )}
             </label>
             {/* -130 (QA-275): the same nine government-portal fields p/register got in -126. That

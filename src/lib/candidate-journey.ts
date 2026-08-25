@@ -29,7 +29,15 @@ export const FRESH_TAGS = ["Fresh Lead", "Portal Link Sent", "Registered on Port
 // lead" Umesh is describing - and folding the two into one list would have forced a choice between
 // showing their stage and showing their availability. So it rides ALONGSIDE, the way "No programme"
 // and "Multi-interest" already do.
-export const FUTURE_INTEREST_TAG = "Future interested";
+// 2026-08-25 (client call, confirmed by Umesh: "current / upcoming ---> current krr do and future
+// wale ko upcomming - just text update krne hai hrr jagah bss"): the client renamed the two choices
+// to "The current batch" and "Upcoming batch", and asked for that wording EVERYWHERE, not only in
+// the dropdown - so this tag, the enrolment refusal and the import label all say it too.
+// SCREEN WORD ONLY. The stored value stays "Future": it is live data on real candidate records, and
+// changing an enum value is the add->migrate->remove dance of LANDMINE 1, not a text edit. So every
+// screen says "Upcoming batch" while the database says "Future", and THIS constant is where the two
+// meet - which is why the mapping is written down here rather than left to be rediscovered.
+export const FUTURE_INTEREST_TAG = "Upcoming batch";
 
 /** The gate in rules.ts `addMemberChecked` refuses exactly this. Absent = Current, by design. */
 export function isFutureInterest(r: JourneyInput): boolean {
