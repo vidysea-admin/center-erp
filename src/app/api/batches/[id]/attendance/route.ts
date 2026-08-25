@@ -141,6 +141,19 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     // three surfaces disagreed with it. Counting the rows is the fix; widening the bucket would
     // break the -109 partition, which is the one thing that must not move.
     awaiting_match_rows: rows.filter((r) => !r.left_on && r.awaiting_match).length,
+    // A-04 / A-05 (24-Aug issues sheet). The buckets below partition the ACTIVE roster, because
+    // every one of them filters `!r.left_on` - and that is deliberate and stays. What was missing is
+    // the other half of the arithmetic: the screen's own chip counts the WHOLE roster, so on a batch
+    // where somebody has left, the buckets summed to one less than the tab beside them said and
+    // there was no bucket for the reader to put that person in.
+    // Live -244, BHA-ITI-RPLHSL-SPIT-01: '23 qualified - 17 with no portal hours imported - 5 not
+    // eligible' = 45, printed on a screen whose chip read 'All 46'. Exactly one member had left.
+    // (The report guessed the missing person was the one candidate with no portal ID. That batch has
+    // exactly one of those too - two unrelated 1s. It is the departed member.)
+    // These two numbers let every surface state the whole roster without widening the buckets, which
+    // the -109 partition invariant above forbids.
+    roster_count: rows.length,
+    left_count: rows.filter((r) => r.left_on).length,
     verdict_counts: ELIGIBILITY_STATES.reduce((acc: Record<string, number>, k) => {
       acc[k] = rows.filter((r) => !r.left_on && r.verdict.state === k).length;
       return acc;

@@ -3250,6 +3250,9 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
   }
 
   const active = items.filter((i) => !i.left_on);
+  // A-05: named beside `active` rather than derived twice, because every count on this screen that
+  // disagreed with another one disagreed about exactly this set.
+  const left = items.filter((i) => i.left_on);
   const pending = active.filter((i) => !i.result || i.result.result === "Pending");
 
   // QA-748 (-214, Umesh 23/08): "yeh joh saare candidate cards hai, inke upar bhi filter hona
@@ -3265,7 +3268,13 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
   const [cardFilter, setCardFilter] = useState("all");
   const [cardSearch, setCardSearch] = useState("");
   const CARD_FILTERS: { value: string; label: string; title: string; test: (i: any) => boolean }[] = [
-    { value: "all", label: "All", title: "Everyone on the roster", test: () => true },
+    // A-05 (24-Aug issues sheet): this chip said "All 46" while the header said "45 not marked yet"
+    // and the bulk button said "Mark 45 pending as Pass" - three numbers, one screen, one batch. The
+    // cause is not the missing portal ID the report reasoned from: `active` below drops members who
+    // have LEFT, and this chip counted everyone. Umesh, asked which number is the true one, chose
+    // "show both, side by side" - so nobody silently disappears from a screen and no number hides
+    // arithmetic. The chip still SELECTS everyone; it just stops implying they are all markable.
+    { value: "all", label: left.length ? `All ${active.length} active · ${left.length} left` : "All", title: left.length ? `${items.length} on the roster: ${active.length} still in the batch and ${left.length} who left. The header and the bulk actions count the ${active.length} - a member who has left cannot be marked.` : "Everyone on the roster", test: () => true },
     { value: "Pass", label: "Pass", title: "Marked Pass", test: (i) => i.result?.result === "Pass" },
     { value: "Fail", label: "Fail", title: "Marked Fail", test: (i) => i.result?.result === "Fail" },
     { value: "Absent", label: "Absent", title: "Marked Absent", test: (i) => i.result?.result === "Absent" },
@@ -3545,9 +3554,27 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
           {/* -224: `disabled={!passes.length}` with nothing beside it is indistinguishable from a
               broken button - and on a batch where marking itself was refused, this was the FIRST
               thing the operator pressed. A control that cannot fire says why (the QA-004 pattern). */}
-          <span className="inline-flex flex-col gap-0.5">
+          <span className="inline-flex flex-col gap-0.5" title={certReady.length
+            ? `${certReady.length} passed candidate${certReady.length === 1 ? " has" : "s have"} no certificate attached yet. This opens the panel that attaches them and records their numbers.`
+            : passes.length
+              ? `Every passed candidate already has a certificate file. This opens the panel that records their certificate numbers${certNoNumber.length ? ` — ${certNoNumber.length} still have none` : ""}.`
+              : "Nobody is marked Pass yet, so there is nothing to certify."}>
+            {/* A-08 (24-Aug issues sheet). This button read "Issue certificates (17)", filled and
+                enabled, directly above a sentence reading "0 can take a certificate now". Both were
+                true and neither was wrong on its own - they answer DIFFERENT questions. The button
+                counted every Pass; the sentence counts the passes with no certificate file yet
+                (`certReady`). On AVP-GURU-RPLAVP-DST-02 all 17 passes already had a file, so one
+                said 17 and the other said 0 and nothing on screen reconciled them.
+                The fix is not to make the numbers agree - they are different facts - but to make the
+                BUTTON say what pressing it will actually do, which on that batch is settle the
+                certificate NUMBERS the header is already complaining are missing. One predicate per
+                sentence, and the label names its own subject. */}
             <Btn small onClick={() => { setCertForm({ certificate_date: toInputDate(new Date()), prefix: "RPL/2026/", numbers: {} }); setCertDrawer(true); }} disabled={!passes.length}>
-              Issue certificates ({passes.length})
+              {certReady.length
+                ? `Issue certificates (${certReady.length})`
+                : certNoNumber.length
+                  ? `Add certificate numbers (${certNoNumber.length})`
+                  : `Certificates (${passes.length})`}
             </Btn>
             {!passes.length && (
               <span className="text-[10px] font-medium text-amber-700">no candidate is marked Pass yet — mark results first</span>
@@ -3653,6 +3680,23 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
                   buckets somebody can clear from their own desk in two clicks. */}
               {(attMeta.verdict_counts.not_eligible ?? 0) > 0 && <> · <span className="text-red-700">{attMeta.verdict_counts.not_eligible} not eligible</span></>}
               {(attMeta.verdict_counts.not_enrolled ?? 0) > 0 && <> · <span className="text-gray-500">{attMeta.verdict_counts.not_enrolled} not enrolled yet</span></>}
+              {/* A-04 (24-Aug issues sheet). `awaiting_match` is a REAL bucket of the partition, and
+                  it was the one bucket with no phrase anywhere: the catch-all two branches above
+                  names "anything without a phrase of its own", but the filter beside it EXCLUDES
+                  awaiting_match by name, and no dedicated branch printed it. So it was silently
+                  dropped from the sentence a human reads.
+                  Measured on live -244, CHI-ITI-RPLAVP-BSRT-01: the line printed
+                  "0 qualified · 41 still short (course running) · 2 not enrolled yet" = 43 against a
+                  chip reading "All 45". The missing 2 were exactly this bucket.
+                  It is NOT the same number as `awaiting_match_rows` below - that one is ungated and
+                  cuts ACROSS the buckets (QA-432); this one is part of the partition. Both are
+                  printed now, and each says which it is. */}
+              {(attMeta.verdict_counts.awaiting_match ?? 0) > 0 && <> · <span className="text-amber-700" title="These students have portal hours waiting on a name match, so no hours verdict can be given yet. They are part of the roster breakdown - one of the buckets that add up to the active roster.">{attMeta.verdict_counts.awaiting_match} waiting on a portal match</span></>}
+              {/* A-04 / A-05: the buckets above partition the ACTIVE roster. A member who has left is
+                  in none of them, while the tab chip beside this line counts the whole roster - so on
+                  BHA-ITI-RPLHSL-SPIT-01 the sentence read 45 under a chip reading "All 46" and there
+                  was no bucket to put the 46th in. Named here, so the line accounts for everybody. */}
+              {(attMeta.left_count ?? 0) > 0 && <> · <span className="text-gray-500" title="These members left the batch, so they get no attendance verdict. They are still on the roster, which is why the roster count is higher than the buckets above.">{attMeta.left_count} left the batch</span></>}
               {/* -156 (QA-432): reads the ROW count, not the journey-gated bucket - a not-enrolled
                   student with an unattached row is still a row somebody must resolve, and this line
                   used to leave them out while three chips on the same page showed them.

@@ -335,11 +335,20 @@ function BatchesInner() {
                 why.set(k, (why.get(k) ?? 0) + 1);
               }
             }
+            // A-14 (24-Aug issues sheet): `why` counts BLOCKERS, not positions - one position that
+            // is short on candidates AND has no trainer AND has no room is counted three times. So
+            // the four reason counts summed to far more than the headline and a reader who tried to
+            // add them up could not. Live -244: "55 of 55 ... candidates 55 · trainer 54 ·
+            // infrastructure 43 · other 16" = 168 against 55 positions, with nothing saying why.
+            // The counts are the useful thing and they stay; what was missing is the sentence that
+            // stops the arithmetic looking broken. Only said when it is actually true.
             const parts = [...why.entries()].map(([k, n]) => `${k} ${n}`).join(" · ");
+            const reasonTotal = [...why.values()].reduce((a, b) => a + b, 0);
+            const overlaps = reasonTotal > (prep.blocked_count ?? 0);
             return (
               <button onClick={() => setTab("Planning")}
                 className="w-full rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-left text-sm text-amber-800 hover:border-amber-300">
-                ⚑ <b>{prep.blocked_count}</b> of {(prep.items ?? []).length} centre × job-role position{prep.blocked_count === 1 ? " is" : "s are"} blocked{parts ? ` — ${parts}` : ""} — open Planning and pick the centre to see what it needs.
+                ⚑ <b>{prep.blocked_count}</b> of {(prep.items ?? []).length} centre × job-role position{prep.blocked_count === 1 ? " is" : "s are"} blocked{parts ? ` — ${parts}` : ""}{overlaps ? " (a position can be blocked for more than one reason, so these add up to more than " + (prep.blocked_count ?? 0) + ")" : ""} — open Planning and pick the centre to see what it needs.
               </button>
             );
           })()}
