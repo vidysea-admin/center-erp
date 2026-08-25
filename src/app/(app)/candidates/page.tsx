@@ -46,7 +46,24 @@ function CandidatesInner() {
   // states nobody could see before: "No programme" (bulk-imported rows), "Multi-interest",
   // "Failed". Pills filter client-side so every count is visible at once; deep links
   // /candidates?lifecycle_status=Enrolled and ?program=null preset the pill.
-  const [tag, setTag] = useState(sp.get("lifecycle_status") ?? (sp.get("program") === "null" ? "No programme" : ""));
+  // QA-1145 (live on -245, found in a browser): `lifecycle_status` is a STORED value on the
+  // candidate ("Enrolled", "Assigned", "Completed"). The pills are JOURNEY labels — `FRESH_TAGS`
+  // and `JOURNEY_TAGS` — and "Enrolled" appears in NEITHER (0 hits in both). Presetting the pill
+  // from the stored value therefore selected a pill that does not exist, and the client-side
+  // filter matched nothing: the Enrolled Students card opened its own list reading
+  // "Enrolled Candidates (332) · All 332" above ZERO rows and the empty-state sentence
+  // "No candidates — add or import." — telling a centre that already holds 332 candidates to
+  // create them again. That is the -245 note's own claim ("Summary cards now open the list of
+  // records they are counting") failing on the one card that needed it.
+  //
+  // The bucket line below already reads the same parameter and resolves it correctly, so the
+  // deep link keeps working; only the pill is dropped when the value is not a pill. A value that
+  // cannot select anything must select nothing, not everything-filtered-to-empty.
+  const presetTag = sp.get("lifecycle_status") ?? "";
+  const [tag, setTag] = useState(
+    [...FRESH_TAGS, ...JOURNEY_TAGS].includes(presetTag)
+      ? presetTag
+      : (sp.get("program") === "null" ? "No programme" : ""));
   // Bucket deep-links: /candidates?bucket=Enrolled, and lifecycle presets pick their bucket.
   const [bucket, setBucket] = useState<"Fresh" | "Enrolled">(
     sp.get("bucket") === "Enrolled" || ["Assigned", "Enrolled", "Completed", "Failed"].includes(sp.get("lifecycle_status") ?? "") ? "Enrolled" : "Fresh");

@@ -1966,6 +1966,51 @@ for (const file of walk(root)) {
   }
 }
 
+// ---- QA-1145: a deep link may not preset a pill that does not exist ----
+// Live on -245, found by opening the app. The Enrolled Students card links to
+// /candidates?lifecycle_status=Enrolled. `lifecycle_status` is a STORED value on the candidate;
+// the pills are JOURNEY labels (`FRESH_TAGS` / `JOURNEY_TAGS`), and "Enrolled" is in NEITHER.
+// The page preset the pill from the stored value, the client-side filter matched nothing, and the
+// screen rendered "Enrolled Candidates (332) · All 332" above ZERO rows and the empty-state
+// sentence "No candidates — add or import." — advising a centre holding 332 candidates to create
+// them again. The card's own count and its own list disagreed by 332.
+//
+// Pinned as the DECISION, not the spelling: whatever the initialiser is, it must consult BOTH pill
+// lists before accepting a URL value as a pill. A value that can select nothing must select
+// nothing — not everything-filtered-to-empty.
+//
+// HONEST LIMIT, and it is the same one three checkers charged today: this is a STATIC pin. It
+// proves the initialiser consults the lists; it cannot prove the screen renders rows. Three static
+// pins of mine were walked past by one more spelling each (QA-1091 → QA-1127 → QA-1141), and the
+// standing answer is QA-573 — the wall has NO rendered-state harness at all, so "assert what the
+// screen does" cannot be pinned here by anyone. This is the strongest tool that exists today, and
+// it is weaker than the defect deserves.
+{
+  const rel = "app/(app)/candidates/page.tsx";
+  const cpath = path.join(root, "app/(app)/candidates/page.tsx");
+  const csrc = fs.existsSync(cpath) ? fs.readFileSync(cpath, "utf-8") : "";
+  if (!csrc) { failed++; pushStructural(rel + ": file not found - the QA-1145 pin cannot run."); }
+  else {
+    const cscan = stripComments(csrc);
+    const init = /const\s*\[\s*tag\s*,\s*setTag\s*\]\s*=\s*useState\(([\s\S]*?)\);/.exec(cscan);
+    const body = init ? init[1] : "";
+    const readsUrl = /lifecycle_status/.test(body);
+    const guardsAgainstLists = /FRESH_TAGS/.test(body) && /JOURNEY_TAGS/.test(body);
+    if (init && (!readsUrl || guardsAgainstLists)) passed++;
+    else {
+      failed++;
+      pushStructural(rel + ": the tag pill is preset from the URL without checking it is a pill"
+        + " (initialiser found=" + !!init + ", reads lifecycle_status=" + readsUrl
+        + ", consults FRESH_TAGS and JOURNEY_TAGS=" + guardsAgainstLists + ") -> "
+        + JSON.stringify(body.trim().replace(/\s+/g, " ").slice(0, 140))
+        + " - `lifecycle_status` is a STORED value (\"Enrolled\", \"Assigned\", \"Completed\") and the"
+        + " pills are JOURNEY labels; \"Enrolled\" is in neither list, so the filter matches nothing"
+        + " and the card opens its own list showing the count above zero rows and an empty state"
+        + " telling the centre to add or import candidates it already has. QA-1145.");
+    }
+  }
+}
+
 // ---- QA-1067 / QA-1042: the govt-attendance advisory arm must not fire over a mapping route ----
 // Two checkers in a row said the same thing about this unit: NO PIN READS THE RENDERED SENTENCE.
 // Four API pins held the flag truth table and were all green on a case where the screen printed
