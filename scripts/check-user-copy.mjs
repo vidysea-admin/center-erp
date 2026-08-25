@@ -189,6 +189,24 @@ for (const file of walk(root)) {
   if (rel && curNote.includes(tag)) passed++;
   else { failed++; pushStructural(`lib/version.ts: the published note does not mention ${tag} — RELEASE was bumped without writing what changed`); }
 
+  // -251 (QA-289, S1): the Locations LIST must never carry a live portal credential - for ANYONE,
+  // the Admin included. The old gate was `maskLocationSecrets(items, user.role === "Admin")`, which
+  // answered WHO may see it and never WHETHER it belongs on an unasked screen; for an Admin the
+  // answer was permanently yes, on a grid of every centre, in every screenshot.
+  //
+  // This pin exists because the SEVEN behavioural pins for this unit sit in scripts/e2e-roles.mjs,
+  // which cannot be committed - it also carries another session's uncommitted work, and committing
+  // it would ride their unit into this one. So QA-289 would otherwise ship with NO guard at all
+  // (the cycle-1 checker said exactly that). The list call must pass a LITERAL false; a role
+  // expression there is the defect returning.
+  {
+    const locSrc = fs.readFileSync(path.join(root, "app/api/locations/route.ts"), "utf-8");
+    const listCall = /maskLocationSecrets\(\s*items\s*,\s*false\s*[,)]/.test(locSrc);
+    const roleGated = /maskLocationSecrets\(\s*items\s*,\s*user\.role/.test(locSrc);
+    if (listCall && !roleGated) passed++;
+    else { failed++; pushStructural(`app/api/locations/route.ts: the LIST must call maskLocationSecrets(items, false, …) — a role expression there puts every centre's live tc_password back in the list payload (QA-289)`); }
+  }
+
   // -251 (QA-1319, S1): both doors onto FollowUpAction must MASK the SheetChange they populate.
   // They populated `source_change` whole - no select, no mask - so a live tc_password reached a
   // non-Admin Operations login on the LANDING PAGE, with nothing opened. The behavioural pins for
@@ -198,7 +216,15 @@ for (const file of walk(root)) {
   for (const rel of ["app/api/home/route.ts", "app/api/follow-ups/route.ts"]) {
     const s = fs.readFileSync(path.join(root, rel), "utf-8");
     const populatesSourceChange = /populate\(\s*\{[^}]*path:\s*"source_change"/.test(s);
-    const masks = /maskSheetChange\s*\(/.test(s);
+    // -251 (QA-1351, the checker's cycle-1 FAIL, and it was right): this asked only whether the FILE
+    // mentions maskSheetChange anywhere. app/api/home/route.ts already called it at :324 for a
+    // DIFFERENT queue, so the assertion passed with the follow-up door reverted to its leaking state
+    // - 317/0 either way. A guard that cannot go red is worse than no guard, because the manifest
+    // then cites it as the thing covering the vacuous behavioural pins. It was the only guard on the
+    // landing-page S1.
+    // The shape below is specific to masking THIS field: `source_change: maskSheetChange(`. The
+    // pre-existing :324 call is `maskSheetChange(c, false)` inside a .map and does not match it.
+    const masks = /source_change:\s*maskSheetChange\s*\(/.test(s);
     if (!populatesSourceChange || masks) passed++;
     else { failed++; pushStructural(`${rel}: populates source_change without calling maskSheetChange — a live tc_password rides out of this list (QA-1319)`); }
   }
