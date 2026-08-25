@@ -397,7 +397,7 @@ and have both of the first two routes call it. The third already does — it was
 *because* of this row, which is the only reason it is not a fourth disagreement.
 
 **QA-1189 — why the heading changed.** This section said "Two" for a release after a third caller
-existed, and the unit that added it (`qa-248`) cited this very section three times as its
+existed, and the unit that added it (`qa-247`) cited this very section three times as its
 justification for routing through `addMemberChecked`. A map that is cited as a reason and is wrong
 about its own subject is worse than one nobody reads. **Capacity, since QA-1187:** "is there room on this
 roster" now has ONE answer and all three doors give it. Joining WARNS and admits

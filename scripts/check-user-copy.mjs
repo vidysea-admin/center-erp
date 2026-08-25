@@ -2314,6 +2314,85 @@ for (const file of walk(root)) {
       + " whether a person may mark is a different question and both components have to ask it.");
   }
 }
+// ---- -250 (Umesh, 25/08, on Ashish Rana / AVP-GURU-RPLAVP-DST-03): the departed row LEAVES ----
+// "log rakho candidate wale mai but baaki jagah se tho data naa dikhee." The Attendance table
+// rendered the raw payload, so a student who left three days earlier sat in it with a "Dropout" chip
+// in the ELIGIBILITY column and the pager saying "1 of 55" over 54 people. Four things are pinned,
+// and every one of them was true in the tree before this unit:
+//   1. the table reads the filtered set, not data.members;
+//   2. no Dropout chip is reachable on this tab (it described rows that no longer render, and its
+//      own filterText had no matching branch, so chip and funnel disagreed for a departed row);
+//   3. the portal chip's denominator counts what the table shows;
+//   4. the filtering goes through the SHARED predicate. An inline re-spelling passes tsc and reads
+//      correctly and is exactly how this concept came to have six hand-written copies and no name.
+{
+  const rel = "app/(app)/batches/[id]/page.tsx";
+  const src = stripComments(fs.readFileSync(path.join(root, rel), "utf-8"));
+  const tab = fnBody(src, "AttendanceTab");
+  const tableFiltered = /rows=\{activeMembers\}/.test(tab) && !/rows=\{data\.members\}/.test(tab);
+  const noDropoutChip = !/<Chip value="Dropout"/.test(tab);
+  const denomFiltered = !/\/\{data\.members\.length\}/.test(tab);
+  const sharedPredicate = /activeOnly\(/.test(tab)
+    && /import \{[^}]*\bactiveOnly\b[^}]*\} from "@\/lib\/candidate-journey"/.test(src);
+  if (tableFiltered && noDropoutChip && denomFiltered && sharedPredicate) passed++;
+  else {
+    failed++;
+    pushStructural(rel + ": the Attendance tab can still render a student who has left the batch"
+      + " (table reads the active set=" + tableFiltered + ", no Dropout chip=" + noDropoutChip
+      + ", portal chip denominator filtered=" + denomFiltered
+      + ", filters through the shared predicate=" + sharedPredicate + ")"
+      + " - Umesh, 25/08: keep the log on the Candidates tab, show the data nowhere else. A count"
+      + " that includes somebody the list below it does not is how three separate counting defects"
+      + " were filed on this batch in one week.");
+  }
+}
+
+// ---- -250: on the Closure tab a member who has LEFT is read-only, and every count says so ----
+// Three separate things, one cause. (a) The card for a departed member used to carry LIVE
+// Pass/Fail/Absent buttons directly under a tooltip promising "a member who has left cannot be
+// marked" - the sentence was false until the server guard shipped with this unit. The ABSENCE of the
+// bare term is asserted rather than the presence of the new one, because counting gates on this very
+// tab was already proved insufficient once (QA-785, five lines up). (b) The card grid and the pill
+// counts must derive from ONE named population; two surfaces each deriving their own is the whole
+// mechanism behind the counting defects. (c) The "No portal ID" pill's own title used to end
+// "including students who have left" - true when written, made FALSE by this change. Nothing in this
+// toolchain compares prose to behaviour, so a prose pin is the only thing that can hold it.
+{
+  const rel = "app/(app)/batches/[id]/page.tsx";
+  const src = stripComments(fs.readFileSync(path.join(root, rel), "utf-8"));
+  const body = fnBody(src, "CandidateResults");
+  const bareClosed = (body.match(/disabled=\{closed\}/g) || []).length;
+  // BOTH components, COUNTED - not "at least one somewhere in the body". The first draft used
+  // .test() and would have stayed green with ResultButtons gated and the Card left wide open.
+  // That is QA-785 on this exact tab: -216 gated the card component and left its parent. Two
+  // components ask this question and both have to be seen asking it.
+  // Both components, each seen exactly once. Not "at least one somewhere in the body": that is
+  // QA-785 on this very tab, where -216 gated the card component and left its parent open.
+  // Literal splits, no regex - the first attempt at this line lost its backslashes on the way to
+  // disk and became an alternation, counting 0 and reddening correct code.
+  const RO_RESULT_BUTTONS = "const readOnly = closed " + "|| hasLeft(i)";
+  const RO_CARD = "const readOnly = closed " + "|| !!leftOn";
+  const readOnlyDerivesFromLeft = body.split(RO_RESULT_BUTTONS).length - 1 === 1
+    && body.split(RO_CARD).length - 1 === 1;
+  const oneShownPopulation = /const shown = visible\.filter\(/.test(body)
+    && /count: visible\.filter\(f\.test\)\.length/.test(body);
+  const staleProse = /including students who have left/.test(body);
+  if (bareClosed === 0 && readOnlyDerivesFromLeft && oneShownPopulation && !staleProse) passed++;
+  else {
+    failed++;
+    pushStructural(rel + ": a Closure control or count still ignores that the member has left"
+      + " (bare disabled={closed} inside CandidateResults=" + bareClosed
+      + ", readOnly derives from left_on=" + readOnlyDerivesFromLeft
+      + ", grid and pills share one population=" + oneShownPopulation
+      + ", stale 'including students who have left' prose still present=" + staleProse + ")"
+      + " - a control whose only possible outcome is a refusal is the dead-control class this tab has"
+      + " now shipped twice, and a pill that counts rows the grid cannot show is the counting class."
+      + " Certificate controls are DELIBERATELY not on readOnly: a candidate who passed and then left"
+      + " keeps their card so the certificate they earned can still be attached, and that write goes"
+      + " through a different door the server guard does not touch.");
+  }
+}
+
 
 // ---- -215 (QA-770): the blocked-student panel must offer the ids that are already here ----// ---- -215 (QA-770): the blocked-student panel must offer the ids that are already here ----
 // 57 candidates on live hold a CAN-shaped value in `id_reference` with `sidh_candidate_id` empty,
@@ -3182,6 +3261,66 @@ for (const file of walk(root)) {
       + "cancelled is not full, so it still reads \"you will be added to this batch\" to somebody who "
       + "cannot be - and the closed case has to be asked FIRST, or a batch that is both is described "
       + "by the condition that is not the one stopping it.",
+    );
+  }
+}
+
+// ---- QA-1167 (a): the attendance picker is an ALLOW-LIST, so a field it forgets is a field the
+// screen silently never renders ----
+// A-04 shipped `roster_count` and `left_count` on the route, and a sentence written to print them,
+// and the screen showed nothing - because `setAttMeta` picks its keys by hand and those two stopped
+// there. Every API assertion passed the whole time; it was found by LOOKING at the page. The finding
+// then proved the gap survives the fix: revert only that picker line and the wall is still green, so
+// nothing would catch the same drop tomorrow.
+// This is the general form, not a re-statement of the one field: every `attMeta.X` the page READS
+// must be a key the picker SETS. That is the invariant the class needs, and it would have caught the
+// original drop without anyone knowing which field to look for.
+{
+  const pageFile = path.join(root, "app", "(app)", "batches", "[id]", "page.tsx");
+  const src = fs.readFileSync(pageFile, "utf8");
+  const call = src.indexOf("setAttMeta({");
+  const set = new Set();
+  if (call >= 0) {
+    const seg = src.slice(call, src.indexOf("});", call));
+    for (const m of seg.matchAll(/([a-z_][a-z0-9_]*):/gi)) set.add(m[1]);
+  }
+  const read = new Set();
+  for (const m of src.matchAll(/attMeta[?]?[.]([a-z_][a-z0-9_]*)/gi)) read.add(m[1]);
+  const dropped = [...read].filter((k) => !set.has(k));
+  if (call < 0) {
+    failed++;
+    pushStructural("batches/[id]: setAttMeta({...}) could not be located - this pin has stopped asking its question and needs re-anchoring, not deleting.");
+  } else if (dropped.length === 0) passed++;
+  else {
+    failed++;
+    pushStructural(
+      `batches/[id]: the page reads attMeta.${dropped.join(", attMeta.")} but setAttMeta never sets `
+      + `${dropped.length === 1 ? "it" : "them"}. That picker is an allow-list: the field arrives from the `
+      + "route, stops at this line, and the sentence written to print it renders nothing at all - with "
+      + "every API assertion still green, because the payload was never the problem.",
+    );
+  }
+}
+
+// ---- QA-1167 (b): A-08 - one control, one predicate ----
+// The button read "Issue certificates (17)", enabled, directly above a sentence reading "0 can take a
+// certificate now". Both were true and neither was wrong alone: the button counted every Pass, the
+// sentence counted passes with no certificate FILE. Two questions, one screen, nothing reconciling
+// them. The repair was not to force the numbers to agree - they are different facts - but to make the
+// button name what pressing it will actually do. This pins that the label is still derived from the
+// same set the sentence beside it describes, and never again from the raw pass count.
+{
+  const pageFile = path.join(root, "app", "(app)", "batches", "[id]", "page.tsx");
+  const src = fs.readFileSync(pageFile, "utf8");
+  const oldLabel = src.includes("Issue certificates (${passes.length})");
+  const newLabel = src.includes("Issue certificates (${certReady.length})");
+  if (!oldLabel && newLabel) passed++;
+  else {
+    failed++;
+    pushStructural(
+      `batches/[id]: the certificate button labels itself from the wrong set `
+      + `(counts-every-pass:${oldLabel} counts-what-it-will-do:${newLabel}). A button that says 17 above a `
+      + "sentence that says 0 is the A-08 complaint, and it is a different fact - not a rounding gap.",
     );
   }
 }
