@@ -723,7 +723,10 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
       // says about a past release is the truth about that release. Rewriting it would make the
       // changelog lie about what shipped.
       {
-        const { readdirSync, statSync } = await import("node:fs");
+        // readFileSync is destructured HERE, not borrowed: the block above has its own, inside its
+        // own braces, and this pin CRASHED the whole suite on that - contributing zero counts rather
+        // than one red line. `node --check` passed it, because syntax is not scope.
+        const { readFileSync, readdirSync, statSync } = await import("node:fs");
         const { join } = await import("node:path");
         const STALE = ["A future batch", "Future interested", "LATER batch", "FUTURE batch",
                        "current intake", "The current / upcoming batch", "later batch"];
