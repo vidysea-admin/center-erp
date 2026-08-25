@@ -58,7 +58,22 @@ const SUITES = [
 // predicate, one place - the same reasoning db-guard.mjs states in its own header, and the failure
 // ARCHITECTURE section 3 exists to name.
 {
-  const asked = process.argv.slice(2).filter((a) => !a.startsWith("-"));
+  const args = process.argv.slice(2);
+  const asked = args.filter((a) => !a.startsWith("-"));
+  // QA-1272 (checker, Mode A on qa-1096 — the maker asked for exactly this to be hunted): arguments
+  // were given and NONE of them survived the flag filter, so the block below is skipped and the FULL
+  // wall runs while the operator believes they asked for one suite. The line that would have said so
+  // ("running N of the full wall") is inside that block, so nothing prints. A typo'd leading dash is
+  // all it takes. Loud, in the same shape as the unknown-suite refusal below, so there is no second
+  // predicate to drift from this one.
+  if (args.length && !asked.length) {
+    console.error("");
+    console.error("run-e2e: every argument was read as a flag, so no suite was selected: " + args.join(", "));
+    console.error("Running the whole wall here would look like the subset you asked for. Refusing instead.");
+    console.error("To run the full wall, pass no arguments at all (`npm test`).");
+    console.error("");
+    process.exit(2);
+  }
   if (asked.length) {
     const unknown = asked.filter((a) => !SUITES.includes(a));
     if (unknown.length) {
