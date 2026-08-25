@@ -224,8 +224,16 @@ for (const file of walk(root)) {
     // landing-page S1.
     // The shape below is specific to masking THIS field: `source_change: maskSheetChange(`. The
     // pre-existing :324 call is `maskSheetChange(c, false)` inside a .map and does not match it.
-    const masks = /source_change:\s*maskSheetChange\s*\(/.test(s);
-    if (!populatesSourceChange || masks) passed++;
+    // -251 cycle 3 (QA-1353, raised by the cycle-2 checker): the shape test above never looked at
+    // the SECOND argument, so `source_change: maskSheetChange(f.source_change, user.role === "Admin")`
+    // read green - and that is THIS UNIT'S OWN DEFECT SHAPE. Role-gating the mask is precisely what
+    // QA-289 was: an Admin keeps seeing the credential on an unasked surface, while the guard says
+    // the door is closed. The sibling pin twelve lines above already refused a role expression
+    // (`roleGated`); this one did not, and an asymmetry between two guards written in one sitting is
+    // how the next author concludes the looser one is deliberate.
+    const masks = /source_change:\s*maskSheetChange\s*\([^)]*,\s*false\s*\)/.test(s);
+    const maskRoleGated = /source_change:\s*maskSheetChange\s*\([^)]*,\s*[^)]*\.role/.test(s);
+    if (!populatesSourceChange || (masks && !maskRoleGated)) passed++;
     else { failed++; pushStructural(`${rel}: populates source_change without calling maskSheetChange — a live tc_password rides out of this list (QA-1319)`); }
   }
 
