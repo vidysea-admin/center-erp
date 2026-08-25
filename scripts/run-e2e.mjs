@@ -31,6 +31,12 @@ const SUITES = [
   "e2e-eval-enrollment.mjs",
   "e2e-eval-locations-admin.mjs",
   "e2e-eval-data.mjs",
+  // QA-1287 + QA-1289 (client call 2026-08-25): the SIDH batch id at the CREATE door, and the
+  // duplicate WARNING that Umesh chose over a refusal. This suite exists because the defect was
+  // invisible to every other kind of check: the field was on the schema, in the model, in the PATCH
+  // allow-list and on a screen — a grep for the NAME finds it everywhere and still finds nothing
+  // wrong. Only driving the create door shows that the value goes in and does not come out.
+  "e2e-govt-batch-id.mjs",
   // QA-573 (2026-08-25, Umesh approved): the FIRST suite here that asserts what the SCREEN does
   // rather than what a source file spells. It drives a real chromium (`playwright` is a
   // devDependency now) and holds one operator-facing invariant: a screen that announces a count

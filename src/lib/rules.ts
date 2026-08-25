@@ -2592,6 +2592,29 @@ export async function createBatchWithCode(
   }
 }
 
+/**
+ * QA-1289 — "is some OTHER batch already carrying this SIDH batch id?", asked in exactly one place
+ * and answered the same way by both doors that can write it (POST /api/batches, PATCH /api/batches/[id]).
+ *
+ * This deliberately does NOT refuse and there is NO unique index behind it. Umesh chose warn-over-
+ * refuse on 2026-08-25 with the alternatives named: an index refuses at the database with a 409 that
+ * no screen can soften, and the portal is not ours — if SIDH ever does hand the same project id to
+ * two of our rows, a refusal would make the truth unrecordable. So the product says what it found,
+ * names the batch, and lets the operator decide.
+ *
+ * `selfId` excludes the batch being edited, or every re-save of an unchanged field would warn about
+ * itself. Returns the conflicting batch's CODE — the thing a person can actually go and look at —
+ * never its ObjectId (QA-1085 is the standing row for an audit line that printed an id at a human).
+ */
+export async function govtBatchIdConflict(value: string | null, selfId?: unknown): Promise<string | null> {
+  if (!value) return null;
+  const other = await Batch.findOne({
+    govt_batch_id: value,
+    ...(selfId ? { _id: { $ne: selfId } } : {}),
+  }).select("code").lean<{ code?: string } | null>();
+  return other?.code ?? null;
+}
+
 // ---------- Trainer preparation pipeline (2026-08-12, Manish's RPL walkthrough) ----------
 // The journey is a round-trip through a body we do not control (NSDC/SSC via the ABPL team), so
 // the machine has to model waiting and rejection as first-class, not as an afterthought:

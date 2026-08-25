@@ -3,7 +3,8 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, requireRole, locationFilter, assertLocationInScope, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { AuditLog, Batch, BatchMember, CandidateResult, Candidate, Closure, DailyLog, GovtAttendanceRow, Invoice, Location, Notification, Program, Trainer } from "@/models";
-import { assertLocationOperational, earliestPossibleStart, earliestStartNote, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, createBatchWithCode, deriveTrainerStatus, settlementStage, trainerBookingWarnings, trainerForLogin } from "@/lib/rules";
+import { assertLocationOperational, earliestPossibleStart, earliestStartNote, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, createBatchWithCode, deriveTrainerStatus, govtBatchIdConflict, settlementStage, trainerBookingWarnings, trainerForLogin } from "@/lib/rules";
+import { canonicalGovtBatchId } from "@/lib/validate";
 import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
 import { mailUsersByRole } from "@/lib/mailer";
@@ -187,6 +188,16 @@ export const POST = apiHandler(async (req: NextRequest) => {
     session,
     slot_start: slot.slot_start || undefined, slot_end: slot.slot_end || undefined,
     target_size: body.target_size ?? program.default_batch_size,
+    // QA-1287 (client call 2026-08-25): "aap batch create karte waqt ek batch ID daalne ka option
+    // daal dijiye." The field has been on the schema and in the PATCH allow-list all along; only
+    // this door never took it, which is ARCHITECTURE section 3.9's "divergent by omission" entry
+    // written out in full. Recording it at creation is the point — the alternative was to create
+    // the batch, open its detail page, find the Details tab, and be reminded by a banner that does
+    // not appear until the batch reaches Closing, months later.
+    //
+    // `drive_folder_url` is deliberately NOT brought across with it: QA-749 records that field as
+    // dead — nothing reads it and its own form input has already been removed.
+    govt_batch_id: canonicalGovtBatchId(body.govt_batch_id) ?? undefined,
     // QA-133: operator-picked, recorded, never a filter.
     relevant_skills: Array.isArray(body.relevant_skills)
       ? body.relevant_skills.filter((s: unknown) => typeof s === "string" && (s as string).trim()).slice(0, 50)
@@ -202,6 +213,12 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // 2026-08-11: booking a not-yet-Ready trainer, or one not capable at this location,
   // warns but does not block (Rule 11 gates the actual start).
   const warnings = trainer ? await trainerBookingWarnings(trainer, location) : [];
+  // QA-1289: warn, never refuse — and name the batch, because "duplicate" without a name sends the
+  // operator to search for something they cannot search for (govt_batch_id is on no list screen).
+  {
+    const clash = await govtBatchIdConflict(canonicalGovtBatchId(body.govt_batch_id), doc._id);
+    if (clash) warnings.push(`SIDH batch ID ${canonicalGovtBatchId(body.govt_batch_id)} is already recorded on batch ${clash}. The batch is created — check the portal if that was not intended.`);
+  }
   // QA-139 (checker, 15/08): the earliest-possible-start was computed, displayed, then ignored
   // at save. Warn — never block; a back-planned batch is sometimes deliberate.
   // QA-509 (-168): this used to be its OWN max(mobilisation, trainer.available_from) - one of FOUR

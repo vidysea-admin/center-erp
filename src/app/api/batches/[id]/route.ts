@@ -3,7 +3,8 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, BatchMember, CandidateResult, Closure, CostEntry, DailyLog, GovtAttendanceRow, Invoice, Program, Trainer } from "@/models";
-import { assertBatchInScope, mergePlan, earliestPossibleStart, earliestStartNote, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, batchReadiness, planBatchBackward, settlementStage, trainerBookingWarnings } from "@/lib/rules";
+import { assertBatchInScope, mergePlan, earliestPossibleStart, earliestStartNote, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, batchReadiness, govtBatchIdConflict, planBatchBackward, settlementStage, trainerBookingWarnings } from "@/lib/rules";
+import { canonicalGovtBatchId } from "@/lib/validate";
 import { getDefaults } from "@/lib/defaults";
 import { audit, auditDiff } from "@/lib/audit";
 
@@ -90,6 +91,11 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
     "govt_batch_id", "drive_folder_url", "relevant_skills"]) {
     if (body[f] !== undefined) patch[f] = body[f];
   }
+  // QA-1287: the SIDH batch id is normalised through the SAME helper the create door uses, so the
+  // two cannot drift into two ideas of what a blank means. Blank must land as `null`, never `""` —
+  // an empty string is a value: it reads back as "there is an id here" and a duplicate check would
+  // then match every blank batch against every other.
+  if (patch.govt_batch_id !== undefined) patch.govt_batch_id = canonicalGovtBatchId(patch.govt_batch_id);
   // QA-133: operator-picked list, recorded, never a filter — but never a free-form blob either.
   if (patch.relevant_skills !== undefined) {
     if (!Array.isArray(patch.relevant_skills)) throw new HttpError(400, "relevant_skills must be a list of skill names.");
@@ -151,6 +157,12 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   if (oldTrainer && oldTrainer !== String(batch.trainer ?? "")) await deriveTrainerStatus(oldTrainer);
   if (batch.trainer) await deriveTrainerStatus(String(batch.trainer)); // Rule 12
   const warnings = patch.trainer && batch.trainer ? await trainerBookingWarnings(String(batch.trainer), batch.location) : [];
+  // QA-1289: same warning as create, and `id` excludes this batch so re-saving an unchanged field
+  // never warns about itself.
+  if (patch.govt_batch_id !== undefined) {
+    const clash = await govtBatchIdConflict(patch.govt_batch_id as string | null, id);
+    if (clash) warnings.push(`SIDH batch ID ${patch.govt_batch_id} is already recorded on batch ${clash}. Saved — check the portal if that was not intended.`);
+  }
   // QA-139: reschedules are exactly where a too-early start sneaks in — same warning as create.
   // QA-509 (-168): the third of four copies. Same one definition as the create door now, so a
   // reschedule and a create cannot disagree about the same centre on the same day.

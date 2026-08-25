@@ -649,6 +649,19 @@ function BatchesInner() {
               </span>
             )}
           </Field>
+          {/* QA-1287 (client, 2026-08-25): "aap batch create karte waqt ek batch ID daalne ka option
+              daal dijiye." The label and placeholder are byte-identical to the batch detail page's
+              Details tab (batches/[id]/page.tsx) on purpose — this is the SAME field on a second
+              door, and one field with two names on two screens is how this product ends up with two
+              fields. Optional: the portal id often does not exist yet at the moment the batch is
+              planned here, which is exactly why the detail page keeps its own input. */}
+          <Field label="Government batch ID (SIDH)">
+            <input className={inputCls} value={form.govt_batch_id ?? ""} placeholder="as shown on the portal"
+              onChange={(e) => set("govt_batch_id", e.target.value)} />
+            <span className="mt-0.5 block text-[11px] text-gray-500">
+              Optional. If the portal has not issued it yet, leave it blank and add it later from the batch page.
+            </span>
+          </Field>
           {earliestStart && !startsTooEarly && (
             <p className="rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-700">
               Earliest possible start: <b>{earliestStart}</b> ({eps?.note})

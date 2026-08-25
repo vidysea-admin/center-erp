@@ -202,3 +202,22 @@ export const storedCanIsUnreadable = (s: unknown) => {
   const raw = String(s ?? "").trim();
   return raw.length > 0 && normalizeCan(raw) === null;
 };
+
+/**
+ * QA-1287 (client call 2026-08-25): the SIDH portal's own batch id, normalised for STORAGE.
+ *
+ * Trim only — and that is a decision, not an omission. Umesh, asked directly with three options on
+ * the table, chose FREE TEXT plus a duplicate warning over a format rule and over holding the work
+ * until the portal's format was known. The format screenshot the client said he had sent never
+ * reached this repo, and QA-977 is the standing lesson about guarding a government id whose real
+ * shape nobody had looked at: the APAAR check was routed through `canonicalAadhaar` and so could not
+ * fire on `190305516076`, the very number the feature was built from.
+ *
+ * Returns `null` for blank. Every caller must store that null rather than `""` — an empty string is
+ * a value, it sorts and filters and reads back as "there is an id here", and it is the exact trap
+ * the two candidate ids already handle at their own doors.
+ */
+export const canonicalGovtBatchId = (v: unknown): string | null => {
+  const raw = String(v ?? "").trim();
+  return raw.length ? raw : null;
+};
