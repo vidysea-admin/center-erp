@@ -1374,12 +1374,20 @@ function CandidatesInner() {
                   qa-1191 was that the preview stayed silent while the confirm died; reporting into a
                   key no screen renders reproduces that silence one layer up.
                   The wording names what happens NEXT, because "not recognised" alone leaves the
-                  operator guessing whether the row imported: it did, as the current intake. */}
+                  operator guessing whether the row imported: it did, set to “The current batch”.
+                  AND THE FIRST DRAFT OF THIS VERY BLOCK USED QA-1190's BANNED PHRASE for this
+                  choice — the wording removed from the product one day earlier. (Not spelled out
+                  here: the pin scans comments too, and a comment quoting the banned phrase reddens
+                  the wall exactly as a live string would. That is correct, and it is the second
+                  time this suite has recorded the trap.) qa-1190's own pin caught it on
+                  the wall, which is the whole reason that pin bans a phrase list rather than
+                  trusting anyone to remember. A rename is not finished when the screens change; it
+                  is finished when writing the old words fails. */}
               {importState.preview?.batch_interest_unmatched?.length > 0 && (
                 <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                  Batch interest not recognised (left as the current batch, never guessed): {importState.preview.batch_interest_unmatched.join(" · ")} —
-                  write “The current batch” or “Upcoming batch”. Those rows still import; they are
-                  simply treated as available for the current intake.
+                  Batch interest not recognised (never guessed): {importState.preview.batch_interest_unmatched.join(" · ")} —
+                  write “The current batch” or “Upcoming batch”. Those rows still import, set to
+                  “The current batch”.
                 </div>
               )}
               {/* -154 (Umesh: "blank ko accept hi kyun kar raha hai, it should ask"). A blank
