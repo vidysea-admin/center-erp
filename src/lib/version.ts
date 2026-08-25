@@ -62,16 +62,17 @@ export const RELEASE_NOTE_CURRENT =
   "-245 corrects a number that could be typed as nonsense and kept, and repairs three places "  +
   "where the screen and the server disagreed about who may do what. A government attendance "  +
   "figure entered alongside a present list was checked only for being too large. A negative "  +
-  "figure, or one with a decimal point, was accepted and stored, and the day then read back as "  +
-  "something like minus four out of two. Entered on its own the same figure had always been "  +
-  "refused; both routes now ask the same three questions, and a refusal no longer writes "  +
-  "anything before it refuses. On the batches screen, the count of batches shown against a "  +
-  "centre grew on every import of the same file, and a genuine zero was left out of the list "  +
-  "entirely rather than shown as zero; both are fixed, and the counts now say what period they "  +
-  "cover. The controls that cancel, close or reopen a batch now ask for exactly the right the "  +
-  "server asks for, so none of them is offered to someone it would refuse. Summary cards on the "  +
-  "home and sync screens now open the list of records they are counting instead of being "  +
-  "unclickable. Nothing on this release changes who may see a candidate, a trainer or a batch.";
+  "figure, or one with a decimal point, was accepted and stored, and the day then read back on "  +
+  "screen as minus four out of two, at minus two hundred per cent. Entered on its own the same "  +
+  "figure had always been "  +
+  "refused; both routes now ask the same three questions. On the batches screen, the count of "  +
+  "batches shown against a centre grew on every import of the same file, and a genuine zero was "  +
+  "left out of the list entirely rather than shown as zero; both are fixed, and the counts now "  +
+  "say what period they cover. The controls that cancel, close or reopen a batch now ask for "  +
+  "exactly the right the server asks for, so none of them is offered to someone it would refuse. "  +
+  "Summary cards on the home and sync screens now open the list of records they are counting "  +
+  "instead of being unclickable, and mobilisation is reported per day within the same totals it "  +
+  "always used. Nothing on this release changes who may see a candidate, a trainer or a batch.";
 
 const RELEASE_NOTE_ARCHIVE_244 =
   "-244 puts back two things a pair of well-meant guards had taken away, both of which stopped "  +
