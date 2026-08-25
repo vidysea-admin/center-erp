@@ -28,6 +28,9 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     days_held: days.length,
     members: rows,
     program_hours: batch.program?.hours || (batch.program?.duration_days ?? 15) * 8,
+    // -251 (voice note 26-Aug): the sheet's "Total Training Days (QP)" denominator for the
+    // Days Attendance % column below — program_hours above already covers the hours half.
+    program_days: batch.program?.duration_days ?? null,
     min_attendance_pct: minPct,
     min_attendance_source: minPctSource, // "scheme" once the master carries hours, else "defaults"
     required_hours: requiredHours,

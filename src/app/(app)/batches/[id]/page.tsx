@@ -2003,6 +2003,23 @@ function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
           { key: "govt_days", label: "Govt days", sortValue: (r: any) => r.govt?.days_present ?? -1, sortable: true, render: (r: any) => r.govt ? `${r.govt.days_present ?? "—"}${r.govt.working_days ? ` / ${r.govt.working_days}` : ""}` : <span className="text-gray-400" title="No matched portal import yet">—</span> },
           { key: "govt_hours", label: "Govt hours", sortValue: (r: any) => r.govt?.hours ?? -1, sortable: true, render: (r: any) => r.govt?.hours != null ? `${r.govt.hours} hrs` : <span className="text-gray-400">—</span> },
           {
+            // -251 (voice note 26-Aug, matched to the govt AEBAS export's own "Hours Attendance %"
+            // column): govt hours attended over the programme's total hours — a progress %, not the
+            // assessment-eligibility threshold (data.required_hours, used by the Assessment column below).
+            key: "govt_hours_pct", label: "Hours Attendance %", sortValue: (r: any) => r.govt?.hours != null && data.program_hours ? Math.round((100 * r.govt.hours) / data.program_hours) : -1, sortable: true,
+            render: (r: any) => r.govt?.hours != null && data.program_hours
+              ? <span className="text-xs tabular-nums">{Math.round((100 * r.govt.hours) / data.program_hours)}%</span>
+              : <span className="text-gray-400" title="No matched portal import yet">—</span>,
+          },
+          {
+            // -251: same sheet's "Days Attendance %" — govt days present over the programme's total
+            // training days (data.program_days, the sync source's "duration_days").
+            key: "govt_days_pct", label: "Days Attendance %", sortValue: (r: any) => r.govt?.days_present != null && data.program_days ? Math.round((100 * r.govt.days_present) / data.program_days) : -1, sortable: true,
+            render: (r: any) => r.govt?.days_present != null && data.program_days
+              ? <span className="text-xs tabular-nums">{Math.round((100 * r.govt.days_present) / data.program_days)}%</span>
+              : <span className="text-gray-400" title="No matched portal import yet">—</span>,
+          },
+          {
             // QA-085: the green mark is PORTAL-VERIFIED only — an estimate can never
             // qualify a student, and the chip says which meter it is reading.
             key: "qualified", label: "Assessment", sortable: true, sortValue: (r: any) => (r.qualified ? 1 : 0),
