@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, locationFilter } from "@/lib/authz";
-import { centreVerdict, reportRollup } from "@/lib/rules";
+import { REPORT_LABELS, centreVerdict, reportRollup } from "@/lib/rules";
 
 // QA-441: the report as an .xlsx, carrying THE SAME NUMBERS as the screen. It reads the same
 // `reportRollup` the screen reads — an export that recomputes is an export that eventually
@@ -10,7 +10,7 @@ import { centreVerdict, reportRollup } from "@/lib/rules";
 export const GET = apiHandler(async (_req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
-  const { rows, roles, total, sources } = await reportRollup(locationFilter(user));
+  const { rows, roles, total, sources, measured_at } = await reportRollup(locationFilter(user));
 
   // One flat sheet: Excel has no two-row header worth trusting, so each job role's five figures
   // become five named columns. The names carry the job role so a filter in Excel still works.
@@ -72,15 +72,28 @@ export const GET = apiHandler(async (_req: NextRequest) => {
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(flat.concat([totalRow])), "report");
   // REQ-367 travels with the file. A number without its origin starts an argument the moment it
   // leaves the screen, and this file is exactly what leaves the screen.
+  // QA-1074 — the report's on-screen names land HERE and only here. Umesh, asked directly where
+  // "Total Target / Approved Target / Pending Target" should go in this file: "excel toh OneDrive
+  // wali client ki sheet ki exact duplicate hai, usme kuch edit nahi kar sakte — isliye uske info
+  // button mein daalna hoga ye naam." So every header on the data sheet above is byte-for-byte what
+  // it has always been (a pin in check-user-copy.mjs keeps it that way), and the mapping between
+  // those headers and what a person now sees on the screen lives on this tab.
+  //
+  // REPORT_LABELS is imported rather than retyped: the tile, the table header and this row have to
+  // agree, and this is the third of the three places.
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([
-    { Column: "Target", "Where it comes from": sources.target },
-    { Column: "Approved", "Where it comes from": sources.approved },
-    { Column: "Not approved", "Where it comes from": sources.not_approved },
-    { Column: "No verdict", "Where it comes from": sources.unknown },
-    { Column: "Mobilised", "Where it comes from": sources.mobilised },
-    { Column: "In training", "Where it comes from": sources.in_training },
-    { Column: "Passed", "Where it comes from": sources.certified },
-    { Column: "Please note", "Where it comes from": sources.caveat },
+    { Column: "Target", "Shown on screen as": REPORT_LABELS.target.label, "Where it comes from": sources.target },
+    { Column: "Approved", "Shown on screen as": REPORT_LABELS.approved.label, "Where it comes from": sources.approved },
+    { Column: "Not approved", "Shown on screen as": REPORT_LABELS.not_approved.label, "Where it comes from": sources.not_approved },
+    { Column: "No verdict", "Shown on screen as": REPORT_LABELS.unknown.label, "Where it comes from": sources.unknown },
+    { Column: "Mobilised", "Shown on screen as": REPORT_LABELS.mobilised.label, "Where it comes from": sources.mobilised },
+    { Column: "In training", "Shown on screen as": REPORT_LABELS.in_training.label, "Where it comes from": sources.in_training },
+    { Column: "Passed", "Shown on screen as": REPORT_LABELS.certified.label, "Where it comes from": sources.certified },
+    { Column: "Please note", "Shown on screen as": "", "Where it comes from": sources.caveat },
+    // When this file was made, from the same measurement the screen shows. A spreadsheet outlives
+    // the tab it came from, and this file's whole failure mode is being quoted next week as this
+    // week's number — which is exactly what happened on the screen and started this work.
+    { Column: "Counted at", "Shown on screen as": "", "Where it comes from": `${measured_at} (UTC). Figures are a snapshot of that moment, not a live feed.` },
   ]), "where the numbers come from");
 
   const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });

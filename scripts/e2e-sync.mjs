@@ -82,7 +82,57 @@ ok("changes carry impact snapshot (Rule 3)", changes.every((c) => c.impact_snaps
 
 // apply Update target
 const tChange = changes.find((c) => c.field_name.startsWith("approved_target:"));
+
+// ---- QA-1074: the Reports page's "can this pending change move a figure?" count ----
+// Umesh asked /reports to notify him when unactioned sheet changes are holding the numbers back.
+// The temptation was to print how many are Open. Measured on production the day this was written,
+// that would have been a lie on day one: 20 were Open and NONE could move a figure there (19 TC
+// passwords, one CENTRE-level tc_status that no count reads). So `sync_gap.open_affecting` counts
+// through sync.ts's own targetRowField() — the same predicate the apply door refuses through — and
+// these pins prove it discriminates rather than just counting the inbox.
+//
+// Deliberately measured as a DELTA around a single change: this suite shares a database with
+// whatever else is in it, and an absolute count would be a pin that passes or fails on its
+// neighbours' data.
+{
+  const gap = async () => (await req("GET", "/api/reports/rollup", undefined, 200)).data?.sync_gap ?? {};
+  const before = await gap();
+  ok("QA-1074: the report ships a sync_gap block with both counts, and affecting can never exceed the total",
+    Number.isInteger(before.open_total) && Number.isInteger(before.open_affecting) && before.open_affecting <= before.open_total,
+    JSON.stringify({ open_total: before.open_total, open_affecting: before.open_affecting }));
+
+  // A NON-target change leaving the Open pile must not move `open_affecting`. `approval_status` is
+  // a centre-level field: applying it can close a location, but no figure on the report reads it.
+  const sc = changes.find((c) => c.field_name === "approval_status");
+  if (sc) {
+    await req("POST", "/api/sheet-changes/bulk-ignore", { ids: [sc._id] }, 200);
+    const mid = await gap();
+    ok("QA-1074: clearing a change the report does not read leaves open_affecting alone (open_total drops, affecting does not)",
+      mid.open_affecting === before.open_affecting && mid.open_total === before.open_total - 1,
+      JSON.stringify({ before, mid }));
+    await req("PATCH", `/api/sheet-changes/${sc._id}/status`, { status: "Open", reason: "QA-1074 pin: put it back for the pins below" }, 200);
+    const back = await gap();
+    ok("QA-1074 fixture guard: the non-target change is back in the Open pile before anything else is asserted",
+      back.open_total === before.open_total && back.open_affecting === before.open_affecting,
+      JSON.stringify({ before, back }));
+  } else {
+    ok("QA-1074 fixture guard: an approval_status change exists to prove open_affecting discriminates", false,
+      JSON.stringify(changes.map((c) => c.field_name)));
+  }
+}
+
+// ...and a TARGET-row change leaving the pile MUST move it. Same shape as the pin above, opposite
+// expectation — the PAIR is what makes this falsifiable. A first draft of this second pin asserted
+// `open_affecting >= 0`, which the code makes true by construction: QA-212's "pin that can never
+// fail", written here by the same hand that filed it.
+const gapBeforeApply = (await req("GET", "/api/reports/rollup", undefined, 200)).data?.sync_gap ?? {};
 await req("POST", `/api/sheet-changes/${tChange._id}/apply`, { action: "Update target" }, 200);
+{
+  const after = (await req("GET", "/api/reports/rollup", undefined, 200)).data?.sync_gap ?? {};
+  ok("QA-1074: actioning an approved_target:<CODE> change DOES drop open_affecting - the count follows targetRowField(), not the inbox size",
+    after.open_affecting === gapBeforeApply.open_affecting - 1 && after.open_total === gapBeforeApply.open_total - 1,
+    JSON.stringify({ before: gapBeforeApply, after }));
+}
 const targets = (await req("GET", `/api/locations/${loc._id}/targets`)).data.items;
 ok("Rule 4: approved_target written from sheet", targets[0]?.approved_target === 210, JSON.stringify(targets[0]?.approved_target));
 

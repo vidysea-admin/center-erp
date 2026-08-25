@@ -273,6 +273,13 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
     // Room this column needs to stay readable (px). Feeds the table's min-width floor —
     // heavy columns (old→new diffs, note text) declare more than the 130 default.
     minWidth?: number;
+    // QA-1074: what this column means, on hover of its header. Umesh, on renaming the report's
+    // "No verdict" column to "Pending": "column mai info button daal de ya 2 naam daal de with |
+    // or /". A header has room for one word and a tooltip has room for the sentence, so the column
+    // gets the new name and the hint carries the old one — a reader who learned the report last
+    // week can still find what they are looking at. Opt-in: a column that declares no hint renders
+    // byte-for-byte as before, tooltip included ("Sort" on the sortable ones).
+    hint?: string;
     // -170 (QA-398): a banner header spanning consecutive columns that share it. The high-level
     // report is five figures under each job role, and Manish sir picked that shape from two he was
     // shown ("yahi wala better hai na?"). Added HERE rather than in a second table component, so
@@ -477,7 +484,9 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
   if (!rows.length) return <div className="rounded-xl border border-dashed bg-white p-10 text-center text-sm text-gray-400">{empty ?? "Nothing here yet"}</div>;
   const cell = (c: Col, r: T) => c.render ? c.render(r) : String((r as any)[c.key] ?? "—");
   const headerCell = (c: Col) => {
-    if (!c.sortable) return c.label;
+    // QA-1074: the hint rides on the header itself, so it is reachable whether or not the column
+    // sorts. `?? "Sort"` keeps the existing tooltip on every column that declares none.
+    if (!c.sortable) return c.hint ? <span title={c.hint} className="cursor-help border-b border-dotted border-gray-300">{c.label}</span> : c.label;
     const is = sort?.key === c.key;
     return (
       // QA-584 (-183): `whitespace-nowrap` on the LABEL, not more pixels on the width. A checker
@@ -493,7 +502,7 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
       // narrower can still drag it.
       <button className="flex items-center gap-1 whitespace-nowrap font-semibold uppercase tracking-wider hover:text-gray-600"
         onClick={() => setSort(is && sort!.dir === -1 ? null : { key: c.key, dir: is ? -1 : 1 })}
-        title="Sort">
+        title={c.hint ?? "Sort"}>
         {c.label}
         <span className={is ? "text-blue-600" : "text-gray-300"}>{is ? (sort!.dir === 1 ? "▲" : "▼") : "↕"}</span>
       </button>

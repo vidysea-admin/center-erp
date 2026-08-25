@@ -3,13 +3,19 @@
 import { Types } from "mongoose";
 import {
   AuditLog, Batch, BatchMember, Candidate, CandidateResult, Closure, CostCategory, CostEntry, DailyLog, GovtAttendanceRow, Invoice, Location,
-  LocationTarget, Notification, Program, Room, Scheme, TRAINER_PIPELINE, Trainer, TrainerDocument,
+  LocationTarget, Notification, Program, Room, Scheme, SheetChange, SyncSource, TRAINER_PIPELINE, Trainer, TrainerDocument,
 } from "@/models";
 import { audit, auditDiff } from "@/lib/audit";
 import { currentStageOf } from "@/lib/candidate-journey";
 import { getDefaults } from "@/lib/defaults";
 import { normalizeCan } from "@/lib/govt-attendance";
 import { HttpError, isScoped } from "@/lib/authz";
+// QA-1074: which pending sheet changes can actually move the report's figures. IMPORTED, never
+// re-listed — this is the predicate the apply door and the Sync Inbox screen already share
+// (-242 / QA-946), and a third copy of "what is a target-row field" is exactly the ARCHITECTURE
+// section 3 disease. Safe direction: govt-attendance already pulls sync.ts in on rules.ts's
+// behalf, and sync.ts never imports rules.ts, so this adds no cycle and no new module to the graph.
+import { targetRowField } from "@/lib/sync";
 import type { SessionUser } from "@/auth";
 
 export const ACTIVE_BATCH_STATUSES = ["Planning", "Ready", "Active", "Closing"];
@@ -3237,6 +3243,36 @@ export type ReportRow = {
   verdict: ReturnType<typeof centreVerdict>;
 };
 
+// QA-1074 (Umesh, 24/08, with a screenshot of /reports): "yeh total targets me main click karoon
+// to woh mujhe 12,090 waali rows par le jaaye na? This is the way you see how the data is
+// occurring." A tile is a dead end today - it states a number and offers no way to ask what it is
+// made of, which is also why he read a Passed figure as under-counted when it was simply older
+// than he was.
+//
+// The drill-down is NOT a second query. It is the SAME rows the tiles are summed from, shipped
+// alongside them, so a panel and the tile above it cannot disagree - `sum(detail[k]) === total[k]`
+// for every k, by construction rather than by care. That equality is pinned in scripts/e2e.mjs.
+//
+// One entry per LocationTarget row, deliberately NOT per `cells` entry: a (centre x job role) cell
+// is SUMMED over programmes (a programme is scheme-x-job-role fused, his columns are job roles
+// alone), so a cell has no single tc_status to show. The row does, and the row is what a person
+// then goes and edits.
+export type ReportDetailRow = {
+  location: { _id: string; name: string };
+  role: string; program_code: string;
+  target: number; approved: number; not_approved: number; unknown: number;
+  mobilised: number; in_training: number; certified: number;
+  // The two TC Statuses, side by side, because they are NOT the same field and the difference is
+  // what a reader is actually looking for. `row_status` is LocationTarget.tc_status - the ONE this
+  // report counts. `centre_status` is Location.tc_status - what the sheet wrote on the centre.
+  // sync.ts:89-97 has said since -100 that a sheet can correct the centre and never move the
+  // report; measured on production 2026-08-24, EIGHT rows carrying 1,740 of target sit blank while
+  // their own centre already reads "Approved". Printing one without the other is what made that
+  // invisible.
+  row_status: string;
+  centre_status: string;
+};
+
 const emptyCell = (): ReportCell => ({
   target: 0, approved: 0, not_approved: 0, unknown: 0, mobilised: 0, in_training: 0, certified: 0,
 });
@@ -3288,16 +3324,81 @@ export function unrecognisedTcStatus(tc_status: unknown): string | null {
   return tcVerdict(raw) === "unknown" ? raw : null;
 }
 
+// QA-1074 (Umesh, 24/08): "kuch aisa notify ho sakta hai ki sheet ka kuch data hai jiski wajah se
+// mismatch ho raha hai… inhone approved se no-verdict me convert kar diya, toh count yahan disturb
+// ho gaya." Three DIFFERENT things can hold this report behind the client's sheet, and lumping
+// them into one scary number would be the third time this file was asked not to do that:
+//
+//   1. Changes sitting in the Sync inbox that WOULD move these figures when actioned.
+//   2. The last sync run's own verdict — it can come back Partial, and it says why in a sentence
+//      it wrote itself.
+//   3. Rows whose TC Status never reached the field this report counts (filled by reportRollup).
+//
+// MEASURED on production 2026-08-24 before writing any of it, because the honest answer turned out
+// to be the uncomfortable one: 20 changes are Open, and ZERO of them can move a figure here — 19
+// are `tc_password` and one is a CENTRE-level `tc_status` that writes Location.tc_status, which no
+// count in this report reads. A banner saying "20 pending changes affect this report" would have
+// been a lie the day it shipped. So the affecting ones are counted THROUGH targetRowField(), the
+// same predicate the apply door refuses through, and the screen is allowed to say zero.
+export type ReportSyncGap = {
+  open_total: number;
+  open_affecting: number;
+  last_synced_at: string | null;
+  last_status: string;
+  last_error: string;
+  source_name: string;
+  verdict_not_on_row: { rows: number; target: number };
+};
+
+async function reportSyncGap(scope: Record<string, unknown> = {}): Promise<ReportSyncGap> {
+  // Same `scope` object the targets are read with: it is `{location: {$in: […]}}` or `{}`, and
+  // SheetChange carries `location` too, so a centre login is told about its own centres and not
+  // about somebody else's. Only `field_name` is selected — nothing here needs a value, and one of
+  // these rows is a TC password.
+  const open = await SheetChange.find({ ...scope, status: "Open" }).select("field_name").lean<any[]>();
+  const source = await SyncSource.findOne({ active: true }).sort({ last_synced_at: -1 })
+    .select("name last_synced_at last_status last_error").lean<any>();
+  return {
+    open_total: open.length,
+    open_affecting: open.filter((c) => targetRowField(String(c.field_name ?? ""))).length,
+    last_synced_at: source?.last_synced_at ? new Date(source.last_synced_at).toISOString() : null,
+    last_status: String(source?.last_status ?? ""),
+    // VERBATIM, and never parsed. The sync writes a whole sentence naming what it skipped and what
+    // to do about it; deriving a count by running a regex over somebody's prose is the QA-805
+    // mistake (a warning chosen by grepping a note showed the wrong warning). Show the sentence.
+    last_error: String(source?.last_error ?? ""),
+    source_name: String(source?.name ?? ""),
+    // Filled by reportRollup once the rows are in hand — it needs the targets, and this function
+    // deliberately does not load them a second time.
+    verdict_not_on_row: { rows: 0, target: 0 },
+  };
+}
+
 export async function reportRollup(scope: Record<string, unknown> = {}) {
   // find() + populate, not an aggregation over the scope filter: authz.ts builds `$in` from
   // `.map(String)`, mongoose casts strings to ObjectId inside find() but NOT inside a pipeline,
   // and four live defects came from exactly that (QA-302, QA-347, QA-350, QA-395). The
   // aggregations below only ever receive ObjectIds taken off documents we already loaded.
   const targets = await LocationTarget.find(scope)
-    .populate("location", "name code")
+    // QA-1074: `tc_status` on the CENTRE as well, so the drill-down can print it beside the row's
+    // own. Two fields with one name is the trap this report has been walking past since -100.
+    .populate("location", "name code tc_status")
     .populate("program", "name code scheme")
     .lean<any[]>();
-  if (!targets.length) return { rows: [] as ReportRow[], roles: [] as string[], total: emptyCell(), sources: SOURCES };
+  // QA-1074: the sync block is computed even when this scope has no targets at all. A centre login
+  // with nothing mapped yet is precisely who needs to be told the sheet is only half-read.
+  const sync_gap = await reportSyncGap(scope);
+  const measured_at = new Date().toISOString();
+  if (!targets.length) {
+    return {
+      rows: [] as ReportRow[], roles: [] as string[], total: emptyCell(), sources: SOURCES,
+      // Same KEYS as the populated return, always. The screen reads `detail` and `sync_gap`
+      // unconditionally, and an empty result that quietly ships a different shape is a crash
+      // waiting for the first centre that has no targets.
+      unrecognised_status: [] as { value: string; rows: number }[],
+      detail: [] as ReportDetailRow[], measured_at, sync_gap, labels: REPORT_LABELS,
+    };
+  }
 
   const locIds = [...new Set(targets.map((t) => t.location?._id).filter(Boolean))];
   const progIds = [...new Set(targets.map((t) => t.program?._id).filter(Boolean))];
@@ -3350,6 +3451,9 @@ export async function reportRollup(scope: Record<string, unknown> = {}) {
   const grand = emptyCell();
   // QA-552: every TC Status value this function did not recognise, and how many rows carry it.
   const unrecognised = new Map<string, number>();
+  // QA-1074: the rows the tiles are made of. Filled from the SAME `one` object that is summed into
+  // the cell, the centre total and the grand total — one construction, four consumers.
+  const detail: ReportDetailRow[] = [];
 
   for (const t of targets) {
     if (!t.location?._id || !t.program?._id) continue;
@@ -3387,6 +3491,16 @@ export async function reportRollup(scope: Record<string, unknown> = {}) {
     addInto(row.cells[role], one);
     addInto(row.total, one);
     addInto(grand, one);
+    // QA-1074: the same figures, un-summed, so a tile can be opened. `...one` rather than a second
+    // hand-written object literal — a copy that lists the seven measures again is a copy that
+    // eventually lists six.
+    detail.push({
+      location: { _id: lid, name: t.location.name },
+      role, program_code: String(t.program.code ?? ""),
+      ...one,
+      row_status: String(t.tc_status ?? "").trim(),
+      centre_status: String(t.location.tc_status ?? "").trim(),
+    });
   }
 
   const rows = [...byLoc.values()].sort((a, b) => a.location.name.localeCompare(b.location.name));
@@ -3398,8 +3512,21 @@ export async function reportRollup(scope: Record<string, unknown> = {}) {
       if (cell.certified > cell.in_training) r.breaks.push(`${role}: passed ${cell.certified} is more than in training ${cell.in_training}`);
     }
   }
+  // QA-1074: the part of Pending Target that is waiting on a FIELD, not on the client. A row with
+  // no TC Status of its own, at a centre whose record already carries a verdict, is one the sheet
+  // has answered and the report cannot see. Counted here rather than on the screen so the drill
+  // panel and the banner cannot arrive at two different numbers for it.
+  //
+  // Gated on `d.unknown > 0` and not merely on a blank status, so this count is a subset of the
+  // rows the Pending Target tile opens. The screen says "N OF THESE rows" and then offers a link
+  // to them; a row counted here that the panel would not show makes that sentence a small lie.
+  let vnrRows = 0, vnrTarget = 0;
+  for (const d of detail) {
+    if (d.unknown > 0 && !d.row_status && tcVerdict(d.centre_status) !== "unknown") { vnrRows++; vnrTarget += d.target; }
+  }
+  sync_gap.verdict_not_on_row = { rows: vnrRows, target: vnrTarget };
   return {
-    rows, roles: [...roles].sort(), total: grand,
+    rows, roles: [...roles].sort(), total: grand, detail, measured_at, sync_gap, labels: REPORT_LABELS,
     // Empty on todays data, and that is the point: the day the sheet grows a word like
     // "Transferable", it appears HERE instead of being absorbed into a bucket labelled blank.
     unrecognised_status: [...unrecognised.entries()].map(([value, rows]) => ({ value, rows })).sort((a, b) => b.rows - a.rows),
@@ -3416,6 +3543,42 @@ export async function reportRollup(scope: Record<string, unknown> = {}) {
 
 // REQ-367: every column says where it came from, on the screen. Two are the client's numbers and
 // three are ours, and an argument about the report always starts with which is which.
+// QA-1074 (Umesh, 24/08): "Total Target · Approved Target · Pending Target — yeh 3 yahan rakhiye."
+// The names he wants live HERE, not in the page, because three surfaces have to agree on them: the
+// tiles, the table's Grand Total headers, and the Excel workbook's info tab. The tsx file cannot
+// import this module (mongoose), so the labels TRAVEL in the payload — the same way the verdict
+// word does since QA-562, and for the same reason.
+//
+// The Excel DATA sheet keeps its old headers on purpose. Umesh, asked directly: "excel toh OneDrive
+// wali client ki sheet ki exact duplicate hai, usme kuch edit nahi kar sakte — isliye uske info
+// button mein daalna hoga ye naam." So the new vocabulary lands on the "where the numbers come
+// from" tab and nowhere else in that file, and `centreVerdict()`'s words are untouched because they
+// are written straight into that sheet's Status column.
+// Every entry carries every field — including the empty ones. A map whose shape changes per key is
+// a map the caller has to test before reading, and this one is read by a client component that
+// cannot import the type.
+//
+// `label` is the tile and the drill panel. `short` is the table header, where there is room for one
+// word. `was` is the header's hint, so someone who learned this report last week can still find the
+// column. `tag` is REQ-367's demand that every figure names its source ON the screen (QA-566), and
+// `of_approved` marks the three that are a percentage OF APPROVED, never of Total — criterion 9,
+// 17:15: "total 10000 the, approved kewal 5000; 5000 mein SE 3000 mobilise".
+export const REPORT_LABELS = {
+  // ORDER MATTERS: this object's key order is the order the tiles, the definitions list and the
+  // drill panel's columns render in. Umesh named three and asked for them together - "Total Target /
+  // Approved Target / Pending Target - yeh 3 yahan rakhiye" - so Pending sits third and Not approved
+  // follows it. A browser screenshot is what caught this: with Not approved between Approved and
+  // Pending (which is the order the Excel columns are in), the three he named were split by a tile
+  // he had asked to remove, on the one dataset where it is not zero.
+  target: { label: "Total Target", short: "Target", was: "", tag: "Client sheet", of_approved: false },
+  approved: { label: "Approved Target", short: "Approved", was: "", tag: "Client sheet", of_approved: false },
+  unknown: { label: "Pending Target", short: "Pending", was: "Called \"No verdict yet\" until 25 Aug 2026. The client sheet has not filled in TC Status on these (centre x job role) rows - nobody has refused them, nobody has approved them either.", tag: "Client sheet · TC Status blank", of_approved: false },
+  not_approved: { label: "Not approved", short: "Not approved", was: "", tag: "Client sheet", of_approved: false },
+  mobilised: { label: "Mobilised", short: "Mobilised", was: "", tag: "Our records", of_approved: true },
+  in_training: { label: "In training", short: "In training", was: "", tag: "Our records", of_approved: true },
+  certified: { label: "Passed", short: "Passed", was: "", tag: "Our records", of_approved: true },
+} as const;
+
 export const SOURCES = {
   target: "Client sheet - the approved target on this centre x job role row",
   approved: "Client sheet - the same target, counted only where its TC Status reads Approved",
@@ -3423,7 +3586,7 @@ export const SOURCES = {
   // blank, and on this data the blank is a THIRD of the target. Saying so on the screen matters
   // more than usual here: the two look identical in every export anyone has made so far.
   not_approved: "Client sheet - target on rows whose TC Status says Unapproved / Not approved / Rejected",
-  unknown: "Client sheet - target on rows whose TC Status is BLANK, plus any value this report does not recognise (those are listed separately on the screen, never hidden here). Nobody has refused these; nobody has approved them either. On 2026-08-21 it was 24 of 55 rows and 4,775 of the target, all of them genuinely blank.",
+  unknown: "Client sheet - target on rows whose TC Status is BLANK, plus any value this report does not recognise (those are listed separately on the screen, never hidden here). Nobody has refused these; nobody has approved them either. On 2026-08-21 it was 24 of 55 rows and 4,775 of the target, all of them genuinely blank. NOTE: the TC Status counted here is the one on the (centre x job role) row, not the one on the centre - a centre can read Approved while its own job-role rows are still blank, and then this figure is waiting on a field rather than on the client. Open the tile to see which rows those are.",
   mobilised: "Our records - candidates ENROLLED onto a batch at this centre x job role. A candidate typed into the pool but not yet put on a batch is not counted.",
   in_training: "Our records - candidates whose enrolment is complete",
   certified: "Our records - candidates with a Pass assessment result (a certificate being issued is a further step)",

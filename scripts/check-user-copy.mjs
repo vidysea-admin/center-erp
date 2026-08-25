@@ -1239,9 +1239,22 @@ for (const file of walk(root)) {
   // "3% of approved", which is a denominator. So folding the definitions in -178 took provenance
   // away from OUR columns only and left the client's intact. Measured by a checker on live: with
   // the card closed, "Client sheet" rendered and "Our records" rendered nowhere.
-  const ourTiles = (reportSrc.match(/Our records ·/g) ?? []).length;
-  if (ourTiles >= 3) passed++;
-  else { failed++; pushStructural("app/(app)/reports/page.tsx: the Mobilised / In training / Passed tiles do not name their source (found " + ourTiles + " of 3) - QA-566. A percentage is a denominator, not a provenance, so with the definitions card closed those three figures say where they came from nowhere on the screen."); }
+  //
+  // QA-1074 (-245): THIS PIN'S MEASUREMENT MOVED, and the old one is rewritten rather than deleted
+  // so the change is visible in the diff. It counted `Our records ·` in the PAGE. That worked while
+  // the tile labels were a hand-written array in the page; -245 moved the seven measures' names and
+  // source tags into REPORT_LABELS (rules.ts) so the tile, the table header and the Excel info tab
+  // cannot say three different words. The guarantee is unchanged - those three tiles must still
+  // name their source on screen - but the string now lives one file away, and a pin that greps the
+  // old file would have gone green while measuring nothing. Blinding a pin by moving the value it
+  // watches is the QA-1022 failure; so the pin follows the value: the tags must be DECLARED for all
+  // three measures, and the tile must RENDER the tag rather than only the percentage.
+  const rulesLib = stripComments(fs.readFileSync(path.join(root, "lib/rules.ts"), "utf8"));
+  const tagged = ["mobilised", "in_training", "certified"]
+    .filter((k) => new RegExp(`${k}:\\s*\\{[^}]*tag:\\s*"Our records"`).test(rulesLib)).length;
+  const rendersTag = /meta\.tag/.test(reportSrc) && /of_approved/.test(reportSrc);
+  if (tagged === 3 && rendersTag) passed++;
+  else { failed++; pushStructural("app/(app)/reports/page.tsx + lib/rules.ts: the Mobilised / In training / Passed tiles do not name their source (declared " + tagged + " of 3, tile renders the tag " + rendersTag + ") - QA-566. A percentage is a denominator, not a provenance, so with the definitions card closed those three figures say where they came from nowhere on the screen."); }
 
   // QA-565 (-179): the screen must call a column what the DOWNLOAD calls it. The report read
   // APPR. / MOB. / IN TRG while rollup/export writes Approved / Mobilised / In training, so one
@@ -1258,9 +1271,21 @@ for (const file of walk(root)) {
   // per job role plus once in Grand Total, so each must appear at least twice.
   const twice = new Set(["Target", "Approved", "Mobilised", "In training", "Passed"]);
   const countOf = (w) => (reportSrc.match(new RegExp('label: "' + w.replace(/ /g, " ") + '"', "g")) ?? []).length;
-  const missingLabels = wantLabels.filter((w) => countOf(w) < (twice.has(w) ? 2 : 1));
+  // QA-1074 (-245): ONE column is now deliberately exempt, and it is named here rather than quietly
+  // dropped from `wantLabels`. Umesh renamed the tile to "Pending Target" and, asked where that
+  // should land in the download, ruled the download OUT: "excel toh OneDrive wali client ki sheet
+  // ki exact duplicate hai, usme kuch edit nahi kar sakte - isliye uske info button mein daalna
+  // hoga ye naam." So screen and file legitimately differ on this one word, and QA-565's rule -
+  // "one column, two names is the defect" - is satisfied a different way instead of being waived:
+  // the screen column carries the new short name AND a hint spelling out what it used to be called,
+  // and the workbook's info tab carries the mapping. All three are required below, so this is a
+  // narrower exemption than deleting the entry would have been, not a wider one.
+  const bridged = /label: L\.unknown\?\.short/.test(reportSrc) && /hint: L\.unknown\?\.was/.test(reportSrc)
+    && /unknown:\s*\{[^}]*was:\s*"[^"]+"/.test(rulesLib)
+    && /"Shown on screen as"/.test(fs.readFileSync(path.join(root, "app/api/reports/rollup/export/route.ts"), "utf-8"));
+  const missingLabels = wantLabels.filter((w) => (w === "No verdict" ? !bridged : countOf(w) < (twice.has(w) ? 2 : 1)));
   if (!missingLabels.length) passed++;
-  else { failed++; pushStructural("app/(app)/reports/page.tsx: the report does not use the full column names the Excel export uses - QA-565. Missing: " + missingLabels.join(", ") + ". One column, two names is the defect; the export has always spelled them out."); }
+  else { failed++; pushStructural("app/(app)/reports/page.tsx: the report does not use the full column names the Excel export uses - QA-565. Missing: " + missingLabels.join(", ") + ". One column, two names is the defect; the export has always spelled them out." + (missingLabels.includes("No verdict") ? " `No verdict` is allowed to differ ONLY while the screen column carries the renamed short label plus a hint naming the old one, and the export's info tab carries the mapping - one of those three is gone (QA-1074)." : "")); }
 
   // QA-552: the report must SURFACE a status value it does not recognise. `unknown` is a default
   // bucket, so without this it silently absorbs any new word the client's sheet grows.
@@ -2369,6 +2394,80 @@ for (const file of walk(root)) {
     );
   } else {
     passed++;
+  }
+}
+
+// ---- QA-1074 (-245): the report's measure names live in ONE place, and the Excel file keeps its
+// own headers ----
+//
+// Two pins, one block, and they pull in opposite directions on purpose.
+//
+// (a) The tiles must read their labels from the payload. `REPORT_LABELS` in rules.ts is the one
+//     place the seven measures are named, because three surfaces have to agree on those words -
+//     the tile, the table header, and the Excel workbook's info tab - and only two of the three
+//     can import that module. Before this unit the tile labels were a hand-written array in the
+//     page, which is how the screen came to say "No verdict yet" while everything else said
+//     something else. This is the ARCHITECTURE section 3 disease and this file exists to catch it.
+//
+// (b) The Excel DATA sheet must NOT be renamed. Umesh, asked directly where the new vocabulary
+//     should go in that file: "excel toh OneDrive wali client ki sheet ki exact duplicate hai, usme
+//     kuch edit nahi kar sakte - isliye uske info button mein daalna hoga ye naam." A promise made
+//     in a conversation is a promise nothing enforces; the headers are listed here so that renaming
+//     one is a failing check rather than a discovery made downstream by whoever opens the file.
+{
+  const rulesSrc = fs.readFileSync(path.join(root, "lib/rules.ts"), "utf-8");
+  const repPage = stripComments(fs.readFileSync(path.join(root, "app/(app)/reports/page.tsx"), "utf-8"));
+  const exportSrc = fs.readFileSync(path.join(root, "app/api/reports/rollup/export/route.ts"), "utf-8");
+
+  // (a) The names exist in rules.ts, travel in the payload, and the page reads them from there
+  // rather than carrying its own copy of any of the three Umesh renamed.
+  const named = /export const REPORT_LABELS/.test(rulesSrc)
+    && /labels: REPORT_LABELS/.test(rulesSrc)
+    && /data\?\.labels/.test(repPage);
+  // Only the three names this unit introduced. "No verdict yet" is deliberately NOT in this list:
+  // that word belongs to centreVerdict(), it labels a CENTRE rather than a measure, and it is
+  // written straight into the Excel Status column - so the page keeping it in its colour/tooltip map
+  // is correct, not drift. A first draft of this pin flagged it and was wrong about what it was
+  // looking at.
+  const ownCopy = ["Total Target", "Approved Target", "Pending Target"].filter((w) => repPage.includes(`"${w}"`) && !repPage.includes(`?? "${w}"`));
+  if (named && ownCopy.length === 0) passed++;
+  else {
+    failed++;
+    pushStructural(
+      "app/(app)/reports: the report's measure names are not coming from one place (QA-1074). "
+      + (named ? "" : "REPORT_LABELS is not exported / not shipped in the payload / not read by the page. ")
+      + (ownCopy.length ? `The page carries its own literal for: ${ownCopy.join(", ")}. ` : "")
+      + "The tile, the table header and the Excel info tab have to say the same words, and only rules.ts can be imported by all three.",
+    );
+  }
+
+  // (b) The data sheet's headers, exactly as the client's duplicate has always had them.
+  // Checked against the DATA SHEET's own construction, not against the file. Two earlier drafts of
+  // this pin were unfalsifiable and the second one was PROVED so: with `Grand Total — No verdict`
+  // and `${role} — No verdict` both renamed to Pending, it still reported green - because the
+  // string survived in the info tab's `{ Column: "No verdict" }` row, which is a DIFFERENT sheet
+  // and is exactly where the new vocabulary was supposed to go. A pin that its own subject cannot
+  // break is QA-212's "pin that can never fail", written here by the hand that keeps filing it.
+  //
+  // So each heading is required in the exact expression the data sheet builds it with: the two
+  // template forms for the seven measures, and the three literal keys that bracket them.
+  const MEASURE_HEADS = ["Target", "Approved", "Not approved", "No verdict", "Mobilised", "In training", "Passed"];
+  const missing = [];
+  for (const h of MEASURE_HEADS) {
+    if (!exportSrc.includes("${role} — " + h + "`")) missing.push(`\${role} — ${h}`);
+    if (!exportSrc.includes(`"Grand Total — ${h}"`)) missing.push(`Grand Total — ${h}`);
+  }
+  if (!exportSrc.includes('"Batch Location"')) missing.push("Batch Location");
+  if (!/Status:\s*centreVerdict\(/.test(exportSrc)) missing.push("Status");
+  if (!exportSrc.includes('out["Check"]')) missing.push("Check");
+  if (missing.length === 0) passed++;
+  else {
+    failed++;
+    pushStructural(
+      `api/reports/rollup/export: ${missing.length} column heading(s) the client's duplicate has always carried are gone - ${missing.join(", ")} (QA-1074). `
+      + "Umesh's condition on this file was explicit: the workbook is a duplicate of the client's own sheet and its headings do not change; new names go on the "
+      + "\"where the numbers come from\" tab. Renaming a heading here breaks every pivot anyone has built on the download.",
+    );
   }
 }
 

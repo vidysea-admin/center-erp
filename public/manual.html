@@ -59,6 +59,7 @@
   <a href="#closure" data-roles="Admin,Operations,Location">Closure, Assessment &amp; Invoice</a>
   <a href="#govt" data-roles="Admin,Operations">Government Attendance</a>
   <a href="#costs" data-roles="Admin,Operations,Location">Costs</a>
+  <a href="#reports" data-roles="Admin,Operations,Location">Reports</a>
   <a href="#sync" data-roles="Admin">Sync Inbox &amp; Sheet Watch</a>
   <a href="#admin" data-roles="Admin">Admin</a>
 </nav>
@@ -256,6 +257,19 @@
     <li><b>Entering costs</b> (Operations and granted roles): per-centre / per-batch / per-trainer entries with categories from the master list. Trainer eligibility payments book themselves when the pipeline stage moves.</li>
     <li><b>Submissions go for approval</b>; your own submissions and their state are under "My submissions".</li>
     <li><b>The ledger</b> (the full book of what everyone posted) is the Admin's screen. Operations posts but does not read the book — by the CEO's design.</li>
+  </ol>
+</section>
+
+<section class="screen" id="reports" data-roles="Admin,Operations,Location">
+  <h2>Reports</h2>
+  <p class="sub">Every centre, every job role: what was targeted, what the client approved, and how far each one has actually got. One table, plus tiles you can open.</p>
+  <ol class="steps">
+    <li><b>The tiles, in the order they read.</b> <b>Total Target</b> — the approved target on every (centre &times; job role) row of the client sheet. <b>Approved Target</b> — the same target, counted only where that row's TC Status reads Approved. <b>Pending Target</b> — target on rows whose TC Status is still blank; nobody has refused these, nobody has approved them either. (<b>Not approved</b> appears only when the client has actually marked a row Unapproved, so the three always add up to Total.) Then <b>Mobilised</b> (put on a batch), <b>In training</b> (still studying) and <b>Passed</b> (a Pass assessment result) — those three are our records, and their percentages are of Approved, never of Total.</li>
+    <li><b>Click any tile to see the rows it is made of.</b> A panel opens listing every (centre &times; job role) row that contributes, with all seven figures side by side. The total under that panel is the same number that was on the tile — it is the same arithmetic, not a second query — so a figure you disagree with can always be traced to the rows that produced it. The panel has its own search and filters, and each centre name links to the centre.</li>
+    <li><b>"Measured &lt;time&gt;" at the top is not decoration.</b> The figures are counted when the page loads and never again. A tab left open overnight will keep showing last night's numbers, which is exactly how a Passed figure got reported as under-counting when it was simply older than the person reading it. Press <b>Refresh</b> to count again.</li>
+    <li><b>TC Status exists in two places, and only one of them is counted.</b> The client sheet can write TC Status on the <em>centre</em> and on each of the centre's <em>job-role rows</em>. Every figure in this report reads the job-role row. So a centre can read "Approved" while its own rows are still blank, and that target sits in Pending Target until the row itself is filled in. The Pending Target panel has a <b>Centre record</b> column beside <b>TC Status</b> precisely so you can see the two disagree; the blue notice above the table counts how many rows are in that state. Fix it on the centre (Locations &rarr; the centre &rarr; TC per job role) or in the sheet.</li>
+    <li><b>The blue notice also reports the sheet itself</b> — how many changes are waiting in the Sync inbox, whether any of them can move a figure on this page (many cannot: a TC password change touches nothing counted here), and what the last sync run said about itself, in its own words. If it came back Partial, some sheet rows were skipped entirely and are in no figure at all.</li>
+    <li><b>Download Excel</b> gives the same numbers as the screen, from the same computation. Its column headings are deliberately left as they were; the second tab, "where the numbers come from", maps each heading to the name shown on screen, states where the figure comes from, and records the moment it was counted.</li>
   </ol>
 </section>
 

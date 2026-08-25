@@ -2654,11 +2654,51 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
       !!rep.total && byRow === rep.total.target && byRole === rep.total.target,
       JSON.stringify({ byRow, byRole, grand: rep.total?.target ?? null }));
 
+    // ---- QA-1074: the tiles are clickable, and what opens has to BE the tile ----
+    // Umesh: "yeh total targets me main click karoon to woh mujhe 12,090 waali rows par le jaaye
+    // na?" The panel is fed by `detail` — one entry per LocationTarget row, filled inside the same
+    // loop that sums the cells — so the promise is that the panel's footer and the tile above it
+    // are the same arithmetic done once. This is that promise, as an assertion, for EVERY measure
+    // rather than for the one that happened to be checked by hand.
+    {
+      const keys = Object.keys(rep.labels ?? {});
+      const off = keys.filter((k) => (rep.detail ?? []).reduce((a, d) => a + (d[k] || 0), 0) !== rep.total?.[k]);
+      ok("QA-1074: sum(detail[k]) === total[k] for EVERY measure - a tile and the panel it opens cannot disagree",
+        keys.length === 7 && off.length === 0,
+        JSON.stringify({ keys: keys.length, mismatched: off.map((k) => ({ k, detail: (rep.detail ?? []).reduce((a, d) => a + (d[k] || 0), 0), total: rep.total?.[k] })) }));
+
+      // The fixture's own two rows, found in `detail` by (centre, job role). They were created one
+      // Approved and one blank a few lines above, so this pin also proves `row_status` is the ROW's
+      // status and not the centre's - the whole point of shipping both.
+      const mine = (rep.detail ?? []).filter((d) => String(d.location?._id) === String(rpLoc._id));
+      ok("QA-1074: detail carries one row per (centre x job role) target row, each with its OWN tc_status beside the centre's",
+        mine.length === 2
+        && mine.every((d) => typeof d.row_status === "string" && typeof d.centre_status === "string" && d.role === ROLE)
+        && mine.filter((d) => d.row_status === "Approved").length === 1
+        && mine.filter((d) => d.row_status === "").length === 1,
+        JSON.stringify(mine.map((d) => ({ role: d.role, code: d.program_code, target: d.target, row: d.row_status, centre: d.centre_status }))));
+
+      // QA-1074 - the vocabulary Umesh chose, shipped from the server so the tile, the table header
+      // and the Excel info tab cannot drift into three different words for one measure.
+      ok("QA-1074: the report names its own measures - Total Target / Approved Target / Pending Target",
+        rep.labels?.target?.label === "Total Target" && rep.labels?.approved?.label === "Approved Target"
+        && rep.labels?.unknown?.label === "Pending Target" && rep.labels?.unknown?.short === "Pending",
+        JSON.stringify(rep.labels ?? null));
+    }
+
     // Mobilised is every candidate for that centre x job role at any stage, off
     // Candidate.location + Candidate.program. NOT interested_programs - measured, those carry
     // data on 2 of 252 records, so a report built on them reads near-empty and gets believed.
     if (rpA?._id) await req("POST", "/api/candidates", { name: "Report Cand " + stamp, phone: "92222" + stamp.slice(0, 5), location: rpLoc._id, program: rpA._id }, 201);
     const rep2 = (await req("GET", "/api/reports/rollup", undefined, 200)).data;
+    // QA-1074 - the stamp that ends the "Passed is under-counting" class of report. It was measured
+    // that /reports drops none of the 53 Pass results; 27 of them were simply entered after the tab
+    // in the screenshot had loaded, and the screen had no way to say so. A timestamp that could
+    // never differ between two reads would be decoration - so the pin is that it MOVES, not merely
+    // that it is present (QA-212). Several API calls separate these two reads.
+    ok("QA-1074: every rollup says when it was counted, and a later read says a later time",
+      !!rep.measured_at && !!rep2.measured_at && Date.parse(rep2.measured_at) > Date.parse(rep.measured_at),
+      JSON.stringify({ first: rep.measured_at, second: rep2.measured_at }));
     const rpRow2 = (rep2.rows ?? []).find((r) => String(r.location._id) === String(rpLoc._id));
     // QA-556 (-177) - THIS PIN'S RULE CHANGED, on Umesh's instruction, and the old assertion is
     // rewritten rather than deleted so the change is visible in the diff. It used to read
