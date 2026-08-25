@@ -636,8 +636,13 @@ console.log("\n--- -155 (QA-414 S1 / 415 / 424 / 425 / 426): the portal ID lands
     file, location: loc._id, program: prog._id,
     mapping: JSON.stringify({ "Student Name": "name", "Mobile": "phone", "Candidate ID": "sidh_link_sent_at" }),
   }, 200);
-  ok("-155 (QA-426): a mapped-but-unhandled destination is NAMED on the preview",
-    (prev2.data.unhandled_fields ?? []).includes("sidh_link_sent_at"), JSON.stringify(prev2.data.unhandled_fields));
+  // QA-1233 (checker, qa-1191 cycle 1): this asserted MEMBERSHIP, so a field wrongly named as
+  // unhandled rode along free - the wall was 3907/0 green with batch_interest sitting in this list
+  // claiming the importer discards it. A report lane is only honest if it names the unhandled fields
+  // and NO others, so the assertion is now the exact set.
+  ok("-155 (QA-426): the preview names the mapped-but-unhandled destination - and NOTHING ELSE (a false name here is a lie about what the importer discards)",
+    JSON.stringify([...(prev2.data.unhandled_fields ?? [])].sort()) === JSON.stringify(["sidh_link_sent_at"]),
+    JSON.stringify(prev2.data.unhandled_fields));
 
   // Umesh ("blank ko accept hi kyun kar raha hai - it should ask"): a mapped column whose cells
   // are EMPTY is reported per column - never blocked (a fresh roster legitimately has no CANs),

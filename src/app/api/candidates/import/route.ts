@@ -30,7 +30,13 @@ const TEXT_IMPORT_FIELDS = new Set(
 const HANDLED_IMPORT_FIELDS = new Set<string>([
   ...TEXT_IMPORT_FIELDS,
   "dob", "last_training_date",          // parsed by parseSheetDate
-  "education", "sidh_status",           // coerced against their enum
+  // QA-1233 (checker, qa-1191 cycle 1): batch_interest belongs HERE the moment it left
+  // TEXT_IMPORT_FIELDS, and cycle 1 took it out of one set without adding it to the other. The cost
+  // was precise and backwards: every import that mapped the interest column started reporting
+  // `unhandled_fields: ["batch_interest"]` - the QA-426/REQ-379 lane announcing "accepted and
+  // discarded" about the ONE column this unit exists to handle, while education beside it returned
+  // []. A fix that makes the honesty lane lie about itself.
+  "education", "sidh_status", "batch_interest",   // coerced against their enum
   "interested_programs", "interested_locations", // resolved by name
 ]);
 
@@ -140,8 +146,14 @@ export const POST = apiHandler(async (req: NextRequest) => {
           // sidh_candidate_id is only the one where it now bites.
           const v = String(r[col] ?? "").trim();
           if (v) c[field] = v;
-          else blankByField[field] = (blankByField[field] ?? 0) + 1;
         }
+        // QA-1234 (checker, qa-1191 cycle 1): counted off the MAPPING, for every mapped column,
+        // before any per-field branching. It used to live inside the text branch above, so the
+        // moment batch_interest moved out of that branch its all-blank column stopped being
+        // reported - silently, while the comment on the screen block still promised "per column,
+        // so a phone column that comes back all-blank is caught by the same line". The same hole
+        // was always there for dob, education and sidh_status; this closes it for all of them.
+        if (!String(r[col] ?? "").trim()) blankByField[field] = (blankByField[field] ?? 0) + 1;
         if (["dob", "last_training_date"].includes(field) && r[col] !== "" && r[col] != null) {
           // QA-097/098: DD-MM-YYYY (the template's own format), ISO and Excel serials all
           // parse; anything else is named by row — new Date() read "05-06-2001" as May 5th
@@ -366,9 +378,14 @@ export const POST = apiHandler(async (req: NextRequest) => {
       blank_by_field: blankByField,
       row_count: rows.length,
       sidh_status_unmatched: [...new Set(sidhStatusUnmatched)].slice(0, 25),
-      // QA-1191: on the PREVIEW, because the preview answering 200 while the confirm died with 400 was
-      // the cruellest half of this defect - the one screen built to report unreadable values was the
-      // one screen that said nothing.
+      // QA-1191: on the PREVIEW, because the preview answering 200 while the confirm died with 400
+      // was the cruellest half of this defect - the one screen built to report unreadable values was
+      // the one screen that said nothing.
+      // QA-1235 (checker, cycle 1): and cycle 1 shipped this key into a response NO SCREEN RENDERED,
+      // which is the same defect one layer up - the checker drove a real browser and watched the
+      // drawer print the education warning and stay silent about this one. The import drawer in
+      // candidates/page.tsx now renders it beside education_unmatched. A field a route reports and a
+      // screen ignores is not a report.
       batch_interest_unmatched: [...new Set(batchInterestUnmatched)].slice(0, 25),
       interest_unmatched: [...new Set(interestUnmatched)].slice(0, 25),
       date_unparseable: dateUnparseable.slice(0, 25), date_unparseable_count: dateUnparseable.length,

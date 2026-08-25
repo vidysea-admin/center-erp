@@ -1368,6 +1368,20 @@ function CandidatesInner() {
                   valid values are Below 10th · 10th Pass · 12th Pass · Graduate · Post Graduate.
                 </div>
               )}
+              {/* QA-1235 (checker on qa-1191 cycle 1). The route reported these and NOTHING SHOWED
+                  THEM — proved in a browser, not by reading the diff: the drawer printed the
+                  education warning above and said nothing about batch interest. The whole point of
+                  qa-1191 was that the preview stayed silent while the confirm died; reporting into a
+                  key no screen renders reproduces that silence one layer up.
+                  The wording names what happens NEXT, because "not recognised" alone leaves the
+                  operator guessing whether the row imported: it did, as the current intake. */}
+              {importState.preview?.batch_interest_unmatched?.length > 0 && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  Batch interest not recognised (left as the current batch, never guessed): {importState.preview.batch_interest_unmatched.join(" · ")} —
+                  write “The current batch” or “Upcoming batch”. Those rows still import; they are
+                  simply treated as available for the current intake.
+                </div>
+              )}
               {/* -154 (Umesh: "blank ko accept hi kyun kar raha hai, it should ask"). A blank
                   portal ID is legitimate - a candidate exists here before the government registers
                   them - so this never blocks. But a column the operator MAPPED and left empty is

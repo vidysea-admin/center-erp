@@ -921,6 +921,57 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
         ok("QA-1191: ...and it is NOT guessed - the row still imports and falls back to Current, the direction that cannot silently block anyone",
           junk.confirm.status === 201 && junk.rows.length === 3 && junk.by(" B") === "Current",
           `status=${junk.confirm.status} landed=${junk.rows.length}/3 stored=${junk.by(" B")}`);
+
+        // ---- cycle 2: the three the checker charged, each pinned so it cannot come back ----
+
+        // QA-1233 (S2). Cycle 1 took batch_interest OUT of TEXT_IMPORT_FIELDS and never added it to
+        // HANDLED_IMPORT_FIELDS, so every import mapping the interest column reported
+        // unhandled_fields:["batch_interest"] - the QA-426/REQ-379 honesty lane announcing "accepted
+        // and discarded" about the one column this unit exists to handle. Asserted as ABSENCE from
+        // the set, because that is the shape the defect had: a false extra member.
+        ok("QA-1233: mapping the interest column does NOT make the importer call it unhandled - the report lane must not lie about the field this unit taught it",
+          !((up.preview.data?.unhandled_fields ?? []).includes("batch_interest"))
+            && !((up.confirm.data?.unhandled_fields ?? []).includes("batch_interest")),
+          `preview=${JSON.stringify(up.preview.data?.unhandled_fields ?? [])} confirm=${JSON.stringify(up.confirm.data?.unhandled_fields ?? [])}`);
+
+        // QA-1234 (S3). Blank counting lived INSIDE the text branch, so the moment batch_interest
+        // left that branch an all-blank interest column stopped being reported - while the screen
+        // block above it still promised "per column ... caught by the same line". An all-blank
+        // MAPPED column is what a mis-aligned sheet looks like, and QA-414 is what that costs.
+        {
+          const nm = `BIBLANK${stamp}`;
+          const buf = sheet([
+            { Name: nm + " A", Phone: ph("9884"), Interest: "" },
+            { Name: nm + " B", Phone: ph("9885"), Interest: "" },
+          ]);
+          const fd = new FormData();
+          fd.append("file", new Blob([buf]), "bi.xlsx");
+          fd.append("location", String(loc._id));
+          fd.append("program", String(prog._id));
+          fd.append("mapping", JSON.stringify({ Name: "name", Phone: "phone", Interest: "batch_interest" }));
+          fd.append("accept_unknown", "1");
+          const r = await fetch(BASE + "/api/candidates/import", { method: "POST", headers: { cookie: admin }, body: fd });
+          const d = await r.json().catch(() => ({}));
+          ok("QA-1234: an ALL-BLANK mapped interest column is reported in blank_by_field - a mapped column that came back empty is what a mis-aligned sheet looks like",
+            (d?.blank_by_field?.batch_interest ?? 0) === 2 && d?.row_count === 2,
+            JSON.stringify({ blank_by_field: d?.blank_by_field, row_count: d?.row_count }));
+        }
+
+        // QA-1235 (S2). Cycle 1 reported batch_interest_unmatched into a response key that NO SCREEN
+        // RENDERED - the checker drove a real browser and watched the drawer print the education
+        // warning and stay silent about this one. That reproduces qa-1191's own defect one layer up:
+        // the preview saying nothing while something was wrong. Source-level here because this wall
+        // has no browser; the rendered proof is in the manifest.
+        // Matched on the RENDERED expression, not the bare key - a bare-key search would also match
+        // the comment that explains the fix, which is a trap this suite has already sprung once.
+        {
+          const { readFileSync: rf } = await import("node:fs");
+          const page = rf("src/app/(app)/candidates/page.tsx", "utf8");
+          ok("QA-1235: the import drawer actually RENDERS batch_interest_unmatched - a key the route reports and no screen shows is not a report",
+            page.includes("importState.preview?.batch_interest_unmatched?.length > 0")
+              && page.includes("importState.preview.batch_interest_unmatched.join"),
+            page.includes("batch_interest_unmatched") ? "key present but not rendered" : "key absent from the screen");
+        }
       }
     }
   } finally { await mc.close(); }

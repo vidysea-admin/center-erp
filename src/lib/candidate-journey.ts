@@ -66,10 +66,17 @@ export function isFutureInterest(r: JourneyInput): boolean {
 // enrollable exactly as before. So anything not spelled out below is REPORTED, the posture the
 // route's own comment already states for sidh_status: "an unrecognised value is REPORTED, never
 // guessed at".
+// QA-1236 (checker, qa-1191 cycle 1): DERIVED from FUTURE_INTEREST_TAG, not re-spelled beside it.
+// Cycle 1 hand-typed "upcoming batch" one line under the constant that already holds those exact
+// words - one day after a client renamed them. The next rename would move the tag and leave this
+// list behind, and the failure would be silent: a sheet saying what the screen says would stop
+// being understood, with nothing red anywhere.
+const FUT = FUTURE_INTEREST_TAG.toLowerCase();
 const BATCH_INTEREST_WORDS: Record<string, "Current" | "Future"> = {
   "current": "Current", "current batch": "Current", "the current batch": "Current",
-  "future": "Future", "upcoming": "Future", "upcoming batch": "Future",
-  "the upcoming batch": "Future", "future batch": "Future", "a future batch": "Future",
+  "future": "Future", "upcoming": "Future", "future batch": "Future", "a future batch": "Future",
+  [FUT]: "Future",          // whatever the tag says today - "upcoming batch"
+  [`the ${FUT}`]: "Future",
 };
 
 /** Sheet cell -> stored value, or null when it is not one we recognise (caller REPORTS it). */
