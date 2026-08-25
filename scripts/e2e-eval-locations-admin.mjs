@@ -431,7 +431,21 @@ ok("[best] each row names its blockers + next action + trainer/candidate counts"
   const mid = (await fetchRow())?.trainers_nominated_total ?? 0;
   ok("QA-1307 [precondition] a PLANNING batch does count, so the next assertion is not vacuous",
     mid === before + 1, JSON.stringify({ before, mid }));
-  await req(admin, "PATCH", `/api/batches/${fBatch._id}`, { status: "Completed" }, 200).catch(() => {});
+  // A batch's status is NOT a PATCH field - it moves through /transition. My first version did
+  //     await req(..., "PATCH", `/api/batches/${id}`, { status: "Completed" }, 200).catch(() => {})
+  // and that `.catch` SWALLOWED the refusal: the batch stayed in Planning, the count correctly did
+  // not drop, and the assertion below failed pointing at the PRODUCT. The test hid its own broken
+  // precondition and then blamed the code. Every step is asserted now, and the state is READ BACK -
+  // if the batch never reaches Completed, that is what goes red, by name.
+  const fMem = (await req(admin, "POST", `/api/batches/${fBatch._id}/members`, { candidate: fresh[0]._id }, 201)).data.item;
+  await req(admin, "PATCH", `/api/members/${fMem._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+  await req(admin, "POST", `/api/batches/${fBatch._id}/transition`, { target: "Ready" }, 200);
+  await req(admin, "POST", `/api/batches/${fBatch._id}/transition`, { target: "Active", actual_start: today() }, 200);
+  await req(admin, "POST", `/api/batches/${fBatch._id}/transition`, { target: "Closing" }, 200);
+  await req(admin, "POST", `/api/batches/${fBatch._id}/transition`, { target: "Completed", actual_end: today() }, 200);
+  const fState = (await req(admin, "GET", `/api/batches/${fBatch._id}`, undefined, 200)).data.item;
+  ok("QA-1307 [precondition] the batch really reached Completed (else the assertion below is about nothing)",
+    fState?.status === "Completed", JSON.stringify({ status: fState?.status }));
   const after = (await fetchRow())?.trainers_nominated_total ?? 0;
   ok("QA-1307: once that batch is FINISHED the trainer stops counting as this centre's",
     after === before, JSON.stringify({ before, mid, after }));
@@ -448,11 +462,25 @@ ok("[best] each row names its blockers + next action + trainer/candidate counts"
   // PUT is an upsert keyed on {location, program} returning `{item}` at 200. The .catch() hid the
   // throw but not the failure, and with no target created the two QA-1306 assertions below and
   // QA-1307 all fell over behind it - four reds from one wrong verb.
-  await req(admin, "PUT", `/api/locations/${qLoc._id}/targets`, { program: qProg._id, trainers_required: 1, approved_target: 30, tc_status: "Approved" }, 200).catch(() => {});
+  // The `.catch(() => {})` that used to be on this line is GONE, and that is the point. The wall
+  // reported `POST /api/locations/.../targets -> 201 (got 405)`: this route exposes GET/PUT/PATCH and
+  // refuses POST. No target row existed, so there was no readiness row, so from-shortfall had nothing
+  // to look at and answered {created:0, skipped:[]} - which reads EXACTLY like the defect this test
+  // was written to catch. A swallowed setup failure does not make a test pass; it makes it accuse the
+  // product of the test's own mistake.
+  await req(admin, "PUT", `/api/locations/${qLoc._id}/targets`, { program: qProg._id, trainers_required: 1, approved_target: 30, tc_status: "Approved" }, 200);
   const qRoom = (await req(admin, "POST", `/api/locations/${qLoc._id}/rooms`, { name: "Q Room " + s, type: "Classroom", capacity: 25 }, 201)).data.item;
   const qTr = (await req(admin, "POST", "/api/trainers", { name: "TEST-Q BatchOnly " + s, phone: phone("93"), skills: ["QSkill" + s], pipeline_status: "Fresh Lead" }, 201)).data.item;
   await req(admin, "POST", "/api/batches", { location: qLoc._id, program: qProg._id, trainer: qTr._id, room: qRoom._id, planned_start: today(), target_size: 1 }, 201);
-  const res = (await req(admin, "POST", "/api/trainer-requests/from-shortfall", { location: qLoc._id }, 200)).data;
+  // 201, not 200 - and the reason this line was wrong is the SAME disease, a third time in this file.
+  // The route has answered `created.length ? 201 : 200` since F-A9 (5536491); that split is older
+  // than this test. While my fixture was broken (POST to a route that only takes PUT), nothing was
+  // ever created, so `created.length` was always 0, the route always said 200, and this assertion
+  // passed - FOR THE WRONG REASON. Fixing the setup is what exposes an expectation that was never
+  // valid. Asserting 201 is also the stronger claim: it is the route's own way of saying it created
+  // something, so the status and the body now have to agree.
+  const shortfall = await req(admin, "POST", "/api/trainer-requests/from-shortfall", { location: qLoc._id }, 201);
+  const res = shortfall.data;
   const createdN = res.summary?.created ?? 0;
   const skippedN = (res.skipped ?? []).length;
   ok("QA-1306: a centre whose only trainer is batch-tied and NOT nominated is still unstaffed - the request gets raised",
