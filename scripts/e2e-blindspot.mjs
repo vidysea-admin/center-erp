@@ -404,8 +404,15 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
     deadMeta.batch?.full === false, JSON.stringify({ full: deadMeta.batch?.full }));
 
   const ph1239 = "7743" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0");
+  // Distinct x-forwarded-for per registrant. The public register POST is limited to 10 per client
+  // per 10 minutes (audit auth S2-14), keyed on the RIGHT-most XFF hop, so every unattributed test
+  // request in this suite shares the single "local" bucket - and these two fixtures were the ones
+  // that tipped it over, so the LAST pin failed with 429 rather than on its own subject.
+  // This is not a way around the guard: the scenario IS two different members of the public opening
+  // two different links, so giving them two client identities is more faithful than sharing one.
+  // The limiter itself is untouched and still proves itself elsewhere in the wall.
   const sub = await fetch(BASE + `/api/public/register/${cTok.data.item.token}`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
+    method: "POST", headers: { "Content-Type": "application/json", "x-forwarded-for": "203.0.113.11" },
     body: JSON.stringify({ name: "Dead Link " + stamp, phone: ph1239, email: "dead" + stamp + "@test.local" }) });
   const subBody = await sub.json();
   ok("QA-1239: the registration is still KEPT - a cancelled batch is the centre problem, never the student one",
@@ -424,7 +431,7 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
     JSON.stringify({ batch: liveBatch?._id, s: okTok.status }));
   const ph1239b = "7744" + String(Math.floor(Math.random() * 1e6)).padStart(6, "0");
   const good = await fetch(BASE + `/api/public/register/${okTok.data.item.token}`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
+    method: "POST", headers: { "Content-Type": "application/json", "x-forwarded-for": "203.0.113.12" },
     body: JSON.stringify({ name: "Live Link " + stamp, phone: ph1239b, email: "live" + stamp + "@test.local" }) });
   const goodBody = await good.json();
   ok("QA-1239: a registration that DID join a live batch still gets the joining message, not the refusal one",
@@ -1038,10 +1045,40 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
         {
           const { readFileSync: rf } = await import("node:fs");
           const page = rf("src/app/(app)/candidates/page.tsx", "utf8");
-          ok("QA-1235: the import drawer actually RENDERS batch_interest_unmatched - a key the route reports and no screen shows is not a report",
-            page.includes("importState.preview?.batch_interest_unmatched?.length > 0")
-              && page.includes("importState.preview.batch_interest_unmatched.join"),
-            page.includes("batch_interest_unmatched") ? "key present but not rendered" : "key absent from the screen");
+          // QA-1268 (checker, cycle 2): the two strings below both survive INSIDE A COMMENT, so
+          // deleting the render entirely and leaving the explanatory comment kept this green - the
+          // very trap its own comment claimed to dodge, and the third time this suite has met it.
+          // Fixed by measuring the file with its comments STRIPPED: a claim about what renders must
+          // be made against what renders.
+          // Comments are stripped with plain string ops, deliberately: the first attempt used a
+          // regex whose escaping did not survive being written to disk, and a pin that cannot even
+          // be parsed is worth less than no pin.
+          const isComment = (t) => t.startsWith("//") || t.startsWith("*") || t.startsWith("/*") || t.startsWith("{/*");
+          const code = page.split(String.fromCharCode(10)).filter((l) => !isComment(l.trim())).join(String.fromCharCode(10));
+          ok("QA-1235: the import drawer actually RENDERS batch_interest_unmatched - measured with comments stripped, because a comment about a render is not a render",
+            code.includes("importState.preview?.batch_interest_unmatched?.length > 0")
+              && code.includes("importState.preview.batch_interest_unmatched.join"),
+            code.includes("batch_interest_unmatched") ? "key present in code but not rendered" : "absent from the screen's CODE (comments do not count)");
+
+          // QA-1267 (checker, cycle 2): an "Ignore"d column must produce no blank_by_field entry at
+          // all. Driven through the API the way the drawer posts it - destination "" - because that
+          // is the state the screen actually creates.
+          {
+            const nm = `BIIGN${stamp}`;
+            const buf = sheet([{ Name: nm + " A", Phone: ph("9886"), Junk: "" }, { Name: nm + " B", Phone: ph("9887"), Junk: "" }]);
+            const fd = new FormData();
+            fd.append("file", new Blob([buf]), "ign.xlsx");
+            fd.append("location", String(loc._id));
+            fd.append("program", String(prog._id));
+            fd.append("mapping", JSON.stringify({ Name: "name", Phone: "phone", Junk: "" }));
+            fd.append("accept_unknown", "1");
+            const r = await fetch(BASE + "/api/candidates/import", { method: "POST", headers: { cookie: admin }, body: fd });
+            const d = await r.json().catch(() => ({}));
+            const keys = Object.keys(d?.blank_by_field ?? {});
+            ok("QA-1267: a column set back to Ignore produces NO nameless blank warning - the preview must never say \"the column mapped to .\"",
+              !keys.includes("") && !keys.some((k) => !String(k).trim()),
+              JSON.stringify(d?.blank_by_field ?? null));
+          }
         }
       }
     }

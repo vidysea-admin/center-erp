@@ -153,7 +153,14 @@ export const POST = apiHandler(async (req: NextRequest) => {
         // reported - silently, while the comment on the screen block still promised "per column,
         // so a phone column that comes back all-blank is caught by the same line". The same hole
         // was always there for dob, education and sidh_status; this closes it for all of them.
-        if (!String(r[col] ?? "").trim()) blankByField[field] = (blankByField[field] ?? 0) + 1;
+        // QA-1267 (checker, cycle 2): `field` can be the EMPTY STRING - that is exactly what the
+        // drawer's own "Ignore" option writes (page.tsx:1193 posts e.target.value, and :519
+        // remembers it), so an operator who maps a column and then sets it back to Ignore got a
+        // preview warning in the amber "probably mis-mapped" styling reading "2 of 2 rows have
+        // nothing in the column mapped to ." - naming no column at all. Which is this cycle's own
+        // charge repeated one line further down: a report lane saying something untrue about a
+        // column. Guard the key, not just the value.
+        if (field && !String(r[col] ?? "").trim()) blankByField[field] = (blankByField[field] ?? 0) + 1;
         if (["dob", "last_training_date"].includes(field) && r[col] !== "" && r[col] != null) {
           // QA-097/098: DD-MM-YYYY (the template's own format), ISO and Excel serials all
           // parse; anything else is named by row — new Date() read "05-06-2001" as May 5th
