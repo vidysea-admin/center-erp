@@ -368,7 +368,7 @@ function ReportsInner() {
           number here (19 TC passwords and one centre-level tc_status). Saying "20 pending changes
           affect this report" would have been false on day one, so the screen is allowed to say
           zero, out loud. */}
-      {g && (g.open_total > 0 || g.verdict_not_on_row?.rows > 0 || (g.last_status && g.last_status !== "OK")) && (
+      {g && (g.open_total > 0 || g.verdict_not_on_row?.rows > 0 || g.target_recon || (g.last_status && g.last_status !== "OK")) && (
         <div className="space-y-1.5 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs text-blue-900">
           {g.open_affecting > 0 ? (
             <div>
@@ -406,6 +406,47 @@ function ReportsInner() {
               )}{" "}
               The client&apos;s verdict has not reached the field this report counts, so that target sits in {L.unknown?.label ?? "Pending Target"}.{" "}
               <button type="button" className="font-medium underline" onClick={() => openDrill("unknown")}>See which rows →</button>
+            </div>
+          )}
+          {/* QA-1263 (client call 25/08): "sheet me isko boliye 12398, yaha pe 12,090 hai, kis aadhar
+              pe hai? Aur sath me yeh bhi match kara lijiyega total." Until now nothing in the product
+              subtracted the client's own total from this one, so the question had no answer on any
+              screen. The books are kept by the SYNC, at the moment each row is read or refused, and
+              printed here verbatim — deriving them from the prose above would be QA-805 again.
+              `unexplained` is always shown when it is non-zero, and that is the honest half: it is
+              whatever the named reasons do NOT account for, so this block can never claim to have
+              explained more of the gap than it has. */}
+          {g.target_recon && (
+            <div>
+              <b>The client sheet totals {g.target_recon.sheet_total.toLocaleString("en-IN")}</b> across{" "}
+              {g.target_recon.sheet_rows.toLocaleString("en-IN")} rows;{" "}
+              <b>this report counts {g.target_recon.erp_total.toLocaleString("en-IN")}</b>.
+              {g.target_recon.sheet_total !== g.target_recon.erp_total && (
+                <> The difference is <b>{Math.abs(g.target_recon.sheet_total - g.target_recon.erp_total).toLocaleString("en-IN")}</b>.</>
+              )}
+              {g.target_recon.skipped.length > 0 && (
+                <ul className="mt-1 ml-4 list-disc">
+                  {g.target_recon.skipped.map((s: any) => (
+                    <li key={s.reason}>
+                      <b>{s.target.toLocaleString("en-IN")}</b> of target on {s.rows} row{s.rows === 1 ? "" : "s"} — {s.reason}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {g.target_recon.unexplained !== 0 && (
+                <div className="mt-1">
+                  <b>{Math.abs(g.target_recon.unexplained).toLocaleString("en-IN")} is not accounted for by any reason above.</b>{" "}
+                  The sheet read cannot explain it, so it is shown rather than hidden inside another figure.
+                </div>
+              )}
+              {g.target_recon.landed_total !== g.target_recon.erp_total && (
+                <div className="mt-1">
+                  {g.target_recon.landed_total.toLocaleString("en-IN")} of target reached the ERP on the last read.
+                  Where that differs from the {g.target_recon.erp_total.toLocaleString("en-IN")} counted here, the change
+                  is waiting in the sync queue — applying it moves this report.
+                </div>
+              )}
+              <div className="mt-1 text-[11px] text-blue-700">Counted while the sheet was read, {fmtDT(g.target_recon.measured_at)}.</div>
             </div>
           )}
           {g.last_status && g.last_status !== "OK" && (

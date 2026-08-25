@@ -820,6 +820,11 @@ const SyncSourceSchema = new Schema({
   // should not keep raising failures, but its history is still worth keeping.
   active: { type: Boolean, default: true },
   field_mappings: { type: Schema.Types.Mixed, default: {} }, // external_column -> erp_field (mapped mode)
+  // QA-1263 (2026-08-25): what the last run's books said - the sheet's own target total, what
+  // landed, what each skip reason carried away, and the unexplained remainder. Mixed rather than a
+  // sub-schema because the SHAPE is owned by sync.ts (`TargetRecon`) and a second declaration here
+  // is the ARCHITECTURE section 3 disease; the reader that matters (reportSyncGap) imports that type.
+  last_target_recon: { type: Schema.Types.Mixed, default: null },
 }, { timestamps: true });
 
 // ---------- SheetChange ----------

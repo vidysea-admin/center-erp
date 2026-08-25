@@ -73,8 +73,15 @@ export function parseCsv(text: string): string[][] {
 // tc_status + tc_id + tc_password added 2026-08-13: the government's verdict AND the portal
 // credentials change in the client's sheet first, and Umesh's call is that these are the initial
 // credentials we are given anyway ("baad ke to hamare paas hain hi nahi"). The values are still
-// masked on the review screens for anyone without locations.manage — see SENSITIVE_SYNC_COLUMNS
-// in the sheet-changes route; only the mapping itself is now allowed.
+// masked on the review screens for everyone who is not an Admin — see `maskSheetChange` below;
+// only the mapping itself is now allowed.
+// QA-1253 cycle 3: this sentence used to say "anyone without locations.manage — see
+// SENSITIVE_SYNC_COLUMNS in the sheet-changes route", and BOTH halves were wrong. There is no
+// `SENSITIVE_SYNC_COLUMNS` anywhere in this repo, and `locations.manage` is the exact gate QA-088
+// removed for being too broad (the saved matrix grants it to Operations and to every SPOC) and
+// QA-1062 then removed here too. A comment citing a constant that does not exist, guarding a rule
+// that was reversed, is ARCHITECTURE.md section 3.2c's disease in its purest form: it tells the
+// next reader the masking question is settled somewhere they will never find.
 const LOCATION_FIELDS = new Set([
   "external_id", "name", "city", "state", "address",
   "approval_status", "spoc_name", "spoc_phone", "principal_name", "principal_phone",
@@ -96,6 +103,38 @@ const LOCATION_FIELDS = new Set([
 // One Set, read by BOTH the diff loop and the apply switch, because two lists of "what is a row
 // field" is exactly the ARCHITECTURE section 3 disease.
 const TARGET_ROW_FIELDS = new Set(["approved_target", "tc_status", "tc_id"]);
+
+// QA-1263 (client call 2026-08-25). The client's question had no answer anywhere in the product:
+//   "sheet me isko boliye 12398, yaha pe 12,090 hai, kis aadhar pe hai? Aur sath me yeh bhi match
+//    kara lijiyega total." ... "Kya hum yeh bata payenge ki inme se kaun sa remaining hai?"
+// Reports counts the ERP's COPY of the sheet, not the sheet, and nothing subtracted the two.
+//
+// THE ONE PROPERTY THAT MAKES THIS HONEST: the books always balance. `unexplained` is whatever the
+// named reasons do not account for, so the screen can never claim to have explained more of the gap
+// than it actually has. If a cause is missed, it shows up there by construction instead of silently
+// shrinking the difference — which is the failure this whole feature exists to end.
+export type TargetRecon = {
+  sheet_total: number; sheet_rows: number;
+  landed_total: number; landed_rows: number;
+  skipped: { reason: string; rows: number; target: number }[];
+  unexplained: number;
+  measured_at: string;
+};
+export function targetRecon(r: {
+  sheet_total: number; sheet_rows: number; landed_total: number; landed_rows: number;
+  skipped: Record<string, { rows: number; target: number }>;
+}): TargetRecon {
+  const skipped = Object.entries(r.skipped)
+    .map(([reason, v]) => ({ reason, rows: v.rows, target: v.target }))
+    .sort((a, b) => b.target - a.target || b.rows - a.rows);
+  return {
+    sheet_total: r.sheet_total, sheet_rows: r.sheet_rows,
+    landed_total: r.landed_total, landed_rows: r.landed_rows,
+    skipped,
+    unexplained: r.sheet_total - r.landed_total - skipped.reduce((a, s) => a + s.target, 0),
+    measured_at: new Date().toISOString(),
+  };
+}
 export function targetRowField(field: string): { base: string; code: string } | null {
   const i = field.indexOf(":");
   if (i < 0) return null;
@@ -389,6 +428,67 @@ export function canRevert(c: { status?: string; action_taken?: string | null; fi
   };
 }
 
+// QA-1253 (S1, checker on sec-1 cycle 2, 2026-08-25): ONE masker for a SheetChange, because three
+// private ones had already been written and each re-decided, per route, WHICH PROPERTIES HOLD THE
+// VALUE. Both of the previous two spread the whole document and rewrote `old_value`/`new_value` —
+// and the document carries the credential in a THIRD place: `impact_snapshot.{apply,revert}`, which
+// tab-mapping.ts:276 fills with the RESOLVED values (which is exactly why revert/route.ts reads
+// `snap.revert` to know what to restore). So a non-Admin holding `sheet.approve` read bullets in the
+// two masked fields and the live portal password in the object beside them — through the list route
+// cycle 1 gated, and again in the reply to the revert button cycle 2 hardened.
+//
+// The lesson is not "we miscounted properties" any more than cycle 1's was "we miscounted doors".
+// It is that a per-route spread makes the count somebody's memory. This function is the count, once.
+// ARCHITECTURE.md section 3 exists for this exact codebase habit.
+export const SHEET_CHANGE_SECRET_FIELDS = new Set(["tc_password"]);
+
+export function isSecretSheetField(field?: string | null): boolean {
+  return SHEET_CHANGE_SECRET_FIELDS.has(String(field ?? ""));
+}
+
+// Rows written BEFORE 2026-08-25 embedded the restored value in the note (`Reverted to "<pw>" by
+// <email>`), and the fixed list route still serves those rows. The write side is fixed, so this
+// format is frozen and cannot drift — the one case where matching a pattern is safe rather than the
+// thing QA-536 warns about. It is a MITIGATION, not the repair: the authoritative fix is rewriting
+// the stored notes, that is a production write, and it is Umesh's to run (QA-1254).
+// What no mask can reach: a credential a human TYPED into a note in some other form. Said out loud
+// because "the note is masked" would otherwise read as a guarantee this cannot give.
+// The capture group is load-bearing: a note that reverted a field which was previously EMPTY reads
+// `Reverted to "" by …`, and blanking that to `"••••••"` would invent a credential where the row's
+// own evidence says there was none. "Absent stays absent" is the same rule `lib/audit.ts` states
+// for its own mask, and it is a fact worth keeping as itself.
+const LEGACY_REVERT_NOTE = /Reverted to "([^"]*)" by /g;
+
+/**
+ * The outgoing copy of a SheetChange, safe to hand to a caller who may not see credentials.
+ *
+ * Returns a NEW object and never touches the input — `revert/route.ts` restores the field from
+ * `impact_snapshot.revert`, so masking in place would put bullets into a centre's live password.
+ * That is the one way this helper could do real damage, so it is stated here and not just avoided.
+ */
+export function maskSheetChange<T extends Record<string, any>>(c: T, canSeeSecrets: boolean): T {
+  if (canSeeSecrets || !isSecretSheetField(c?.field_name)) return c;
+  // Deliberately byte-identical to the two masks this replaces (`c.old_value ? "••••••" : ""`), so
+  // collapsing three copies into one changes WHERE the decision lives and nothing about its answer.
+  const hide = (v: unknown) => (v ? "••••••" : "");
+  const snap = c.impact_snapshot;
+  return {
+    ...c,
+    old_value: hide(c.old_value),
+    new_value: hide(c.new_value),
+    // Only the two value-bearing keys: `row_label` and the counts runSync writes are what the
+    // drawer renders, and blanking them would break the screen to fix a leak they do not carry.
+    ...(snap && typeof snap === "object"
+      ? { impact_snapshot: { ...snap, ...("apply" in snap ? { apply: hide(snap.apply) } : {}), ...("revert" in snap ? { revert: hide(snap.revert) } : {}) } }
+      : {}),
+    // No `.test()` guard before this replace, and that is on purpose: `LEGACY_REVERT_NOTE` carries
+    // the /g flag, and `regex.test()` on a global regex ADVANCES `lastIndex`, so a test-then-replace
+    // pair is a stateful-regex bug waiting for the next reader to reorder it. `replace` returns the
+    // string unchanged when nothing matches, so the guard bought nothing and risked something.
+    ...(typeof c.note === "string" ? { note: c.note.replace(LEGACY_REVERT_NOTE, (m, v) => (v ? 'Reverted to "••••••" by ' : m)) } : {}),
+  } as T;
+}
+
 async function impactSnapshot(locationId: unknown) {
   const [batches, trainers, requests, candidates] = await Promise.all([
     Batch.countDocuments({ location: locationId, status: { $in: ACTIVE_BATCH_STATUSES } }),
@@ -544,16 +644,59 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
   // job-role rows. Nothing on such a row can be written anywhere, and the silence about it is what
   // let four of the five rows Umesh asked about disappear behind a clean run.
   const unreachable: string[] = [];
+  // QA-1261 (checker, from Umesh's 2026-08-25 client call): the FIFTH reason a run is not clean, and
+  // the only one that was completely silent. A row that physically carries every mapped column but
+  // whose TC ID CELL IS BLANK fell through a bare `continue` below into none of the four collectors
+  // above, so the run ended `last_status: "OK"` having dropped it. `truncated` does not catch it —
+  // that one only fires on a row SHORTER than the last mapped column. This is QA-666's defect one
+  // layer over: QA-666 closed "the TC ID names no centre" and left "there is no TC ID" silent.
+  const blankId: number[] = [];
+
+  // QA-1263: the client asked a question no screen could answer — "sheet me isko boliye 12398, yaha
+  // pe 12,090 hai, kis aadhar pe hai? Aur sath me yeh bhi match kara lijiyega total." The run
+  // already visits every row and already knows each row's target cell, so it can keep the books:
+  // what the SHEET totals, what actually LANDED, and what each skip reason carried away. Every
+  // figure below is accumulated from the same cell the write uses, never re-derived from a second
+  // read, so the reconciliation cannot drift from the sync it describes.
+  const targetCols = mappedCols.filter((c) => mappings[c] === "approved_target" || String(mappings[c]).startsWith("approved_target:"));
+  const rowTarget = (raw: string[]): number => {
+    let n = 0;
+    for (const c of targetCols) {
+      const v = Number(String(raw[colIdx.get(c)!] ?? "").trim().replace(/,/g, ""));
+      if (Number.isFinite(v)) n += v;
+    }
+    return n;
+  };
+  const recon = {
+    sheet_total: 0, sheet_rows: 0, landed_total: 0, landed_rows: 0,
+    skipped: {} as Record<string, { rows: number; target: number }>,
+  };
+  const skip = (reason: string, target: number) => {
+    const s = (recon.skipped[reason] ??= { rows: 0, target: 0 });
+    s.rows++; s.target += target;
+  };
 
   let created = 0;
   for (const [rowNo, raw] of rows.slice(1).entries()) {
+    // Counted BEFORE any skip, so `sheet_total` is the client's own column sum and not a figure
+    // that quietly shrinks by whatever this run could not read. That is the whole point of it.
+    const thisTarget = raw.length > maxMappedIdx ? rowTarget(raw) : 0;
+    const nonEmpty = raw.some((cell) => String(cell ?? "").trim());
+    if (nonEmpty) { recon.sheet_total += thisTarget; recon.sheet_rows++; }
+
     if (raw.length <= maxMappedIdx) {
       // A row that does not physically carry every mapped column is unreadable, not empty.
-      if (raw.some((cell) => String(cell ?? "").trim())) truncated.push(rowNo + 2); // 1-based, +header
+      if (nonEmpty) { truncated.push(rowNo + 2); skip("row was missing mapped columns", thisTarget); } // 1-based, +header
       continue;
     }
     const externalId = (raw[colIdx.get(idCol)!] ?? "").trim();
-    if (!externalId) continue;
+    if (!externalId) {
+      // QA-1261: was a bare `continue`. A blank identity is not an empty row — an empty row is
+      // already gone by the `nonEmpty` test above — so this is a row with real content that the
+      // sync cannot key, and it has to be as loud as the four reasons beside it.
+      if (nonEmpty) { blankId.push(rowNo + 2); skip("the TC ID cell is blank", thisTarget); }
+      continue;
+    }
     const loc = await Location.findOne({ external_id: externalId }).lean<any>();
     // QA-520 (-169): the sheet's row identity is its OWN TC ID, and a centre has SEVERAL - the
     // government registers each (centre x scheme x job role) separately and numbers each one
@@ -572,6 +715,7 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
     // question, and the same standard the -163 move door holds. Refuse the whole row and say so.
     if (anchorLocs.length > 1) {
       ambiguous.push(`${externalId} (${anchorLocs.length} different centres carry it)`);
+      skip("the TC ID is claimed by more than one centre", thisTarget); // QA-1263
       continue;
     }
     const anchorLoc = anchorLocs.length === 1 ? anchors[0].location : null;
@@ -593,6 +737,7 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
     const centre = loc ?? (anchorLoc ? await Location.findById(anchorLoc).lean<any>() : null);
     if (!centre) {
       unreachable.push(externalId);
+      skip("no centre carries that TC ID", thisTarget); // QA-1263
       continue;
     }
 
@@ -618,6 +763,15 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
         else unresolvedRoles.push(`${externalId} / "${roleText}"${codes.length > 1 ? ` (${codes.length} programmes match)` : " (no target row for that job role)"}`);
       }
     }
+
+    // QA-1263: the row's LAST chance to lose its target. An unresolved job role does not abandon the
+    // row — the centre-level fields still get written, which is why this is not a `continue` — but a
+    // BARE `approved_target` on a job_role-mapped source has nowhere to go, so the target itself is
+    // dropped a few lines below. Booked here, at the point the decision is actually made, rather
+    // than inferred afterwards from the message text (that is the QA-805 mistake).
+    const targetIsBare = targetCols.some((c) => !String(mappings[c]).includes(":"));
+    if (roleCol && !rowCode && targetIsBare) skip("the row's job role matched no target row", thisTarget);
+    else { recon.landed_total += thisTarget; recon.landed_rows++; }
 
     for (const col of mappedCols) {
       const field = mappings[col];
@@ -691,7 +845,8 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
       created++;
     }
   }
-  // FOUR reasons a run is not clean (QA-666 added the fourth), and each one used to be its own
+  // FIVE reasons a run is not clean (QA-666 added the fourth, QA-1261 the fifth), and each one used
+  // to be its own
   // early return, so a sheet with more than one fault reported only the first and the rest vanished
   // - on precisely the signal whose whole job is to say the run was not clean.
   //
@@ -723,14 +878,22 @@ export async function runSync(sourceId: string): Promise<{ created: number; stat
   if (truncated.length) {
     partialReasons.push(`${truncated.length} row(s) were missing one or more mapped columns and were skipped entirely (row ${truncated.slice(0, 10).join(", ")}${truncated.length > 10 ? ", …" : ""}).`);
   }
+  // QA-1261: the fifth, and the one that was completely silent. Same standard as the four above -
+  // a row the run could not even KEY is the loudest of these cases, not the quietest.
+  if (blankId.length) {
+    partialReasons.push(`${blankId.length} row(s) carry data but leave the TC ID cell blank, so they could not be matched to any centre and were skipped entirely (row ${blankId.slice(0, 10).join(", ")}${blankId.length > 10 ? ", …" : ""}). Fill the TC ID in the sheet, or remove the row.`);
+  }
   if (partialReasons.length) {
     src.last_status = "Partial";
     src.last_error = partialReasons.join(" ");
     src.last_synced_at = new Date();
+    src.last_target_recon = targetRecon(recon); // QA-1263
     await src.save();
     return { created, status: "Partial", error: src.last_error };
   }
   src.last_status = "OK"; src.last_error = undefined; src.last_synced_at = new Date();
+  src.last_target_recon = targetRecon(recon); // QA-1263 - written on the CLEAN path too: a run with
+  // nothing to report still has a total, and that total is what the client actually asked about.
   await src.save();
   return { created, status: "OK" };
 }

@@ -7,6 +7,7 @@ import {
 } from "@/models";
 import { audit, auditDiff } from "@/lib/audit";
 import { currentStageOf, isCertificateSettled } from "@/lib/candidate-journey";
+import type { TargetRecon } from "@/lib/sync"; // QA-1263: the shape is sync.ts's, declared once
 // QA-1198: re-exported so server callers may import the settled-certificate predicate from either
 // module — the same shape normalizeCan has (ARCHITECTURE 3.0), and the reason is the same: the
 // definition must live in the import-free module because a CLIENT screen reads it too.
@@ -1862,19 +1863,65 @@ export async function assertResultInScope(user: SessionUser, resultId: string) {
 }
 
 // ---------- Closure / Invoice (Rules 34–36) ----------
+
+// QA-1265: "is this incoming value the same fact that is already stored?" — the question the frozen
+// -batch filter below asks of every field. It exists because the two sides arrive in different
+// shapes: a date comes off Mongo as a Date and off a form as "2026-08-24", and `Date === string` is
+// false for values that are the same day. Comparing the CANONICAL form of each is the only way this
+// can be both correct and narrow.
+//
+// Narrow on purpose. `null`/`undefined`/`""` all mean "no value" on this record — a form that never
+// filled a date sends "" where Mongo holds null, and refusing that as a "change" would block a save
+// over a field nobody touched. Anything else falls through to a strict string comparison, so a real
+// edit is still a real edit and the freeze still bites.
+function sameStoredValue(incoming: unknown, stored: unknown): boolean {
+  const blank = (v: unknown) => v === null || v === undefined || v === "";
+  if (blank(incoming) && blank(stored)) return true;
+  if (blank(incoming) || blank(stored)) return false;
+  const canon = (v: unknown) => {
+    if (v instanceof Date) return v.toISOString();
+    if (typeof v === "string") {
+      // A date-only string and a stored Date are the same fact; anything unparseable stays itself.
+      const d = new Date(v);
+      if (!Number.isNaN(d.getTime()) && /^\d{4}-\d{2}-\d{2}/.test(v)) return d.toISOString();
+      return v;
+    }
+    return String(v);
+  };
+  return canon(incoming) === canon(stored);
+}
+
 export async function upsertClosureChecked(batchId: string, patch: Record<string, unknown>, userId: string) {
   const batch = await Batch.findById(batchId).lean<any>();
   if (!batch) throw new HttpError(404, "Batch not found");
   // DEC-6 (Umesh, 2026-08-13): once the batch is Completed the closure record is frozen.
   // The MONEY-FLOW flags stay writable — invoicing and the Rule 52 dues attestation happen
   // naturally AFTER completion (that is their whole purpose); the training facts stay locked.
-  const POST_COMPLETION_WRITABLE = new Set(["ready_for_invoice", "dues_settled", "dues_note", "dues_marked_by", "dues_marked_at"]);
+  // QA-1265 (client call 2026-08-25, decided by Umesh the same day): the two dates that can only be
+  // KNOWN after completion join the money flags, for the identical reason the comment above already
+  // gives. The client had distributed certificates on the Monday and had nowhere to record it:
+  //   "Certification completed. Yeh Monday ko humne certificate distribute kar diye ... ab jaise
+  //    main yeh dalna chahta hu distribution date kab ki thi, ispe portal pe upload hua ki nahi
+  //    hua ... toh ab kaise dalu? Yeh add hi nahi ho raha hai."
+  // This is an AMENDMENT to DEC-6 and it is deliberately narrow: certificate_distribution_date and
+  // sidh_uploaded_on only. assessment_date, mock_test_date, result_expected_date and
+  // certification_date stay locked, because those are the training facts DEC-6 exists to freeze.
+  const POST_COMPLETION_WRITABLE = new Set(["ready_for_invoice", "dues_settled", "dues_note", "dues_marked_by", "dues_marked_at",
+    "certificate_distribution_date", "sidh_uploaded_on"]);
   if (["Completed", "Cancelled"].includes(batch.status)) {
     // -112 (QA-219): a hand tick that merely re-states what derivation already wrote
     // (assessment/certification Completed) is a no-op, not a rewrite of a frozen batch.
-    const current = await Closure.findOne({ batch: batchId }).select("assessment_status certification_status").lean<any>();
+    //
+    // QA-1265 GENERALISES THAT SENTENCE to every field, and it has to. The Closure form's Save
+    // builds its patch from the whole loaded form (`closureDatePatch`), so the moment ONE writable
+    // date is editable on a Completed batch the request also carries the four frozen ones at their
+    // STORED values — and the old filter would 409 the whole save over values nobody changed. The
+    // alternative was a second copy of this allow-list on the client, which is the ARCHITECTURE
+    // section 3 disease. A value equal to what is stored is not a rewrite; that was already true
+    // for the two statuses and there was never a reason it was true only for them.
+    const current = await Closure.findOne({ batch: batchId }).lean<any>();
     const blocked = Object.keys(patch).filter((k) => patch[k] !== undefined && !POST_COMPLETION_WRITABLE.has(k)
-      && !(["assessment_status", "certification_status"].includes(k) && patch[k] === current?.[k]));
+      && !sameStoredValue(patch[k], current?.[k]));
     if (blocked.length) {
       throw new HttpError(409, `The batch is closed — ${blocked.join(", ")} can no longer change (2026-08-13 decision: a Completed batch stays locked; only invoice-readiness and the dues attestation may still be marked).`);
     }
@@ -3649,6 +3696,11 @@ export type ReportSyncGap = {
   last_error: string;
   source_name: string;
   verdict_not_on_row: { rows: number; target: number };
+  // QA-1263: the client's own arithmetic, answered. `sheet_total` is what THEIR column adds up to,
+  // `erp_total` is what this report counts, and `skipped` + `unexplained` say where the difference
+  // went. Null when the caller may not see the sheet surface (same right as `source_name` and
+  // `last_error` — see the note on showSource below), and null before the first sync that recorded it.
+  target_recon: (TargetRecon & { erp_total: number }) | null;
 };
 
 // `showSource` — QA-1104 (checker, cycle 1). The COUNTS below are location-scoped and are the part
@@ -3671,8 +3723,14 @@ async function reportSyncGap(scope: Record<string, unknown> = {}, showSource = f
   // renderer, and this one is read straight out of an upstream exception.
   const source = showSource
     ? await SyncSource.findOne({ active: true }).sort({ last_synced_at: -1 })
-      .select("name last_synced_at last_status last_error").lean<any>()
+      .select("name last_synced_at last_status last_error last_target_recon").lean<any>()
     : null;
+  // QA-1263: shape-checked rather than trusted. This field is Mixed on the model (the shape belongs
+  // to sync.ts), so a source written before this existed, or by an older build, hands back null or a
+  // half-object — and a screen that renders `undefined.toLocaleString()` is a worse outcome than a
+  // screen that says nothing. One test, here, so no renderer has to repeat it.
+  const r = source?.last_target_recon as TargetRecon | null | undefined;
+  const recon: TargetRecon | null = r && typeof r.sheet_total === "number" && Array.isArray(r.skipped) ? r : null;
   return {
     open_total: open.length,
     open_affecting: open.filter((c) => targetRowField(String(c.field_name ?? ""))).length,
@@ -3686,6 +3744,11 @@ async function reportSyncGap(scope: Record<string, unknown> = {}, showSource = f
     // Filled by reportRollup once the rows are in hand — it needs the targets, and this function
     // deliberately does not load them a second time.
     verdict_not_on_row: { rows: 0, target: 0 },
+    // QA-1263: gated on the SAME right as source_name/last_error, and for the same QA-1104 reason —
+    // this is a whole-SHEET total, so handing it to a location-scoped user would tell them the
+    // org-wide target through a screen that otherwise shows them only their own centres.
+    // `erp_total` is filled by reportRollup, which is the only caller that has the summed rows.
+    target_recon: recon ? { ...recon, erp_total: 0 } : null,
   };
 }
 
@@ -3842,6 +3905,9 @@ export async function reportRollup(scope: Record<string, unknown> = {}, opts: { 
     if (d.unknown > 0 && !d.row_status && tcVerdict(d.centre_status) !== "unknown") { vnrRows++; vnrTarget += d.target; }
   }
   sync_gap.verdict_not_on_row = { rows: vnrRows, target: vnrTarget };
+  // QA-1263: the same `grand` the tiles are made of — not a second count of the same thing, which is
+  // how a report ends up disagreeing with itself.
+  if (sync_gap.target_recon) sync_gap.target_recon.erp_total = grand.target;
   return {
     rows, roles: [...roles].sort(), total: grand, detail, measured_at, sync_gap, labels: REPORT_LABELS,
     // Empty on todays data, and that is the point: the day the sheet grows a word like
