@@ -141,9 +141,20 @@ const RELEASE_NOTE_ARCHIVE_245 =
   "screen as minus four out of two, at minus two hundred per cent. Entered on its own the same "  +
   "figure had always been "  +
   "refused; both routes now ask the same three questions. On the batches screen, the count of "  +
-  "batches shown against a centre grew on every import of the same file, and a genuine zero was "  +
-  "left out of the list entirely rather than shown as zero; both are fixed, and the counts now "  +
-  "say what period they cover. The controls that cancel, close or reopen a batch now ask for "  +
+  // QA-1156: this sentence described BOTH halves of that fix wrongly, and it was the text the
+  // public version endpoint actually published for -245. It said "the count of batches shown
+  // against a centre" - it was the count of STUDENTS shown against a BATCH (attendance ROWS were
+  // being counted as students, so re-importing the same file grew the figure). And it said "a
+  // genuine zero was left out of the list entirely rather than shown as zero" - the defect was the
+  // opposite shape: a batch that had NEVER had a day logged here was printed as a literal 0 days,
+  // indistinguishable from one that genuinely logged zero. Corrected 2026-08-25. The wording is
+  // fixed rather than annotated inside the string, because this text is read by people outside the
+  // team who cannot be asked to parse a correction notice - the record of the correction belongs
+  // here in the source and in the ledger row, which is where it now lives.
+  "students shown against a batch grew on every import of the same file, and a batch that had "  +
+  "never had a day logged here was shown as zero days, indistinguishable from one that genuinely "  +
+  "logged zero; both are fixed, and the counts now say what period they cover. "  +
+  "The controls that cancel, close or reopen a batch now ask for "  +
   "exactly the right the server asks for, so none of them is offered to someone it would refuse. "  +
   "Summary cards on the home and sync screens now open the list of records they are counting "  +
   "instead of being unclickable, and mobilisation is reported per day within the same totals it "  +
