@@ -2074,10 +2074,19 @@ for (const file of walk(root)) {
 //
 // HONEST LIMIT, and it is the same one three checkers charged today: this is a STATIC pin. It
 // proves the initialiser consults the lists; it cannot prove the screen renders rows. Three static
-// pins of mine were walked past by one more spelling each (QA-1091 → QA-1127 → QA-1141), and the
-// standing answer is QA-573 — the wall has NO rendered-state harness at all, so "assert what the
-// screen does" cannot be pinned here by anyone. This is the strongest tool that exists today, and
-// it is weaker than the defect deserves.
+// pins of mine were walked past by one more spelling each (QA-1091 → QA-1127 → QA-1141).
+//
+// QA-1247 (checker, qa-573 cycle 1): THIS PARAGRAPH USED TO END "the wall has NO rendered-state
+// harness at all, so 'assert what the screen does' cannot be pinned here by anyone." That sentence
+// is now FALSE, and it was made false by the same release that left it standing. A comment claiming
+// the right tool does not exist is precisely the invitation to write a sixth regex, which is how
+// QA-1091 → QA-1127 → QA-1141 → QA-1184 → QA-1214 happened.
+//
+// THE RENDERED-STATE HARNESS EXISTS: scripts/e2e-rendered-candidates.mjs, in the wall, driving a
+// real chromium. It is where this defect is actually held, and it catches what no spelling of this
+// pin can - it went red on the reverted fix naming the URLs, with the operator's own sentence in
+// the failure. THIS pin is a smoke alarm for the careless case, nothing more. Do not tighten it;
+// add the case to the rendered suite instead.
 {
   const rel = "app/(app)/candidates/page.tsx";
   const cpath = path.join(root, "app/(app)/candidates/page.tsx");
@@ -2098,6 +2107,29 @@ for (const file of walk(root)) {
     // So the REGION is what is read, bounded by the two things this decision is actually made of —
     // the first `lifecycle_status` read, and the bucket's own `useState`. The state variable's name
     // is not part of the invariant and is no longer part of the test.
+    //
+    // ============================ READ THIS BEFORE TRUSTING THIS PIN ============================
+    // QA-1214 (S2), cycle 2 checker, PROVEN not argued: THIS PIN STILL FAILS OPEN. The four
+    // conditions below are four INDEPENDENT, UNANCHORED `.test()` calls over a region STRING. They
+    // are never tied to the initialiser that actually runs, so ONE UNUSED DECOY LINE inside the
+    // region satisfies all four while the bug sits reinstated beside it. The checker wrote that
+    // mutation into the tree, rebuilt, re-seeded, restarted and drove the screen:
+    // `check-user-copy: 300 passed, 0 failed` while `?lifecycle_status=Enrolled` rendered
+    // "Enrolled Candidates (46)" above ZERO rows and "No candidates - add or import."
+    // Screenshot: evidence-24-08/chk1145c2/A2MUT-pin-green-lifecycle-status-Enrolled.png
+    // QA-1215 (S3): it also FALSE-REDS two correct rewrites — the bucket useState declared before
+    // the tag useState (299/1, "names both lists=false"), and a type alias on the bucket useState
+    // (299/1, "region found=false").
+    //
+    // DO NOT RE-SPELL THESE REGEXES. Three cycles now, and every tightening bought exactly one new
+    // hole and one new false red; that is the instrument, not the spelling. What this pin honestly
+    // provides is a SMOKE ALARM for the careless case, NOT a guarantee that the screen renders rows.
+    // The unit that closes it is QA-573 (a rendered-state wall suite; Umesh approved it 2026-08-25),
+    // and QA-1214/QA-1215 are to be carried INTO that unit rather than patched here. The checker's
+    // re-runnable harness is evidence-24-08/chk1145c2/rendered-state-probe2.mjs — it discriminates
+    // all three trees this static pin cannot: RED at 3416d45^ (7 of 17 URLs), GREEN at 3416d45
+    // (0 of 17), RED on the decoy mutation (4 of 17).
+    // ===========================================================================================
     const urlAt = cscan.indexOf("lifecycle_status");
     const bucketAt = cscan.search(/useState<\s*"Fresh"\s*\|\s*"Enrolled"\s*>/);
     const region = urlAt >= 0 && bucketAt > urlAt ? cscan.slice(urlAt, bucketAt) : "";
@@ -2810,7 +2842,16 @@ for (const file of walk(root)) {
 // is covered without anyone remembering this.
 {
   const importSrc = fs.readFileSync(path.join(root, "app/api/candidates/import/route.ts"), "utf-8");
-  const drawerSrc = fs.readFileSync(path.join(root, "app/(app)/candidates/page.tsx"), "utf-8");
+  // QA-1022 (checker on qa-232 cycle 3): stripComments, because this pin used to read the RAW
+  // source — so a bare `{/* TODO: apaar_duplicate_count */}` turned it GREEN while the lane
+  // rendered nowhere. Proved by doing it: with the render deleted and only that comment left, the
+  // suite reported 284 passed / 0 failed. A check that cannot tell code from a comment ABOUT the
+  // code is not a check, and this one existed specifically to stop unrendered lanes.
+  //
+  // KEEP THIS BLOCK ABOVE the `for (const h of hits)` print loop below. At 432a5f9 it sat after it
+  // and a failure printed no reason at all — only "281 passed, 1 failed". It is above it today by
+  // someone else's insertions, not by design, so it is said here in words.
+  const drawerSrc = stripComments(fs.readFileSync(path.join(root, "app/(app)/candidates/page.tsx"), "utf-8"));
   const lanes = [...new Set([...importSrc.matchAll(/(\w+_count)\s*:/g)].map((m) => m[1]))];
   const unrendered = lanes.filter((k) => !drawerSrc.includes(k));
   if (lanes.length === 0) {
@@ -2824,6 +2865,187 @@ for (const file of walk(root)) {
     );
   } else {
     passed++;
+  }
+}
+
+// ---- QA-1010 (-244): the row verbs Umesh actually asked for, pinned as a PAIR ----
+// Umesh's fourth ask, verbatim: "abhi candidate details edit and delete nhi hoo paa rhi hai naa
+// like koi galti se candidate delete krr diyaa tho delete krne ka option dena hai team ko". The
+// answer shipped at -241 (QA-904): a visible Edit/Delete pair on the Candidates row, copied in
+// shape from the Trainers directory which already did it correctly.
+//
+// It shipped with NOTHING in this wall able to see it. Two consequences, both already paid for:
+// QA-1052 - a manifest claimed a chip on that row that was not in the product, and only a checker
+// opening a BROWSER caught it; and QA-1038 - trainer delete was WIDER than trainer-document delete,
+// a defect that was invisible to any single-door assertion and only appeared in COMPARISON.
+// So this is pinned the way QA-1038 had to be: as a PARITY between the two directories. Delete the
+// Candidates cell and this fails; re-gate either list on a role while the other uses a right and
+// this fails; wire either flag to the wrong permission key and this fails.
+//
+// WHAT IT PROVES - rewritten in cycle 2, because cycle 1's version of this paragraph was WRONG and
+// the wrongness was the whole finding. It said the two lists "cannot drift apart". They could: the
+// vector was computed by running the same regexes over the file TEXT, so any drift that changes
+// BEHAVIOUR without changing SPELLING produced identical vectors on both sides and sailed through.
+// A checker found five such drifts and proved the strongest in a browser - 25 rows, 0 Edit, 0
+// Delete, `npm run build` exit 0, this pin reading 287/0. That is QA-437 - cited by cycle 1 as its
+// reason NOT to string-match - reappearing inside the block written to avoid it, from the other side.
+//
+// So, precisely: this closes SIX named ways to lose the verbs while keeping the strings - spread out
+// of the rendered array, a role test back in front, a `false &&` welded onto the flag, `disabled` on
+// the buttons, `className="hidden"` on their span, and a DELETE repointed at another collection.
+// It does NOT prove the controls render, and no source scan can. Six closed classes is not a closed
+// class of one; a seventh is a finding, not a surprise. The rendering half needs a DOM-level suite,
+// which this repo has no harness for - QA-1057 stays open for it and is deliberately NOT smuggled in
+// here as a browser dependency on `npm test`.
+{
+  const rowVerbs = (rel, flag, permKey, resource) => {
+    const raw = stripComments(fs.readFileSync(path.join(root, rel), "utf-8"));
+    // QA-1060 (cycle 3): the cycle-2 walk counted brackets in the RAW source, so one unbalanced "("
+    // inside an unrelated tooltip twenty lines above the cell collapsed the column array from 13
+    // members to 9, made `editMember` the WRONG member - 913 chars became 5,703, starting at
+    // `key: "sidh_status"` - and every regex below then ran over a four-column blob and reported
+    // true. It failed OPEN: `liveMember` went TRUE for a cell that had been spread out of the array.
+    // The repair was already in this file, one function above: blankStrings() at :58, written for
+    // QA-681/QA-685 with the comment "so the brace scan cannot be thrown by a { or } inside a
+    // literal". It preserves LENGTH, so every index found in `scan` still points at the right place
+    // in `raw` - walk on `scan`, read content from `raw`.
+    const scan = blankStrings(raw);
+    const at = raw.indexOf('key: "_edit"');
+
+    // the bracket ranges of every columns={[ ... ]} in the file
+    const ranges = [...scan.matchAll(/columns=\{\[/g)].map((m) => {
+      let i = m.index + m[0].length, d = 1;
+      while (i < scan.length && d > 0) { if (scan[i] === "[") d++; else if (scan[i] === "]") d--; i++; }
+      return [m.index + m[0].length, i - 1];
+    });
+    // QA-1061: cycle 2 used ranges.find(), which silently took the FIRST array mentioning the cell.
+    // trainers/page.tsx has three. A second array carrying the same key is an ambiguity, not a
+    // detail - so it is an error here rather than a coin toss.
+    const holding = at < 0 ? [] : ranges.filter(([a, b]) => at >= a && at < b);
+
+    // top-level members of the holding array, by index (walk on scan, slice from raw)
+    let editMember = "", memberCount = 0;
+    if (holding.length === 1) {
+      const [a, b] = holding[0];
+      let d = 0, start = a;
+      for (let i = a; i < b; i++) {
+        const c = scan[i];
+        if (c === "[" || c === "{" || c === "(") d++;
+        else if (c === "]" || c === "}" || c === ")") d--;
+        else if (c === "," && d === 0) {
+          memberCount++;
+          if (at >= start && at < i) editMember = raw.slice(start, i);
+          start = i + 1;
+        }
+      }
+      memberCount++;
+      if (at >= start && at < b) editMember = raw.slice(start, b);
+    }
+    const cellScan = blankStrings(editMember);
+
+    // QA-1061 - "gate on the DECISION, not the token". Cycle 2 asked whether the string
+    // `role === "Admin"` appeared. A checker wrote `!["Admin"].includes(role) ? null : (...)` - an
+    // idiom that sits two columns above this cell in the same file - and restored the exact QA-904
+    // defect, for the exact users the fix was for, with the wall green. Any spelling of any new gate
+    // is a new decision about who sees these verbs, so the RULE is: this cell may contain exactly
+    // ONE conditional, and it must be the delete flag. A ternary here is a gate whatever it says.
+    const ands = [...cellScan.matchAll(/&&/g)].length;
+    // QA-1081: the lookahead alone skipped the FIRST `?` of `??` and then matched the SECOND, so any
+    // nullish default written in this cell read as a second permission gate and turned the wall RED
+    // on an ordinary edit. A pin that false-REDs is not "safely strict" - it trains people to route
+    // around it, which is how a real finding gets ignored later. The lookbehind pairs with it.
+    const ternaries = [...cellScan.matchAll(/(?<!\?)\?(?![.?])/g)].length;
+    const guardIsFlag = new RegExp("\\{\\s*" + flag + "\\s*&&").test(editMember);
+
+    // M13: Edit stayed visible, enabled and unhidden while openEdit was emptied - and onRowClick
+    // went with it, so the row lost BOTH ways in. A verb that calls a function which does nothing
+    // is the reported defect wearing the fix's clothes.
+    const openBody = (() => {
+      const i = raw.search(/function openEdit\s*\(/);
+      if (i < 0) return "";
+      const s = raw.indexOf("{", i);
+      let j = s, d = 0;
+      do { if (scan[j] === "{") d++; else if (scan[j] === "}") d--; j++; } while (j < scan.length && d > 0);
+      return raw.slice(s, j);
+    })();
+
+    // ...and it must not make an access decision of its OWN. A checker left the Edit button
+    // untouched - rendered, enabled, unhidden - and put `if (!canRight("candidates.edit","edit"))
+    // return;` at the top of openEdit, a right no role holds. Every JSX-reading assertion above
+    // stayed green while the button did nothing for anybody. Who may edit is decided in the render,
+    // in ONE place; a handler that quietly refuses is indistinguishable from a working one until
+    // somebody presses it. So: no permission call inside the handler, and nothing returns before it
+    // has opened something.
+    const openScan = blankStrings(openBody);
+    const firstSet = Math.min(...[openBody.indexOf("setDrawer("), openBody.indexOf("setForm(")].filter((i) => i >= 0).concat([Infinity]));
+    const retIdx = openScan.search(/\breturn\b/);
+    const firstReturn = retIdx < 0 ? Infinity : retIdx;
+
+    const call = editMember.match(/api\(`\/api\/([a-z-]+)\/\$\{r\._id\}`,\s*\{\s*method:\s*"DELETE"/);
+    const init = (raw.match(new RegExp("const\\s+" + flag + "\\s*=\\s*([^;]+);")) ?? [])[1] ?? "";
+
+    return {
+      file: rel,
+      hasCell: at >= 0,
+      oneArray: holding.length === 1,
+      liveMember: editMember.trim().startsWith("{"),
+      sane: memberCount >= 5,
+      edit: /onClick=\{\(\) => openEdit\(r\)\}>\s*Edit\s*</.test(editMember),
+      openEditReal: firstSet < Infinity && firstReturn > firstSet && !/canRight\(/.test(openBody),
+      del: guardIsFlag && /\}>\s*Delete\s*</.test(editMember),
+      oneGate: ands === 1 && ternaries === 0,
+      permWired: new RegExp("const\\s+" + flag + "\\s*=[\\s\\S]{0,120}?" + permKey.replace(".", "\\.")).test(raw),
+      flagClean: new RegExp("^rightsLoaded && canRight\\(\"" + permKey.replace(".", "\\.") + "\", \"edit\"\\)$").test(init.trim()),
+      notInert: !/\bdisabled\b/.test(cellScan),
+      notHidden: !/className="[^"]*\bhidden\b/.test(editMember),
+      rightTarget: !!call && call[1] === resource,
+    };
+  };
+  const cand = rowVerbs("app/(app)/candidates/page.tsx", "canDeleteCandidate", "candidates.delete", "candidates");
+  const trn = rowVerbs("app/(app)/trainers/page.tsx", "canDeleteTrainer", "trainers.delete", "trainers");
+
+  for (const v of [cand, trn]) {
+    const why = !v.hasCell
+      ? 'there is no `key: "_edit"` row-verb cell at all - the list has no visible Edit or Delete, which is the exact state Umesh reported ("edit and delete nhi hoo paa rhi hai naa").'
+      : !v.oneArray
+        ? "the `_edit` key appears in " + (v.file.includes("trainers") ? "an ambiguous number of" : "more than one") + " `columns={[...]}` arrays (or in none of them). Which list renders it is then a coin toss, and this check would silently measure whichever came first."
+        : !v.sane
+          ? "the column array parsed to fewer than five members, which no real list has - the structural walk has lost its place and every judgement below it would be about the wrong text. Failing here on purpose: a parser that cannot find its subject must go RED, never green."
+          : !v.liveMember
+            ? "the `_edit` cell is still WRITTEN but is not a live member of the rendered `columns={[...]}` array - it is spread out of it. The file compiles, the build passes, and every row loses both verbs."
+            : !v.edit
+              ? "the row offers no Edit control that opens the edit drawer (`onClick={() => openEdit(r)}>Edit<`)"
+              : !v.openEditReal
+                ? "the Edit control calls `openEdit`, but `openEdit` does not reliably open anything - it either opens nothing at all, or returns before it does, or makes an access decision of its own inside the handler. Who may edit is decided in the render and in ONE place; a handler that quietly refuses looks exactly like a working button until somebody presses it. The row also opens on click through this same function, so breaking it closes BOTH ways in while every control still looks right."
+                : !v.oneGate
+                  ? 'this cell contains more than one decision about who sees these verbs. Exactly one conditional belongs here - the delete right - and a second one (in ANY spelling: a role test, a ternary returning null, a negated list membership) decides who gets Edit and Delete. Umesh asked for "vo bhi respective acess wale persons"; that is the toggle at /erp/admin?tab=Permissions and nothing else.'
+                  : !v.del
+                    ? "the row offers no Delete control gated on the delete right - either the verb is gone or its gate is"
+                    : !v.permWired
+                      ? "the delete flag is not derived from its own permission key, so it gates on something other than the right it is named for"
+                      : !v.flagClean
+                        ? 'the delete flag\'s initialiser is no longer exactly `rightsLoaded && canRight(<key>, "edit")` - something else has been conjoined to it. A `false &&` in front still mentions the right key and hides the verb from EVERYONE, Admin included.'
+                        : !v.notInert
+                          ? "a row verb carries `disabled` - the buttons are on screen and do nothing, which reads to the user exactly like the state that was reported"
+                          : !v.notHidden
+                            ? "the row-verb span is hidden by its className - the controls are in the DOM and invisible on screen, and only the screen is what Umesh was describing"
+                            : !v.rightTarget
+                              ? "the row's Delete does not call this list's own collection - pressing it does not delete the record the row is about"
+                              : "";
+    if (!why) passed++;
+    else { failed++; pushStructural(v.file + ": " + why + " (QA-1010)"); }
+  }
+
+  const shape = (v) => JSON.stringify([v.hasCell, v.oneArray, v.sane, v.liveMember, v.edit, v.openEditReal, v.oneGate, v.del, v.permWired, v.flagClean, v.notInert, v.notHidden, v.rightTarget]);
+  if (shape(cand) === shape(trn)) passed++;
+  else {
+    failed++;
+    pushStructural(
+      "the Candidates and Trainers directories no longer offer the same row verbs under the same gate - " +
+      "candidates=" + shape(cand) + " trainers=" + shape(trn) +
+      " [hasCell, oneArray, sane, liveMember, edit, openEditReal, oneGate, delete, permWired, flagClean, notInert, notHidden, rightTarget]. " +
+      "These two lists were deliberately made to behave alike; one of them has drifted. (QA-1010)",
+    );
   }
 }
 
@@ -2900,6 +3122,7 @@ for (const file of walk(root)) {
     );
   }
 }
+
 
   // -175: every finding, printed once, AFTER every check has had its say. See the note where this
   // loop used to live.

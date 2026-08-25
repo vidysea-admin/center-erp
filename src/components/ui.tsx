@@ -223,7 +223,13 @@ export function Tabs({ tabs, active, onChange }: { tabs: string[]; active: strin
   return (
     <div className="flex gap-1 overflow-x-auto border-b">
       {tabs.map((t) => (
-        <button key={t} onClick={() => onChange(t)}
+        // QA-1243 (2026-08-25, checker on qa-573 cycle 1): which tab is SELECTED was expressed only
+        // as a Tailwind colour. A pure restyle of this line therefore changed application MEANING
+        // that nothing could read - the checker changed only the colours and the rendered-state
+        // suite went green while its active-tab detector was dead on 17 of 17 URLs, noticing
+        // nothing. `aria-current` says the same thing to a screen reader, to a test, and to the
+        // next restyle, and it does not depend on what colour we happen to be using this month.
+        <button key={t} onClick={() => onChange(t)} aria-current={active === t ? "page" : undefined}
           className={`whitespace-nowrap border-b-2 px-3.5 py-2.5 text-sm font-medium ${active === t ? "border-blue-600 text-blue-700" : "border-transparent text-gray-500 hover:text-gray-800"}`}>
           {t}
         </button>
@@ -245,7 +251,10 @@ export function FilterPills({ options, active, onChange }: {
   return (
     <div className="flex flex-wrap gap-2 text-xs">
       {options.map((o) => (
-        <button key={o.value} onClick={() => onChange(o.value)} title={o.title}
+        // QA-1243, same finding as Tabs() above: which pill is SELECTED was a Tailwind colour and
+        // nothing else. `aria-pressed` is the standard for a toggle button, so a screen reader, a
+        // test and a restyle all read the same fact from the same place.
+        <button key={o.value} onClick={() => onChange(o.value)} title={o.title} aria-pressed={active === o.value}
           className={`rounded-full border px-3 py-1 font-medium ${active === o.value ? "border-blue-300 bg-blue-50 text-blue-700" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}>
           {o.label}{o.count != null ? ` ${o.count}` : ""}
         </button>
