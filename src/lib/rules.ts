@@ -6,7 +6,11 @@ import {
   LocationTarget, Notification, Program, Room, Scheme, SheetChange, SyncSource, TRAINER_PIPELINE, Trainer, TrainerDocument,
 } from "@/models";
 import { audit, auditDiff } from "@/lib/audit";
-import { currentStageOf } from "@/lib/candidate-journey";
+import { currentStageOf, isCertificateSettled } from "@/lib/candidate-journey";
+// QA-1198: re-exported so server callers may import the settled-certificate predicate from either
+// module — the same shape normalizeCan has (ARCHITECTURE 3.0), and the reason is the same: the
+// definition must live in the import-free module because a CLIENT screen reads it too.
+export { isCertificateSettled, SETTLED_CERTIFICATE_STATUSES } from "@/lib/candidate-journey";
 import { getDefaults } from "@/lib/defaults";
 import { nameKey, normalizeCan, unresolvedPortalRowsByName } from "@/lib/govt-attendance";
 import { HttpError, isScoped } from "@/lib/authz";
@@ -1589,8 +1593,10 @@ export async function certificationCompleteness(batchId: string) {
   const dropped = await BatchMember.find({ batch: batchId, left_on: { $ne: null } }).select("_id").lean<any[]>();
   const droppedIds = new Set(dropped.map((m) => String(m._id)));
   const passes = rows.filter((r) => r.result === "Pass" && !droppedIds.has(String(r.batch_member)));
-  // "Not Issued" is a settled outcome, not an outstanding one.
-  const blocking = passes.filter((r) => !["Issued", "Not Issued"].includes(r.certificate_status));
+  // "Not Issued" is a settled outcome, not an outstanding one. QA-1198: the predicate is shared —
+  // this gate, the upload route, the complete-batch preview and the batch screen's filter all read
+  // isCertificateSettled from lib/candidate-journey.ts, so they cannot drift apart.
+  const blocking = passes.filter((r) => !isCertificateSettled(r.certificate_status));
   return {
     legacy: false,
     pass_count: passes.length,

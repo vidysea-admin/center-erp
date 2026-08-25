@@ -74,3 +74,20 @@ export function journeyOf(r: JourneyInput): string {
 export function currentStageOf(r: JourneyInput): string {
   return isFreshCandidate(r) ? freshJourneyOf(r) : journeyOf(r);
 }
+
+// QA-1198 (DRY roadmap D6, 2026-08-25): "is this certificate SETTLED" had FOUR spellings of the
+// same literal — rules.ts's certification-completeness gate, the certificate upload route, the
+// complete-batch preview, and the batch screen's "Passed, no certificate" filter. It lives here
+// because this module imports NOTHING and is already read by a client page, a route and rules.ts,
+// so it is the one place all four callers can reach (ARCHITECTURE 3.7's wall: @/models pulls
+// mongoose, so the client screen could never import CERTIFICATE_STATUS).
+//
+// "Not Issued" is a SETTLED outcome, not an outstanding one — a decision was taken and recorded.
+// That is the whole content of the predicate and the reason a bare `=== "Issued"` is wrong
+// everywhere. A subset of models CERTIFICATE_STATUS by design; not a copy of it.
+export const SETTLED_CERTIFICATE_STATUSES = ["Issued", "Not Issued"];
+
+/** True when a certificate outcome has been decided — issued OR deliberately not issued. */
+export function isCertificateSettled(status?: string | null): boolean {
+  return SETTLED_CERTIFICATE_STATUSES.includes(String(status ?? ""));
+}

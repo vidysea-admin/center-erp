@@ -965,6 +965,40 @@ for (const file of walk(root)) {
       }
     }
   }
+  // QA-1198 (DRY roadmap unit D6, 2026-08-25): "is this certificate SETTLED" had FOUR spellings of
+  // the same literal — the certification-completeness gate, the upload route, the complete-batch
+  // preview and the batch screen's "Passed, no certificate" filter. "Not Issued" is a SETTLED
+  // outcome, so a bare `=== "Issued"` is wrong at all four, and four copies is four chances to
+  // write it. Home: lib/candidate-journey.ts, the import-free module a client screen can reach —
+  // the batch page cannot import rules.ts (mongoose), which is exactly why it grew its own copy.
+  // TWO assertions, and the second is the one QA-987 taught: a shared helper with ONE caller means
+  // somebody collapsed the definition and left the copies in place.
+  {
+    const LIT = /\[\s*"Issued"\s*,\s*"Not Issued"\s*\]/;
+    const homes = [];
+    const callers = [];
+    for (const abs of walk(root)) {
+      const rel = path.relative(root, abs).split(path.sep).join("/");
+      if (SKIP_FILES.has(rel)) continue;
+      const code = stripComments(fs.readFileSync(abs, "utf-8"));
+      if (LIT.test(code)) homes.push(rel);
+      if (/\bisCertificateSettled\b/.test(code)) callers.push(rel);
+    }
+    if (homes.length === 1 && homes[0] === "lib/candidate-journey.ts") passed++;
+    else {
+      failed++;
+      pushStructural(
+        `the settled-certificate literal ["Issued","Not Issued"] appears in [${homes.join(", ") || "nowhere"}] - its only home is lib/candidate-journey.ts (SETTLED_CERTIFICATE_STATUSES). A hand-written copy is how the four doors that decide whether a certificate is outstanding drifted apart (QA-1198).`,
+      );
+    }
+    if (callers.length >= 4 && callers.includes("lib/candidate-journey.ts")) passed++;
+    else {
+      failed++;
+      pushStructural(
+        `isCertificateSettled is referenced in only ${callers.length} file(s) [${callers.join(", ")}] - the four doors that read it are lib/rules.ts, api/batches/[id]/certificates, api/batches/[id]/complete and app/(app)/batches/[id]/page.tsx. A shared predicate that loses its callers means the copies came back (QA-1198; QA-987's lesson).`,
+      );
+    }
+  }
   const tips = bp.split(/\r?\n/).filter((l) => /title=/.test(l) && /awaiting_match/.test(l));
   const tipFaults = [];
   if (tips.length < 3) tipFaults.push(`app/(app)/batches/[id]/page.tsx: only ${tips.length} of the three awaiting-match tooltips (Candidates chip, Attendance chip, Closure summary) can be found - this check has lost a subject rather than passed (QA-434)`);

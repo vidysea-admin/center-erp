@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, requireRole, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, BatchMember, CandidateResult, Closure } from "@/models";
-import { assertBatchInScope, activeRoster, enrolledWithoutCan, recomputeClosureAggregates, transitionBatch, upsertCandidateResult } from "@/lib/rules";
+import { assertBatchInScope, activeRoster, enrolledWithoutCan, isCertificateSettled, recomputeClosureAggregates, transitionBatch, upsertCandidateResult } from "@/lib/rules";
 import { requireApproval } from "@/lib/approvals";
 import { audit } from "@/lib/audit";
 
@@ -48,7 +48,7 @@ async function outstanding(batchId: string) {
     if (!row || row.result === "Pending") unmarked.push({ member: String(m._id), name: cand?.name, phone: cand?.phone ?? null });
   }
   const unsettled = rows.filter((r) => r.result === "Pass" && live.has(String(r.batch_member))
-    && !["Issued", "Not Issued"].includes(r.certificate_status))
+    && !isCertificateSettled(r.certificate_status))
     .map((r) => ({ id: String(r._id), name: r.candidate?.name, phone: r.candidate?.phone ?? null, status: r.certificate_status, has_file: !!r.certificate_file }));
   return { unmarked, unsettled, roster_count: roster.length, marked: roster.length - unmarked.length };
 }

@@ -8,7 +8,7 @@ import { BASE_PATH } from "@/lib/base-path";
 import { Batch, BatchMember, CandidateResult, Closure, StoredFile } from "@/models";
 import { normalizeCan } from "@/lib/validate";
 import { putFile, removeStoredFile } from "@/lib/storage";
-import { assertBatchInScope, recomputeClosureAggregates, upsertCandidateCertificate } from "@/lib/rules";
+import { assertBatchInScope, isCertificateSettled, recomputeClosureAggregates, upsertCandidateCertificate } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
 // 2026-08-14 (CEO 49:33): "sare certificate ek folder mein ID ke saath — upload hote hi
@@ -254,7 +254,7 @@ async function attachPairs(opts: {
         if (!doc) { refuse(`${candName}: result row vanished`, candName); continue; }
         if (doc.certificate_file) { refuse(`${candName}: a certificate file arrived meanwhile — frozen, it cannot be replaced`, candName); continue; }
         doc.certificate_file = url;
-        if (!["Issued", "Not Issued"].includes(doc.certificate_status)) { doc.certificate_status = "Issued"; if (!doc.certificate_date) doc.certificate_date = new Date(); } // -112 QA-219: the file is the certificate
+        if (!isCertificateSettled(doc.certificate_status)) { doc.certificate_status = "Issued"; if (!doc.certificate_date) doc.certificate_date = new Date(); } // -112 QA-219: the file is the certificate
         await doc.save();
         resultId = String(doc._id);
       } else {
