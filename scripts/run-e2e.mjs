@@ -67,6 +67,100 @@ const SUITES = [
   if (!loopback) console.log("WALL: remote database permitted by WALL_ALLOW_REMOTE_DB - host " + host + ", db " + db);
 }
 
+// QA-1065 (2026-08-25): the TIMEZONE, which nothing guarded, and which decided whether a release
+// was allowed to ship. Measured, not argued - the SAME commit (19eb673), the SAME physical copy,
+// minutes apart, changing nothing but TZ:
+//
+//     TZ=Asia/Kolkata   3796 passed,  0 failed, 17/17          -> pushed to production on this
+//     TZ=UTC            2515 passed, 21 failed, e2e.mjs CRASHED
+//     GitHub CI (UTC)   2512 passed, 21 failed, e2e.mjs CRASHED   <- identical per-suite breakdown
+//
+// `ci.yml` ran `ubuntu-latest`, which is UTC, while every developer machine here runs IST. So the
+// number the whole team treated as the authority to push was answering a DIFFERENT QUESTION than the
+// one CI asked, and on 2026-08-25 a build reached production on a green local wall while CI was red
+// on that exact commit.
+//
+// The date boundary is the whole mechanism: at 04:26 IST it is still the PREVIOUS DAY in UTC, and
+// this product's rules are built on "today" - Rule 26 rosters, Rule 28 frozen counts, `joined_on`
+// floors, government attendance. A fixture that computes an expected date in local time and a server
+// that computes it in IST agree in Kolkata and disagree in London.
+//
+// AND IT WAS NEVER NEW. The two calendar dates differ only between 18:30 and 24:00 UTC (00:00-05:30
+// IST), so outside that 5.5-hour window the bug cannot appear at all. Over 100 CI runs:
+//     INSIDE  the window:   0 success, 18 failure
+//     OUTSIDE the window:  82 success,  0 failure
+// Perfect separation, no exception, back to 2026-08-20 in that sample alone. CI was never green on
+// this - it was green by the clock, and every run that did land in the window failed, each one a
+// release that deployed anyway (CodePipeline does not gate on GitHub Actions).
+//
+// THE DECISION (Umesh, 2026-08-25, recorded verbatim in qa/feedback-inbox.md):
+//     "ye timeline wala issue bhi memory mai save krlee so that it does not repeate
+//      aur system mai sabb IST mai hoga"
+// Every machine runs IST - CI, production, dev. That does not test the bug, it deletes the class:
+// this ERP serves Indian centres, government attendance reports on the Indian calendar day, and the
+// product already decides in IST via `istToday()`/`dayKey()`. Only the machines disagreed.
+//
+// So this guard requires IST and refuses anything else, in the same shape as the QA-851 database
+// guard above and for the same reason: a warning here would be read past. `WALL_ALLOW_LOCAL_TZ=1`
+// exists for someone deliberately wanting another zone's picture - it must never be set in a run
+// whose green is used to justify a push, and when it IS set the runner writes that sentence to
+// qa/.last-tick, because what is said in a console gets walked past and what is written in qa/ is read.
+//
+// WHAT NOT TO DO, learned the expensive way on this very finding: do not fix the helpers and leave
+// the runner in the other zone. Patching one side of a timezone mismatch and declaring it closed is
+// how this arrived. Set the zone first; then make every helper agree with the product.
+{
+  const tz = process.env.TZ || "";
+  const offsetMin = new Date().getTimezoneOffset();
+  // Umesh, 2026-08-25, on this finding: "system mai sabb IST mai hoga". IST (UTC+5:30, so
+  // getTimezoneOffset() === -330) is now the ONE zone every machine runs in - CI, prod and dev alike.
+  // The first version of this guard refused anything that was not UTC: the right instinct pointed the
+  // wrong way. It would have locked the harness to the zone the decision moved AWAY from, and the next
+  // person would have made WALL_ALLOW_LOCAL_TZ=1 a habit just to get their own wall to run - which is
+  // the exact outcome the hatch was written to make visible, not to encourage.
+  const isIst = offsetMin === -330;
+  if (!isIst && !process.env.WALL_ALLOW_LOCAL_TZ) {
+    console.error("");
+    console.error("################################################################");
+    console.error("##  WALL REFUSED TO START (QA-1065)");
+    console.error("##  This run is NOT in IST, so its result cannot stand in for CI's or production's.");
+    console.error("##  TZ env:            " + (tz || "<unset - using the machine's local zone>"));
+    console.error("##  UTC offset:        " + -offsetMin + " minutes");
+    console.error("##  Local time now:    " + new Date().toString());
+    console.error("##  This product decides on the INDIAN calendar day - istToday(), dayKey(), Rule 26");
+    console.error("##  rosters, Rule 28 frozen counts, government attendance. On 19eb673 the same copy");
+    console.error("##  was 3796/0 in IST and 2515/21 + a crashed suite in UTC, and 18 of 18 CI runs that");
+    console.error("##  ever landed between 18:30 and 24:00 UTC failed while 82 of 82 outside it passed.");
+    console.error("##  Run it the way the product thinks:");
+    console.error("##    TZ=Asia/Kolkata MONGODB_URL=mongodb://127.0.0.1:27017 MONGODB_DB=center_erp_ci_<slug> npm test");
+    console.error("##  If you genuinely want the local-timezone picture, set WALL_ALLOW_LOCAL_TZ=1 -");
+    console.error("##  but a green from such a run is NOT authority to push.");
+    console.error("################################################################");
+    console.error("");
+    process.exit(2);
+  }
+  const line = isIst
+    ? "WALL TIMEZONE: IST - the one zone this system runs in"
+    : "WALL TIMEZONE: NOT IST (" + (tz || "machine default") + "), offset " + -offsetMin + "min - WALL_ALLOW_LOCAL_TZ is set, so this green is NOT push authority (QA-1065)";
+  console.log(line);
+  // ...and when the hatch is used, that sentence goes to DISK, not only to a console nobody re-reads.
+  // This is the night's whole lesson: what is said in a log gets walked past, what is written in
+  // qa/ gets read by the next session, the sweep and the session-start hook. Best-effort by design -
+  // an isolated copy has no ../../qa and must not fail its wall over an audit line it cannot write.
+  if (!isIst) {
+    try {
+      // `dir` is this file's own directory, resolved at the top of this module - use it rather than
+      // re-deriving it from import.meta.url, which is how a second, subtly different copy of the
+      // same idea gets into a file.
+      const tick = path.join(dir, "..", "..", "qa", ".last-tick");
+      if (fs.existsSync(tick)) {
+        fs.appendFileSync(tick, new Date().toISOString() + " WALL RUN OUTSIDE IST (WALL_ALLOW_LOCAL_TZ=1, offset " +
+          -offsetMin + "min). Whatever this run reports, it is NOT CI's answer and NOT authority to push - QA-1065." + String.fromCharCode(10));
+      }
+    } catch { /* never fail a wall over its own audit line */ }
+  }
+}
+
 // QA-638 / QA-645 (-197): BEFORE any suite runs, prove the server at BASE_URL is the build in this
 // working tree. On 2026-08-22 a wall reported "45 failed, 2 crashed" about a build it never started:
 // a `next start` from an earlier session held the port, `npm start` died with EADDRINUSE into a log

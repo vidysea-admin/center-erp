@@ -16,6 +16,9 @@ jobs:
       - run: npm ci
       - run: npm run build
         env:
+          # QA-1065: every machine runs IST - CI, production, dev. Umesh, 2026-08-25:
+          # "system mai sabb IST mai hoga". ubuntu-latest is UTC unless told otherwise.
+          TZ: Asia/Kolkata
           MONGODB_URL: mongodb://ci-placeholder:27017
           AUTH_SECRET: ci-placeholder
 
@@ -32,6 +35,16 @@ jobs:
           --health-cmd "mongosh --quiet --eval 'db.runCommand({ping:1}).ok'"
           --health-interval 10s --health-timeout 5s --health-retries 10
     env:
+      # QA-1065 (2026-08-25) - THE ONE LINE THIS WHOLE FINDING COMES DOWN TO.
+      # ubuntu-latest runs UTC; every developer machine here runs IST. IST is UTC+5:30, so the two
+      # calendar dates differ between 18:30 and 24:00 UTC (00:00-05:30 IST) - and this product decides
+      # on the INDIAN day (istToday(), dayKey(), Rule 26 rosters, Rule 28 frozen counts, government
+      # attendance). Over 100 runs of this workflow: 0 of 18 that landed inside that window passed,
+      # and 82 of 82 outside it did. CI was never green on this - it was green by the clock, and each
+      # of those 18 was a release that deployed anyway, because CodePipeline does not gate on Actions.
+      # Umesh's call, recorded verbatim in qa/feedback-inbox.md: "system mai sabb IST mai hoga".
+      # scripts/run-e2e.mjs now REFUSES to run outside IST, so this line is what keeps CI able to run.
+      TZ: Asia/Kolkata
       MONGODB_URL: mongodb://localhost:27017
       MONGODB_DB: center_erp_ci
       AUTH_SECRET: ci-only-not-a-real-secret
