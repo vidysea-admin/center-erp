@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-248";
+export const RELEASE = "2026.08.14-249";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -100,6 +100,23 @@ const RELEASE_NOTE_ARCHIVE_247 =
   "candidate.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-249 is about counts and controls that were reading only part of the picture. The Locations "  +
+  "screen shows how many of our own trainers a centre has for a job role, and it was counting "  +
+  "only the trainers who had been nominated to that centre by name. Putting a trainer on a batch "  +
+  "there never recorded that, so a centre with a trainer running a live batch could still read "  +
+  "zero, even after the nomination had gone out. That count now also sees the trainer through the "  +
+  "batch they are running, and a trainer who is both nominated and on a batch is still counted "  +
+  "once. Stored records are untouched: this is a count being read correctly, not data being "  +
+  "rewritten. Second, a student who has left a batch no longer appears where they should not. "  +
+  "The attendance view and the closure controls were still showing and counting people who had "  +
+  "left, so a figure could include somebody the list beneath it did not, and a control could be "  +
+  "offered whose only possible outcome was a refusal. The record of the departure stays on the "  +
+  "candidate, where it belongs, and the certificate controls are deliberately left alone so "  +
+  "somebody who passed and then left can still have the certificate they earned attached. Third, "  +
+  "government attendance files are now matched on the portal Candidate ID rather than on the "  +
+  "name, so a roster that has never carried that ID no longer reports every row as matched.";
+
+const RELEASE_NOTE_ARCHIVE_248 =
   "-248 is mostly about a secret that was readable from the wrong side, and about one question "  +
   "that three screens answered differently. The portal password a centre signs in with was being "  +
   "written into the audit trail in full. Restricting who can open the sync queue did nothing "  +
@@ -648,7 +665,7 @@ const RELEASE_NOTE_ARCHIVE =
   // QA-265 records, one release after the comment above was written warning about it. tsc stayed
   // silent because tsconfig.json does not set noUnusedLocals. Both -246 and the orphaned -245 are
   // wired in here; adding a note to this chain is the second half of every bump, not an optional one.
-  RELEASE_NOTE_ARCHIVE_247 + " " + RELEASE_NOTE_ARCHIVE_246 + " " + RELEASE_NOTE_ARCHIVE_245 + " " +
+  RELEASE_NOTE_ARCHIVE_248 + " " + RELEASE_NOTE_ARCHIVE_247 + " " + RELEASE_NOTE_ARCHIVE_246 + " " + RELEASE_NOTE_ARCHIVE_245 + " " +
   RELEASE_NOTE_ARCHIVE_244 + " " + RELEASE_NOTE_ARCHIVE_243 + " " + RELEASE_NOTE_ARCHIVE_242 + " " + RELEASE_NOTE_ARCHIVE_241 + " " + RELEASE_NOTE_ARCHIVE_240 + " " + RELEASE_NOTE_ARCHIVE_239 + " " + RELEASE_NOTE_ARCHIVE_238 + " " +
   RELEASE_NOTE_ARCHIVE_237 + " " + RELEASE_NOTE_ARCHIVE_236 + " " +
   RELEASE_NOTE_ARCHIVE_231 + " " +
