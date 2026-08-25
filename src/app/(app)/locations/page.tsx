@@ -40,8 +40,18 @@ function LocationsInner() {
   // carries them. Centre pills still filter whole centres; search matches on every row.
   const centres = tag ? items.filter((l: any) => l.approval_status === tag) : items;
   const flatRows = centres.flatMap((l: any) => ((l.job_roles?.length ? l.job_roles : [null]) as any[])
-    .map((j: any, i: number) => ({ _id: `${l._id}:${i}`, loc: l, jr: j, first: i === 0 })));
-  const rep = (r: any, v: any) => r.first ? (v ?? <span className="text-gray-400">—</span>) : <span className="text-gray-300">〃</span>;
+    .map((j: any, i: number) => ({ _id: `${l._id}:${i}`, loc: l, jr: j })));
+  // QA-763: this used to read `firstOfCentre(ctx, r)`, an index computed over the UNFILTERED array, so one
+  // filter click made a centre's surviving row render as a ditto and visually inherit the name of
+  // whatever ended up above it - one centre's data read as another's. It also took the edit button
+  // away from that row (:242), because that was gated on the same flag. The question "is this the
+  // first row of its centre" is only ever meaningful about the list the reader is LOOKING AT, so it
+  // is now answered from the previous VISIBLE row, which DataTable hands to render (ctx).
+  const firstOfCentre = (ctx: any, r: any) => {
+    const prev = ctx && ctx.index > 0 ? ctx.rows[ctx.index - 1] : null;
+    return !prev || String(prev.loc?._id) !== String(r.loc?._id);
+  };
+  const rep = (ctx: any, r: any, v: any) => firstOfCentre(ctx, r) ? (v ?? <span className="text-gray-400">—</span>) : <span className="text-gray-300">〃</span>;
 
   // 2026-08-14 (CEO 09:46: "Om Prakash das mat banana — ek SPOC, multiple locations pe
   // mapping"): a derived directory of UNIQUE SPOCs across all centres. Key = normalized
@@ -148,28 +158,28 @@ function LocationsInner() {
           );
         }}
         columns={[
-          { key: "spoc_name", label: "SPOC Name", sortable: true, sortValue: (r: any) => r.loc.spoc_name, filterText: (r: any) => r.loc.spoc_name, render: (r: any) => rep(r, r.loc.spoc_name) },
+          { key: "spoc_name", label: "SPOC Name", sortable: true, sortValue: (r: any) => r.loc.spoc_name, filterText: (r: any) => r.loc.spoc_name, render: (r: any, ctx: any) => rep(ctx, r, r.loc.spoc_name) },
           {
             // QA-075 (CEO [01:17-01:39]): "Spoc name and cluster head contact, are these
             // different, or Saurabh Verma's number is this?" — when the two numbers are the
             // same person, SAY so instead of printing the same digits twice.
             key: "cluster_head_phone", label: "Cluster Head Contact", mobile: false, filterText: (r: any) => r.loc.cluster_head_phone,
-            render: (r: any) => {
+            render: (r: any, ctx: any) => {
               const same = r.loc.cluster_head_phone && r.loc.spoc_phone
                 && String(r.loc.cluster_head_phone).replace(/\D/g, "") === String(r.loc.spoc_phone).replace(/\D/g, "");
               return same
-                ? <span title={`${r.loc.cluster_head_name ?? "Cluster head"} — same number as the SPOC`}>{rep(r, r.loc.cluster_head_phone)} <span className="rounded bg-gray-100 px-1 text-[10px] text-gray-500">= SPOC</span></span>
-                : rep(r, r.loc.cluster_head_phone);
+                ? <span title={`${r.loc.cluster_head_name ?? "Cluster head"} — same number as the SPOC`}>{rep(ctx, r, r.loc.cluster_head_phone)} <span className="rounded bg-gray-100 px-1 text-[10px] text-gray-500">= SPOC</span></span>
+                : rep(ctx, r, r.loc.cluster_head_phone);
             },
           },
-          { key: "state", label: "State", mobile: false, sortable: true, sortValue: (r: any) => r.loc.state, filterText: (r: any) => r.loc.state, render: (r: any) => rep(r, r.loc.state) },
-          { key: "district", label: "District", sortable: true, sortValue: (r: any) => r.loc.district ?? r.loc.city, filterText: (r: any) => r.loc.district ?? r.loc.city, render: (r: any) => rep(r, r.loc.district ?? r.loc.city) },
+          { key: "state", label: "State", mobile: false, sortable: true, sortValue: (r: any) => r.loc.state, filterText: (r: any) => r.loc.state, render: (r: any, ctx: any) => rep(ctx, r, r.loc.state) },
+          { key: "district", label: "District", sortable: true, sortValue: (r: any) => r.loc.district ?? r.loc.city, filterText: (r: any) => r.loc.district ?? r.loc.city, render: (r: any, ctx: any) => rep(ctx, r, r.loc.district ?? r.loc.city) },
           {
             key: "name", label: "Institution Name", sortable: true, sortValue: (r: any) => r.loc.name, minWidth: 240,
             filterText: (r: any) => r.loc.name,
-            render: (r: any) => r.first ? <span className="font-medium text-gray-900">{r.loc.name}</span> : <span className="text-gray-300" title={r.loc.name}>〃</span>,
+            render: (r: any, ctx: any) => firstOfCentre(ctx, r) ? <span className="font-medium text-gray-900">{r.loc.name}</span> : <span className="text-gray-300" title={r.loc.name}>〃</span>,
           },
-          { key: "operating_partner", label: "Operating Partner", mobile: false, filterText: (r: any) => r.loc.operating_partner, render: (r: any) => rep(r, r.loc.operating_partner) },
+          { key: "operating_partner", label: "Operating Partner", mobile: false, filterText: (r: any) => r.loc.operating_partner, render: (r: any, ctx: any) => rep(ctx, r, r.loc.operating_partner) },
           {
             key: "scheme", label: "Ongoing Scheme", filterable: true,
             filterText: (r: any) => r.jr?.scheme ?? "",
@@ -184,7 +194,7 @@ function LocationsInner() {
           { key: "tc_id", label: "TC ID", mobile: false, filterText: (r: any) => r.jr?.tc_id ?? "", render: (r: any) => r.jr?.tc_id ? <span className="font-mono text-xs">{r.jr.tc_id}</span> : <span className="text-gray-400">—</span> },
           {
             key: "tc_password", label: "TC Password", mobile: false, filterable: false,
-            render: (r: any) => r.loc.tc_password ? rep(r, <span className="font-mono text-xs">{r.loc.tc_password}</span>) : <span className="text-gray-300">—</span>,
+            render: (r: any, ctx: any) => r.loc.tc_password ? rep(ctx, r, <span className="font-mono text-xs">{r.loc.tc_password}</span>) : <span className="text-gray-300">—</span>,
           },
           { key: "tc_status", label: "TC Status", filterable: true, filterText: (r: any) => r.jr?.tc_status ?? "", render: (r: any) => r.jr?.tc_status ? <Chip value={r.jr.tc_status} /> : <span className="text-gray-400">—</span> },
           // QA-223 (Manish 17/08 M4-08: "ye trainer required — aise click kara to yahan pe koi field hai
@@ -223,23 +233,23 @@ function LocationsInner() {
             key: "cert_variance", label: "Certified Δ (sheet − ours)", mobile: false,
             sortable: true,
             sortValue: (r: any) => (r.jr?.trainers_certified_reported ?? 0) - (r.jr?.trainers_certified ?? 0),
-            render: (r: any) => {
+            render: (r: any, ctx: any) => {
               if (!r.jr || r.jr.trainers_certified_reported == null) return <span className="text-gray-400">—</span>;
               const d = (r.jr.trainers_certified_reported ?? 0) - (r.jr.trainers_certified ?? 0);
               return <span className={`text-xs font-semibold ${d === 0 ? "text-green-700" : d > 0 ? "text-amber-600" : "text-blue-700"}`}>{d > 0 ? `+${d}` : d}</span>;
             },
           },
-          { key: "source", label: "Source", mobile: false, filterText: (r: any) => r.loc.external_id ? "Vidysea-RPL (OneDrive)" : "Entered in ERP", render: (r: any) => r.first ? <SourceCell source={r.loc.external_id ? "AVPL Location_Master" : ""} /> : <span className="text-gray-300">〃</span> },
+          { key: "source", label: "Source", mobile: false, filterText: (r: any) => r.loc.external_id ? "Vidysea-RPL (OneDrive)" : "Entered in ERP", render: (r: any, ctx: any) => firstOfCentre(ctx, r) ? <SourceCell source={r.loc.external_id ? "AVPL Location_Master" : ""} /> : <span className="text-gray-300">〃</span> },
           // ERP-internal columns — picker-selectable, hidden by default.
-          { key: "code", label: "Code", mobile: false, hidden: true, sortable: true, sortValue: (r: any) => r.loc.code, filterText: (r: any) => r.loc.code, render: (r: any) => rep(r, r.loc.code) },
-          { key: "city", label: "City", mobile: false, hidden: true, sortValue: (r: any) => r.loc.city, filterText: (r: any) => r.loc.city, render: (r: any) => rep(r, r.loc.city) },
-          { key: "approval_status", label: "Approval (centre)", hidden: true, sortable: true, sortValue: (r: any) => r.loc.approval_status, filterText: (r: any) => r.loc.approval_status, render: (r: any) => r.first ? <Chip value={r.loc.approval_status} /> : <span className="text-gray-300">〃</span> },
-          { key: "operational_status", label: "Operational", hidden: true, sortValue: (r: any) => r.loc.operational_status, filterText: (r: any) => r.loc.operational_status, render: (r: any) => r.first ? <Chip value={r.loc.operational_status} /> : <span className="text-gray-300">〃</span> },
+          { key: "code", label: "Code", mobile: false, hidden: true, sortable: true, sortValue: (r: any) => r.loc.code, filterText: (r: any) => r.loc.code, render: (r: any, ctx: any) => rep(ctx, r, r.loc.code) },
+          { key: "city", label: "City", mobile: false, hidden: true, sortValue: (r: any) => r.loc.city, filterText: (r: any) => r.loc.city, render: (r: any, ctx: any) => rep(ctx, r, r.loc.city) },
+          { key: "approval_status", label: "Approval (centre)", hidden: true, sortable: true, sortValue: (r: any) => r.loc.approval_status, filterText: (r: any) => r.loc.approval_status, render: (r: any, ctx: any) => firstOfCentre(ctx, r) ? <Chip value={r.loc.approval_status} /> : <span className="text-gray-300">〃</span> },
+          { key: "operational_status", label: "Operational", hidden: true, sortValue: (r: any) => r.loc.operational_status, filterText: (r: any) => r.loc.operational_status, render: (r: any, ctx: any) => firstOfCentre(ctx, r) ? <Chip value={r.loc.operational_status} /> : <span className="text-gray-300">〃</span> },
           {
             // QA-018 (-69): editing lives on the centre detail (Overview → Master fields) by
             // design — but nothing on this table SAID so, and a row-click reads as "view".
             // An explicit affordance ends the hunt; same destination, said out loud.
-            key: "_edit", label: "", render: (r: any) => r.first ? (
+            key: "_edit", label: "", render: (r: any, ctx: any) => firstOfCentre(ctx, r) ? (
               <span onClick={(e) => e.stopPropagation()}>
                 <Btn small kind="ghost" onClick={() => router.push(`/locations/${r.loc._id}`)}
                   >Edit</Btn>

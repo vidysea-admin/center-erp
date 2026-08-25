@@ -278,7 +278,13 @@ export function FilterPills({ options, active, onChange }: {
 // what the table itself is filtering by.
 export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClick, empty, cardTitle, pageSize = 25, defaultSort, searchable, initialSearch, resizable = true, loading, storageKey, totals, freeze, pickerMode }: {
   columns: {
-    key: string; label: string; render?: (row: T) => ReactNode; mobile?: boolean;
+    // QA-763: `render` now also gets WHERE the row sits in the list the reader is actually
+    // looking at. A column that draws a repeated value as a ditto mark ("〃") has to decide that
+    // against the PREVIOUS VISIBLE ROW; deciding it from a pre-filter index means one filter click
+    // makes a row inherit the name of whatever ended up above it. locations/page.tsx did exactly
+    // that. ADDITIVE on purpose: every existing render takes one argument and ignores the second,
+    // so no other table changes by a pixel.
+    key: string; label: string; render?: (row: T, ctx: { index: number; rows: T[] }) => ReactNode; mobile?: boolean;
     sortable?: boolean; sortValue?: (row: T) => string | number | null | undefined;
     // Text a cell contributes to search + the header funnel filter, when the raw value /
     // sortValue is not what the user sees (derived chips, old→new pairs, …).
@@ -497,7 +503,7 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
     );
   }
   if (!rows.length) return <div className="rounded-xl border border-dashed bg-white p-10 text-center text-sm text-gray-400">{empty ?? "Nothing here yet"}</div>;
-  const cell = (c: Col, r: T) => c.render ? c.render(r) : String((r as any)[c.key] ?? "—");
+  const cell = (c: Col, r: T, i: number) => c.render ? c.render(r, { index: i, rows: slice }) : String((r as any)[c.key] ?? "—");
   const headerCell = (c: Col) => {
     // QA-1074: the hint rides on the header itself, so it is reachable whether or not the column
     // sorts. `?? "Sort"` keeps the existing tooltip on every column that declares none.
@@ -871,7 +877,7 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
                       its siblings start at the same line, not floating mid-air. */}
                   {visCols.map((c, ci) => {
                     const f = frozenCell(ci, "body");
-                    return <td key={c.key} style={f.style} className={"break-words px-3.5 py-3 align-top " + (f.className ?? "")}>{cell(c, r)}</td>;
+                    return <td key={c.key} style={f.style} className={"break-words px-3.5 py-3 align-top " + (f.className ?? "")}>{cell(c, r, i)}</td>;
                   })}
                 </tr>
               ))}
@@ -912,7 +918,7 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
               {visCols.filter((c) => c.mobile !== false).map((c) => (
                 <div key={c.key}>
                   {c.label ? <span className="text-xs text-gray-400">{c.label}: </span> : null}
-                  {cell(c, r)}
+                  {cell(c, r, i)}
                 </div>
               ))}
             </div>
