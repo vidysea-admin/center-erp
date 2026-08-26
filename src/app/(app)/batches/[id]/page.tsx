@@ -3938,7 +3938,12 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
                   Separately, <b>{linkPlan.blocking} enrolled student{linkPlan.blocking === 1 ? "" : "s"}</b> {linkPlan.blocking === 1 ? "has" : "have"} no portal Candidate ID, and certification cannot complete until {linkPlan.blocking === 1 ? "they do" : "they all do"}.
                 </span>
               )}
-              {linkPlan.linkable?.length > 0 && (
+              {/* QA-738 (checker on qa-211): "of them" points at the blocking sentence above, which
+                  does not render at all when blocking === 0 - so on a roster with nobody blocking
+                  but some OTHER (non-blocking) member matched by the import, this sentence still said
+                  "names 1 of them" with no antecedent left for "them" to mean. Gated on blocking now,
+                  same as its sibling sentence below (QA-720) already is. */}
+              {(linkPlan.blocking ?? 0) > 0 && linkPlan.linkable?.length > 0 && (
                 <span className="ml-1">
                   The portal attendance already imported names <b>{linkPlan.linkable.length}</b> of them.
                   <button onClick={linkPortalIds} disabled={linking}
@@ -3953,7 +3958,12 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
                   the students who HAVE an id have to be typed in from the portal, above an empty list.
                   It names its own subject now, and does not render at all when nothing is blocking.
                   Third correction to one paragraph in three releases. */}
-              {!linkPlan.linkable?.length && (linkPlan.blocking ?? 0) > 0 && (
+              {/* QA-739 (checker on qa-211): "the imports name none of those N" was false whenever a
+                  blocking student DID have an import match that landed in `conflicts` (the portal
+                  gave two different ids for them) rather than `linkable` - the sentence two lines
+                  below then named that same student, contradicting this one in the same paragraph.
+                  Gated on conflicts too now; the conflicts sentence stands alone in that case. */}
+              {!linkPlan.linkable?.length && !linkPlan.conflicts?.length && (linkPlan.blocking ?? 0) > 0 && (
                 <span className="ml-1">The imports name none of those {linkPlan.blocking}, so their IDs have to be typed in from the portal.</span>
               )}
               {/* QA-715 (-208 checker, cycle 1 FAIL): the mount used to be HERE, but this whole
