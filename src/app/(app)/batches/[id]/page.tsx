@@ -209,7 +209,7 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
   // -113 (Umesh 18/08: "admin ke paas mark completed ka button aaye, aur wo press kar paye"). The
   // ordinary buttons refuse until the ROWS allow it — Rule 43 wants every student marked, Rule 46
   // every pass settled — and on a batch that finished months ago nobody can satisfy that by hand.
-  // The Admin door settles the outstanding rows the honest way (no result = Absent, no certificate =
+  // The Admin door settles the outstanding rows the honest way (no result = Fail, no certificate =
   // Not Issued), under one typed reason, audited per row. This panel says exactly what it will do
   // BEFORE it is pressed; nothing here is silent.
   const [completePlan, setCompletePlan] = useState<any>(null);
