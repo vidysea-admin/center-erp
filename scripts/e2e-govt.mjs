@@ -2022,8 +2022,12 @@ ok("removal is real", (await req(admin, "GET", `/api/sync-sources/${srcId}`)).st
   //     The other half, and it is the one that was actually lying: pre-fix this read 1 — a
   //     per-student attended count standing in for the batch's training days. The file does not
   //     state a training-day total, so the honest answer is nothing at all.
+  //     `nqAlpha != null` is not defensive noise: without it this line reads TRUE when the preview
+  //     is empty or Alpha is absent, i.e. it passes hardest exactly when the thing it measures is
+  //     not on screen at all. That failure mode has cost this project four false greens.
   ok("-254 (QA-1383): ...and NOT as the working-days denominator (pre-fix it was 1)",
-    nqAlpha?.total_working_days == null, JSON.stringify({ wd: nqAlpha?.total_working_days }));
+    nqAlpha != null && nqAlpha.total_working_days == null,
+    JSON.stringify({ alphaPresent: nqAlpha != null, wd: nqAlpha?.total_working_days }));
   //     Reported as absent rather than guessed, so the blank column on the grid is explained.
   ok("-254 (QA-1383): the file's missing column is named honestly - working days, not days present",
     (nq.data.missing_columns ?? []).includes("Total Working Days")
