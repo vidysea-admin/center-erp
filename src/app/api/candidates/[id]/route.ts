@@ -104,7 +104,12 @@ export const { GET, PATCH } = itemRoutes({
     // rows over format, so records holding an unvalidatable Aadhaar will exist by design, and fixing
     // the phone number on one of them must not be blocked by it.
     if (body.aadhaar_no !== undefined) {
-      const incoming = String(body.aadhaar_no).trim();
+      // QA-1454: body.aadhaar_no is null when the caller means "clear it" (the -156/QA-450 rule
+      // two blocks up), and String(null) is the 4-character string "null" - truthy, so the
+      // clearing branch below never fired and "null" fell through to be judged as a real Aadhaar
+      // number. `?? ""` turns a genuine null into the empty string BEFORE String()/trim() ever
+      // sees it; a real string value passes through untouched.
+      const incoming = String(body.aadhaar_no ?? "").trim();
       const current = String((existing as any)?.aadhaar_no ?? "").trim();
       if (!incoming) {
         body.aadhaar_no = null; // clearing it must stay possible — that is how a wrong one is removed
@@ -138,7 +143,12 @@ export const { GET, PATCH } = itemRoutes({
     // and does not refuse rows over format, so records holding an unvalidatable APAAR will exist by
     // design, and fixing the phone number on one of them must never be blocked by it.
     if (body.apaar_id !== undefined) {
-      const incoming = String(body.apaar_id).trim();
+      // QA-1454: same fix as the aadhaar_no block above - body.apaar_id is null when the caller
+      // means "clear it", and String(null) is the truthy string "null", so the clearing branch
+      // never fired and any save (even an unrelated field, since the drawer re-sends every field
+      // on every edit) on a candidate with no APAAR ID recorded threw a false "APAAR ID is 12
+      // digits" 400.
+      const incoming = String(body.apaar_id ?? "").trim();
       const current = String((existing as any)?.apaar_id ?? "").trim();
       if (!incoming) {
         body.apaar_id = null; // clearing it must stay possible — that is how a wrong one is removed
