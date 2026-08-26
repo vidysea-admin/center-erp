@@ -2451,13 +2451,42 @@ for (const file of walk(root)) {
   const rel = "app/(app)/batches/[id]/page.tsx";
   const src = stripComments(fs.readFileSync(path.join(root, rel), "utf-8"));
   const decls = (src.match(/function PortalIdGaps\(/g) ?? []).length;
-  const mounts = (src.match(/<PortalIdGaps\b/g) ?? []).length;
-  const leftovers = /const \[showMissing|const \[canDraft|async function saveCan\(/.test(src);
-  if (decls === 1 && mounts >= 2 && !leftovers) passed++;
+  const mountRe = /<PortalIdGaps\b/g;
+  const mountPositions = [];
+  for (let m; (m = mountRe.exec(src)); ) mountPositions.push(m.index);
+  const mounts = mountPositions.length;
+  // QA-716 (S3, -208 cycle-1 checker): the old pin (`decls===1 && mounts>=2 && !leftovers`, a
+  // hard-coded name list) was beaten 4 of 6 ways in the checker's own attack: a parent regaining a
+  // saver under a NEW name, a third re-implemented widget under a different name, both mounts
+  // landing inside the SAME enclosing component, and a mount inside dead code nothing renders.
+  // Hard-coded names cannot catch a rename; counting raw text matches cannot catch either shape
+  // bug. This is a shape test instead:
+  //   (a) no PATCH to /api/candidates/ carrying sidh_candidate_id exists ANYWHERE in this file
+  //       OUTSIDE PortalIdGaps's own body - a renamed saver or a third widget both have to make
+  //       that exact write, so this catches both without naming either.
+  //   (b) the mounts sit in at least two DIFFERENT top-level component functions, not two mounts
+  //       inside one.
+  const gapsBody = fnBody(src, "PortalIdGaps");
+  const outsideGaps = gapsBody ? src.replace(gapsBody, "") : src;
+  const secondSaverElsewhere = /api\(`\/api\/candidates\/[^`]*`[\s\S]{0,200}?sidh_candidate_id/.test(outsideGaps);
+  const topFnRe = /^function (\w+)\(/gm;
+  const topFns = [];
+  for (let m; (m = topFnRe.exec(src)); ) topFns.push({ name: m[1], start: m.index });
+  topFns.sort((a, b) => a.start - b.start);
+  const enclosingFn = (pos) => {
+    let best = null;
+    for (const f of topFns) if (f.start <= pos) best = f; else break;
+    return best?.name ?? null;
+  };
+  const mountHomes = new Set(mountPositions.map(enclosingFn));
+  const distinctHomes = mountHomes.size >= 2;
+  if (decls === 1 && mounts >= 2 && distinctHomes && !secondSaverElsewhere) passed++;
   else {
     failed++;
-    pushStructural(rel + ": the portal-ID gap widget is not one component in two homes"
-      + " (declarations=" + decls + ", mounts=" + mounts + ", the parent still holds its own copy of the state or saver=" + leftovers + ")"
+    pushStructural(rel + ": the portal-ID gap widget is not one component in two GENUINELY separate homes"
+      + " (declarations=" + decls + ", mounts=" + mounts + ", distinct enclosing components="
+      + [...mountHomes].join("/") + ", a second write to sidh_candidate_id exists outside PortalIdGaps="
+      + secondSaverElsewhere + ")"
       + " - Umesh asked for it on the Certificates tab AND the Attendance tab; two literals of a"
       + " widget that WRITES a candidate's portal ID is a second door onto an identity field, which"
       + " is the class ARCHITECTURE.md section 3 exists to list.");
@@ -3708,6 +3737,33 @@ for (const file of walk(root)) {
       + " and never corrected by a person: PUT upserts on {location, program} so sending the right"
       + " programme ADDS a second row rather than moving the first, and there is no delete. That is"
       + " QA-496, and it is 560 of approved target reading in the wrong column of the CEO's report.");
+  }
+}
+
+// QA-1195 (checker on qa-1195 itself, REQ-388): the fix was verified by hand, in a browser, on a
+// pre/post A/B - and the wall's own two assertions for this unit stayed green on BOTH builds,
+// because they hit the server directly and this bug lived entirely in the client discarding the
+// response. "these two were green before the fix as well; they do not prove the fix" is the
+// manifest's own honest line. This is the alarm that fires by itself: EditDetails's save() must
+// both confirm success AND surface a server warning, or a save that WORKS and a save that does
+// NOTHING go back to being byte-identical from the operator's seat.
+{
+  const pageSrc = stripComments(fs.readFileSync(path.join(root, "app/(app)/batches/[id]/page.tsx"), "utf8"));
+  const editDetailsBody = fnBody(pageSrc, "EditDetails");
+  const saveStart = editDetailsBody.indexOf("async function save(");
+  const saveBody = saveStart < 0 ? "" : editDetailsBody.slice(saveStart, editDetailsBody.indexOf("\n  }\n", saveStart) + 1 || editDetailsBody.length);
+  // Not a bare `setSaved(` test: save() ALSO resets to setSaved("") at the top on every call
+  // (clearing a stale message before the request), so that alone is present even in the broken
+  // pre-fix shape. Requires a non-empty string argument - the actual confirmation, not the reset.
+  const setsSaved = /setSaved\(\s*["'][^"']*[A-Za-z]/.test(saveBody);
+  const surfacesWarning = /res\??\.warning/.test(saveBody) && /setWarn\(/.test(saveBody);
+  if (saveStart >= 0 && setsSaved && surfacesWarning) passed++;
+  else {
+    failed++;
+    pushStructural("app/(app)/batches/[id]: EditDetails's save() no longer confirms success and surfaces the server's warning"
+      + " (found save()=" + (saveStart >= 0) + ", sets a saved message=" + setsSaved + ", reads+shows res.warning=" + surfacesWarning + ")"
+      + " - QA-1195. A save that persists but is never SHOWN to have persisted is indistinguishable from a save that silently failed,"
+      + " which is the exact report this unit exists to close: \"batch ki details save nahi ho paa rhi hai\" when the save always worked.");
   }
 }
 
