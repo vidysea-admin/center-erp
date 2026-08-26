@@ -55,6 +55,11 @@ const SUITES = [
   // gate and batch scope, and that the trainer-documentation pull-through writes nothing into
   // BatchDocument (no duplicate storage of trainer identity docs under a batch).
   "e2e-batch-documents.mjs",
+  // QA-1436 (2026-08-26): the batch Enrollment tab's new Edit-candidate button. Server-side, the
+  // only real change is GET /api/batches/[id]/members populating the FULL candidate document — this
+  // suite's load-bearing assertion is the regression guard proving that widening did NOT reopen
+  // GET /api/candidates/[id] or GET /api/locations, both deliberately closed to Trainer (QA-060/095).
+  "e2e-candidate-edit-from-batch.mjs",
   // QA-573 (2026-08-25, Umesh approved): the FIRST suite here that asserts what the SCREEN does
   // rather than what a source file spells. It drives a real chromium (`playwright` is a
   // devDependency now) and holds one operator-facing invariant: a screen that announces a count

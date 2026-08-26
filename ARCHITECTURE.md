@@ -930,6 +930,28 @@ right. It imports the shared one now.) · `offerable()` retired-programme filter
 stripping regex (`user-copy.ts` + copy-pasted into three scripts) · hardcoded
 `https://www.vidysea.com/erp…` in five places that bypass `BASE_PATH`.
 
+### 3.15 The candidate Edit shutter — COLLAPSED to one copy (QA-1436, 2026-08-26)
+
+Was inlined ~250 lines deep in `candidates/page.tsx`'s `CandidatesInner` (form state, government-ID
+save semantics, the document sub-block) with no way to reach it from anywhere else. Extracted to
+`src/components/candidate-edit-drawer.tsx` — exports `CandidateEditDrawer` (add + edit) and
+`CandidateDocs` — and now shared by `candidates/page.tsx` and the batch detail page's Enrollment tab
+(`batches/[id]/page.tsx`'s `EnrolCard`/`Enrollment`, new "Edit" button per candidate). Do not
+re-inline a second copy for a third caller; import this one.
+
+**A read-gate landmine sits under this component, disclosed in its own comments** (do not "fix" it
+by widening `GET /api/candidates/[id]`'s `readRoles` — that door is deliberately closed to Trainer,
+QA-060/095, CEO: "I shouldn't see all the candidates… just my batch-wise details", and is a tested
+invariant in `e2e-roles.mjs`). The component's self-fetch fallback (used when a caller does not pass
+`candidate`/`locations` pre-loaded) hits that same-gated `/api/candidates/[id]` door and the
+similarly Trainer-closed `/api/locations` (QA-095). A Trainer-reachable caller MUST pass a
+pre-loaded `candidate` and a scoped `locations` list instead of relying on the fallback — the batch
+Enrollment tab does this by widening `GET /api/batches/[id]/members`'s `.populate("candidate")` to
+the full document (that route is already scoped by `assertBatchInScope`, so reading a candidate
+behind a batch this user can see does not reopen the pool door) and passing just that batch's own
+centre as `locations`. A future third caller that skips this and relies on the fallback will silently
+403 for any Trainer — check the component's own effect comments before wiring a new caller.
+
 ---
 
 ## 4. Key entry points

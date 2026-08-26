@@ -6,14 +6,12 @@ import { useSession } from "next-auth/react";
 import { api, fmtDate, istTodayInput, offerable } from "@/lib/client";
 import { personLabel } from "@/lib/person";
 import { CANDIDATE_IMPORT_FIELDS } from "@/lib/field-catalog";
-import { aadhaarError, apaarError, emailError, phoneError } from "@/lib/validate";
 import { FRESH_TAGS, JOURNEY_TAGS, isFreshCandidate, freshJourneyOf as sharedFreshJourneyOf, journeyOf as sharedJourneyOf, FUTURE_INTEREST_TAG, isFutureInterest } from "@/lib/candidate-journey";
 import { Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, ShareLinkPanel, SourceCell, copyText, inputCls , Tabs} from "@/components/ui";
 import { useLocationCtx, usePerms } from "@/components/shell";
-import { GeographyFields } from "@/components/geography-fields";
+import { CandidateEditDrawer } from "@/components/candidate-edit-drawer";
 import { BASE_PATH } from "@/lib/base-path";
 import { bulkSmsCsv, smsLink, unsendableCount, waLink } from "@/lib/messaging";
-import { uploadWithRetry } from "@/lib/upload";
 
 // -115 (QA-221): a RETIRED programme (active === false) leaves the pickers where something new is
 // created, but never disappears from a record that already points at one — editing such a record must
@@ -116,7 +114,7 @@ function CandidatesInner() {
   const [dropForm, setDropForm] = useState<any>({});
   const [dropReasons, setDropReasons] = useState<any[]>([]);
   const [editId, setEditId] = useState<string>("");
-  const [form, setForm] = useState<any>({});
+  const [editRecord, setEditRecord] = useState<any>(null);
   // QA-896 (Umesh 24/08: "iss batch wale mai bulk sheet upload ... kaam nhi krr rha hai properly").
   // A batch with an empty roster shows a banner offering "Import candidates (Excel)", and that
   // button used to be a bare link to this page carrying nothing. The operator then re-picked the
@@ -132,20 +130,6 @@ function CandidatesInner() {
   // Held separately from importState because importState is wiped on every drawer close, and this
   // must survive the preview -> confirm round trip that sits between arriving and enrolling.
   const [importForBatch, setImportForBatch] = useState<string>(sp.get("batch") ?? "");
-  const [dupes, setDupes] = useState<any[]>([]);
-  const set = (k: string, v: unknown) => setForm((f: any) => ({ ...f, [k]: v }));
-
-  // Rule 7: advisory duplicate lookup while the operator types. Never blocks the save.
-  useEffect(() => {
-    const phone = String(form.phone ?? "").replace(/\D/g, "");
-    if (drawer !== "add" || phone.length < 7) { setDupes([]); return; }
-    const t = setTimeout(() => {
-      api("/api/candidates/check-duplicate", { method: "POST", json: { name: form.name, phone: form.phone, dob: form.dob } })
-        .then((d) => setDupes(d.duplicates ?? []))
-        .catch(() => setDupes([]));
-    }, 400);
-    return () => clearTimeout(t);
-  }, [form.phone, form.name, form.dob, drawer]);
 
   const load = () => {
     // Search moved into DataTable (all-column, client-side) — the fetch brings the full
@@ -204,61 +188,13 @@ function CandidatesInner() {
     setSelected(s);
   }
 
-  // QA-141 rider (-72): in-flight guard against double-submit.
-  const [savingC, setSavingC] = useState(false);
-  async function saveCandidate() {
-    if (savingC) return;
-    setSavingC(true);
-    try {
-      if (drawer === "edit" && editId) {
-        // PATCH is partial: a blank select/date means "not changing this", never "cast '' to
-        // ObjectId/Date" (imported rows legitimately have location/program/dob still empty).
-        const json: any = Object.fromEntries(Object.entries(form).filter(([, v]) => v !== ""));
-        // QA-726 (-212, checker on qa-210): the ONE field where blank has to mean "clear it", not
-        // "leave it". The filter above dropped an emptied portal ID, so the drawer reported a saved
-        // edit while the junk id stayed in the database - and that id is exactly what blocks the
-        // automatic linker for that student. Emptying the box is how an operator FIXES a wrong id,
-        // so it has to reach the server; null (not "") because the QA-417 partial index does not
-        // index null.
-        if (form.sidh_candidate_id !== undefined && !String(form.sidh_candidate_id).trim()) json.sidh_candidate_id = null;
-        // QA-902: the same for the APAAR ID, and for the identical reason — emptying the box is how
-        // an operator REMOVES a wrong government id, so it has to reach the server; null (not "")
-        // because the partial unique index does not index null but does index the empty string.
-        if (form.apaar_id !== undefined && !String(form.apaar_id).trim()) json.apaar_id = null;
-        await api(`/api/candidates/${editId}`, { method: "PATCH", json });
-      } else await api("/api/candidates", { method: "POST", json: form });
-      setDrawer(""); setForm({}); setEditId(""); load();
-    } catch (e: any) { setError(e.message); }
-    setSavingC(false);
-  }
-
   // Sheet-imported rows carry sheet mistakes (wrong phone, synthetic DOB from an "age" column,
-  // fuzzy-matched location) — the row itself opens the same form for correction.
+  // fuzzy-matched location) — the row itself opens the same form for correction. Form population,
+  // validation and save now live in CandidateEditDrawer (QA-1436) — this just records which record
+  // and hands it the already-loaded row so it skips a redundant fetch.
   function openEdit(r: any) {
     setEditId(r._id);
-    setForm({
-      name: r.name ?? "", phone: r.phone ?? "", alt_phone: r.alt_phone ?? "", email: r.email ?? "", gender: r.gender ?? "",
-      custom_fields: r.custom_fields, // read-only display; the PATCH whitelist ignores it
-      dob: r.dob ? String(r.dob).slice(0, 10) : "",
-      location: r.location?._id ?? r.location ?? "", program: r.program?._id ?? r.program ?? "",
-      education: r.education ?? "", source: r.source ?? "",
-      last_training_date: r.last_training_date ? String(r.last_training_date).slice(0, 10) : "",
-      sidh_candidate_id: r.sidh_candidate_id ?? "",
-      // QA-903: this list IS the edit form. A field the API accepts but openEdit does not load is
-      // sent back EMPTY on the next save - the -116 shape, and it is silent.
-      aadhaar_no: r.aadhaar_no ?? "",
-      // QA-945: seeded for the same reason as aadhaar_no above - a field the drawer does not load is
-      // sent back at its default on the next save, which would silently flip Future back to Current.
-      batch_interest: r.batch_interest ?? "Current",
-      apaar_id: r.apaar_id ?? "",
-      // -116 (SS-01): the government-portal fields ride the edit form too, or opening a record and
-      // saving it would silently drop everything typed into that section.
-      ...Object.fromEntries(["salutation", "father_name", "mother_name", "marital_status", "religion",
-        "social_category", "state", "district", "sub_district"]
-        .map((f) => [f, r[f] ?? ""])),
-      interested_programs: (r.interested_programs ?? []).map((x: any) => x?._id ?? x),
-      interested_locations: (r.interested_locations ?? []).map((x: any) => x?._id ?? x),
-    });
+    setEditRecord(r);
     setDrawer("edit");
   }
 
@@ -433,55 +369,6 @@ function CandidatesInner() {
       setError(""); setShareLink(link); setDrawer("");
     } catch (e: any) { setError(e.message); }
     setRegBusy(false);
-  }
-
-  // QA-105: document section for the edit drawer — list + multi-upload + delete.
-  function CandidateDocs({ candidateId, setError }: { candidateId: string; setError: (m: string) => void }) {
-    const [docs, setDocs] = useState<any[]>([]);
-    const [busy, setBusy] = useState(false);
-    const loadDocs = () => api(`/api/candidates/${candidateId}/documents`).then((d) => setDocs(d.items ?? [])).catch(() => setDocs([]));
-    useEffect(() => { loadDocs(); }, [candidateId]); // eslint-disable-line react-hooks/exhaustive-deps
-    const guess = (name: string): string => {
-      const n = name.toLowerCase();
-      if (/aadhaar|aadhar/.test(n)) return "Aadhaar";
-      if (/pan/.test(n)) return "PAN";
-      if (/photo|passport|selfie/.test(n)) return "Photo";
-      if (/edu|degree|marksheet|certificate|qual/.test(n)) return "Educational Qualification";
-      if (/bank|passbook/.test(n)) return "Bank Passbook";
-      return "Other";
-    };
-    async function addFiles(files: FileList | null) {
-      if (!files?.length) return;
-      setBusy(true);
-      try {
-        for (const file of Array.from(files)) {
-          const url = await uploadWithRetry(file, "candidate-doc", { folder_centre: "_candidates", folder_kind: "documents", entity: "Candidate", entity_id: candidateId });
-          await api(`/api/candidates/${candidateId}/documents`, { method: "POST", json: { doc_type: guess(file.name), file_url: url, original_name: file.name } });
-        }
-        await loadDocs();
-      } catch (e: any) { setError(e.message); }
-      setBusy(false);
-    }
-    return (
-      <div className="rounded-lg border border-gray-200 px-3 py-2">
-        <div className="mb-1 text-xs font-medium text-gray-500">Documents</div>
-        {docs.length === 0 && <p className="mb-1 text-xs text-gray-400">No documents yet.</p>}
-        <ul className="mb-2 space-y-1 text-sm">
-          {docs.map((d) => (
-            <li key={d._id} className="flex items-center justify-between gap-2">
-              <a className="min-w-0 truncate text-blue-700 underline" href={d.file_url} target="_blank" rel="noreferrer">{d.doc_type}{d.original_name ? ` — ${d.original_name}` : ""}</a>
-              <button type="button" className="shrink-0 text-xs text-red-600 hover:underline" onClick={async () => {
-                if (!window.confirm(`Delete this ${d.doc_type}? The audit log keeps a record.`)) return;
-                try { await api(`/api/candidates/${candidateId}/documents/${d._id}`, { method: "DELETE" }); await loadDocs(); }
-                catch (e: any) { setError(e.message); }
-              }}>Delete</button>
-            </li>
-          ))}
-        </ul>
-        <input type="file" multiple disabled={busy} accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,.heic" onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }} />
-        <p className="mt-1 text-[11px] text-gray-400">Pick several files at once — the type is detected from each filename. Wrong type? Delete the document and upload it again.</p>
-      </div>
-    );
   }
 
   // Excel import steps
@@ -846,243 +733,21 @@ function CandidatesInner() {
         </div>
       </Drawer>
 
-      <Drawer error={error} open={drawer === "add" || drawer === "edit"} onClose={() => { setDrawer(""); setEditId(""); }}
-        title={drawer === "edit" ? `Edit Candidate — ${form.name || ""}` : "Add Candidate"}>
-        <div className="space-y-3">
-          <Field label="Name" required><input className={inputCls} value={form.name ?? ""} onChange={(e) => set("name", e.target.value)} /></Field>
-          <div className="grid grid-cols-2 gap-3">
-            {/* QA-141: same checks the API refuses with — shown while typing. */}
-            <Field label="Phone" required>
-              <input className={inputCls} value={form.phone ?? ""} onChange={(e) => set("phone", e.target.value)} />
-              {form.phone && phoneError(form.phone) && <p className="mt-1 text-xs text-red-600">{phoneError(form.phone)}</p>}
-            </Field>
-            <Field label="Alt phone">
-              <input className={inputCls} value={form.alt_phone ?? ""} onChange={(e) => set("alt_phone", e.target.value)} />
-              {form.alt_phone && phoneError(form.alt_phone, { optional: true }) && <p className="mt-1 text-xs text-red-600">{phoneError(form.alt_phone, { optional: true })}</p>}
-            </Field>
-          </div>
-          {/* 15/08 (Umesh): mandatory only on SELF-registration; staff may fill or fix it here. */}
-          <Field label="Email">
-            <input className={inputCls} type="email" value={form.email ?? ""} onChange={(e) => set("email", e.target.value)} />
-            {form.email && emailError(form.email, { optional: true }) && <p className="mt-1 text-xs text-red-600">{emailError(form.email, { optional: true })}</p>}
-          </Field>
-          {dupes.length > 0 && (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-              <div className="font-medium">Possible duplicate — check before saving</div>
-              <ul className="mt-1 space-y-0.5 text-xs">
-                {dupes.map((d: any) => <li key={d.candidate_id}>• {d.message}</li>)}
-              </ul>
-              <div className="mt-1 text-xs text-amber-700">You can still save — one phone number often serves a whole family.</div>
-            </div>
-          )}
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Gender">
-              <select className={inputCls} value={form.gender ?? ""} onChange={(e) => set("gender", e.target.value)}>
-                <option value="">—</option><option>Female</option><option>Male</option><option>Other</option>
-              </select>
-            </Field>
-            <Field label="Date of birth"><input type="date" className={inputCls} value={form.dob ?? ""} onChange={(e) => set("dob", e.target.value)} /></Field>
-          </div>
-          {/* -124 (M4-04, Manish 17/08 [01:50] "ye location nahi hogi, user ka koi bhi location ho
-              sakta hai"): a walk-in belongs to no centre yet. The field stays — most entries DO know
-              their centre and picking it here saves a step — but it is no longer required, and the
-              blank option says what blank means rather than looking like an unfinished form. */}
-          <Field label="Location">
-            <select className={inputCls} value={form.location ?? ""} onChange={(e) => set("location", e.target.value)}>
-              <option value="">Not tied to a centre yet (walk-in)</option>
-              {offerable(locations, form.location).map((l) => <option key={l._id} value={l._id} title={l.name}>{l.name}</option>)}
-            </select>
-            {!form.location && (
-              <span className="mt-0.5 block text-[11px] text-gray-500">They get their centre when they are enrolled on a batch. Until then only Admin and Operations can see them.</span>
-            )}
-          </Field>
-          <Field label="Program" required>
-            <select className={inputCls} value={form.program ?? ""} onChange={(e) => set("program", e.target.value)}>
-              <option value="">Select…</option>
-              {offerable(programs, form.program).map((p) => { const t = `${p.name}${p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}`; return <option key={p._id} value={p._id} title={t}>{t}</option>; })}
-            </select>
-          </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Education">
-              <select className={inputCls} value={form.education ?? ""} onChange={(e) => set("education", e.target.value)}>
-                <option value="">—</option>
-                {["Below 10th", "10th Pass", "12th Pass", "Graduate", "Post Graduate"].map((l) => <option key={l}>{l}</option>)}
-              </select>
-            </Field>
-            <Field label="Last govt training (if any)"><input type="date" className={inputCls} value={form.last_training_date ?? ""} onChange={(e) => set("last_training_date", e.target.value)} /></Field>
-          </div>
-          {/* 2026-08-24 (Umesh): "candidate form mai aadhaar number nhi aa rha hai". Checked WHILE
-              TYPING with the same function the API refuses with, so the operator is told before they
-              press Add rather than after (QA-141's canon). The check digit is why this is worth doing
-              at all: a mistyped Aadhaar looks perfectly valid on screen and is only discovered when
-              the government portal rejects that student, weeks later.
-              THREE government-ID boxes now sit on this form and they are NOT interchangeable, so each
-              one says what it is for. QA-414 measured 55 live candidates whose portal id landed in
-              "Govt ID reference" because it was the nearest-looking option on a screen that did not
-              offer the right one. */}
-          {/* QA-945 (Umesh): "candidate k paas hoga option interested in current upcoming batch ya
-              firr hoga interested in future batches". The wording says what it COSTS them, because
-              the consequence is real: choosing Future keeps them out of every batch until somebody
-              changes it back. */}
-          <Field label="Interested in">
-            <select className={inputCls} value={form.batch_interest ?? "Current"} onChange={(e) => set("batch_interest", e.target.value)}>
-              <option value="Current">The current batch</option>
-              <option value="Future">Upcoming batch</option>
-            </select>
-            {form.batch_interest === "Future" && (
-              <span className="mt-0.5 block text-[11px] text-amber-700">They will not be selectable for a batch until this is set back to “The current batch”.</span>
-            )}
-          </Field>
-          <Field label="Aadhaar number">
-            <input className={inputCls} inputMode="numeric" placeholder="12 digits" value={form.aadhaar_no ?? ""} onChange={(e) => set("aadhaar_no", e.target.value)} />
-            {form.aadhaar_no && aadhaarError(form.aadhaar_no, { optional: true }) && <p className="mt-1 text-xs text-red-600">{aadhaarError(form.aadhaar_no, { optional: true })}</p>}
-          </Field>
-          {/* 2026-08-12: the portal attendance export keys on this ID — filling it in makes every
-              future import match this candidate automatically instead of falling back to the name. */}
-          <Field label="Portal Candidate ID (from the government portal, e.g. CAN_40918461)">
-            <input className={inputCls} placeholder="CAN_…" value={form.sidh_candidate_id ?? ""} onChange={(e) => set("sidh_candidate_id", e.target.value)} />
-          </Field>
-          {/* QA-902 (-232, Umesh 24/08): the government APAAR ID, directly under the portal id it is
-              the sibling of. It is fillable on the batch Closure card too (that is where he asked for
-              it first, and that door is open to a Trainer) — this one is the record's own screen, and
-              a field editable in only one place is a field an operator cannot correct.
-              The hint validates while typing with the SAME function the API refuses with, so the form
-              and the door never disagree about what a valid APAAR ID is. */}
-          <Field label="APAAR ID (government academic account — 12 digits)">
-            <input className={inputCls} inputMode="numeric" placeholder="e.g. 190305516076"
-              value={form.apaar_id ?? ""} onChange={(e) => set("apaar_id", e.target.value)} />
-            {form.apaar_id && apaarError(form.apaar_id, { optional: true }) && (
-              <span className="mt-1 block text-xs text-red-600">{apaarError(form.apaar_id, { optional: true })}</span>
-            )}
-            <span className="mt-0.5 block text-[11px] text-gray-500">
-              Not the Aadhaar number — both are 12 digits and they are different numbers.
-            </span>
-          </Field>
-          {/* 2026-08-11: "कौन से program में interested… कौन-कौन सी location में" — for fast shortlisting later.
-              2026-08-13 (Umesh): stacked full-width — side-by-side clipped "Govt. ITI Charthwal, Muzaff…"
-              and selection was guesswork; title = hover reveal for anything that still clips. */}
-          <Field label="Interested programs (Ctrl-click for many)">
-            <select multiple className={inputCls + " h-28"} value={form.interested_programs ?? []}
-              onChange={(e) => set("interested_programs", Array.from(e.target.selectedOptions).map((o) => o.value))}>
-              {offerable(programs, form.interested_programs).map((p) => { const t = `${p.name}${p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}`; return <option key={p._id} value={p._id} title={t}>{t}</option>; })}
-            </select>
-          </Field>
-          <Field label="Interested locations (Ctrl-click for many)">
-            <select multiple className={inputCls + " h-28"} value={form.interested_locations ?? []}
-              onChange={(e) => set("interested_locations", Array.from(e.target.selectedOptions).map((o) => o.value))}>
-              {offerable(locations, form.interested_locations).map((l) => <option key={l._id} value={l._id} title={l.name}>{l.name}</option>)}
-            </select>
-          </Field>
-          {/* -116 (M4-06, Manish 17/08 [02:21] "इसको अगर ड्रॉप डाउन कर सकते हो, सोर्स को — तो ड्रॉप
-              डाउन कर दो। रेफरल और कैंपेन"): a list, not a hard enum. Umesh's own issue sheet flags the
-              wording as unreliable — three transcripts give "referral", "franchiser" and "mobiliser" —
-              so a closed enum would freeze a guess into the data model. A datalist offers exactly what
-              he named, still accepts anything typed, and loses nothing already stored. It becomes a
-              closed list the day Manish confirms the wording. */}
-          <Field label="Source (mobiliser / campaign)">
-            <input className={inputCls} list="candidate-source-options" value={form.source ?? ""} onChange={(e) => set("source", e.target.value)} placeholder="Pick one, or type another" />
-            <datalist id="candidate-source-options">
-              {["Mobiliser", "Campaign", "Referral", "Franchisee", "Walk-in", "Government portal"].map((o) => <option key={o} value={o} />)}
-            </datalist>
-          </Field>
-          {/* -116 (SS-01, Shivshakti 17/08 13:00): he filled THIS form, then opened the government's
-              "Skilling Program Application" beside it to show what we do not ask for. He named eight
-              out loud — religion, category, state, district, sub-district, father's name, mother's
-              name, marital status — and three more are visible on that portal screen which he never
-              said: salutation, urban/rural, and the differently-abled flag. Our candidates have to be
-              registered there anyway, so this is data somebody types either way; asking here means
-              typing it once instead of chasing it at registration time.
-              -126 (S18-01, Shivshakti 18/08 15:56): he was explicit that the FIELDS are right and the
-              placement was not — "ye jo aapne alag se banaya hua hai… options sahi hain, lekin isko
-              yahan add kar dijiye". Walled off in a collapsed block it took two passes to fill a
-              candidate, so the block is inline now: same fields, same grid, no lid.
-              -126 (S18-03): "ye dono option hata do" — Address type and Differently abled are GONE.
-              Worth remembering why they existed: they were never in his spoken list of eight. He named
-              eight; I read three more off the portal screenshot and added them. His spoken request
-              stands, my inference did not. Salutation is not in the removal and stays.
-              Every field optional — no existing record becomes invalid and no import breaks. The
-              portal's "Education & Employment" section was never expanded on screen, so its fields
-              stay unknown rather than guessed at. */}
-          <div className="text-sm font-medium text-gray-700">Government portal details (Skill India registration)</div>
-          <p className="-mt-2 text-xs text-gray-500">Everything the Skilling Program Application asks for. All optional here — filling it now saves re-collecting it at registration.</p>
-          <div className="grid gap-3 md:grid-cols-3">
-              <Field label="Salutation">
-                <input className={inputCls} list="cand-salutation" value={form.salutation ?? ""} onChange={(e) => set("salutation", e.target.value)} />
-                <datalist id="cand-salutation">{["Mr.", "Mrs.", "Ms.", "Dr."].map((o) => <option key={o} value={o} />)}</datalist>
-              </Field>
-              <Field label="Father&apos;s name"><input className={inputCls} value={form.father_name ?? ""} onChange={(e) => set("father_name", e.target.value)} /></Field>
-              <Field label="Mother&apos;s name"><input className={inputCls} value={form.mother_name ?? ""} onChange={(e) => set("mother_name", e.target.value)} /></Field>
-              <Field label="Marital status">
-                <input className={inputCls} list="cand-marital" value={form.marital_status ?? ""} onChange={(e) => set("marital_status", e.target.value)} />
-                <datalist id="cand-marital">{["Single", "Married", "Widowed", "Divorced"].map((o) => <option key={o} value={o} />)}</datalist>
-              </Field>
-              <Field label="Religion">
-                <input className={inputCls} list="cand-religion" value={form.religion ?? ""} onChange={(e) => set("religion", e.target.value)} />
-                <datalist id="cand-religion">{["Hindu", "Muslim", "Christian", "Sikh", "Buddhist", "Jain", "Parsi", "Other"].map((o) => <option key={o} value={o} />)}</datalist>
-              </Field>
-              <Field label="Category">
-                <input className={inputCls} list="cand-category" value={form.social_category ?? ""} onChange={(e) => set("social_category", e.target.value)} />
-                <datalist id="cand-category">{["General", "OBC", "SC", "ST", "EWS"].map((o) => <option key={o} value={o} />)}</datalist>
-              </Field>
-              {/* 2026-08-24 (Umesh, with the SIDH form on screen): "state - selected state dropdown -
-                  respective district - respective sub district". These were three free-text boxes on
-                  THREE separate doors; the behaviour now lives in one component and each door keeps
-                  its own label markup. A stored value LGD does not carry stays selected and is
-                  marked, never dropped - "purana data chhedo mat, sirf batao". */}
-              <GeographyFields
-                state={form.state} district={form.district} subDistrict={form.sub_district}
-                onChange={(patch) => setForm((f: any) => ({ ...f, ...patch }))}
-                inputCls={inputCls}
-                wrap={(label, child, hint) => <Field label={label}>{child}{hint}</Field>}
-              />
-          </div>
-          {/* 15/08 (Umesh): no candidate fee in this programme — the fee inputs left the
-              drawer. Schema + Rule 54 toggle stay dormant for a future paid scheme. */}
-          {/* QA-105 (15/08): the candidate document store — multi-pick, type guessed from
-              each filename (trainer pattern), delete from day one. Edit mode only: the
-              candidate must exist before files can hang on them. */}
-          {drawer === "edit" && editId && <CandidateDocs candidateId={editId} setError={setError} />}
-          {/* 15/08 (Umesh): columns the import didn't recognise, accepted by the operator —
-              shown as facts, edited only by re-import. */}
-          {/* -115 (QA-146, measured on live 18/08): the 45 CHI-ITI rows are correct again — name,
-              phone and email all read right — but 45 of them still carry the junk keys the bad header
-              row produced, and "__EMPTY_4" is SheetJS's name for a column whose header cell was blank,
-              not a fact about the student. It was being shown to staff as an "extra column" with a
-              value beside it. A key that is only a spreadsheet artefact is now named as one and the
-              value still shown, so nothing is hidden and nothing is dressed up as data. */}
-          {form.custom_fields && Object.keys(form.custom_fields).length > 0 && (
-            <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm">
-              <div className="mb-1 text-xs font-medium text-gray-500">Extra columns (from import)</div>
-              {Object.entries(form.custom_fields).map(([k, v]) => (
-                <div key={k} className="flex justify-between gap-3">
-                  <span className="text-gray-500">
-                    {/^__EMPTY/.test(k)
-                      ? <span title="The spreadsheet column this came from had no header, so the importer had no name for it. It is kept as-is; correct it by re-importing with a fixed header row.">unnamed column {k.replace(/^__EMPTY_?/, "") || "1"}</span>
-                      : k}
-                  </span>
-                  <span className="text-right">{String(v)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-          {/* Edit mode: location/program may legitimately be blank on a sheet-imported row — the
-              save must not be held hostage to fields the user is not correcting. */}
-          <Btn onClick={saveCandidate} disabled={savingC || (drawer === "add" ? (!form.name || !form.phone || !form.program) : (!form.name || !form.phone))
-            || !!phoneError(form.phone) || !!phoneError(form.alt_phone, { optional: true }) || !!emailError(form.email, { optional: true })}>
-            {drawer === "edit" ? "Save changes" : "Add"}
-          </Btn>
-          {/* -84 (QA-146 part 2): junk rows (a sheet's own header/description lines) need a way out.
-              QA-904 (2026-08-24): was Admin-only, now follows `candidates.delete`. The API still
-              refuses anyone with batch history — a real person is Dropped, never erased. */}
-          {drawer === "edit" && editId && canDeleteCandidate && (
-            <Btn kind="ghost" onClick={async () => {
-              if (!window.confirm(`Delete "${form.name}" (${form.phone}) permanently? Their documents go too. A candidate with batch history should be dropped from the batch, not deleted.`)) return;
-              try { await api(`/api/candidates/${editId}`, { method: "DELETE" }); setDrawer(""); setEditId(""); load(); }
-              catch (e: any) { setError(e.message); }
-            }}>Delete</Btn>
-          )}
-        </div>
-      </Drawer>
+      {/* QA-1436: form fields, validation, government-ID save semantics and the document block
+          now live in CandidateEditDrawer (src/components/candidate-edit-drawer.tsx) — shared with
+          the batch Enrollment tab's Edit button, so there is one copy of this instead of two. The
+          already-loaded row is passed as `candidate` so opening Edit here costs no extra fetch. */}
+      <CandidateEditDrawer
+        open={drawer === "add" || drawer === "edit"}
+        mode={drawer === "edit" ? "edit" : "add"}
+        candidateId={editId}
+        candidate={editRecord}
+        locations={locations}
+        programs={programs}
+        canDelete={canDeleteCandidate}
+        onClose={() => { setDrawer(""); setEditId(""); setEditRecord(null); }}
+        onSaved={load}
+      />
 
       {/* 2026-08-24 (Umesh): both answers, before the link exists. `offerable` with no second
           argument is deliberate on the programme picker — a retired programme may stay on a record

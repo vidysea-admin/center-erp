@@ -3021,13 +3021,23 @@ for (const file of walk(root)) {
     "app/p/register/[token]/page.tsx",
     "app/p/enrol/page.tsx",
   ];
+  // QA-1436: candidates/page.tsx's Edit/Add form (and its GeographyFields usage) was extracted one
+  // level into src/components/candidate-edit-drawer.tsx so the batch Enrollment tab could reuse it
+  // (ARCHITECTURE.md 3.15) — a door importing that shared component satisfies this pin the same as
+  // having the literal text inline; the check is "does opening this door's form reach the cascade
+  // component", not "is the string GeographyFields typed directly into this file".
+  const indirectDoors = { "app/(app)/candidates/page.tsx": "components/candidate-edit-drawer.tsx" };
   const missing = [];
   const freeText = [];
   for (const rel of doors) {
     const src = stripComments(fs.readFileSync(path.join(root, rel), "utf-8"));
-    if (!/GeographyFields/.test(src)) missing.push(rel);
-    // an <input> bound to any of the three fields is the shape that was replaced
-    if (/<input[^>]*value=\{form\.(state|district|sub_district)/.test(src)) freeText.push(rel);
+    const indirectRel = indirectDoors[rel];
+    const indirectSrc = indirectRel ? stripComments(fs.readFileSync(path.join(root, indirectRel), "utf-8")) : "";
+    const usesIndirection = indirectRel && new RegExp(path.basename(indirectRel, ".tsx")).test(src);
+    if (!/GeographyFields/.test(src) && !(usesIndirection && /GeographyFields/.test(indirectSrc))) missing.push(rel);
+    // an <input> bound to any of the three fields is the shape that was replaced — checked on
+    // whichever file actually renders this door's form now.
+    if (/<input[^>]*value=\{form\.(state|district|sub_district)/.test(usesIndirection ? indirectSrc : src)) freeText.push(rel);
   }
   const endpoint = fs.existsSync(path.join(root, "app/api/public/geography/route.ts"));
   const data = fs.existsSync(path.join(root, "data/lgd-geography.json"));

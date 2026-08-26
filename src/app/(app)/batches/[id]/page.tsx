@@ -17,6 +17,7 @@ import { slotGuidelineErrors, slotHoursPerDay } from "@/lib/slot-rules";
 import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthBanner, NameCell, Notice, Section, ShareLinkPanel, Tabs, inputCls, statusLabel } from "@/components/ui";
 import { Activity } from "@/components/activity";
 import { usePerms } from "@/components/shell";
+import { CandidateEditDrawer } from "@/components/candidate-edit-drawer";
 import { compressImage, flushQueue, fmtBytes, getLastUploadInfo, getQueue, pickRecorderMime, uploadWithRetry, videoKnobs, type VideoKnobs } from "@/lib/upload";
 import { BASE_PATH } from "@/lib/base-path";
 import { bulkSmsCsv, smsLink, waLink } from "@/lib/messaging";
@@ -169,7 +170,7 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
       <Tabs tabs={tabs} active={tab} onChange={setTab} />
       {tab === "Overview" && <Overview data={data} role={role} onChanged={load} error={error} setError={setError} onGo={setTab} />}
       {tab === "Candidates" && <Roster batchId={id} batch={b} error={error} setError={setError} onChanged={load} />}
-      {tab === "Enrollment" && <Enrollment batchId={id} error={error} setError={setError} />}
+      {tab === "Enrollment" && <Enrollment batchId={id} batch={b} error={error} setError={setError} />}
       {tab === "Daily Execution" && <DailyExecution batchId={id} batch={b} role={role} error={error} setError={setError} />}
       {tab === "Documents" && <BatchDocuments batchId={id} batch={b} error={error} setError={setError} onGo={setTab} />}
       {tab === "Attendance" && <AttendanceTab batchId={id} batch={data.item} role={role} error={error} setError={setError} onGo={setTab} />}
@@ -1530,7 +1531,7 @@ function PortalIdChip({ candidate, value, className = "" }: { candidate?: any; v
     title="No portal Candidate ID on record. Certification cannot complete until this is filled in from SIDH.">no portal ID</span>;
 }
 
-function EnrolCard({ m, onUpdate, selected, onSelect, canEdit = true }: any) {
+function EnrolCard({ m, onUpdate, selected, onSelect, canEdit = true, canEditCandidate = false, onEditCandidate }: any) {
   const who = m.candidate?.name || m.candidate?.email || m.candidate?.phone || "(unnamed candidate)";
   return (
     <div className={`space-y-3 rounded-xl border bg-white p-4 ${selected ? "ring-2 ring-blue-200" : ""}`}>
@@ -1543,7 +1544,17 @@ function EnrolCard({ m, onUpdate, selected, onSelect, canEdit = true }: any) {
             <div className="mt-1"><PortalIdChip candidate={m.candidate} /></div>
           </div>
         </label>
-        <Chip value={m.enrollment_status} />
+        <div className="flex shrink-0 items-center gap-2">
+          {/* QA-1436 (Umesh, with two screenshots): the candidate's own detail shutter, reachable
+              from the batch's Enrollment tab so a trainer does not have to leave the batch to fix a
+              candidate's profile. Gated on candidates.manage — deliberately NOT the `canEdit` prop
+              above, which gates candidates.assign (the enrollment-step toggles) — those are two
+              different rights and conflating them would silently mis-gate this button. */}
+          {canEditCandidate && m.candidate?._id && (
+            <Btn small kind="ghost" onClick={() => onEditCandidate(m.candidate)}>Edit</Btn>
+          )}
+          <Chip value={m.enrollment_status} />
+        </div>
       </div>
       <div className="flex flex-wrap gap-2">
         <EnrolStepToggle m={m} field="reg_done" label="Registration" onUpdate={onUpdate} canEdit={canEdit} />
@@ -1564,13 +1575,28 @@ function EnrolCard({ m, onUpdate, selected, onSelect, canEdit = true }: any) {
   );
 }
 
-function Enrollment({ batchId, error, setError }: any) {
+function Enrollment({ batchId, batch, error, setError }: any) {
   // QA-1363: this component called usePerms not once, while the same file used it eight times
   // elsewhere - so a Trainer saw "Bulk (all N pending)" with four enabled buttons and every card's
   // step toggles live, all of which the server now refuses. Gated on the right the server itself
   // asks for, so the screen and the door answer the same question.
   const { can: canEnrolAct, loaded: enrolPermsReady } = usePerms();
   const canEnrol = !enrolPermsReady || canEnrolAct("candidates.assign", "edit");
+  // QA-1436: candidates.manage, not candidates.assign above — editing a candidate's own profile
+  // and toggling this batch's enrolment steps are two different rights (see the QA-813/QA-806
+  // "gate reads role, door reads permission" class this comment style is warning about elsewhere
+  // in this file). Same "assume yes while loading" convention as PortalIdGaps's canMove below.
+  const { can: canManageCand, loaded: candPermsReady } = usePerms();
+  const canEditCandidate = !candPermsReady || canManageCand("candidates.manage", "edit");
+  // Delete lives inside the same drawer but is its OWN right (candidates.delete) — not to be
+  // conflated with candidates.manage above, same reasoning, different key (see candidates/page.tsx's
+  // canDeleteCandidate for the sibling check this mirrors).
+  const canDeleteCandidate = !candPermsReady || canManageCand("candidates.delete", "edit");
+  // QA-1436: holds the whole candidate object (from the already-loaded, now fully-populated
+  // roster), not just an id — a Trainer must NOT go through the drawer's fetch-by-id fallback,
+  // since GET /api/candidates/[id] is deliberately closed to Trainer (QA-060/095). Passing the
+  // pre-loaded record sidesteps that door entirely, the same way candidates/page.tsx already does.
+  const [editCandidate, setEditCandidate] = useState<any>(null);
   const [members, setMembers] = useState<any[]>([]);
   const [idx, setIdx] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -1630,16 +1656,34 @@ function Enrollment({ batchId, error, setError }: any) {
       )}
       {/* Desktop: all cards. Mobile: one at a time with prev/next (spec §0 Rule B) */}
       <div className="hidden gap-3 md:grid md:grid-cols-2 xl:grid-cols-3">
-        {members.map((m) => <EnrolCard key={m._id} m={m} onUpdate={update} selected={selected.has(m._id)} onSelect={toggleSel} canEdit={canEnrol} />)}
+        {members.map((m) => <EnrolCard key={m._id} m={m} onUpdate={update} selected={selected.has(m._id)} onSelect={toggleSel} canEdit={canEnrol} canEditCandidate={canEditCandidate} onEditCandidate={setEditCandidate} />)}
       </div>
       <div className="md:hidden">
-        <EnrolCard m={cur} onUpdate={update} selected={selected.has(cur._id)} onSelect={toggleSel} canEdit={canEnrol} />
+        <EnrolCard m={cur} onUpdate={update} selected={selected.has(cur._id)} onSelect={toggleSel} canEdit={canEnrol} canEditCandidate={canEditCandidate} onEditCandidate={setEditCandidate} />
         <div className="mt-3 flex items-center justify-between">
           <Btn kind="ghost" onClick={() => setIdx((i) => Math.max(0, i - 1))} disabled={idx === 0}>← Prev</Btn>
           <span className="text-sm text-gray-500">{idx + 1} / {members.length}</span>
           <Btn kind="ghost" onClick={() => setIdx((i) => Math.min(members.length - 1, i + 1))} disabled={idx >= members.length - 1}>Next →</Btn>
         </div>
       </div>
+      {/* QA-1436: scoped to this tab only (Umesh: "ye enrollment walde usme rahae ga") — no other
+          tab mounts this drawer. `candidate` is passed pre-loaded (see the members route above) so
+          this never falls through to the drawer's fetch-by-id path — that path calls
+          GET /api/candidates/[id], which stays closed to Trainer on purpose (QA-060/095).
+          `programs` is left unset (GET /api/programs carries no role restriction, so the drawer's
+          own fetch works for every role here) but `locations` is passed explicitly as just this
+          batch's own centre — GET /api/locations is ALSO closed to Trainer (QA-095, same CEO
+          ruling), so letting the drawer self-fetch there would silently empty the Location field
+          for exactly the audience this button is for. One option is the correct scope anyway: a
+          Trainer editing a candidate from inside this batch is acting on this batch's own centre,
+          not browsing the location directory. */}
+      <CandidateEditDrawer
+        open={!!editCandidate} mode="edit" candidateId={editCandidate?._id} candidate={editCandidate}
+        locations={batch?.location ? [batch.location] : []}
+        canDelete={canDeleteCandidate}
+        onClose={() => setEditCandidate(null)}
+        onSaved={load}
+      />
     </div>
   );
 }

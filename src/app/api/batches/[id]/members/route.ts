@@ -17,7 +17,14 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   // Without it the chip on every candidate card and both attendance pickers would read "no portal
   // ID" for the entire roster - a screen-wide falsehood that no source-scanning pin could see,
   // because the component would be correct and the data behind it empty.
-  const items = await BatchMember.find({ batch: id }).populate("candidate", "name phone lifecycle_status sidh_candidate_id apaar_id").sort({ joined_on: 1 }).lean();
+  // QA-1436: populate went from a fixed field list to the full document so the Enrollment tab's
+  // Edit-candidate button can hand CandidateEditDrawer an already-loaded record with zero extra
+  // fetch. Deliberately NOT routed through GET /api/candidates/[id] for this — that door stays
+  // closed to a Trainer on purpose (QA-060/095, CEO: "I shouldn't see all the candidates... just
+  // my batch-wise details" — a Trainer's lens IS this roster, not the general pool). A member row
+  // here is already scoped by assertBatchInScope above, so reading the candidate behind a batch
+  // this user is authorized to see does not reopen that door.
+  const items = await BatchMember.find({ batch: id }).populate("candidate").sort({ joined_on: 1 }).lean();
 
   // GD-102: "kitne bacche ki kitni-kitni attendance chal rahi hai" — each member's running
   // attendance, counted from the daily logs rather than stored anywhere it could go stale.
