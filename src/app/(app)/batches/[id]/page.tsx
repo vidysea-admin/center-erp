@@ -1061,6 +1061,16 @@ function EditDetails({ b, onChanged, error, setError }: any) {
 
 // ---------- Candidates tab: roster ----------
 function Roster({ batchId, batch, error, setError, onChanged }: any) {
+  // QA-1363 (checker on qa-1290): -253 closed the three enrolment doors on the SERVER and left every
+  // button that opens them on the SCREEN. Driven as a Trainer in a real browser, this roster rendered
+  // 18 enabled Drop buttons and pressing one printed the permission refusal back at the user. Before
+  // -253 those presses WORKED, so the fix turned a working control into a dead one - which is the
+  // -224 fault this project has already shipped once: a correct guard whose stated remedy is a
+  // button that refuses on press.
+  // Same right the server asks (`candidates.assign` / edit), and the same `!loaded ||` shape this
+  // file already uses eight times, so the control does not flicker to disabled while rights load.
+  const { can: canRosterAct, loaded: rosterPermsReady } = usePerms();
+  const canDropMember = !rosterPermsReady || canRosterAct("candidates.assign", "edit");
   const [members, setMembers] = useState<any[]>([]);
   const [pool, setPool] = useState<any[]>([]);
   const [showPool, setShowPool] = useState(false);
@@ -1318,7 +1328,7 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
             // QA-039: provenance on the roster too.
             { key: "source", label: "Source", mobile: false, hidden: true, filterable: true, render: (r: any) => r.source ?? <span className="text-gray-400">—</span> },
             { key: "left_on", label: "Left", render: (r: any) => r.left_on ? `${fmtDate(r.left_on)} (${r.drop_reason})` : "—" },
-            { key: "_act", label: "", render: (r: any) => !r.left_on ? <Btn small kind="ghost" onClick={() => setDropTarget(r)}>Drop</Btn> : null },
+            { key: "_act", label: "", render: (r: any) => !r.left_on && canDropMember ? <Btn small kind="ghost" onClick={() => setDropTarget(r)}>Drop</Btn> : null },
           ]} empty="No members yet — add from the candidate pool." />
       </Section>
 
@@ -1369,10 +1379,15 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
 // now; a click updates one card in place and the scroll position stays. (2) Bulk actions —
 // mark one step, or complete enrollment, for every pending member in ONE request. (3) The
 // card names the person in every state (Completed included) with a name→email→phone chain.
-function EnrolStepToggle({ m, field, label, onUpdate }: any) {
+function EnrolStepToggle({ m, field, label, onUpdate, canEdit = true }: any) {
+  // QA-1363: DISABLED rather than hidden, and it says WHY. A step that vanishes leaves a viewer
+  // unable to read the state at all - and reading is not what the server refuses. The three steps
+  // are the record of where this person has reached, so they stay legible to everyone and editable
+  // only by whoever holds the right.
   return (
-    <button onClick={() => onUpdate(m, { [field]: !m[field] })}
-      className={`rounded-lg border px-3 py-2 text-sm font-medium ${m[field] ? "border-green-300 bg-green-50 text-green-700" : "border-gray-300 bg-white text-gray-500"}`}>
+    <button onClick={() => onUpdate(m, { [field]: !m[field] })} disabled={!canEdit}
+      title={canEdit ? undefined : "You do not have the right to change enrolment on this batch."}
+      className={`rounded-lg border px-3 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60 ${m[field] ? "border-green-300 bg-green-50 text-green-700" : "border-gray-300 bg-white text-gray-500"}`}>
       {m[field] ? "✓ " : ""}{label}
     </button>
   );
@@ -1433,13 +1448,13 @@ function PortalIdChip({ candidate, value, className = "" }: { candidate?: any; v
     title="No portal Candidate ID on record. Certification cannot complete until this is filled in from SIDH.">no portal ID</span>;
 }
 
-function EnrolCard({ m, onUpdate, selected, onSelect }: any) {
+function EnrolCard({ m, onUpdate, selected, onSelect, canEdit = true }: any) {
   const who = m.candidate?.name || m.candidate?.email || m.candidate?.phone || "(unnamed candidate)";
   return (
     <div className={`space-y-3 rounded-xl border bg-white p-4 ${selected ? "ring-2 ring-blue-200" : ""}`}>
       <div className="flex items-center justify-between gap-2">
         <label className="flex min-w-0 items-start gap-2">
-          {m.enrollment_status !== "Completed" && <input type="checkbox" className="mt-1" checked={!!selected} onChange={() => onSelect(m._id)} />}
+          {canEdit && m.enrollment_status !== "Completed" && <input type="checkbox" className="mt-1" checked={!!selected} onChange={() => onSelect(m._id)} />}
           <div className="min-w-0">
             <div className="truncate font-semibold" title={who}>{who}</div>
             <div className="text-sm text-gray-500">{m.candidate?.phone}{m.candidate?.email && m.candidate?.name ? ` · ${m.candidate.email}` : ""}</div>
@@ -1449,17 +1464,18 @@ function EnrolCard({ m, onUpdate, selected, onSelect }: any) {
         <Chip value={m.enrollment_status} />
       </div>
       <div className="flex flex-wrap gap-2">
-        <EnrolStepToggle m={m} field="reg_done" label="Registration" onUpdate={onUpdate} />
-        <EnrolStepToggle m={m} field="kyc_done" label="e-KYC" onUpdate={onUpdate} />
-        <EnrolStepToggle m={m} field="accept_done" label="Batch Accept" onUpdate={onUpdate} />
+        <EnrolStepToggle m={m} field="reg_done" label="Registration" onUpdate={onUpdate} canEdit={canEdit} />
+        <EnrolStepToggle m={m} field="kyc_done" label="e-KYC" onUpdate={onUpdate} canEdit={canEdit} />
+        <EnrolStepToggle m={m} field="accept_done" label="Batch Accept" onUpdate={onUpdate} canEdit={canEdit} />
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <select className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm" value={m.issue ?? ""}
+        <select className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm disabled:bg-gray-100 disabled:text-gray-400" value={m.issue ?? ""} disabled={!canEdit}
+          title={canEdit ? undefined : "You do not have the right to change enrolment on this batch."}
           onChange={(e) => e.target.value ? onUpdate(m, { failed: true, issue: e.target.value }) : onUpdate(m, { failed: false, issue: null })}>
           <option value="">No issue</option>
           {["OTP not received", "Already registered", "KYC failed", "Portal error", "Duplicate", "Other"].map((i) => <option key={i}>{i}</option>)}
         </select>
-        {m.enrollment_status === "Failed" && <Btn small kind="ghost" onClick={() => onUpdate(m, { failed: false, issue: null })}>Clear failure</Btn>}
+        {canEdit && m.enrollment_status === "Failed" && <Btn small kind="ghost" onClick={() => onUpdate(m, { failed: false, issue: null })}>Clear failure</Btn>}
         <span className="ml-auto text-xs text-gray-400">{m.source}</span>
       </div>
     </div>
@@ -1467,6 +1483,12 @@ function EnrolCard({ m, onUpdate, selected, onSelect }: any) {
 }
 
 function Enrollment({ batchId, error, setError }: any) {
+  // QA-1363: this component called usePerms not once, while the same file used it eight times
+  // elsewhere - so a Trainer saw "Bulk (all N pending)" with four enabled buttons and every card's
+  // step toggles live, all of which the server now refuses. Gated on the right the server itself
+  // asks for, so the screen and the door answer the same question.
+  const { can: canEnrolAct, loaded: enrolPermsReady } = usePerms();
+  const canEnrol = !enrolPermsReady || canEnrolAct("candidates.assign", "edit");
   const [members, setMembers] = useState<any[]>([]);
   const [idx, setIdx] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -1512,7 +1534,7 @@ function Enrollment({ batchId, error, setError }: any) {
         {bulkMsg && <span className="text-green-700">✓ {bulkMsg}</span>}
       </div>
       {/* QA-147: bulk actions — the 135-click wall becomes three clicks (or one). */}
-      {pending.length > 0 && (
+      {canEnrol && pending.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs">
           <span className="font-medium text-blue-900">Bulk ({scope}):</span>
           <Btn small kind="ghost" disabled={bulkBusy} onClick={() => bulk("reg_done")}>Mark Registration</Btn>
@@ -1526,10 +1548,10 @@ function Enrollment({ batchId, error, setError }: any) {
       )}
       {/* Desktop: all cards. Mobile: one at a time with prev/next (spec §0 Rule B) */}
       <div className="hidden gap-3 md:grid md:grid-cols-2 xl:grid-cols-3">
-        {members.map((m) => <EnrolCard key={m._id} m={m} onUpdate={update} selected={selected.has(m._id)} onSelect={toggleSel} />)}
+        {members.map((m) => <EnrolCard key={m._id} m={m} onUpdate={update} selected={selected.has(m._id)} onSelect={toggleSel} canEdit={canEnrol} />)}
       </div>
       <div className="md:hidden">
-        <EnrolCard m={cur} onUpdate={update} selected={selected.has(cur._id)} onSelect={toggleSel} />
+        <EnrolCard m={cur} onUpdate={update} selected={selected.has(cur._id)} onSelect={toggleSel} canEdit={canEnrol} />
         <div className="mt-3 flex items-center justify-between">
           <Btn kind="ghost" onClick={() => setIdx((i) => Math.max(0, i - 1))} disabled={idx === 0}>← Prev</Btn>
           <span className="text-sm text-gray-500">{idx + 1} / {members.length}</span>

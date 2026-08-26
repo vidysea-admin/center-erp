@@ -350,6 +350,106 @@ if (await card.count() > 0) {
   }
 }
 
+// ---------------------------------------------------------------------------------------------
+// QA-1363 (checker on qa-1290). THE SERVER CLOSED THREE DOORS AND LEFT THEIR BUTTONS ON THE SCREEN.
+//
+// -253 gated the enrolment doors on `candidates.assign`. Driven as a Trainer in a real browser, the
+// batch page still rendered "Bulk (all N pending)" with four enabled buttons and 18 enabled Drop
+// buttons - and pressing one printed the permission refusal back at the user. Before -253 those
+// presses WORKED, so the fix turned a working control into a dead one. That is the -224 fault this
+// project has already shipped once.
+//
+// TWO ARMS, AND THE ADMIN ARM IS WHY THIS MEANS ANYTHING. The checker's own first UI run scored a
+// PASS because the bulk bar was absent - every member happened to be Completed and the bar sits
+// behind `pending.length > 0`. That is an absence-based green, true the way it is true of a blank
+// page. So this asserts the ADMIN does see the controls on the SAME batch in the SAME run.
+{
+  const asRole = async (email, pw) => {
+    const c = await browser.newContext({ viewport: { width: 1536, height: 900 } });
+    const pg = await c.newPage();
+    await pg.goto(BASE, { waitUntil: "domcontentloaded" });
+    await pg.waitForTimeout(800);
+    const box = pg.locator('input[type="email"], input[name="email"]').first();
+    if (await box.count()) {
+      await box.fill(email);
+      await pg.locator('input[type="password"]').first().fill(pw);
+      await pg.locator('button[type="submit"], button:has-text("Sign in"), button:has-text("Log in")').first().click();
+      await pg.waitForURL((u) => !/login/i.test(String(u)), { timeout: 30000 }).catch(() => {});
+    }
+    return { c, pg, ok: !/login/i.test(pg.url()) };
+  };
+  // THE CONTROLS ARE BEHIND TABS, and the page opens on Overview. The first two runs of this pin
+  // read the Overview tab and reported that even an Admin saw no enrolment controls - measuring the
+  // wrong screen and calling it a permission result. `page.tsx:141-143` mounts Roster under
+  // "Candidates" and Enrollment under "Enrollment"; neither exists in the DOM until its tab is
+  // selected. So this opens each tab and reads it, and says which tab each number came from.
+  const openTab = async (pg, name) => {
+    const tab = pg.getByRole("button", { name }).first();
+    if (await tab.count()) { await tab.click().catch(() => {}); await pg.waitForTimeout(1200); }
+  };
+  const readBatch = async (pg, id) => {
+    await pg.goto(BASE + "/batches/" + id, { waitUntil: "domcontentloaded" });
+    await pg.waitForFunction(() => /Overview|Enrollment|Candidates/i.test(document.body.innerText), undefined, { timeout: 30000 }).catch(() => {});
+    await pg.waitForTimeout(800);
+    await openTab(pg, /^Enrollment$/);
+    const et = await pg.locator("body").innerText();
+    const bulk = et.indexOf("Bulk (") >= 0;
+    const complete = await pg.getByRole("button", { name: /Complete enrollment/ }).count();
+    await openTab(pg, /^Candidates$/);
+    await pg.waitForTimeout(600);
+    const drops = await pg.getByRole("button", { name: /^Drop$/ }).count();
+    return { bulk, complete, drops };
+  };
+
+  const tr = await asRole("trainer.jpr03@vidysea.com", "CiOnly@123");
+  if (!tr.ok) {
+    ok("[QA-1363] the Trainer sample login works - without it this arm verifies nothing", false, tr.pg.url());
+  } else {
+    const list = await tr.pg.evaluate(async (b) => {
+      const r = await fetch(b + "/api/batches?limit=50", { credentials: "include" });
+      const j = await r.json().catch(() => ({}));
+      return (j.items || []).map((x) => ({ id: x._id, code: x.code, status: x.status }));
+    }, BASE);
+    const target = list.find((b) => ["Active", "Ready", "Planning"].includes(b.status)) || list[0];
+    if (!target) {
+      ok("[QA-1363] the Trainer can reach at least one batch page - the fixture must get there", false, JSON.stringify(list).slice(0, 200));
+    } else {
+      // THE FIXTURE MUST CREATE WHAT IT MEASURES. First run of this pin: the control FAILED because
+      // the Admin saw nothing either - JPR03-MATH-FND-01 had no pending member, so the bulk bar
+      // (gated on `pending.length > 0`) and the Drop cells were absent for everyone. The control
+      // did its job and refused to let the Trainer arm score a green on an empty screen. Picking
+      // "some batch the Trainer can see" was never enough; the batch has to HAVE a pending member.
+      const seeded = await (async () => {
+        try {
+          const b = (await req(admin, "GET", `/api/batches/${target.id}`)).data.item;
+          const cand = (await req(admin, "POST", "/api/candidates", {
+            name: `TEST-Perm ${s}`, phone: phone("76"), location: b.location?._id ?? b.location,
+            program: b.program?._id ?? b.program,
+          }, 201)).data.item;
+          await req(admin, "POST", `/api/batches/${target.id}/members`, { candidate: cand._id }, 201);
+          return true;
+        } catch { return false; }
+      })();
+      ok("[QA-1363 fixture] a PENDING member exists on the batch under test - the controls are gated on pending.length > 0, so without one this whole arm is vacuous",
+        seeded, `batch=${target.code}`);
+
+      const t = await readBatch(tr.pg, target.id);
+      const ad = await asRole("admin@vidysea.com", ADMIN_PASSWORD);
+      const a = ad.ok ? await readBatch(ad.pg, target.id) : null;
+      ok("[QA-1363 control] an ADMIN sees the enrolment controls on this same batch - otherwise the Trainer arm below is green by ABSENCE, not by permission",
+        !!a && (a.bulk || a.drops > 0), JSON.stringify({ admin: a, batch: target.code }));
+      if (a && (a.bulk || a.drops > 0)) {
+        ok("[QA-1363] ...and the TRAINER is offered no bulk enrolment bar the server would refuse",
+          !t.bulk && t.complete === 0, JSON.stringify({ trainer: t, batch: target.code }));
+        ok("[QA-1363] ...and no Drop button either - a control that refuses on press is the -224 fault",
+          t.drops === 0, JSON.stringify({ trainerDrops: t.drops, adminDrops: a.drops }));
+      }
+      await ad.c.close().catch(() => {});
+    }
+  }
+  await tr.c.close().catch(() => {});
+}
+
 console.log(`\n--- rendered-state summary (${results.length} URLs) ---`);
 for (const r of results) {
   console.log(`  ${(decodeURIComponent(r.qs.split("=")[1] || "(none)")).padEnd(24)} | ${r.kind.padEnd(11)} | ${r.bucket.padEnd(9)} | tab ${r.activeTab.padEnd(26)} | pill ${(r.activePills[0] || "-").padEnd(22)} | announced ${String(r.announced).padStart(4)} | rows ${String(r.rows).padStart(4)}`);
