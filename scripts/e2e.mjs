@@ -819,6 +819,49 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
     const anyFail = rrows.filter((i) => i.result?.result === "Fail").length;
     ok("QA-697: …and NOT ONE student was written to Fail by a press that then failed",
       anyFail === 0, JSON.stringify({ failed: anyFail, rows: rrows.length }));
+
+    // ---- QA-732 (-206 checker, cycle 2 on qa-206): the FORCED press's own deliverables, pinned ----
+    // QA-675 asked for the IST wall-clock and the list of what was open, by name, on the audit row -
+    // the checker measured all of it by hand and found NOT ONE assertion existed for any of it,
+    // on the release whose own commit message names "no suite exercises this path" as the reason
+    // QA-697 itself survived. This is that pin.
+    const forced = await req("POST", `/api/batches/${rb._id}/complete`,
+      { reason: "QA-732 pin: forced, must be signed and logged in IST", force: true });
+    ok("QA-732: a forced press on a noCan, unmarked batch actually completes",
+      forced.status === 200, `status=${forced.status} error=${JSON.stringify(forced.data?.error ?? null).slice(0, 200)}`);
+    const rClosure = await closureOf(rb._id);
+    ok("QA-732: …certification is signed by the Admin, not derived",
+      rClosure?.certification_status === "Completed" && rClosure?.certification_derived === false,
+      JSON.stringify({ cert: rClosure?.certification_status, derived: rClosure?.certification_derived }));
+    const rAudit = ((await req("GET", `/api/audit/Batch/${rb._id}`)).data.items ?? []);
+    const completedRow = rAudit.find((a) => a.field === "completed_by_admin");
+    const nvText = String(completedRow?.new_value ?? completedRow?.newValue ?? "");
+    ok("QA-732: …the audit row carries an IST wall-clock, not the raw UTC instant",
+      /Completed by Admin at \d{1,2} \w{3} \d{4}, \d{2}:\d{2} (am|pm) IST/.test(nvText),
+      nvText.slice(0, 120));
+    // The blocked candidates come from `mkBatch`'s own `noCan` roster, named `D112 9<i> <stamp>`.
+    const rrosterCands = (await req("GET", `/api/batches/${rb._id}/members`)).data.items ?? [];
+    const blockedNames = rrosterCands.map((m) => m.candidate?.name).filter(Boolean);
+    ok("QA-732: …and it names EACH blocked student, not just a count",
+      blockedNames.length >= 2 && blockedNames.every((n) => nvText.includes(n)),
+      JSON.stringify({ names: blockedNames, text: nvText.slice(0, 260) }));
+  }
+
+  // A clean, fully-marked and fully-settled batch: a bare (unforced) press must say plainly that
+  // nothing was outstanding, not merely succeed silently.
+  {
+    const { b: cb, mems: cm } = await mkBatch(2, 90);
+    await req("PUT", `/api/batches/${cb._id}/results`, { rows: cm.map((m) => ({ member: String(m._id), result: "Pass", score: 80, max_score: 100, assessed_on: today })) }, 200);
+    const cRows = await rowsOf(cb._id);
+    for (const i of cRows) await req("PATCH", `/api/results/${i.result._id}`, { certificate_file: await upload(`d112-clean-${i.member}.pdf`) }, 200);
+    const clean = await req("POST", `/api/batches/${cb._id}/complete`, { reason: "QA-732 pin: clean press, must say nothing was outstanding" });
+    ok("QA-732: a clean press on a fully-marked, fully-settled, fully-CAN'd batch completes unforced",
+      clean.status === 200, `status=${clean.status} error=${JSON.stringify(clean.data?.error ?? null).slice(0, 200)}`);
+    const cAudit = ((await req("GET", `/api/audit/Batch/${cb._id}`)).data.items ?? []);
+    const cRow = cAudit.find((a) => a.field === "completed_by_admin");
+    const cText = String(cRow?.new_value ?? cRow?.newValue ?? "");
+    ok("QA-732: …and the row reads plainly that nothing was outstanding, not an empty list",
+      cText.includes("nothing was outstanding"), cText.slice(0, 200));
   }
 
   // ---- QA-735 / QA-736 (-212, checker on qa-211): QA-697 RESTORED, on a shape nothing covered ----

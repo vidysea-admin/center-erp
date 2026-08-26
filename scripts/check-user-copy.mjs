@@ -2131,6 +2131,11 @@ for (const file of walk(root)) {
   // (`batches.manage`), not a blacklist of role names. Corrected in place rather than left to
   // mislead the next reader into restoring the literal, which is exactly the trap QA-1059 records
   // one tab over.
+  // QA-733 (S3, -206 checker on qa-204's own class): this pin proves the GUARD's declaration text
+  // does not reference `running`/`status` - it does NOT prove the guard renders correctly, or that
+  // the permission it names is actually what the server enforces. That second half is a source scan
+  // cannot prove, the same concession `saveCard`'s own pin states a few hundred lines up this file -
+  // this one lacked it, which is what the checker charged. Stated here rather than implied.
   const decl = /const canTransition = ([^;]*);/.exec(scan);
   const guardSrc = decl ? decl[1] : "";
   const guardClean = !!guardSrc && !/\brunning\b/.test(guardSrc) && !/\bb\.status\b/.test(guardSrc) && !/\bstatus\b/.test(guardSrc);
@@ -2139,7 +2144,7 @@ for (const file of walk(root)) {
     failed++;
     pushStructural(rel + ": the batch status controls do not render in both states"
       + " (declared=" + hasDecl + ", in the \"Right now\" card=" + inRunning + ", in the readiness Section=" + inReadiness
-      + ", canTransition is role-only=" + guardClean + (guardClean ? "" : " -> " + JSON.stringify(guardSrc.trim().slice(0, 90))) + ")"
+      + ", the canTransition declaration mentions neither running nor status=" + guardClean + (guardClean ? "" : " -> " + JSON.stringify(guardSrc.trim().slice(0, 90))) + ")"
       + " - whichever of those is false, a batch in that state has NO way to be completed, reopened,"
       + " closed or cancelled from this screen. That is what -112 shipped and nobody noticed for 92"
       + " releases; Umesh asked for the control to sit in the card, not merely to exist, and one"
