@@ -79,13 +79,13 @@ ok("home: the strip's JSX closes before the trainers-by-role block", stripClose 
   // no-op. `legacy` is the client's name for "zero rows".
   const reopenGate = b.indexOf('closure?.assessment_status === "Completed" && !statusClosedTab && mayMarkTab');
   const gateLine = reopenGate > 0 ? b.slice(b.lastIndexOf("\n", reopenGate) + 1, reopenGate) : "";
-  ok("-224 (QA-878): the standing Reopen control also asks the zero-rows half of its server guard",
+  ok("-229 (QA-878): the standing Reopen control also asks the zero-rows half of its server guard",
     reopenGate > 0 && /legacy\s*&&\s*$/.test(gateLine.replace(/^\s*\{/, "")),
     reopenGate > 0 ? `gate reads: ${JSON.stringify(gateLine.trim())}` : "reopen gate not found");
 
   // ...and the confirm must READ provenance, not assert it. Asserting "recorded by hand" on a
   // derived sign-off is a falsehood told to obtain consent.
-  ok("-224 (QA-878): the reopen confirm reads assessment_derived instead of asserting how the figures were made",
+  ok("-229 (QA-878): the reopen confirm reads assessment_derived instead of asserting how the figures were made",
     b.includes("assessment_derived"), "assessment_derived appears 0 times in this file");
 
   // QA-877: a SUCCESSFUL bulk mark must clear the per-card refusals it has just disproved, or a
@@ -93,7 +93,7 @@ ok("home: the strip's JSX closes before the trainers-by-role block", stripClose 
   const bulk = b.indexOf("async function bulkApply");
   const bulkEnd = b.indexOf("async function certPatch", bulk);
   const bulkBody = bulk > 0 && bulkEnd > bulk ? b.slice(bulk, bulkEnd) : "";
-  ok("-224 (QA-877): a successful bulk mark clears the per-card errors of the members it updated",
+  ok("-229 (QA-877): a successful bulk mark clears the per-card errors of the members it updated",
     /setCardErrors/.test(bulkBody) && /delete\s+n\[/.test(bulkBody),
     bulkBody ? "bulkApply never removes a cardErrors entry" : "could not locate bulkApply");
 
@@ -103,14 +103,14 @@ ok("home: the strip's JSX closes before the trainers-by-role block", stripClose 
   const gen = b.indexOf("Generate &amp; issue");
   const genStart = gen > 0 ? b.lastIndexOf("<Btn onClick={async () => {", gen) : -1;
   const genBody = genStart > 0 ? b.slice(genStart, gen) : "";
-  ok("-224 (QA-862): Generate & issue does not close its drawer unconditionally after the loop",
+  ok("-229 (QA-862): Generate & issue does not close its drawer unconditionally after the loop",
     genBody.length > 0 && !/\n\s*setCertDrawer\(false\);\s*await load\(\)/.test(genBody),
     genBody ? "setCertDrawer(false) still runs straight after the loop" : "could not locate the handler");
-  ok("-224 (QA-862): ...and it collects every refusal instead of each overwriting the last",
+  ok("-229 (QA-862): ...and it collects every refusal instead of each overwriting the last",
     /failures\.push\(/.test(genBody), "no failures[] accumulation in the issue loop");
 
   // QA-886: and it must not silently skip candidates whose number is blank while issuing the rest.
-  ok("-224 (QA-886): Generate & issue counts the candidates it left out for want of a number",
+  ok("-229 (QA-886): Generate & issue counts the candidates it left out for want of a number",
     /skipped\.push\(/.test(genBody), "blank-number candidates are still skipped in silence");
 
   // QA-856: the marking grid's failures must reach a surface AT the press, not only the page-top
@@ -168,7 +168,7 @@ ok("home: the strip's JSX closes before the trainers-by-role block", stripClose 
     });
     // The exception must not become a way to have no fields at all: both named fields have to BE here.
     const namedPresent = POST_COMPLETION_WRITABLE.filter((f) => inputs.some((t) => nameOf(t) === f));
-    ok("-235 (QA-833/QA-961/QA-1265): EVERY input in the closure cards carries the gate its own Save carries",
+    ok("-231 (QA-833/QA-961/QA-1265): EVERY input in the closure cards carries the gate its own Save carries",
       region.length > 0 && inputs.length >= 6 && wrongGate.length === 0 && namedPresent.length === POST_COMPLETION_WRITABLE.length,
       region.length === 0 ? "could not locate the closure cards"
         : `${inputs.length} inputs, ${wrongGate.length} with the wrong gate: ${wrongGate.map(nameOf).join(", ") || "(none)"}`
@@ -200,11 +200,11 @@ ok("home: the strip's JSX closes before the trainers-by-role block", stripClose 
       }
     }
   }
-  ok("-224 (QA-880 class pin): no catch in CandidateResults reports only through the page-level banner",
+  ok("-229 (QA-880 class pin): no catch in CandidateResults reports only through the page-level banner",
     crBody.length > 0 && bareCatches.length === 0,
     crBody.length === 0 ? "could not locate CandidateResults" : `${bareCatches.length} bare: ${JSON.stringify(bareCatches[0] ?? "")}`);
 
-  ok("-224 (QA-856): a failed per-candidate mark pins its refusal to that candidate's own card",
+  ok("-229 (QA-856): a failed per-candidate mark pins its refusal to that candidate's own card",
     /setCardErrors/.test(markBody), markBody ? "mark() still reports only through the page-level banner" : "could not locate mark()");
 }
 

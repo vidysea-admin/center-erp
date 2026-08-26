@@ -1333,27 +1333,27 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
     const { b: t1, mems: tm } = await mkBatch(2, 8);   // tag 8 — 1,2,3,4,9,10,11,12,13 are taken; a reused tag collides on the trainer phone
     // the legacy door: a batch-level sign-off, exactly as the live batch carries one
     await req("PUT", `/api/batches/${t1._id}/closure`, { assessment_status: "Completed", appeared: 2, passed: 2, assessment_date: today }, 200);
-    ok("-224: precondition — a batch-level sign-off stands and NO per-candidate row exists",
+    ok("-223: precondition — a batch-level sign-off stands and NO per-candidate row exists",
       (await closureOf(t1._id))?.assessment_status === "Completed" && (await rowsOf(t1._id)).every((i) => !i.result),
       JSON.stringify({ a: (await closureOf(t1._id))?.assessment_status, rows: (await rowsOf(t1._id)).filter((i) => i.result).length }));
 
     // 1. the trap itself — every mark is refused, and this is the state the live batch was stuck in
     const trapped = await req("PUT", `/api/batches/${t1._id}/results`, { rows: [{ member: String(tm[0]._id), result: "Pass", assessed_on: today }] });
-    ok("-224: marking a candidate is REFUSED while a batch-level sign-off stands (the live trap)",
+    ok("-223: marking a candidate is REFUSED while a batch-level sign-off stands (the live trap)",
       trapped.status >= 400 && /reopen the assessment/i.test(String(trapped.data?.error ?? "")),
       `${trapped.status} ${String(trapped.data?.error ?? "").slice(0, 110)}`);
-    ok("-224: …and the refusal wrote NOTHING — no half-marked row left behind",
+    ok("-223: …and the refusal wrote NOTHING — no half-marked row left behind",
       (await rowsOf(t1._id)).every((i) => !i.result), JSON.stringify((await rowsOf(t1._id)).map((i) => i.result?.result)));
 
     // 2. the door the refusal asks for. THIS is what no screen offered; the server always allowed it.
     const reopened = await req("PUT", `/api/batches/${t1._id}/closure`, { assessment_status: "Pending" });
-    ok("-224: reopening the assessment is accepted by the server (the door the message names)",
+    ok("-223: reopening the assessment is accepted by the server (the door the message names)",
       reopened.status === 200 && (await closureOf(t1._id))?.assessment_status === "Pending",
       `${reopened.status} ${String((await closureOf(t1._id))?.assessment_status)}`);
 
     // 3. and only now does the thing Umesh pressed actually work
     const freed = await req("PUT", `/api/batches/${t1._id}/results`, { rows: [{ member: String(tm[0]._id), result: "Pass", score: 70, max_score: 100, assessed_on: today }] });
-    ok("-224: after the reopen the SAME press is accepted — the trap is escapable",
+    ok("-223: after the reopen the SAME press is accepted — the trap is escapable",
       freed.status === 200 && (await rowsOf(t1._id)).find((i) => String(i.member) === String(tm[0]._id))?.result?.result === "Pass",
       `${freed.status} ${String((await rowsOf(t1._id)).find((i) => String(i.member) === String(tm[0]._id))?.result?.result)}`);
 
@@ -1365,10 +1365,10 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
       { member: String(tm[1]._id), result: "Pass", score: 60, assessed_on: today },
       { member: "0".repeat(24), result: "Pass", assessed_on: today },
     ] });
-    ok("-224: a PARTIAL bulk mark returns 200 carrying BOTH halves — updated AND errors[]",
+    ok("-223: a PARTIAL bulk mark returns 200 carrying BOTH halves — updated AND errors[]",
       mixed.status === 200 && (mixed.data?.updated ?? 0) === 1 && Array.isArray(mixed.data?.errors) && mixed.data.errors.length === 1,
       JSON.stringify({ s: mixed.status, u: mixed.data?.updated, e: mixed.data?.errors?.length }));
-    ok("-224: …and each refused row names WHICH member it was, so the card can be pointed at",
+    ok("-223: …and each refused row names WHICH member it was, so the card can be pointed at",
       !!mixed.data?.errors?.[0]?.member && !!mixed.data?.errors?.[0]?.error,
       JSON.stringify(mixed.data?.errors?.[0]));
   }
