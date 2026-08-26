@@ -68,8 +68,12 @@ export const PUT = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   // centre actually needs there is the portal Candidate ID.
   //
   // It is written HERE, on this door, and not through PATCH /api/candidates/:id - deliberately, and
-  // it is his call. This card opens on `closure.manage`, which a TRAINER has; the candidate door
-  // wants `candidates.manage`, which a Trainer does not. Putting the box on the card and the write
+  // it is his call. This card opens on `closure.manage`, which a Trainer does NOT hold by default
+  // (permissions.ts: Trainer's fixed set is just `batches.daily_log`) - QA-781 (checker on qa-214)
+  // caught this comment claiming otherwise. It is grantable per-deployment through the live
+  // permission matrix (togglable, 2026-08-11), which is what makes "Trainer bhi bhar sake" true when
+  // it is; the candidate door wants `candidates.manage`, a different, ungrantable-to-Trainer-here
+  // right. Putting the box on the card and the write
   // on that door would have shown every Trainer an input that 403s on save - the dead-button class
   // that shipped three times in three releases (QA-712, QA-723, QA-754). Asked directly, Umesh said
   // "Trainer bhi bhar sake", so the write lives on the door the card already has.

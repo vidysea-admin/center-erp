@@ -692,7 +692,13 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
               marked and every certificate is settled" two lines under a caption correctly saying 10
               were outstanding. One card, contradicting itself. Same flag, same wrong question as
               QA-678 — asked in a third place. */}
-          {completePlan?.can_complete_cleanly && !(completePlan?.no_portal_id?.length ?? 0) ? (
+          {/* QA-737 (checker on qa-211, cycle 3): `no_portal_id` alone answers "is anyone missing an
+              ID", not "does that stop this press" - `no_portal_id_blocks` (complete/route.ts,
+              !certSigned) is the field that answers the second question, and -212 added it to the
+              API without this screen ever reading it. Measured live: a portal-ID gap on a batch
+              whose certification is already signed off listed as "open" here while the ordinary
+              press completed it 200 - the drawer named a blocker that was not one. */}
+          {completePlan?.can_complete_cleanly && !(completePlan?.no_portal_id_blocks && (completePlan?.no_portal_id?.length ?? 0)) ? (
             <p className="mt-1 text-amber-800">Every student is marked, every certificate is settled and every portal Candidate ID is on record — this just completes the batch.</p>
           ) : (
             /* -206 (Umesh, 23/08): "2 time confirmation kindaa... ek popup aana chaiye like list of
@@ -719,7 +725,11 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
                     <Btn small kind="ghost" onClick={() => { setCompleteOpen(false); onGo("Closure"); }}>Attach certificates →</Btn>
                   </li>
                 )}
-                {(completePlan?.no_portal_id?.length ?? 0) > 0 && (
+                {/* QA-737 (checker on qa-211, cycle 3): only list this as OPEN when it actually
+                    blocks (no_portal_id_blocks). A batch whose certification is already signed off
+                    is not re-opened by a portal ID missing afterward - listing it here anyway told
+                    an operator to go fix something the press would let through unforced. */}
+                {completePlan?.no_portal_id_blocks && (completePlan?.no_portal_id?.length ?? 0) > 0 && (
                   <li className="flex flex-wrap items-center gap-2">
                     {/* The one blocker no amount of marking settles: it is the government's number.
                         Rule 18 holds certification shut on it, which is what used to make this door
@@ -750,7 +760,7 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
             <Btn onClick={isAdmin ? completeAsAdmin : completeOrdinary} disabled={completing || !completeReason.trim()}>
               {completing ? "Completing…" : !isAdmin
                 ? "Complete batch"
-                : completePlan?.can_complete_cleanly && !(completePlan?.no_portal_id?.length ?? 0)
+                : completePlan?.can_complete_cleanly && !(completePlan?.no_portal_id_blocks && (completePlan?.no_portal_id?.length ?? 0))
                   ? "Complete batch"
                   : "Complete batch forcefully"}
             </Btn>
@@ -3707,7 +3717,10 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
             about `_id` and `sidh_candidate_id`, not this field. The FIELD stays on the model and on
             this door's allow-list so nothing already typed anywhere dies; only the box is gone.
             The write goes through THIS door (closure.manage), not the candidate door
-            (candidates.manage) - his decision, so a Trainer can fill one in without meeting a 403. */}
+            (candidates.manage) - his decision, so a Trainer CAN fill one in when the deployment's
+            permission matrix grants Trainer that right (QA-781, checker on qa-214: Trainer does not
+            hold it by default). Either way the box is safely gated now - `readOnly` below folds in
+            `mayMark` (QA-777/QA-785), so nobody sees an enabled input their save would 403 on. */}
         <span className="ml-auto flex items-center gap-1.5">
           {portalIdState(i.candidate?.sidh_candidate_id) === "unreadable" && (
             <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-900"
@@ -3938,17 +3951,21 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
                   Separately, <b>{linkPlan.blocking} enrolled student{linkPlan.blocking === 1 ? "" : "s"}</b> {linkPlan.blocking === 1 ? "has" : "have"} no portal Candidate ID, and certification cannot complete until {linkPlan.blocking === 1 ? "they do" : "they all do"}.
                 </span>
               )}
-              {/* QA-738 (checker on qa-211): "of them" points at the blocking sentence above, which
-                  does not render at all when blocking === 0 - so on a roster with nobody blocking
-                  but some OTHER (non-blocking) member matched by the import, this sentence still said
-                  "names 1 of them" with no antecedent left for "them" to mean. Gated on blocking now,
-                  same as its sibling sentence below (QA-720) already is. */}
-              {(linkPlan.blocking ?? 0) > 0 && linkPlan.linkable?.length > 0 && (
+              {/* QA-738 (checker on qa-211, cycle 3): the cycle-2 fix gated on `blocking > 0 &&
+                  linkable.length > 0`, which stopped the dangling "them" but not the underlying
+                  falsehood - `linkable` is every roster-wide match (QA-1398), so a non-blocking
+                  member matched by the import could still make this render "names 1 of them" when
+                  that 1 is not one of "them" at all. `linkable_blocking` (server-computed,
+                  link-portal-ids/route.ts) is the intersection: of the blocking students, how many
+                  does the import resolve. The button still links the FULL roster-wide `linkable` set
+                  on press - narrowing what it links, not just what this sentence claims, would
+                  silently stop linking real matches for non-blocking members. */}
+              {(linkPlan.blocking ?? 0) > 0 && (linkPlan.linkable_blocking ?? 0) > 0 && (
                 <span className="ml-1">
-                  The portal attendance already imported names <b>{linkPlan.linkable.length}</b> of them.
+                  The portal attendance already imported names <b>{linkPlan.linkable_blocking}</b> of them.
                   <button onClick={linkPortalIds} disabled={linking}
                     className="ml-2 rounded-lg bg-blue-600 px-2.5 py-1 font-medium text-white hover:bg-blue-700 disabled:bg-blue-300">
-                    {linking ? "Linking…" : `Link portal IDs (${linkPlan.linkable.length})`}
+                    {linking ? "Linking…" : `Link portal IDs (${linkPlan.linkable?.length ?? 0})`}
                   </button>
                 </span>
               )}
@@ -3958,12 +3975,13 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
                   the students who HAVE an id have to be typed in from the portal, above an empty list.
                   It names its own subject now, and does not render at all when nothing is blocking.
                   Third correction to one paragraph in three releases. */}
-              {/* QA-739 (checker on qa-211): "the imports name none of those N" was false whenever a
-                  blocking student DID have an import match that landed in `conflicts` (the portal
-                  gave two different ids for them) rather than `linkable` - the sentence two lines
-                  below then named that same student, contradicting this one in the same paragraph.
-                  Gated on conflicts too now; the conflicts sentence stands alone in that case. */}
-              {!linkPlan.linkable?.length && !linkPlan.conflicts?.length && (linkPlan.blocking ?? 0) > 0 && (
+              {/* QA-739 (checker on qa-211, cycle 3 rework): the cycle-2 fix gated on
+                  `!linkable.length && !conflicts.length`, both roster-wide (QA-1398 - the same
+                  population mismatch one field over: a conflict on a NON-blocking member would have
+                  suppressed this sentence even though none of the actually-blocking students were
+                  named anywhere). Gated on the blocking-scoped counts now - both must be zero before
+                  this claims the imports name NONE of the blocking students. */}
+              {(linkPlan.linkable_blocking ?? 0) === 0 && (linkPlan.conflicts_blocking ?? 0) === 0 && (linkPlan.blocking ?? 0) > 0 && (
                 <span className="ml-1">The imports name none of those {linkPlan.blocking}, so their IDs have to be typed in from the portal.</span>
               )}
               {/* QA-715 (-208 checker, cycle 1 FAIL): the mount used to be HERE, but this whole

@@ -142,6 +142,21 @@ async function plan(batchId: string) {
   //     the one function the gate honours. This is the list the screen opens and the caption on the
   //     Overview points at, and its length is the only number printed beside it (QA-701: the panel
   //     used to print a roster-wide count next to a button offering a shorter list).
+  //
+  // QA-1398 (checker on qa-211, cycle 2 - this class's SEVENTH release): `linkable` and `conflicts`
+  // are built from `seen`, which walks every member with an import match REGARDLESS of enrollment -
+  // the same roster-wide population `with_portal_id`/`without_portal_id` describe, not the
+  // `missing`/`blocking` one. A member matched by the import but not enrolled (or already left)
+  // lands in `linkable` and inflates a sentence that claims to describe "them" - the blocking
+  // students - the exact QA-701/QA-704 disease one field over. `linkable` and `conflicts` themselves
+  // stay roster-wide on purpose (the "Link portal IDs" button correctly links everyone it can, not
+  // only blocking members - narrowing THAT would silently stop linking real, useful matches). What
+  // was missing is a count scoped to the population the SENTENCE actually names: of the students who
+  // are blocking, how many does the import already resolve (linkable) versus contradict itself about
+  // (conflicts)? These two, plus the "found nowhere" remainder, partition `blocking` exactly.
+  const blockingCandIds = new Set(missing.map((m) => m.candidate).filter(Boolean));
+  const linkableBlocking = linkable.filter((l) => blockingCandIds.has(l.candidate)).length;
+  const conflictsBlocking = conflicts.filter((c) => blockingCandIds.has(c.candidate)).length;
   return {
     roster: members.length,
     with_portal_id: withId,
@@ -149,6 +164,8 @@ async function plan(batchId: string) {
     missing,
     blocking: missing.length,
     linkable, already, conflicts,
+    linkable_blocking: linkableBlocking,
+    conflicts_blocking: conflictsBlocking,
   };
 }
 
