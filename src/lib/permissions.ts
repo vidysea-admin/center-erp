@@ -175,13 +175,24 @@ export async function requireView(user: SessionUser, perm: string): Promise<void
   }
 }
 
-// level = EDIT required. Every existing caller is a write-ish gate, so their meaning is
+// level = EDIT, non-throwing. QA-1459: `GET /api/batches/[id]/members` has to ask "may this user
+// edit candidates?" to decide how much of each candidate to put on the wire, and a GET cannot use
+// the throwing form for that - refusing the roster is not the answer, sending less of it is. The
+// only non-throwing check that existed was `hasPermission`, which is >= VIEW, so a call site
+// needing EDIT had to restate requirePerm's rule inline. That is precisely the two-statements-of-
+// one-rule drift the QA-617 note below records. requirePerm now DECIDES from this function and
+// computes `level` only to word its error, so there is one statement of "edit" and one of "why not".
+export async function hasEditLevel(user: SessionUser, perm: string): Promise<boolean> {
+  if (user.role === "Admin") return true;
+  return (await getEffectiveLevels(user)).get(parseLevel(perm).key) === "edit";
+}
+
+// level = EDIT required, throwing. Every existing caller is a write-ish gate, so their meaning is
 // unchanged for everyone holding bare keys — a ":view" holder now reads but cannot write.
 export async function requirePerm(user: SessionUser, perm: string): Promise<void> {
-  if (user.role === "Admin") return;
+  if (await hasEditLevel(user, perm)) return;
   const key = parseLevel(perm).key;
   const level = (await getEffectiveLevels(user)).get(key);
-  if (level === "edit") return;
   const label = PERMISSIONS.find((p) => p.key === key)?.label ?? perm;
   throw new HttpError(403, level === "view"
     ? `Your "${label}" right is view-only. Ask an Admin for the edit level.`

@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError, assertLocationInScope } from "@/lib/authz";
-import { requirePerm } from "@/lib/permissions";
+import { requirePerm, hasEditLevel } from "@/lib/permissions";
+
+// The fields the roster itself renders - the chip, both attendance pickers, the enrolment card.
+// Named once so the QA-1459 branch below cannot drift from what -212 established.
+const ROSTER_CANDIDATE_FIELDS = "name phone lifecycle_status sidh_candidate_id apaar_id";
 import { Batch, BatchMember, Candidate, DailyLog, GovtAttendanceRow } from "@/models";
 import { addMemberChecked, assertBatchInScope, assertLocationOperational, assessmentHoursBar, awaitingMatchFor, memberAttendedHours, slotHoursPerDay } from "@/lib/rules";
 import { nameKey, unresolvedPortalRowsByName } from "@/lib/govt-attendance";
@@ -24,7 +28,24 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   // my batch-wise details" — a Trainer's lens IS this roster, not the general pool). A member row
   // here is already scoped by assertBatchInScope above, so reading the candidate behind a batch
   // this user is authorized to see does not reopen that door.
-  const items = await BatchMember.find({ batch: id }).populate("candidate").sort({ joined_on: 1 }).lean();
+  //
+  // QA-1459 — and that argument was HALF right, which is why it shipped. assertBatchInScope answers
+  // WHICH candidates (this batch's, and only for someone allowed this batch); the projection was
+  // answering WHICH FIELDS, and widening it to the whole document conflated the two. What went on
+  // the wire for every roster row was aadhaar_no, dob, father_name, mother_name, religion, address,
+  // email and custom_fields - to anyone who can see the batch, including a default Trainer who
+  // holds no candidates right at all and is correctly shown no Edit button. A control the user
+  // cannot see is not a gate; the door was open regardless of what the screen rendered.
+  // The full record exists for ONE reason - to hand CandidateEditDrawer something to edit - and
+  // that drawer only ever mounts for a user who may edit candidates. So ask that exact question,
+  // with the exact function the drawer's own gate uses, and give everyone else the five fields the
+  // roster actually renders. A Trainer's screen is byte-identical to what it was before -222.
+  const mayEditCandidates = await hasEditLevel(user, "candidates.manage");
+  const q = BatchMember.find({ batch: id }).sort({ joined_on: 1 });
+  const items = await (mayEditCandidates
+    ? q.populate("candidate")
+    : q.populate("candidate", ROSTER_CANDIDATE_FIELDS)
+  ).lean();
 
   // GD-102: "kitne bacche ki kitni-kitni attendance chal rahi hai" — each member's running
   // attendance, counted from the daily logs rather than stored anywhere it could go stale.

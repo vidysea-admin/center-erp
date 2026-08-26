@@ -251,6 +251,20 @@ export function CandidateEditDrawer({
             <span className="mt-0.5 block text-[11px] text-amber-700">They will not be selectable for a batch until this is set back to “The current batch”.</span>
           )}
         </Field>
+        {/* 2026-08-24 (Umesh): "candidate form mai aadhaar number nhi aa rha hai". Checked WHILE
+            TYPING with the same function the API refuses with, so the operator is told before they
+            press Add rather than after (QA-141's canon). The check digit is why this is worth doing
+            at all: a mistyped Aadhaar looks perfectly valid on screen and is only discovered when
+            the government portal rejects that student, weeks later.
+            THREE government-ID boxes now sit on this form and they are NOT interchangeable, so each
+            one says what it is for. QA-414 measured 55 live candidates whose portal id landed in
+            "Govt ID reference" because it was the nearest-looking option on a screen that did not
+            offer the right one.
+            QA-1458: restored here in cycle 3. It was dropped when this form moved out of
+            candidates/page.tsx, while the manifest said the extraction kept "all their QA-fix
+            comments" - the fifth claim-wider-than-the-code in this unit. The reason a comment like
+            this is load-bearing is that it is the only record of WHY three near-identical 12-digit
+            boxes sit next to each other; without it the next reader tidies two of them away. */}
         <Field label="Aadhaar number">
           <input className={inputCls} inputMode="numeric" placeholder="12 digits" value={form.aadhaar_no ?? ""} onChange={(e) => set("aadhaar_no", e.target.value)} />
           {form.aadhaar_no && aadhaarError(form.aadhaar_no, { optional: true }) && <p className="mt-1 text-xs text-red-600">{aadhaarError(form.aadhaar_no, { optional: true })}</p>}
@@ -316,6 +330,10 @@ export function CandidateEditDrawer({
             wrap={(label, child, hint) => <Field label={label}>{child}{hint}</Field>}
           />
         </div>
+        {/* 15/08 (Umesh): no candidate fee in this programme - the fee inputs left this drawer.
+            Schema + Rule 54 toggle stay dormant for a future paid scheme. QA-1458: restored in
+            cycle 3, dropped by the extraction. Without it, "why is there a fee field in the schema
+            that no screen writes?" has no answer in the code that owns the screen. */}
         {/* QA-105 (15/08): the candidate document store. Edit mode only: the candidate must
             exist before files can hang on them. */}
         {mode === "edit" && candidateId && <CandidateDocs candidateId={candidateId} setError={setError} />}
