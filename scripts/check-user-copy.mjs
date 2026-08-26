@@ -3035,9 +3035,14 @@ for (const file of walk(root)) {
     const indirectSrc = indirectRel ? stripComments(fs.readFileSync(path.join(root, indirectRel), "utf-8")) : "";
     const usesIndirection = indirectRel && new RegExp(path.basename(indirectRel, ".tsx")).test(src);
     if (!/GeographyFields/.test(src) && !(usesIndirection && /GeographyFields/.test(indirectSrc))) missing.push(rel);
-    // an <input> bound to any of the three fields is the shape that was replaced — checked on
-    // whichever file actually renders this door's form now.
-    if (/<input[^>]*value=\{form\.(state|district|sub_district)/.test(usesIndirection ? indirectSrc : src)) freeText.push(rel);
+    // an <input> bound to any of the three fields is the shape that was replaced. QA-1457 (S2,
+    // qa-1436 cycle-2 checker): redirecting this check to ONLY the indirect file when
+    // `usesIndirection` is true made the door itself blind — a free-text geography input typed
+    // directly into `candidates/page.tsx`, bypassing the shared drawer entirely, scored a clean
+    // pass. Checking indirection answers "does this door ALSO reach the cascade component"; it
+    // must never mean "stop looking at the door's own file". Both are scanned now, always.
+    const freeTextRe = /<input[^>]*value=\{form\.(state|district|sub_district)/;
+    if (freeTextRe.test(src) || (usesIndirection && freeTextRe.test(indirectSrc))) freeText.push(rel);
   }
   const endpoint = fs.existsSync(path.join(root, "app/api/public/geography/route.ts"));
   const data = fs.existsSync(path.join(root, "data/lgd-geography.json"));
