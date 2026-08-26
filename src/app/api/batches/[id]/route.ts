@@ -47,7 +47,12 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
   //
   // EVERY SAFETY REFUSAL BELOW IS UNCHANGED. Widening WHO may press the verb is not a reason to
   // soften WHAT it refuses - if anything it is the reason not to, because more people can now reach it.
-  await requirePerm(user, "batches.delete");
+  //
+  // QA-1437 (checker, cycle 1 FAIL): the permission check used to run here, UNCONDITIONALLY,
+  // before the total>0 branch below ever got a chance to check batches.delete_with_data instead —
+  // so an actor needed BOTH rights to ever force-delete a non-empty batch, contradicting this
+  // unit's own "holding one does not imply the other" design and the catalog's own label. Fixed by
+  // moving the check past the carried-work count and branching on which right applies.
   const { id } = await ctx.params;
   await assertBatchInScope(user, id); // Rule 38
   const batch = await Batch.findById(id).select("code status location program").lean<any>();
@@ -68,9 +73,9 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
   if (total > 0) {
     // 2026-08-25 (Umesh, feedback-inbox): a batch created by mistake (e.g. for a test) and then
     // populated with data could only be Cancelled, never removed. batches.delete_with_data is a
-    // SEPARATE, narrower-grantable right from batches.delete above — holding one does not imply
-    // the other — and a reason is required, same as every other force-past-history verb in this
-    // file (see complete/route.ts's own reason requirement).
+    // SEPARATE, narrower-grantable right from batches.delete — holding it ALONE is sufficient for
+    // this branch (QA-1437) — and a reason is required, same as every other force-past-history verb
+    // in this file (see complete/route.ts's own reason requirement).
     let canForce = false;
     try { await requirePerm(user, "batches.delete_with_data"); canForce = true; } catch { canForce = false; }
     if (!canForce) {
@@ -95,6 +100,7 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
     return NextResponse.json({ deleted: batch.code, forced: true, carried });
   }
 
+  await requirePerm(user, "batches.delete");
   await Batch.deleteOne({ _id: id });
   await audit({ entity: "Batch", entityId: id, field: "delete", newValue: `${batch.code} (${batch.status}) deleted — empty shell, no members/results/costs/logs/closure/attendance/invoice`, actor: user.id });
   return NextResponse.json({ deleted: batch.code });
