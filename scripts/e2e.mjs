@@ -2894,6 +2894,109 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
       }
     }
 
+    // ---- -253 (Umesh, on the client's own OneDrive sheet's Batch ID column): "location wise,
+    // batch wise analytics" ----
+    // Three things pinned on the SAME (rpLoc, rpA) fixture the -170/-177 blocks above already
+    // built: (a) a batch's own detail row carries its own count and the centre row for that
+    // (location, role) drops to zero on the three batch-scoped measures; (b) a candidate who
+    // switches batches at the SAME centre x role is counted once, under their LATEST membership,
+    // not once per batch; (c) a batch with no activity still gets its own row, at zero, never
+    // absent; (d) rpB - which has a target but never gets a batch anywhere in this file - keeps
+    // exactly the one placeholder row it always had. rpA and rpB share one `role` string on
+    // purpose (the -170 fixture's whole point), so every lookup below disambiguates on
+    // `program_code`, never on `role` alone.
+    {
+      const batX = (await req("POST", "/api/batches", { location: rpLoc._id, program: rpA._id, planned_start: "2029-05-01", target_size: 5 }, 201)).data.item;
+      const batY = (await req("POST", "/api/batches", { location: rpLoc._id, program: rpA._id, planned_start: "2029-05-02", target_size: 5 }, 201)).data.item;
+      const batZ = (await req("POST", "/api/batches", { location: rpLoc._id, program: rpA._id, planned_start: "2029-05-03", target_size: 5 }, 201)).data.item;
+      const swCand = (await req("POST", "/api/candidates", { name: "Report Switch " + stamp, phone: "93222" + stamp.slice(0, 5), location: rpLoc._id, program: rpA._id }, 201)).data.item;
+      ok("-253 fixture: three batches and one candidate exist before anything batch-wise is asserted",
+        !!batX?._id && !!batY?._id && !!batZ?._id && !!swCand?._id,
+        JSON.stringify({ x: batX?._id ?? null, y: batY?._id ?? null, z: batZ?._id ?? null, c: swCand?._id ?? null }));
+
+      if (batX?._id && batY?._id && batZ?._id && swCand?._id) {
+        const forA = (rep) => (rep.detail ?? []).filter((d) => String(d.location?._id) === String(rpLoc._id) && d.program_code === rpA.code);
+
+        // (a) enrol into Batch X - its own row shows mobilised 1, the centre row for (rpLoc, rpA)
+        // reads zero on all three batch-scoped measures (they now live on the batch rows only).
+        const memX = (await req("POST", `/api/batches/${batX._id}/members`, { candidate: swCand._id }, 201)).data.item;
+        const repX = (await req("GET", "/api/reports/rollup", undefined, 200)).data;
+        const detX = forA(repX);
+        const rowX = detX.find((d) => String(d.batch?._id) === String(batX._id));
+        const centreRowX = detX.find((d) => !d.batch);
+        ok("-253: a batch's own detail row carries its OWN mobilised count, and the centre row for the same (location, role) reads zero on the batch-scoped measures",
+          rowX?.mobilised === 1 && centreRowX?.mobilised === 0 && centreRowX?.in_training === 0 && centreRowX?.certified === 0,
+          JSON.stringify({ rowX: rowX ? { mobilised: rowX.mobilised } : null, centreRowX: centreRowX ? { mobilised: centreRowX.mobilised, in_training: centreRowX.in_training, certified: centreRowX.certified } : null }));
+        ok("-253: and the centre row's OWN measures - the ones this change must not touch - are exactly what they were set to, unaffected by any batch existing",
+          centreRowX?.target === 180 && centreRowX?.approved === 180 && centreRowX?.row_status === "Approved",
+          JSON.stringify({ target: centreRowX?.target, approved: centreRowX?.approved, row_status: centreRowX?.row_status }));
+        ok("-253: the Batch ID travels on the row - code, govt_batch_id and status all present",
+          rowX?.batch?.code === batX.code && "govt_batch_id" in (rowX?.batch ?? {}) && rowX?.batch?.status === "Planning",
+          JSON.stringify(rowX?.batch ?? null));
+
+        // (b) drop from Batch X, enrol into Batch Y (SAME centre x role) - only the LATEST
+        // membership counts. Batch X's row must fall to zero, Batch Y's must show 1, and the
+        // centre-level `cells` aggregate (untouched code, feeds the tile) must still read 1 - not
+        // 2 - or the batch-rows' own sum would read higher than the tile above them.
+        await req("POST", `/api/members/${memX._id}/drop`, { left_on: today, drop_reason: "-253 pin: switching batches" }, 200);
+        await req("POST", `/api/batches/${batY._id}/members`, { candidate: swCand._id }, 201);
+        const repY = (await req("GET", "/api/reports/rollup", undefined, 200)).data;
+        const detY = forA(repY);
+        const rowXafter = detY.find((d) => String(d.batch?._id) === String(batX._id));
+        const rowY = detY.find((d) => String(d.batch?._id) === String(batY._id));
+        const cellRow = (repY.rows ?? []).find((r) => String(r.location._id) === String(rpLoc._id));
+        // The cell total is 2, not 1: the -177 block above already put `mobCand` on this same
+        // (rpLoc, rpA) cell via `mobBatch`, and this candidate is a SECOND mobilised member of
+        // that same cell - the row-level split is what this assertion is really pinning.
+        ok("-253: switching batches at the same centre x role counts the candidate ONCE, under their LATEST membership - not once per batch",
+          rowXafter?.mobilised === 0 && rowY?.mobilised === 1 && cellRow?.cells?.[ROLE]?.mobilised === 2,
+          JSON.stringify({ x: rowXafter?.mobilised, y: rowY?.mobilised, cell: cellRow?.cells?.[ROLE]?.mobilised }));
+
+        // (c) Batch Z has no members at all - it must still appear, at zero, not be silently left out.
+        const rowZ = detY.find((d) => String(d.batch?._id) === String(batZ._id));
+        ok("-253: a batch with no activity for these measures still gets its own row, at zero - not absent",
+          !!rowZ && rowZ.mobilised === 0 && rowZ.in_training === 0 && rowZ.certified === 0,
+          JSON.stringify(rowZ ?? null));
+
+        // (d) rpB has a target (280, blank TC Status - set alongside rpA at the top of this
+        // fixture) but never gets a batch anywhere in this file. It must keep exactly the ONE
+        // placeholder row it has always had, values untouched.
+        const detB = (repY.detail ?? []).filter((d) => String(d.location?._id) === String(rpLoc._id) && d.program_code === rpB.code);
+        ok("-253: a (centre, role) with a target but NO batches anywhere keeps exactly the one placeholder row it always had",
+          detB.length === 1 && detB[0].batch === null && detB[0].target === 280 && detB[0].row_status === "",
+          JSON.stringify(detB));
+
+        // (e) the invariant this whole change was designed around: every measure's full value
+        // lives on exactly one kind of row (centre or batch), so summing `detail` still equals
+        // `total` for all seven keys - re-asserted here, on a payload that NOW mixes both row
+        // shapes, not merely inherited from the -170/QA-1074 read taken before any batch existed.
+        {
+          const keys = Object.keys(repY.labels ?? {});
+          const off = keys.filter((k) => (repY.detail ?? []).reduce((a, d) => a + (d[k] || 0), 0) !== repY.total?.[k]);
+          ok("-253: sum(detail[k]) === total[k] for every measure STILL holds once detail mixes centre rows and batch rows",
+            keys.length === 7 && off.length === 0,
+            JSON.stringify({ mismatched: off }));
+        }
+      }
+    }
+
+    // -253: a source-level pin for the inline Batch ID edit - it must call the EXISTING batch
+    // PATCH door, never a new endpoint. The filtering/rendering itself is client-side, so no HTTP
+    // assertion can see it; the repo already runs source scans for exactly this reason (see the
+    // `plannerLocations` pin further below in this same file).
+    {
+      const src = (await import("node:fs")).readFileSync("src/app/(app)/reports/page.tsx", "utf8");
+      ok("-253: the inline Batch ID edit calls the batch's own PATCH door, not a new endpoint",
+        /api\(`\/api\/batches\/\$\{row\.batch\._id\}`,\s*\{\s*method:\s*"PATCH"/.test(src),
+        "BatchIdCell source pattern not found");
+      // QA-1288's own maker_note (quoting QA-246 "chaar jhoothi ginti"): a batch row's
+      // target/approved/not_approved/unknown must render as "-" with an explanation, never as a
+      // plain 0 - those measures belong to the centre x role, not to any one batch under it.
+      ok("-253: a batch row dashes the four centre-only measures instead of printing a false zero",
+        /r\.batch && !L\[k\]\?\.batch_scoped/.test(src) && /does not apply on a batch row/.test(src),
+        "dash treatment for non-batch-scoped measures not found in drillNum");
+    }
+
     // REQ-367: the sources travel WITH the payload, so the screen cannot render a number
     // whose origin only exists in someone's memory. The caveat is asserted too, because a reader
     // who sees Mobilised and In training almost equal would otherwise take that for a finding.

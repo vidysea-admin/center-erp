@@ -3697,6 +3697,11 @@ export type ReportDetailRow = {
   // invisible.
   row_status: string;
   centre_status: string;
+  // -253: null on the centre x role row (target/approved/not_approved/unknown live there);
+  // populated on the per-batch rows added for mobilised/in_training/certified. `status` travels so
+  // the client can grey out editing on a Completed/Cancelled batch instead of offering an input
+  // that will always 409 (the batch PATCH door refuses on those statuses).
+  batch: { _id: string; code: string; govt_batch_id: string | null; status: string } | null;
 };
 
 const emptyCell = (): ReportCell => ({
@@ -3862,6 +3867,20 @@ export async function reportRollup(scope: Record<string, unknown> = {}, opts: { 
   const progIds = [...new Set(targets.map((t) => t.program?._id).filter(Boolean))];
   const key = (l: unknown, p: unknown) => `${String(l)}|${String(p)}`;
 
+  // -253 (Umesh, on the client's own OneDrive sheet, which carries a numeric Batch ID per row):
+  // "location wise, batch wise analytics" — the drill drawer needs a batch dimension this report
+  // has never had. Fetched here, alongside `targets`, so it shares the same (location, program)
+  // scope rather than a second, driftable query.
+  const batches = await Batch.find({ location: { $in: locIds }, program: { $in: progIds } })
+    .select("code govt_batch_id status location program").lean<any[]>();
+  const batchIds = batches.map((b) => b._id);
+  const batchesByKey = new Map<string, any[]>();
+  for (const b of batches) {
+    const k = key(b.location, b.program);
+    if (!batchesByKey.has(k)) batchesByKey.set(k, []);
+    batchesByKey.get(k)!.push(b);
+  }
+
   // QA-556 (-177) - MOBILISED MEANS ENROLLED INTO A BATCH. Umesh, 2026-08-21, correcting the
   // column's stated source on the live screen: "mobilized vo hoga jo koi bhi ENROLLED hoga uss
   // batch mai. enrollment is needed."
@@ -3903,6 +3922,53 @@ export async function reportRollup(scope: Record<string, unknown> = {}, opts: { 
     { $group: { _id: { l: "$c.location", p: "$c.program" }, certified: { $sum: 1 } } },
   ]);
   const passBy = new Map(passRows.map((r: any) => [key(r._id.l, r._id.p), r]));
+
+  // -253: the SAME three measures, one level deeper — grouped by the individual Batch instead of
+  // collapsed to the centre x role. Kept as SEPARATE aggregations from candRows/passRows above
+  // (never folded in), so the centre-level cells/total/grand — what the main table, the tiles and
+  // the Excel export read — cannot be touched by this change even by accident.
+  //
+  // Mobilised/In-training are attributed to a candidate's MOST RECENT BatchMember row, not every
+  // historical one (Umesh, 2026-08-26: "sirf uske AAKHRI batch me ginno"). Without this, a
+  // candidate who dropped Batch A and re-enrolled into Batch B at the same centre x role would be
+  // counted once under each — two batch-rows summing to more than the one centre tile above them,
+  // the exact "footer disagrees with the tile" failure this report has fought before (QA-1074,
+  // QA-762). $sort before $group + $first is the standard way to pick "latest row per group"
+  // without a MongoDB version dependency on $sortArray.
+  const candBatchRows = await Candidate.aggregate([
+    { $match: { location: { $in: locIds }, program: { $in: progIds } } },
+    { $lookup: { from: "batchmembers", localField: "_id", foreignField: "candidate", as: "bm" } },
+    { $unwind: "$bm" },
+    // `joined_on` alone is not enough to break the tie: it is day-truncated at write time
+    // (`dayKey(...)`/`istToday()`, :602-603), so a drop-and-rejoin done within the same calendar
+    // day carries an IDENTICAL `joined_on` on both rows. `createdAt` (from this schema's own
+    // `{ timestamps: true }`) is millisecond-precision and always reflects true creation order —
+    // sort on it second, so a genuine multi-day gap still wins on `joined_on` first.
+    { $sort: { "bm.joined_on": -1, "bm.createdAt": -1 } },
+    { $group: {
+      _id: "$_id",
+      location: { $first: "$location" }, program: { $first: "$program" },
+      lifecycle_status: { $first: "$lifecycle_status" },
+      latest_batch: { $first: "$bm.batch" },
+    } },
+    { $match: { latest_batch: { $in: batchIds } } },
+    { $group: {
+      _id: { l: "$location", p: "$program", batch: "$latest_batch" },
+      mobilised: { $sum: 1 },
+      in_training: { $sum: { $cond: [{ $eq: ["$lifecycle_status", "Enrolled"] }, 1, 0] } },
+    } },
+  ]);
+  const candBatchBy = new Map(candBatchRows.map((r: any) =>
+    [`${key(r._id.l, r._id.p)}|${String(r._id.batch)}`, r]));
+
+  // Certified needs no unwind at all — CandidateResult already carries `batch` directly, one row
+  // per (batch, candidate) (models/index.ts, unique index), so regrouping by batch instead of by
+  // centre x role cannot change which rows are summed, only how they are bucketed.
+  const passBatchRows = await CandidateResult.aggregate([
+    { $match: { result: "Pass", batch: { $in: batchIds } } },
+    { $group: { _id: "$batch", certified: { $sum: 1 } } },
+  ]);
+  const passBatchBy = new Map(passBatchRows.map((r: any) => [String(r._id), r.certified]));
 
   const byLoc = new Map<string, ReportRow>();
   const roles = new Set<string>();
@@ -3952,13 +4018,43 @@ export async function reportRollup(scope: Record<string, unknown> = {}, opts: { 
     // QA-1074: the same figures, un-summed, so a tile can be opened. `...one` rather than a second
     // hand-written object literal — a copy that lists the seven measures again is a copy that
     // eventually lists six.
+    //
+    // -253: `detail` now carries TWO row shapes, told apart by `batch`. The centre row below keeps
+    // target/approved/not_approved/unknown (a target belongs to the centre x role, never to one
+    // batch under it) and zeroes the three batch-attributable measures; the per-batch rows pushed
+    // after it do the opposite. Every measure's full value therefore lives on exactly one kind of
+    // row, so `sum(detail[k]) === total[k]` (pinned in scripts/e2e.mjs) keeps holding without
+    // double-counting anything — this is why one array with a `batch: null | {...}` discriminator
+    // was chosen over two parallel arrays: the invariant falls out of the shape rather than needing
+    // to be maintained by hand across two places.
     detail.push({
       location: { _id: lid, name: t.location.name },
       role, program_code: String(t.program.code ?? ""),
-      ...one,
+      target: one.target, approved: one.approved, not_approved: one.not_approved, unknown: one.unknown,
+      mobilised: 0, in_training: 0, certified: 0,
       row_status: String(t.tc_status ?? "").trim(),
       centre_status: String(t.location.tc_status ?? "").trim(),
+      batch: null,
     });
+
+    // One row per Batch actually running against this (location, role) — even ones with zero on
+    // every measure, so an analyst can see the whole roster of batches under a centre and check
+    // that they add up, not just the ones with something to show.
+    const batchesHere = batchesByKey.get(key(t.location._id, t.program._id)) ?? [];
+    for (const b of batchesHere) {
+      const cb = candBatchBy.get(`${key(t.location._id, t.program._id)}|${String(b._id)}`);
+      detail.push({
+        location: { _id: lid, name: t.location.name },
+        role, program_code: String(t.program.code ?? ""),
+        target: 0, approved: 0, not_approved: 0, unknown: 0,
+        mobilised: cb?.mobilised ?? 0,
+        in_training: cb?.in_training ?? 0,
+        certified: passBatchBy.get(String(b._id)) ?? 0,
+        row_status: String(t.tc_status ?? "").trim(),
+        centre_status: String(t.location.tc_status ?? "").trim(),
+        batch: { _id: String(b._id), code: b.code, govt_batch_id: b.govt_batch_id ?? null, status: b.status },
+      });
+    }
   }
 
   const rows = [...byLoc.values()].sort((a, b) => a.location.name.localeCompare(b.location.name));
@@ -4031,13 +4127,17 @@ export const REPORT_LABELS = {
   // follows it. A browser screenshot is what caught this: with Not approved between Approved and
   // Pending (which is the order the Excel columns are in), the three he named were split by a tile
   // he had asked to remove, on the one dataset where it is not zero.
+  // `batch_scoped` (-253): exactly the three measures the drill drawer can break down per Batch —
+  // target/approved/not_approved/unknown are one figure for the whole centre x role, never one
+  // batch's alone, and are deliberately left without this flag. One place to name the three, so the
+  // server and the client cannot end up with two different lists of "which measures are batch-wise".
   target: { label: "Total Target", short: "Target", was: "", tag: "Client sheet", of_approved: false },
   approved: { label: "Approved Target", short: "Approved", was: "", tag: "Client sheet", of_approved: false },
   unknown: { label: "Pending Target", short: "Pending", was: "Called \"No verdict yet\" until 25 Aug 2026. The client sheet has not filled in TC Status on these (centre x job role) rows - nobody has refused them, nobody has approved them either.", tag: "Client sheet · TC Status blank", of_approved: false },
   not_approved: { label: "Not approved", short: "Not approved", was: "", tag: "Client sheet", of_approved: false },
-  mobilised: { label: "Mobilised", short: "Mobilised", was: "", tag: "Our records", of_approved: true },
-  in_training: { label: "In training", short: "In training", was: "", tag: "Our records", of_approved: true },
-  certified: { label: "Passed", short: "Passed", was: "", tag: "Our records", of_approved: true },
+  mobilised: { label: "Mobilised", short: "Mobilised", was: "", tag: "Our records", of_approved: true, batch_scoped: true },
+  in_training: { label: "In training", short: "In training", was: "", tag: "Our records", of_approved: true, batch_scoped: true },
+  certified: { label: "Passed", short: "Passed", was: "", tag: "Our records", of_approved: true, batch_scoped: true },
 } as const;
 
 export const SOURCES = {

@@ -657,6 +657,14 @@ two are named above so the next reader knows they are still open, not resolved b
 **The one place this is done right:** `trainers/route.ts:21` exports `SENSITIVE_FIELDS` +
 `maskTrainerSecrets` and `[id]/route.ts:10` imports them, with a comment saying they had drifted before.
 
+**`govt_batch_id` gained a THIRD write path (-253, 2026-08-26): the Reports drill drawer.** A
+per-batch row in the drill-down (`reportRollup`'s `detail`, see 3.9c below) carries an inline,
+editable Batch ID cell (`reports/page.tsx`, `BatchIdCell`). It does not add a fourth field-write
+door — it calls the **same** `PATCH /api/batches/[id]` this section already tracks, with the same
+normalization (`canonicalGovtBatchId`) and the same warn-never-block duplicate check
+(`govtBatchIdConflict`). A future editor adding a fourth surface for this field should be pointed
+at that existing door, not tempted to write a bespoke one.
+
 ### 3.9b `CORRECTABLE_TRAINER_DATES` — 2 copies, one of them guarded (added -202)
 `rules.ts` (**SoT**, exported) · `trainers/[id]/page.tsx` `PIPELINE_DATES` (labels + order for the
 card's Edit mode). The screen cannot import the SoT — `rules.ts` pulls mongoose and that page is a
@@ -665,6 +673,37 @@ client component, the same wall `DOC_TYPES` hits in 3.7. **The copy is pinned**:
 the six ever reaches the plain `PATCH /api/trainers/[id]` allow-list (3.9), which is what qa-196's
 ratified invariant I2 rests on. These six are written **only** through
 `/api/trainers/[id]/transition` — `POST` stamps them on a stage move, `PATCH` corrects them after.
+
+### 3.9c `reportRollup`'s `detail` array carries TWO row shapes (added -253)
+`detail` (`rules.ts`, `reportRollup`) used to be one row per `(location, role)` `LocationTarget`.
+It now mixes that centre row with, for centres that have batches, one row per `Batch` — told apart
+by the `batch: null | {...}` field on `ReportDetailRow`. Centre rows carry `target/approved/
+not_approved/unknown` (a target belongs to a centre × job-role, never to one batch under it) and
+zero the other three; batch rows do the opposite, splitting `mobilised/in_training/certified` per
+batch (`REPORT_LABELS[k].batch_scoped === true` names exactly these three, in one place, so the
+server and the client cannot end up with two different lists of which measures are batch-wise).
+
+**This is why `sum(detail[k]) === total[k]` (pinned in `scripts/e2e.mjs`) still holds without
+double-counting anything** — every measure's full value lives on exactly one kind of row, by
+construction, not by a rule someone has to remember to keep true.
+
+**The client dashes, never zeroes, a measure that does not apply to the row it is on**
+(`reports/page.tsx`'s `drillNum`): a batch row's `target/approved/not_approved/unknown` are real
+numeric `0`s on the wire (needed for the sum invariant above), but printing that `0` reads as "this
+batch has zero target" — a false measurement, the exact class QA-1288's own maker_note calls out
+by name (QA-246 "chaar jhoothi ginti"). `drillNum` checks `r.batch && !L[k]?.batch_scoped` and
+renders `—` with an explanatory title instead. A centre row is never at risk of the same failure
+on the other three measures: `hasBatchFor` already drops a centre's own placeholder row from a
+batch-scoped drill the moment that centre has any batch, so a centre row showing `mobilised: 0`
+only ever appears when it is genuinely true (no batch exists yet).
+
+**`Mobilised`/`In training` attribute to a candidate's MOST RECENT `BatchMember` row, not every
+historical one** (Umesh, 2026-08-26: "sirf uske aakhri batch me ginno"). A candidate who dropped
+Batch A and re-enrolled into Batch B at the same centre × role is counted once, under B — not once
+under each. Without this, the batch-rows' own sum could read higher than the centre tile above
+them, the "footer disagrees with the tile" failure this report has already been fixed for twice
+(QA-1074, QA-762). `Certified` needs no such rule: `CandidateResult.batch` is set directly on the
+result row, so regrouping by batch instead of centre × role cannot change which rows are summed.
 
 ### 3.11 How the batch-code PREFIX is spelled — 3 writers, 2 of them byte-identical (added -225)
 `nextBatchCode` builds `${Location.code}-${Program.code}-NN`, and **both of those codes are minted

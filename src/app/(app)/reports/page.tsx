@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { api, fmtDT } from "@/lib/client";
 import { BASE_PATH } from "@/lib/base-path";
 import { Btn, DataTable, Drawer, ErrorBanner } from "@/components/ui";
+import { usePerms } from "@/components/shell";
 
 // QA-398 — the high-level report. Karunn sir, 18:51: "aapki ek ye high level aur doosra batch
 // planning — bas in do mein saara kaam nikal jaata hai, teesri cheez ki zaroorat hi nahi."
@@ -29,6 +30,10 @@ function ReportsInner() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // -253: the duplicate-warning the batch PATCH door already returns (govtBatchIdConflict,
+  // rules.ts) when an inline Batch ID edit collides with another batch — same words, same door,
+  // just surfaced on this screen instead of the batch page.
+  const [batchIdWarn, setBatchIdWarn] = useState("");
 
   // QA-1074 — the fetch is NAMED because Refresh needs it too. Umesh read "Passed 26" off this
   // screen and reported it as an under-count; it was measured that 53 Pass results exist and the
@@ -192,9 +197,19 @@ function ReportsInner() {
   // question a reader asks next is almost always "and how far did THAT row get", and a panel that
   // shows one number per row sends them back to the table to find out. The clicked measure is the
   // default sort, so the rows that built the tile are at the top.
-  const drillNum = (k: string) => (r: any) => (drill === k
-    ? <b className="text-gray-900">{num(r[k] ?? 0)}</b>
-    : num(r[k] ?? 0));
+  // -253 (QA-1288's own maker_note, quoting QA-246 "chaar jhoothi ginti"): a batch row's
+  // target/approved/not_approved/unknown are hardcoded to 0 on the server because those measures
+  // belong to the centre x role, never to one batch under it - printing that 0 as a plain number
+  // reads as "this batch has zero target", a false measurement the client has been burned by
+  // before. Dash it, and say why, instead of letting a batch row show four more zeroes.
+  const drillNum = (k: string) => (r: any) => {
+    if (r.batch && !L[k]?.batch_scoped) {
+      return <span className="text-gray-300" title="This measure belongs to the centre × job role target, not to any one batch - it does not apply on a batch row.">—</span>;
+    }
+    return drill === k
+      ? <b className="text-gray-900">{num(r[k] ?? 0)}</b>
+      : num(r[k] ?? 0);
+  };
   const measureCol = (k: string) => ({
     key: k, label: L[k]?.short ?? k, minWidth: k === "in_training" ? 124 : 112, sortable: true,
     hint: L[k]?.was || undefined,
@@ -212,6 +227,20 @@ function ReportsInner() {
       render: (r: any) => <Link href={`/locations/${r.location._id}`} className="font-medium text-blue-700 hover:underline">{r.location.name}</Link>,
       total: (rs: any[]) => <span className="whitespace-nowrap">{rs.length} row{rs.length === 1 ? "" : "s"}</span>,
     },
+    // -253 (Umesh, on the client's own OneDrive sheet): "location wise, batch wise analytics" —
+    // right after Location, per his own ask. Only present when the drilled measure is one of the
+    // three this report can actually attribute to a single batch (REPORT_LABELS.batch_scoped);
+    // Target/Approved/Pending/Not-approved stay exactly as they were, no Batch ID column at all,
+    // because those figures belong to the centre x role, not to any one batch under it.
+    ...(L[drill]?.batch_scoped ? [{
+      key: "batch_id", label: "Batch ID", minWidth: 170, sortable: true, filterable: true,
+      hint: "The client's own portal/scheme Batch ID for this batch. Blank ones can be typed in right here.",
+      sortValue: (r: any) => r.batch?.govt_batch_id ?? "",
+      filterText: (r: any) => r.batch?.govt_batch_id ?? "(blank)",
+      render: (r: any) => r.batch
+        ? <BatchIdCell row={r} onSaved={(w?: string) => { setBatchIdWarn(w ?? ""); void load(); }} />
+        : <span className="text-gray-300">·</span>,
+    }] : []),
     { key: "role", label: "Job role", minWidth: 190, sortable: true, filterable: true, sortValue: (r: any) => r.role, filterText: (r: any) => r.role, render: (r: any) => <span>{r.role}</span> },
     // THE CLICKED MEASURE SITS HERE, third, before anything else — a browser screenshot is what
     // asked for it. With the seven measures all after the two status columns, opening a tile put
@@ -247,6 +276,21 @@ function ReportsInner() {
     // choice, which is keyed by `key`.
     ...measures.filter((k) => k !== drill).map(measureCol),
   ];
+
+  // -253: which rows the drill shows changes shape ONLY for the three batch-scoped measures.
+  // Everything else is untouched — same filter, same rows, same numbers as before this unit.
+  const detailAll: any[] = data?.detail ?? [];
+  const batchDrill = !!L[drill]?.batch_scoped;
+  // Centres that already have at least one batch row for this (location, role) hide their
+  // centre-level placeholder row on a batch-scoped drill (its three batch measures are always 0
+  // by construction — the real numbers live on the batch rows below it); a centre with NO batches
+  // yet keeps that placeholder, so it still shows up instead of silently vanishing from the drill.
+  const hasBatchFor = batchDrill
+    ? new Set(detailAll.filter((d) => d.batch).map((d) => `${d.location._id}|${d.role}`))
+    : null;
+  const drillRows = batchDrill
+    ? detailAll.filter((d) => d.batch ? true : !hasBatchFor!.has(`${d.location._id}|${d.role}`))
+    : detailAll.filter((d) => Number(d?.[drill] ?? 0) !== 0);
 
   return (
     <div className="space-y-4">
@@ -524,9 +568,14 @@ function ReportsInner() {
               centre (Locations → the centre → TC per job role), or in the sheet.
             </p>
           )}
+          {batchIdWarn && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              ⚠ {batchIdWarn} <button className="ml-2 font-bold" onClick={() => setBatchIdWarn("")}>×</button>
+            </div>
+          )}
           <DataTable
             storageKey={`reports-drill-${drill}`}
-            rows={(data?.detail ?? []).filter((d: any) => Number(d?.[drill] ?? 0) !== 0)}
+            rows={drillRows}
             columns={drillColumns}
             defaultSort={{ key: drill, dir: "desc" }}
             cardTitle={(r: any) => `${r.location.name} — ${r.role}`}
@@ -534,11 +583,57 @@ function ReportsInner() {
             searchable
           />
           <p className="text-[11px] text-gray-400">
-            Rows with nothing in this column are left out — {(data?.detail ?? []).length} (centre × job role) rows exist in total.
-            The figure under the table is the same one on the tile.
+            {batchDrill
+              ? <>Every batch at every centre × job role is shown here, including ones with zero — {drillRows.filter((d) => d.batch).length} batch{drillRows.filter((d) => d.batch).length === 1 ? "" : "es"}, {drillRows.filter((d) => !d.batch).length} centre × job-role row{drillRows.filter((d) => !d.batch).length === 1 ? "" : "s"} with no batch yet.
+                  Target/Approved/Not approved/Pending show — on a batch's own row: those are centre × job-role figures, not any one batch's.</>
+              : <>Rows with nothing in this column are left out — {detailAll.filter((d) => !d.batch).length} (centre × job role) rows exist in total.
+                  The figure under the table is the same one on the tile.</>}
           </p>
         </div>
       </Drawer>
+    </div>
+  );
+}
+
+// -253: the inline Batch ID cell for a batch-scoped drill row. Same uncontrolled/onBlur pattern
+// as the roster's Candidate ID cell (batches/[id]/page.tsx, sidh_candidate_id) — commit only on
+// blur and only if changed — but through the BATCH's own PATCH door
+// (api/batches/[id]/route.ts), not the candidate/results door that precedent uses: `govt_batch_id`
+// is a batch-level field, and that door already normalizes (canonicalGovtBatchId) and already
+// warns-never-blocks on a duplicate (govtBatchIdConflict). No new endpoint, no new write logic.
+function BatchIdCell({ row, onSaved }: { row: any; onSaved: (warning?: string) => void }) {
+  const { can, loaded: permsReady } = usePerms();
+  const closed = ["Completed", "Cancelled"].includes(row.batch.status);
+  // Gated on the SAME permission and the SAME statuses the PATCH door itself checks
+  // (requirePerm(user, "batches.manage"); refuses on Completed/Cancelled) — an editable box that
+  // will always 409 is the dead-control class this codebase has already named three times
+  // (QA-712, QA-723, QA-754); this is the one place that class does not get a fourth outing.
+  const canEdit = (!permsReady || can("batches.manage", "edit")) && !closed;
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  return (
+    <div>
+      <input
+        defaultValue={row.batch.govt_batch_id ?? ""}
+        disabled={busy || !canEdit}
+        title={closed ? "This batch is closed — its Batch ID can no longer be edited here." : undefined}
+        placeholder="type ID"
+        className="w-32 rounded border border-gray-200 px-1.5 py-0.5 font-mono text-[11px] disabled:bg-gray-50 disabled:text-gray-400"
+        onBlur={async (e) => {
+          const v = e.target.value.trim();
+          if (v === (row.batch.govt_batch_id ?? "")) return;
+          setBusy(true); setErr("");
+          try {
+            const res = await api(`/api/batches/${row.batch._id}`, { method: "PATCH", json: { govt_batch_id: v } });
+            onSaved(res?.warning);
+          } catch (ex: any) {
+            setErr(String(ex?.message ?? ex));
+          } finally {
+            setBusy(false);
+          }
+        }}
+      />
+      {err && <div className="text-[10px] text-red-600">{err}</div>}
     </div>
   );
 }
