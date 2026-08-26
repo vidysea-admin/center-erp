@@ -346,6 +346,34 @@ const CandidateDocumentSchema = new Schema({
 }, { timestamps: true });
 CandidateDocumentSchema.index({ candidate: 1, doc_type: 1 });
 
+// ---------- BatchDocument (2026-08-26) ----------
+// The RPL compliance paperwork a batch must have on file — candidate registration forms,
+// assessment-day photos, the signed final attendance sheet, post-certification photos. Daily
+// training photos/attendance and trainer credentials are DELIBERATELY not here: the first is
+// DailyLog (already a per-day record with photos/videos/attendance_sheet below), the second is
+// TrainerDocument (already exists, read-only pull-through — see trainerDocSummary). This is a
+// different concept: batch-level evidence with no natural per-day home.
+// Unlike TrainerDocument/CandidateDocument (one row per doc_type, re-upload REPLACES), this is
+// one row per FILE — a doc_type here routinely needs many files (several registration forms,
+// several angle photos of one assessment day), so uploads APPEND.
+export const BATCH_DOC_TYPE = [
+  "Candidate Registration Forms",
+  "Assessment Day Photos (Individual)",
+  "Assessment Day Photos (Group)",
+  "Final Assessment Attendance Sheet",
+  "Post-Certification Photos (Individual)",
+  "Post-Certification Photos (Group)",
+] as const;
+const BatchDocumentSchema = new Schema({
+  batch: oid("Batch", true),
+  doc_type: { type: String, enum: BATCH_DOC_TYPE, required: true },
+  file_url: { type: String, required: true },
+  original_name: String,
+  uploaded_by: oid("User"),
+  note: String,
+}, { timestamps: true });
+BatchDocumentSchema.index({ batch: 1, doc_type: 1 });
+
 // ---------- TrainerRequest ----------
 const TrainerRequestSchema = new Schema({
   location: oid("Location", true),
@@ -624,6 +652,12 @@ const DailyLogSchema = new Schema({
   govt_screenshot: String,
   photos: { type: [String], default: [] },
   videos: { type: [String], default: [] },
+  // 2026-08-26 (RPL compliance): the client requires the signed manual attendance register
+  // photographed daily, alongside training photos — same evidence class as `photos`, kept as its
+  // own field rather than folded into `photos` because a batch-document checklist (BatchDocument
+  // above) needs to ask "does this day have its attendance sheet" separately from "does it have
+  // training photos", and a single mixed array cannot answer that.
+  attendance_sheet: { type: [String], default: [] },
   note: String,
   entered_by: oid("User", true),
   entered_at: { type: Date, required: true, default: () => new Date() },
@@ -1316,6 +1350,7 @@ const JobRoleSchema = new Schema({
 export const Scheme = models.Scheme || model("Scheme", SchemeSchema);
 export const JobRole = models.JobRole || model("JobRole", JobRoleSchema);
 export const CandidateDocument = models.CandidateDocument || model("CandidateDocument", CandidateDocumentSchema);
+export const BatchDocument = models.BatchDocument || model("BatchDocument", BatchDocumentSchema);
 export const Defaults = models.Defaults || model("Defaults", DefaultsSchema);
 
 export { mongoose };

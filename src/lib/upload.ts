@@ -38,7 +38,7 @@ export async function compressImage(file: File): Promise<Blob> {
 // daily log's govt_screenshot. Only daily-log kinds queue at all; documents fail loudly.
 type QueueItem = { dataUrl: string; name: string; kind: string; ts: number; batch_id?: string; hints?: UploadHints };
 const QKEY = "erp_upload_queue";
-const QUEUEABLE = new Set(["photos", "videos", "govt_screenshot"]);
+const QUEUEABLE = new Set(["photos", "videos", "govt_screenshot", "attendance_sheet"]);
 
 // Where a file belongs — becomes the Drive folder <Centre>/<Batch>/<kind> and the
 // StoredFile's entity link ("which files belong to this batch?" finally has an answer).

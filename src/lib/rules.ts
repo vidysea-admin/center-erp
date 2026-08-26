@@ -2,7 +2,7 @@
 // center-erp-data-model-rules.md §4. Rule numbers are cited inline.
 import { Types } from "mongoose";
 import {
-  AuditLog, Batch, BatchMember, Candidate, CandidateResult, Closure, CostCategory, CostEntry, DailyLog, GovtAttendanceRow, Invoice, Location,
+  AuditLog, Batch, BatchDocument, BATCH_DOC_TYPE, BatchMember, Candidate, CandidateResult, Closure, CostCategory, CostEntry, DailyLog, GovtAttendanceRow, Invoice, Location,
   LocationTarget, Notification, Program, Room, Scheme, SheetChange, SyncSource, TRAINER_PIPELINE, Trainer, TrainerDocument,
 } from "@/models";
 import { audit, auditDiff } from "@/lib/audit";
@@ -1188,7 +1188,7 @@ export async function createDailyLogChecked(
     govt_present: body.govt_present ?? null,
     govt_source: body.govt_source ?? "Manual",
     govt_screenshot: body.govt_screenshot,
-    photos: body.photos ?? [], videos: body.videos ?? [],
+    photos: body.photos ?? [], videos: body.videos ?? [], attendance_sheet: body.attendance_sheet ?? [],
     note: body.note,
     entered_by: user.id, entered_at: new Date(),
   });
@@ -2670,6 +2670,19 @@ export async function trainerDocSummary(trainerId: string) {
   const have = new Set(docs.map((d) => d.doc_type));
   const missing = required.filter((t) => !have.has(t));
   return { total: docs.length, required, missing, complete: missing.length === 0, verified: docs.filter((d) => d.verified).length };
+}
+
+// 2026-08-26 (RPL compliance, client): every one of the six batch-level document types is
+// required for every batch — no partial floor the way MANDATORY_TRAINER_DOCS is a subset of
+// TRAINER_DOC_TYPE. Mirrors trainerDocSummary's required/have/missing/complete shape so the
+// Documents tab's banner reads the same way both places.
+export const REQUIRED_BATCH_DOC_TYPES: readonly string[] = BATCH_DOC_TYPE;
+
+export async function batchDocSummary(batchId: string) {
+  const docs = await BatchDocument.find({ batch: batchId }).select("doc_type").lean<any[]>();
+  const have = new Set(docs.map((d) => d.doc_type));
+  const missing = REQUIRED_BATCH_DOC_TYPES.filter((t) => !have.has(t));
+  return { total: docs.length, required: REQUIRED_BATCH_DOC_TYPES, missing, complete: missing.length === 0 };
 }
 
 // Mirrors transitionBatch: an explicit edge table, each edge naming its own precondition, and a

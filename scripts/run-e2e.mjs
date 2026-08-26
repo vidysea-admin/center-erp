@@ -50,6 +50,11 @@ const SUITES = [
   // allow-list and on a screen — a grep for the NAME finds it everywhere and still finds nothing
   // wrong. Only driving the create door shows that the value goes in and does not come out.
   "e2e-govt-batch-id.mjs",
+  // RPL compliance (2026-08-26): the batch document checklist — six new batch-level document
+  // types, attendance_sheet on DailyLog (Daily Execution door), the batches.daily_log permission
+  // gate and batch scope, and that the trainer-documentation pull-through writes nothing into
+  // BatchDocument (no duplicate storage of trainer identity docs under a batch).
+  "e2e-batch-documents.mjs",
   // QA-573 (2026-08-25, Umesh approved): the FIRST suite here that asserts what the SCREEN does
   // rather than what a source file spells. It drives a real chromium (`playwright` is a
   // devDependency now) and holds one operator-facing invariant: a screen that announces a count

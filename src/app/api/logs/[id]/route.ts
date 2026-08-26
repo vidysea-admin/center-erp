@@ -29,7 +29,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   }
   const before = log.toObject();
   const patch: Record<string, unknown> = {};
-  for (const f of ["planned_topic", "actual_topic", "present_member_ids", "biometric_member_ids", "trainer_present", "govt_present", "govt_source", "govt_screenshot", "photos", "videos", "note"]) {
+  for (const f of ["planned_topic", "actual_topic", "present_member_ids", "biometric_member_ids", "trainer_present", "govt_present", "govt_source", "govt_screenshot", "photos", "videos", "attendance_sheet", "note"]) {
     if (body[f] !== undefined) patch[f] = body[f];
   }
   // 2026-08-12 audit F-007 (S1): this used to re-validate the STORED present list against the

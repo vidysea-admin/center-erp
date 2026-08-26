@@ -46,12 +46,12 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
   try { const b = await req.json(); reason = String(b?.reason ?? "").trim().slice(0, 300); } catch { /* no body is fine */ }
   const snapshot = {
     log_date: log.log_date, present: (log.present_member_ids ?? []).length, govt_present: log.govt_present ?? null,
-    photos: log.photos ?? [], videos: log.videos ?? [], govt_screenshot: log.govt_screenshot ?? null,
+    photos: log.photos ?? [], videos: log.videos ?? [], attendance_sheet: log.attendance_sheet ?? [], govt_screenshot: log.govt_screenshot ?? null,
     note: log.note ?? null, entered_by: String(log.entered_by ?? ""),
   };
   await log.deleteOne();
   // the day's own evidence leaves with it (best-effort; each row stays as audit, URL → 410)
-  const files = [...snapshot.photos, ...snapshot.videos, ...(snapshot.govt_screenshot ? [snapshot.govt_screenshot] : [])];
+  const files = [...snapshot.photos, ...snapshot.videos, ...snapshot.attendance_sheet, ...(snapshot.govt_screenshot ? [snapshot.govt_screenshot] : [])];
   const removed: string[] = [];
   for (const u of files) { const r = await removeStoredFile(String(u), user.id).catch(() => ({ removed: false })); if (r.removed) removed.push(String(u).split("/").pop() ?? ""); }
   await audit({
