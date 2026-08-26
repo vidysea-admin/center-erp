@@ -1811,6 +1811,46 @@ ok("removal is real", (await req(admin, "GET", `/api/sync-sources/${srcId}`)).st
       }));
   }
 
+  // ---- QA-725: "on record but unreadable" is a DIFFERENT state from "no CAN anywhere", and until
+  // now the health plan showed them as the same bucket. The single-edit door (looksLikeCan,
+  // deliberately looser than normalizeCan - widening it is Umesh's call, not this screen's) can
+  // accept a value like "CAN_CHK208A" that certification can never match against - so a candidate
+  // who genuinely typed something got told the same thing as a candidate who typed nothing at all.
+  {
+    const unrCand = (await req(admin, "POST", "/api/candidates", {
+      name: `${NAME} Unreadable`, phone: `9${STAMP.slice(1)}3001`, location: loc._id, program: program._id,
+    }, 201)).data.item;
+    const setJunk = await req(admin, "PATCH", `/api/candidates/${unrCand._id}`, { sidh_candidate_id: "CAN_CHK208A" });
+    ok("QA-725 precondition: the write door still ACCEPTS this shape (deliberate - widening looksLikeCan is Umesh's call)",
+      setJunk.status === 200, `got ${setJunk.status}: ${JSON.stringify(setJunk.data).slice(0, 150)}`);
+
+    const planU = (await req(admin, "GET", "/api/candidates/portal-id-health", undefined, 200)).data;
+    const inUnreadable = (planU.unreadable ?? []).find((x) => String(x.candidate) === String(unrCand._id));
+    ok("QA-725: a stored-but-unreadable portal ID now surfaces on the health screen, with the value that was actually typed",
+      !!inUnreadable && inUnreadable.stored === "CAN_CHK208A",
+      JSON.stringify({ found: !!inUnreadable, stored: inUnreadable?.stored ?? null }));
+
+    // The regression this fixed: an ENROLLED candidate with this exact shape used to fall into
+    // "enrolled_no_can" ("the government issues the CAN; it cannot be invented here") - the wrong
+    // bucket, since the government DID issue one and someone mistyped it. Same value, enrolled.
+    const unrTrainer = (await req(admin, "POST", "/api/trainers", { name: `${NAME} UnrTrainer`, phone: `9${STAMP.slice(1)}3002`, skills: ["Testing"] })).data.item;
+    const unrRoom = (await req(admin, "POST", `/api/locations/${loc._id}/rooms`, { name: `${NAME} Unr Lab`, type: "Lab", capacity: 30 })).data.item;
+    const unrBatch = (await req(admin, "POST", "/api/batches", {
+      location: loc._id, program: program._id, trainer: unrTrainer._id, room: unrRoom._id,
+      planned_start: localDate(), target_size: 1,
+    }, 201)).data.item;
+    const unrMem = (await req(admin, "POST", `/api/batches/${unrBatch._id}/members`, { candidate: unrCand._id }, 201)).data.item;
+    await req(admin, "PATCH", `/api/members/${unrMem._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+
+    const planU2 = (await req(admin, "GET", "/api/candidates/portal-id-health", undefined, 200)).data;
+    ok("QA-725: ...and once enrolled, they do NOT fall into 'enrolled_no_can' — that bucket means nothing was ever typed",
+      !(planU2.enrolled_no_can ?? []).some((x) => String(x.candidate) === String(unrCand._id)),
+      JSON.stringify((planU2.enrolled_no_can ?? []).filter((x) => String(x.candidate) === String(unrCand._id))));
+    ok("QA-725: ...they stay in 'unreadable' instead, where the fix is retyping the ID, not waiting on the portal",
+      (planU2.unreadable ?? []).some((x) => String(x.candidate) === String(unrCand._id)),
+      JSON.stringify((planU2.unreadable ?? []).map((x) => x.candidate)));
+  }
+
   // -156 (QA-453): exact-ID equality answers WHICH CANDIDATE - the whole argument for this door
   // being safe where a name match is not. It does not answer WHICH BATCH, and a row naming no batch
   // was attached to whatever membership Mongo returned first, then audited as decided by the ID.

@@ -1487,6 +1487,9 @@ function CandidatesInner() {
               <Fix kind="set_null" list={health.empty_strings ?? []} keyName="candidate" title={'Empty-string ("") artefacts'}
                 note={'"" is a string, so under the uniqueness rule two of these would collide. Blank means not-known, which is null.'}
                 render={(x: any) => <span><b>{x.name}</b> {x.phone && <span className="text-gray-500">· {x.phone}</span>}</span>} />
+              <Report tone="red" title="Portal ID on record, but unreadable" list={health.unreadable ?? []}
+                note="something was typed and saved here, but it does not match CAN followed by the number — certification can never read it. Open the candidate and retype it from SIDH exactly as it appears there."
+                render={(x: any) => <span><b>{x.name}</b> {x.phone && <span className="text-gray-500">· {x.phone}</span>} → <span className="font-mono">{x.stored}</span></span>} />
               <Report tone="red" title="One portal ID on two candidates" list={health.duplicates ?? []}
                 note="the machine must not choose whose identity it is — open each candidate and clear the wrong one"
                 render={(d: any) => <span><span className="font-mono">{d.id}</span>: {d.members.map(personLabel).filter(Boolean).join(" vs ")}</span>} />
