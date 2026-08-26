@@ -168,7 +168,7 @@ ok("home: the strip's JSX closes before the trainers-by-role block", stripClose 
     });
     // The exception must not become a way to have no fields at all: both named fields have to BE here.
     const namedPresent = POST_COMPLETION_WRITABLE.filter((f) => inputs.some((t) => nameOf(t) === f));
-    ok("-231 (QA-833/QA-961/QA-1265): EVERY input in the closure cards carries the gate its own Save carries",
+    ok("-250 (QA-833/QA-961/QA-1265): EVERY input in the closure cards carries the gate its own Save carries",
       region.length > 0 && inputs.length >= 6 && wrongGate.length === 0 && namedPresent.length === POST_COMPLETION_WRITABLE.length,
       region.length === 0 ? "could not locate the closure cards"
         : `${inputs.length} inputs, ${wrongGate.length} with the wrong gate: ${wrongGate.map(nameOf).join(", ") || "(none)"}`
@@ -200,7 +200,7 @@ ok("home: the strip's JSX closes before the trainers-by-role block", stripClose 
       }
     }
   }
-  ok("-229 (QA-880 class pin): no catch in CandidateResults reports only through the page-level banner",
+  ok("-230 (QA-880 class pin): no catch in CandidateResults reports only through the page-level banner",
     crBody.length > 0 && bareCatches.length === 0,
     crBody.length === 0 ? "could not locate CandidateResults" : `${bareCatches.length} bare: ${JSON.stringify(bareCatches[0] ?? "")}`);
 
