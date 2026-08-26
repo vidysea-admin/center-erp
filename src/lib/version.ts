@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-255";
+export const RELEASE = "2026.08.14-256";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -138,6 +138,25 @@ const RELEASE_NOTE_ARCHIVE_254 =
   "screen for a real number sitting one tab over.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-256 is a maintenance release: it does not add a screen, it closes three ways the system could "  +
+  "tell you something that was not so. A batch that has finished can now be given the government "  +
+  "portal's own Batch ID. That identifier is issued by the portal at or after a batch closes, so "  +
+  "the one moment it actually arrives was the one moment the system refused to record it - and the "  +
+  "batch page had been asking for it on finished batches the whole time, over a form whose save "  +
+  "was then turned away. Recording it is limited to an Admin and to that single field; everything "  +
+  "else about a finished batch stays frozen exactly as before, and the edit is logged with who "  +
+  "made it. On the reports screen, opening one of the three per-batch figures now lists batches "  +
+  "and only batches: rows for a centre that has no batch yet carried nothing to identify them and "  +
+  "nothing to type an ID into, and the note under the table now says how many were left out "  +
+  "rather than dropping them silently. No total changes. "  +
+  "Alongside those, an Admin may now delete a course, and force-delete a batch that already "  +
+  "carries recorded work, for the case of a batch created by mistake - both were asked for "  +
+  "directly and both are limited to an Admin. "  +
+  "The rest of this release is checking that does not show on any screen: several of the automated "  +
+  "guards meant to catch a mistake before it ships were found to pass when they should have "  +
+  "failed, and were repaired and then deliberately broken again to prove they now notice.";
+
+const RELEASE_NOTE_ARCHIVE_255 =
   "-255 closes a gap in how a centre's edit to its own contacts behaves when that edit needs an "  +
   "Admin's approval first. The save was answered with a 202 carrying no saved record, and the "  +
   "screen could not tell that apart from an ordinary success - so it kept showing the change the "  +
@@ -793,6 +812,12 @@ const RELEASE_NOTE_ARCHIVE =
   // QA-265 records, one release after the comment above was written warning about it. tsc stayed
   // silent because tsconfig.json does not set noUnusedLocals. Both -246 and the orphaned -245 are
   // wired in here; adding a note to this chain is the second half of every bump, not an optional one.
+  // -256: ARCHIVE_253 and ARCHIVE_254 were each DECLARED by their own bump and then never added to
+  // this chain, so for three releases both were dead constants and neither note was published
+  // anywhere - the same shape the comment above records for -245, and the same shape QA-265 records
+  // for 329 lines of this file. Wired in here together with -255's, archived by this bump. Adding a
+  // note to this chain is the second half of every bump, not an optional one.
+  RELEASE_NOTE_ARCHIVE_255 + " " + RELEASE_NOTE_ARCHIVE_254 + " " + RELEASE_NOTE_ARCHIVE_253 + " " +
   RELEASE_NOTE_ARCHIVE_252 + " " + RELEASE_NOTE_ARCHIVE_251 + " " + RELEASE_NOTE_ARCHIVE_250 + " " + RELEASE_NOTE_ARCHIVE_249 + " " + RELEASE_NOTE_ARCHIVE_248 + " " + RELEASE_NOTE_ARCHIVE_247 + " " + RELEASE_NOTE_ARCHIVE_246 + " " + RELEASE_NOTE_ARCHIVE_245 + " " +
   RELEASE_NOTE_ARCHIVE_244 + " " + RELEASE_NOTE_ARCHIVE_243 + " " + RELEASE_NOTE_ARCHIVE_242 + " " + RELEASE_NOTE_ARCHIVE_241 + " " + RELEASE_NOTE_ARCHIVE_240 + " " + RELEASE_NOTE_ARCHIVE_239 + " " + RELEASE_NOTE_ARCHIVE_238 + " " +
   RELEASE_NOTE_ARCHIVE_237 + " " + RELEASE_NOTE_ARCHIVE_236 + " " +
