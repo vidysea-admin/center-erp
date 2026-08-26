@@ -1352,6 +1352,25 @@ for (const file of walk(root)) {
   const sendsId = !!saveCall && /\{\s*_id\s*,/.test(saveCall[0]) && /\(\{\s*_id\s*,/.test(saveCall[0]);
   if (sendsId) passed++;
   else { failed++; pushStructural("app/(app)/locations/[id]/page.tsx: the contacts save does not send each contact's `_id` back (found the call: " + !!saveCall + ") - QA-622. Mongoose mints a fresh id for every entry that arrives without one, so one added contact renews the identity of all of them, and every plan link sent to those people quietly stops being theirs."); }
+
+  // QA-627 (cycle 2 - this pin was lost from the working tree once already before commit, a
+  // concurrent-edit collision this project has not previously hit on a SOURCE file rather than a
+  // qa/ file; re-applied and re-verified against the actual committed content this time, not just
+  // a pre-commit working-tree snapshot): -195 (the pin above) closed the OUTGOING half - `_id`
+  // travels out on every save. It left the INCOMING half open: `setContacts(next)` seeded local
+  // state from the pre-save local array, never from what the server actually persisted, so a
+  // contact added earlier in the same visit still had no `_id` in state when the NEXT save fired -
+  // only the server had minted one. Two "Add contact" presses in one visit was enough to silently
+  // re-mint the first one's id and detach the plan share already sent to them. The pin above cannot
+  // catch this: it is satisfied by the outgoing shape alone and stays green whether or not state is
+  // ever refreshed from the response. This one reads the other half - that `setContacts` is seeded
+  // from the PATCH response, not from the argument that was passed in.
+  const saveContactsFn = locPageSrc.match(/async function saveContacts\([^)]*\)\s*\{[\s\S]*?\n  \}/);
+  const readsResponseBack = !!saveContactsFn
+    && /const\s+res\s*=\s*await\s+api\(/.test(saveContactsFn[0])
+    && /setContacts\(\s*res\??\.\??item\??\.\??contacts/.test(saveContactsFn[0]);
+  if (readsResponseBack) passed++;
+  else { failed++; pushStructural("app/(app)/locations/[id]/page.tsx: saveContacts still seeds local state from its own argument rather than from the PATCH response's `item.contacts` (found the function: " + !!saveContactsFn + ") - QA-627. A contact added earlier in the same visit has no `_id` in local state until a save round-trips it back; skipping that round-trip lets the NEXT save re-mint that contact's id and detach any plan share already sent to them."); }
 }
 
 // stripComments runs first, so writing the promise in a comment cannot satisfy it.
