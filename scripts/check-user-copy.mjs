@@ -2137,14 +2137,53 @@ for (const file of walk(root)) {
   // cannot prove, the same concession `saveCard`'s own pin states a few hundred lines up this file -
   // this one lacked it, which is what the checker charged. Stated here rather than implied.
   const decl = /const canTransition = ([^;]*);/.exec(scan);
+  //
+  // QA-733 cycle 2 (-256): the test above read ONLY the declaration's own text, so ONE named local
+  // walked straight through it. The checker's attack, verbatim, with tsc rc=0 and this file green:
+  //
+  //     const idle = !running;
+  //     const canTransition = role !== "Location" && ... && idle;
+  //
+  // `guardSrc` then says nothing about `running`, the pin passes, and every Active/Closing/
+  // Completed/Closed batch renders "Batch status is moved by Operations/Admin." instead of its
+  // controls - QA-693 restored, tenth of its class. A presence test cannot see what somebody moved
+  // one line up; that is the same lesson QA-741 was raised for this week.
+  //
+  // So the guard's INPUTS are resolved before the question is asked: every bare identifier in the
+  // expression that has a `const <id> = ...;` of its own in this file is inlined, up to three
+  // levels. Destructured bindings (`const { can: canBatchOv } = usePerms()`) match no such
+  // declaration and resolution simply stops there, which is correct - nothing about a permission
+  // hook can smuggle a status in. An honest rename (`const mayMove = <the same guard>;
+  // const canTransition = mayMove;`) resolves to the same text and stays GREEN; the alias attack
+  // resolves to one containing `running` and goes RED. Both directions are mutation-tested.
+  const resolveAliases = (expr) => {
+    // `scan` is comment-stripped source, so a match here is real code, not prose.
+    const SKIP = new Set(["true", "false", "null", "undefined", "typeof", "new", "void", "in", "of"]);
+    const seen = new Set();
+    let out = expr;
+    for (let depth = 0; depth < 3; depth++) {
+      const ids = [...new Set(out.match(/\b[A-Za-z_$][\w$]*\b/g) || [])].filter((id) => !SKIP.has(id) && !seen.has(id));
+      let grew = false;
+      for (const id of ids) {
+        seen.add(id);
+        const m = new RegExp("const\\s+" + id + "\\s*=\\s*([^;]*);").exec(scan);
+        if (m && m[1] !== undefined) { out += " " + m[1]; grew = true; }
+      }
+      if (!grew) break;
+    }
+    return out;
+  };
   const guardSrc = decl ? decl[1] : "";
-  const guardClean = !!guardSrc && !/\brunning\b/.test(guardSrc) && !/\bb\.status\b/.test(guardSrc) && !/\bstatus\b/.test(guardSrc);
+  const guardResolved = guardSrc ? resolveAliases(guardSrc) : "";
+  const guardClean = !!guardSrc && !/\brunning\b/.test(guardResolved) && !/\bb\.status\b/.test(guardResolved) && !/\bstatus\b/.test(guardResolved);
   if (hasDecl && inRunning && inReadiness && guardClean) passed++;
   else {
     failed++;
     pushStructural(rel + ": the batch status controls do not render in both states"
       + " (declared=" + hasDecl + ", in the \"Right now\" card=" + inRunning + ", in the readiness Section=" + inReadiness
-      + ", the canTransition declaration mentions neither running nor status=" + guardClean + (guardClean ? "" : " -> " + JSON.stringify(guardSrc.trim().slice(0, 90))) + ")"
+      + ", the canTransition guard AND every local it resolves to mention neither running nor status=" + guardClean
+      + (guardClean ? "" : " -> declared " + JSON.stringify(guardSrc.trim().slice(0, 90))
+        + (guardResolved.trim() !== guardSrc.trim() ? ", resolves to " + JSON.stringify(guardResolved.trim().slice(0, 160)) : "")) + ")"
       + " - whichever of those is false, a batch in that state has NO way to be completed, reopened,"
       + " closed or cancelled from this screen. That is what -112 shipped and nobody noticed for 92"
       + " releases; Umesh asked for the control to sit in the card, not merely to exist, and one"

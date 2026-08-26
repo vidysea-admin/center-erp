@@ -845,6 +845,89 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
     ok("QA-732: …and it names EACH blocked student, not just a count",
       blockedNames.length >= 2 && blockedNames.every((n) => nvText.includes(n)),
       JSON.stringify({ names: blockedNames, text: nvText.slice(0, 260) }));
+
+    // ---- QA-732 cycle 2 (-256): the two deliverables the cycle-1 pins still did not cover ----
+    // The checker listed five unguarded behaviours and verified all five BY HAND (its P3/P4/P6).
+    // Three got pins above. These are the other two, and they are the two that cannot be seen by
+    // reading the audit row - one lives on the RESPONSE, the other only shows up later.
+
+    // (1) `completed_at_ist` on the response body. A grep of the whole scripts/ tree found ZERO
+    //     hits for this key at the cycle-1 commit AND at HEAD: the route computes an IST stamp,
+    //     returns it, and nothing has ever asserted it is there or that it is IST. The audit-row
+    //     pin above reads the STORED sentence; this reads what the caller is handed back, which is
+    //     what a screen would render. Two different surfaces, and only one of them was watched.
+    ok("QA-732 (-256): the forced press HANDS BACK its IST wall-clock, not only writes it to the audit row",
+      typeof forced.data?.completed_at_ist === "string"
+        && /^\d{2} \w{3} \d{4}, \d{2}:\d{2} (am|pm)$/.test(String(forced.data.completed_at_ist)),
+      JSON.stringify({ completed_at_ist: forced.data?.completed_at_ist ?? null }));
+    // ...and it is the SAME instant the audit row recorded. Two stamps of "now" taken in two places
+    // is how a record ends up disagreeing with itself about when a thing happened.
+    ok("QA-732 (-256): …and it is the same stamp the audit row carries, not a second reading of the clock",
+      !!forced.data?.completed_at_ist && nvText.includes(String(forced.data.completed_at_ist)),
+      JSON.stringify({ response: forced.data?.completed_at_ist ?? null, audit: nvText.slice(0, 140) }));
+
+    // (2) THE STICKY SIGNATURE. Rule 18 normally derives certification from the rows; an Admin who
+    //     forces past it SIGNS it instead (`certification_derived: false`). The danger is the next
+    //     derivation quietly overwriting that signature and erasing the fact that a human overrode
+    //     the rule - the batch would then read as if it had qualified on its own. The checker
+    //     reproduced the correct behaviour by hand (P6) and found nothing guarding it.
+    //
+    //     Every step below is asserted, so this cannot pass by the reopen failing and nothing
+    //     happening at all - which is exactly how a "nothing changed" pin passes for the wrong
+    //     reason (QA-776, and twice more in this file's own history this week).
+    const reopen = await req("POST", `/api/batches/${rb._id}/transition`,
+      { target: "Closing", reason: "QA-732 pin: reopen to re-run derivation over a signed closure" });
+    ok("QA-732 (-256): …the signed batch can be reopened at all, so the rest of this actually runs",
+      reopen.status === 200, `status=${reopen.status} ${JSON.stringify(reopen.data?.error ?? null).slice(0, 160)}`);
+    if (reopen.status === 200) {
+      // Give every student the portal ID whose absence forced the press in the first place, so the
+      // ordinary derivation now HAS every reason to sign certification by itself.
+      const rmems = (await req("GET", `/api/batches/${rb._id}/members`)).data.items ?? [];
+      let idsSet = 0;
+      for (const [i, m] of rmems.entries()) {
+        const cid = m.candidate?._id ?? m.candidate;
+        if (!cid) continue;
+        const put = await req("PATCH", `/api/candidates/${cid}`, { sidh_candidate_id: `CAN_${stamp}73${i}` });
+        if (put.status === 200) idsSet++;
+      }
+      ok("QA-732 (-256): …and the blocker that forced the press is genuinely gone before we re-derive",
+        idsSet >= 2 && idsSet === rmems.length, JSON.stringify({ idsSet, roster: rmems.length }));
+      // Now give the derivation EVERY reason to sign certification by itself: every row a Pass, every
+      // certificate walked up Rule 46 to Issued. If the signature were overwritable, this is the
+      // shape that would overwrite it - a batch that now qualifies on its own merits, with the
+      // Admin's override sitting underneath.
+      //
+      // The first version of this block reached for one `PATCH /api/results/<id> {certificate_no}`,
+      // the touch the -112 fixture next door uses. It answered 409 - those rows are Fail with the
+      // certificate Not Issued after a forced press, which is a different shape entirely - and the
+      // sticky assertion below then passed WITHOUT ANY DERIVATION HAVING RUN. It was green because
+      // nothing happened. The `touch` assertion is what caught it, which is the whole reason each
+      // step here is asserted rather than assumed (QA-776's lesson, third outing this week).
+      const rmems2 = (await req("GET", `/api/batches/${rb._id}/members`)).data.items ?? [];
+      const rePut = await req("PUT", `/api/batches/${rb._id}/results`, {
+        rows: rmems2.map((m) => ({ member: String(m._id), result: "Pass", score: 75, max_score: 100, assessed_on: today })),
+      });
+      ok("QA-732 (-256): …every student can be re-marked Pass, so the derivation has rows to act on",
+        rePut.status === 200, `status=${rePut.status} ${JSON.stringify(rePut.data?.error ?? null).slice(0, 160)}`);
+      const rrows2 = (await req("GET", `/api/batches/${rb._id}/results`)).data.items ?? [];
+      let issued = 0;
+      for (const i of rrows2) {
+        const rid = i.result?._id;
+        if (!rid) continue;
+        await req("PATCH", `/api/results/${rid}`, { certificate_status: "Processing" });
+        await req("PATCH", `/api/results/${rid}`, { certificate_status: "Generated", certificate_no: `CERT-732-${stamp}-${issued}`, certificate_date: today });
+        const iss = await req("PATCH", `/api/results/${rid}`, { certificate_status: "Issued" });
+        if (iss.status === 200) issued++;
+      }
+      ok("QA-732 (-256): …and the derivation really was re-run over a batch that now qualifies on its own",
+        issued >= 2 && issued === rrows2.length,
+        JSON.stringify({ issued, rows: rrows2.length }));
+      const signed = await closureOf(rb._id);
+      // Certification IS Completed either way - what must not change is WHO said so.
+      ok("QA-732 (-256): the Admin's signature is STICKY - a later derivation cannot quietly overwrite it",
+        signed?.certification_status === "Completed" && signed?.certification_derived === false,
+        JSON.stringify({ cert: signed?.certification_status, derived: signed?.certification_derived, issued }));
+    }
   }
 
   // A clean, fully-marked and fully-settled batch: a bare (unforced) press must say plainly that
