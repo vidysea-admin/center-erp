@@ -42,8 +42,11 @@ export type GovtRow = {
 
 const norm = (s: unknown) => String(s ?? "").replace(/ /g, " ").trim().toLowerCase().replace(/[\s_]+/g, " ");
 
-// First alias that the header cell *starts with* wins — "total days came after 00:00:00" carries a
-// clock value in the header itself, so exact equality would fail on every portal export.
+// An alias matches a header cell exactly, or as a PREFIX of it — "total days came after 00:00:00"
+// carries a clock value in the header itself, so exact equality alone would fail on every portal
+// export. Read `resolveHeader` below before adding an alias: exact matches are settled first,
+// across all fields, so a short prefix alias here can no longer steal a column that is somebody
+// else's exact header (-254 / QA-1383).
 const COLUMNS: Record<keyof GovtRow | "came_after" | "going_before", string[]> = {
   sl_no: ["sl no", "s no", "s.no", "sr no", "serial no", "#"],
   org_name: ["org name", "organisation name", "organization name", "tc name", "centre name", "center name"],
@@ -59,16 +62,20 @@ const COLUMNS: Record<keyof GovtRow | "came_after" | "going_before", string[]> =
   // Report" that states the QP entitlement and the AEBAS attendance side by side ("Total Training
   // Days (QP)" / "Total Days Attended" / "Total Hours Attended").
   //
-  // Read `resolveHeader` above before touching the ORDER here. It sorts each field's aliases
-  // LONGEST FIRST, and its `findIndex` skips any column an earlier field already claimed, so the
-  // new aliases are
-  // load-bearing in two directions:
-  //   - "total training days" (19) must beat the bare "total days" (10), or `total_working_days`
-  //     claims "Total Days Attended" — which is exactly what it did on Umesh's file: the batch
-  //     denominator read 0/1/2 (a per-student attended count) instead of 18, and `total_days_present`
-  //     then found nothing left and came back null on all 45 rows.
-  //   - a null days-present column on every row is ALSO the column-shift signature (`shiftSignature`), so the import was refused with "this file looks column-shifted". It is not shifted.
-  //     A wrong diagnosis an operator cannot act on is worse than none.
+  // What went wrong on Umesh's file: `total_working_days` claimed "Total Days Attended" through
+  // its bare "total days" alias, so the batch denominator read 0/1/2 (a per-student attended count)
+  // instead of 18 and `total_days_present` found nothing left and came back null on all 45 rows.
+  // A null days-present column on every row is ALSO the column-shift signature (`shiftSignature`),
+  // so the file was refused with "this file looks column-shifted". It was not shifted. A wrong
+  // diagnosis an operator cannot act on is worse than none.
+  //
+  // -248 answered that by adding "total training days" (19 chars) so it out-sorted the bare "total
+  // days" (10) — which worked only while the file HAD a QP column, and every fixture written for it
+  // did. -254 (QA-1383) moved the guarantee into `resolveHeader` instead: exact matches are settled
+  // across ALL fields before any prefix match may claim a column, so "Total Days Attended" goes to
+  // the field whose alias spells it exactly, with or without a QP column beside it, and no matter
+  // which field is declared first. Order here is no longer load-bearing — but keep it anyway, and
+  // read `resolveHeader` below before adding an alias that is a prefix of another field's header.
   // On a genuine AEBAS export none of the three new aliases exist, so each falls through to the
   // alias it always used. That is asserted, not assumed — the fixture's parse is pinned byte-for-byte.
   total_working_days: ["total training days", "total working days", "working days", "total days"],
@@ -81,15 +88,44 @@ const COLUMNS: Record<keyof GovtRow | "came_after" | "going_before", string[]> =
   going_before: ["total days going before", "days going before"],
 };
 
+// -254 (QA-1383, Umesh 26/08 on batch 6a848c6c…f91): EVERY EXACT MATCH IS SETTLED BEFORE ANY
+// PREFIX MATCH MAY CLAIM A COLUMN. That ordering is the whole fix, and here is what it cost to
+// learn twice.
+//
+// A field used to take its column the moment its own turn came round, in the declaration order of
+// COLUMNS. So `total_working_days`, which is declared first and carries the BARE PREFIX alias
+// "total days", could claim a column headed literally **"Total Days Attended"** — an exact match
+// for the field declared one line BELOW it. `total_days_present` then found nothing left and came
+// back null on every row, and the per-student attended count sat in the batch-level working-days
+// slot.
+//
+// -248 met this and fixed the file in front of it: SIDH's "Attendance Report" carries "Total
+// Training Days (QP)", whose 19-character alias out-sorts "total days", so working-days took the
+// QP column and days-present got its own. But the fix depended on that column BEING THERE, and
+// every fixture written for it carried one. The same export without the QP column — which is what
+// the portal served for the batch above — still lost days-present entirely, silently:
+//   Govt days read "— / 1" and "— / 2" (that 1 and 2 ARE the attended counts), Days Attendance %
+//   was blank on all 45 students, and the file did not even trip `shiftSignature`, because that
+//   guard needs working-days to VARY across more than two values and a young batch's attended
+//   counts are 0/1/2.
+// A blank column that means "the portal never said" is indistinguishable from one that means "we
+// read your file into the wrong slot" — and it was the second.
+//
+// So field order and alias length are no longer allowed to beat an exact header match. On a
+// genuine AEBAS register every assignment is byte-for-byte what it was; only the two shapes that
+// were being misread change. Both are pinned in scripts/e2e-govt.mjs.
 function resolveHeader(header: string[]): Record<string, number> {
   const cells = header.map(norm);
   const idx: Record<string, number> = {};
-  for (const [field, aliases] of Object.entries(COLUMNS)) {
-    if (!aliases.length) continue;
-    // Longest alias first so "candidate id" is not stolen by the bare "name"/"type" aliases.
-    for (const alias of [...aliases].sort((a, b) => b.length - a.length)) {
-      const at = cells.findIndex((c, i) => !Object.values(idx).includes(i) && (c === alias || c.startsWith(alias + " ")));
-      if (at >= 0) { idx[field] = at; break; }
+  const taken = new Set<number>();
+  for (const exactPass of [true, false]) {
+    for (const [field, aliases] of Object.entries(COLUMNS)) {
+      if (!aliases.length || idx[field] !== undefined) continue;
+      // Longest alias first so "candidate id" is not stolen by the bare "name"/"type" aliases.
+      for (const alias of [...aliases].sort((a, b) => b.length - a.length)) {
+        const at = cells.findIndex((c, i) => !taken.has(i) && (exactPass ? c === alias : c.startsWith(alias + " ")));
+        if (at >= 0) { idx[field] = at; taken.add(at); break; }
+      }
     }
   }
   return idx;

@@ -1993,6 +1993,69 @@ ok("removal is real", (await req(admin, "GET", `/api/sync-sources/${srcId}`)).st
   ok("-248 (QA-1217): ...so it is NOT misdiagnosed as column-shifted (it was, on all 45 live rows)",
     sPre.data.column_shift_suspected === false, JSON.stringify({ s: sPre.data.column_shift_suspected }));
 
+  // 1b. -254 (QA-1383, Umesh 26/08, batch 6a848c6c…f91). THE SAME REPORT WITHOUT THE QP COLUMN.
+  //
+  //     Everything above passes on the PRE-254 build, and that is the point of writing this block
+  //     directly beneath it: -248's fix was "total training days" out-sorting the bare "total days",
+  //     so it held only while the file carried a Total Training Days (QP) column — and every
+  //     fixture written for -248, including sidhFile() on the line above, carries one.
+  //
+  //     The portal also serves this report WITHOUT it. Then "total days" prefix-matched "Total Days
+  //     Attended" again, total_days_present came back null on every row, and on the batch screen:
+  //       Govt days   "— / 1", "— / 2"   <- those ARE the attended counts, in the denominator slot
+  //       Days Attendance %   blank on all 45 students
+  //     while Hours Attendance % showed 4% and 13% beside it, so the screen looked ALIVE. And
+  //     shiftSignature did not fire either — it needs working-days to vary across more than two
+  //     values, and a young batch's attended counts are 0/1/2.
+  const noQpCsv = [
+    "S.No,Candidate Name,Candidate ID,Total Days Attended,Total Hours Attended",
+    `1,${NAME} Alpha,CAN_${STAMP}0001,1,7.05`,
+    `2,${NAME} Bravo,CAN_${STAMP}0002,4,27.33`,
+  ].join(String.fromCharCode(10));
+  const noQpFile = (n = "sidh-no-qp.csv") => new File([Buffer.from(noQpCsv)], n, { type: "text/csv" });
+
+  const nq = await upload(admin, { file: noQpFile(), batch: batch._id });
+  const nqAlpha = (nq.data.preview ?? []).find((r) => r.name === `${NAME} Alpha`);
+  ok("-254 (QA-1383): 'Total Days Attended' with NO QP column beside it is read as DAYS PRESENT",
+    nq.status === 200 && nqAlpha?.total_days_present === 1,
+    JSON.stringify({ status: nq.status, dp: nqAlpha?.total_days_present, wd: nqAlpha?.total_working_days }));
+  //     The other half, and it is the one that was actually lying: pre-fix this read 1 — a
+  //     per-student attended count standing in for the batch's training days. The file does not
+  //     state a training-day total, so the honest answer is nothing at all.
+  ok("-254 (QA-1383): ...and NOT as the working-days denominator (pre-fix it was 1)",
+    nqAlpha?.total_working_days == null, JSON.stringify({ wd: nqAlpha?.total_working_days }));
+  //     Reported as absent rather than guessed, so the blank column on the grid is explained.
+  ok("-254 (QA-1383): the file's missing column is named honestly - working days, not days present",
+    (nq.data.missing_columns ?? []).includes("Total Working Days")
+      && !(nq.data.missing_columns ?? []).includes("Total Days Present"),
+    JSON.stringify({ missing: nq.data.missing_columns }));
+  ok("-254 (QA-1383): ...and it is not misdiagnosed as column-shifted",
+    nq.data.column_shift_suspected === false, JSON.stringify({ s: nq.data.column_shift_suspected }));
+
+  //     AND THE SCREEN. The three above are all preview-shaped; the complaint was about a column on
+  //     the batch's Attendance tab, so this reads that endpoint's own answer for the same student.
+  //     Without it a parser could be right while the column stayed blank for some other reason.
+  const nqImp = await upload(admin, { file: noQpFile("sidh-no-qp-commit.csv"), batch: batch._id, confirm: "1", period_label: `no-qp ${STAMP}` });
+  const att = await req(admin, "GET", `/api/batches/${batch._id}/attendance`);
+  const attAlpha = (att.data.members ?? []).find((m) => m.name === `${NAME} Alpha`);
+  const pct = attAlpha?.govt?.days_present != null && att.data.program_days
+    ? Math.round((100 * attAlpha.govt.days_present) / att.data.program_days) : null;
+  ok("-254 (QA-1383): the batch Attendance tab can render Days Attendance % (it was blank)",
+    nqImp.status === 201 && attAlpha?.govt?.days_present === 1 && att.data.program_days > 0 && pct != null,
+    JSON.stringify({ imp: nqImp.status, dp: attAlpha?.govt?.days_present, wd: attAlpha?.govt?.working_days,
+      program_days: att.data.program_days, pct }));
+  if (nqImp.data?._id) await req(admin, "DELETE", `/api/govt-attendance/${nqImp.data._id}`); // no residue
+
+  //     The regression arm: the genuine AEBAS register must parse EXACTLY as it did before -254.
+  //     Exact-before-prefix changes which field wins a contest; on a real export there is no
+  //     contest, and this is what says so out loud rather than assuming it.
+  const aebas = await upload(admin, { file: csvFile() });
+  const aebasRow = (aebas.data.preview ?? [])[0];
+  ok("-254 (QA-1383) REGRESSION ARM: a genuine AEBAS register parses unchanged",
+    aebas.status === 200 && aebasRow?.total_days_present != null && aebasRow?.total_working_days != null
+      && (aebas.data.missing_columns ?? []).length === 0,
+    JSON.stringify({ dp: aebasRow?.total_days_present, wd: aebasRow?.total_working_days, missing: aebas.data.missing_columns }));
+
   // 2. THE GATE NAMES IT.
   //
   //    NOT reusing the fixture's Charlie, and the reason is worth writing down: Charlie starts with
