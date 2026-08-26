@@ -268,15 +268,19 @@ if (await card.count() > 0) {
     // which is the only shape that can tell the two apart.
     { Name: "TEST-IP " + s + " C", Phone: phone("77"), Interest: bad.onlyInterest, Edu: "Graduate", AltPhone: "", Junk: "" },
   ];
+  // ONE FLOW, CALLED TWICE - not two copies, and the reason is this file's own history: every
+  // guard in this block that went quietly wrong went wrong by drifting away from the thing beside
+  // it. Two hand-maintained copies of a thirty-line Playwright flow is that same bet, taken on
+  // purpose. The SHEET is the only thing that differs between the two calls, so the sheet is the
+  // only thing that is a parameter.
+  //
   // tmpdir, NOT the tree. The cycle-3 checker put a temporary path inside the checkout and Turbopack
   // failed the build on it - a self-inflicted error that reads exactly like broken code.
-  const xlsx = pjoin(tmpdir(), "erp-import-" + s + ".xlsx");
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Sheet1");
-  wfs(xlsx, XLSX.write(wb, { type: "buffer", bookType: "xlsx" }));
-
-  let reached = false;
-  try {
+  const previewSheet = async (sheetRows, want, tag) => {
+    const xlsx = pjoin(tmpdir(), "erp-import-" + s + "-" + tag + ".xlsx");
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sheetRows), "Sheet1");
+    wfs(xlsx, XLSX.write(wb, { type: "buffer", bookType: "xlsx" }));
     await page.goto(BASE + "/candidates", { waitUntil: "domcontentloaded" });
     await settled();
     await page.getByRole("button", { name: "Import Excel" }).click();
@@ -304,22 +308,30 @@ if (await card.count() > 0) {
     // enters Object.entries(mapping) at all. Only ACTIVELY selecting Ignore writes the empty key -
     // and the empty key is the entire subject of the QA-1267 guard below. The old fixture left Junk
     // alone and therefore never created the state it was meant to be testing.
-    const want = ["name", "phone", "batch_interest", "education", "alt_phone", ""];
     const sels = page.locator('select:has(option[value="batch_interest"])');
     const nsel = await sels.count();
     for (let i = 0; i < Math.min(nsel, want.length); i++) {
       await sels.nth(i).selectOption(want[i]).catch(() => {});
     }
     await page.getByRole("button", { name: /^Preview/ }).click();
-    await page.waitForFunction((e) => document.body.innerText.includes(e), bad.edu, { timeout: 25000 });
-    reached = true;
+    // WAIT ON A NEUTRAL ANCHOR, not on one of the warnings. page.tsx:1342 always renders
+    // "<n> valid, <n> skipped" once a preview exists, whatever the warnings say. Waiting on a
+    // warning value instead - which is what cycle 2 did - means that a build where the warning
+    // stops rendering produces a TIMEOUT rather than the assertion below firing with the screen
+    // in its message. Both are red; only one of them tells you what happened.
+    await page.waitForFunction(() => /\d+ valid, \d+ skipped/.test(document.body.innerText), undefined, { timeout: 25000 });
+    return await page.locator("body").innerText();
+  };
+
+  let text = null;
+  try {
+    text = await previewSheet(rows, ["name", "phone", "batch_interest", "education", "alt_phone", ""], "a");
   } catch (e) {
     // NOT a skip. A flow that never reached the preview verified nothing, and says so in red.
     ok("[QA-1268] the import preview was reachable in a browser", false, String((e && e.message) || e).slice(0, 200));
   }
 
-  if (reached) {
-    const text = await page.locator("body").innerText();
+  if (text) {
     // THE CONTROL, and it is what makes the next assertion mean anything. Cycle 1's real defect was
     // that education rendered and batch interest did not - so "the interest value appears" alone
     // would pass on a screen that renders everything, and prove nothing about the fix.
@@ -372,6 +384,52 @@ if (await card.count() > 0) {
     // substring, line-anchored by construction, nothing to escape.
     ok("[QA-1267] ...and no blank-column warning names NOTHING - 'the column mapped to .' is a report lane lying about a column",
       !mapped.some((l) => l.indexOf("mapped to .") >= 0), JSON.stringify(mapped.slice(0, 3)) || "(no blank-column warning at all)");
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // QA-1366, CYCLE 3, AND THE THIRD ROW ABOVE DOES NOT CLOSE IT. Writing this down because I
+  // believed it did.
+  //
+  // The checker's arm was one line in page.tsx:1386 - an ordinary wrong-condition bug that makes
+  // the batch-interest block render only when the EDUCATION one also has something to say:
+  //     {importState.preview?.education_unmatched?.length > 0 && importState.preview?.batch_interest_unmatched?.length > 0 && (
+  // That build reads 75/0. On it, a sheet with an unreadable batch interest and a clean education
+  // column renders no batch-interest warning at all - which is QA-1235 verbatim, the live defect
+  // this entire guard exists for.
+  //
+  // Cycle 3's first answer was row C: bad in interest, VALID in education. That makes the two
+  // COUNTS independent, and it is why row C stays. It does NOT make the two RENDERS independent -
+  // row B is still bad in education, so `education_unmatched` is still non-empty on that preview,
+  // the coupled condition is still satisfied, and the arm stays green. One sheet cannot answer
+  // this, because the question is about what happens when education has NOTHING to say.
+  //
+  // So: a SECOND preview whose education column is entirely clean. On it, `education_unmatched`
+  // is empty and the batch-interest warning has nothing to ride on. If it renders, it is its own.
+  const cleanEduRows = [
+    { Name: "TEST-IP " + s + " D", Phone: phone("77"), Interest: "The current batch", Edu: "10th Pass" },
+    { Name: "TEST-IP " + s + " E", Phone: phone("77"), Interest: bad.onlyInterest, Edu: "Graduate" },
+  ];
+  let text2 = null;
+  try {
+    text2 = await previewSheet(cleanEduRows, ["name", "phone", "batch_interest", "education"], "b");
+  } catch (e) {
+    ok("[QA-1366] the second preview - clean education, bad interest - was reachable in a browser",
+      false, String((e && e.message) || e).slice(0, 200));
+  }
+
+  if (text2) {
+    const lineWith2 = (re) => (text2.split(String.fromCharCode(10)).find((l) => re.test(l)) || "");
+    const iLine2 = lineWith2(/Batch interest not recognised/i);
+    const eLine2 = lineWith2(/Education values not recognised/i);
+    // THE CONTROL, and it runs FIRST because the assertion after it is worthless without it. If
+    // this sheet's education column were not actually clean, the next line would be measuring the
+    // same coupled state as sheet A all over again and would pass for the old reason.
+    ok("[QA-1366 control] this second sheet's education column really is clean - NO education warning on it",
+      eLine2 === "", eLine2 || "(no education line - correct)");
+    // AND THE ARM. Green on the honest build; RED on the one-line coupling bug, because there
+    // `education_unmatched` is empty and the interest block never renders.
+    ok("[QA-1366] ...and the batch-interest warning still renders with NOTHING beside it - it is not the education block wearing another heading",
+      iLine2.includes(bad.onlyInterest), iLine2 || "(no batch-interest line rendered - the warning is riding on education's)");
   }
 }
 
