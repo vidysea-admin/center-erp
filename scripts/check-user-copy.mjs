@@ -2777,14 +2777,29 @@ for (const file of walk(root)) {
   // QA-723: -209 offered the Complete control to a non-Admin on an ACTIVE batch, where the only arm
   // into Completed is Closing -> Completed, so every press could only 409. The visibility has to know
   // the difference between the two doors.
-  if (/isAdmin \? \["Active", "Closing"\] : \["Closing"\]/.test(page)) passed++;
-  else {
-    bad++;
-    pushStructural(pageRel + ": the Complete Batch control does not distinguish the Admin force door"
-      + " (Active or Closing) from the ordinary one (Closing only) - transitionBatch has no"
-      + " Active -> Completed arm, so offering it there gives a non-Admin a button that can only 409"
-      + " - QA-723.");
+  // -253 (QA-741, checker on qa-211): this WAS the literal test above - a single presence check for
+  // one exact string. Mutation M9 beat it: leave the guarded control exactly as shipped and add a
+  // SECOND, unguarded Complete control immediately above it, and the pin stays green. It constrained
+  // the author who edits that one line and nobody else. It also went red on a semantically identical
+  // rewrite of the same guard, which is the other half of a bad pin.
+  //
+  // Asked as a CLASS question now: EVERY control that opens the complete dialog must be guarded, and
+  // the guard must distinguish the two doors. So a second opener reddens it (that is M9) and a
+  // reworded guard does not (that is the false red). Same shape as the -251 lesson on my own pins:
+  // a presence test cannot see what somebody ADDS, only what they remove.
+  {
+    const openers = [...page.matchAll(/setCompleteOpen\(\s*true\s*\)/g)];
+    const guarded = openers.filter((m) => {
+      const before = page.slice(Math.max(0, m.index - 260), m.index);
+      return /isAdmin/.test(before) && /"Closing"/.test(before) && /includes\(\s*b\.status\s*\)/.test(before);
+    });
+    if (openers.length >= 1 && guarded.length === openers.length) passed++;
+    else {
+      bad++;
+      pushStructural(pageRel + `: ${openers.length - guarded.length} of ${openers.length} control(s) opening the complete dialog are NOT guarded by the two-door test (isAdmin ? Active|Closing : Closing). transitionBatch has no Active -> Completed arm, so an unguarded control gives a non-Admin a button that can only 409 - QA-723/QA-741.`);
+    }
   }
+
 
   // ...and it promised the wrong outcome while it was at it: ABSENT, which -204 changed to Fail on
   // Umesh's ruling, with the banner two lines above already saying Fail.
