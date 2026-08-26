@@ -1539,16 +1539,20 @@ console.log("\n--- FL19 (-235): a cancelled batch can be RESTORED, and a typed j
   const bdMember = (await req(admin, "POST", `/api/batches/${b1._id}/members`,
     { candidate: backDated._id, joined_on: istDay(-19) }, 201)).data.item;
   const overfull = [...beforeMembers, String(bdMember._id)];
-  // The internal_present bound that used to be asserted here is WITHDRAWN, and the reason is worth
-  // more than the pin was. Refusing `internal_present > roster_count` broke `e2e.mjs`: a member who
-  // joins and attends on the SAME DAY is ordinary and truthful, and the log was frozen earlier that
-  // day with a smaller count. Rule 26 (REQ-119) says that member WAS on the roster; Rule 28 (REQ-202)
-  // says roster_count is never recalculated. Both cannot hold once a join date can be typed, and
-  // choosing between them is a contract + government-reporting decision, not the maker's. Raised in
-  // qa/feedback-inbox.md. What IS pinned below is the half that needed no ruling.
+  // The `internal_present > roster_count` bound that once stood here was withdrawn because it broke
+  // `e2e.mjs`: a member who joins and attends on the SAME DAY is ordinary and truthful, and the log
+  // was frozen earlier that day with a smaller count (that over-refusal is QA-1055, S2). Rule 26
+  // (REQ-119) said that member WAS on the roster; Rule 28 (REQ-202) said roster_count is never
+  // recalculated. SETTLED 2026-08-27 by Umesh: the count may GROW to admit exactly such a member and
+  // may never shrink. So the row is no longer allowed to read 2-of-1 — the denominator moves instead,
+  // and that is what is pinned now.
   const stillAccepted = await req(admin, "PATCH", `/api/logs/${frozenLog._id}`, { present_member_ids: overfull });
   ok("FL19: a same-day/back-dated joiner can still be marked on a frozen day (the guard I over-reached with is gone)",
     stillAccepted.status === 200, `${stillAccepted.status} ${JSON.stringify(stillAccepted.data?.error ?? "")}`);
+  ok("FL19 (QA-1055/REQ-202): ...and the day's roster_count GREW to admit them, so the row never reads more present than enrolled",
+    Number(stillAccepted.data?.item?.roster_count) === overfull.length
+    && Number(stillAccepted.data?.item?.internal_present) <= Number(stillAccepted.data?.item?.roster_count),
+    JSON.stringify({ was: frozenLog?.roster_count, now: stillAccepted.data?.item?.roster_count, ip: stillAccepted.data?.item?.internal_present }));
 
   // The govt figure escaped entirely: its bound lived in an `else if`, so sending a present list AND
   // a government number in one PATCH skipped Rule 30 outright.

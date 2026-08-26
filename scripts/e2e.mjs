@@ -300,6 +300,100 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   await req("POST", `/api/batches/${bdBatch._id}/transition`, { target: "Cancelled", reason: "backdate fixture done" }, 200);
 }
 
+// ---- QA-1055 (S2): a saved day's roster count GROWS to admit a walk-in — and never shrinks ----
+// REQ-202 as amended 2026-08-27 (Umesh, verbatim: "Us din ka count badh jaye — Rule 28 ki asli
+// mansha count ko GHATNE se rokna thi, badhne se nahi") + REQ-421 on the government half (his own
+// answer: "Flag the day for review when this happens").
+//
+// QA-1047 made the FROZEN roster_count the bound on a day edit and that refused the everyday case
+// outright: a student who enrols today is on today's Rule 26 roster (REQ-119) by the product's own
+// default joining date, and BOTH doors — the day PATCH and the marking round — returned 400, so
+// there was no way at all to record that day's real attendance. The bound is now the live Rule 26
+// roster AS OF log_date; the stored count rises to meet it and never falls. This whole block runs
+// on its OWN batch, trainer and room so nothing here can move the shared fixture's numbers.
+{
+  const q55T = (await req("POST", "/api/trainers", { name: "RosterGrow Trainer " + stamp, phone: "5500" + stamp, skills: ["rg55" + stamp] }, 201)).data.item;
+  const q55R = (await req("POST", `/api/locations/${loc._id}/rooms`, { name: "RosterGrow Room " + stamp, type: "Classroom", capacity: 10 }, 201)).data.item;
+  const q55B = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: q55T._id, room: q55R._id, planned_start: today, target_size: 3 }, 201)).data.item;
+  const q55Mem = [];
+  for (let i = 0; i < 3; i++) {
+    const c = (await req("POST", "/api/candidates", { name: `RosterGrow Cand ${i} ${stamp}`, phone: `56${i}0${stamp}`.slice(0, 10), location: loc._id, program: prog._id }, 201)).data.item;
+    const m = (await req("POST", `/api/batches/${q55B._id}/members`, { candidate: c._id }, 201)).data.item;
+    await req("PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+    q55Mem.push(String(m._id));
+  }
+  await req("POST", `/api/batches/${q55B._id}/transition`, { target: "Ready" }, 200);
+  await req("POST", `/api/batches/${q55B._id}/transition`, { target: "Active", actual_start: today }, 200);
+  // Today's log, saved with all three present AND a government figure already recorded against 3.
+  // That govt figure is what makes this day REQ-421 material: 3 is what the portal was told.
+  const q55Log = (await req("POST", `/api/batches/${q55B._id}/logs`, { log_date: today, present_member_ids: q55Mem, govt_present: 3, trainer_present: true, actual_topic: "roster-growth day" }, 201)).data.item;
+  ok("QA-1055 fixture: today's log is saved with roster_count frozen at 3 and govt 3 already recorded",
+    q55Log.roster_count === 3 && q55Log.govt_present === 3, JSON.stringify({ rc: q55Log.roster_count, g: q55Log.govt_present }));
+
+  // (a) THE REPORTED CASE. A walk-in enrolled today, no joining date typed — addMemberChecked's own
+  // default stores joined_on = today, so Rule 26 puts them on today's roster. The day must accept it.
+  const wCand = (await req("POST", "/api/candidates", { name: `RosterGrow Walkin ${stamp}`, phone: `5700${stamp}`.slice(0, 10), location: loc._id, program: prog._id }, 201)).data.item;
+  const wMem = String((await req("POST", `/api/batches/${q55B._id}/members`, { candidate: wCand._id }, 201)).data.item._id);
+  const q55Patch = await req("PATCH", `/api/logs/${q55Log._id}`, { present_member_ids: [...q55Mem, wMem] });
+  ok("QA-1055 (a): a walk-in enrolled TODAY can be marked present on today's already-saved log (200, not the old 400)",
+    q55Patch.status === 200, `${q55Patch.status} ${String(q55Patch.data?.error ?? "").slice(0, 140)}`);
+  ok("QA-1055 (a): REQ-202 — the day's roster_count GREW 3 → 4 to match the real Rule 26 roster, so the row reads 4 of 4 (100%), not 4 of 3 (133%)",
+    q55Patch.data?.item?.roster_count === 4 && q55Patch.data?.item?.internal_present === 4,
+    JSON.stringify({ rc: q55Patch.data?.item?.roster_count, ip: q55Patch.data?.item?.internal_present }));
+
+  // (b) REQ-421. The day already carried a government figure, so the growth is FLAGGED, and the
+  // reported number itself is left exactly as it was — no resubmission, no silent restatement.
+  const q55Flagged = q55Patch.data?.item?.govt_review;
+  ok("QA-1055 (b): REQ-421 — the day is flagged for manual review, naming both denominators and the figure that was reported",
+    q55Flagged?.needed === true && q55Flagged?.roster_count_before === 3 && q55Flagged?.roster_count_after === 4 && q55Flagged?.govt_present_at_flag === 3,
+    JSON.stringify(q55Flagged));
+  ok("QA-1055 (b): …and the already-reported government figure is UNTOUCHED — flagged, never restated",
+    q55Patch.data?.item?.govt_present === 3, String(q55Patch.data?.item?.govt_present));
+  const q55Notes = (await req("GET", "/api/notifications?type=govt_roster_grew")).data.items ?? [];
+  const q55Note = q55Notes.find((n) => String(n.entity_id) === String(q55Log._id));
+  ok("QA-1055 (b): …and it reaches Ops/Admin through the existing review queue, saying nothing went to the portal",
+    !!q55Note && /grew from 3 to 4/.test(String(q55Note.message)) && /resubmitted/i.test(String(q55Note.message)),
+    JSON.stringify(q55Note && { t: q55Note.type, m: String(q55Note.message).slice(0, 160) }));
+  // REQ-201: a count-changing edit is audited, and the denominator moves under its own name.
+  const q55Aud = ((await req("GET", `/api/audit/DailyLog/${q55Log._id}`)).data.items ?? []);
+  ok("QA-1055 (b): REQ-201 — the roster_count move is audited by name, 3 → 4",
+    q55Aud.some((a) => a.field === "roster_count" && String(a.old_value) === "3" && String(a.new_value) === "4"),
+    JSON.stringify(q55Aud.map((a) => `${a.field}:${a.old_value}→${a.new_value}`).slice(0, 8)));
+
+  // (c) THE SECOND DOOR. A marking round is same-day only, which is exactly the case QA-1047 broke.
+  const w2Cand = (await req("POST", "/api/candidates", { name: `RosterGrow Walkin Two ${stamp}`, phone: `5800${stamp}`.slice(0, 10), location: loc._id, program: prog._id }, 201)).data.item;
+  const w2Mem = String((await req("POST", `/api/batches/${q55B._id}/members`, { candidate: w2Cand._id }, 201)).data.item._id);
+  const q55Round = await req("POST", `/api/logs/${q55Log._id}/sessions`, { present_member_ids: [w2Mem] });
+  ok("QA-1055 (c): the marking round accepts a second same-day walk-in (201) and grows the count 4 → 5 the same way",
+    q55Round.status === 201 && q55Round.data?.item?.roster_count === 5 && q55Round.data?.item?.internal_present === 5,
+    `${q55Round.status} ${JSON.stringify({ rc: q55Round.data?.item?.roster_count, ip: q55Round.data?.item?.internal_present })}`);
+
+  // (d) THE HALF OF RULE 28 THAT MUST SURVIVE: the count NEVER decreases. Someone leaving later
+  // cannot shrink a day that has already been counted and reported — that was Rule 28's real purpose.
+  await req("POST", `/api/members/${w2Mem}/drop`, { left_on: today, drop_reason: "roster-growth pin: left again" }, 200);
+  const q55Shrink = await req("PATCH", `/api/logs/${q55Log._id}`, { present_member_ids: [...q55Mem, wMem] });
+  ok("QA-1055 (d): REQ-202 — a member leaving cannot pull the day's roster_count back down (still 5, never 4)",
+    q55Shrink.status === 200 && q55Shrink.data?.item?.roster_count === 5, `${q55Shrink.status} rc=${q55Shrink.data?.item?.roster_count}`);
+  ok("QA-1055 (d): …and REQ-203 still holds on every edit — internal_present never exceeds roster_count",
+    q55Shrink.data?.item?.internal_present <= q55Shrink.data?.item?.roster_count,
+    JSON.stringify({ ip: q55Shrink.data?.item?.internal_present, rc: q55Shrink.data?.item?.roster_count }));
+
+  // (e) THE RESIDUAL REFUSAL QA-1047 ACTUALLY DESCRIBED is still a 400: someone demonstrably NOT on
+  // that day's roster. Growing the denominator is not the same as admitting anybody.
+  const q55Bad = await req("PATCH", `/api/logs/${q55Log._id}`, { present_member_ids: [...q55Mem, wMem, w2Mem] });
+  ok("QA-1055 (e): a member who left ON that day is still refused (400) — and the refusal names them, not a joining date to 'correct'",
+    q55Bad.status === 400 && /left this batch/i.test(String(q55Bad.data?.error ?? "")) && !/joining date/i.test(String(q55Bad.data?.error ?? "")),
+    `${q55Bad.status} ${String(q55Bad.data?.error ?? "").slice(0, 140)}`);
+  const q55Stranger = await req("PATCH", `/api/logs/${q55Log._id}`, { present_member_ids: [...q55Mem, String(mIds[0])] });
+  ok("QA-1055 (e): …and a member of a DIFFERENT batch is still refused (400) — the roster is the bound, not the count",
+    q55Stranger.status === 400, `${q55Stranger.status} ${String(q55Stranger.data?.error ?? "").slice(0, 120)}`);
+  const q55Final = (await req("GET", `/api/batches/${q55B._id}/logs`)).data.items.find((l) => String(l._id) === String(q55Log._id));
+  ok("QA-1055 (e): a refused edit changed nothing — the day still reads 4 of 5 with the flag and the reported 3 intact",
+    q55Final?.roster_count === 5 && q55Final?.internal_present === 4 && q55Final?.govt_present === 3 && q55Final?.govt_review?.needed === true,
+    JSON.stringify({ rc: q55Final?.roster_count, ip: q55Final?.internal_present, g: q55Final?.govt_present, f: q55Final?.govt_review?.needed }));
+  await req("POST", `/api/batches/${q55B._id}/transition`, { target: "Cancelled", reason: "roster-growth fixture done" }, 200);
+}
+
 // 2026-08-12 audit F-007 (S1): dropping a candidate on day D used to lock day D's log. Rule 26
 // excludes them from that day's roster, the saved log still listed them present, and every later
 // PATCH touching present_member_ids or govt_present was refused — so the government attendance
@@ -311,13 +405,20 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   const rosterBefore = (await req("GET", `/api/batches/${batch._id}/logs`)).data.items[0]?.roster_count;
   // put them on today's log, then drop them today
   const withThem = [...mIds.slice(0, 2), fm._id];
-  await req("PATCH", `/api/logs/${log._id}`, { present_member_ids: withThem }, 200);
+  const withThemRes = await req("PATCH", `/api/logs/${log._id}`, { present_member_ids: withThem }, 200);
+  // QA-1055: `fm` joined TODAY, so Rule 26 puts them on today's roster and REQ-202 (as amended
+  // 2026-08-27) raises this day's count to admit them. `rosterBefore` above is the count from
+  // BEFORE that add, so it is no longer what the drop must be compared against — the question
+  // this pin asks ("does a DROP move the count?") needs the count as it stood after the add.
+  const rosterAfterAdd = withThemRes.data?.item?.roster_count;
+  ok("QA-1055/REQ-202: adding a member who joined today raises this day's count to the real Rule 26 roster",
+    rosterAfterAdd === rosterBefore + 1, `${rosterBefore} → ${rosterAfterAdd}`);
   await req("POST", `/api/members/${fm._id}/drop`, { left_on: today, drop_reason: "Got a job" }, 200);
   // the log must have been tidied, not left inconsistent
   const tidied = (await req("GET", `/api/batches/${batch._id}/logs`)).data.items.find((l) => l._id === log._id);
   ok("F-007: dropping a member strips them from that day's present list", !tidied.present_member_ids.map(String).includes(String(fm._id)));
   ok("F-007: internal_present follows the tidy-up", tidied.internal_present === tidied.present_member_ids.length, `${tidied.internal_present} vs ${tidied.present_member_ids.length}`);
-  ok("F-007: Rule 28 roster_count still frozen after a drop", tidied.roster_count === rosterBefore, `${tidied.roster_count} vs ${rosterBefore}`);
+  ok("F-007 + REQ-202: a drop still cannot move roster_count — it never decreases", tidied.roster_count === rosterAfterAdd && tidied.roster_count > rosterBefore, `${tidied.roster_count} vs ${rosterAfterAdd} (was ${rosterBefore})`);
   // …and the number that matters can still be entered
   await req("PATCH", `/api/logs/${log._id}`, { govt_present: 1 }, 200);
   await req("PATCH", `/api/logs/${log._id}`, { note: "still editable" }, 200);

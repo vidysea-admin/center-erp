@@ -3,7 +3,8 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { DailyLog } from "@/models";
-import { assertBatchInScope, canEditDailyLog, validateDailyLog } from "@/lib/rules";
+import { assertBatchInScope, canEditDailyLog, planRosterGrowth, recordRosterGrowth, validateDailyLog } from "@/lib/rules";
+import type { RosterGrowth } from "@/lib/rules";
 import { auditDiff } from "@/lib/audit";
 
 // PATCH edit an existing log — Rule 27 (48h window for enterer; anytime Ops/Admin; audited)
@@ -29,6 +30,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   }
   const before = log.toObject();
   const patch: Record<string, unknown> = {};
+  let growth: RosterGrowth | null = null; // REQ-202/REQ-421, set in the present-list branch below
   for (const f of ["planned_topic", "actual_topic", "present_member_ids", "biometric_member_ids", "trainer_present", "govt_present", "govt_source", "govt_screenshot", "photos", "videos", "attendance_sheet", "note"]) {
     if (body[f] !== undefined) patch[f] = body[f];
   }
@@ -48,25 +50,32 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
       biometric_member_ids: biometric, // Rule 51 holds on the final day-level pair
     });
     patch.internal_present = check.internal_present; // Rule 29
-    // QA-1047 (-243, checker on qa-235) — HALF FIXED HERE, HALF AWAITING A DECISION THAT IS NOT MINE.
+    // QA-1047 / QA-1055 (-243 → 2026-08-27) — SETTLED, and the answer was the denominator, not the guard.
     //
-    // The charge is real: `validateDailyLog` counts presence against the roster AS IT IS NOW, while
-    // Rule 28 freezes `roster_count` at save. Back-date a member behind a frozen day and
-    // `internal_present` climbs past the number stored on the row — a government-facing row reading
-    // more present than it says were enrolled.
+    // QA-1047's charge was real: `validateDailyLog` counts presence against the roster AS IT IS NOW,
+    // while Rule 28 froze `roster_count` at save. Back-date a member behind a frozen day and
+    // `internal_present` climbed past the number stored on the row — a government-facing row reading
+    // more present than it said were enrolled.
     //
-    // My first fix refused any edit where `internal_present > log.roster_count`, and that was WRONG,
-    // measured: `e2e.mjs` marks a member present on the SAME DAY they joined, which is an ordinary,
-    // truthful thing to do — the log was saved when three were enrolled, a fourth joined that day and
-    // attended. The refusal turned a correct entry into a 400.
+    // The fix for it made the FROZEN number the bound, and that was QA-1055 (S2): `e2e.mjs` marks a
+    // member present on the SAME DAY they joined, which is an ordinary, truthful thing to do — the
+    // log was saved when three were enrolled, a fourth walked in that day and attended. Both doors
+    // returned 400 and there was NO way left to record that day's real attendance, with a refusal
+    // that advised correcting a joining date that was already correct.
     //
-    // The two rules genuinely disagree, and this is the disagreement: Rule 26 (REQ-119) says the
-    // roster on day D is everyone with `joined_on <= D`, so a member added later with a back-dated
-    // join date WAS on that day's roster by the contract's own definition. Rule 28 (REQ-202) says
-    // `roster_count` is frozen and never recalculated. Both cannot hold once a join date can be typed.
-    // Resolving it means either letting `roster_count` GROW (which REQ-202 forbids in those words) or
-    // refusing truthful same-day entries. That is a contract decision and a government-reporting
-    // decision; the maker does not get to pick. Raised in `qa/feedback-inbox.md`.
+    // The two rules only ever disagreed because both were read as bounds. Rule 26 (REQ-119) says the
+    // roster on day D is everyone with `joined_on <= D`; REQ-202 (as amended 2026-08-27 on Umesh's
+    // own answer, "Us din ka count badh jaye") says the frozen count may INCREASE for exactly that
+    // reason and may NEVER decrease. So the bound is `check.roster_count` — the live Rule 26 roster
+    // as of `log_date`, which the validator above already computed — and the stored count rises to
+    // meet it. The row reads 4 of 4. Nothing new derives Rule 26 here; nobody leaving later can
+    // shrink the day, which was Rule 28's actual purpose.
+    //
+    // REQ-421: if that day already carries a government figure, the growth silently rewrites the
+    // denominator of a number already reported. It is flagged for a person instead — never
+    // resubmitted, never restated. `recordRosterGrowth` below, after the save.
+    growth = planRosterGrowth(log, check.roster_count);
+    if (growth.grew) Object.assign(log, growth.patch); // applied to the doc, audited by name below
     //
     // What IS fixed below, because it needed no ruling: Rule 30's bound on `govt_present` lived in an
     // `else if`, so sending a present list AND a government figure in one PATCH skipped it entirely.
@@ -109,7 +118,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
         throw new HttpError(400, `${origin}cannot exceed the ${log.roster_count} on the roster that day.${repair}`);
       }
     }
-    // Rule 28: roster_count stays frozen — deliberately NOT recomputed
+    // REQ-202: roster_count moved above if the day's real Rule 26 roster is now larger — never down.
     // A day-level edit is a CORRECTION, not a marking round: the day arrays are replaced as
     // given, and the correction is appended to the session history so the trail stays honest.
     patch.sessions = [...(log.sessions ?? []), { at: new Date(), present_member_ids: present, biometric_member_ids: biometric, marked_by: user.id, correction: true }];
@@ -123,5 +132,9 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   Object.assign(log, patch);
   await log.save();
   await auditDiff("DailyLog", log._id, before, patch, user.id); // Rule 27: every edit audited
+  // REQ-201 audit row for the denominator itself + REQ-421's review item, only once the write
+  // actually landed. `roster_count` is deliberately NOT in `patch` above, so this is the single
+  // place that records it — auditDiff cannot also write it and produce two rows for one change.
+  if (growth) await recordRosterGrowth(log, growth, user.id);
   return NextResponse.json({ item: log });
 });

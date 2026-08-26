@@ -2713,7 +2713,21 @@ function DailyExecution({ batchId, batch, role, error, setError }: any) {
                 </span>
               ),
             },
-            { key: "govt_present", label: "Govt", render: (r: any) => r.govt_present == null ? <span className="text-gray-400">Not verified</span> : `${r.govt_present}/${r.roster_count} (${Math.round((100 * r.govt_present) / r.roster_count)}%)` },
+            // REQ-421 (QA-1055): when the day's roster count grew AFTER this figure was recorded, the
+            // percentage beside it is against a denominator that is no longer the one it was reported
+            // on. Nothing is resubmitted or restated — the cell says so, next to the number it is
+            // about, because a notification alone leaves the screen showing a figure it cannot explain.
+            { key: "govt_present", label: "Govt", render: (r: any) => r.govt_present == null ? <span className="text-gray-400">Not verified</span> : (
+              <span>
+                {`${r.govt_present}/${r.roster_count} (${Math.round((100 * r.govt_present) / r.roster_count)}%)`}
+                {r.govt_review?.needed && (
+                  <span className="ml-1.5 rounded bg-amber-100 px-1 py-0.5 text-[10px] font-medium text-amber-800"
+                    title={`Reported against ${r.govt_review.roster_count_before} on the roster; that day's roster is now ${r.govt_review.roster_count_after}. Nothing has been resubmitted to the portal — check it and decide.`}>
+                    Review
+                  </span>
+                )}
+              </span>
+            ) },
             { key: "gap", label: "Gap", render: (r: any) => <Gap r={r} /> },
             { key: "actual_topic", label: "Topic", render: (r: any) => r.actual_topic ?? r.planned_topic ?? "—", mobile: false },
             { key: "photos", label: "Media", render: (r: any) => <MediaCell r={r} /> },
@@ -2842,7 +2856,7 @@ function LogEditDrawer({ log, members, onClose, onSaved, error, setError }: any)
   return (
     <Drawer open onClose={onClose} title={`Edit log — ${fmtDate(log.log_date)}`} wide error={error}>
       <div className="space-y-4">
-        <p className="text-xs text-gray-500">Editable for 48h by whoever entered it, anytime by Operations/Admin; every change is audited. Roster count stays at {log.roster_count}.</p>
+        <p className="text-xs text-gray-500">Editable for 48h by whoever entered it, anytime by Operations/Admin; every change is audited. Roster count for this day is {log.roster_count} — it never drops, and it rises only to admit someone whose joining date was on or before {fmtDate(log.log_date)}.</p>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Planned topic"><input className={inputCls} value={form.planned_topic} onChange={(e) => setForm({ ...form, planned_topic: e.target.value })} /></Field>
           <Field label="Actual topic"><input className={inputCls} value={form.actual_topic} onChange={(e) => setForm({ ...form, actual_topic: e.target.value })} /></Field>

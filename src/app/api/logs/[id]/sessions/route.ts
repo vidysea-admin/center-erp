@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { DailyLog } from "@/models";
-import { assertBatchInScope, dayKey, istToday, validateDailyLog } from "@/lib/rules";
+import { assertBatchInScope, dayKey, istToday, planRosterGrowth, recordRosterGrowth, validateDailyLog } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
 // POST append a MARKING ROUND to a day's log (Karunn 2026-08-13: "din mein do baar, teen
@@ -47,15 +47,23 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     biometric_member_ids: dayBiometric,
   });
 
-  // QA-1047: the same `internal_present > roster_count` guard was here and is withdrawn for the same
-  // reason — a marking round is same-day only, which is EXACTLY the case that guard got wrong: a
-  // member who joined today, marked present today, on a log frozen earlier today. See the long note in
-  // logs/[id]/route.ts; the unresolved half is a contract question, not a code one.
+  // QA-1047 / QA-1055 (settled 2026-08-27): the guard that briefly lived here refused any round whose
+  // union pushed `internal_present` past the FROZEN `roster_count`, and a marking round is same-day
+  // only — which is EXACTLY the case it got wrong: a member who joined today, marked present today,
+  // on a log frozen earlier today. REQ-202 (amended) now says that day's count may rise to admit them
+  // (REQ-119/Rule 26 says they were genuinely on that day's roster) and may never fall. The bound is
+  // therefore `check.roster_count` — the live Rule 26 roster as of `log_date` that `validateDailyLog`
+  // above already computed. Same call as the day-edit door: one decision, one implementation
+  // (ARCHITECTURE §3). REQ-421's review flag rides along for a day that already carries a government
+  // figure. Full reasoning in logs/[id]/route.ts.
+  const growth = planRosterGrowth(log, check.roster_count);
+  if (growth.grew) Object.assign(log, growth.patch);
   log.sessions.push({ at: new Date(), present_member_ids: roundPresent, biometric_member_ids: roundBiometric, marked_by: user.id } as any);
   log.present_member_ids = dayPresent as any;
   log.biometric_member_ids = dayBiometric as any;
   log.internal_present = check.internal_present; // Rule 29 on the union
   await log.save();
   await audit({ entity: "DailyLog", entityId: log._id, field: "session", newValue: `round ${log.sessions.length}: ${roundPresent.length} present, ${roundBiometric.length} biometric`, actor: user.id });
+  await recordRosterGrowth(log, growth, user.id); // REQ-201 audit row + REQ-421 review item
   return NextResponse.json({ item: log }, { status: 201 });
 });

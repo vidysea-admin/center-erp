@@ -1148,6 +1148,95 @@ export async function validateDailyLog(batchId: string, log_date: Date, payload:
   return { roster_count: roster.length, internal_present }; // Rule 28: frozen at save
 }
 
+// ---------- REQ-202 growth + REQ-421 review flag (QA-1055) ----------
+// The bound on a day-level edit is the Rule 26 roster AS OF `log_date` — which `validateDailyLog`
+// above already computes and returns — NOT the number frozen on the row. QA-1047 made the frozen
+// number the bound and that over-refused the everyday case: a walk-in enrolled today (the product's
+// own default stores `joined_on` = today) is on today's roster by REQ-119, so marking them present
+// on today's already-saved log records a real fact. Both doors returned 400 and there was no way at
+// all to enter that day's real attendance (QA-1055, S2).
+//
+// What QA-1047 was actually right about survives untouched: `internal_present` must never exceed
+// `roster_count`. It is the DENOMINATOR that moves now, not the guard — the row reads 4 of 4, not
+// 4 of 3. And it moves in one direction only. Somebody leaving later still cannot shrink the day
+// (REQ-202: "never decrease"), which is the whole original purpose of Rule 28.
+//
+// Split in two on purpose: `planRosterGrowth` is pure and decides, `recordRosterGrowth` writes the
+// trail and only runs after the caller's `save()` succeeded — so a refused edit can never leave a
+// notification behind about a change that did not happen.
+export type RosterGrowth = {
+  grew: boolean;
+  from: number;
+  to: number;
+  flagged: boolean;                       // REQ-421: govt figure already on record for this day
+  govt_present_at_flag: number | null;    // the ALREADY-REPORTED figure, read before this edit
+  patch: Record<string, unknown>;
+};
+
+export function planRosterGrowth(
+  log: { roster_count?: number; govt_present?: number | null },
+  liveRosterCount: number,
+): RosterGrowth {
+  const from = Number(log.roster_count ?? 0);
+  const none: RosterGrowth = { grew: false, from, to: from, flagged: false, govt_present_at_flag: null, patch: {} };
+  if (!Number.isFinite(liveRosterCount) || liveRosterCount <= from) return none; // never decrease
+  const to = liveRosterCount;
+  // REQ-421 — "already reported to the government portal", read off the fields that exist.
+  // There is no per-day sync/sent marker anywhere in this schema: `GovtAttendanceImport` is a
+  // CUMULATIVE per-person file (models/index.ts: "cannot be folded into DailyLog.govt_present,
+  // which is per day"), and `govt_source` is provenance (Manual / Portal Sync), not a send. What
+  // DOES exist is REQ-215's own distinction: `govt_present` null means "Not verified", non-null
+  // means a government figure for this day is on record and is what the centre is reporting and
+  // being compared against. That is the condition REQ-421 describes, so it is the condition used.
+  const flagged = log.govt_present !== null && log.govt_present !== undefined;
+  const patch: Record<string, unknown> = { roster_count: to };
+  if (flagged) {
+    patch.govt_review = {
+      needed: true,
+      reason: `Roster count for this day grew from ${from} to ${to} after the government figure (${log.govt_present}) was recorded against the smaller number. The already-reported figure has NOT been changed or resubmitted — check the portal and decide (REQ-421).`,
+      roster_count_before: from,
+      roster_count_after: to,
+      govt_present_at_flag: log.govt_present,
+      flagged_at: new Date(),
+    };
+  }
+  return { grew: true, from, to, flagged, govt_present_at_flag: flagged ? Number(log.govt_present) : null, patch };
+}
+
+// Audit row (REQ-201 already requires one on every daily-log edit — this makes the denominator
+// move an explicitly named field rather than something a reader has to infer) plus, when REQ-421
+// fires, the in-app review item. Notification is this codebase's existing review queue — the same
+// door `attendance_mismatch` uses — deduped by (type, entity_id) exactly as alerts.ts does, so a
+// day whose roster grows twice does not raise two live items.
+export async function recordRosterGrowth(
+  log: { _id: unknown; batch: unknown; log_date: Date },
+  growth: RosterGrowth,
+  actorId: string,
+) {
+  if (!growth.grew) return;
+  await audit({
+    entity: "DailyLog", entityId: log._id, field: "roster_count",
+    oldValue: String(growth.from), newValue: String(growth.to), actor: actorId,
+  });
+  if (!growth.flagged) return;
+  const existing = await Notification.findOne({
+    type: "govt_roster_grew", entity_id: log._id, status: { $in: ["New", "Acknowledged"] },
+  }).select("_id").lean();
+  if (existing) return;
+  const batch = await Batch.findById(String(log.batch)).select("code location")
+    .populate("location", "name").lean<any>();
+  const day = dayKey(log.log_date).toLocaleDateString("en-IN");
+  await Notification.create({
+    type: "govt_roster_grew",
+    severity: "warning",
+    message: `${batch?.code ?? "A batch"}${batch?.location?.name ? ` at ${batch.location.name}` : ""}: the roster count for ${day} grew from ${growth.from} to ${growth.to} after government attendance (${growth.govt_present_at_flag}) was already recorded for that day. Needs manual review — nothing has been resubmitted to the portal.`,
+    entity: "DailyLog", entity_id: log._id,
+    link: `/batches/${String(log.batch)}?tab=Daily Execution`,
+    location: batch?.location?._id,
+    role_target: ["Admin", "Operations"],
+  });
+}
+
 
 // -82 (Umesh, 15/08: "Attendance tab se bhi us batch ki attendance fill ho, that too bulk").
 // The ONE path that turns a request into a DailyLog — the single-day POST and the bulk

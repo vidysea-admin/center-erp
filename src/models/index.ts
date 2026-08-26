@@ -646,10 +646,27 @@ const DailyLogSchema = new Schema({
   // in. Absent on legacy rows (pre-field) — validation applies at write time only.
   trainer_present: Boolean,
   internal_present: { type: Number, required: true },
-  roster_count: { type: Number, required: true }, // frozen at save (Rule 28)
+  // REQ-202 (Rule 28, amended 2026-08-27): frozen at save, may never DECREASE, and may increase
+  // for exactly one reason — a member whose `joined_on` is on or before this log's date, and who
+  // was therefore genuinely on that day's Rule 26 roster (REQ-119), was not yet counted in it.
+  roster_count: { type: Number, required: true },
   govt_present: { type: Number, default: null },
   govt_source: { type: String, enum: GOVT_SOURCE, default: "Manual" },
   govt_screenshot: String,
+  // REQ-421 (QA-1055, 2026-08-27 — Umesh's own answer: "Flag the day for review when this
+  // happens"): raising `roster_count` on a day that ALREADY carries a government figure silently
+  // rewrites the denominator of a number that has been reported — 33/33 becomes 33/37 without
+  // anyone touching the portal. The contract forbids resubmitting or restating it automatically,
+  // so the day is MARKED instead and a person decides. Written only by the two daily-log edit
+  // doors; cleared by nothing in code — a person clears it once they have dealt with the portal.
+  govt_review: {
+    needed: { type: Boolean, default: false },
+    reason: String,
+    roster_count_before: Number,
+    roster_count_after: Number,
+    govt_present_at_flag: Number,
+    flagged_at: Date,
+  },
   photos: { type: [String], default: [] },
   videos: { type: [String], default: [] },
   // 2026-08-26 (RPL compliance): the client requires the signed manual attendance register
