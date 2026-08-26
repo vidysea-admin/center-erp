@@ -103,29 +103,58 @@ const COLUMNS: Record<keyof GovtRow | "came_after" | "going_before", string[]> =
 // Training Days (QP)", whose 19-character alias out-sorts "total days", so working-days took the
 // QP column and days-present got its own. But the fix depended on that column BEING THERE, and
 // every fixture written for it carried one. The same export without the QP column — which is what
-// the portal served for the batch above — still lost days-present entirely, silently:
-//   Govt days read "— / 1" and "— / 2" (that 1 and 2 ARE the attended counts), Days Attendance %
-//   was blank on all 45 students, and the file did not even trip `shiftSignature`, because that
-//   guard needs working-days to VARY across more than two values and a young batch's attended
-//   counts are 0/1/2.
+// the portal served for the batch above — still lost days-present entirely:
+//   Govt days read "— / 1" and "— / 2" (that 1 and 2 ARE the attended counts) and Days Attendance %
+//   was blank on all 45 students.
 // A blank column that means "the portal never said" is indistinguishable from one that means "we
 // read your file into the wrong slot" — and it was the second.
 //
-// So field order and alias length are no longer allowed to beat an exact header match. On a
-// genuine AEBAS register every assignment is byte-for-byte what it was; only the two shapes that
-// were being misread change. Both are pinned in scripts/e2e-govt.mjs.
+// WHAT THIS COMMENT USED TO CLAIM NEXT, AND WHY IT IS GONE (QA-1394, cycle 2): it said the file
+// "did not even trip `shiftSignature`, because that guard needs working-days to vary across more
+// than two values and a young batch's attended counts are 0/1/2". Run the guard on those very
+// numbers and it is self-refuting — {0,1,2} is THREE distinct values, so `distinct.length > 2`
+// holds and the guard FIRES, which disables the Import button rather than passing quietly. So
+// either the live counts were {1,2} and the "0/1/2" was wrong, or the guard fired and the operator
+// clicked past it and the "silently" was wrong. **I cannot tell which**: production Mongo is
+// read-only and IP-protected from here, and the uploaded file's header is not stored anywhere
+// (`GovtAttendanceImportSchema` keeps file_name, org_name, tc_id, period_label and counts — no
+// header). An inference dressed as a mechanism is exactly what the -248 block below was rewritten
+// for, and cycle 1 shipped a fresh one beside it. **Whether the import was silent is unknown and
+// stays unknown here.** What is measured is the parser, and the parser is what this fixes.
+//
+// So field order is no longer allowed to beat SPECIFICITY — in either pass. Two passes, one rule:
+//
+//   pass 1  every EXACT header match, across all fields, longest alias first
+//   pass 2  every PREFIX match, across all fields, longest alias first
+//
+// Pass 2's cross-field ordering is cycle 2's correction (QA-1393, found by the checker). Cycle 1
+// fixed only pass 1 and left pass 2 walking the declaration order — so the moment
+// `total_days_present` took its exact column in pass 1, `total_working_days` arrived at pass 2 with
+// its bare "total days" alias still live and, being declared FIRST, took the column headed
+// "Total Days Came After 00:00:00" straight out of `came_after`'s hands. `came_after` and
+// `going_before` are read by nothing in this tree; RESERVING those two clock columns so nobody else
+// eats them is their entire job, and cycle 1's fix defeated the reservation in precisely the shape
+// it was written for. Ranking pass 2 by alias length too puts "total days came after" (21) ahead of
+// "total days" (10) and the reservation holds. (On one of those shapes the ORIGINAL code stole the
+// clock column as well — this is not only a cycle-1 regression, it closes an older hole.)
+//
+// Measured across the two REAL portal fixtures and six adversarial shapes: `govt-attendance-sample.csv`
+// (AEBAS, clock headers and all) and `govt-attendance-sidh-report.csv` (SIDH with QP) resolve
+// byte-for-byte as they always did; only the misread shapes move. All pinned in scripts/e2e-govt.mjs.
 function resolveHeader(header: string[]): Record<string, number> {
   const cells = header.map(norm);
   const idx: Record<string, number> = {};
   const taken = new Set<number>();
-  for (const exactPass of [true, false]) {
-    for (const [field, aliases] of Object.entries(COLUMNS)) {
-      if (!aliases.length || idx[field] !== undefined) continue;
-      // Longest alias first so "candidate id" is not stolen by the bare "name"/"type" aliases.
-      for (const alias of [...aliases].sort((a, b) => b.length - a.length)) {
-        const at = cells.findIndex((c, i) => !taken.has(i) && (exactPass ? c === alias : c.startsWith(alias + " ")));
-        if (at >= 0) { idx[field] = at; taken.add(at); break; }
-      }
+  // Longest alias first, ACROSS FIELDS, so "candidate id" is not stolen by the bare "name"/"type"
+  // aliases and "total days came after" is not stolen by the bare "total days".
+  const candidates = Object.entries(COLUMNS)
+    .flatMap(([field, aliases]) => aliases.map((alias) => ({ field, alias })))
+    .sort((a, b) => b.alias.length - a.alias.length);
+  for (const exact of [true, false]) {
+    for (const { field, alias } of candidates) {
+      if (idx[field] !== undefined) continue;
+      const at = cells.findIndex((c, i) => !taken.has(i) && (exact ? c === alias : c.startsWith(alias + " ")));
+      if (at >= 0) { idx[field] = at; taken.add(at); }
     }
   }
   return idx;

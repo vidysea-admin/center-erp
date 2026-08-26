@@ -2034,7 +2034,10 @@ ok("removal is real", (await req(admin, "GET", `/api/sync-sources/${srcId}`)).st
     nqAlpha != null && nqAlpha.total_working_days == null,
     JSON.stringify({ alphaPresent: nqAlpha != null, wd: nqAlpha?.total_working_days }));
   //     Reported as absent rather than guessed, so the blank column on the grid is explained.
-  ok("QA-1383: the file's missing column is named honestly - working days, not days present",
+  //     Narrowed in cycle 2. The old name — "the file's missing column is named honestly" —
+  //     asserted a GENERAL property that this five-column, clock-free fixture cannot carry; the
+  //     shape below is the one that proves it does not hold in general.
+  ok("QA-1383: on THIS file the missing column is named as working days, not days present",
     (nq.data.missing_columns ?? []).includes("Total Working Days")
       && !(nq.data.missing_columns ?? []).includes("Total Days Present"),
     JSON.stringify({ missing: nq.data.missing_columns }));
@@ -2060,7 +2063,31 @@ ok("removal is real", (await req(admin, "GET", `/api/sync-sources/${srcId}`)).st
       program_days: att.data.program_days, pct }));
   if (nqImp.data?._id) await req(admin, "DELETE", `/api/govt-attendance/${nqImp.data._id}`); // no residue
 
-  //     The regression arm: the genuine AEBAS register must parse EXACTLY as it did before -254.
+  // 1c. QA-1393 (checker, cycle 1). CYCLE 1's OWN REGRESSION, AND AN OLDER HOLE BESIDE IT.
+  //
+  //     Cycle 1 ordered only the EXACT pass across fields and left the PREFIX pass walking the
+  //     declaration order. So on a file with no working-days column at all, the moment
+  //     total_days_present took its exact column, total_working_days reached the prefix pass with
+  //     its bare "total days" alias still live and — being declared first — took the column headed
+  //     "Total Days Came After 00:00:00" out of came_after's hands. Nothing in this tree reads
+  //     came_after or going_before: RESERVING those two clock columns is their whole job, and
+  //     cycle 1 defeated the reservation in exactly the shape prefix matching exists for.
+  //
+  //     What is observable from outside the parser is the damage, and that is what this asserts:
+  //     a per-student CLOCK count standing in the batch-level working-days denominator. Pre-cycle-2
+  //     this reads 2. It is the same failure QA-1383 itself is about, one column over.
+  const clockCsv = [
+    "S.No,Candidate Name,Candidate ID,Total Days Present,Total Days Came After 00:00:00,Total Hours Spent",
+    `1,${NAME} Alpha,CAN_${STAMP}0001,1,2,07:02:51`,
+    `2,${NAME} Bravo,CAN_${STAMP}0002,4,3,27:19:48`,
+  ].join(String.fromCharCode(10));
+  const clk = await upload(admin, { file: new File([Buffer.from(clockCsv)], "clock.csv", { type: "text/csv" }), batch: batch._id });
+  const clkAlpha = (clk.data.preview ?? []).find((r) => r.name === `${NAME} Alpha`);
+  ok("QA-1393: a reserved clock column is NOT eaten by the bare 'total days' alias",
+    clk.status === 200 && clkAlpha != null && clkAlpha.total_days_present === 1 && clkAlpha.total_working_days == null,
+    JSON.stringify({ status: clk.status, alphaPresent: clkAlpha != null, dp: clkAlpha?.total_days_present, wd: clkAlpha?.total_working_days }));
+
+  //     The regression arm: the genuine AEBAS register must parse EXACTLY as it did before this unit.
   //     Exact-before-prefix changes which field wins a contest; on a real export there is no
   //     contest, and this is what says so out loud rather than assuming it.
   const aebas = await upload(admin, { file: csvFile() });
