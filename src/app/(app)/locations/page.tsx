@@ -223,7 +223,13 @@ function LocationsInner() {
               if (!r.loc.tc_password_revealable) return rep(ctx, r, <span className="font-mono text-xs text-gray-400">••••••••</span>);
               return rep(ctx, r, (
                 <button type="button" className="font-mono text-xs text-blue-700 underline underline-offset-2"
-                  onClick={async () => {
+                  onClick={async (e) => {
+                    // -253 (QA-1365, found by the live checker on production): without this the
+                    // click bubbles to the table's onRowClick (:137) and NAVIGATES to the centre
+                    // instead of revealing - a control that renders and then refuses, which is the
+                    // exact class the comment above cites (QA-712/723/754/775/785). Two other
+                    // controls in this same file already do this (:246, :323); this one did not.
+                    e.stopPropagation();
                     setRevealedPw((m) => ({ ...m, [id]: "…" }));
                     try {
                       const d: any = await api(`/api/locations/${id}`);
