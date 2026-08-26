@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-256";
+export const RELEASE = "2026.08.14-257";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -138,6 +138,24 @@ const RELEASE_NOTE_ARCHIVE_254 =
   "screen for a real number sitting one tab over.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-257 exists to correct something -256 got wrong, and to say so plainly. When the Enrollment tab "  +
+  "gained its Edit-candidate button, the list of students behind a batch started being sent to the "  +
+  "browser in full rather than as the handful of details that list actually shows. Anyone who could "  +
+  "open a batch therefore received every student's Aadhaar number, date of birth, parents' names, "  +
+  "religion and category - including a trainer who has no permission to edit students at all and is "  +
+  "correctly shown no Edit button. Hiding a button does not close a door. From this release the full "  +
+  "record is sent only to someone who may actually edit a student; everyone else gets exactly what "  +
+  "the roster displays, which is what they got before the button existed. Nothing on any screen "  +
+  "looks different, and no student record was changed. "  +
+  "Alongside it: passwords held against a synced centre are now masked in the Sync Inbox for every "  +
+  "role, revealed one record at a time when someone chooses to. "  +
+  "The remainder is checking. A guard meant to notice if a form ever asks for State, District and "  +
+  "Sub-district as free text had quietly stopped watching one of the three forms it covers, and now "  +
+  "watches all three again. A second guard was found to be unable to fail for five and a half hours "  +
+  "of every day, because it worked in a different timezone from the system it was checking; it now "  +
+  "uses the same day the rest of the system does.";
+
+const RELEASE_NOTE_ARCHIVE_256 =
   "-256 is a maintenance release: it does not add a screen, it closes three ways the system could "  +
   "tell you something that was not so. A batch that has finished can now be given the government "  +
   "portal's own Batch ID. That identifier is issued by the portal at or after a batch closes, so "  +
@@ -817,6 +835,7 @@ const RELEASE_NOTE_ARCHIVE =
   // anywhere - the same shape the comment above records for -245, and the same shape QA-265 records
   // for 329 lines of this file. Wired in here together with -255's, archived by this bump. Adding a
   // note to this chain is the second half of every bump, not an optional one.
+  RELEASE_NOTE_ARCHIVE_256 + " " +
   RELEASE_NOTE_ARCHIVE_255 + " " + RELEASE_NOTE_ARCHIVE_254 + " " + RELEASE_NOTE_ARCHIVE_253 + " " +
   RELEASE_NOTE_ARCHIVE_252 + " " + RELEASE_NOTE_ARCHIVE_251 + " " + RELEASE_NOTE_ARCHIVE_250 + " " + RELEASE_NOTE_ARCHIVE_249 + " " + RELEASE_NOTE_ARCHIVE_248 + " " + RELEASE_NOTE_ARCHIVE_247 + " " + RELEASE_NOTE_ARCHIVE_246 + " " + RELEASE_NOTE_ARCHIVE_245 + " " +
   RELEASE_NOTE_ARCHIVE_244 + " " + RELEASE_NOTE_ARCHIVE_243 + " " + RELEASE_NOTE_ARCHIVE_242 + " " + RELEASE_NOTE_ARCHIVE_241 + " " + RELEASE_NOTE_ARCHIVE_240 + " " + RELEASE_NOTE_ARCHIVE_239 + " " + RELEASE_NOTE_ARCHIVE_238 + " " +
