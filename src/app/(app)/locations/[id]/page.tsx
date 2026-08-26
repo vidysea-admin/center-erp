@@ -140,8 +140,15 @@ function ContactsNotes({ loc, onSaved, setError }: any) {
       // renamed every contact in the list. Nothing on this screen showed it; what it broke was the
       // plan share, which identifies a recipient by that id, so after any edit a person's own link
       // stopped being theirs and re-sending to them left two live links instead of replacing one.
-      await api(`/api/locations/${loc._id}`, { method: "PATCH", json: { contacts: next.map(({ _id, name, phone, role_label, user }) => ({ _id, name, phone, role_label, user })) } });
-      setContacts(next); onSaved();
+      //
+      // QA-627: -195's fix sent `_id` on the way OUT but never read it back on the way IN. `next`
+      // is built from LOCAL state, so a contact added earlier in this same visit still has no
+      // `_id` in it - only the server, on save, mints one. Seeding local state from the PATCH
+      // response (which carries the saved document, ids and all) instead of from `next` is what
+      // actually closes this: the id a share link is keyed on now matches what state holds before
+      // the very next save, not just after a page reload.
+      const res = await api(`/api/locations/${loc._id}`, { method: "PATCH", json: { contacts: next.map(({ _id, name, phone, role_label, user }) => ({ _id, name, phone, role_label, user })) } });
+      setContacts(res?.item?.contacts ?? next); onSaved();
     } catch (e: any) { setError(e.message); }
   }
 

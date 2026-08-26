@@ -2061,6 +2061,26 @@ await req("PATCH", `/api/locations/${loc._id}`, {
 }, 200);
 const locAfter = (await req("GET", `/api/locations/${loc._id}`)).data.item;
 ok("location holds multiple contacts", locAfter.contacts?.length === 2, JSON.stringify(locAfter.contacts));
+
+// QA-627: the SERVER-side half of the contract the client's saveContacts fix depends on - a save
+// must hand the minted `_id`s straight back on the SAME response, not only on a later GET, or the
+// client has nothing to seed its next save from. Two saves in a row, the second reusing exactly
+// what the first returned (the "same page visit, no reload" shape the bug lived in).
+{
+  const r1 = (await req("PATCH", `/api/locations/${loc._id}`, { contacts: [{ name: "QA-627 Contact A " + stamp, role_label: "Contact" }] }, 200)).data.item;
+  const idA = r1.contacts?.find((c) => c.name.startsWith("QA-627 Contact A"))?._id;
+  ok("QA-627: a save's own response carries the freshly minted _id, not just a later GET", !!idA, JSON.stringify(r1.contacts));
+  const r2 = (await req("PATCH", `/api/locations/${loc._id}`, {
+    contacts: [
+      { _id: idA, name: "QA-627 Contact A " + stamp, role_label: "Contact" },
+      { name: "QA-627 Contact B " + stamp, role_label: "Contact" },
+    ],
+  }, 200)).data.item;
+  const idAafter = r2.contacts?.find((c) => c.name.startsWith("QA-627 Contact A"))?._id;
+  ok("QA-627: reusing the id a prior save returned keeps that contact's identity across a second save in the same visit",
+    !!idAafter && String(idAafter) === String(idA), JSON.stringify({ idA, idAafter }));
+}
+
 await req("POST", `/api/locations/${loc._id}/notes`, { met_with: "Principal", note: "Discussed batch plan " + stamp }, 201);
 await req("POST", `/api/locations/${loc._id}/notes`, { met_with: "Nobody" }, 400); // note text required
 const notes = (await req("GET", `/api/locations/${loc._id}/notes`, undefined, 200)).data.items;
@@ -2450,6 +2470,17 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
       sidh_profile_verified_on: "2027-01-02", eligibility_checked_on: "2027-01-03",
       tot_result_expected_on: "2027-02-10",
     }, 200);
+    // QA-689 (checker on qa-192 cycle 2): the pipeline-stamped three - nsdc_submitted_on,
+    // nsdc_result_on, paid_on - are refused on the plain PATCH above (QA-523) and were never
+    // populated anywhere else in this fixture either, so they sat null on every "Fresh Lead"
+    // trainer and "Not needed" on every certified one: two values, but never DIFFERING WITHIN a
+    // swapped pair, which is what let break H (a swap between exactly two of these) through
+    // invisibly. correctTrainerDates (the SAME door -173's own correction PATCH uses, not the
+    // refused door above) sets them directly - it is a real, shipped feature ("agar koi wrong
+    // value set ho gayi toh baad me edit nahi kar pa raha hai", Umesh 22/08), not a test backdoor.
+    await req("PATCH", `/api/trainers/${tkTrainer._id}/transition`, {
+      nsdc_submitted_on: "2026-01-15", nsdc_result_on: "2026-01-20", paid_on: "2026-01-25",
+    }, 200);
 
     // TWO batches, ONE trainer. This is the case the whole design turns on.
     const tkA = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: tkTrainer._id, planned_start: "2029-03-01", target_size: 3 }, 201)).data.item;
@@ -2741,11 +2772,16 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
       // ...and the fixture must actually be able to catch a SWAP. If every mapped column holds the
       // same value on every row, the pin above passes whatever order they are printed in - which is
       // the "cannot fail" shape this whole block exists to close, one level deeper.
+      // QA-689 (checker on qa-192 cycle 2): "at least 2 columns vary" let break H through - it swapped
+      // nsdc_submitted_on <-> nsdc_result_on, a pair that is UNIFORM in this fixture (both null on the
+      // Fresh-Lead trainer, both "Not needed" on the certified one), while six OTHER columns varied
+      // and satisfied the >=2 threshold. Varying is a PER-PAIR property: a swap between two uniform
+      // columns is invisible no matter how many other columns move. Every mapped column must vary.
       const distinctPerCol = PAIRS.map(([h]) => new Set((exRows ?? []).map((r) => String(r[h] ?? ""))).size);
-      const discriminating = distinctPerCol.filter((n) => n > 1).length;
-      ok("QA-672: ...and the fixture varies enough for that check to notice a swap",
-        discriminating >= 2,
-        JSON.stringify({ columnsWithMoreThanOneValue: discriminating, perColumn: distinctPerCol }));
+      const uniformCols = PAIRS.filter((_, i) => distinctPerCol[i] < 2).map(([h]) => h);
+      ok("QA-689: the fixture varies enough for that check to notice a swap between ANY pair, not just some",
+        !!exRows && uniformCols.length === 0,
+        JSON.stringify({ uniform: uniformCols, perColumn: Object.fromEntries(PAIRS.map(([h], i) => [h, distinctPerCol[i]])) }));
 
       // The scoping landmine, measured from the scoped login itself. authz builds its $in from
       // .map(String) and mongoose does not cast inside a pipeline - four live defects came from

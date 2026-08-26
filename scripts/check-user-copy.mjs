@@ -1264,6 +1264,19 @@ for (const file of walk(root)) {
   if (planCard) passed++;
   else { failed++; pushStructural("app/(app)/batches: the planning table has no collapsed card mapping each column to the client's sheet heading - QA-640. Without it the verbatim headings are stored and never shown, which is the same as not having them."); }
 
+  // QA-688 (-203, checker on qa-192 cycle 2): the pin above only reads the TEXT of the card and
+  // never asks whether it is actually reachable. Break D wrapped the whole <details> in
+  // `{showSheetCard && (...)}` with `showSheetCard` a literal `false` a few lines above - the
+  // regex above still matched (the JSX text is still there), so five green pins described a card
+  // that renders nothing. The card is meant to be unconditionally present, collapsed by default via
+  // <details> itself - not conditionally mounted by app logic - so ANY `{ident &&`/`{ident ?`
+  // wrapper immediately before its opening tag is the defect, not just a false one.
+  const planCardIdx = planSrc.search(/<details[^>]*>[\s\S]{0,400}?Which column of the planning sheet is which/);
+  const beforeCard = planCardIdx < 0 ? "" : planSrc.slice(Math.max(0, planCardIdx - 200), planCardIdx);
+  const cardGate = /[A-Za-z_$][\w.]*\s*(&&|\?)\s*\(?\s*$/.exec(beforeCard.replace(/\s+$/, ""));
+  if (!cardGate) passed++;
+  else { failed++; pushStructural("app/(app)/batches: the sheet-heading card sits behind a conditional (" + JSON.stringify(cardGate[0]) + ") - QA-688. The card renders on its OWN <details> collapse, not on an app-logic flag; a flag that is false, or never becomes true, hides the card while every text-scanning pin above stays green."); }
+
   // ---- QA-672 (-203): the four pins above verify SOURCE TEXT, and the card is a KEY JOIN ----
   // The checker on qa-192 cycle 1 broke this screen three ways and left all four green. The worst:
   // prefix the `columns[]` keys in a refactor and leave PLAN_COLUMN_SOURCE behind, and the card
@@ -1284,6 +1297,39 @@ for (const file of walk(root)) {
     pushStructural("app/(app)/batches: the sheet-heading card would render " + cardRows + " of 18 rows - PLAN_COLUMN_SOURCE has " + sourceKeys.length
       + " headings and " + orphanKeys.length + " of them match no column key: " + JSON.stringify(orphanKeys.slice(0, 4))
       + " - QA-672. The card is a JOIN on c.key; renaming either side silently empties it while every heading is still present in the source.");
+  }
+
+  // QA-688 (-208, checker on qa-192 cycle 2, break E): the key-join pin above checks the key SET and
+  // the heading MULTISET - never which heading belongs to which key. Swapping two STRING VALUES
+  // between two PLAN_COLUMN_SOURCE entries (e.g. tot_start <-> tot_done_on) leaves all 18 keys
+  // present and all 18 headings present somewhere in the object, so both pins above stay green,
+  // while the card now tells a reader holding the client's sheet the WRONG heading for two columns -
+  // the exact doubt this card exists to remove. This pins the 18 key<->heading PAIRS explicitly,
+  // zipped against the same SHEET_HEADINGS list above, in PLAN_COLUMN_SOURCE's own declared order
+  // (the comment above the object lists it: sl, location, job_role, trainer, then the fourteen
+  // trainer/TOT/batch date columns, ending planned_start, planned_end).
+  {
+    const SHEET_HEADING_KEYS = [
+      "sl", "location", "job_role", "trainer",
+      "sidh_profile_verified_on", "eligibility_checked_on", "ready_for_tot",
+      "nsdc_submitted_on", "nsdc_result_on", "paid_on",
+      "tot_start", "tot_done_on", "tot_result_expected_on",
+      "trainer_mapped_sidh", "mobilization", "enrollment_done",
+      "planned_start", "planned_end",
+    ];
+    const sourcePairs = [...srcBlock.matchAll(/^\s{2}([A-Za-z_][A-Za-z_0-9]*):\s*"((?:[^"\\]|\\.)*)"/gm)]
+      .map((m) => [m[1], m[2]]);
+    const sourceHeadingByKey = Object.fromEntries(sourcePairs);
+    const wrongPairs = SHEET_HEADING_KEYS
+      .map((k, i) => [k, SHEET_HEADINGS[i], sourceHeadingByKey[k]])
+      .filter(([, want, got]) => got !== want);
+    if (SHEET_HEADING_KEYS.length === SHEET_HEADINGS.length && !wrongPairs.length) passed++;
+    else {
+      failed++;
+      pushStructural("app/(app)/batches: " + wrongPairs.length + " of PLAN_COLUMN_SOURCE's headings sit on the WRONG key: "
+        + JSON.stringify(wrongPairs.slice(0, 4).map(([k, want, got]) => k + " should read \"" + String(want).slice(0, 40) + "...\" but reads \"" + String(got).slice(0, 40) + "...\""))
+        + " - QA-688. The key SET and the heading SET can both be complete while a heading answers for the wrong column - a set check can never catch a pairwise swap.");
+    }
   }
 }
 

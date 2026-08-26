@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, isScoped, locationFilter, HttpError } from "@/lib/authz";
 import { requirePerm, requireView } from "@/lib/permissions";
 import { Batch, BatchMember, Candidate, GovtAttendanceImport, GovtAttendanceRow } from "@/models";
-import { normalizeCan, shiftSignature } from "@/lib/govt-attendance";
+import { normalizeCan, shiftSignature, storedCanIsUnreadable } from "@/lib/govt-attendance";
 import { audit } from "@/lib/audit";
 import { assertBatchInScope } from "@/lib/rules";
 
@@ -55,6 +55,18 @@ async function plan(user: Awaited<ReturnType<typeof requireUser>>, batchId?: str
   // a) "" artefacts - would collide under the QA-417 partial unique index ("" IS a string).
   const emptyStrings = await Candidate.find({ sidh_candidate_id: "", ...scope })
     .select("name phone").lean<any[]>();
+
+  // a2) QA-725: a value IS on record and this system cannot read it - a DIFFERENT state from
+  // "no CAN anywhere" below, and until now the two were shown as the same thing. The single-edit
+  // door (looksLikeCan, deliberately looser than normalizeCan - widening it is Umesh's call, not
+  // this screen's - see the comment on looksLikeCan in lib/validate.ts) can accept a value like
+  // "CAN_CHK208A" that certification can never match against. -212 (QA-727) already reports this
+  // shape at the BULK import door; this is the same check reaching the door that mints it one at a
+  // time, and the screen operators actually use to fix it. Selectable in spirit but not mechanical
+  // - nobody here can guess the right digits - so it is report-only, same as enrolled_no_can below.
+  const unreadable = await Candidate.find({ sidh_candidate_id: { $type: "string", $ne: "" }, ...scope })
+    .select("name phone sidh_candidate_id").lean<any[]>();
+  const unreadableIds = unreadable.filter((c) => storedCanIsUnreadable(c.sidh_candidate_id));
 
   // b+c) CAN-shaped values sitting in id_reference (the field the model itself says is "NOT the
   // Aadhaar number itself" and was never meant to hold a portal CAN).
@@ -152,11 +164,15 @@ async function plan(user: Awaited<ReturnType<typeof requireUser>>, batchId?: str
     if (!m.candidate) return false;
     if (normalizeCan(m.candidate.sidh_candidate_id)) return false;
     if (normalizeCan(m.candidate.id_reference)) return false; // those are "misfiled", above
+    // QA-725: "no CAN anywhere" must mean nothing is stored, not "something is stored and this
+    // system cannot read it" - that is `unreadable`, above, and it needed correcting, not issuing.
+    if (storedCanIsUnreadable(m.candidate.sidh_candidate_id)) return false;
     return true;
   }).map((m) => ({ candidate: m.candidate._id, name: m.candidate.name, phone: m.candidate.phone ?? null, batch: m.batch?.code ?? null }));
 
   return {
     empty_strings: emptyStrings.map((c) => ({ candidate: c._id, name: c.name, phone: c.phone ?? null })),
+    unreadable: unreadableIds.map((c) => ({ candidate: c._id, name: c.name, phone: c.phone ?? null, stored: c.sidh_candidate_id })),
     misfiled,
     disagreements,
     duplicates: dupRows.map((d) => ({ id: d._id, members: d.members })),

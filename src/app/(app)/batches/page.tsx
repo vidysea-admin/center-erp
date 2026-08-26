@@ -1359,7 +1359,7 @@ function PlanningTable({ rows, onSaved, onError }: { rows: any[] | null; onSaved
           "Back-dated Planning" tab open should be able to match every column here to a column there
           with no doubt. So it quotes that sheet's headings VERBATIM — including their typos — rather
           than a tidied paraphrase, which is the one thing that would put the doubt back. */}
-      <details className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
+      {false && <details className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
         <summary className="cursor-pointer text-[11px] font-semibold uppercase tracking-wider text-gray-500">
           Which column of the planning sheet is which
         </summary>
@@ -1368,7 +1368,7 @@ function PlanningTable({ rows, onSaved, onError }: { rows: any[] | null; onSaved
             <div key={c.key}><b>{c.label}</b> — {PLAN_COLUMN_SOURCE[c.key]}</div>
           ))}
         </div>
-      </details>
+      </details>}
       <DataTable storageKey="plan-tracker" rows={shown} loading={rows === null} columns={columns}
         empty="No batch is being planned right now — use “Plan a batch” at the top of this page to start one."
         cardTitle={(r: any) => <>{r.batch.code} <span className="text-xs text-gray-400">· {r.location?.name}</span></>} />

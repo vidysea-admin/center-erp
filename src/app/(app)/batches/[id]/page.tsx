@@ -1861,7 +1861,7 @@ function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
   return (
     <div className="space-y-3">
       {/* -208 (Umesh, 23/08): "even attendance wale tab me bhi vo kar de". Same component as the
-          Certificates tab, mounted where the centre works every day - one widget, two homes. It
+          Closure tab, mounted where the centre works every day - one widget, two homes. It
           renders nothing when there is no gap. */}
       <PortalIdGaps batchId={batchId} onChanged={load} />
       <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -2907,6 +2907,13 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
           <Btn small onClick={completeAsAdmin} disabled={adminBusy}>{adminBusy ? "Completing…" : "Mark Completed (Admin)"}</Btn>
         </div>
       )}
+      {/* QA-715 (-208 checker, cycle 1 FAIL): this used to live only inside CandidateResults, so on
+          any batch that had not yet had "Start per-candidate marking" pressed - the common case for
+          a batch just reaching Closure - the "second home" Umesh asked for never rendered at all.
+          Mounted here, unconditionally, it is present the moment the Closure tab is, matching the
+          Attendance-tab mount above. Removed from CandidateResults below so the two homes never
+          double-render the same box when per-candidate marking IS on. */}
+      <PortalIdGaps batchId={batchId} onChanged={() => { load(); onChanged(); }} />
       {/* Per-candidate marking gets the full width — it is a data-entry grid, not a side panel. */}
       {perCandidate && (
         <CandidateResults batchId={batchId} batch={batch} error={error} setError={setError} onChanged={() => { load(); onChanged(); }} />
@@ -3930,12 +3937,13 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
               {!linkPlan.linkable?.length && (linkPlan.blocking ?? 0) > 0 && (
                 <span className="ml-1">The imports name none of those {linkPlan.blocking}, so their IDs have to be typed in from the portal.</span>
               )}
-              {/* -208 (Umesh, 23/08): "even attendance wale tab me bhi vo kar de, yeh closer wale
-                  me kar dhe". The list of students with no portal ID is ONE component now, mounted
-                  where the work happens - here on Certificates, and on Attendance where the centre
-                  is every day. A second copy of the same widget is the drift ARCHITECTURE.md
-                  section 3 is a catalogue of, and this one carries a WRITE. */}
-              <PortalIdGaps batchId={batchId} onChanged={() => { load(); loadLinkPlan(); }} />
+              {/* QA-715 (-208 checker, cycle 1 FAIL): the mount used to be HERE, but this whole
+                  panel is inside CandidateResults, which only renders once per-candidate marking has
+                  started (`perCandidate`) - so on a batch not yet at that stage, the "second home"
+                  Umesh asked for silently did not exist. Moved to ClosureTab itself (unconditional,
+                  right above where this component is mounted) so it renders the moment the Closure
+                  tab is open, matching the Attendance-tab mount. Not re-mounted here to avoid
+                  showing the same box twice when per-candidate marking IS on. */}
               {linkPlan.conflicts?.length > 0 && (
                 <div className="mt-1 text-amber-800">
                   {linkPlan.conflicts.length} left untouched because the portal gives conflicting IDs: {personList(linkPlan.conflicts.slice(0, 3))}
