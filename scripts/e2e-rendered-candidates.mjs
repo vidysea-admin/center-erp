@@ -524,7 +524,7 @@ if (await card.count() > 0) {
       if (a && (a.bulk || a.drops > 0)) {
         ok("[QA-1363] ...and the TRAINER is offered no bulk enrolment bar the server would refuse",
           !t.bulk && t.complete === 0, JSON.stringify({ trainer: t, batch: target.code }));
-        ok("[QA-1363] ...and no Drop button either - a control that refuses on press is the -224 fault",
+        ok("[QA-1363] ...and no Drop button either - a control that refuses on press is the -229 fault",
           t.drops === 0, JSON.stringify({ trainerDrops: t.drops, adminDrops: a.drops }));
       }
       await ad.c.close().catch(() => {});
