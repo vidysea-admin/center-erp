@@ -2468,7 +2468,20 @@ for (const file of walk(root)) {
   //       inside one.
   const gapsBody = fnBody(src, "PortalIdGaps");
   const outsideGaps = gapsBody ? src.replace(gapsBody, "") : src;
-  const secondSaverElsewhere = /api\(`\/api\/candidates\/[^`]*`[\s\S]{0,200}?sidh_candidate_id/.test(outsideGaps);
+  // QA-1415 (S3, -208 cycle-2 checker): the first version anchored on one calling convention
+  // (`api(\`/api/candidates/...\``) and was beaten by a string-concatenated URL (an idiom already
+  // live elsewhere in this file) and by a raw `fetch(...)` bypassing the `api()` helper entirely.
+  // Widened to not care HOW the call is made: any `api(`/`fetch(` call whose nearby text carries
+  // both a PATCH-shaped method and the literal `sidh_candidate_id` is a second door.
+  let secondSaverElsewhere = false;
+  {
+    const callRe = /\b(?:api|fetch)\s*\(/g;
+    let cm;
+    while ((cm = callRe.exec(outsideGaps))) {
+      const windowText = outsideGaps.slice(cm.index, cm.index + 320);
+      if (/PATCH/.test(windowText) && /sidh_candidate_id/.test(windowText)) { secondSaverElsewhere = true; break; }
+    }
+  }
   const topFnRe = /^function (\w+)\(/gm;
   const topFns = [];
   for (let m; (m = topFnRe.exec(src)); ) topFns.push({ name: m[1], start: m.index });
