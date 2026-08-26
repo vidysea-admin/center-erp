@@ -693,9 +693,13 @@ numeric `0`s on the wire (needed for the sum invariant above), but printing that
 batch has zero target" — a false measurement, the exact class QA-1288's own maker_note calls out
 by name (QA-246 "chaar jhoothi ginti"). `drillNum` checks `r.batch && !L[k]?.batch_scoped` and
 renders `—` with an explanatory title instead. A centre row is never at risk of the same failure
-on the other three measures: `hasBatchFor` already drops a centre's own placeholder row from a
-batch-scoped drill the moment that centre has any batch, so a centre row showing `mobilised: 0`
-only ever appears when it is genuinely true (no batch exists yet).
+on the other three measures, because since -256 it is not on a batch-scoped drill at all (next
+paragraph). **This sentence used to read "`hasBatchFor` already drops a centre's own placeholder
+row…", describing a helper -256 deleted — left standing four lines above the paragraph that says it
+was deleted, so this section contradicted itself. Filed as QA-1423 by the checker on
+qa-1408-band-batch-ka-id, whose manifest had claimed this paragraph was *rewritten* when it had only
+been appended to. A map that disagrees with itself is worse than a map that is merely out of date:
+a reader has no way to tell which half is current.**
 
 **-256 (QA-1410) removed `hasBatchFor` entirely: a batch-scoped drill now lists rows carrying a
 `batch` and nothing else.** Umesh, on his own screenshot: *"agar batch bnn hi nhi skta tho vo batch
