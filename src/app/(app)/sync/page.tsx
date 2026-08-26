@@ -39,6 +39,11 @@ export default function SyncInboxPage() {
   const [review, setReview] = useState<any>(null);
   const [action, setAction] = useState("");
   const [note, setNote] = useState("");
+  // QA-1026 (S1): a revealed credential, per row, for this page view only. Never persisted, never
+  // put in a URL, and gone on reload — a reveal is an act, not a setting (same rule as
+  // locations/page.tsx's revealedPw). Read this in preference to r.old_value/r.new_value wherever
+  // a masked secret field is rendered.
+  const [revealedVal, setRevealedVal] = useState<Record<string, { old_value: string; new_value: string }>>({});
   const [openCounts, setOpenCounts] = useState<{ watch?: number; sync?: number }>({});
   useEffect(() => {
     api("/api/workbook-changes?count=1").then((d) => setOpenCounts((c) => ({ ...c, watch: d.count ?? 0 }))).catch(() => {});
@@ -254,7 +259,38 @@ It leaves the review queue. You can re-open it later from the Ignored list.`;
           // LIST first — it is the surface a reviewer scans before opening anything — so half the
           // issue was closed while the half it was reported on stayed broken. Same helper, both
           // places, which is the only way they cannot drift apart again.
-          { key: "change", label: "Old → New", minWidth: 280, filterText: (r: any) => `${r.old_value ?? ""} ${r.new_value ?? ""}`, render: (r: any) => <span className="text-xs">{r.old_value || "∅"} → <b>{shownValue(r.new_value)}</b></span> },
+          {
+            key: "change", label: "Old → New", minWidth: 280, filterText: (r: any) => `${r.old_value ?? ""} ${r.new_value ?? ""}`,
+            // QA-1026 (S1): the list ships this row already masked (`••••••`) for a secret field —
+            // this render only decides whether a reveal control is worth showing, never whether the
+            // value itself is safe to print, which is the server's decision (lib/sync.ts).
+            render: (r: any) => {
+              const id = String(r._id);
+              const shown = revealedVal[id];
+              const old_value = shown ? shown.old_value : r.old_value;
+              const new_value = shown ? shown.new_value : r.new_value;
+              if (!r.secret_revealable || shown) return <span className="text-xs">{old_value || "∅"} → <b>{shownValue(new_value)}</b></span>;
+              return (
+                <span className="text-xs">
+                  {old_value || "∅"} →{" "}
+                  <button type="button" className="font-mono text-xs text-blue-700 underline underline-offset-2"
+                    onClick={async (e) => {
+                      // Same reason as locations/page.tsx's identical guard (QA-1365): without this
+                      // the click bubbles to the table's onRowClick and opens the review drawer
+                      // instead of revealing.
+                      e.stopPropagation();
+                      setRevealedVal((m) => ({ ...m, [id]: { old_value: "…", new_value: "…" } }));
+                      try {
+                        const d: any = await api(`/api/sheet-changes/${id}`);
+                        setRevealedVal((m) => ({ ...m, [id]: { old_value: d?.item?.old_value ?? "", new_value: d?.item?.new_value ?? "" } }));
+                      } catch {
+                        setRevealedVal((m) => ({ ...m, [id]: { old_value: "(refused)", new_value: "(refused)" } }));
+                      }
+                    }}>{shownValue(new_value)} Show</button>
+                </span>
+              );
+            },
+          },
           { key: "detected_at", label: "Detected", render: (r: any) => fmtDT(r.detected_at) },
           {
             key: "status", label: "Status",
@@ -320,7 +356,36 @@ It leaves the review queue. You can re-open it later from the Ignored list.`;
           <div className="space-y-4">
             <div className="rounded-lg bg-gray-50 p-4 text-sm">
               <div className="font-medium">{rowLabel(review) ?? "Unmatched location"}</div>
-              <div className="mt-1">Field <b>{review.field_name}</b>: <span className="text-gray-500">{review.old_value || "∅"}</span> → <b>{shownValue(review.new_value)}</b></div>
+              <div className="mt-1">
+                Field <b>{review.field_name}</b>:{" "}
+                {(() => {
+                  // QA-1026 (S1): same reveal state as the column — a row already revealed there
+                  // stays revealed here, and an unrevealed secret row shows the SAME mask + button
+                  // rather than a second, independent leak surface.
+                  const id = String(review._id);
+                  const shown = revealedVal[id];
+                  const old_value = shown ? shown.old_value : review.old_value;
+                  const new_value = shown ? shown.new_value : review.new_value;
+                  if (!review.secret_revealable || shown) {
+                    return <><span className="text-gray-500">{old_value || "∅"}</span> → <b>{shownValue(new_value)}</b></>;
+                  }
+                  return (
+                    <>
+                      <span className="text-gray-500">{old_value || "∅"}</span> →{" "}
+                      <button type="button" className="font-mono text-xs text-blue-700 underline underline-offset-2"
+                        onClick={async () => {
+                          setRevealedVal((m) => ({ ...m, [id]: { old_value: "…", new_value: "…" } }));
+                          try {
+                            const d: any = await api(`/api/sheet-changes/${id}`);
+                            setRevealedVal((m) => ({ ...m, [id]: { old_value: d?.item?.old_value ?? "", new_value: d?.item?.new_value ?? "" } }));
+                          } catch {
+                            setRevealedVal((m) => ({ ...m, [id]: { old_value: "(refused)", new_value: "(refused)" } }));
+                          }
+                        }}>{shownValue(new_value)} Show</button>
+                    </>
+                  );
+                })()}
+              </div>
               <div className="mt-1 text-xs text-gray-400">Detected {fmtDT(review.detected_at)}</div>
             </div>
             {review.impact_snapshot && review.impact_snapshot.active_batches !== undefined && (

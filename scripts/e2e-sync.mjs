@@ -1300,9 +1300,15 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
   // reads `new_value` would go green on a fix that missed those. That is exactly how QA-1253
   // reached cycle 3.
   {
+    // QA-1026 (S1, fixed): the Sync Inbox LIST masks tc_password unconditionally now, Admin
+    // included — the control below used to read the real value straight off this list; it now
+    // asks the reveal door instead (the same per-record GET the "Show" button calls), which is the
+    // deliberate door this comment already describes ("the deliberate door still hands an Admin
+    // the value"). pwRow itself stays the masked list row for every other use in this block.
+    const pwRevealed = (await req("GET", `/api/sheet-changes/${pwRow?._id}`)).data.item;
     ok("QA-1231 control: the Sync Inbox still hands an Admin the real value when they ask for it",
-      pwRow?.new_value === `pw${s9}`,
-      JSON.stringify({ field: pwRow?.field_name, value: pwRow?.new_value }));
+      pwRevealed?.new_value === `pw${s9}`,
+      JSON.stringify({ field: pwRevealed?.field_name, value: pwRevealed?.new_value }));
 
     const homeBody = (await req("GET", "/api/home", undefined, 200)).data;
     const homeJson = JSON.stringify(homeBody);
@@ -1521,8 +1527,14 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
     await req("POST", `/api/sync-sources/${srcA._id}/run`, undefined, 200);
     const pwRowA = ((await req("GET", "/api/sheet-changes?status=Open")).data.items ?? [])
       .find((c) => String(c.location?._id ?? c.location) === String(lA._id) && c.field_name === "tc_password");
-    ok("QA-1316 precondition: the row exists and Admin can still see the real value (control)",
-      pwRowA?.new_value === `OLDPW-${sA}`, JSON.stringify(pwRowA?.new_value));
+    // QA-1026 (S1, fixed): the list masks tc_password unconditionally now, Admin included, so the
+    // control reads the real value through the reveal door instead — the same per-record GET the
+    // Sync Inbox UI's "Show" button calls (sheet-changes/[id]/route.ts).
+    ok("QA-1316 precondition: the row is masked on the list even for Admin",
+      pwRowA?.new_value === "••••••" && pwRowA?.secret_revealable === true, JSON.stringify({ new_value: pwRowA?.new_value, secret_revealable: pwRowA?.secret_revealable }));
+    const revealedA = (await req("GET", `/api/sheet-changes/${pwRowA._id}`)).data.item;
+    ok("QA-1316 precondition: …and the reveal door gives Admin the real value (control)",
+      revealedA?.new_value === `OLDPW-${sA}`, JSON.stringify(revealedA?.new_value));
 
     const applyRes = await fetch(BASE + `/api/sheet-changes/${pwRowA._id}/apply`, {
       method: "POST", headers: { "Content-Type": "application/json", cookie: probeCookie },
@@ -1565,8 +1577,13 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
     await req("POST", `/api/sync-sources/${srcC._id}/run`, undefined, 200);
     const pwRowC = ((await req("GET", "/api/sheet-changes?status=Open")).data.items ?? [])
       .find((c) => String(c.location?._id ?? c.location) === String(lC._id) && c.field_name === "tc_password");
-    ok("QA-1331c precondition: the second row exists with its own real value",
-      pwRowC?.new_value === `CLOSEPW-${sA}`, JSON.stringify(pwRowC?.new_value));
+    // QA-1026 (S1, fixed): same adaptation as QA-1316's precondition above — masked on the list,
+    // real value through the reveal door.
+    ok("QA-1331c precondition: the second row is masked on the list even for Admin",
+      pwRowC?.new_value === "••••••", JSON.stringify(pwRowC?.new_value));
+    const revealedC = (await req("GET", `/api/sheet-changes/${pwRowC._id}`)).data.item;
+    ok("QA-1331c precondition: …and the reveal door gives Admin the second row's own real value",
+      revealedC?.new_value === `CLOSEPW-${sA}`, JSON.stringify(revealedC?.new_value));
 
     const parkRes = await fetch(BASE + `/api/sheet-changes/${pwRowC._id}/apply`, {
       method: "POST", headers: { "Content-Type": "application/json", cookie: probeCookie },

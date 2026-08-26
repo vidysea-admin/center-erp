@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser } from "@/lib/authz";
 import { requirePerm, requireView } from "@/lib/permissions";
 import { FollowUpAction, LocationTarget, Program, SheetChange } from "@/models";
-import { canRevert, classifyChange, maskSheetChange, targetRowField } from "@/lib/sync";
+import { canRevert, classifyChange, maskSheetChange, sheetChangeRevealable, targetRowField } from "@/lib/sync";
 
 export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
@@ -52,12 +52,11 @@ export const GET = apiHandler(async (req: NextRequest) => {
   // lesson is the count: a route that masks a field is not the only route that reads it, and
   // "three doors" was a number I had not gone and looked for.
   //
-  // NOT fixed here and deliberately so: QA-289 (S1, still Open) and QA-1026 (S1) ask for something
-  // further — "a live credential is not on screen unless somebody asks for it" — which no screen
-  // does today, Locations included. Admin still sees both values by default on this list. That is
-  // one requirement across two screens and needs its own unit; narrowing WHO can see it does not
-  // answer WHETHER it should be on screen unasked.
-  const canSeeSecrets = user.role === "Admin";
+  // QA-1026 (S1) FIXED: the list masks unconditionally now, Admin included — the same requirement
+  // QA-289 already delivered for Locations ("a live credential is not on screen unless somebody
+  // asks for it"). Reveal is a per-record act now, through GET /api/sheet-changes/[id]
+  // (sheetChangeRevealable below tells the UI whether that door would open for this row/role).
+  const canSeeSecrets = false;
 
   // QA-988 (checker on qa-234 cycle 1): `targetRowField` only proves the field NAME parses. The
   // apply door additionally requires the LocationTarget row to already exist for tc_status / tc_id
@@ -115,6 +114,10 @@ export const GET = apiHandler(async (req: NextRequest) => {
       // revert door refuses through. The page used to decide this itself with a looser rule, so
       // every applied tc_status:/tc_id: row showed a button that 400s after the confirm.
       revert: canRevert(masked),
+      // QA-1026: whether a reveal button on THIS row would actually open the door — computed from
+      // the RAW field_name (masking never touches field_name), never from whether the value looks
+      // masked, since a legitimately empty old_value must not be mistaken for "not revealable".
+      secret_revealable: sheetChangeRevealable(c.field_name, user.role),
     };
   }));
   return NextResponse.json({ items: withFups });

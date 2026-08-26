@@ -446,6 +446,14 @@ export function isSecretSheetField(field?: string | null): boolean {
   return SHEET_CHANGE_SECRET_FIELDS.has(String(field ?? ""));
 }
 
+// QA-1026 (S1): the list route now masks a secret field unconditionally (see maskSheetChange's own
+// caller in api/sheet-changes/route.ts) — this is the flag that tells the UI whether pressing a
+// reveal button on THIS row would actually succeed, the same shape Locations' own
+// tc_password_revealable already uses (QA-289, api/locations/route.ts).
+export function sheetChangeRevealable(field: string | null | undefined, role: string | undefined): boolean {
+  return isSecretSheetField(field) && role === "Admin";
+}
+
 // Rows written BEFORE 2026-08-25 embedded the restored value in the note (`Reverted to "<pw>" by
 // <email>`), and the fixed list route still serves those rows. The write side is fixed, so this
 // format is frozen and cannot drift — the one case where matching a pattern is safe rather than the
