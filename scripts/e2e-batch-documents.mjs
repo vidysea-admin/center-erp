@@ -56,9 +56,10 @@ const tr = (await req(admin, "POST", "/api/trainers", {
   email: `doctrainer.${stamp}@example.com`.toLowerCase(),
   skills: [prog.trainer_skill], home_location: loc._id, pipeline_status: "Fresh Lead",
 }, 201)).data.item;
+const room = (await req(admin, "POST", `/api/locations/${loc._id}/rooms`, { name: "Room " + stamp, type: "Classroom" }, 201)).data.item;
 const batch = (await req(admin, "POST", "/api/batches", {
-  code: "B" + stamp, location: loc._id, program: prog._id, trainer: tr._id,
-  target_size: 20, planned_start: new Date().toISOString().slice(0, 10),
+  code: "B" + stamp, location: loc._id, program: prog._id, trainer: tr._id, room: room._id,
+  target_size: 1, planned_start: new Date().toISOString().slice(0, 10),
 }, 201)).data.item;
 const DOCS = `/api/batches/${batch._id}/documents`;
 
@@ -138,6 +139,15 @@ ok("restoring batches.daily_log re-opens the door (the RIGHT decides, not the ro
 const permsAfter = (await req(admin, "GET", "/api/permissions")).data;
 const trainerSetAfter = (permsAfter?.roles ?? []).find((r) => r.role === "Trainer")?.permissions ?? [];
 ok("Trainer's permission set is byte-restored", JSON.stringify([...trainerSetAfter].sort()) === JSON.stringify([...trainerSetBefore].sort()), JSON.stringify({ before: trainerSetBefore, after: trainerSetAfter }));
+
+// ---- fixture: daily logs only exist on an Active/Closing batch — enrol one candidate through
+// to Completed and start the batch, mirroring e2e.mjs's own Ready->Active walk ----
+const cand = (await req(admin, "POST", "/api/candidates", { name: "Doc Candidate " + stamp, phone: "7" + Date.now().toString().slice(-9), location: loc._id, program: prog._id }, 201)).data.item;
+await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: cand._id }, 201);
+const fixtureMembers = (await req(admin, "GET", `/api/batches/${batch._id}/members`)).data.items;
+await req(admin, "PATCH", `/api/members/${fixtureMembers[0]._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Ready" }, 200);
+await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Active" }, 200);
 
 // ---- 8. attendance_sheet rides the existing Daily Execution door, not a new upload path ----
 const logDate = new Date().toISOString().slice(0, 10);
