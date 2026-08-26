@@ -258,10 +258,15 @@ if (await card.count() > 0) {
 // So the question moves to the instrument that answers it directly: the DOM. Deleting the render
 // fails this. No comment, in any shape, can pass it.
 {
-  const bad = { interest: "maybe later idk", edu: "not-a-level" };
+  const bad = { interest: "maybe later idk", edu: "not-a-level", onlyInterest: "sometime next year" };
   const rows = [
     { Name: "TEST-IP " + s + " A", Phone: phone("77"), Interest: "The current batch", Edu: "10th Pass", AltPhone: "", Junk: "" },
     { Name: "TEST-IP " + s + " B", Phone: phone("77"), Interest: bad.interest, Edu: bad.edu, AltPhone: "", Junk: "" },
+    // QA-1366 (checker, cycle 2): row B was the ONLY bad row and it was bad in BOTH columns, so
+    // "the interest warning renders" and "it renders only when education's does" were the SAME
+    // measurement - QA-1235 returning invisibly. Row C is bad in interest and VALID in education,
+    // which is the only shape that can tell the two apart.
+    { Name: "TEST-IP " + s + " C", Phone: phone("77"), Interest: bad.onlyInterest, Edu: "Graduate", AltPhone: "", Junk: "" },
   ];
   // tmpdir, NOT the tree. The cycle-3 checker put a temporary path inside the checkout and Turbopack
   // failed the build on it - a self-inflicted error that reads exactly like broken code.
@@ -292,13 +297,18 @@ if (await card.count() > 0) {
     await page.waitForSelector('input[type="file"]', { timeout: 15000 });
     await page.locator('input[type="file"]').last().setInputFiles(xlsx);
     await page.waitForFunction(() => /Interest/.test(document.body.innerText), undefined, { timeout: 20000 });
-    for (const field of ["name", "phone", "batch_interest", "education", "alt_phone"]) {
-      const sel = page.locator('select:has(option[value="' + field + '"])');
-      const n = await sel.count();
-      for (let i = 0; i < n; i++) {
-        const cur = await sel.nth(i).inputValue().catch(() => "x");
-        if (!cur) { await sel.nth(i).selectOption(field).catch(() => {}); break; }
-      }
+    // BY INDEX, not by "the first empty one". The mapping selects render in the sheet's own column
+    // order (page.tsx:1199 maps over importState.columns), so this is deterministic - and it lets
+    // the LAST column be set to Ignore on purpose.
+    // QA-1340 (checker, cycle 2): a column left at its DEFAULT is an *unknown* column that never
+    // enters Object.entries(mapping) at all. Only ACTIVELY selecting Ignore writes the empty key -
+    // and the empty key is the entire subject of the QA-1267 guard below. The old fixture left Junk
+    // alone and therefore never created the state it was meant to be testing.
+    const want = ["name", "phone", "batch_interest", "education", "alt_phone", ""];
+    const sels = page.locator('select:has(option[value="batch_interest"])');
+    const nsel = await sels.count();
+    for (let i = 0; i < Math.min(nsel, want.length); i++) {
+      await sels.nth(i).selectOption(want[i]).catch(() => {});
     }
     await page.getByRole("button", { name: /^Preview/ }).click();
     await page.waitForFunction((e) => document.body.innerText.includes(e), bad.edu, { timeout: 25000 });
@@ -331,6 +341,10 @@ if (await card.count() > 0) {
       iLine.includes(bad.interest) && !iLine.includes(bad.edu), iLine || "(no batch-interest line rendered)");
     ok("[QA-1341] ...and the two are NOT crossed - the education line must not carry the interest value either",
       !eLine.includes(bad.interest), JSON.stringify({ interestLine: iLine.slice(0, 90), eduLine: eLine.slice(0, 90) }));
+    // QA-1366: row C is bad in interest and VALID in education. If the interest warning were
+    // silently riding on the education one, this value would be missing while row B's still showed.
+    ok("[QA-1366] the interest warning stands on its own - a row bad ONLY in interest is named, so this is not education's render wearing another heading",
+      iLine.includes(bad.onlyInterest), iLine || "(no batch-interest line rendered)");
     // QA-1340 (same verdict): the guard below was green by ABSENCE - the old fixture rendered no
     // "mapped to" line at all, so "no warning names nothing" was true the way it is true of an
     // empty page. A guard that passes because its subject is missing measures nothing (QA-212).
@@ -344,9 +358,20 @@ if (await card.count() > 0) {
     // "mapped tos" and nothing it was meant to catch. A guard whose PATTERN is silently corrupt is
     // the same class as a guard that cannot fail, and it is the third escaping casualty in this
     // file today. Plain string arithmetic cannot be mangled that way.
-    const columnNamed = (l) => l.slice(l.indexOf("mapped to ") + 10).trim().replace(/^[.]+/, "").trim();
+    // QA-1340, cycle 3. My cycle-2 replacement COULD NOT FAIL AT ALL: columnNamed() sliced to the
+    // end of the line, and the render always continues past the period ("mapped to alt_phone. Those
+    // rows are imported without it..."), so it never returned "". The checker reverted the product
+    // guard and this still read 75/0 on a screen literally showing "the column mapped to .".
+    //
+    // AND THE DIAGNOSIS THAT CAUSED IT WAS WRONG. I deleted a working regex believing three layers
+    // of shell quoting had eaten it. They had eaten my EXPERIMENTS, never the regex on disk. I
+    // replaced something that worked with something that could not, on a misreading.
+    //
+    // The template is `...the column mapped to {field}.` - so an empty field renders the literal
+    // "mapped to ." and a real one renders "mapped to alt_phone.", which does not contain it. One
+    // substring, line-anchored by construction, nothing to escape.
     ok("[QA-1267] ...and no blank-column warning names NOTHING - 'the column mapped to .' is a report lane lying about a column",
-      !mapped.some((l) => columnNamed(l) === ""), JSON.stringify(mapped.slice(0, 3)) || "(no blank-column warning at all)");
+      !mapped.some((l) => l.indexOf("mapped to .") >= 0), JSON.stringify(mapped.slice(0, 3)) || "(no blank-column warning at all)");
   }
 }
 
