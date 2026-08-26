@@ -16,8 +16,21 @@ const SUITES = [
   "check-home-structure.mjs",
   // The original eight (audit era)
   "e2e.mjs",
-  "e2e-roles.mjs",
+  // QA-814(a) (maker on qa-219 cycle 3, pre-push — release number TBD at ship time): e2e-roles.mjs's
+  // -218/QA-806/-220(QA-814) block reads
+  // `GET /api/sheet-changes?status=all` and only runs `if (anyChange)`. On a FRESH CI database that
+  // guard was FALSE in this exact order — e2e.mjs never creates a sync-mode SheetChange (only
+  // workbook-watch changes, a different collection) and e2e-sync.mjs, the suite that does, ran
+  // AFTER e2e-roles.mjs. So the block that proves -218/-219/-220's permission-door fix silently
+  // never executed in the wall CI actually runs — confirmed by grepping a full wall's own output for
+  // "QA-806"/"QA-814" and finding zero lines, even after -220 fixed the accessor bug inside the same
+  // block. e2e-sync.mjs now runs FIRST: it creates and leaves multiple SheetChange rows behind (CSV
+  // imports, applies, reverts, Ignored rows — see its own e2e-sync-mjs run), so by the time
+  // e2e-roles.mjs asks for `?status=all` there is always at least one. e2e-sync.mjs's own assertions
+  // filter on rows it created itself (by stamp / tab / row_key), so running it before e2e-roles.mjs
+  // changes nothing it measures.
   "e2e-sync.mjs",
+  "e2e-roles.mjs",
   "e2e-blindspot.mjs",
   "e2e-govt.mjs",
   "e2e-trainer-pipeline.mjs",
