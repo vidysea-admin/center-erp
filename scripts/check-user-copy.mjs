@@ -2102,6 +2102,25 @@ for (const file of walk(root)) {
       + " appended token on the guard puts it all back.");
   }
 
+  // QA-701 (S2, re-opened on live -218, this cycle): `PortalIdGaps` used to return null the moment
+  // nothing was BLOCKING (`gaps.length === 0`), even when the roster-wide `without_portal_id` count
+  // was still positive — a batch in Planning with 29 people missing a portal ID rendered nothing at
+  // all. The fix keeps `gaps.length === 0` collapsing to `return null` ONLY when the roster-wide
+  // count is also zero; otherwise it renders a distinct, non-blocking informational line.
+  const gapsBody = fnBody(scan, "PortalIdGaps");
+  const oldCollapsedReturn = /if\s*\(!plan\s*\|\|\s*gaps\.length === 0\)\s*return null;/.test(gapsBody);
+  const hasInfoBranch = /if\s*\(gaps\.length === 0\)\s*\{[\s\S]*?plan\.without_portal_id[\s\S]*?\}/.test(gapsBody);
+  if (gapsBody && !oldCollapsedReturn && hasInfoBranch) passed++;
+  else {
+    failed++;
+    pushStructural(rel + ": PortalIdGaps goes silent on a roster-wide portal-ID gap the moment"
+      + " nothing is blocking certification (found the function: " + !!gapsBody
+      + ", still collapses !plan||gaps.length===0 into one return null=" + oldCollapsedReturn
+      + ", has a without_portal_id informational branch=" + hasInfoBranch + ") - QA-701. A batch"
+      + " still in Planning can carry a large roster-wide gap with nobody enrolled yet, and the"
+      + " operator working ahead of enrolment must not be shown an empty screen for it.");
+  }
+
   // ---- QA-798 (sweep cycle 1, Umesh 2026-08-25 "go for 2"): the guard must ask the SAME thing
   // the server asks. `transition/route.ts` and `api/batches/[id]/route.ts:75` both call
   // `requirePerm(user, "batches.manage")`. The screen used to decide with

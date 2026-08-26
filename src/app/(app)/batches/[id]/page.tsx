@@ -1659,7 +1659,26 @@ function PortalIdGaps({ batchId, onChanged }: any) {
   }
 
   const gaps = plan?.missing ?? [];
-  if (!plan || gaps.length === 0) return null;
+  if (!plan) return null;
+  // QA-701 (S2, re-opened on live -218): `without_portal_id` and `missing` answer two different
+  // questions on purpose (see the route's own comment) — roster-wide "who does the certificate
+  // matcher need an id for" vs. gate-blocking "who is actually stopping certification right now".
+  // A batch still in Planning can carry a large roster-wide gap while nobody is enrolled yet, so
+  // `gaps.length` is correctly 0 — but the old `return null` here made that state INDISTINGUISHABLE
+  // from "nothing to fix", and the reopen found a real batch (roster 30, without_portal_id 29,
+  // missing []) where the operator saw nothing at all. This does not force the two numbers equal
+  // (that was the pre-207 shape and it was wrong for a different reason) — it just stops hiding the
+  // roster-wide gap entirely when it exists and nothing is blocking yet.
+  if (gaps.length === 0) {
+    if (!plan.without_portal_id) return null;
+    return (
+      <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700">
+        {plan.without_portal_id} student{plan.without_portal_id === 1 ? "" : "s"} on this roster
+        {plan.without_portal_id === 1 ? " has" : " have"} no portal Candidate ID yet.{" "}
+        Not blocking certification right now — none of them are enrolled yet.
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">

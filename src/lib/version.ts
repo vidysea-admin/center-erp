@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-253";
+export const RELEASE = "2026.08.14-254";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -116,7 +116,7 @@ const RELEASE_NOTE_ARCHIVE_249 =
   "government attendance files are now matched on the portal Candidate ID rather than on the "  +
   "name, so a roster that has never carried that ID no longer reports every row as matched.";
 
-export const RELEASE_NOTE_CURRENT =
+const RELEASE_NOTE_ARCHIVE_253 =
   "-253 closes a door the client asked about directly on a call. Three places that move a "  +
   "student through enrolment - marking a step done, doing that for a whole roster at once, and "  +
   "taking a student off a roster - asked only whether the signed-in person was allowed to make "  +
@@ -125,6 +125,17 @@ export const RELEASE_NOTE_CURRENT =
   "three, right next to them, did not. All three now ask the same question the doors beside "  +
   "them already ask, so a login that can put someone on a roster and a login that can carry "  +
   "them through it are the same login, by design, not by accident.";
+
+export const RELEASE_NOTE_CURRENT =
+  "-254 stops a batch screen from going silent about a real gap. A batch's portal-ID panel "  +
+  "answers two different questions on purpose - how many people on the WHOLE roster still need "  +
+  "a portal Candidate ID, and how many of THEM are actually stopping certification right now - "  +
+  "and those numbers can genuinely differ, most often on a batch still in Planning where nobody "  +
+  "is enrolled yet. The panel used to disappear entirely the moment nothing was blocking, even "  +
+  "when dozens of people on the roster still had no ID at all. It now says so, plainly and "  +
+  "without the certification warning, whenever that roster-wide gap exists and nothing is "  +
+  "blocking yet, so an operator working ahead of enrolment is not left looking at an empty "  +
+  "screen for a real number sitting one tab over.";
 
 const RELEASE_NOTE_ARCHIVE_252 =
   "-252 closes one more door on the same shared save path -251 fixed on two doors already. "  +
