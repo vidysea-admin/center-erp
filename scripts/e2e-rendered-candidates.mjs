@@ -439,7 +439,7 @@ if (await card.count() > 0) {
 // -253 gated the enrolment doors on `candidates.assign`. Driven as a Trainer in a real browser, the
 // batch page still rendered "Bulk (all N pending)" with four enabled buttons and 18 enabled Drop
 // buttons - and pressing one printed the permission refusal back at the user. Before -253 those
-// presses WORKED, so the fix turned a working control into a dead one. That is the -224 fault this
+// presses WORKED, so the fix turned a working control into a dead one. That is the -230 fault this
 // project has already shipped once.
 //
 // TWO ARMS, AND THE ADMIN ARM IS WHY THIS MEANS ANYTHING. The checker's own first UI run scored a
@@ -524,7 +524,7 @@ if (await card.count() > 0) {
       if (a && (a.bulk || a.drops > 0)) {
         ok("[QA-1363] ...and the TRAINER is offered no bulk enrolment bar the server would refuse",
           !t.bulk && t.complete === 0, JSON.stringify({ trainer: t, batch: target.code }));
-        ok("[QA-1363] ...and no Drop button either - a control that refuses on press is the -229 fault",
+        ok("[QA-1363] ...and no Drop button either - a control that refuses on press is the -230 fault",
           t.drops === 0, JSON.stringify({ trainerDrops: t.drops, adminDrops: a.drops }));
       }
       await ad.c.close().catch(() => {});
