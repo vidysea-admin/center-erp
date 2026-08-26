@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-254";
+export const RELEASE = "2026.08.14-255";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -126,7 +126,7 @@ const RELEASE_NOTE_ARCHIVE_253 =
   "them already ask, so a login that can put someone on a roster and a login that can carry "  +
   "them through it are the same login, by design, not by accident.";
 
-export const RELEASE_NOTE_CURRENT =
+const RELEASE_NOTE_ARCHIVE_254 =
   "-254 stops a batch screen from going silent about a real gap. A batch's portal-ID panel "  +
   "answers two different questions on purpose - how many people on the WHOLE roster still need "  +
   "a portal Candidate ID, and how many of THEM are actually stopping certification right now - "  +
@@ -136,6 +136,15 @@ export const RELEASE_NOTE_CURRENT =
   "without the certification warning, whenever that roster-wide gap exists and nothing is "  +
   "blocking yet, so an operator working ahead of enrolment is not left looking at an empty "  +
   "screen for a real number sitting one tab over.";
+
+export const RELEASE_NOTE_CURRENT =
+  "-255 closes a gap in how a centre's edit to its own contacts behaves when that edit needs an "  +
+  "Admin's approval first. The save was answered with a 202 carrying no saved record, and the "  +
+  "screen could not tell that apart from an ordinary success - so it kept showing the change the "  +
+  "person had just typed, unsaved, sometimes without the identity a real save would have given a "  +
+  "new contact. Anyone reading that screen afterwards, including a plan-share link keyed on that "  +
+  "identity, would have been reading something that was never written. It now recognises a parked "  +
+  "save for what it is and says so, the same way a sibling save on this same screen already did.";
 
 const RELEASE_NOTE_ARCHIVE_252 =
   "-252 closes one more door on the same shared save path -251 fixed on two doors already. "  +

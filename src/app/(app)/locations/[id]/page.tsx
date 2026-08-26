@@ -148,6 +148,13 @@ function ContactsNotes({ loc, onSaved, setError }: any) {
       // actually closes this: the id a share link is keyed on now matches what state holds before
       // the very next save, not just after a page reload.
       const res = await api(`/api/locations/${loc._id}`, { method: "PATCH", json: { contacts: next.map(({ _id, name, phone, role_label, user }) => ({ _id, name, phone, role_label, user })) } });
+      // R-F: a centre login's edit parks for Admin approval - the 202 carries the message and
+      // no `item`. Overview.save() below can just leave its typed form as-is when this happens;
+      // this screen cannot, because it ADOPTS the response into what it shows next. Falling
+      // through to `next` here would display an unsaved, un-minted-id draft as if it had gone
+      // through - the exact QA-627 staleness this function exists to prevent, reopened by the
+      // one save path that never reaches `res.item` at all.
+      if (res?.error) { setError(res.error); return; }
       setContacts(res?.item?.contacts ?? next); onSaved();
     } catch (e: any) { setError(e.message); }
   }

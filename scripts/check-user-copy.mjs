@@ -1371,6 +1371,31 @@ for (const file of walk(root)) {
     && /setContacts\(\s*res\??\.\??item\??\.\??contacts/.test(saveContactsFn[0]);
   if (readsResponseBack) passed++;
   else { failed++; pushStructural("app/(app)/locations/[id]/page.tsx: saveContacts still seeds local state from its own argument rather than from the PATCH response's `item.contacts` (found the function: " + !!saveContactsFn + ") - QA-627. A contact added earlier in the same visit has no `_id` in local state until a save round-trips it back; skipping that round-trip lets the NEXT save re-mint that contact's id and detach any plan share already sent to them."); }
+
+  // QA-1399 (originally minted QA-1385 by the qa-627 checker, but a concurrent qa-192 checker the
+  // same day independently claimed that same number for an unrelated git-grep-on-empty-index
+  // artifact - only one landed in the ledger; re-filed under QA-1399, disclosed in that row): a
+  // centre login's contacts save can be parked for Admin approval - `locations/[id]/route.ts`'s
+  // `beforeUpdate` throws `HttpError(202, ...)` with no `item` key, and `api()` treats any 2xx as
+  // success (`res.ok`), so it never throws. The pin above only checks that `readsResponseBack`
+  // seeds from `res.item.contacts` - it says nothing about what happens when `res.item` does not
+  // exist, which is exactly the parked case. Without this guard, `res?.item?.contacts ?? next`
+  // falls through to the STALE local draft and displays an unsaved, un-minted-id edit as if it had
+  // gone through - Overview.save() (the sibling function ~90 lines up this same file) already
+  // handles this correctly with `if (res?.error) setError(res.error)`; this checks saveContacts
+  // does the same before it ever reaches the `setContacts` fallback.
+  const guardsParkedSave = !!saveContactsFn
+    && /if\s*\(\s*res\?\.error\s*\)\s*\{[\s\S]{0,80}?setError\(res\??\.error\)[\s\S]{0,40}?return;?[\s\S]{0,10}?\}/.test(saveContactsFn[0]);
+  if (guardsParkedSave) passed++;
+  else {
+    failed++;
+    pushStructural("app/(app)/locations/[id]/page.tsx: saveContacts does not guard against an "
+      + "approval-parked (202) PATCH response before falling back to the local draft (found the "
+      + "function: " + !!saveContactsFn + ", has an early res.error return: " + guardsParkedSave
+      + ") - QA-1399. A parked save has no `item` key, so `res?.item?.contacts ?? next` silently "
+      + "adopts the unsaved local draft as if the write had gone through, and the caller's "
+      + "onSaved() then fires as if nothing were wrong.");
+  }
 }
 
 // stripComments runs first, so writing the promise in a comment cannot satisfy it.
