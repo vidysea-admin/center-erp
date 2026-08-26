@@ -3,6 +3,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { api } from "@/lib/client";
+import { BASE_PATH } from "@/lib/base-path";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, SourceCell, inputCls } from "@/components/ui";
 
 export default function LocationsPage() {
@@ -94,6 +95,9 @@ function LocationsInner() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-xl font-semibold">Locations</h1>
         <div className="flex gap-2">
+          {/* QA-1286 (client call #3, 2026-08-25): "yahan apne ko download ke bhi option aane
+              hain." Same masking as the screen (TC Password never leaves either door). */}
+          <Btn kind="ghost" onClick={() => { window.location.href = `${BASE_PATH}/api/locations/export`; }}>Download Excel</Btn>
           <Btn kind="ghost" onClick={() => setSpocOpen(true)}>SPOC directory{spocDir.length ? ` (${spocDir.length})` : ""}</Btn>
           <Btn onClick={() => setDrawer(true)}>New Location</Btn>
         </div>
