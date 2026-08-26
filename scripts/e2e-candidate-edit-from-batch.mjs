@@ -148,6 +148,48 @@ const rosterGranted = (await req(trainerCookie, "GET", `/api/batches/${batch._id
 const memberGranted = rosterGranted.find((m) => String(m.candidate?._id) === String(cand._id));
 ok("QA-1459: WITH candidates.manage the trainer receives aadhaar_no on the roster", memberGranted?.candidate?.aadhaar_no === "999941057058", JSON.stringify(memberGranted?.candidate));
 
+// ---- 3b. QA-1463 — THE LEVEL, not just the key. Cycle-3's third checker showed that every
+// assertion in this file survives if hasEditLevel is made LEVEL-BLIND, because `hasPermission`
+// sits directly beside it in lib/permissions.ts and does exactly that (>= view). Under that
+// one-word regression the full PII payload silently reopens to three populations, and the ONLY
+// suite that goes red is e2e-roles.mjs, on unrelated WRITE assertions - the leak itself is
+// invisible across the entire wall. These three close that, using fixtures this suite already
+// builds. Each asserts a user who HOLDS the key but not at edit level still gets the narrow row. ----
+const rosterFor = async (cookie) => {
+  const items = (await req(cookie, "GET", `/api/batches/${batch._id}/members`, undefined, 200)).data.items;
+  return items.find((m) => String(m.candidate?._id) === String(cand._id))?.candidate;
+};
+
+// (a) a :view-level ROLE grant is a right, but not an edit right
+await req(admin, "PUT", "/api/permissions", { role: "Trainer", permissions: [...trainerSetBefore, "candidates.manage:view"] }, 200);
+const candViewLevel = await rosterFor(trainerCookie);
+ok("QA-1463 PRECONDITION: the :view grant is actually in effect (the trainer still gets the roster)", !!candViewLevel, JSON.stringify(candViewLevel));
+ok("QA-1463(a): a :view-LEVEL candidates.manage grant does NOT open the full record", candViewLevel?.aadhaar_no === undefined, JSON.stringify(candViewLevel));
+
+// (b) Rule 39: can_edit=false caps every right at view, so an EDIT grant must not open it either
+const trainerUser = ((await req(admin, "GET", "/api/users", undefined, 200)).data.items ?? []).find((u) => String(u.email).toLowerCase() === String(tr.email).toLowerCase());
+ok("QA-1463 PRECONDITION: the trainer's user record is findable (this is an assertion, not a skip - QA-1214)", !!trainerUser, tr.email);
+// CAPTURE, never assume: can_edit is `false` by default on POST /api/users, but create-login may
+// differ, and if this trainer were view-only the section-3 positive assertion above could not have
+// passed. Restoring to a guessed value is how a pin ends up asserting against a fixture it broke.
+const trainerCanEditBefore = trainerUser?.can_edit;
+ok("QA-1463 PRECONDITION: this trainer can edit, so (b) below is testing Rule 39 rather than an already-view-only user", trainerCanEditBefore === true, JSON.stringify({ can_edit: trainerCanEditBefore }));
+await req(admin, "PUT", "/api/permissions", { role: "Trainer", permissions: [...trainerSetBefore, "candidates.manage"] }, 200);
+await req(admin, "PATCH", `/api/users/${trainerUser._id}`, { can_edit: false }, 200);
+const candNoEdit = await rosterFor(trainerCookie);
+ok("QA-1463(b): can_edit=false caps the right at view, so the full record stays closed", candNoEdit?.aadhaar_no === undefined, JSON.stringify(candNoEdit));
+
+// (c) an :edit revoke strips edit and leaves view standing - still closed
+await req(admin, "PATCH", `/api/users/${trainerUser._id}`, { can_edit: trainerCanEditBefore, revoked_permissions: ["candidates.manage:edit"] }, 200);
+const candRevoked = await rosterFor(trainerCookie);
+ok("QA-1463(c): an :edit revoke leaves view standing and the full record closed", candRevoked?.aadhaar_no === undefined, JSON.stringify(candRevoked));
+
+// restore the user, then re-assert the POSITIVE case so these three cannot pass by having simply
+// broken the trainer - if the gate is now a blanket denial, this line fails and says so
+await req(admin, "PATCH", `/api/users/${trainerUser._id}`, { can_edit: trainerCanEditBefore, revoked_permissions: [] }, 200);
+const candRestored = await rosterFor(trainerCookie);
+ok("QA-1463: with the plain edit-level grant restored, the full record opens again (these pins did not just break the trainer)", candRestored?.aadhaar_no === "999941057058", JSON.stringify(candRestored));
+
 // ---- 4. THE REGRESSION GUARD: candidates.manage must NOT reopen the general candidate/location
 // doors QA-060/095 closed to Trainer — this is the near-miss this unit's manifest discloses ----
 await req(trainerCookie, "GET", `/api/candidates/${cand._id}`, undefined, 403);
