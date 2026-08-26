@@ -217,6 +217,10 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
   const [completeReason, setCompleteReason] = useState("");
   const [completing, setCompleting] = useState(false);
   const isAdmin = role === "Admin";
+  // -256: the same two statuses the PATCH door freezes on (api/batches/[id]/route.ts). Named once
+  // here because the banner and the Details gate below both ask it, and two hand-written copies of
+  // a status list is how this page ends up with two ideas of what "closed" means.
+  const closedBatch = ["Completed", "Cancelled"].includes(b.status);
   useEffect(() => {
     // -205: the `isAdmin` guard was here because only the Admin panel read this payload. The caption
     // above reads it too now, and Operations and the centre look at that caption — with the guard in
@@ -796,16 +800,33 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
             storage is GCS. So the batch was being nagged for a folder nobody would ever open.
             His ruling, asked directly: "poori tarah hatao" - banner and form both. The SCHEMA is
             untouched, so every link already typed is still in the database. */}
+        {/* -256 (found while fixing the Batch ID cell on /reports, which Umesh reported): this
+            banner has been telling the reader to "fill them below" on a COMPLETED batch since -214,
+            over a form whose Save the API answered 409 "Batch is closed." on every field. The nag
+            and the door disagreed, and the nag was the one talking. The door now takes the SIDH
+            batch ID on a closed batch (Admin only, and nothing else) - so the sentence is split:
+            it names the action only for the person who can actually complete it, and tells everyone
+            else who can. A nag that names an impossible action is the dead-control class
+            (QA-712/723/754/775/785) wearing a banner instead of a button. */}
         {["Closing", "Completed"].includes(b.status) && (!b.govt_batch_id || !b.slot_start) && (
           <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
             Still missing on this finished batch: {[
               !b.govt_batch_id && "the SIDH batch ID",
               !b.slot_start && "the time slot",
-            ].filter(Boolean).join(" · ")} — fill them below so the record stands on its own.
+            ].filter(Boolean).join(" · ")} — {closedBatch
+              ? (isAdmin
+                ? "the batch is closed, so the SIDH batch ID is the one field still editable below; the rest is now history."
+                : "the batch is closed. Its SIDH batch ID can still be recorded, but only by an Admin.")
+              : "fill them below so the record stands on its own."}
           </div>
         )}
-        {canTransition
-          ? <EditDetails b={b} onChanged={onChanged} error={error} setError={setError} />
+        {/* -256: `canTransition` is purely a PERMISSION test (:205) with no status in it, so the
+            full editable form rendered on a Completed batch for anyone with batches.manage - and
+            every Save bounced. On a closed batch only an Admin gets the form (and inside it, only
+            the SIDH id is live); everyone else gets the read-only facts, which already list
+            Government batch ID below. */}
+        {canTransition && (!closedBatch || isAdmin)
+          ? <EditDetails b={b} closed={closedBatch} onChanged={onChanged} error={error} setError={setError} />
           : (
             <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
               {[["Trainer", b.trainer?.name ?? "—"], ["Room", b.room?.name ?? "—"],
@@ -892,7 +913,7 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
   );
 }
 
-function EditDetails({ b, onChanged, error, setError }: any) {
+function EditDetails({ b, closed = false, onChanged, error, setError }: any) {
   const [trainers, setTrainers] = useState<any[]>([]);
   const [rooms, setRooms] = useState<any[]>([]);
   const [allLocations, setAllLocations] = useState<any[]>([]);
@@ -934,7 +955,13 @@ function EditDetails({ b, onChanged, error, setError }: any) {
   async function save() {
     setError(""); setSaved(""); setWarn(""); setSaving(true);
     try {
-      const json: any = { ...form, trainer: form.trainer || null, room: form.room || null };
+      // -256: on a closed batch this form sends the SIDH id and NOTHING else, which is exactly the
+      // shape the door's carve-out accepts (api/batches/[id]/route.ts: `idOnly`). Sending the whole
+      // form here would fail the id-only test and 409 the one edit that is now allowed - so the
+      // freeze in the UI and the freeze on the server have to be the same freeze, not two.
+      const json: any = closed
+        ? { govt_batch_id: form.govt_batch_id }
+        : { ...form, trainer: form.trainer || null, room: form.room || null };
       // location/program travel only when actually changed — otherwise every ordinary save on a
       // Planning batch with a roster would trip the empty-roster guard on the API.
       if (json.location === String(b.location?._id ?? b.location ?? "")) delete json.location;
@@ -994,6 +1021,18 @@ function EditDetails({ b, onChanged, error, setError }: any) {
           </Field>
         </div>
       )}
+      {/* -256: on a closed batch the server takes govt_batch_id and refuses everything else, so
+          everything else is frozen here in ONE place. `fieldset[disabled]` disables every descendant
+          control natively — eleven hand-added `disabled=` props would be eleven chances to add a
+          twelfth control and forget. The SIDH id Field sits deliberately OUTSIDE it, below. */}
+      {closed && (
+        <p className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+          This batch is closed, so its plan is history and cannot be edited. The <b>Government batch
+          ID (SIDH)</b> below is the one field still open — the portal usually issues it after the
+          batch finishes, which is why it is the exception.
+        </p>
+      )}
+      <fieldset disabled={closed} className="space-y-3">
       <div className="grid grid-cols-2 gap-3">
         {/* Same gates as batch creation (shared predicate) — reassigning a trainer here must
             not quietly sidestep what the create drawer enforces. */}
@@ -1036,6 +1075,7 @@ function EditDetails({ b, onChanged, error, setError }: any) {
           {skillOptions.map((s: string) => <option key={s} value={s}>{s}</option>)}
         </select>
       </Field>
+      </fieldset>
       {/* The portal's own identifiers. Batch formation happens on SIDH, so the ERP has to hold
           the key that links our row to theirs — and the Drive folder Manish keeps in parallel
           with the NSDC upload, which is the only copy if the portal upload is ever questioned. */}
@@ -1046,8 +1086,10 @@ function EditDetails({ b, onChanged, error, setError }: any) {
         </Field>
       </div>
       <div className="text-xs text-gray-500">Actual: {fmtDate(b.actual_start)} → {fmtDate(b.actual_end)}</div>
-      {/* QA-138: the same errors the API would refuse with, shown while typing. */}
-      {slotErrs.length > 0 && (
+      {/* QA-138: the same errors the API would refuse with, shown while typing.
+          -256: silent on a closed batch — the slot is frozen and the API no longer checks it on the
+          id-only path, so warning about it would be a complaint with no available answer. */}
+      {!closed && slotErrs.length > 0 && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
           {slotErrs.map((e: string) => <div key={e}>⚠ {e}</div>)}
         </div>
@@ -2745,7 +2787,10 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
   // changed that to Fail on Umesh's ruling. Two lines above it the banner already said "Fail". A
   // screen that describes a write in two ways is worse than one that describes it in none.
   async function completeAsAdmin() {
-    const noId = blockers?.no_portal_id?.length ?? 0;
+    // QA-1403 (checker on qa-211, cycle 3 follow-up): same class as QA-737 - no_portal_id alone
+    // answers "is anyone missing an id", not "does that stop certification". Gated on
+    // no_portal_id_blocks now, matching the Overview drawer's completeAsAdmin (line ~249).
+    const noId = blockers?.no_portal_id_blocks ? (blockers?.no_portal_id?.length ?? 0) : 0;
     const why = window.prompt(
       `Complete this batch now?\n\n${(blockers?.unmarked?.length ?? 0)} student(s) with no result will be recorded FAIL.\n`
       + `${(blockers?.unsettled?.length ?? 0)} passed candidate(s) with no certificate will be recorded NOT ISSUED.\n`
@@ -2922,8 +2967,14 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
           settled and 45 students had no ID, the ordinary buttons were disabled AND this box was
           gone. A flag was being asked a question it does not answer. The condition is now "is
           anything at all still open", portal IDs included. Umesh: "dono jagah dikhein." */}
+      {/* QA-1403 (checker on qa-211, cycle 3 follow-up): the OR below used to fire on
+          no_portal_id.length alone - a portal-ID gap that does NOT block certification (already
+          signed off) was enough to show "cannot be completed the ordinary way yet" and hide the
+          ordinary buttons in favour of this Admin-only box, even though the ordinary door would
+          have completed it 200. Gated on no_portal_id_blocks now, matching completePlan's own
+          three sites on the Overview drawer. */}
       {isAdmin && !closed && blockers
-        && (blockers.can_complete_cleanly === false || (blockers.no_portal_id?.length ?? 0) > 0)
+        && (blockers.can_complete_cleanly === false || (blockers.no_portal_id_blocks && (blockers.no_portal_id?.length ?? 0) > 0))
         && ["Active", "Closing"].includes(batch?.status) && (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
           <span>
