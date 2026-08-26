@@ -36,7 +36,7 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
 // batch with zero students on the board. A batch that carries ANY real record is business
 // history and is CANCELLED, never deleted; only an empty shell can be removed, and the
 // endpoint proves emptiness itself rather than trusting the caller.
-export const DELETE = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
+export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   await dbConnect();
   const user = await requireUser();
   requireEdit(user);
@@ -64,10 +64,35 @@ export const DELETE = apiHandler(async (_req: NextRequest, ctx: { params: Promis
   ]);
   const carried = { members, results, costs, logs, closures, govt_rows: govtRows, invoices };
   const total = Object.values(carried).reduce((a, n) => a + n, 0);
+  const breakdown = Object.entries(carried).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k.replace("_", " ")}`).join(", ");
   if (total > 0) {
-    throw new HttpError(409,
-      `${batch.code} carries recorded work (${Object.entries(carried).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k.replace("_", " ")}`).join(", ")}). ` +
-      `A batch with history is cancelled, never deleted — use the Cancel transition instead.`);
+    // 2026-08-25 (Umesh, feedback-inbox): a batch created by mistake (e.g. for a test) and then
+    // populated with data could only be Cancelled, never removed. batches.delete_with_data is a
+    // SEPARATE, narrower-grantable right from batches.delete above — holding one does not imply
+    // the other — and a reason is required, same as every other force-past-history verb in this
+    // file (see complete/route.ts's own reason requirement).
+    let canForce = false;
+    try { await requirePerm(user, "batches.delete_with_data"); canForce = true; } catch { canForce = false; }
+    if (!canForce) {
+      throw new HttpError(409,
+        `${batch.code} carries recorded work (${breakdown}). ` +
+        `A batch with history is cancelled, never deleted — use the Cancel transition instead.`);
+    }
+    let reason = "";
+    try { const body = await req.json(); reason = String(body?.reason ?? "").trim().slice(0, 500); } catch { /* no body */ }
+    if (!reason) throw new HttpError(400, "Say why this batch is being force-deleted with recorded work still on it — it is recorded against every row this removes.");
+    await Promise.all([
+      BatchMember.deleteMany({ batch: id }),
+      CandidateResult.deleteMany({ batch: id }),
+      CostEntry.deleteMany({ batch: id }),
+      DailyLog.deleteMany({ batch: id }),
+      Closure.deleteMany({ batch: id }),
+      GovtAttendanceRow.deleteMany({ batch: id }),
+      Invoice.deleteMany({ batch: id }),
+    ]);
+    await Batch.deleteOne({ _id: id });
+    await audit({ entity: "Batch", entityId: id, field: "delete", newValue: `${batch.code} (${batch.status}) FORCE-deleted with recorded work (${breakdown}) — reason: ${reason}`, actor: user.id });
+    return NextResponse.json({ deleted: batch.code, forced: true, carried });
   }
 
   await Batch.deleteOne({ _id: id });

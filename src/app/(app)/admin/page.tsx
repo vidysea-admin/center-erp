@@ -3,6 +3,7 @@ import { Fragment, useEffect, useState } from "react";
 import { api, fmtDT, fmtDate, offerable } from "@/lib/client";
 import { emailError } from "@/lib/validate";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
+import { usePerms } from "@/components/shell";
 
 const TABS = ["Programs", "Users & Access", "Permissions", "Sync Source", "Approvals", "Master Lists", "Defaults"];
 
@@ -52,6 +53,10 @@ function Programs({ error, setError }: any) {
   const [edit, setEdit] = useState<any>(null);
   const [form, setForm] = useState<any>({});
   const set = (k: string, v: unknown) => setForm((f: any) => ({ ...f, [k]: v }));
+  // 2026-08-25 (Umesh, feedback-inbox): "courses aatay hai, woh courses delete ka bhi option nai
+  // a raha hai" — a togglable right, matching batches.delete/candidates.delete/trainers.delete.
+  const { can, loaded: rightsLoaded } = usePerms();
+  const canDeleteProgram = rightsLoaded && can("programs.delete", "edit");
 
   const load = () => api("/api/programs?limit=1000").then((d) => setItems(d.items)).catch((e: any) => setError(e.message));
   useEffect(() => { load(); }, []);
@@ -69,6 +74,14 @@ function Programs({ error, setError }: any) {
     try {
       if (edit) await api(`/api/programs/${edit._id}`, { method: "PATCH", json: form });
       else await api("/api/programs", { method: "POST", json: form });
+      setDrawer(false); load();
+    } catch (e: any) { setError(e.message); }
+  }
+  async function remove() {
+    if (!edit) return;
+    if (!confirm(`Delete ${edit.code} (${edit.name})? This removes the course record permanently.`)) return;
+    try {
+      await api(`/api/programs/${edit._id}`, { method: "DELETE" });
       setDrawer(false); load();
     } catch (e: any) { setError(e.message); }
   }
@@ -174,7 +187,10 @@ function Programs({ error, setError }: any) {
             </div>
           </Field>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.active ?? true} onChange={(e) => set("active", e.target.checked)} /> Active</label>
-          <Btn onClick={save} disabled={!form.code || !form.name || !form.trainer_skill}>{edit ? "Save" : "Add Program"}</Btn>
+          <div className="flex items-center gap-2">
+            <Btn onClick={save} disabled={!form.code || !form.name || !form.trainer_skill}>{edit ? "Save" : "Add Program"}</Btn>
+            {edit && canDeleteProgram && <Btn kind="danger" onClick={remove}>Delete Program</Btn>}
+          </div>
         </div>
       </Drawer>
     </Section>

@@ -32,6 +32,13 @@ export const PERMISSIONS: { key: string; label: string; group: string }[] = [
   { key: "candidates.delete", label: "Delete candidate records (junk rows only — a real person is Dropped)", group: "Candidates" },
   { key: "trainers.delete", label: "Delete trainer records (junk rows only — a real trainer is Dropped)", group: "Trainers" },
   { key: "batches.delete", label: "Delete empty batch shells (a batch with any history is Cancelled)", group: "Batches" },
+  // 2026-08-25 (Umesh, feedback-inbox): a batch created by mistake (e.g. for a test) that already
+  // has data on it (members, results, logs, etc.) could only be Cancelled, never deleted — and
+  // Umesh wanted a real delete for exactly that case, kept separate from the empty-shell right
+  // above so it can be granted narrowly. No separate "reset the location's batch-code counter"
+  // code is needed: nextBatchCode() (src/lib/rules.ts) already derives the next code by scanning
+  // for the lowest free number among live batches, so deleting one frees its number automatically.
+  { key: "batches.delete_with_data", label: "Force-delete a batch that carries recorded work (members, results, costs, logs, closure, attendance, invoices) — batches.delete alone only removes empty shells", group: "Batches" },
   { key: "batches.manage", label: "Plan/edit batches & transitions", group: "Batches" },
   { key: "batches.daily_log", label: "Enter daily logs & evidence", group: "Batches" },
   { key: "closure.manage", label: "Assessment, certification & closure", group: "Batches" },
@@ -46,6 +53,11 @@ export const PERMISSIONS: { key: string; label: string; group: string }[] = [
   { key: "pipeline.bypass", label: "Bypass pipeline steps (set any status directly)", group: "Admin" },
   { key: "users.manage", label: "Create/approve users & assign rights", group: "Admin" },
   { key: "defaults.manage", label: "Edit planning defaults & master lists", group: "Admin" },
+  // 2026-08-25 (Umesh, feedback-inbox): Admin's course (Program) dropdown had no delete option at
+  // all. Unlike the master-lists philosophy elsewhere (job-roles/schemes/cost-categories are
+  // deactivate-only, never deleted), Umesh explicitly chose a real delete here: "Delete hamesha
+  // allow karo, Admin ki marzi" — no usage check.
+  { key: "programs.delete", label: "Delete a course/programme record", group: "Admin" },
   { key: "approvals.decide", label: "Decide approval requests", group: "Admin" },
 ];
 

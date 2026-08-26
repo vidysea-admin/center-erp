@@ -37,6 +37,10 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
   // 2026-08-24 (QA-904): the empty-shell delete follows `batches.delete` rather than the Admin role.
   const { can: canRightB, loaded: rightsLoadedB } = usePerms();
   const canDeleteBatch = rightsLoadedB && canRightB("batches.delete", "edit");
+  // 2026-08-25 (Umesh, feedback-inbox): a mistakenly-created batch that already carries data
+  // (members, results, costs, logs, closure, attendance, invoices) could only be Cancelled —
+  // never deleted. Separate, narrower-grantable right from batches.delete above.
+  const canForceDeleteBatch = rightsLoadedB && canRightB("batches.delete_with_data", "edit");
   // R-E (CEO 14/08): Operations is post-only on money — the batch cost ledger is Admin's.
   const tabs = TABS.filter((t) => t !== "Costs" || role === "Admin");
   const [tab, setTab] = useState(sp.get("tab") && TABS.includes(sp.get("tab")!) ? sp.get("tab")! : "Overview");
@@ -85,6 +89,21 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
           {b.program ? <Link className="text-blue-700 hover:underline" href={`/programs/${b.program._id}`}>{b.program.name}</Link> : "—"}
           {" "}· {fmtDate(b.planned_start)} → {fmtDate(b.planned_end)}
         </span>
+        {/* 2026-08-25 (Umesh, feedback-inbox): "agar galti se koi test batch bana ke usme data
+            daal diya, toh wo delete nahi ho sakti, sirf cancel hoti hai" — this is the delete for
+            exactly that batch, kept out of the roster-empty banner below because a batch that
+            carries data can be in any status, not only the empty-roster shape that banner covers. */}
+        {canForceDeleteBatch && (
+          <Btn small kind="danger" onClick={async () => {
+            const reason = window.prompt(`Force-delete ${b.code}? This permanently removes the batch AND everything recorded on it — members, results, costs, daily logs, closure, attendance, invoices. Use Cancel instead if you just want to stop it. Say why you're deleting it:`);
+            if (reason === null) return;
+            if (!reason.trim()) { setError("A reason is required to force-delete a batch with recorded work."); return; }
+            try {
+              await api(`/api/batches/${id}`, { method: "DELETE", json: { reason: reason.trim() } });
+              window.location.href = `${BASE_PATH}/batches`;
+            } catch (e: any) { setError(e.message); }
+          }}>Force-delete (has data)</Btn>
+        )}
       </div>
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
       {/* 2026-08-14 (Umesh): a batch with nobody on it is not a batch — either its students
