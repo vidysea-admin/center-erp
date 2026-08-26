@@ -2239,7 +2239,7 @@ function BatchDocuments({ batchId, batch, error, setError, onGo }: any) {
       </Section>
 
       <Section title="Batch documents" actions={<Btn onClick={() => setDrawer(true)}>Add document</Btn>}>
-        {summary && !summary.complete && (
+        {summary?.complete === false && (
           <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
             Still needed for this batch: <strong>{summary.missing.join(", ")}</strong>
           </div>
