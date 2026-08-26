@@ -1993,9 +1993,14 @@ ok("removal is real", (await req(admin, "GET", `/api/sync-sources/${srcId}`)).st
   ok("-248 (QA-1217): ...so it is NOT misdiagnosed as column-shifted (it was, on all 45 live rows)",
     sPre.data.column_shift_suspected === false, JSON.stringify({ s: sPre.data.column_shift_suspected }));
 
-  // 1b. -254 (QA-1383, Umesh 26/08, batch 6a848c6c…f91). THE SAME REPORT WITHOUT THE QP COLUMN.
+  // 1b. QA-1383 (Umesh, 26/08, batch 6a848c6c…f91). THE SAME REPORT WITHOUT THE QP COLUMN.
   //
-  //     Everything above passes on the PRE-254 build, and that is the point of writing this block
+  //     NO RELEASE NUMBER ON THESE LINES, deliberately: -254 was already claimed by another unit
+  //     (qa-205's portal-ID panel) before this landed, and its note describes that, not this. The
+  //     release this actually ships in is recorded in qa/CHANGELOG.jsonl by whoever bumps the
+  //     marker — guessing one into the source is how a release audit ends up reading a lie.
+  //
+  //     Everything above passes on the PRE-FIX build, and that is the point of writing this block
   //     directly beneath it: -248's fix was "total training days" out-sorting the bare "total days",
   //     so it held only while the file carried a Total Training Days (QP) column — and every
   //     fixture written for -248, including sidhFile() on the line above, carries one.
@@ -2016,7 +2021,7 @@ ok("removal is real", (await req(admin, "GET", `/api/sync-sources/${srcId}`)).st
 
   const nq = await upload(admin, { file: noQpFile(), batch: batch._id });
   const nqAlpha = (nq.data.preview ?? []).find((r) => r.name === `${NAME} Alpha`);
-  ok("-254 (QA-1383): 'Total Days Attended' with NO QP column beside it is read as DAYS PRESENT",
+  ok("QA-1383: 'Total Days Attended' with NO QP column beside it is read as DAYS PRESENT",
     nq.status === 200 && nqAlpha?.total_days_present === 1,
     JSON.stringify({ status: nq.status, dp: nqAlpha?.total_days_present, wd: nqAlpha?.total_working_days }));
   //     The other half, and it is the one that was actually lying: pre-fix this read 1 — a
@@ -2025,15 +2030,20 @@ ok("removal is real", (await req(admin, "GET", `/api/sync-sources/${srcId}`)).st
   //     `nqAlpha != null` is not defensive noise: without it this line reads TRUE when the preview
   //     is empty or Alpha is absent, i.e. it passes hardest exactly when the thing it measures is
   //     not on screen at all. That failure mode has cost this project four false greens.
-  ok("-254 (QA-1383): ...and NOT as the working-days denominator (pre-fix it was 1)",
+  ok("QA-1383: ...and NOT as the working-days denominator (pre-fix it was 1)",
     nqAlpha != null && nqAlpha.total_working_days == null,
     JSON.stringify({ alphaPresent: nqAlpha != null, wd: nqAlpha?.total_working_days }));
   //     Reported as absent rather than guessed, so the blank column on the grid is explained.
-  ok("-254 (QA-1383): the file's missing column is named honestly - working days, not days present",
+  ok("QA-1383: the file's missing column is named honestly - working days, not days present",
     (nq.data.missing_columns ?? []).includes("Total Working Days")
       && !(nq.data.missing_columns ?? []).includes("Total Days Present"),
     JSON.stringify({ missing: nq.data.missing_columns }));
-  ok("-254 (QA-1383): ...and it is not misdiagnosed as column-shifted",
+  //     NOT A DISCRIMINATOR, and labelled so rather than counted as one: measured in the
+  //     falsification arm, this line passes on the pre-fix build TOO. Two fixture rows give
+  //     distinct working-days [1,4], and shiftSignature needs MORE THAN TWO distinct values, so
+  //     the guard cannot fire on either side. It is here to prove the fix does not START a false
+  //     accusation, which is a real risk when days-present goes from null-everywhere to populated.
+  ok("QA-1383: ...and it is not misdiagnosed as column-shifted (not a discriminator — see above)",
     nq.data.column_shift_suspected === false, JSON.stringify({ s: nq.data.column_shift_suspected }));
 
   //     AND THE SCREEN. The three above are all preview-shaped; the complaint was about a column on
@@ -2044,7 +2054,7 @@ ok("removal is real", (await req(admin, "GET", `/api/sync-sources/${srcId}`)).st
   const attAlpha = (att.data.members ?? []).find((m) => m.name === `${NAME} Alpha`);
   const pct = attAlpha?.govt?.days_present != null && att.data.program_days
     ? Math.round((100 * attAlpha.govt.days_present) / att.data.program_days) : null;
-  ok("-254 (QA-1383): the batch Attendance tab can render Days Attendance % (it was blank)",
+  ok("QA-1383: the batch Attendance tab can render Days Attendance % (it was blank)",
     nqImp.status === 201 && attAlpha?.govt?.days_present === 1 && att.data.program_days > 0 && pct != null,
     JSON.stringify({ imp: nqImp.status, dp: attAlpha?.govt?.days_present, wd: attAlpha?.govt?.working_days,
       program_days: att.data.program_days, pct }));
@@ -2055,7 +2065,7 @@ ok("removal is real", (await req(admin, "GET", `/api/sync-sources/${srcId}`)).st
   //     contest, and this is what says so out loud rather than assuming it.
   const aebas = await upload(admin, { file: csvFile() });
   const aebasRow = (aebas.data.preview ?? [])[0];
-  ok("-254 (QA-1383) REGRESSION ARM: a genuine AEBAS register parses unchanged",
+  ok("QA-1383 REGRESSION ARM: a genuine AEBAS register parses unchanged",
     aebas.status === 200 && aebasRow?.total_days_present != null && aebasRow?.total_working_days != null
       && (aebas.data.missing_columns ?? []).length === 0,
     JSON.stringify({ dp: aebasRow?.total_days_present, wd: aebasRow?.total_working_days, missing: aebas.data.missing_columns }));

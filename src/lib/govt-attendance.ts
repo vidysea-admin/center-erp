@@ -46,7 +46,7 @@ const norm = (s: unknown) => String(s ?? "").replace(/ /g, " ").trim().toLowerC
 // carries a clock value in the header itself, so exact equality alone would fail on every portal
 // export. Read `resolveHeader` below before adding an alias: exact matches are settled first,
 // across all fields, so a short prefix alias here can no longer steal a column that is somebody
-// else's exact header (-254 / QA-1383).
+// else's exact header (QA-1383).
 const COLUMNS: Record<keyof GovtRow | "came_after" | "going_before", string[]> = {
   sl_no: ["sl no", "s no", "s.no", "sr no", "serial no", "#"],
   org_name: ["org name", "organisation name", "organization name", "tc name", "centre name", "center name"],
@@ -71,7 +71,7 @@ const COLUMNS: Record<keyof GovtRow | "came_after" | "going_before", string[]> =
   //
   // -248 answered that by adding "total training days" (19 chars) so it out-sorted the bare "total
   // days" (10) — which worked only while the file HAD a QP column, and every fixture written for it
-  // did. -254 (QA-1383) moved the guarantee into `resolveHeader` instead: exact matches are settled
+  // did. QA-1383 moved the guarantee into `resolveHeader` instead: exact matches are settled
   // across ALL fields before any prefix match may claim a column, so "Total Days Attended" goes to
   // the field whose alias spells it exactly, with or without a QP column beside it, and no matter
   // which field is declared first. Order here is no longer load-bearing — but keep it anyway, and
@@ -88,7 +88,7 @@ const COLUMNS: Record<keyof GovtRow | "came_after" | "going_before", string[]> =
   going_before: ["total days going before", "days going before"],
 };
 
-// -254 (QA-1383, Umesh 26/08 on batch 6a848c6c…f91): EVERY EXACT MATCH IS SETTLED BEFORE ANY
+// QA-1383 (Umesh, 26/08 on batch 6a848c6c…f91): EVERY EXACT MATCH IS SETTLED BEFORE ANY
 // PREFIX MATCH MAY CLAIM A COLUMN. That ordering is the whole fix, and here is what it cost to
 // learn twice.
 //
