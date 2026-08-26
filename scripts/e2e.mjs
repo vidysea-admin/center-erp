@@ -2071,10 +2071,22 @@ ok("QA-042: tranche two does NOT rewrite the recorded batch-level figures",
   ok("…and is gone from the list", !((await req("GET", "/api/batches?limit=2000")).data.items ?? []).some((x) => x.code === shell.code));
   await req("GET", `/api/batches/${shell._id}`, undefined, 404);
   // b4 carries results/closure/members — the guard must refuse it BY NAME.
+  // QA-1431 (2026-08-26): Admin now implicitly holds batches.delete_with_data (every togglable
+  // right), so the plain Admin actor this suite normally runs as would hit the NEW "supply a
+  // reason to force-delete" 400 path here instead of the old hard 409 refusal — that is the
+  // intended product change (Umesh: Admin/anyone granted the right can now force-delete a batch
+  // with data), not a regression. This assertion's own point — that a batch carrying data cannot
+  // be silently vaporized and the guard must name what it carries — is still true for anyone who
+  // does NOT hold batches.delete_with_data, so it now runs as Operations (which holds
+  // batches.delete by default but not the new, separately-grantable batches.delete_with_data).
+  const opsCookieDel = await loginAs("ops@vidysea.com", "CiOnly@123");
+  const savedForDel = cookie;
+  if (opsCookieDel) cookie = opsCookieDel;
   const del2 = await req("DELETE", `/api/batches/${b4._id}`);
   ok("a batch with recorded work refuses deletion and names what it carries",
     del2.status === 409 && /members|results|closure/.test(del2.data?.error ?? "") && /cancelled, never deleted/i.test(del2.data?.error ?? ""),
     `got ${del2.status}: ${del2.data?.error ?? ""}`);
+  cookie = savedForDel;
 }
 
 // ---- QA-048: the post-Completed money chain is visible, derived from Closure+Invoice ----
