@@ -144,7 +144,16 @@ export const RELEASE_NOTE_CURRENT =
   "person had just typed, unsaved, sometimes without the identity a real save would have given a "  +
   "new contact. Anyone reading that screen afterwards, including a plan-share link keyed on that "  +
   "identity, would have been reading something that was never written. It now recognises a parked "  +
-  "save for what it is and says so, the same way a sibling save on this same screen already did.";
+  "save for what it is and says so, the same way a sibling save on this same screen already did. "  +
+  "-255 also repairs a batch's Attendance tab, where the Days Attendance % column stood empty for "  +
+  "a whole batch while attendance was plainly being recorded. The government portal serves its "  +
+  "attendance report in two shapes, and in one of them the column stating how many days each "  +
+  "student attended was being read into the slot meant for how many training days the programme "  +
+  "has - so the figure the percentage needed was never stored at all, and the count that was "  +
+  "stored sat in the wrong place, visible as a stray '1' or '2' beside the students' names. Both "  +
+  "shapes of that report now read correctly. Attendance already imported under the old reading is "  +
+  "not repaired by this: that file needs uploading once more, after which the newest import "  +
+  "corrects the batch.";
 
 const RELEASE_NOTE_ARCHIVE_252 =
   "-252 closes one more door on the same shared save path -251 fixed on two doors already. "  +
