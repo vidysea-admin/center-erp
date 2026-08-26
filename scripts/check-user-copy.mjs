@@ -2525,13 +2525,37 @@ for (const file of walk(root)) {
   // live elsewhere in this file) and by a raw `fetch(...)` bypassing the `api()` helper entirely.
   // Widened to not care HOW the call is made: any `api(`/`fetch(` call whose nearby text carries
   // both a PATCH-shaped method and the literal `sidh_candidate_id` is a second door.
+  //
+  // QA-1419 (S3, -208 cycle-3 checker, HUMAN_GATE approved cycle 4): a `method` sourced from a
+  // same-file `const` binding referenced by NAME at the call site (e.g. `const __CHK_HTTP_VERB_2 =
+  // "PATCH"`) defeated the scan above, since the literal "PATCH" text never appears near the call.
+  // Made value-aware: resolve simple same-file `const NAME = "..."` string bindings first, so a
+  // window that references such a name by identifier is treated the same as if the literal string
+  // were written inline. Deliberately simple (single-hop, string literals only, no re-exports or
+  // cross-file resolution) — this is still a heuristic text-window pin, not a type-checker.
+  const constBindings = new Map();
+  {
+    const constRe = /\bconst\s+(\w+)\s*=\s*(["'])((?:(?!\2)[^\\]|\\.)*)\2/g;
+    let bm;
+    while ((bm = constRe.exec(src))) constBindings.set(bm[1], bm[3]);
+  }
+  const windowMatches = (windowText, pattern) => {
+    if (pattern.test(windowText)) return true;
+    const idRe = /\b([A-Za-z_$][\w$]*)\b/g;
+    let im;
+    while ((im = idRe.exec(windowText))) {
+      const val = constBindings.get(im[1]);
+      if (val !== undefined && pattern.test(val)) return true;
+    }
+    return false;
+  };
   let secondSaverElsewhere = false;
   {
     const callRe = /\b(?:api|fetch)\s*\(/g;
     let cm;
     while ((cm = callRe.exec(outsideGaps))) {
       const windowText = outsideGaps.slice(cm.index, cm.index + 320);
-      if (/PATCH/.test(windowText) && /sidh_candidate_id/.test(windowText)) { secondSaverElsewhere = true; break; }
+      if (windowMatches(windowText, /PATCH/) && windowMatches(windowText, /sidh_candidate_id/)) { secondSaverElsewhere = true; break; }
     }
   }
   const topFnRe = /^function (\w+)\(/gm;
