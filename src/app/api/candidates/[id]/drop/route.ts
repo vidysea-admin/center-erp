@@ -54,6 +54,15 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
 
   const activeMember = await BatchMember.findOne({ candidate: cand._id, left_on: null }).select("_id").lean<any>();
   if (activeMember) {
+    // QA-1364: this branch is a ROSTER drop by another name — it calls the exact same
+    // dropMemberChecked() that POST /api/members/[id]/drop calls, and until this line it did so
+    // behind candidates.manage alone. So a login that QA-1290 locked out of the member-level drop
+    // (403 on /api/members/[id]/drop) could still drop the same person from the same roster one
+    // route over, through the candidate's own page, and dropMemberChecked never knew the
+    // difference. `candidates.manage` stays the gate for a NON-roster candidate below (dropping a
+    // Fresh Lead who was never assigned is not a roster action); the moment there IS an active
+    // membership, this asks the same question the roster door asks.
+    await requirePerm(user, "candidates.assign");
     // Rule 25 does the whole batch-side dance (roster, stale logs, aggregates) AND stamps the
     // candidate — one writer, no drift.
     await dropMemberChecked(String(activeMember._id), when, reason);

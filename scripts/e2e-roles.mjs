@@ -1437,6 +1437,30 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
         ok("QA-1290: …and revoking it closes the door again", revokedAgain.status === 403, `status=${revokedAgain.status}`);
       }
     }
+
+    // QA-1364 (checker on qa-1290, cycle 1 FAIL): POST /api/candidates/[id]/drop reaches the SAME
+    // dropMemberChecked() as POST /api/members/[id]/drop, one route over — but only the member
+    // door asked for candidates.assign. So a login holding candidates.manage without
+    // candidates.assign (impossible under the default matrix, but exactly one PUT away, and the
+    // whole point of a togglable right) could drop the same roster member through the candidate's
+    // own page while the roster door correctly refused it. Reproduced with enroll@vidysea.com,
+    // which by default carries BOTH candidates.manage and candidates.assign — revoke only the
+    // second and this must now refuse too, not just fall back to candidates.manage.
+    if (trM?.candidate?._id) {
+      const permsBefore = (await req(admin, "GET", "/api/permissions")).data;
+      const enrollRow = (permsBefore?.roles ?? []).find((r) => r.role === "Enrollment");
+      const enrollSetBefore = enrollRow?.permissions ?? ["candidates.manage", "candidates.assign"];
+      if (enrollSetBefore.includes("candidates.assign") && enrollSetBefore.includes("candidates.manage")) {
+        await req(admin, "PUT", "/api/permissions", { role: "Enrollment", permissions: enrollSetBefore.filter((p) => p !== "candidates.assign") }, 200);
+        const candDropDenied = await req(enroll, "POST", `/api/candidates/${trM.candidate._id}/drop`, { reason: "QA-1364 probe — should be refused" });
+        ok("QA-1364: candidates.manage WITHOUT candidates.assign still CANNOT drop a rostered candidate via /api/candidates/[id]/drop",
+          candDropDenied.status === 403, `got ${candDropDenied.status}`);
+        await req(admin, "PUT", "/api/permissions", { role: "Enrollment", permissions: enrollSetBefore }, 200);
+        const restored = await req(admin, "GET", "/api/permissions");
+        const enrollAfter = (restored.data?.roles ?? []).find((r) => r.role === "Enrollment")?.permissions ?? [];
+        ok("QA-1364: Enrollment's permission set is restored exactly", JSON.stringify([...enrollAfter].sort()) === JSON.stringify([...enrollSetBefore].sort()), JSON.stringify(enrollAfter));
+      }
+    }
   }
 
   // Operations: trainer + trainee data updates work.

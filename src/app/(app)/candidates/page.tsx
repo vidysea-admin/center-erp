@@ -35,6 +35,11 @@ function CandidatesInner() {
   // verb as missing. The server refuses independently; this only decides who is OFFERED it.
   const { can: canRight, loaded: rightsLoaded } = usePerms();
   const canDeleteCandidate = rightsLoaded && canRight("candidates.delete", "edit");
+  // QA-1364: /api/candidates/[id]/drop now asks candidates.assign too when the candidate carries
+  // an active_batch (it is a roster drop by another name, same dropMemberChecked() the roster
+  // door calls). Assume yes while rights are loading, same as canImport a hundred lines up this
+  // file — the point is to never flicker the button away from someone who does hold the right.
+  const canAssignCandidate = !rightsLoaded || canRight("candidates.assign", "edit");
   const [items, setItems] = useState<any[]>([]);
   const [locations, setLocations] = useState<any[]>([]);
   const [programs, setPrograms] = useState<any[]>([]);
@@ -789,7 +794,10 @@ function CandidatesInner() {
                       try { await api(`/api/candidates/${r._id}/drop`, { method: "POST", json: { undo: true } }); load(); }
                       catch (e: any) { setError(e.message); }
                     }}>Reinstate</Btn>
-                  : <Btn small kind="ghost" onClick={() => { setDropT(r); setDropForm({}); }}>Drop…</Btn>}
+                  : <span title={r.active_batch && !canAssignCandidate ? "You do not have the right to change enrolment on this batch." : undefined}>
+                      <Btn small kind="ghost" disabled={!!r.active_batch && !canAssignCandidate}
+                        onClick={() => { setDropT(r); setDropForm({}); }}>Drop…</Btn>
+                    </span>}
                 {/* QA-945: the conversion Umesh described — "baad mai dobara call kreke convert kr
                     skti hai". One click on the row, because the alternative is opening a drawer,
                     finding one select among thirty fields and saving; a call-back queue worked
