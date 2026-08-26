@@ -2161,7 +2161,15 @@ for (const file of walk(root)) {
     const SKIP = new Set(["true", "false", "null", "undefined", "typeof", "new", "void", "in", "of"]);
     const seen = new Set();
     let out = expr;
-    for (let depth = 0; depth < 3; depth++) {
+    // QA-1438 (checker on qa-206 cycle 2): this loop was bounded at THREE hops while the failure
+    // message said "every local it resolves to". A four-link chain (lvl4 = !running; lvl3 = lvl4;
+    // lvl2 = lvl3; lvl1 = lvl2) therefore walked through GREEN - the QA-733 defect one radius
+    // smaller, under a sentence that promised otherwise. The claim was wider than the code, the
+    // same failure as the stale line number in QA-1227 and as this pin's own QA-733 concession.
+    // The bound is gone; `seen` already guarantees termination - every identifier is expanded at
+    // most once, so this iterates at most as many times as the file has distinct consts, and
+    // `if (!grew) break` ends it the moment nothing new resolves.
+    for (;;) {
       const ids = [...new Set(out.match(/\b[A-Za-z_$][\w$]*\b/g) || [])].filter((id) => !SKIP.has(id) && !seen.has(id));
       let grew = false;
       for (const id of ids) {
