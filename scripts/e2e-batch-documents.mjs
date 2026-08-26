@@ -9,6 +9,15 @@
 import { requireLocalBase } from "./db-guard.mjs";
 const BASE = requireLocalBase("e2e-batch-documents", process.env.BASE_URL || "http://localhost:3000/erp");
 let pass = 0, fail = 0;
+// QA-1460: the Indian day, not the UTC one. `new Date().toISOString().slice(0,10)` is ALWAYS UTC -
+// TZ=Asia/Kolkata does not touch it - so between 00:00 and 05:30 IST it returns YESTERDAY, and this
+// suite then asks for a daily log dated before the batch the server just started today. It died
+// exactly that way at 00:20 IST on 2026-08-27 ("Log date before batch actual start.", then a
+// TypeError on the missing item), contributing 0 assertions to the wall. That is QA-1065's curve one
+// layer down: red for 5.5 hours a day, green for the other 18.5, which reads as flakiness. Same
+// formatter this repo already uses for this in scripts/migrate-logdate-tz.mjs.
+const istDay = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+
 const ok = (n, c, x = "") => { if (c) { pass++; console.log("PASS  " + n); } else { fail++; console.log("FAIL  " + n + " " + x); } };
 
 async function login(email, password) {
@@ -59,7 +68,7 @@ const tr = (await req(admin, "POST", "/api/trainers", {
 const room = (await req(admin, "POST", `/api/locations/${loc._id}/rooms`, { name: "Room " + stamp, type: "Classroom" }, 201)).data.item;
 const batch = (await req(admin, "POST", "/api/batches", {
   code: "B" + stamp, location: loc._id, program: prog._id, trainer: tr._id, room: room._id,
-  target_size: 1, planned_start: new Date().toISOString().slice(0, 10),
+  target_size: 1, planned_start: istDay(),
 }, 201)).data.item;
 const DOCS = `/api/batches/${batch._id}/documents`;
 
@@ -150,7 +159,7 @@ await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Read
 await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Active" }, 200);
 
 // ---- 8. attendance_sheet rides the existing Daily Execution door, not a new upload path ----
-const logDate = new Date().toISOString().slice(0, 10);
+const logDate = istDay();
 const logCreate = await req(trainerCookie, "POST", `/api/batches/${batch._id}/logs`, {
   log_date: logDate, present_member_ids: [], trainer_present: true, attendance_sheet: [`/uploads/${stamp}-att1.jpg`],
 }, 201);
