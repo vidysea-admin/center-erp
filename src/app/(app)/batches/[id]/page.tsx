@@ -21,7 +21,7 @@ import { compressImage, flushQueue, fmtBytes, getLastUploadInfo, getQueue, pickR
 import { BASE_PATH } from "@/lib/base-path";
 import { bulkSmsCsv, smsLink, waLink } from "@/lib/messaging";
 
-const TABS = ["Overview", "Candidates", "Enrollment", "Daily Execution", "Attendance", "Closure", "Feedback", "Costs", "Activity"];
+const TABS = ["Overview", "Candidates", "Enrollment", "Daily Execution", "Documents", "Attendance", "Closure", "Feedback", "Costs", "Activity"];
 
 // -159 cycle 2 (QA-481): the definition moved to @/lib/client, because writing it here made it the
 // THIRD copy in src/ - in the release whose entire point was collapsing copies of this same rule.
@@ -90,18 +90,28 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
       {/* 2026-08-14 (Umesh): a batch with nobody on it is not a batch — either its students
           get uploaded or the empty shell gets deleted. -86 (Umesh 15/08): dismissible with a
           ✕ for the session — it collapses to a one-line chip so Add/Import stay one click away. */}
+      {/* QA-1312 (checker on qa-1195, re-dispatch): this box was ALWAYS red, on every batch status,
+          including the overwhelmingly common one - a fresh Planning batch with no roster yet, which
+          is not a defect at all, it is the normal starting shape. Red is this app's own convention
+          for "something is wrong" (ErrorBanner uses it); a permanent red box above a Save button
+          that answers nothing is what the checker traced Umesh's "ye error aa raha hai" to. Red now
+          only for the genuinely wrong shape - a FINISHED batch with nobody on it, where attendance/
+          results/billing are actively reading zero; amber (this app's "needs attention, not broken"
+          colour, same as the portal-ID panels) for the normal case. */}
       {(data.readiness?.roster_count ?? 0) === 0 && !["Cancelled"].includes(b.status) && dismissed(`erp_dismiss_roster_${id}`) && (
         <button data-tick={dismissTick} onClick={() => undismiss(`erp_dismiss_roster_${id}`)}
-          className="w-fit rounded-full border border-red-200 bg-red-50 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-100">
+          className={`w-fit rounded-full border px-3 py-1 text-xs font-medium ${["Completed", "Closing"].includes(b.status)
+            ? "border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
+            : "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"}`}>
           No students yet · show
         </button>
       )}
       {(data.readiness?.roster_count ?? 0) === 0 && !["Cancelled"].includes(b.status) && !dismissed(`erp_dismiss_roster_${id}`) && (
-        <div className="relative rounded-xl border-2 border-red-300 bg-red-50 p-4" data-tick={dismissTick}>
+        <div className={`relative rounded-xl border-2 p-4 ${["Completed", "Closing"].includes(b.status) ? "border-red-300 bg-red-50" : "border-amber-300 bg-amber-50"}`} data-tick={dismissTick}>
           <button aria-label="Dismiss" title="Hide for now" onClick={() => dismiss(`erp_dismiss_roster_${id}`)}
-            className="absolute right-2 top-2 rounded px-1.5 text-lg leading-none text-red-400 hover:text-red-700">×</button>
-          <div className="text-sm font-semibold text-red-800">This batch has no students yet — upload the roster</div>
-          <p className="mt-1 text-sm text-red-700">
+            className={`absolute right-2 top-2 rounded px-1.5 text-lg leading-none ${["Completed", "Closing"].includes(b.status) ? "text-red-400 hover:text-red-700" : "text-amber-400 hover:text-amber-700"}`}>×</button>
+          <div className={`text-sm font-semibold ${["Completed", "Closing"].includes(b.status) ? "text-red-800" : "text-amber-800"}`}>This batch has no students yet — upload the roster</div>
+          <p className={`mt-1 text-sm ${["Completed", "Closing"].includes(b.status) ? "text-red-700" : "text-amber-700"}`}>
             {b.status === "Completed" || b.status === "Closing"
               ? "It is marked " + b.status + " with an empty roster, so its attendance, results and billing are all reading zero."
               : "Readiness, attendance and every count on the dashboard stay wrong until the students are on it."}
@@ -142,6 +152,7 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
       {tab === "Candidates" && <Roster batchId={id} batch={b} error={error} setError={setError} onChanged={load} />}
       {tab === "Enrollment" && <Enrollment batchId={id} error={error} setError={setError} />}
       {tab === "Daily Execution" && <DailyExecution batchId={id} batch={b} role={role} error={error} setError={setError} />}
+      {tab === "Documents" && <BatchDocuments batchId={id} batch={b} error={error} setError={setError} onGo={setTab} />}
       {tab === "Attendance" && <AttendanceTab batchId={id} batch={data.item} role={role} error={error} setError={setError} onGo={setTab} />}
       {tab === "Closure" && <ClosureTab batchId={id} batch={b} role={role} error={error} setError={setError} onChanged={load} />}
       {tab === "Feedback" && <FeedbackTab batchId={id} error={error} setError={setError} />}
@@ -2153,6 +2164,135 @@ function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
   );
 }
 
+// 2026-08-26 (RPL compliance): the batch's own document checklist. Two of the client's eight
+// required items already ride the Daily Execution tab (photos/attendance_sheet, per day) — shown
+// here as a status summary that LINKS there rather than a second upload control. Trainer
+// documentation is a READ-ONLY pull-through from the trainer's own existing document store
+// (trainerDocSummary) — never a duplicate copy scoped to this batch. The remaining six types are
+// genuinely new per-batch evidence, uploaded and listed here.
+function BatchDocuments({ batchId, batch, error, setError, onGo }: any) {
+  const [items, setItems] = useState<any[]>([]);
+  const [summary, setSummary] = useState<any>(null);
+  const [logs, setLogs] = useState<any[]>([]);
+  const [trainerDocs, setTrainerDocs] = useState<any>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [drawer, setDrawer] = useState(false);
+  const trainerId = batch?.trainer?._id ?? batch?.trainer;
+
+  const load = () => {
+    const calls: Promise<any>[] = [
+      api(`/api/batches/${batchId}/documents`).then((d) => { setItems(d.items ?? []); setSummary(d.summary ?? null); }),
+      api(`/api/batches/${batchId}/logs`).then((d) => setLogs(d.items ?? [])),
+    ];
+    if (trainerId) calls.push(api(`/api/trainers/${trainerId}/documents`).then((d) => setTrainerDocs(d.summary ?? null)));
+    else setTrainerDocs(null);
+    return Promise.all(calls).catch((e: any) => setError(e.message)).finally(() => setLoaded(true));
+  };
+  useEffect(() => { load(); }, [batchId, trainerId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function addDocs(files: File[], docType: string) {
+    setBusy(true);
+    try {
+      for (const file of files) {
+        const url = await uploadWithRetry(file, "document", { folder_centre: batch?.location?.code ?? batch?.location?.name ?? "", folder_batch: batch?.code ?? "", folder_kind: "documents", entity: "Batch", entity_id: batchId });
+        await api(`/api/batches/${batchId}/documents`, { method: "POST", json: { doc_type: docType, file_url: url, original_name: file.name } });
+      }
+      setDrawer(false); load();
+    } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+  }
+
+  const daysWithPhotos = logs.filter((l: any) => (l.photos ?? []).length > 0).length;
+  const daysWithAttendanceSheet = logs.filter((l: any) => (l.attendance_sheet ?? []).length > 0).length;
+
+  if (!loaded) return <div className="p-6 text-sm text-gray-500">Loading…</div>;
+
+  return (
+    <div className="space-y-4">
+      {error && <ErrorBanner msg={error} onDismiss={() => setError("")} />}
+
+      <Section title="Daily evidence (Daily Execution tab)">
+        <p className="text-sm text-gray-600">
+          {logs.length} day{logs.length === 1 ? "" : "s"} logged — {daysWithPhotos} with training photos,{" "}
+          {daysWithAttendanceSheet} with a signed attendance sheet.
+        </p>
+        <button className="mt-2 text-sm text-blue-700 underline" onClick={() => onGo?.("Daily Execution")}>Go to Daily Execution →</button>
+      </Section>
+
+      <Section title="Trainer documentation">
+        {!trainerId ? (
+          <p className="text-sm text-gray-500">No trainer assigned to this batch yet.</p>
+        ) : trainerDocs ? (
+          <>
+            {trainerDocs.complete ? (
+              <p className="text-sm text-green-700">Complete — all required trainer documents are on file.</p>
+            ) : (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                Still needed on the trainer&apos;s own record: <strong>{trainerDocs.missing.join(", ")}</strong>
+              </div>
+            )}
+            <Link className="mt-2 inline-block text-sm text-blue-700 underline" href={`/trainers/${trainerId}?tab=Documents`}>Open trainer&apos;s Documents tab →</Link>
+          </>
+        ) : (
+          <p className="text-sm text-gray-500">Could not load the trainer&apos;s document status.</p>
+        )}
+      </Section>
+
+      <Section title="Batch documents" actions={<Btn onClick={() => setDrawer(true)}>Add document</Btn>}>
+        {summary && !summary.complete && (
+          <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+            Still needed for this batch: <strong>{summary.missing.join(", ")}</strong>
+          </div>
+        )}
+        <DataTable
+          rows={items}
+          cardTitle={(r: any) => r.doc_type}
+          columns={[
+            { key: "doc_type", label: "Document", mobile: false },
+            { key: "original_name", label: "File", render: (r: any) => (
+              <a className="text-blue-700 underline" href={r.file_url} target="_blank" rel="noreferrer">{r.original_name || "open"}</a>) },
+            { key: "uploaded_by", label: "Uploaded by", render: (r: any) => r.uploaded_by?.name ?? "—", mobile: false },
+            { key: "createdAt", label: "On", render: (r: any) => fmtDate(r.createdAt), mobile: false },
+            {
+              key: "_del", label: "", mobile: false,
+              render: (r: any) => (
+                <span onClick={(e) => e.stopPropagation()}>
+                  <Btn small kind="ghost" onClick={async () => {
+                    if (!window.confirm(`Delete this ${r.doc_type}${r.original_name ? ` (${r.original_name})` : ""}? The audit log keeps a record of who removed it.`)) return;
+                    try { await api(`/api/batches/${batchId}/documents/${r._id}`, { method: "DELETE" }); await load(); }
+                    catch (er: any) { setError(er.message); }
+                  }}>Delete</Btn>
+                </span>
+              ),
+            },
+          ]}
+          empty="No batch documents yet."
+        />
+      </Section>
+
+      {drawer && (
+        <Drawer error={error} open onClose={() => setDrawer(false)} title="Add batch document">
+          <Field label="Document type (applies to a single file; several files upload under the same type)">
+            <select className={inputCls} id="bdt" defaultValue={summary?.required?.[0] ?? ""}>
+              {(summary?.required ?? []).map((d: string) => <option key={d}>{d}</option>)}
+            </select>
+          </Field>
+          <Field label="Files — pick several at once (PDF / Word / photos)" required>
+            <input type="file" multiple className={inputCls} disabled={busy}
+              accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,.heic"
+              onChange={(e) => {
+                const files = Array.from(e.target.files ?? []);
+                const sel = document.getElementById("bdt") as HTMLSelectElement | null;
+                if (files.length && sel?.value) addDocs(files, sel.value);
+              }} />
+          </Field>
+          {busy && <p className="mt-2 text-sm text-gray-500">Uploading…</p>}
+        </Drawer>
+      )}
+    </div>
+  );
+}
+
 function DailyExecution({ batchId, batch, role, error, setError }: any) {
   const canMark = role !== "Location";
   // -107: the bulk portal-sheet link is gated on the RIGHT, matching the API.
@@ -2160,7 +2300,7 @@ function DailyExecution({ batchId, batch, role, error, setError }: any) {
   const canImportSheet = !permsReady || canPerm("attendance.govt", "edit");
   const [logs, setLogs] = useState<any[]>([]);
   const [members, setMembers] = useState<any[]>([]);
-  const [form, setForm] = useState<any>({ log_date: toInputDate(new Date()), present: new Set<string>(), biometric: new Set<string>(), photos: [], videos: [] });
+  const [form, setForm] = useState<any>({ log_date: toInputDate(new Date()), present: new Set<string>(), biometric: new Set<string>(), photos: [], videos: [], attendance_sheet: [] });
   const [busy, setBusy] = useState(false);
   const [queued, setQueued] = useState(0);
   const [editLog, setEditLog] = useState<any>(null);
@@ -2196,13 +2336,13 @@ function DailyExecution({ batchId, batch, role, error, setError }: any) {
         note: dayLog.note ?? "", trainer_present: dayLog.trainer_present !== false,
         present: new Set((dayLog.present_member_ids ?? []).map(String)),
         biometric: new Set((dayLog.biometric_member_ids ?? []).map(String)),
-        photos: [], videos: [],
+        photos: [], videos: [], attendance_sheet: [],
       }));
     } else if (seeded) {
       // moved off an already-logged day onto a fresh one — start clean rather than carrying
       // the previous day's ticks over as if they were marked.
       setForm((f: any) => ({
-        log_date: f.log_date, present: new Set<string>(), biometric: new Set<string>(), photos: [], videos: [],
+        log_date: f.log_date, present: new Set<string>(), biometric: new Set<string>(), photos: [], videos: [], attendance_sheet: [],
       }));
     }
   }, [dayLog?._id, form.log_date, logs]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -2226,7 +2366,7 @@ function DailyExecution({ batchId, batch, role, error, setError }: any) {
     folder_centre: batch?.location?.code ?? batch?.location?.name ?? "", folder_batch: batch?.code ?? "", folder_kind: kind,
     entity: "Batch", entity_id: batchId, batch_id: batchId,
   });
-  async function uploadFile(file: File, kind: "photos" | "videos" | "govt_screenshot") {
+  async function uploadFile(file: File, kind: "photos" | "videos" | "govt_screenshot" | "attendance_sheet") {
     try {
       const url = await uploadWithRetry(file, kind, evidenceHints(kind), (p) => {
         if (p.phase === "uploading") setUploadNote(`${file.name}: ${p.pct}% (${fmtBytes(p.sent)} / ${fmtBytes(p.total)}) — uploading straight to storage, resumes if the signal drops`);
@@ -2243,13 +2383,14 @@ function DailyExecution({ batchId, batch, role, error, setError }: any) {
       }
       if (kind === "photos") setForm((f: any) => ({ ...f, photos: [...f.photos, url] }));
       else if (kind === "videos") setForm((f: any) => ({ ...f, videos: [...f.videos, url] }));
+      else if (kind === "attendance_sheet") setForm((f: any) => ({ ...f, attendance_sheet: [...f.attendance_sheet, url] }));
       else setForm((f: any) => ({ ...f, govt_screenshot: url }));
     } catch (e: any) { setError(e.message); setQueued(getQueue(batchId).length); }
   }
 
   // -97 (Umesh: delete must work too): a wrong photo/video can be dropped BEFORE Save — the
   // object is discarded from storage (uploader-only, unreferenced), not left as an orphan.
-  async function discardUpload(url: string, kind: "photos" | "videos") {
+  async function discardUpload(url: string, kind: "photos" | "videos" | "attendance_sheet") {
     const name = url.split("/").pop() ?? "";
     try { await api(`/api/files/${name}`, { method: "DELETE" }); }
     catch (e: any) { if (!/removed|already|not found/i.test(String(e?.message))) { setError(e.message); return; } }
@@ -2261,6 +2402,7 @@ function DailyExecution({ batchId, batch, role, error, setError }: any) {
     for (const d of done) {
       if (d.kind === "photos") setForm((f: any) => ({ ...f, photos: [...f.photos, d.url] }));
       else if (d.kind === "videos") setForm((f: any) => ({ ...f, videos: [...f.videos, d.url] }));
+      else if (d.kind === "attendance_sheet") setForm((f: any) => ({ ...f, attendance_sheet: [...f.attendance_sheet, d.url] }));
       else if (d.kind === "govt_screenshot") setForm((f: any) => ({ ...f, govt_screenshot: d.url }));
     }
     setQueued(getQueue(batchId).length);
@@ -2283,6 +2425,7 @@ function DailyExecution({ batchId, batch, role, error, setError }: any) {
             note: form.note,
             photos: [...(dayLog.photos ?? []), ...form.photos],
             videos: [...(dayLog.videos ?? []), ...form.videos],
+            attendance_sheet: [...(dayLog.attendance_sheet ?? []), ...form.attendance_sheet],
             ...(form.govt_screenshot ? { govt_screenshot: form.govt_screenshot } : {}),
             ...(form.govt_present === "" || form.govt_present == null ? {} : { govt_present: +form.govt_present }),
           },
@@ -2299,10 +2442,10 @@ function DailyExecution({ batchId, batch, role, error, setError }: any) {
             trainer_present: form.trainer_present !== false, // default true; unticking blocks student marks (portal rule)
             govt_present: form.govt_present === "" || form.govt_present == null ? null : +form.govt_present,
             govt_screenshot: form.govt_screenshot,
-            photos: form.photos, videos: form.videos, note: form.note,
+            photos: form.photos, videos: form.videos, attendance_sheet: form.attendance_sheet, note: form.note,
           },
         });
-        setForm({ log_date: toInputDate(new Date()), present: new Set(), biometric: new Set(), photos: [], videos: [] });
+        setForm({ log_date: toInputDate(new Date()), present: new Set(), biometric: new Set(), photos: [], videos: [], attendance_sheet: [] });
       }
       load();
     } catch (e: any) { setError(e.message); }
@@ -2429,6 +2572,13 @@ function DailyExecution({ batchId, batch, role, error, setError }: any) {
             <Field label={`Photos (${form.photos.length})`}>
               <input type="file" accept="image/*" capture="environment" multiple className={inputCls} onChange={(e) => { for (const f of Array.from(e.target.files ?? [])) uploadFile(f, "photos"); }} />
               <PendingMedia urls={form.photos} kind="photos" onRemove={(u) => discardUpload(u, "photos")} />
+            </Field>
+            {/* 2026-08-26 (RPL compliance): the signed manual attendance register, photographed
+                daily like a training photo but tracked separately — the Documents tab's checklist
+                needs to ask about it on its own, not folded into the general photo count. */}
+            <Field label={`Attendance sheet (${form.attendance_sheet.length})`}>
+              <input type="file" accept="image/*" capture="environment" multiple className={inputCls} onChange={(e) => { for (const f of Array.from(e.target.files ?? [])) uploadFile(f, "attendance_sheet"); }} />
+              <PendingMedia urls={form.attendance_sheet} kind="attendance_sheet" onRemove={(u) => discardUpload(u, "attendance_sheet")} />
             </Field>
             <Field label={`Videos (${form.videos.length})`}>
               <input type="file" accept="video/mp4,video/*" capture="environment" multiple className={inputCls} onChange={(e) => { for (const f of Array.from(e.target.files ?? [])) uploadFile(f, "videos"); }} />
@@ -2670,15 +2820,15 @@ function LogEditDrawer({ log, members, onClose, onSaved, error, setError }: any)
 // Evidence must be viewable, not just counted — the daily verification loop depends on
 // someone opening the govt screenshot (transcript 13:12–14:33).
 // -97: what is attached to the day BEFORE it is saved — thumbnails with a ✕ each.
-function PendingMedia({ urls, kind, onRemove }: { urls: string[]; kind: "photos" | "videos"; onRemove: (u: string) => void }) {
+function PendingMedia({ urls, kind, onRemove }: { urls: string[]; kind: "photos" | "videos" | "attendance_sheet"; onRemove: (u: string) => void }) {
   if (!urls?.length) return null;
   return (
     <div className="mt-1 flex flex-wrap gap-2">
       {urls.map((u, i) => (
         <div key={u} className="relative">
-          {kind === "photos"
-            ? <img src={u} alt={`photo ${i + 1}`} className="h-14 w-14 rounded border object-cover" />
-            : <video src={u} className="h-14 w-20 rounded border bg-black object-cover" muted playsInline preload="metadata" />}
+          {kind === "videos"
+            ? <video src={u} className="h-14 w-20 rounded border bg-black object-cover" muted playsInline preload="metadata" />
+            : <img src={u} alt={`${kind === "attendance_sheet" ? "attendance sheet" : "photo"} ${i + 1}`} className="h-14 w-14 rounded border object-cover" />}
           <button type="button" aria-label="Remove" title="Remove this file (it is deleted from storage)" onClick={() => onRemove(u)}
             className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full border border-gray-300 bg-white text-xs text-gray-700 shadow hover:bg-red-50 hover:text-red-700">✕</button>
         </div>
@@ -2689,12 +2839,18 @@ function PendingMedia({ urls, kind, onRemove }: { urls: string[]; kind: "photos"
 function MediaCell({ r }: any) {
   const photos: string[] = r.photos ?? [];
   const videos: string[] = r.videos ?? [];
-  if (!photos.length && !videos.length && !r.govt_screenshot) return <span className="text-gray-400">—</span>;
+  const attendanceSheet: string[] = r.attendance_sheet ?? [];
+  if (!photos.length && !videos.length && !attendanceSheet.length && !r.govt_screenshot) return <span className="text-gray-400">—</span>;
   return (
     <span className="flex flex-wrap items-center gap-1">
       {photos.map((p, i) => (
         <a key={p} href={p} target="_blank" rel="noreferrer" title={`Photo ${i + 1}`}>
           <img src={p} alt={`Photo ${i + 1}`} className="h-8 w-8 rounded border border-gray-200 object-cover" />
+        </a>
+      ))}
+      {attendanceSheet.map((p, i) => (
+        <a key={p} href={p} target="_blank" rel="noreferrer" title={`Attendance sheet ${i + 1}`}>
+          <img src={p} alt={`Attendance sheet ${i + 1}`} className="h-8 w-8 rounded border border-blue-200 object-cover" />
         </a>
       ))}
       {/* -83: evidence must be VIEWABLE — a video plays here (Range-served, seekable), a

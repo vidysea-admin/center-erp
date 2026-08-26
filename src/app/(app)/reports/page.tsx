@@ -216,7 +216,15 @@ function ReportsInner() {
     sortValue: (r: any) => r[k] ?? 0, render: drillNum(k),
     // The footer the whole panel exists for: this sum is the tile's number, arrived at from the
     // same array the tile was summed from.
-    total: (rs: any[]) => <b>{num(rs.reduce((a: number, r: any) => a + (r[k] || 0), 0))}</b>,
+    //
+    // -256: on a batch-scoped drill the rows are batch rows ONLY (Umesh: "report mai location wise
+    // batch wise aana chaiyee data"), and a batch row carries a hardcoded 0 for the four centre x
+    // role measures - which `drillNum` above already dashes rather than printing as a number. Adding
+    // those zeroes up would put a bold `0` under a column of dashes: the one figure on this panel
+    // that measures nothing at all. Dash the footer for the same reason, in the same words.
+    total: (rs: any[]) => (L[drill]?.batch_scoped && !L[k]?.batch_scoped
+      ? <span className="text-gray-300" title="This measure belongs to the centre × job role target - every row below is a batch, so there is nothing here to add up.">—</span>
+      : <b>{num(rs.reduce((a: number, r: any) => a + (r[k] || 0), 0))}</b>),
   });
   const drillColumns: any[] = [
     {
@@ -237,9 +245,11 @@ function ReportsInner() {
       hint: "The client's own portal/scheme Batch ID for this batch. Blank ones can be typed in right here.",
       sortValue: (r: any) => r.batch?.govt_batch_id ?? "",
       filterText: (r: any) => r.batch?.govt_batch_id ?? "(blank)",
+      // The second arm is unreachable since -256 (a batch-scoped drill carries batch rows only) and
+      // is kept as a fallback that SAYS what it means rather than printing a dot nobody can read.
       render: (r: any) => r.batch
         ? <BatchIdCell row={r} onSaved={(w?: string) => { setBatchIdWarn(w ?? ""); void load(); }} />
-        : <span className="text-gray-300">·</span>,
+        : <span className="text-[11px] text-gray-400">no batch</span>,
     }] : []),
     { key: "role", label: "Job role", minWidth: 190, sortable: true, filterable: true, sortValue: (r: any) => r.role, filterText: (r: any) => r.role, render: (r: any) => <span>{r.role}</span> },
     // THE CLICKED MEASURE SITS HERE, third, before anything else — a browser screenshot is what
@@ -281,15 +291,25 @@ function ReportsInner() {
   // Everything else is untouched — same filter, same rows, same numbers as before this unit.
   const detailAll: any[] = data?.detail ?? [];
   const batchDrill = !!L[drill]?.batch_scoped;
-  // Centres that already have at least one batch row for this (location, role) hide their
-  // centre-level placeholder row on a batch-scoped drill (its three batch measures are always 0
-  // by construction — the real numbers live on the batch rows below it); a centre with NO batches
-  // yet keeps that placeholder, so it still shows up instead of silently vanishing from the drill.
-  const hasBatchFor = batchDrill
-    ? new Set(detailAll.filter((d) => d.batch).map((d) => `${d.location._id}|${d.role}`))
-    : null;
+  // -256 (Umesh, on his own screenshot): "agar batch bnn hi nhi skta tho vo batch successfull wali
+  // report mai aayega bhi nhi naa. report mai location wise batch wise aana chaiyee data. vo hi
+  // correct way hogaa."
+  //
+  // -253 kept a centre x job-role placeholder row for centres with no batches yet, so that they
+  // would not "silently vanish" from the drill. What that actually produced was a row in a BATCH
+  // report with no batch on it: nothing to identify it by, nothing to type a Batch ID into (it
+  // rendered a bare `·`, which is what he asked about), and a hardcoded 0 for the very measure being
+  // drilled. On a batch-scoped drill the unit is the batch, full stop.
+  //
+  // NO ARITHMETIC MOVES. Those placeholder rows are built with mobilised/in_training/certified
+  // hardcoded to 0 (rules.ts, the `batch: null` push), so the footer and the tile are still the same
+  // number and `sum(detail[k]) === total[k]` is a server-side invariant this does not touch. The
+  // centres have not gone anywhere either - the table BEHIND this drawer is centre x job role by
+  // construction, which is where a centre holding a target and no batches is meant to be read. The
+  // footnote below names how many were left out, so the exclusion is visible rather than silent.
+  const centreRowsHidden = batchDrill ? detailAll.filter((d) => !d.batch).length : 0;
   const drillRows = batchDrill
-    ? detailAll.filter((d) => d.batch ? true : !hasBatchFor!.has(`${d.location._id}|${d.role}`))
+    ? detailAll.filter((d) => d.batch)
     : detailAll.filter((d) => Number(d?.[drill] ?? 0) !== 0);
 
   return (
@@ -584,8 +604,9 @@ function ReportsInner() {
           />
           <p className="text-[11px] text-gray-400">
             {batchDrill
-              ? <>Every batch at every centre × job role is shown here, including ones with zero — {drillRows.filter((d) => d.batch).length} batch{drillRows.filter((d) => d.batch).length === 1 ? "" : "es"}, {drillRows.filter((d) => !d.batch).length} centre × job-role row{drillRows.filter((d) => !d.batch).length === 1 ? "" : "s"} with no batch yet.
-                  Target/Approved/Not approved/Pending show — on a batch's own row: those are centre × job-role figures, not any one batch's.</>
+              ? <>One row per batch — every batch at every centre × job role, including ones with zero, so the list can be read against the portal's own: {drillRows.length} batch{drillRows.length === 1 ? "" : "es"}.
+                  {centreRowsHidden > 0 && <> Not shown: {centreRowsHidden} centre × job-role row{centreRowsHidden === 1 ? "" : "s"} with no batch yet — a batch report has nowhere to put that, and the table behind this panel is where it is read.</>}
+                  {" "}Target/Approved/Not approved/Pending show — on every row here: those are centre × job-role figures, never one batch's.</>
               : <>Rows with nothing in this column are left out — {detailAll.filter((d) => !d.batch).length} (centre × job role) rows exist in total.
                   The figure under the table is the same one on the tile.</>}
           </p>
@@ -602,21 +623,39 @@ function ReportsInner() {
 // is a batch-level field, and that door already normalizes (canonicalGovtBatchId) and already
 // warns-never-blocks on a duplicate (govtBatchIdConflict). No new endpoint, no new write logic.
 function BatchIdCell({ row, onSaved }: { row: any; onSaved: (warning?: string) => void }) {
-  const { can, loaded: permsReady } = usePerms();
+  const { can, role, loaded: permsReady } = usePerms();
   const closed = ["Completed", "Cancelled"].includes(row.batch.status);
-  // Gated on the SAME permission and the SAME statuses the PATCH door itself checks
-  // (requirePerm(user, "batches.manage"); refuses on Completed/Cancelled) — an editable box that
-  // will always 409 is the dead-control class this codebase has already named three times
-  // (QA-712, QA-723, QA-754); this is the one place that class does not get a fourth outing.
-  const canEdit = (!permsReady || can("batches.manage", "edit")) && !closed;
+  // Gated on the SAME rule the PATCH door itself enforces, which -256 changed on BOTH sides at once:
+  // requirePerm(user, "batches.manage") to reach the door at all, and on a closed batch the SIDH id
+  // and nothing else, Admin only. An editable box that will always 409 is the dead-control class
+  // this codebase has already named three times (QA-712, QA-723, QA-754).
+  //
+  // -256 (Umesh, with a screenshot of the Passed drill): "top ke 2 mei toh main input nii kar pa
+  // raha hon, niche ke jaha par id karke aarek type id, waha par type ho pa raha hai, toh ye kya
+  // mili bhagat hai". Those two rows were Completed batches. The box was DISABLED rather than
+  // absent, so the screen went on saying "type ID" to somebody who could not type in it - the same
+  // dead control, wearing the placeholder of a live one. A cell that cannot be edited now renders
+  // as the VALUE, never as an input: there is no box to poke at and no instruction to follow.
+  const mayEdit = !permsReady || can("batches.manage", "edit");
+  const canEdit = mayEdit && (!closed || role === "Admin");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  if (!canEdit) {
+    return (
+      <span
+        className="font-mono text-[11px] text-gray-500"
+        title={closed
+          ? "This batch is closed. Its SIDH batch ID can still be recorded — but only by an Admin."
+          : "You do not have edit rights on batches, so this ID is shown and not editable."}
+      >{row.batch.govt_batch_id || "—"}</span>
+    );
+  }
   return (
     <div>
       <input
         defaultValue={row.batch.govt_batch_id ?? ""}
-        disabled={busy || !canEdit}
-        title={closed ? "This batch is closed — its Batch ID can no longer be edited here." : undefined}
+        disabled={busy}
+        title={closed ? "This batch is closed — the SIDH batch ID is the one field an Admin can still record on it." : undefined}
         placeholder="type ID"
         className="w-32 rounded border border-gray-200 px-1.5 py-0.5 font-mono text-[11px] disabled:bg-gray-50 disabled:text-gray-400"
         onBlur={async (e) => {

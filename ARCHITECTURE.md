@@ -697,6 +697,24 @@ on the other three measures: `hasBatchFor` already drops a centre's own placehol
 batch-scoped drill the moment that centre has any batch, so a centre row showing `mobilised: 0`
 only ever appears when it is genuinely true (no batch exists yet).
 
+**-256 (QA-1410) removed `hasBatchFor` entirely: a batch-scoped drill now lists rows carrying a
+`batch` and nothing else.** Umesh, on his own screenshot: *"agar batch bnn hi nhi skta tho vo batch
+successfull wali report mai aayega bhi nhi naa. report mai location wise batch wise aana chaiyee
+data."* -253's placeholder-for-a-centre-with-no-batches was keeping a row in a BATCH report with no
+batch on it — nothing to identify it by, nothing to type a Batch ID into (it rendered a bare `·`,
+which is what he asked about), and a hardcoded zero for the very measure being drilled. **The
+arithmetic is unaffected and that is the reason it was safe:** those rows are built with
+`mobilised/in_training/certified` hardcoded to `0`, so the footer and the tile are still the same
+number, and `sum(detail[k]) === total[k]` is a SERVER invariant this never touched. The rows are
+still in the payload with their targets — the table BEHIND the drawer is centre × job role by
+construction, and that is where a centre holding a target and no batches is meant to be read. The
+drill's footnote names how many were left out, so the exclusion is visible rather than silent.
+`scripts/e2e.mjs` pins the fact that makes it free: every `batch_scoped` measure sums, over batch
+rows ALONE, to `total[k]`, and no centre row carries a non-zero value for any of the three. **One
+consequence to keep in view:** the four centre-only measures now render `—` in every cell of a
+batch drill, so their column FOOTER dashes too — summing a column of dashes to a bold `0` would be
+the same false measurement one level down.
+
 **`Mobilised`/`In training` attribute to a candidate's MOST RECENT `BatchMember` row, not every
 historical one** (Umesh, 2026-08-26: "sirf uske aakhri batch me ginno"). A candidate who dropped
 Batch A and re-enrolled into Batch B at the same centre × role is counted once, under B — not once
@@ -758,6 +776,37 @@ targets and greys the impossible ones **with the reason** (`restoreBlocked`, der
 and `b.actual_start`), because a picker that silently omits a choice cannot tell you why it is
 missing. The standing risk is that those two strings drift from the server's two refusals; both are
 pinned in `e2e-flows-blindspot.mjs` FL19.
+
+**-256 (QA-1408/QA-1409): the Completed/Cancelled FREEZE now has exactly one exception, and it is
+named here so nobody has to rediscover it.** `PATCH /api/batches/[id]` used to throw 409 *"Batch is
+closed."* for every field before it had even read the body. SIDH issues the batch ID at or after
+completion, so the one status in which that id arrives was the one status that would not take it —
+and `batches/[id]/page.tsx` had been NAGGING for it on Completed batches over a form whose Save the
+door then refused. The door now accepts a body whose asked-for fields are exactly `[govt_batch_id]`
+**and only from an Admin** (Umesh's decision, asked directly with both options on the table). Three
+things about that carve-out belong in this row:
+
+- **The test is on the REQUEST, from ONE list.** `PATCHABLE` is hoisted to module scope so the
+  assignment loop and the freeze test read the same names, and `location`/`program` are added to the
+  test even though they are handled in their own block further down — without them a body carrying
+  `{govt_batch_id, location}` reads as id-only and walks a centre change through the freeze. An
+  empty body still 409s rather than answering a silent 200.
+- **The three scheduling assertions are SKIPPED on that path** (slot guidelines, trainer
+  availability, room availability). They are refusals about a request that MOVES the schedule;
+  leaving them in fails the id edit for reasons it has nothing to do with — a legacy slot that is
+  not exactly 4h or 8h answers 400, and a trainer since given a LIVE batch in the same hour answers
+  409. Both are pinned in `scripts/e2e-govt-batch-id.mjs` section 6.
+- **The client half must send the SAME shape or the carve-out is useless.** `EditDetails.save()`
+  sends `{ govt_batch_id }` alone when the batch is closed; everything else on that form is frozen
+  by ONE `<fieldset disabled>` rather than eleven hand-added `disabled=` props, because a twelfth
+  control added later would be a twelfth chance to forget.
+
+**And this row's own warning applies to the fix:** `["Completed","Cancelled"].includes(status)` now
+has a **third and fourth** client copy — `closedBatch` in `batches/[id]/page.tsx` (Overview) and
+`closed` in `BatchIdCell` in `reports/page.tsx` — beside the server's. That is the QA-828/825/785
+shape, listed here deliberately rather than discovered later. What keeps them honest for now is that
+both are pinned to the SERVER's answer by behavioural assertions, not by a shared constant; the
+collapse is worth doing and is not this unit's.
 
 **Note the render sites, because -204/-205/-677 were all about this:** `statusActions` is ONE value
 rendered in TWO places (:479 inside the "Right now" card while a batch runs, :537 inside the

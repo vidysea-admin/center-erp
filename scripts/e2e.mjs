@@ -3013,6 +3013,30 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
             keys.length === 7 && off.length === 0,
             JSON.stringify({ mismatched: off }));
         }
+
+        // (f) -256 (Umesh, 2026-08-26): "agar batch bnn hi nhi skta tho vo batch successfull wali
+        // report mai aayega bhi nhi naa. report mai location wise batch wise aana chaiyee data."
+        // The batch-scoped drill now lists BATCH rows only - the centre placeholder rows are gone
+        // from it. That is a client-side filter, so what has to be pinned here is the fact that
+        // MAKES it free: every batch-scoped measure lives entirely on batch rows, so the footer
+        // under a batch-only table is still the number on the tile. If a future change ever moves
+        // any part of mobilised/in_training/certified onto a centre row, this goes red and the
+        // drill silently under-reports rather than the wall telling anyone.
+        {
+          const batchOnly = (repY.detail ?? []).filter((d) => d.batch);
+          const centreOnly = (repY.detail ?? []).filter((d) => !d.batch);
+          const scoped = Object.entries(repY.labels ?? {}).filter(([, v]) => v && v.batch_scoped).map(([k]) => k);
+          const offScoped = scoped.filter((k) => batchOnly.reduce((a, d) => a + (d[k] || 0), 0) !== repY.total?.[k]);
+          const centreCarries = scoped.filter((k) => centreOnly.some((d) => (d[k] || 0) !== 0));
+          ok("-256: every batch-scoped measure lives ENTIRELY on batch rows, so a drill that shows batches only still foots to its tile",
+            scoped.length === 3 && offScoped.length === 0 && centreCarries.length === 0,
+            JSON.stringify({ scoped, mismatched: offScoped, centreRowsCarryingBatchMeasures: centreCarries, centreRows: centreOnly.length, batchRows: batchOnly.length }));
+          // ...and the centre rows that the drill drops are still THERE in the payload, carrying
+          // their own target - they have not been deleted from the report, only from the batch view.
+          ok("-256: the dropped centre rows still exist in the payload with their targets intact - the batch drill hides them, nothing deletes them",
+            centreOnly.length > 0 && centreOnly.some((d) => (d.target || 0) > 0),
+            JSON.stringify({ centreRows: centreOnly.length, withTarget: centreOnly.filter((d) => (d.target || 0) > 0).length }));
+        }
       }
     }
 
@@ -3025,6 +3049,20 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
       ok("-253: the inline Batch ID edit calls the batch's own PATCH door, not a new endpoint",
         /api\(`\/api\/batches\/\$\{row\.batch\._id\}`,\s*\{\s*method:\s*"PATCH"/.test(src),
         "BatchIdCell source pattern not found");
+      // -256: the three client-side halves of the same unit. Written as SHAPE tests that the
+      // pre-fix file fails: it had `disabled={busy || !canEdit}` with no read-only arm at all, and
+      // `canEdit` ended in `&& !closed`, which is precisely the box that said "type ID" at somebody
+      // who could not type in it.
+      ok("-256: a Batch ID cell this login cannot edit renders the VALUE, never a box that refuses to be typed in",
+        /if \(!canEdit\)\s*\{[\s\S]{0,600}?<span/.test(src) && !/disabled=\{busy \|\| !canEdit\}/.test(src),
+        "expected a read-only arm before the input, and no `disabled={busy || !canEdit}` box");
+      ok("-256: ...and a CLOSED batch's id is editable only by an Admin - the same rule api/batches/[id] enforces",
+        /const canEdit = mayEdit && \(!closed \|\| role === "Admin"\)/.test(src),
+        "expected canEdit to gate a closed batch on the Admin role");
+      ok("-256: a batch-scoped drill lists batch rows ONLY - a row with no batch has no place in a batch report",
+        /const drillRows = batchDrill\s*\r?\n\s*\? detailAll\.filter\(\(d\) => d\.batch\)/.test(src)
+          && !/hasBatchFor/.test(src),
+        "expected drillRows to keep only rows carrying a batch, and hasBatchFor to be gone");
       // QA-1288's own maker_note (quoting QA-246 "chaar jhoothi ginti"): a batch row's
       // target/approved/not_approved/unknown must render as "-" with an explanation, never as a
       // plain 0 - those measures belong to the centre x role, not to any one batch under it.

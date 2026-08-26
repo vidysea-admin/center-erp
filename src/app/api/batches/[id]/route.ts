@@ -8,6 +8,12 @@ import { canonicalGovtBatchId } from "@/lib/validate";
 import { getDefaults } from "@/lib/defaults";
 import { audit, auditDiff } from "@/lib/audit";
 
+// The fields this door may write. ONE list, because two consumers now read it: the assignment loop
+// in PATCH, and the closed-batch test right above it. A second hand-written copy of these names is
+// how "what can be patched" ends up meaning two different things inside one function.
+const PATCHABLE = ["trainer", "room", "session", "target_size", "planned_start", "planned_end", "slot_start", "slot_end",
+  "govt_batch_id", "drive_folder_url", "relevant_skills"];
+
 export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   await dbConnect();
   const user = await requireUser();
@@ -78,8 +84,28 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   await assertBatchInScope(user, id); // Rule 38
   const batch = await Batch.findById(id);
   if (!batch) throw new HttpError(404, "Batch not found");
-  if (["Completed", "Cancelled"].includes(batch.status)) throw new HttpError(409, "Batch is closed.");
   const body = await req.json();
+  // A closed batch is frozen - with ONE exception, and the portal's own timing is what demands it:
+  // SIDH issues the batch ID at or after completion, so the single status in which that id actually
+  // arrives was the one status in which this door refused to record it. The batch page has been
+  // NAGGING for it on Completed batches the whole time (batches/[id]/page.tsx: "Still missing on
+  // this finished batch: the SIDH batch ID - fill them below") over a form whose Save then 409'd.
+  //
+  // Umesh, asked directly with both options on the table, chose ADMIN ONLY for this exception.
+  //
+  // The test is on what the REQUEST asks to change, never on what the caller says it is doing.
+  // `location` and `program` are in the list even though they are handled separately further down -
+  // without them a body carrying {govt_batch_id, location} reads as id-only and walks a centre
+  // change straight through the freeze. `asked.length > 0` keeps an empty body at 409 rather than
+  // letting it answer 200 having done nothing.
+  const closed = ["Completed", "Cancelled"].includes(batch.status);
+  const asked = [...PATCHABLE, "location", "program"].filter((f) => body[f] !== undefined);
+  const idOnly = asked.length > 0 && asked.every((f) => f === "govt_batch_id");
+  if (closed && !(idOnly && user.role === "Admin")) {
+    throw new HttpError(409, idOnly
+      ? "Batch is closed - only an Admin can still record its SIDH batch ID."
+      : "Batch is closed.");
+  }
   const before = batch.toObject();
 
   const patch: Record<string, unknown> = {};
@@ -87,8 +113,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   // were unreachable through the API — written nowhere, readable nowhere. The SIDH batch id is
   // the key that links our row to the portal's, and the Drive folder is the evidence backup
   // Manish keeps in parallel with the NSDC upload; a field the API cannot write does not exist.
-  for (const f of ["trainer", "room", "session", "target_size", "planned_start", "planned_end", "slot_start", "slot_end",
-    "govt_batch_id", "drive_folder_url", "relevant_skills"]) {
+  for (const f of PATCHABLE) {
     if (body[f] !== undefined) patch[f] = body[f];
   }
   // QA-1287: the SIDH batch id is normalised through the SAME helper the create door uses, so the
@@ -129,9 +154,17 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
     slot_start: (patch.slot_start as string | undefined) ?? batch.slot_start,
     slot_end: (patch.slot_end as string | undefined) ?? batch.slot_end,
   };
-  await assertSlotWithinGuidelines(slot); // slot-rules.ts: 09:00–18:00 window, exactly 4h or 8h
-  if (trainer) await assertTrainerAvailableForBatch(String(trainer), id, newStart, newEnd ?? newStart, slot); // Rule 10 + slot clash
-  if (room) await assertRoomFreeForBatch(String(room), id, newStart, newEnd ?? newStart, session); // Rule 13
+  // Every refusal here is about a request that MOVES the schedule. Reaching this line with `closed`
+  // true means the Admin id-only carve-out above, where nothing about the schedule is changing - and
+  // running them anyway would fail that edit for reasons it has nothing to do with: a legacy batch
+  // whose stored slot is not exactly 4h or 8h answers 400 (slot-rules.ts), and a trainer who has
+  // since been given a LIVE batch at the same hour answers 409 (Rule 10). Neither is a statement
+  // about the id being typed.
+  if (!closed) {
+    await assertSlotWithinGuidelines(slot); // slot-rules.ts: 09:00–18:00 window, exactly 4h or 8h
+    if (trainer) await assertTrainerAvailableForBatch(String(trainer), id, newStart, newEnd ?? newStart, slot); // Rule 10 + slot clash
+    if (room) await assertRoomFreeForBatch(String(room), id, newStart, newEnd ?? newStart, session); // Rule 13
+  }
 
   // Backward plan follows the start date while the batch is still being planned; once
   // Ready/Active the dates are history and stay put.
