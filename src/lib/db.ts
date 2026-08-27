@@ -1,7 +1,15 @@
 import mongoose from "mongoose";
 
 const MONGODB_URL = process.env.MONGODB_URL!;
-const MONGODB_DB = process.env.MONGODB_DB || "center_erp";
+// QA-1520: trimmed ONCE here so every use (this comparison below, and the dbName mongoose.connect
+// is given further down) agrees - a hand-edited .env with a trailing space/newline on MONGODB_DB
+// used to fail the production exemption's exact `===` match and refuse the real production
+// connection outright. Deliberately NOT case-folded: a differently-cased name is a genuinely
+// different MongoDB database (names are case-sensitive), and Mongo auto-creates a database on
+// first write - silently exempting a case slip would risk connecting to (and creating) a wrong,
+// empty database instead of the real one. Refusing on a case slip is the correct failure mode;
+// only whitespace has no such downside.
+const MONGODB_DB = (process.env.MONGODB_DB || "center_erp").trim();
 const PRODUCTION_DB = "center_erp";
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 
