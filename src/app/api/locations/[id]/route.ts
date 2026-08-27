@@ -2,7 +2,6 @@ import { itemRoutes } from "@/lib/crud";
 import { Location } from "@/models";
 import { HttpError } from "@/lib/authz";
 import { requireApproval } from "@/lib/approvals";
-import { slotGenerationBumps } from "@/lib/rules";
 import { maskLocationSecrets } from "../route";
 
 export const { GET, PATCH } = itemRoutes({
@@ -17,13 +16,13 @@ export const { GET, PATCH } = itemRoutes({
   writeRoles: ["Admin", "Operations", "Location"],
   permission: "locations.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
   async beforeUpdate(id, data, existing, user) {
-    // QA-621 cycle 4: `existing` is still the pre-mutation document here, so this is the one
-    // place a direct edit can compare "what a slot's occupant is now" to "what this write wants
-    // it to be" before crud.ts applies `data` on top of it. Safe to compute even when this
-    // request goes on to throw below (a Location-role change gated for approval never reaches
-    // `existing.save()`, so an in-memory bump on `data` here is simply discarded with it) — the
-    // approved-later path is its own write and bumps again there (approvals/[id]/route.ts).
-    Object.assign(data, slotGenerationBumps(existing, data));
+    // QA-621 cycle 4 / QA-1502 cycle 6: this route used to bump the slot generation counters here
+    // itself. It no longer does, and not because the bump stopped mattering — because a checker
+    // found two OTHER shipped routes that write `spoc_name` and never bumped (the Sync Inbox's
+    // "Apply value" and the sheet-change revert door), which is the fifth time this S1 has been
+    // caused by a write path that did not know it had a duty. The bump is structural now:
+    // `LocationSchema.pre("save")` in models/index.ts fires for crud.ts's `existing.save()` below
+    // exactly as it does for those two, and for whatever route is written next.
     // R-F (CEO 14/08 [36:44-37:28]): a SPOC/principal may help with centre details — "other
     // than whatever eight, ten fields you want to fix" — and their change applies only once
     // the Admin approves it. The fixed ten are the centre's identity and the master-sheet

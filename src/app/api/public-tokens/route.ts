@@ -216,8 +216,13 @@ export const POST = apiHandler(async (req: NextRequest) => {
     // and "remembers to" is how each of the last four fixes died. So the key ALSO carries a
     // snapshot of WHO the centre says occupies this ref right now, read server-side - never
     // `body.recipient_name`, which the caller controls and could aim at somebody else's link.
+    // QA-1503 cycle 6: ...and WHICH CENTRE that ref was read off. `spoc` is a role on whatever
+    // centre this batch sits on today, and `PATCH /api/batches/[id]` moves a batch between centres
+    // — after which the new centre's SPOC minted a key byte-identical to the old centre's SPOC's
+    // whenever the two shared a name, and killed their link. Nothing was renamed and no bump was
+    // missed; the key was simply one field short of saying who it meant.
     const occName = occupantName(planLoc, rRef);
-    const rKey = recipientKey({ recipient_ref: rRef, slot_generation: slotGeneration(planLoc, rRef), occupant_name: occName });
+    const rKey = recipientKey({ recipient_ref: rRef, slot_generation: slotGeneration(planLoc, rRef), occupant_name: occName, location_id: planLoc?._id ? String(planLoc._id) : "" });
     if (!rKey) {
       // Unreachable while `offered` requires a non-empty name for every ref it admits - kept
       // because an empty key must never reach the revocation below, where it would match every
@@ -246,10 +251,14 @@ export const POST = apiHandler(async (req: NextRequest) => {
     // input is the ROW'S OWN recorded fields (storedTokenKey() in rules.ts reads nothing from the
     // centre's current state), because deriving an old row's identity from today's occupant is
     // precisely the guess that made this an S1 five times.
+    //
+    // QA-1503 cycle 6: the format the pass looks for is now "does not start with `loc:`", which
+    // also catches the two-signal keys cycle 1 wrote. A row it cannot rebuild — no recorded centre,
+    // or no recorded person — keeps whatever key it has and simply matches no mint from here on.
     const stale = await PublicToken.find({
       purpose: "plan", batch: body.batch, recipient_ref: { $nin: [null, ""] },
-      recipient_key: { $not: /\|as:/ },
-    }).select("recipient_ref recipient_name recipient_occupant recipient_key").lean<any[]>();
+      recipient_key: { $not: /^loc:/ },
+    }).select("recipient_ref recipient_name recipient_occupant recipient_location recipient_key").lean<any[]>();
     for (const t of stale) {
       const upgraded = storedTokenKey(t);
       // "" means the row cannot say whose it is (no recorded name). Leave its key exactly as it
@@ -273,6 +282,10 @@ export const POST = apiHandler(async (req: NextRequest) => {
       // day they disagree - a stale picker, a rename mid-session - the identity must be the one the
       // server read, and there has to be somewhere to see that it was.
       recipient_occupant: occName,
+      // ...and the centre that ref was read off, for the same reason and in the same spirit: the
+      // key must be rebuildable later from the row's OWN record, never from where this batch
+      // happens to sit on the day somebody re-sends (QA-1503).
+      recipient_location: planLoc?._id,
       recipient_role_label: rRole, recipient_ref: rRef,
       recipient_key: rKey,
     });

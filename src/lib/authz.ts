@@ -138,11 +138,19 @@ export function apiHandler<T extends unknown[]>(fn: (...args: T) => Promise<Resp
       // are already public, since the caller just sent them. So: name the field and, for an enum,
       // the permitted values; never repeat what was submitted.
       if (e instanceof Error && e.name === "ValidationError") {
-        const errs = (e as unknown as { errors?: Record<string, { kind?: string; properties?: { enumValues?: string[] } }> }).errors ?? {};
+        const errs = (e as unknown as { errors?: Record<string, { kind?: string; properties?: { enumValues?: string[]; message?: string } }> }).errors ?? {};
         const parts = Object.entries(errs).slice(0, 4).map(([path, err]) => {
           const allowed = err?.properties?.enumValues;
           if (allowed?.length) return `${path} must be one of: ${allowed.join(", ")}`;
           if (err?.kind === "required") return `${path} is required`;
+          // QA-1505: a schema-authored message, when the schema wrote one. `properties.message` is
+          // where Mongoose puts a CUSTOM validator's own text — ours, written in models/index.ts,
+          // never anything the caller submitted (the enum and required branches above still win, so
+          // no existing refusal changes wording). Without this, the one schema rule that has a real
+          // explanation to give — two contacts sharing an id, which makes a plan link unable to say
+          // whose it is — arrived at the screen as "contacts is not valid", and a refusal that does
+          // not say what to do is the defect this file already documents twice.
+          if (err?.properties?.message) return err.properties.message;
           return `${path} is not valid`;
         });
         return NextResponse.json(

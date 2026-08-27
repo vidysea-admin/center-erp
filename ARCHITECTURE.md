@@ -44,6 +44,20 @@ page.** It imports models, so client components can't import it — client-safe 
 **Every exported const list here is a source of truth.** Where a UI hardcodes the same strings, that
 pairing is listed in §3.
 
+**This file also carries BEHAVIOUR, and only in one place** (QA-1502, 2026-08-27). `LocationSchema`
+has two pieces of middleware beside it — a `pre("save")` and a `pre([...update])` — that (a) advance
+the `spoc_gen` / `principal_gen` / `cluster_head_gen` counters whenever the matching `*_name` field
+is set to a different value, and (b) refuse a `contacts[]` array with two entries sharing one `_id`.
+Both exist because a plan link's identity (`recipientKey()` in `lib/rules.ts`) is built from a slot
+ref + that slot's generation + an occupant snapshot + the centre, and for five releases the counter
+was maintained by every write path *remembering* to call a helper — two shipped routes did not
+(`sync.ts` "Apply value", `sheet-changes/[id]/revert`), and a real person's live link died each time.
+`SLOT_OCCUPANT_FIELDS` and `slotGenerationBumps()` therefore live HERE, not in `rules.ts` (which
+imports this module and so cannot be imported by it); `rules.ts` re-exports both names, so there is
+one definition and every caller is unchanged. The **one** remaining explicit caller is
+`admin/avpl-rebase/route.ts`, whose upsert goes through the raw driver collection and can never
+reach Mongoose middleware — it says so at the call site.
+
 Key enums: `TRAINER_PIPELINE` (:26) · `TRAINER_DOC_TYPE` (:42) · `SCHEME` · `LIFECYCLE_STATUS` ·
 `ASSESSMENT_RESULT` · `CERTIFICATE_STATUS` (:65) · `BATCH_STATUS` (:68) · `ENROLLMENT_ISSUE` (:70) ·
 `CANDIDATE_DOC_TYPE` (:310) · `EDUCATION_LEVEL` (:340) · `SIDH_STATUS` · `GOVT_MATCH_STATUS` ·

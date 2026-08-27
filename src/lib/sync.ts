@@ -1045,6 +1045,13 @@ export async function applySheetChange(changeId: string, action: string, note: s
       if (!doc) throw new HttpError(404, `${entityType} not found.`);
       const snap = change.impact_snapshot as any;
       const resolved = snap && snap.apply !== undefined ? snap.apply : change.new_value;
+      // QA-1502 (QA-558/QA-621 cycle 6): `spoc_name` and `principal_name` are both in
+      // LOCATION_FIELDS, so this ★-recommended Sync Inbox button hands a centre's SPOC chair to a
+      // different human — and for five releases it did so without moving that slot's generation
+      // counter, which a plan link's identity depends on. Two presses (rename, then rename back)
+      // and the first person's live link was silently 404. Nothing is added here on purpose: the
+      // bump belongs to `LocationSchema.pre("save")` (models/index.ts) and fires on the save below,
+      // because "this route remembers" is precisely the mechanism that failed five times.
       doc.set(change.field_name, resolved === "" ? undefined : resolved);
       await doc.save({ validateModifiedOnly: true });
       await audit({ entity: entityType, entityId: doc._id, field: change.field_name, oldValue: change.old_value, newValue: change.new_value, actor: actorId, actorType: "EXTERNAL_SYNC" });

@@ -189,7 +189,11 @@ export const POST = apiHandler(async (req: NextRequest) => {
     // QA-621 cycle 4: this write bypasses Mongoose entirely (that's the whole point of the raw
     // driver above), so no schema hook could ever catch a SPOC/Principal/Cluster-Head rename
     // coming from the master sheet — it has to be done explicitly, here, against whatever is
-    // CURRENTLY stored under this code, same helper as every other write path (rules.ts).
+    // CURRENTLY stored under this code.
+    // QA-1502 cycle 6: this is now the ONLY explicit call left in `src/`. Every other write path
+    // reaches a Location through Mongoose and is covered by the middleware on LocationSchema
+    // (models/index.ts) — which is where the duty belongs, because two shipped routes never knew
+    // they had it. This one is the exception the middleware provably cannot reach, and it says so.
     const existingLoc = await db.collection("locations").findOne(
       { code: loc.code },
       { projection: { spoc_name: 1, principal_name: 1, cluster_head_name: 1, spoc_gen: 1, principal_gen: 1, cluster_head_gen: 1 } },

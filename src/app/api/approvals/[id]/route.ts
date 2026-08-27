@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { decideApproval } from "@/lib/approvals";
-import { assertCostEntryValid, slotGenerationBumps, transitionBatch, updateInvoiceChecked } from "@/lib/rules";
+import { assertCostEntryValid, transitionBatch, updateInvoiceChecked } from "@/lib/rules";
 import { CostEntry, Location, LocationTarget, Room } from "@/models";
 import { audit } from "@/lib/audit";
 
@@ -49,13 +49,12 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
         const patch = { ...p.patch };
         for (const f of FIXED) delete patch[f];
         if (Object.keys(patch).length) {
-          // QA-621 cycle 4: a parked SPOC/Principal/Cluster-Head name change lands HERE, via
-          // findByIdAndUpdate rather than crud.ts's beforeUpdate — its own, separate write path,
-          // so it needs its own bump against whatever the slot's occupant is right now (not what
-          // it was when the suggestion was first typed, which may be stale by approval time).
-          const currentLoc = await Location.findById(request.entity_id)
-            .select("spoc_name principal_name cluster_head_name spoc_gen principal_gen cluster_head_gen").lean<any>();
-          Object.assign(patch, slotGenerationBumps(currentLoc, patch));
+          // QA-621 cycle 4 / QA-1502 cycle 6: a parked SPOC/Principal/Cluster-Head name change
+          // lands HERE, via findByIdAndUpdate rather than crud.ts's beforeUpdate — its own,
+          // separate write path, which used to mean its own copy of the generation bump. The
+          // query middleware on LocationSchema (models/index.ts) now does it for every Mongoose
+          // write, and it still compares against whatever the slot's occupant is RIGHT NOW rather
+          // than what it was when the suggestion was typed, which may be stale by approval time.
           await Location.findByIdAndUpdate(request.entity_id, patch);
         }
       }

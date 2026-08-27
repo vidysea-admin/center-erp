@@ -3,7 +3,7 @@
 import { Types } from "mongoose";
 import {
   AuditLog, Batch, BatchDocument, BATCH_DOC_TYPE, BatchMember, Candidate, CandidateResult, Closure, CostCategory, CostEntry, DailyLog, GovtAttendanceRow, Invoice, Location,
-  LocationTarget, Notification, Program, Room, Scheme, SheetChange, SyncSource, TRAINER_PIPELINE, Trainer, TrainerDocument,
+  LocationTarget, Notification, Program, Room, Scheme, SheetChange, SLOT_OCCUPANT_FIELDS, SyncSource, TRAINER_PIPELINE, Trainer, TrainerDocument,
 } from "@/models";
 import { audit, auditDiff } from "@/lib/audit";
 import { currentStageOf, isCertificateSettled } from "@/lib/candidate-journey";
@@ -2377,31 +2377,15 @@ export type Basis = { key: string; label: string; date: Date | null; blocking?: 
 // the OLD un-suffixed format (`ref:<slot>`) - so every link minted before this fix, and every
 // location whose SPOC/Principal/Cluster Head has simply never been edited, is byte-for-byte
 // unchanged. Nothing to migrate, nothing to backfill.
-export const SLOT_OCCUPANT_FIELDS: Record<string, { nameField: string; genField: string }> = {
-  spoc: { nameField: "spoc_name", genField: "spoc_gen" },
-  principal: { nameField: "principal_name", genField: "principal_gen" },
-  cluster_head: { nameField: "cluster_head_name", genField: "cluster_head_gen" },
-};
-
-// Given a Location's CURRENTLY STORED fields and a patch about to be written to it, return the
-// generation bumps (if any) that write must fold into the SAME write. The one place this
-// comparison is made - every write path that can change spoc_name / principal_name /
-// cluster_head_name (the direct edit route, an approved location.edit suggestion, the AVPL master
-// -sheet rebase) calls this with whatever it is about to persist, rather than re-deriving "did the
-// occupant change" for itself.
-export function slotGenerationBumps(
-  existing: Record<string, unknown> | null | undefined,
-  patch: Record<string, unknown>,
-): Record<string, number> {
-  const bumps: Record<string, number> = {};
-  for (const { nameField, genField } of Object.values(SLOT_OCCUPANT_FIELDS)) {
-    if (!(nameField in patch)) continue; // this write does not touch this field at all
-    const before = String((existing as any)?.[nameField] ?? "").trim();
-    const after = String(patch[nameField] ?? "").trim();
-    if (before !== after) bumps[genField] = Number((existing as any)?.[genField] ?? 0) + 1;
-  }
-  return bumps;
-}
+// QA-1502 (cycle 2): both of these now live WITH THE SCHEMA (models/index.ts), because that is
+// where the middleware that maintains the counters had to go - a Mongoose model cannot import this
+// module, which imports it. Re-exported so every existing caller reads them from here unchanged,
+// and so there is still exactly one definition of each (ARCHITECTURE §3). The bump itself is no
+// longer anybody's to remember: `LocationSchema.pre("save")` and the query middleware beside it
+// fire for every Mongoose write that reaches a Location. slotGenerationBumps() survives for the one
+// write in the codebase that never reaches Mongoose - `admin/avpl-rebase`, which upserts through
+// the raw driver collection.
+export { SLOT_OCCUPANT_FIELDS, slotGenerationBumps } from "@/models";
 
 // The generation currently in effect for a slot ref (`spoc` / `principal` / `cluster_head`), read
 // off the location that offers it. Anything else (a `contact:<id>` ref, or an unrecognised ref)
@@ -2472,17 +2456,29 @@ export function occupantName(loc: Record<string, unknown> | null | undefined, re
   return "";
 }
 
-// `occupant_name` is a REQUIRED property, not an optional one, on purpose: a caller that forgets it
-// must fail to compile rather than quietly compute the old single-signal key and match somebody
-// else's token. An empty ref or an empty occupant means "this link cannot say whose it is" and
-// returns "" - which never matches anything, because the revocation refuses to run on an empty key.
-export function recipientKey(r: { recipient_ref?: unknown; slot_generation?: unknown; occupant_name: unknown }): string {
+// `occupant_name` and `location_id` are REQUIRED properties, not optional ones, on purpose: a
+// caller that forgets one must fail to compile rather than quietly compute an older, wider key and
+// match somebody else's token. Any of the three being empty means "this link cannot say whose it
+// is" and returns "" - which never matches anything, because the revocation refuses an empty key.
+//
+// QA-1503 (cycle 2) - why the CENTRE is the third component, and why it is a component of the key
+// rather than a filter beside it. `spoc` names a role on whatever centre the batch currently sits
+// on, and the generation counters are per-Location and both start at 0, so the SPOC of centre X and
+// the SPOC of centre Y minted a byte-identical key whenever their names matched - and a batch can
+// be moved between centres by `PATCH /api/batches/[id]`, which is an ordinary supported operation
+// that renames nothing and forgets no bump. Two people, two centres, one dead link. Folding the
+// centre in makes a ref mean (location, role) rather than role alone, which is what it always
+// meant in prose; and a component of the string, rather than a second query condition, because the
+// revocation is one exact match on one indexed field and every extra reader of "whose is this" is
+// how this bug has restarted before (QA-616).
+export function recipientKey(r: { recipient_ref?: unknown; slot_generation?: unknown; occupant_name: unknown; location_id: unknown }): string {
   const ref = String(r.recipient_ref ?? "").trim();
   const who = normalizeOccupantName(r.occupant_name);
-  if (!ref || !who) return "";
+  const loc = String(r.location_id ?? "").trim();
+  if (!ref || !who || !loc) return "";
   const gen = Number(r.slot_generation ?? 0);
   const base = gen > 0 ? `ref:${ref}:g${gen}` : `ref:${ref}`;
-  return `${base}|as:${who}`;
+  return `loc:${loc}|${base}|as:${who}`;
 }
 
 // The key a token that is ALREADY STORED should carry, derived from that token's OWN recorded
@@ -2497,15 +2493,28 @@ export function recipientKey(r: { recipient_ref?: unknown; slot_generation?: unk
 // than from today's counter, which may have moved since. A row with no ref, or no recorded name,
 // gets "" and stays unmatched forever - listed on the plan screen as belonging to nobody the centre
 // still lists, revoked by hand.
-export function storedTokenKey(t: { recipient_ref?: unknown; recipient_name?: unknown; recipient_occupant?: unknown; recipient_key?: unknown }): string {
+// QA-1503 (cycle 2): the centre is recovered the same way - from `recipient_location`, stamped on
+// the row at mint time, and from nowhere else. Deliberately NOT from the batch's location today:
+// that is the guess QA-1503 is made of, because the batch may have been moved since this link was
+// sent, and reading where it sits now would hand an old centre's link to the new centre's SPOC.
+// A row with no recorded centre therefore gets "" and stays unmatched forever, exactly as a row
+// with no recorded person does (QA-623) - it is listed on the plan screen as belonging to nobody
+// the centre still lists and revoked by hand, and re-sending to that person adds a second link
+// rather than replacing a link the system cannot prove is theirs. That is the failure direction
+// this unit chose in cycle 1 and it is the same one here: an extra live link, never a dead one.
+export function storedTokenKey(t: { recipient_ref?: unknown; recipient_name?: unknown; recipient_occupant?: unknown; recipient_location?: unknown; recipient_key?: unknown }): string {
   const existing = String(t.recipient_key ?? "");
-  if (existing.includes("|as:")) return existing; // already in the two-signal format
-  const m = /:g(\d+)$/.exec(existing);
+  // Already in the current three-component format - `loc:` can only have been written by the mint
+  // or by this function. Anything else (`ref:<ref>`, `ref:<ref>:g<n>`, or cycle 1's
+  // `ref:<ref>|as:<who>`) is rebuilt below from what the ROW itself recorded.
+  if (existing.startsWith("loc:") && existing.includes("|as:")) return existing;
+  const m = /:g(\d+)(?:\|as:|$)/.exec(existing);
   const recorded = String(t.recipient_occupant ?? "").trim() || t.recipient_name;
   return recipientKey({
     recipient_ref: t.recipient_ref,
     slot_generation: m ? Number(m[1]) : 0,
     occupant_name: recorded,
+    location_id: t.recipient_location ? String(t.recipient_location) : "",
   });
 }
 

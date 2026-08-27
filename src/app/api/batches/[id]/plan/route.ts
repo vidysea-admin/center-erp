@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser } from "@/lib/authz";
 import { Batch, Location, PublicToken } from "@/models";
-import { assertBatchInScope, planArtifact, recipientKey, slotGeneration, storedTokenKey } from "@/lib/rules";
+import { assertBatchInScope, occupantName, planArtifact, recipientKey, slotGeneration, storedTokenKey } from "@/lib/rules";
 import { canShareLinks } from "@/lib/permissions";
 
 // QA-152 part 2 (-82): the signed-in plan view. Read for anyone who can see the batch
@@ -23,7 +23,7 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   const art = await planArtifact(id);
 
   const links = await PublicToken.find({ purpose: "plan", batch: id, active: true })
-    .select("token allow_updates createdAt recipient_name recipient_phone recipient_role_label recipient_ref recipient_occupant recipient_key")
+    .select("token allow_updates createdAt recipient_name recipient_phone recipient_role_label recipient_ref recipient_occupant recipient_location recipient_key")
     .sort({ createdAt: -1 }).lean<any[]>();
 
   // QA-614: this endpoint is readable by anyone who passes assertBatchInScope - which includes a
@@ -42,8 +42,20 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     const b = await Batch.findById(id).select("location").lean<any>();
     const loc = b?.location ? await Location.findById(b.location)
       .select("spoc_name spoc_phone principal_name principal_phone cluster_head_name cluster_head_phone contacts spoc_gen principal_gen cluster_head_gen").lean<any>() : null;
-    const add = (ref: string, name?: string, phone?: string, role_label?: string) => {
-      const n = String(name ?? "").trim();
+    // QA-1505 (cycle 2): the NAME is no longer this route's own reading of the location document.
+    // Cycle 1's manifest claimed both doors called occupantName(); a checker read the imports and
+    // found only this one passing whatever it had picked up itself, which is the ARCHITECTURE §3
+    // "two readers of one fact" condition the shared helper exists to remove — reintroduced inside
+    // the change written to prevent it (QA-616 is the same defect one release earlier). It cost a
+    // real divergence: with two contact subdocuments sharing an `_id`, this route offered two
+    // people under one ref with two different keys while the mint — which resolves `contact:<id>`
+    // by taking the FIRST row with that id — computed one key for both and revoked the wrong
+    // person. The duplicate id is refused at the write door now (models/index.ts), and this route
+    // no longer has an opinion of its own about who occupies a ref either. `add()` therefore takes
+    // the ref and the fields that are NOT identity (phone, role label); the name comes back from
+    // the one function that answers that question.
+    const add = (ref: string, phone?: string, role_label?: string) => {
+      const n = occupantName(loc, ref);
       if (!n) return;
       const role = String(role_label ?? "Contact").trim() || "Contact";
       const phoneStr = String(phone ?? "").trim();
@@ -54,15 +66,17 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
       // read from the same location document, two lines up), which is exactly what the mint route
       // snapshots into the key - so the picker and the mint still compute one identical key, and
       // "this person already has a link" cannot disagree with what sending actually replaces.
-      recipients.push({ ref, key: recipientKey({ recipient_ref: ref, slot_generation: slotGeneration(loc, ref), occupant_name: n }), name: n, phone: phoneStr, role_label: role });
+      // QA-1503 cycle 6: ...and on WHICH CENTRE, because `spoc` is a role on a centre and a batch
+      // can be moved to another one.
+      recipients.push({ ref, key: recipientKey({ recipient_ref: ref, slot_generation: slotGeneration(loc, ref), occupant_name: n, location_id: loc?._id ? String(loc._id) : "" }), name: n, phone: phoneStr, role_label: role });
     };
-    add("spoc", loc?.spoc_name, loc?.spoc_phone, "SPOC");
-    add("principal", loc?.principal_name, loc?.principal_phone, "Principal");
-    add("cluster_head", loc?.cluster_head_name, loc?.cluster_head_phone, "Cluster Head");
+    add("spoc", loc?.spoc_phone, "SPOC");
+    add("principal", loc?.principal_phone, "Principal");
+    add("cluster_head", loc?.cluster_head_phone, "Cluster Head");
     // QA-615: the contact's OWN id, not its position. `contact:<index>` moved when the admin
     // removed an earlier contact, and sending to whoever slid into that slot revoked the previous
     // occupant's live link. An `_id` does not slide.
-    (loc?.contacts ?? []).forEach((c: any) => add(c?._id ? `contact:${String(c._id)}` : "", c?.name, c?.phone, c?.role_label));
+    (loc?.contacts ?? []).forEach((c: any) => add(c?._id ? `contact:${String(c._id)}` : "", c?.phone, c?.role_label));
   }
 
   return NextResponse.json({

@@ -3922,6 +3922,202 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
     (await slotLive(aliceRowTok)) === 200,
     JSON.stringify({ alice: await slotLive(aliceRowTok) }));
 
+  // ══ QA-1502 / QA-1503 / QA-1505 (cycle 6) — THE INTERSECTIONS, AND THE CENTRE ═══════════════════
+  // The seven pins above are each individually right and TOGETHER they miss three shapes a checker
+  // then reproduced end to end. Every one of them is the same {404, 200}: a real person's live plan
+  // link, silently dead, with nothing on any screen explaining why.
+  //
+  //   * pin (4) breaks the generation bump with a name that DIFFERS; pin (5) tests a RETURNING name
+  //     through a path that DOES bump. Nothing tested their intersection — and two shipped,
+  //     Admin-clickable routes sat exactly there (QA-1502).
+  //   * no pin had ever moved a batch to another centre. `ref:spoc` names a role on whatever centre
+  //     the batch sits on, and per-Location counters both start at 0, so two centres' SPOCs sharing
+  //     a name minted a byte-identical key (QA-1503).
+  //   * no pin had ever compared the PICKER's key with the key the mint actually STORED. They
+  //     agreed by coincidence of implementation, not because one function answered the question
+  //     (QA-1505).
+  const cy = "Y" + Date.now().toString().slice(-6);
+  // Liveness is read from the PUBLIC door, because "is this person's link dead" is a question only
+  // the door can answer. But `public/plan/[token]` rate-limits on `clientKey(req)` — 60 reads per
+  // client per 10 minutes, one bucket shared by every token — and the pins above have already spent
+  // most of it, so a naive read here returns 429 and a pin would fail for the INSTRUMENT rather than
+  // for the product (cycle 1's checker lost a whole run to exactly this and said so). Each read
+  // therefore arrives from its own client address, which is what a rate limit is defined against;
+  // nothing else about the request changes. Statuses are also taken ONCE per checkpoint and reused
+  // in the assertion and its message, rather than re-fetched to print.
+  let planReadClient = 0;
+  const liveOf = async (t) => (await fetch(BASE + `/api/public/plan/${t.token}`, {
+    headers: { "x-forwarded-for": `10.58.${(++planReadClient >> 8) & 255}.${planReadClient & 255}` },
+  })).status;
+  const planBatchFor = async (locId, start) => {
+    const b = (await req("POST", "/api/batches", { location: locId, program: prog._id, planned_start: start, target_size: 3 }, 201)).data.item;
+    await req("PATCH", `/api/batches/${b._id}/milestones`, { create: true }, 200);
+    return b;
+  };
+  const pickFrom = async (batchId, startsWith) => ((await req("GET", `/api/batches/${batchId}/plan`)).data.recipients ?? [])
+    .find((r) => String(r.name).startsWith(startsWith));
+  const mintFor = async (batchId, r) => (await req("POST", "/api/public-tokens", { purpose: "plan", batch: batchId, recipient_name: r.name, recipient_phone: r.phone, recipient_role_label: r.role_label, recipient_ref: r.ref }, 201)).data.item;
+  // A sheet-change fixture: a one-row CSV that maps a centre's SPOC column onto `spoc_name`, so the
+  // rename below arrives through the SYNC INBOX exactly as it does in production — the ★-recommended
+  // "Apply value" button on a row a human is looking at — rather than through a hand-built write.
+  const spocSheet = async (extId, spocName, name) => {
+    const fd = new FormData();
+    fd.append("file", new File([`Center ID,SPOC\n${extId},${spocName}\n`], name, { type: "text/csv" }));
+    return new URL((await fetch(`${BASE}/api/upload`, { method: "POST", headers: { cookie }, body: fd }).then((r) => r.json())).url, BASE).href;
+  };
+  const openSpocRow = async (locId) => ((await req("GET", "/api/sheet-changes?status=Open")).data.items ?? [])
+    .find((c) => String(c.location?._id ?? c.location) === String(locId) && c.field_name === "spoc_name");
+
+  // ── (7) QA-1502 — the Sync Inbox's "Apply value" is a slot reassignment, and it never bumped ──
+  // `spoc_name` is in LOCATION_FIELDS and classifyChange RECOMMENDS "Apply value" on it, so this is
+  // one ordinary press of a starred button. Two of them — rename, then rename back — used to leave
+  // spoc_gen at 0 through both, and the first Meena's link died when the second Meena's was minted.
+  // The fix is not a call added here; it is that the counter is maintained by the schema, so a
+  // route that has never heard of it (this one, the revert door below, and whatever is written
+  // next) cannot fail to move it.
+  const applyLoc = (await req("POST", "/api/locations", { code: "AV" + cy, name: "Apply Centre " + cy, external_id: "AV" + cy, approval_status: "Approved", city: "Rewa", spoc_name: "Meena " + cy, spoc_phone: "9810000001" }, 201)).data.item;
+  const applyBatch = await planBatchFor(applyLoc._id, "2027-08-01");
+  const meenaOne = await pickFrom(applyBatch._id, "Meena");
+  const meenaOneTok = await mintFor(applyBatch._id, meenaOne);
+  const applySrc = (await req("POST", "/api/sync-sources", {
+    name: "Apply Src " + cy, source_url: await spocSheet("AV" + cy, "Naveen " + cy, "av1" + cy + ".csv"),
+    field_mappings: { "Center ID": "external_id", "SPOC": "spoc_name" },
+  }, 201)).data.item;
+  await req("POST", `/api/sync-sources/${applySrc._id}/run`, undefined, 200);
+  const row1 = await openSpocRow(applyLoc._id);
+  await req("POST", `/api/sheet-changes/${row1?._id}/apply`, { action: "Apply value" }, 200);
+  const naveen = await pickFrom(applyBatch._id, "Naveen");
+  ok("QA-1502: a Sync Inbox 'Apply value' that renames a centre's SPOC moves that slot's generation - the picker's key for the chair is no longer the one the previous occupant's link carries",
+    !!naveen && naveen.ref === "spoc" && naveen.key !== meenaOne.key && /:g[1-9]/.test(naveen.key),
+    JSON.stringify({ before: meenaOne.key, after: naveen?.key }));
+  const naveenTok = await mintFor(applyBatch._id, naveen);
+  // ...and now the intersection nothing tested: the SAME NAME comes back through that same
+  // non-bumping route. The occupant snapshot matches (it is the same string), so the generation is
+  // the only thing that can tell the two Meenas apart.
+  await req("PATCH", `/api/sync-sources/${applySrc._id}`, { source_url: await spocSheet("AV" + cy, "Meena " + cy, "av2" + cy + ".csv") }, 200);
+  await req("POST", `/api/sync-sources/${applySrc._id}/run`, undefined, 200);
+  const row2 = await openSpocRow(applyLoc._id);
+  await req("POST", `/api/sheet-changes/${row2?._id}/apply`, { action: "Apply value" }, 200);
+  const meenaTwoTok = await mintFor(applyBatch._id, await pickFrom(applyBatch._id, "Meena"));
+  const applyLive = { firstMeena: await liveOf(meenaOneTok), naveen: await liveOf(naveenTok), secondMeena: await liveOf(meenaTwoTok) };
+  ok("QA-1502: two 'Apply value' presses hand a centre's SPOC chair away and back, and the FIRST holder of that name keeps their live link",
+    Object.values(applyLive).every((s) => s === 200), JSON.stringify(applyLive));
+
+  // ── (8) QA-1502 — the revert door is the same write, one route over ──
+  // `POST /api/sheet-changes/[id]/revert` puts the old value back with the identical
+  // `doc.set(); doc.save()`, so undoing an applied SPOC change is ALSO a slot reassignment. It is
+  // the cheapest way to produce the returning-name shape in production: apply, then undo.
+  const revLoc = (await req("POST", "/api/locations", { code: "RV" + cy, name: "Revert Centre " + cy, external_id: "RV" + cy, approval_status: "Approved", city: "Satna", spoc_name: "Ravi " + cy, spoc_phone: "9810000002" }, 201)).data.item;
+  const revBatch = await planBatchFor(revLoc._id, "2027-08-15");
+  const ravi = await pickFrom(revBatch._id, "Ravi");
+  const raviTok = await mintFor(revBatch._id, ravi);
+  const revSrc = (await req("POST", "/api/sync-sources", {
+    name: "Revert Src " + cy, source_url: await spocSheet("RV" + cy, "Sonal " + cy, "rv1" + cy + ".csv"),
+    field_mappings: { "Center ID": "external_id", "SPOC": "spoc_name" },
+  }, 201)).data.item;
+  await req("POST", `/api/sync-sources/${revSrc._id}/run`, undefined, 200);
+  const revRow = await openSpocRow(revLoc._id);
+  await req("POST", `/api/sheet-changes/${revRow?._id}/apply`, { action: "Apply value" }, 200);
+  const sonalTok = await mintFor(revBatch._id, await pickFrom(revBatch._id, "Sonal"));
+  await req("POST", `/api/sheet-changes/${revRow?._id}/revert`, undefined, 200);
+  const raviBack = await pickFrom(revBatch._id, "Ravi");
+  ok("QA-1502: reverting an applied SPOC change is a slot reassignment too, so it moves the generation - the restored name is not offered under the departed occupant's key",
+    !!raviBack && raviBack.key !== ravi.key && /:g[1-9]/.test(raviBack.key),
+    JSON.stringify({ beforeApply: ravi.key, afterRevert: raviBack?.key }));
+  const raviBackTok = await mintFor(revBatch._id, raviBack);
+  const revLive = { ravi: await liveOf(raviTok), sonal: await liveOf(sonalTok), raviBack: await liveOf(raviBackTok) };
+  ok("QA-1502: ...and neither the original Ravi's link nor Sonal's is revoked by minting for the restored name",
+    Object.values(revLive).every((s) => s === 200), JSON.stringify(revLive));
+
+  // ── (9) QA-1503 — two centres, one name, and a batch that moved between them ──
+  // No rename. No missed bump. No raw write. Two ordinary supported operations — create two centres
+  // whose SPOCs happen to share a name (`avpl-rebase` forward-fills the master sheet's SPOC column,
+  // so consecutive centres in one import inherit exactly that), and move a batch from one to the
+  // other — and on cycle 1 the second mint killed the first centre's SPOC's link, because `ref:spoc`
+  // said WHICH CHAIR and never WHICH BUILDING.
+  const sameer = "Sameer " + cy;
+  const centreX = (await req("POST", "/api/locations", { code: "CX" + cy, name: "Centre X " + cy, external_id: "CX" + cy, approval_status: "Approved", city: "Ujjain", spoc_name: sameer, spoc_phone: "9810000003" }, 201)).data.item;
+  const centreY = (await req("POST", "/api/locations", { code: "CY" + cy, name: "Centre Y " + cy, external_id: "CY" + cy, approval_status: "Approved", city: "Dewas", spoc_name: sameer, spoc_phone: "9810000004" }, 201)).data.item;
+  const moveBatch = await planBatchFor(centreX._id, "2027-09-01");
+  const spocX = await pickFrom(moveBatch._id, "Sameer");
+  const spocXTok = await mintFor(moveBatch._id, spocX);
+  await req("PATCH", `/api/batches/${moveBatch._id}`, { location: centreY._id }, 200);
+  const spocY = await pickFrom(moveBatch._id, "Sameer");
+  ok("QA-1503 fixture: after the batch moves, the picker offers the NEW centre's SPOC under the SAME ref and the SAME name - so the collision is genuinely available",
+    !!spocY && spocY.ref === spocX.ref && spocY.name === spocX.name,
+    JSON.stringify({ ref: spocY?.ref, sameName: spocY?.name === spocX.name }));
+  ok("QA-1503: ...and their keys still differ, because a slot ref means (centre, role) and never role alone",
+    !!spocY && spocY.key !== spocX.key && spocY.key.startsWith("loc:") && spocX.key.startsWith("loc:"),
+    JSON.stringify({ x: spocX.key, y: spocY?.key }));
+  const spocYTok = await mintFor(moveBatch._id, spocY);
+  const moveLive = { centreX: await liveOf(spocXTok), centreY: await liveOf(spocYTok) };
+  ok("QA-1503: sending the plan to the new centre's SPOC does not revoke the old centre's SPOC's live link, though the two share a name",
+    moveLive.centreX === 200 && moveLive.centreY === 200, JSON.stringify(moveLive));
+  // ...and the half that is not about safety: back on centre Y, re-sending to Y's own SPOC still
+  // rotates Y's own link off. A key qualified by the centre must not cost REQ-393 its rotation.
+  const spocYAgainTok = await mintFor(moveBatch._id, await pickFrom(moveBatch._id, "Sameer"));
+  const rotLive = { yOld: await liveOf(spocYTok), yNew: await liveOf(spocYAgainTok), x: await liveOf(spocXTok) };
+  ok("QA-1503: REQ-393 still holds across the move - re-sending to the CURRENT centre's SPOC rotates that person's own link and nobody else's",
+    rotLive.yOld === 404 && rotLive.yNew === 200 && rotLive.x === 200, JSON.stringify(rotLive));
+
+  // ── (10) QA-1505 — the picker and the mint answer "who occupies this ref" with ONE function ──
+  // Cycle 1's manifest said both doors called occupantName(); the picker did not, and passed a name
+  // it had read for itself. Two contacts sharing one subdocument `_id` made the divergence visible:
+  // the screen told two people apart and the mint — which takes the FIRST row with that id —
+  // collapsed them, and revoked the wrong one. The duplicate is refused at the door now, and the
+  // pin below is the general property, checked for EVERY ref the centre offers rather than for the
+  // one that happened to break: what the screen shows as this person's key is what the mint stores.
+  const dupLoc = (await req("POST", "/api/locations", { code: "DP" + cy, name: "Dup Centre " + cy, external_id: "DP" + cy, approval_status: "Approved", city: "Guna", spoc_name: "Dup Spoc " + cy, spoc_phone: "9810000005", principal_name: "Dup Principal " + cy, contacts: [{ name: "Dup One " + cy, role_label: "Contact", phone: "9810000006" }] }, 201)).data.item;
+  const dupBatch = await planBatchFor(dupLoc._id, "2027-09-15");
+  const dupNow = (await req("GET", `/api/locations/${dupLoc._id}`)).data.item;
+  const dupContact = (dupNow.contacts ?? [])[0];
+  const dupWrite = await req("PATCH", `/api/locations/${dupLoc._id}`, { contacts: [
+    { _id: dupContact._id, name: "Dup One " + cy, role_label: "Contact", phone: "9810000006" },
+    { _id: dupContact._id, name: "Dup Two " + cy, role_label: "Contact", phone: "9810000007" },
+  ] }, 400);
+  ok("QA-1505: a centre cannot be saved with two contacts sharing one id, and the refusal says why rather than 'contacts is not valid'",
+    /same id/i.test(String(dupWrite.data?.error ?? "")),
+    JSON.stringify({ error: String(dupWrite.data?.error ?? "").slice(0, 180) }));
+  const dupAfter = (await req("GET", `/api/locations/${dupLoc._id}`)).data.item;
+  ok("QA-1505: ...and the refusal is a refusal - the duplicate row is not half-written onto the centre",
+    (dupAfter.contacts ?? []).length === 1 && String(dupAfter.contacts[0].name).startsWith("Dup One"),
+    JSON.stringify((dupAfter.contacts ?? []).map((c) => c.name)));
+  {
+    const offeredAll = (await req("GET", `/api/batches/${dupBatch._id}/plan`)).data.recipients ?? [];
+    const minted = [];
+    for (const r of offeredAll) minted.push([r, await mintFor(dupBatch._id, r)]);
+    const shares = (await req("GET", `/api/batches/${dupBatch._id}/plan`)).data.shares ?? [];
+    const mismatched = minted.filter(([r, t]) => (shares.find((s) => s.token === t.token) ?? {}).recipient_key !== r.key);
+    ok("QA-1505: for every person the plan screen offers, the key it shows is byte-identical to the key the mint stored - one function answers 'who occupies this ref', not two readers agreeing by luck",
+      offeredAll.length >= 3 && mismatched.length === 0,
+      JSON.stringify({ offered: offeredAll.length, mismatched: mismatched.map(([r]) => r.ref) }));
+  }
+
+  // ── (11) QA-1503 — a row that cannot say WHICH CENTRE it was sent from is never matched ──
+  // The same discipline as QA-623, one field over. The centre is recovered from `recipient_location`
+  // stamped at mint time and from nowhere else — deliberately NOT from where the batch sits today,
+  // because that is exactly the guess QA-1503 is made of. So a row with no recorded centre keeps its
+  // key, matches no mint, and shows up on the plan screen as belonging to nobody: an EXTRA live
+  // link, revocable by hand, which is the failure direction this unit chose over a silently dead one.
+  const orphanTok = await mintFor(dupBatch._id, await pickFrom(dupBatch._id, "Dup Spoc"));
+  {
+    const { MongoClient, ObjectId } = await import("mongodb");
+    const mc = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+    await mc.connect();
+    await mc.db(process.env.MONGODB_DB).collection("publictokens").updateOne(
+      { _id: new ObjectId(String(orphanTok._id)) },
+      { $set: { recipient_key: "ref:spoc" }, $unset: { recipient_location: "", recipient_occupant: "" } });
+    await mc.close();
+  }
+  const orphanRow = ((await req("GET", `/api/batches/${dupBatch._id}/plan`)).data.shares ?? []).find((s) => s.token === orphanTok.token);
+  ok("QA-1503: a link whose row cannot say which centre it was sent from is shown as belonging to nobody, not guessed onto today's centre",
+    !!orphanRow && !orphanRow.recipient_key,
+    JSON.stringify({ found: !!orphanRow, key: orphanRow?.recipient_key ?? null }));
+  const orphanFreshTok = await mintFor(dupBatch._id, await pickFrom(dupBatch._id, "Dup Spoc"));
+  const orphanLive = { orphan: await liveOf(orphanTok), fresh: await liveOf(orphanFreshTok) };
+  ok("QA-1503: ...and re-sending to that same slot leaves the unmatched link alive rather than revoking a link the system cannot prove is theirs",
+    orphanLive.orphan === 200 && orphanLive.fresh === 200, JSON.stringify(orphanLive));
+
   // QA-617 — "may this user share?" was asked in two places that disagreed in BOTH directions. The
   // direction pinned here is the one my own first fix got wrong: an Admin with `can_edit: false` -
   // the schema's DEFAULT - can mint a link (requireEdit exempts Admin) but was shown nobody to send

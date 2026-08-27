@@ -175,9 +175,11 @@ const LocationSchema = new Schema({
   // `cluster_head_name` further up) is a role label, not a person - its OCCUPANT can change by a
   // plain edit to the *_name field, and a plan link's identity (recipientKey() in lib/rules.ts)
   // has to tell "same occupant re-sent" apart from "a different person now holds this slot".
-  // These three counters are bumped ONLY by slotGenerationBumps() (lib/rules.ts), and only when
-  // the matching *_name field is actually set to a different value - never client-writable
-  // directly (not in any itemRoutes `fields` allowlist).
+  // QA-1502 (cycle 2): these three counters are bumped STRUCTURALLY, by the middleware below this
+  // schema, and only when the matching *_name field is actually set to a different value - never
+  // client-writable directly (not in any itemRoutes `fields` allowlist). The bump used to be a
+  // call each write path had to remember to make; two shipped routes did not, and that is exactly
+  // how the previous five fixes died.
   spoc_gen: { type: Number, default: 0 },
   principal_gen: { type: Number, default: 0 },
   cluster_head_gen: { type: Number, default: 0 },
@@ -190,6 +192,133 @@ const LocationSchema = new Schema({
     user: oid("User"),
   }],
 }, { timestamps: true });
+
+// ══ QA-1502 (QA-558/QA-621 cycle 6) — THE SLOT GENERATION IS MAINTAINED BY THE SCHEMA ═══════════
+//
+// A plan link's identity (recipientKey() in lib/rules.ts) folds in the GENERATION of the slot it
+// was minted for, so that when a centre hands its SPOC chair to a different human the new
+// occupant's mint lands on a different key and cannot revoke the old occupant's live link.
+//
+// That only works while the counter actually moves. Cycle 1 moved it by having every write path
+// CALL a helper, and a checker then found two shipped, Admin-clickable routes that never did:
+// `applySheetChange` case "Apply value" and `POST /api/sheet-changes/[id]/revert`, both of which do
+// a plain `doc.set(field, value); doc.save()` on a Location. Two presses of the ★-recommended
+// button in the Sync Inbox renamed a SPOC and back, the generation stayed at 0, and the first
+// person's link died — the same {404, 200} this S1 has produced for five releases.
+//
+// The lesson of six root causes on one bug is that "every write path remembers" is not a mechanism,
+// it is a hope. So the bump lives HERE, on the model, in one place, and fires for every Mongoose
+// write that reaches a Location — a route written next year, a migration, a seed script, an
+// importer. The only writes it cannot see are ones that bypass Mongoose entirely and speak to the
+// driver's raw collection (`admin/avpl-rebase`, which reads-then-upserts through
+// `Location.collection`); that route calls slotGenerationBumps() itself and says why.
+//
+// SLOT_OCCUPANT_FIELDS lives with the schema rather than in lib/rules.ts because the middleware
+// below needs it and rules.ts already imports this module (a definition here, imported there, is
+// the only direction that has no cycle). rules.ts RE-EXPORTS both names, so every existing
+// importer is unchanged and there is still exactly one definition (ARCHITECTURE §3).
+export const SLOT_OCCUPANT_FIELDS: Record<string, { nameField: string; genField: string }> = {
+  spoc: { nameField: "spoc_name", genField: "spoc_gen" },
+  principal: { nameField: "principal_name", genField: "principal_gen" },
+  cluster_head: { nameField: "cluster_head_name", genField: "cluster_head_gen" },
+};
+
+// Given a Location's CURRENTLY STORED fields and a patch about to be written to it, return the
+// generation bumps that write must fold into the SAME write. The one place this comparison is made.
+// The middleware below is its only caller inside `src/`; `admin/avpl-rebase/route.ts` calls it
+// directly because its write never reaches Mongoose.
+export function slotGenerationBumps(
+  existing: Record<string, unknown> | null | undefined,
+  patch: Record<string, unknown>,
+): Record<string, number> {
+  const bumps: Record<string, number> = {};
+  for (const { nameField, genField } of Object.values(SLOT_OCCUPANT_FIELDS)) {
+    if (!(nameField in patch)) continue; // this write does not touch this field at all
+    const before = String((existing as any)?.[nameField] ?? "").trim();
+    const after = String(patch[nameField] ?? "").trim();
+    if (before !== after) bumps[genField] = Number((existing as any)?.[genField] ?? 0) + 1;
+  }
+  return bumps;
+}
+
+// QA-1505 (cycle 2): two contact subdocuments sharing one `_id` on the same centre. A checker got
+// two of them stored through `PATCH /api/locations/[id]` (200), and then the plan screen offered
+// two DIFFERENT people under ONE ref while the mint - which resolves `contact:<id>` by taking the
+// FIRST row with that id - collapsed them to one, and revoked the wrong person's link. The ref is
+// the durable half of the two-signal identity, so a duplicated ref is not a cosmetic data problem;
+// it is the identity itself becoming ambiguous. It is refused at the door instead, for every
+// Mongoose write, because "which door accepts contacts" is a question with more than one answer.
+function assertContactIdsUnique(contacts: unknown) {
+  if (!Array.isArray(contacts)) return;
+  const seen = new Set<string>();
+  for (const c of contacts) {
+    const id = String((c as any)?._id ?? "").trim();
+    if (!id) continue; // a new row without an id: Mongoose mints a fresh unique one
+    if (seen.has(id)) {
+      // Shaped exactly like a Mongoose custom-validator failure so apiHandler answers 400 with THIS
+      // sentence (the `properties.message` branch in lib/authz.ts) rather than a generic refusal.
+      const msg = "Two of this centre's contacts carry the same id, so a plan link sent to one of them could not say which of the two people it belongs to. Remove the duplicate row and save again.";
+      const e: any = new Error(msg);
+      e.name = "ValidationError";
+      e.errors = { contacts: { kind: "duplicate-contact-id", properties: { message: msg } } };
+      throw e;
+    }
+    seen.add(id);
+  }
+}
+
+// The document path: `new Location(...)`, `doc.set(...) + doc.save()` (the Sync Inbox's "Apply
+// value" and the revert route), and crud.ts's `existing.save()` behind PATCH /api/locations/[id].
+// `isModified` IS the comparison here - Mongoose marks a primitive path modified only when it is
+// set to a value that differs from the one loaded from the database, which is precisely the
+// question slotGenerationBumps() asks of a patch.
+// (`as any` on the two registrations below only because `new Schema({...})` here is untyped, so
+// Mongoose's overloads cannot narrow the hook name — nothing about the hooks themselves.)
+// (Promise-style rather than the `next` callback: `save` is also registered for the document form
+// of `updateOne`, and the two are invoked with different arguments — an `async` hook is the one
+// shape Mongoose calls the same way for all of them.)
+(LocationSchema as any).pre("save", async function (this: any) {
+  if (this.isModified("contacts")) assertContactIdsUnique(this.get("contacts"));
+  if (this.isNew) return;
+  for (const { nameField, genField } of Object.values(SLOT_OCCUPANT_FIELDS)) {
+    // A caller that set the counter itself in the same save wins - nothing in `src/` does, but
+    // a bump applied twice would be silently wrong in the rotation direction rather than loudly.
+    if (this.isModified(nameField) && !this.isModified(genField)) {
+      this.set(genField, Number(this.get(genField) ?? 0) + 1);
+    }
+  }
+});
+
+// The query path: `findByIdAndUpdate` / `findOneAndUpdate` / `updateOne` / `updateMany` /
+// `replaceOne`. There is no document in hand, so the before-values are read here and the counters
+// are advanced with their own `$inc` per affected document - `$set`-ing a computed number would be
+// wrong the moment a query matches more than one centre, and `$inc` in the caller's own update
+// would collide with an explicit `$set` of the same path ("Updating the path ... would create a
+// conflict"). Written through `collection` so this middleware does not re-enter itself.
+(LocationSchema as any).pre(["findOneAndUpdate", "updateOne", "updateMany", "replaceOne"], async function (this: any) {
+  const raw = this.getUpdate() ?? {};
+  if (Array.isArray(raw)) return; // an aggregation-pipeline update; nothing in `src/` writes one
+  const flat: Record<string, unknown> = { ...(raw.$set ?? {}), ...(raw.$setOnInsert ?? {}) };
+  for (const [k, v] of Object.entries(raw)) if (!k.startsWith("$")) flat[k] = v;
+
+  if ("contacts" in flat) assertContactIdsUnique(flat.contacts);
+
+  const touched = Object.values(SLOT_OCCUPANT_FIELDS).filter(({ nameField, genField }) =>
+    nameField in flat
+    && !(genField in flat)                                   // an explicit counter write wins
+    && !(genField in (raw.$inc ?? {})));
+  if (!touched.length) return;
+
+  const docs = await this.model.find(this.getQuery())
+    .select("spoc_name principal_name cluster_head_name").lean();
+  for (const doc of docs) {
+    const inc: Record<string, number> = {};
+    for (const { nameField, genField } of touched) {
+      if (String((doc as any)[nameField] ?? "").trim() !== String(flat[nameField] ?? "").trim()) inc[genField] = 1;
+    }
+    if (Object.keys(inc).length) await this.model.collection.updateOne({ _id: (doc as any)._id }, { $inc: inc });
+  }
+});
 
 // ---------- MeetingNote (2026-08-11 meeting) ----------
 // "मीटिंग के नोट्स ले पाऊं… ताकि मुझे पता रहे किससे किस लोकेशन पे किस दिन बात हुई है" —
@@ -1162,6 +1291,19 @@ const PublicTokenSchema = new Schema({
   // (spoc_name edited, a contact row typed over) revoke a different person's live link five
   // releases running.
   recipient_occupant: String,
+  // QA-1503 (cycle 2): WHICH CENTRE the ref above was read off, at mint time. `spoc` names a role
+  // on whatever centre the batch sat on that day, and the generation counters are per-Location and
+  // both start at 0 - so the SPOC of centre X and the SPOC of centre Y produced a BYTE-IDENTICAL
+  // key whenever their names matched. `PATCH /api/batches/[id] {location}` moves a batch between
+  // centres and is an ordinary supported operation; after it, the new centre's mint revoked the old
+  // centre's SPOC's live link, with no rename and no missed bump anywhere. Nor is the name
+  // collision exotic: `admin/avpl-rebase` forward-fills the master sheet's SPOC column, so
+  // consecutive centres in one import inherit the SAME spoc_name, and the Locations screen ships a
+  // SPOC directory whose whole purpose is one SPOC across many centres.
+  //
+  // Stored as EVIDENCE for the same reason as `recipient_occupant`: the key must be rebuildable
+  // from the row's own record, never from where the batch happens to sit today.
+  recipient_location: oid("Location"),
   // QA-611: WHO this link belongs to, as one stored value - see recipientKey() in lib/rules.ts.
   // -191 revoked on the phone string and a centre with one landline for two people put the S1
   // straight back; a phone number is not a person.

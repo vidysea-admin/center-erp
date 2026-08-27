@@ -48,6 +48,11 @@ export const POST = apiHandler(async (_req: NextRequest, ctx: { params: Promise<
     if (!doc) throw new HttpError(404, `${entityType} not found.`);
     const snap = change.impact_snapshot as any;
     const restore = snap && snap.revert !== undefined ? snap.revert : (change.old_value ?? "");
+    // QA-1502 (QA-558/QA-621 cycle 6): the twin of the "Apply value" write in lib/sync.ts, and it
+    // was the other route that could rename a centre's SPOC without the slot's generation counter
+    // moving — the half of a plan link's identity that tells "re-sent to the same person" apart
+    // from "a different person holds this chair now". Nothing is added here: the bump is structural
+    // and fires on this save (LocationSchema.pre("save"), models/index.ts).
     doc.set(change.field_name, restore === "" ? undefined : restore);
     await doc.save({ validateModifiedOnly: true });
     // QA-1062 cycle 2 (2026-08-25): this note used to embed the restored value, and for a
