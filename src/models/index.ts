@@ -312,7 +312,23 @@ function assertContactIdsUnique(contacts: unknown) {
       for (const c of current) {
         const id = c?._id ? String(c._id) : "";
         const before = id ? priorById.get(id) : null;
-        if (!before) continue; // no matching row existed before: a genuinely new contact, stays at the schema default (0)
+        if (!before) {
+          // QA-1537 (cycle 2): a row the hook doesn't recognise as pre-existing is not
+          // necessarily brand-new to this LOCATION - Mongoose respects a caller-supplied
+          // subdocument `_id` instead of always minting one, so a row that was genuinely REMOVED
+          // in an earlier write and then RE-ADDED carrying that same `_id` looks identical here to
+          // "never existed" (`prior` above is only THIS write's pre-write state). The `ref`
+          // (`contact:<id>`) is the durable half of recipientKey()'s two-signal identity, so a
+          // reused `_id` would mint a byte-identical key to whatever that ref's earlier holder
+          // had, reviving their old link under the new occupant. Never let the wire choose this
+          // row's identity: mint a fresh `_id` so the old `contact:<oldId>` ref stays permanently
+          // associated with whoever held it before, and this row gets its own, never-seen ref -
+          // and force `gen` to 0 regardless of what the wire supplied (also closes the sibling gap
+          // where a brand-new row could carry a caller-supplied `gen`, e.g. 999, straight in).
+          c._id = new Types.ObjectId();
+          c.gen = 0;
+          continue;
+        }
         const beforeName = String(before.name ?? "").trim();
         const afterName = String(c.name ?? "").trim();
         // Never trust whatever `gen` rode in on the wire (the whole array is client-writable) -
@@ -363,7 +379,15 @@ function assertContactIdsUnique(contacts: unknown) {
       for (const c of flat.contacts as any[]) {
         const id = c?._id ? String(c._id) : "";
         const before = id ? priorById.get(id) : null;
-        if (!before) { if (c && typeof c === "object" && c.gen === undefined) c.gen = 0; continue; }
+        if (!before) {
+          // QA-1537 (cycle 2): same reasoning as the document hook above - a caller-supplied `_id`
+          // this write doesn't recognise as pre-existing may be a REUSED id from a row genuinely
+          // removed in an earlier write. Mint a fresh `_id` and force `gen` to 0 unconditionally
+          // (not only `=== undefined`, closing 7b here too - a caller could otherwise set `gen`
+          // straight into a "new" row through this path).
+          if (c && typeof c === "object") { c._id = new Types.ObjectId(); c.gen = 0; }
+          continue;
+        }
         const beforeName = String(before.name ?? "").trim();
         const afterName = String(c?.name ?? "").trim();
         c.gen = beforeName !== afterName ? Number(before.gen ?? 0) + 1 : Number(before.gen ?? 0);

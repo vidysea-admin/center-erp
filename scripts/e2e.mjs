@@ -4305,6 +4305,89 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
     (await liveOf(g16SlotRaviOneTok)) === 200 && (await liveOf(g16SlotRaviTwoTok)) === 200,
     JSON.stringify({ slotFirstRavi: await liveOf(g16SlotRaviOneTok), slotThirdRavi: await liveOf(g16SlotRaviTwoTok) }));
 
+  // ══ QA-1537 (QA-1516 cycle 2) — THE NINTH SHAPE: remove a contact row, then RE-ADD it under
+  // the SAME caller-supplied `_id` ═══════════════════════════════════════════════════════════
+  // Mongoose respects a caller-supplied subdocument `_id` instead of always minting a fresh one -
+  // src/app/(app)/locations/[id]/page.tsx:150 sends `_id` straight out of local component state
+  // on every save, so a stale second browser tab (or back-navigation) that still holds a row
+  // another tab has since removed re-submits that row's ORIGINAL `_id` on its own next save. The
+  // per-row `gen` fix above (`models/index.ts`'s document hook) only compares against THIS
+  // write's pre-write DB state via `priorById` - when a row was genuinely removed in an earlier
+  // write, the database's "before" for this write has no row at that `_id`, so the re-added row
+  // looked identical to "brand new" and stayed at `gen: 0`, minting a byte-identical key to
+  // whatever the SAME ref's earlier holder had. Closed by minting a FRESH `_id` (and forcing
+  // `gen` to 0, also closing the sibling QA-1516-cycle-1-verdict finding "7b" - a brand-new row
+  // could otherwise carry a caller-supplied `gen` straight into the database) for any row the
+  // hook does not recognise as pre-existing, on BOTH the document hook and the query-hook path.
+  const g1537Loc = (await req("POST", "/api/locations", { code: "G37" + cy, name: "Gen Readd Centre " + cy, external_id: "G37" + cy, approval_status: "Approved", city: "Jhansi",
+    contacts: [{ name: "Kiran Original " + cy, phone: "9700000101", role_label: "Contact" }] }, 201)).data.item;
+  const g1537Batch = await planBatchFor(g1537Loc._id, "2027-08-15");
+  const g1537Pick = async (s) => ((await req("GET", `/api/batches/${g1537Batch._id}/plan`)).data.recipients ?? []).find((r) => String(r.name).startsWith(s));
+  const g1537Mint = async (r) => (await req("POST", "/api/public-tokens", { purpose: "plan", batch: g1537Batch._id, recipient_name: r.name, recipient_phone: r.phone, recipient_role_label: r.role_label, recipient_ref: r.ref }, 201)).data.item;
+
+  const g1537Kiran1 = await g1537Pick("Kiran Original");
+  const g1537KiranId = g1537Kiran1.ref.slice("contact:".length);
+  const g1537Kiran1Tok = await g1537Mint(g1537Kiran1);
+
+  await req("PATCH", `/api/locations/${g1537Loc._id}`, { contacts: [] }, 200); // remove the row entirely
+  // re-add carrying the SAME caller-supplied _id AND the SAME name — the actual collision shape;
+  // a different name would never collide regardless of the _id/gen bug, since recipientKey()
+  // folds in an occupant-name snapshot too (a re-add under a different name is QA-1505/assertContactIdsUnique
+  // territory, already covered — this pin isolates the name-identical case the fix has to close).
+  const g1537Readd = (await req("PATCH", `/api/locations/${g1537Loc._id}`, { contacts: [{ _id: g1537KiranId, name: "Kiran Original " + cy, phone: "9700000199", role_label: "Contact" }] }, 200)).data.item.contacts[0];
+  ok("QA-1537: a re-added contact row does NOT keep the caller-supplied _id it was removed under",
+    String(g1537Readd._id) !== g1537KiranId, JSON.stringify({ removedId: g1537KiranId, readdId: g1537Readd._id }));
+  ok("QA-1537: the re-added row's own generation starts at 0 (a fresh identity, not a stale counter)",
+    g1537Readd.gen === 0, JSON.stringify(g1537Readd));
+
+  const g1537Kiran2 = await g1537Pick("Kiran Original");
+  const g1537Kiran2Tok = await g1537Mint(g1537Kiran2);
+  ok("QA-1537: THE NINTH SHAPE CLOSED — minting for the re-added row (byte-identical name) does not revoke the original mint's link",
+    (await liveOf(g1537Kiran1Tok)) === 200 && (await liveOf(g1537Kiran2Tok)) === 200,
+    JSON.stringify({ original: await liveOf(g1537Kiran1Tok), readded: await liveOf(g1537Kiran2Tok), sameRef: g1537Kiran2?.ref === g1537Kiran1.ref, sameKey: g1537Kiran2?.key === g1537Kiran1.key }));
+
+  // The sibling gap (verdict's "7b"): a genuinely brand-new row cannot smuggle a caller-supplied
+  // gen straight into the database — found in the same code path, closed in the same pass.
+  const g1537WithNew = (await req("PATCH", `/api/locations/${g1537Loc._id}`, { contacts: [
+    { _id: g1537Readd._id, name: "Kiran Original " + cy, phone: "9700000199", role_label: "Contact" },
+    { name: "Brand New Contact " + cy, phone: "9700000177", role_label: "Contact", gen: 999 },
+  ] }, 200)).data.item.contacts;
+  ok("QA-1537 sibling (7b): a brand-new contact row cannot smuggle a caller-supplied gen (sent 999, stored 0)",
+    g1537WithNew.find((c) => String(c.name).startsWith("Brand New Contact"))?.gen === 0,
+    JSON.stringify(g1537WithNew.find((c) => String(c.name).startsWith("Brand New Contact"))));
+
+  // The QUERY-PATH variant: a Location-role user's contacts edit parks for approval and applies
+  // via `Location.findByIdAndUpdate` (approvals/[id]/route.ts's "location.edit" case) — never the
+  // document hook. The fix lives in BOTH hooks (models/index.ts); this proves the query hook too.
+  await req("PUT", "/api/approvals", { action: "location.edit", enabled: true, approver_role: "Admin" }, 200);
+  const g1537SpocEmail = `g1537spoc.${stamp}@vidysea.com`;
+  await req("POST", "/api/users", { name: "G1537 SPOC " + cy, email: g1537SpocEmail, password: "Test@12345", role: "Location", location_scope: [g1537Loc._id], can_edit: true }, 201);
+  const g1537SpocCookie = await loginAs(g1537SpocEmail, "Test@12345");
+  if (g1537SpocCookie) {
+    const beforeQP = (await req("GET", `/api/locations/${g1537Loc._id}`)).data.item;
+    const qpRow = beforeQP.contacts.find((c) => String(c.name).startsWith("Kiran Original"));
+    const qpReuseId = String(qpRow._id);
+    await req("PATCH", `/api/locations/${g1537Loc._id}`, { contacts: beforeQP.contacts.filter((c) => String(c._id) !== qpReuseId) }, 200); // remove it (Admin, document path)
+    const saved1537 = cookie; cookie = g1537SpocCookie;
+    const spocPark = await req("PATCH", `/api/locations/${g1537Loc._id}`, { contacts: [{ _id: qpReuseId, name: "Kiran Original " + cy, phone: "9700000255", role_label: "Contact" }] }, 202);
+    cookie = saved1537;
+    const pending1537 = (await req("GET", "/api/approvals?status=Pending")).data.items ?? [];
+    const myReq1537 = pending1537.find((r) => String(r.entity_id) === String(g1537Loc._id) && r.action === "location.edit");
+    ok("QA-1537 query-path setup: the parked contacts edit is visible in the approvals queue", !!myReq1537, JSON.stringify(spocPark.data?.error));
+    if (myReq1537) {
+      await req("POST", `/api/approvals/${myReq1537._id}`, { decision: "Approved" }, 200);
+      const afterQP = (await req("GET", `/api/locations/${g1537Loc._id}`)).data.item;
+      const qpReaddRow = afterQP.contacts.find((c) => String(c.name).startsWith("Kiran Original"));
+      ok("QA-1537 QUERY-PATH CLOSED: findByIdAndUpdate also mints a fresh _id for a reused-id re-add",
+        qpReaddRow && String(qpReaddRow._id) !== qpReuseId, JSON.stringify({ qpReuseId, qpReaddId: qpReaddRow?._id }));
+      ok("QA-1537 QUERY-PATH CLOSED: gen forced to 0 through the query-hook path too",
+        qpReaddRow?.gen === 0, JSON.stringify(qpReaddRow));
+    }
+  } else {
+    ok("QA-1537 query-path skipped — SPOC login unavailable", true);
+  }
+  await req("PUT", "/api/approvals", { action: "location.edit", enabled: false }, 200); // restore default OFF
+
   // QA-617 — "may this user share?" was asked in two places that disagreed in BOTH directions. The
   // direction pinned here is the one my own first fix got wrong: an Admin with `can_edit: false` -
   // the schema's DEFAULT - can mint a link (requireEdit exempts Admin) but was shown nobody to send
