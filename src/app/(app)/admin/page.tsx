@@ -79,7 +79,21 @@ function Programs({ error, setError }: any) {
   }
   async function remove() {
     if (!edit) return;
-    if (!confirm(`Delete ${edit.code} (${edit.name})? This removes the course record permanently.`)) return;
+    // 2026-08-27 (Umesh, verbal): "the sentence doesn't say WHAT breaks" — the plain confirm
+    // never named how many batches/candidates use the course. Delete itself stays unconditional
+    // (2026-08-25 decision, programs/[id]/route.ts) — this only fetches the real numbers first so
+    // the confirm reads them instead of a blind "are you sure". A usage-lookup failure falls back
+    // to the plain sentence rather than blocking the delete on it.
+    let msg = `Delete ${edit.code} (${edit.name})? This removes the course record permanently.`;
+    try {
+      const u = await api<{ batches: number; candidates: number; target_seats: number }>(`/api/programs/${edit._id}/usage`);
+      msg = u.batches > 0
+        ? `Delete ${edit.code} (${edit.name})? ${u.batches} batch${u.batches === 1 ? "" : "es"}, ` +
+          `${u.candidates} candidate${u.candidates === 1 ? "" : "s"}, ${u.target_seats} target seat${u.target_seats === 1 ? "" : "s"} ` +
+          `reference this course — deleting it will not delete them, but they will point at a program that no longer exists.`
+        : `Delete ${edit.code} (${edit.name})? No batches reference this course — this removes the course record permanently.`;
+    } catch { /* usage lookup failed - fall back to the plain confirm above, not a block */ }
+    if (!confirm(msg)) return;
     try {
       await api(`/api/programs/${edit._id}`, { method: "DELETE" });
       setDrawer(false); load();

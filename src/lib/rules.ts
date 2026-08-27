@@ -246,6 +246,23 @@ export function capacitySummary(
   };
 }
 
+// 2026-08-27 (Umesh, verbal): programs/[id]/route.ts's DELETE is a deliberate, unconditional
+// delete ("Delete hamesha allow karo, Admin ki marzi") — no usage/reference check, and this
+// function adds none. What Umesh asked for is INFORMATIONAL: the confirm dialog on
+// admin/page.tsx never named what breaks. This is the read-only count the confirm string quotes
+// before the click — same Promise.all(countDocuments) shape as batches/[id]/route.ts's DELETE
+// handler (member/results/costs/... carried-work count), scoped to a Program instead of a Batch.
+export async function programUsage(programId: string) {
+  const batchIds = await Batch.find({ program: programId }).distinct("_id");
+  const [candidates, targetAgg] = await Promise.all([
+    batchIds.length ? BatchMember.countDocuments({ batch: { $in: batchIds } }) : 0,
+    batchIds.length
+      ? Batch.aggregate([{ $match: { _id: { $in: batchIds } } }, { $group: { _id: null, sum: { $sum: "$target_size" } } }])
+      : [],
+  ]);
+  return { batches: batchIds.length, candidates, target_seats: targetAgg[0]?.sum ?? 0 };
+}
+
 // ---------- Trainer rules ----------
 function rangesOverlap(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date): boolean {
   return aStart <= bEnd && bStart <= aEnd;
