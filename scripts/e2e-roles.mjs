@@ -244,9 +244,13 @@ if (ownActive) {
     // QA-1469 (2026-08-24 outage postmortem, "Trainer ko haq do" -> Trainer now carries
     // closure.manage): the coupling above cuts the other way too - a Trainer can now open this
     // card, so a Trainer can now also write the portal Candidate ID from it, same as a SPOC.
+    // Re-writes the SAME value the SPOC already stored (not a fresh one) so the id chain every
+    // pin below this one hardcodes as `CAN_${stamp}` stays intact - QA-1502 cycle 2's checker
+    // caught a first version of this pin using a distinct value here, which left `target`
+    // holding it instead and broke QA-780/QA-786's duplicate-id and untouched-id assertions.
     {
       const r = await req(trainer, "PUT", `/api/batches/${ownActive._id}/results`,
-        { rows: [{ member: String(target.member), sidh_candidate_id: `CAN_${stamp}2` }] });
+        { rows: [{ member: String(target.member), sidh_candidate_id: `CAN_${stamp}` }] });
       ok("QA-1469: …and a Trainer (closure.manage granted) CAN write one now",
         r.status === 200, `status=${r.status} error=${JSON.stringify(r.data?.error ?? null).slice(0, 140)}`);
     }
@@ -1385,8 +1389,14 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   if (anyBatch) {
     const dl = await req(principal, "POST", `/api/batches/${anyBatch._id}/logs`, { log_date: new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10), present_member_ids: [] });
     ok("matrix: principal CANNOT enter a daily log (attendance is the trainer's)", dl.status === 403, `got ${dl.status}`);
-    const gv = await req(principal, "POST", "/api/govt-attendance", {});
-    ok("matrix: principal CANNOT import govt attendance", gv.status === 403, `got ${gv.status}`);
+    // QA-1469: a principal/Location login now CARRIES attendance.govt (see the QA-153 block
+    // above), so this probe no longer names a role without the right - retargeted to a Trainer,
+    // who still lacks it, to keep testing what it always tested: refused BEFORE the door's own
+    // body-shape validation runs. (A `principal` probe here now reaches that validation - POSTing
+    // `{}` instead of multipart form data - and 500s on a JS-side sender rather than the shape
+    // check itself, which is a separate, pre-existing route behavior, not this pin's concern.)
+    const gv = await req(trainer, "POST", "/api/govt-attendance", {});
+    ok("matrix: a role without attendance.govt CANNOT import govt attendance", gv.status === 403, `got ${gv.status}`);
   }
   // NO batch edit: transition + PATCH both 403 (batches.manage removed).
   const anyB = spocBatches.data.items[0];
