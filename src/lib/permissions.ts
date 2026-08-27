@@ -83,7 +83,11 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   // upload YES (closure.manage carries it); NO accounts (never granted here)".
   Location: [
     "locations.manage", "trainers.manage", "candidates.manage", "candidates.assign",
-    "closure.manage", "feedback.links",
+    // QA-1469 (feedback-inbox, 2026-08-24 outage postmortem): Umesh — "Location ko bhi
+    // govt-attendance milna chahiye." Narrower than the 08-13 "NO attendance" line above: that
+    // ruled out routine daily attendance logging (still Trainer's job, batches.daily_log), not the
+    // government-portal reconciliation import a SPOC needs to see for their own location.
+    "closure.manage", "attendance.govt", "feedback.links",
     // 2026-08-24: the CANDIDATE delete only. A principal clears a mis-typed row out of their own
     // pool; erasing a trainer or a batch is a wider blast radius than their remit, and the 2026-08-13
     // ruling on this role already drew that line ("NO batch edit"). An Admin can still grant either
@@ -93,7 +97,11 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   // QA-036 (checker, vs the role table): Enrollment's brief is candidate registration and
   // the enrollment worklist — daily attendance is the SPOC/Trainer's job, removed 14/08.
   Enrollment: ["candidates.manage", "candidates.assign"],
-  Trainer: ["batches.daily_log"],
+  // QA-1469 (feedback-inbox, 2026-08-24 outage postmortem): Umesh, asked directly — "Trainer ko
+  // pass/fail + certificate ka haq hona chahiye?" -> "Haan, Trainer ko haq do." Trainer never held
+  // closure.manage, so -216/-217's mayMarkTab check (QA-777/QA-785) left every Trainer locked out
+  // of marking results and uploading certificates the day it shipped.
+  Trainer: ["batches.daily_log", "closure.manage"],
 };
 
 // Role toggles are read per request; a tiny TTL cache keeps that cheap without letting a

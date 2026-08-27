@@ -235,11 +235,20 @@ if (ownActive) {
     ok("QA-747: …and the refused row left the stored id exactly as it was (nothing written first)",
       idOf((await req(spoc, "GET", `/api/batches/${ownActive._id}/results`)).data?.items ?? []) === `CAN_${stamp}`,
       String(idOf((await req(spoc, "GET", `/api/batches/${ownActive._id}/results`)).data?.items ?? [])));
-    // and the two who cannot mark cannot write an identity field either - no half-open door
-    for (const [who, cookie] of [["a view-only user", viewer], ["a Trainer (no closure right today)", trainer]]) {
-      const r = await req(cookie, "PUT", `/api/batches/${ownActive._id}/results`,
+    // and whoever cannot mark cannot write an identity field either - no half-open door
+    {
+      const r = await req(viewer, "PUT", `/api/batches/${ownActive._id}/results`,
         { rows: [{ member: String(target.member), sidh_candidate_id: `CAN_${stamp}1` }] });
-      ok(`QA-747: …and ${who} cannot write one either`, r.status === 403, `status=${r.status}`);
+      ok("QA-747: …and a view-only user cannot write one either", r.status === 403, `status=${r.status}`);
+    }
+    // QA-1469 (2026-08-24 outage postmortem, "Trainer ko haq do" -> Trainer now carries
+    // closure.manage): the coupling above cuts the other way too - a Trainer can now open this
+    // card, so a Trainer can now also write the portal Candidate ID from it, same as a SPOC.
+    {
+      const r = await req(trainer, "PUT", `/api/batches/${ownActive._id}/results`,
+        { rows: [{ member: String(target.member), sidh_candidate_id: `CAN_${stamp}2` }] });
+      ok("QA-1469: …and a Trainer (closure.manage granted) CAN write one now",
+        r.status === 200, `status=${r.status} error=${JSON.stringify(r.data?.error ?? null).slice(0, 140)}`);
     }
     // QA-780 (-216, checker on qa-214): the id must NOT be written by a request that then refuses.
     // -214 wrote it, then let the result-marking throw 400 and a duplicate id throw 409 mid-loop -
@@ -976,8 +985,14 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
       }
     }
     const meSp = await req(spoc, "GET", "/api/permissions/me");
-    ok("QA-153: a SPOC's rights carry no attendance.govt / costs.manage (Umesh 13/08: attendance is off the SPOC plate)",
-      meSp.status === 200 && meSp.data.role === "Location" && !meSp.data.levels?.["attendance.govt"] && !meSp.data.levels?.["costs.manage"], JSON.stringify(meSp.data.levels));
+    // QA-1469 (2026-08-24 outage postmortem): Umesh - "Location ko bhi govt-attendance milna
+    // chahiye." Narrower than the 13/08 "attendance is off the SPOC plate" ruling below: that was
+    // about routine daily attendance logging (still Trainer's job), not the government-portal
+    // reconciliation import a SPOC needs to see for their own location. costs.manage is untouched.
+    ok("QA-153/QA-1469: a SPOC's rights carry attendance.govt (govt-attendance import), still no costs.manage",
+      meSp.status === 200 && meSp.data.role === "Location" && meSp.data.levels?.["attendance.govt"] === "edit" && !meSp.data.levels?.["costs.manage"], JSON.stringify(meSp.data.levels));
+    ok("QA-1469: …and the govt-attendance importer actually OPENS for a SPOC now (200, not 403)",
+      (await req(spoc, "GET", "/api/govt-attendance")).status === 200);
     const meOps = await req(ops, "GET", "/api/permissions/me");
     ok("QA-153: Operations carries costs.manage + attendance.govt (their doors stay; the Costs page is post-only by role)",
       meOps.status === 200 && meOps.data.levels?.["costs.manage"] === "edit" && meOps.data.levels?.["attendance.govt"] === "edit", JSON.stringify(meOps.data.levels));
