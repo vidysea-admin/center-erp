@@ -138,17 +138,17 @@ const RELEASE_NOTE_ARCHIVE_254 =
   "screen for a real number sitting one tab over.";
 
 export const RELEASE_NOTE_CURRENT =
-  "-259 closes one more way a plan link could die without anyone being told. A centre's contact "  +
-  "list is the part of the recipient list a coordinator can add to freely, and until now a contact "  +
-  "row carried no version of its own. Retyping one person's name over another's on that list "  +
-  "rebuilt the first person's exact link address, which silently switched off the link already "  +
-  "sent to them - they saw a dead page, and nothing anywhere said why. Each contact row now "  +
-  "carries its own counter, so a new person on an old row gets a new address and the previous "  +
-  "recipient's link keeps working. "  +
-  "Said plainly, because it is not finished: this closes the case where a contact row is RETYPED. "  +
-  "The case where a row is REMOVED and then added back again is still open and is being worked "  +
-  "on - two independent reviews found it and it is on record. Nothing that worked before stops "  +
-  "working, and no link that is live today is switched off by this release.";
+  "-259 closes two ways a plan link could die without anyone being told. A centre's contact list "  +
+  "is the part of the recipient list a coordinator can add to freely, and until now a contact row "  +
+  "carried no version of its own. Retyping one person's name over another's on that list rebuilt "  +
+  "the first person's exact link address, which silently switched off the link already sent to "  +
+  "them - they saw a dead page, and nothing anywhere said why. The second way was subtler: "  +
+  "removing a contact row and adding one back could reuse the same underlying row identity and "  +
+  "reset that counter, producing the same dead link by a different route. Both are closed - each "  +
+  "contact row now carries a counter that moves forward and does not go back, so a new person on "  +
+  "an old row always gets a new address and the previous recipient's link keeps working. "  +
+  "Nothing that worked before stops working, and no link that is live today is switched off by "  +
+  "this release.";
 
 const RELEASE_NOTE_ARCHIVE_258 =
   "-258 restores two rights decided on the day of the 2026-08-24 outage but never written into "  +
