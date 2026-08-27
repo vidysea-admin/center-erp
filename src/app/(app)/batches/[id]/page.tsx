@@ -883,9 +883,14 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
           act, not a side-effect of saving a batch". No plan → one button. Batches created
           before -81 keep their auto-milestones hidden until this button is pressed. Plan-only
           verdicts (TOT lead time, F-A3) live HERE, never on the readiness checklist. */}
-      {!b.plan_enabled && canTransition && b.status === "Planning" && (
+      {/* QA-607 (Umesh, 2026-08-27): "Planning" alone made this button unreachable on every batch
+          that exists — all six live batches are Active/Completed, so plan sharing shipped correct
+          and unopenable. The list mirrors PLAN_CREATE_STATUSES in lib/rules.ts (which this client
+          file cannot import — mongoose); the API refuses anything else, so this is a view of that
+          gate, not a second gate. "Ready" is absent on purpose: see the note on that constant. */}
+      {!b.plan_enabled && canTransition && ["Planning", "Active"].includes(b.status) && (
         <Section title="Backward plan">
-          <p className="text-sm text-gray-600">No plan for this batch. A backward plan counts the trainer/TOT/mobilisation milestones back from the planned start — for a batch you are planning ahead, not one that has already run.</p>
+          <p className="text-sm text-gray-600">No plan for this batch. A backward plan counts the trainer/TOT/mobilisation milestones back from the planned start{b.status === "Active" ? " — on a batch that is already running, the earlier milestones will land on dates that have already passed, which is what a backward plan is for." : " — for a batch you are planning ahead."}</p>
           <div className="mt-3">
             <Btn onClick={async () => {
               try { await api(`/api/batches/${b._id}/milestones`, { method: "PATCH", json: { create: true } }); onChanged(); }

@@ -2354,6 +2354,83 @@ await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { regenerate: tru
 const regen = (await req("GET", `/api/batches/${planBatch._id}`)).data.item;
 ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.key === "mobilization")?.done_on);
 
+// ---- QA-607 (Umesh, 2026-08-27): a backward plan can be made on a batch that is ALREADY RUNNING ----
+// Plan sharing (QA-557/558/621, seven fix cycles) shipped correct and unopenable: the only status
+// that accepted `{ create: true }` was Planning, and on live -191 all six batches were Active or
+// Completed. Every local fixture starts a batch in Planning, which is exactly why no suite here
+// could see it — so this block takes a batch up the ORDINARY ladder (Planning -> Ready -> Active,
+// no backdate_override) and then asks for a plan, which is the sentence the live check failed on.
+{
+  const aRoom = (await req("POST", `/api/locations/${loc._id}/rooms`, { name: `Active Plan Room ${stamp}`, type: "Classroom", capacity: 30 }, 201)).data.item;
+  // planned_start is TODAY, so planBatchBackward's rows land on days that have ALREADY PASSED —
+  // which is the whole point of a backward plan on a running batch, and the precondition for the
+  // alert question below.
+  const ab = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, room: aRoom._id, planned_start: today, target_size: 1 }, 201)).data.item;
+  const ac = (await req("POST", "/api/candidates", { name: `Active Plan One ${stamp}`, phone: `833${stamp}0`, location: loc._id, program: prog._id }, 201)).data.item;
+  const am = (await req("POST", `/api/batches/${ab._id}/members`, { candidate: ac._id }, 201)).data.item;
+  await req("PATCH", `/api/members/${am._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+  await req("POST", `/api/batches/${ab._id}/transition`, { target: "Ready" }, 200);
+  await req("POST", `/api/batches/${ab._id}/transition`, { target: "Active" }, 200);
+  const activeNow = (await req("GET", `/api/batches/${ab._id}`)).data.item;
+  ok("QA-607 precondition: the batch reached Active by the ordinary ladder, with no plan on it",
+    activeNow.status === "Active" && activeNow.plan_enabled === false,
+    JSON.stringify({ status: activeNow.status, plan_enabled: activeNow.plan_enabled }));
+
+  // THE FIX. Before it this returned 409 "A backward plan is made while the batch is in Planning."
+  const made = (await req("PATCH", `/api/batches/${ab._id}/milestones`, { create: true }, 200)).data.item;
+  ok("QA-607: 'Create backward plan' works on a RUNNING batch — the 8 milestones exist and the plan is enabled",
+    made.milestones?.length === 8 && made.plan_enabled === true,
+    JSON.stringify({ n: made.milestones?.length, plan_enabled: made.plan_enabled }));
+
+  // …and REGENERATION is deliberately NOT widened: it recuts every due date from planned_start, and
+  // a running batch's plan is a record of what happened, not a schedule to be recut.
+  const regenActive = await req("PATCH", `/api/batches/${ab._id}/milestones`, { regenerate: true });
+  ok("QA-607: regenerate is still refused on a running batch (creation widened, regeneration not)",
+    regenActive.status === 409 && /regenerated while the batch is in Planning/.test(String(regenActive.data?.error)),
+    JSON.stringify({ s: regenActive.status, e: regenActive.data?.error }));
+
+  // "Ready" is NOT in the widened list, and that is load-bearing rather than an oversight:
+  // alerts.ts's milestone_overdue rule queries `status: { $in: ["Planning", "Ready"] }`, so a plan
+  // minted on a Ready batch whose earlier dates have passed raises an overdue alert immediately.
+  // Its own room: `aRoom` is already booked for these dates by the batch above, and a room hosts
+  // one batch at a time.
+  const rRoom = (await req("POST", `/api/locations/${loc._id}/rooms`, { name: `Ready Plan Room ${stamp}`, type: "Classroom", capacity: 30 }, 201)).data.item;
+  const rTrainer = (await req("POST", "/api/trainers", { name: `Ready Plan Trainer ${stamp}`, phone: `98888${stamp.slice(0, 5)}`, skills: ["TestSkill" + stamp] }, 201)).data.item;
+  const readyB = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: rTrainer._id, room: rRoom._id, planned_start: today, target_size: 1 }, 201)).data.item;
+  const readyC = (await req("POST", "/api/candidates", { name: `Ready Plan One ${stamp}`, phone: `834${stamp}0`, location: loc._id, program: prog._id }, 201)).data.item;
+  const readyM = (await req("POST", `/api/batches/${readyB._id}/members`, { candidate: readyC._id }, 201)).data.item;
+  await req("PATCH", `/api/members/${readyM._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+  await req("POST", `/api/batches/${readyB._id}/transition`, { target: "Ready" }, 200);
+  const readyPlan = await req("PATCH", `/api/batches/${readyB._id}/milestones`, { create: true });
+  ok("QA-607: Ready is deliberately still refused — it is inside the milestone_overdue alert query, Active is not",
+    readyPlan.status === 409, JSON.stringify({ s: readyPlan.status, e: readyPlan.data?.error }));
+  await req("POST", `/api/batches/${readyB._id}/transition`, { target: "Cancelled", reason: "QA-607 ready-gate probe cleanup" }, 200);
+
+  // The plan on the running batch DOES carry overdue rows — so the alerts question below is a real
+  // one, not one answered by there being nothing to alert about. (A pin that passes vacuously is
+  // not a pin — QA-598, learned on this same file.)
+  const art = (await req("GET", `/api/batches/${ab._id}/plan`)).data;
+  ok("QA-607: the backward plan on a running batch is retroactive — its rows are already overdue",
+    (art?.counts?.overdue ?? 0) > 0, JSON.stringify(art?.counts));
+  // …and alerts.ts never sees this batch: milestone_overdue selects Planning/Ready only, and the
+  // batch is Active. Asserted at the level a suite can assert it — the batch's status is outside
+  // that query — with the engine's own behaviour measured in qa/manifests/qa-607-plan-on-active-batches.md.
+  ok("QA-607: …and the batch it sits on is Active, which the milestone_overdue rule does not select",
+    art?.batch?.status === "Active", String(art?.batch?.status));
+
+  // The now-reachable end of the feature: a plan link can actually be minted and opened. This is
+  // QA-558/621's machinery, unchanged — asserted here only to show this unit did not break it.
+  const planContact = ((await req("GET", `/api/locations/${loc._id}`)).data.item.contacts ?? [])[0];
+  const mint = await req("POST", "/api/public-tokens", { purpose: "plan", batch: ab._id, recipient_name: planContact.name, recipient_role_label: planContact.role_label, recipient_ref: `contact:${planContact._id}` }, 201);
+  const shared = await fetch(BASE + `/api/public/plan/${mint.data.item?.token ?? mint.data.token}`);
+  const sharedJ = shared.status === 200 ? await shared.json() : null;
+  ok("QA-607: the plan on a running batch can be shared, and the link opens — the sentence live -191 could not reach",
+    shared.status === 200 && (sharedJ?.milestones ?? []).length === 8,
+    JSON.stringify({ mint: mint.status, open: shared.status, n: (sharedJ?.milestones ?? []).length }));
+
+  await req("POST", `/api/batches/${ab._id}/transition`, { target: "Cancelled", reason: "QA-607 plan-on-active probe cleanup" }, 200);
+}
+
 // ---- -196 (Umesh 22/08): "jaise dates aate rahengi woh usi values mein fill hote rahengi" ----
 // The Planning grid is filled from a sheet DAYS after the fact, so the date the operator types is
 // the fact. Before this release a tick always stamped `new Date()`, which meant every date typed

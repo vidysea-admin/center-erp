@@ -25,6 +25,23 @@ import type { SessionUser } from "@/auth";
 
 export const ACTIVE_BATCH_STATUSES = ["Planning", "Ready", "Active", "Closing"];
 
+// QA-607 (Umesh, 2026-08-27): the statuses in which a backward plan may be CREATED. Until now the
+// only answer was "Planning", and no batch that exists is in Planning — the whole plan-sharing
+// feature (QA-557/558/621, seven fix cycles) was correct code nobody could open. Widened to the
+// running batch as well, which is what a "backward plan" is for: counting back over days that have
+// already happened.
+//   - "Ready" is DELIBERATELY absent. `alerts.ts` (milestone_overdue) queries exactly
+//     `status: { $in: ["Planning", "Ready"] }` — so a plan minted on a Ready batch whose earlier
+//     milestone dates have passed raises an overdue alert per batch on the very next tick. That is
+//     the same noise that got QA-607's backfill option declined; Active sits outside that query, so
+//     a plan on a running batch raises nothing. If that alert query is ever widened to Active, this
+//     comment is the thing to re-read first.
+//   - REGENERATION is not widened: it recuts every due date from planned_start, and a running
+//     batch's plan is a record, not a schedule.
+// The two client screens ((app)/batches/[id]/page.tsx and .../plan/page.tsx) restate this list
+// inline because they cannot import this file (mongoose). Change all three together.
+export const PLAN_CREATE_STATUSES = ["Planning", "Active"];
+
 // Rule 1 (RPL M1/M10): no operational activity at a location that has been stopped.
 // "Not Started" is deliberately allowed — centres are planned before they open, which is
 // the whole point of advance batch planning.

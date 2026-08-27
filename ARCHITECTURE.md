@@ -831,6 +831,33 @@ rendered in TWO places (:479 inside the "Right now" card while a batch runs, :53
 readiness Section before it starts). `Cancelled` is NOT in `running` (:170), so a cancelled batch
 takes the readiness branch — which is why the Restore control lands there.
 
+**QA-607 (2026-08-27) adds a THIRD instance of this exact shape — WHICH STATUSES MAY CREATE A
+BACKWARD PLAN — and it is listed here on the way in rather than found later.** The server's answer is
+`PLAN_CREATE_STATUSES` in `lib/rules.ts` (`["Planning", "Active"]`), enforced by
+`api/batches/[id]/milestones/route.ts`. Two client screens restate the same list inline —
+`batches/[id]/page.tsx` (the Overview "Backward plan" section) and `batches/[id]/plan/page.tsx` (the
+plan screen's empty state) — because a `"use client"` file cannot import `rules.ts` (mongoose). That
+is the same structural bar §3.0's `lib/validate`, `lib/slot-rules` and `lib/candidate-journey`
+extractions exist to clear, and the collapse (a pure module, or a `may_create_plan` flag on
+`GET /api/batches/[id]/plan` the way QA-617 collapsed `may_share`) is worth doing and is not that
+unit's. Until then: **all three change together**, and the client is a VIEW of the server's refusal,
+never a second gate.
+
+Two things about that list are load-bearing rather than arbitrary, and both are written into the
+constant's own comment:
+- **`"Ready"` is absent on purpose.** `alerts.ts`'s `milestone_overdue` rule selects exactly
+  `status: { $in: ["Planning", "Ready"] }`, so a backward plan minted on a Ready batch whose earlier
+  milestone dates have already passed raises an overdue alert on the very next 10-minute tick. That
+  is the noise QA-607's own checker named when it flagged the (declined) backfill option. `Active`
+  sits OUTSIDE that query, which is why widening to Active is alert-neutral — measured, not argued,
+  in `qa/manifests/qa-607-plan-on-active-batches.md`.
+- **Regeneration was NOT widened.** `{ create: true }` accepts Planning or Active;
+  `{ regenerate: true }` is still Planning-only, because regenerating recuts every due date from
+  `planned_start` and a running batch's plan is a record of what happened, not a schedule.
+  Consequently the "Regenerate" buttons on both client screens keep their `status === "Planning"`
+  test — a rare case where the two conditions on one screen are DELIBERATELY different, so do not
+  "tidy" them into one.
+
 ### 3.13 "Was this batch recorded AFTER it ran?" — COLLAPSED (QA-957/958/965), do not re-grow it
 
 **This row was first written, in this very file, saying the opposite — that the gate reads only one of

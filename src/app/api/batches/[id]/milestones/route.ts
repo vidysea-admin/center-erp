@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, Trainer } from "@/models";
-import { assertBatchInScope, dayKey, istToday, mergePlan, planBatchBackward } from "@/lib/rules";
+import { PLAN_CREATE_STATUSES, assertBatchInScope, dayKey, istToday, mergePlan, planBatchBackward } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
 
@@ -26,7 +26,17 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
 
   if (body.create || body.regenerate) {
     if (body.regenerate && !batch.plan_enabled) throw new HttpError(409, "This batch has no plan yet — create one first.");
-    if (batch.status !== "Planning") throw new HttpError(409, body.create ? "A backward plan is made while the batch is in Planning." : "Plan can only be regenerated while the batch is in Planning.");
+    // QA-607 (Umesh, 2026-08-27): plan CREATION also reaches a running batch. The feature shipped
+    // usable only on Planning batches and every batch that exists is Active — plan sharing was
+    // correct code nobody could open. Creation only; REGENERATION stays Planning-only, because
+    // regenerating recomputes every due date from planned_start and a running batch's plan is a
+    // record of what already happened, not a schedule to be recut. "Ready" is deliberately NOT in
+    // this list: `alerts.ts:165` raises milestone_overdue for Planning/Ready only, so a plan minted
+    // on a Ready batch whose dates have passed would raise a wall of alerts the moment it exists —
+    // which is exactly the risk that got the QA-607 backfill option declined. Active is outside
+    // that query, so a backward plan on a running batch raises nothing. See the manifest.
+    if (body.regenerate && batch.status !== "Planning") throw new HttpError(409, "Plan can only be regenerated while the batch is in Planning.");
+    if (body.create && !PLAN_CREATE_STATUSES.includes(batch.status)) throw new HttpError(409, "A backward plan is made while the batch is in Planning, or while it is running.");
     const creating = !batch.plan_enabled;
     batch.plan_enabled = true;
     // QA-460 (-164): the batch's own trainer decides whether TOT rows belong in this plan. Read

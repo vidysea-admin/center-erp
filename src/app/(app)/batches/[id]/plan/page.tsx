@@ -93,8 +93,10 @@ export default function BatchPlanPage({ params }: { params: Promise<{ id: string
 
           {!b.plan_enabled ? (
             <Section title="No plan yet">
-              <p className="text-sm text-gray-600">This batch has no backward plan. A plan is made on request — for a batch you are planning ahead, not one that has already run.</p>
-              {canEdit && b.status === "Planning" && (
+              <p className="text-sm text-gray-600">This batch has no backward plan. A plan is made on request{b.status === "Active" ? " — on a running batch its earlier milestones land on dates that have already passed, which is what a backward plan is for." : " — for a batch you are planning ahead."}</p>
+              {/* QA-607: mirrors PLAN_CREATE_STATUSES in lib/rules.ts (unimportable here — mongoose).
+                  The API is the gate; this only decides whether to show the button. */}
+              {canEdit && ["Planning", "Active"].includes(b.status) && (
                 <div className="mt-3"><Btn disabled={busy} onClick={() => patch({ create: true })}>Create backward plan</Btn></div>
               )}
             </Section>
