@@ -33,7 +33,14 @@ function stop(lines) {
  * @param {string} scriptName - shown in the message, so the operator knows what refused.
  */
 export function requireSafeDb(scriptName) {
-  const db = process.env.MONGODB_DB;
+  // QA-1528: trimmed once here, same as QA-1520's fix to src/lib/db.ts - an untrimmed value from
+  // a hand-edited .env would make `db === PRODUCTION_DB` false on a whitespace slip, so the
+  // production refusal below would NOT fire and the (still-untrimmed) name would be returned to
+  // the caller as if it were a safe non-production db - a destructive script would then proceed
+  // to auto-create and write into a phantom, differently-named database instead of refusing
+  // loudly. Not case-folded, for the same reason QA-1520 wasn't: a case slip is a genuinely
+  // different (case-sensitive) Mongo database name, and refusing on it is the safer failure mode.
+  const db = (process.env.MONGODB_DB ?? "").trim();
   if (!db) {
     stop([
       `${scriptName}: MONGODB_DB is not set, and this script WRITES.`,

@@ -131,7 +131,10 @@ const SUITES = [
 // still never permits `center_erp`.
 {
   const url = process.env.MONGODB_URL || "mongodb://127.0.0.1:27017";
-  const db = process.env.MONGODB_DB || "center_erp_ci";
+  // QA-1528: trimmed, same fix as QA-1520 (src/lib/db.ts) and db-guard.mjs's requireSafeDb - an
+  // untrimmed whitespace-padded "center_erp" from a hand-edited .env would make the `db ===
+  // "center_erp"` refusal below fail to fire.
+  const db = (process.env.MONGODB_DB || "center_erp_ci").trim();
   const host = url.replace(/^mongodb(\+srv)?:\/\//, "").replace(/^[^@]*@/, "").split("/")[0].split("?")[0];
   const loopback = /^(localhost|127\.0\.0\.1|\[::1\]|::1|host\.docker\.internal)(:\d+)?$/i.test(host);
   const die = (why) => {
