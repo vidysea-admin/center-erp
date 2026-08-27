@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser } from "@/lib/authz";
 import { Batch, Location, PublicToken } from "@/models";
-import { assertBatchInScope, planArtifact, recipientKey } from "@/lib/rules";
+import { assertBatchInScope, planArtifact, recipientKey, slotGeneration, storedTokenKey } from "@/lib/rules";
 import { canShareLinks } from "@/lib/permissions";
 
 // QA-152 part 2 (-82): the signed-in plan view. Read for anyone who can see the batch
@@ -23,7 +23,7 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   const art = await planArtifact(id);
 
   const links = await PublicToken.find({ purpose: "plan", batch: id, active: true })
-    .select("token allow_updates createdAt recipient_name recipient_phone recipient_role_label recipient_ref recipient_key")
+    .select("token allow_updates createdAt recipient_name recipient_phone recipient_role_label recipient_ref recipient_occupant recipient_key")
     .sort({ createdAt: -1 }).lean<any[]>();
 
   // QA-614: this endpoint is readable by anyone who passes assertBatchInScope - which includes a
@@ -41,13 +41,20 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   if (mayShare) {
     const b = await Batch.findById(id).select("location").lean<any>();
     const loc = b?.location ? await Location.findById(b.location)
-      .select("spoc_name spoc_phone principal_name principal_phone cluster_head_name cluster_head_phone contacts").lean<any>() : null;
+      .select("spoc_name spoc_phone principal_name principal_phone cluster_head_name cluster_head_phone contacts spoc_gen principal_gen cluster_head_gen").lean<any>() : null;
     const add = (ref: string, name?: string, phone?: string, role_label?: string) => {
       const n = String(name ?? "").trim();
       if (!n) return;
       const role = String(role_label ?? "Contact").trim() || "Contact";
       const phoneStr = String(phone ?? "").trim();
-      recipients.push({ ref, key: recipientKey({ recipient_ref: ref }), name: n, phone: phoneStr, role_label: role });
+      // QA-621 cycle 4: same generation-aware key the mint route computes (public-tokens/route.ts)
+      // - this is the "Send to" picker's twin door, and it must agree on WHO a slot's occupant is
+      // right now or a stale/live decision here would disagree with what mint actually does.
+      // QA-558 / QA-621 cycle 5: `n` IS this ref's current occupant as the centre records it (it is
+      // read from the same location document, two lines up), which is exactly what the mint route
+      // snapshots into the key - so the picker and the mint still compute one identical key, and
+      // "this person already has a link" cannot disagree with what sending actually replaces.
+      recipients.push({ ref, key: recipientKey({ recipient_ref: ref, slot_generation: slotGeneration(loc, ref), occupant_name: n }), name: n, phone: phoneStr, role_label: role });
     };
     add("spoc", loc?.spoc_name, loc?.spoc_phone, "SPOC");
     add("principal", loc?.principal_name, loc?.principal_phone, "Principal");
@@ -69,7 +76,10 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
       recipient_phone: mayShare ? (l.recipient_phone ?? null) : null,
       recipient_role_label: l.recipient_role_label ?? null, recipient_ref: l.recipient_ref ?? null,
       // QA-611: the identity the screen compares on, so it never re-derives its own answer.
-      recipient_key: l.recipient_key ?? recipientKey(l),
+      // QA-558 / QA-621 cycle 5: when a row predates the stored key, storedTokenKey() rebuilds it
+      // from the ROW'S OWN recorded fields - the same function the mint route's upgrade pass uses,
+      // so the screen and the mint cannot end up holding two different keys for one link.
+      recipient_key: storedTokenKey(l),
     })),
     recipients,
     may_share: mayShare,

@@ -5,6 +5,7 @@ import { apiHandler, requireUser, requireRole, HttpError } from "@/lib/authz";
 import { fetchWorkbook } from "@/lib/workbook";
 import { Location } from "@/models";
 import { audit } from "@/lib/audit";
+import { slotGenerationBumps } from "@/lib/rules";
 
 // Rebuild the base layer — Locations, Programmes, LocationTargets — from the client's AVPL
 // master workbook (the OneDrive truth sheet). App-side port of scripts/seed-rpl.mjs so the
@@ -185,6 +186,15 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // Raw-collection upserts, exactly like the proven script — parity beats mongoose casting here.
   const db = Location.db;
   for (const loc of locations.values()) {
+    // QA-621 cycle 4: this write bypasses Mongoose entirely (that's the whole point of the raw
+    // driver above), so no schema hook could ever catch a SPOC/Principal/Cluster-Head rename
+    // coming from the master sheet — it has to be done explicitly, here, against whatever is
+    // CURRENTLY stored under this code, same helper as every other write path (rules.ts).
+    const existingLoc = await db.collection("locations").findOne(
+      { code: loc.code },
+      { projection: { spoc_name: 1, principal_name: 1, cluster_head_name: 1, spoc_gen: 1, principal_gen: 1, cluster_head_gen: 1 } },
+    );
+    Object.assign(loc, slotGenerationBumps(existingLoc, loc));
     await db.collection("locations").updateOne({ code: loc.code }, { $set: loc }, { upsert: true });
   }
   for (const p of programs.values()) {

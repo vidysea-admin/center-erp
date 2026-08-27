@@ -4,7 +4,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireRole, requireEdit, assertLocationInScope, isScoped, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, BatchMember, Location, Program, PublicToken } from "@/models";
-import { assertBatchInScope, recipientKey } from "@/lib/rules";
+import { assertBatchInScope, occupantName, recipientKey, slotGeneration, storedTokenKey } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
 // Admin/Ops management of public capability links (2026-08-11):
@@ -187,7 +187,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
     // there is no fallback, because a fallback is a guess and every guess has been wrong.
     const rRef = String(body.recipient_ref ?? "").trim();
     const planLoc = await Location.findById(b.location)
-      .select("spoc_name principal_name cluster_head_name contacts").lean<any>();
+      .select("spoc_name principal_name cluster_head_name contacts spoc_gen principal_gen cluster_head_gen").lean<any>();
     const offered = new Set<string>();
     if (String(planLoc?.spoc_name ?? "").trim()) offered.add("spoc");
     if (String(planLoc?.principal_name ?? "").trim()) offered.add("principal");
@@ -202,7 +202,29 @@ export const POST = apiHandler(async (req: NextRequest) => {
     // exact match on an indexed field. -191 matched on the phone string and a centre recording one
     // landline for its SPOC and its Principal had them cutting each other off - the S1 this unit
     // exists to close, alive again through the line written to close it.
-    const rKey = recipientKey({ recipient_ref: rRef });
+    // QA-621 cycle 4: a slot ref alone is not enough - "spoc" names a role, and the role's
+    // OCCUPANT can change (Location.spoc_name edited to a different person) without the ref
+    // changing at all. slotGeneration() folds in the slot's current generation (0 for a slot that
+    // has never changed occupant, or for a `contact:<id>` ref, which has no generation) so a mint
+    // for a NEW occupant lands on a different key than the one the OLD occupant's link was keyed
+    // under, and never revokes it. See SLOT_OCCUPANT_FIELDS / slotGenerationBumps in rules.ts.
+    // QA-558 / QA-621 cycle 5: the generation alone still leaves TWO holes, and both are the same
+    // family as everything before them. (1) `contact:<id>` has no generation, and an admin can
+    // rename a contact row in place - same subdocument id, a different human in it - so the new
+    // person's mint would revoke the old person's link exactly as -193 did. (2) the generation is
+    // only correct while every write path that can rename a slot's occupant remembers to bump it,
+    // and "remembers to" is how each of the last four fixes died. So the key ALSO carries a
+    // snapshot of WHO the centre says occupies this ref right now, read server-side - never
+    // `body.recipient_name`, which the caller controls and could aim at somebody else's link.
+    const occName = occupantName(planLoc, rRef);
+    const rKey = recipientKey({ recipient_ref: rRef, slot_generation: slotGeneration(planLoc, rRef), occupant_name: occName });
+    if (!rKey) {
+      // Unreachable while `offered` requires a non-empty name for every ref it admits - kept
+      // because an empty key must never reach the revocation below, where it would match every
+      // keyless token on the batch. A guard whose absence is only safe by coincidence is a bug
+      // waiting for the coincidence to end.
+      throw new HttpError(400, "This centre no longer records who occupies that slot, so there is no way to say whose link this would be.");
+    }
 
     // QA-616: `recipient_key` is stored, so a token minted before it existed carries none - and the
     // revocation, which matches on the key, could never touch it. Meanwhile the screen recomputes
@@ -217,10 +239,25 @@ export const POST = apiHandler(async (req: NextRequest) => {
     // invent: a row that carries a ref gets its key, and a row that does not is left alone. Those
     // are listed on the plan screen as links that belong to nobody the centre still lists, and are
     // revoked by hand rather than silently matched.
-    const unkeyed = await PublicToken.find({ purpose: "plan", batch: body.batch, recipient_key: { $in: [null, ""] }, recipient_ref: { $nin: [null, ""] } })
-      .select("recipient_ref").lean<any[]>();
-    for (const t of unkeyed) {
-      await PublicToken.updateOne({ _id: t._id }, { $set: { recipient_key: recipientKey(t) } });
+    //
+    // QA-558 / QA-621 cycle 5: the same pass now also UPGRADES rows that carry an older
+    // single-signal key (`ref:<ref>` / `ref:<ref>:g<n>`) to the two-signal format, so that
+    // re-sending to the same person still rotates their own link off across this change. Every
+    // input is the ROW'S OWN recorded fields (storedTokenKey() in rules.ts reads nothing from the
+    // centre's current state), because deriving an old row's identity from today's occupant is
+    // precisely the guess that made this an S1 five times.
+    const stale = await PublicToken.find({
+      purpose: "plan", batch: body.batch, recipient_ref: { $nin: [null, ""] },
+      recipient_key: { $not: /\|as:/ },
+    }).select("recipient_ref recipient_name recipient_occupant recipient_key").lean<any[]>();
+    for (const t of stale) {
+      const upgraded = storedTokenKey(t);
+      // "" means the row cannot say whose it is (no recorded name). Leave its key exactly as it
+      // was rather than clearing it - it simply matches no mint from here on, which is the
+      // QA-623 outcome: shown as belonging to nobody, revocable by hand, never silently matched.
+      if (upgraded && upgraded !== String(t.recipient_key ?? "")) {
+        await PublicToken.updateOne({ _id: t._id }, { $set: { recipient_key: upgraded } });
+      }
     }
 
     await PublicToken.updateMany({ purpose: "plan", batch: body.batch, recipient_key: rKey, active: true }, { $set: { active: false } });
@@ -229,6 +266,13 @@ export const POST = apiHandler(async (req: NextRequest) => {
       token: crypto.randomBytes(16).toString("hex"),
       purpose, batch: body.batch, allow_updates: !!body.allow_updates, created_by: user.id,
       recipient_name: rName, recipient_phone: rPhone || undefined,
+      // ...and, separately from the name the sender saw, the centre's OWN record of who occupied
+      // that ref at this moment. Two fields rather than one on purpose: `recipient_name` is what
+      // the screen shows and the sender typed, which makes it an input; `recipient_occupant` is
+      // what the identity in `recipient_key` was actually built from, which makes it evidence. The
+      // day they disagree - a stale picker, a rename mid-session - the identity must be the one the
+      // server read, and there has to be somewhere to see that it was.
+      recipient_occupant: occName,
       recipient_role_label: rRole, recipient_ref: rRef,
       recipient_key: rKey,
     });

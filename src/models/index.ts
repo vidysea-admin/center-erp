@@ -171,6 +171,16 @@ const LocationSchema = new Schema({
   status_changed_on: Date,
   spoc_name: String, spoc_phone: String, spoc_user: oid("User"),
   principal_name: String, principal_phone: String, principal_user: oid("User"),
+  // QA-621 cycle 4: a SLOT (spoc / principal / cluster_head, the field above and
+  // `cluster_head_name` further up) is a role label, not a person - its OCCUPANT can change by a
+  // plain edit to the *_name field, and a plan link's identity (recipientKey() in lib/rules.ts)
+  // has to tell "same occupant re-sent" apart from "a different person now holds this slot".
+  // These three counters are bumped ONLY by slotGenerationBumps() (lib/rules.ts), and only when
+  // the matching *_name field is actually set to a different value - never client-writable
+  // directly (not in any itemRoutes `fields` allowlist).
+  spoc_gen: { type: Number, default: 0 },
+  principal_gen: { type: Number, default: 0 },
+  cluster_head_gen: { type: Number, default: 0 },
   // 2026-08-11 meeting: "एक SPOC, दो SPOC… कोई और contact person है तो वो सब ऐड कर पाऊं" —
   // any number of named contacts beyond the two legacy slots above (which stay untouched).
   contacts: [{
@@ -1144,9 +1154,20 @@ const PublicTokenSchema = new Schema({
   recipient_phone: String,
   recipient_role_label: String,
   recipient_ref: String,        // "spoc" | "principal" | "cluster_head" | "contact:<index>"
+  // QA-558 / QA-621 cycle 5: the centre's OWN record of who occupied `recipient_ref` at the moment
+  // this link was minted, read server-side (occupantName() in lib/rules.ts) - never the name the
+  // caller sent. `recipient_name` above is what the sender saw and is therefore an INPUT; this is
+  // what the identity in `recipient_key` was built from, and is therefore EVIDENCE. A ref says
+  // which chair; this says who was sitting in it, which is the half that made a slot reassignment
+  // (spoc_name edited, a contact row typed over) revoke a different person's live link five
+  // releases running.
+  recipient_occupant: String,
   // QA-611: WHO this link belongs to, as one stored value - see recipientKey() in lib/rules.ts.
   // -191 revoked on the phone string and a centre with one landline for two people put the S1
   // straight back; a phone number is not a person.
+  // QA-558 / QA-621 cycle 5: that value is now TWO independent signals ANDed together - the durable
+  // ref (with the slot's generation) and the occupant snapshot above - so a wrongful revocation
+  // needs both to fail at once, in the same direction, rather than either one of them.
   recipient_key: String,
   created_by: oid("User"),
 }, { timestamps: true });

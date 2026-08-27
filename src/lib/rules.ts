@@ -2340,9 +2340,156 @@ export type Basis = { key: string; label: string; date: Date | null; blocking?: 
 // minting. Nothing falls back, because a fallback IS a guess, and every guess here has been wrong.
 // A token that carries no ref - only the ones minted before this rule - can be read and revoked by
 // hand, and is never silently matched to anybody.
-export function recipientKey(r: { recipient_ref?: unknown }): string {
+// QA-621 cycle 4 (the sixth answer, and still not a guess): a SLOT (`spoc` / `principal` /
+// `cluster_head`) has durable identity as a role name, but its OCCUPANT does not - a centre can
+// be handed to a different real person by a plain edit to Location.spoc_name, and the ref alone
+// cannot tell "re-sent to the same person" apart from "a different person now holds this slot".
+// `contact:<id>` already carries a durable per-person id (the subdocument's own _id, QA-615) and
+// needs none of this.
+//
+// So the three role slots are VERSIONED: each carries its own generation counter on Location
+// (spoc_gen / principal_gen / cluster_head_gen, models/index.ts), bumped only when the field that
+// names its occupant is actually set to a DIFFERENT value - editing an unrelated field like `code`
+// or `contacts` must not touch any of them, and the three slots are independent because a centre
+// can change its SPOC without its Principal moving. recipientKey() folds the slot's generation, AT
+// MINT TIME, into the key: a link minted for generation N of a slot is `ref:<slot>:g<N>`, so once
+// the slot moves to N+1 a new mint for the new occupant lands on a different key and never touches
+// the old link.
+//
+// A slot that has never changed since this shipped stays at generation 0, and 0 is deliberately
+// the OLD un-suffixed format (`ref:<slot>`) - so every link minted before this fix, and every
+// location whose SPOC/Principal/Cluster Head has simply never been edited, is byte-for-byte
+// unchanged. Nothing to migrate, nothing to backfill.
+export const SLOT_OCCUPANT_FIELDS: Record<string, { nameField: string; genField: string }> = {
+  spoc: { nameField: "spoc_name", genField: "spoc_gen" },
+  principal: { nameField: "principal_name", genField: "principal_gen" },
+  cluster_head: { nameField: "cluster_head_name", genField: "cluster_head_gen" },
+};
+
+// Given a Location's CURRENTLY STORED fields and a patch about to be written to it, return the
+// generation bumps (if any) that write must fold into the SAME write. The one place this
+// comparison is made - every write path that can change spoc_name / principal_name /
+// cluster_head_name (the direct edit route, an approved location.edit suggestion, the AVPL master
+// -sheet rebase) calls this with whatever it is about to persist, rather than re-deriving "did the
+// occupant change" for itself.
+export function slotGenerationBumps(
+  existing: Record<string, unknown> | null | undefined,
+  patch: Record<string, unknown>,
+): Record<string, number> {
+  const bumps: Record<string, number> = {};
+  for (const { nameField, genField } of Object.values(SLOT_OCCUPANT_FIELDS)) {
+    if (!(nameField in patch)) continue; // this write does not touch this field at all
+    const before = String((existing as any)?.[nameField] ?? "").trim();
+    const after = String(patch[nameField] ?? "").trim();
+    if (before !== after) bumps[genField] = Number((existing as any)?.[genField] ?? 0) + 1;
+  }
+  return bumps;
+}
+
+// The generation currently in effect for a slot ref (`spoc` / `principal` / `cluster_head`), read
+// off the location that offers it. Anything else (a `contact:<id>` ref, or an unrecognised ref)
+// has no generation of its own - 0, so recipientKey() below falls back to the un-suffixed form.
+export function slotGeneration(loc: Record<string, unknown> | null | undefined, ref: string): number {
+  const field = SLOT_OCCUPANT_FIELDS[ref];
+  if (!field) return 0;
+  return Number((loc as any)?.[field.genField] ?? 0);
+}
+
+// QA-558 / QA-621 cycle 5 - the OCCUPANT SNAPSHOT, and the reason it is ANDed with the ref rather
+// than replacing it.
+//
+// Five keys, five defects, and re-reading them together says something none of them says alone:
+//
+//   -190  the batch          -> sending to one killed everyone's link
+//   -191  the phone string   -> one landline shared by two people (QA-611)
+//   -193  the array index    -> remove a contact and everyone below shifts up (QA-615)
+//   -194  the name + role    -> two DIFFERENT people with one name cut each other off (QA-621)
+//   -195  the slot ref       -> a slot's occupant is replaced and the new one revokes the old one
+//
+// Every one of them was a SINGLE derived signal, and every time that one signal turned out to be
+// either shared between two people or reassignable from one person to another, a real person's live
+// link died silently. A sixth single signal would only be a sixth guess: `contact:<id>` is the best
+// ref this codebase has and it STILL fails the same way, because an admin can rename a contact row
+// in place (same subdocument `_id`, a different human in it) - the QA-615 shape one level down, and
+// a shape no generation counter on the three role slots can see.
+//
+// So the identity is not one signal. **A prior link is revoked only when TWO INDEPENDENT signals
+// both say "the same person": the durable ref (which survives edits and is unique per slot/contact
+// row) AND a snapshot of who was actually occupying that ref, taken at mint time from the centre's
+// own record and stored on the token.** They fail for different reasons, so a wrongful revocation
+// now needs BOTH to fail at once, in the same direction:
+//
+//   * ref reassigned to a different person (spoc_name edited, contact row renamed in place) ->
+//     the snapshot differs -> no revocation, whether or not any generation counter was bumped.
+//     That last clause is the point: `slot_generation` is maintained by four write paths calling
+//     slotGenerationBumps(), which is DISCIPLINE, and discipline is exactly what fails silently.
+//     The snapshot needs no maintenance at all - it is computed at mint from the document in hand.
+//   * the same NAME arriving twice as two different people in the same slot (A -> B -> "A" again,
+//     a different A) -> the snapshots match, but the generation moved and never comes back -> no
+//     revocation. This is the case a snapshot alone would get wrong, and why the generation stays.
+//   * genuinely the same person re-sent -> ref, generation and snapshot all match -> their own old
+//     link rotates off, which is the half of REQ-393 that is not about safety.
+//
+// The snapshot is the CURRENT OCCUPANT's name as the centre records it (occupantName() below),
+// never the name the caller typed - a caller-supplied string is an input, and an input that can be
+// aimed at someone else's link is not an identity.
+//
+// Normalisation is deliberately timid: case and runs of whitespace only. Anything cleverer (drop
+// punctuation, initials, transliterate) MERGES people, and merging people is the entire bug.
+export function normalizeOccupantName(name: unknown): string {
+  return String(name ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+// The name of whoever occupies `ref` on this centre RIGHT NOW, read off the location document.
+// One definition, so the mint route and the "Send to" picker cannot disagree about who a slot's
+// occupant is (ARCHITECTURE §3 - two readers of one fact is how they start diverging).
+export function occupantName(loc: Record<string, unknown> | null | undefined, ref: string): string {
+  const r = String(ref ?? "").trim();
+  const slot = SLOT_OCCUPANT_FIELDS[r];
+  if (slot) return String((loc as any)?.[slot.nameField] ?? "").trim();
+  if (r.startsWith("contact:")) {
+    const id = r.slice("contact:".length);
+    const c = ((loc as any)?.contacts ?? []).find((x: any) => x?._id && String(x._id) === id);
+    return String(c?.name ?? "").trim();
+  }
+  return "";
+}
+
+// `occupant_name` is a REQUIRED property, not an optional one, on purpose: a caller that forgets it
+// must fail to compile rather than quietly compute the old single-signal key and match somebody
+// else's token. An empty ref or an empty occupant means "this link cannot say whose it is" and
+// returns "" - which never matches anything, because the revocation refuses to run on an empty key.
+export function recipientKey(r: { recipient_ref?: unknown; slot_generation?: unknown; occupant_name: unknown }): string {
   const ref = String(r.recipient_ref ?? "").trim();
-  return ref ? `ref:${ref}` : "";
+  const who = normalizeOccupantName(r.occupant_name);
+  if (!ref || !who) return "";
+  const gen = Number(r.slot_generation ?? 0);
+  const base = gen > 0 ? `ref:${ref}:g${gen}` : `ref:${ref}`;
+  return `${base}|as:${who}`;
+}
+
+// The key a token that is ALREADY STORED should carry, derived from that token's OWN recorded
+// fields and nothing else. Used to upgrade rows minted under the older single-signal formats
+// (`ref:<ref>` / `ref:<ref>:g<n>`) so that re-sending to the same person still rotates their own
+// link off after this change.
+//
+// Nothing here is read from the centre's CURRENT state, which is the whole discipline: `recipient_
+// occupant` (or, for a row minted before that field existed, `recipient_name`) on the token is the
+// recorded fact of who that link was actually sent to (QA-623 - a key is never INVENTED for a row
+// that cannot say whose it is), and the generation is recovered from the row's existing key rather
+// than from today's counter, which may have moved since. A row with no ref, or no recorded name,
+// gets "" and stays unmatched forever - listed on the plan screen as belonging to nobody the centre
+// still lists, revoked by hand.
+export function storedTokenKey(t: { recipient_ref?: unknown; recipient_name?: unknown; recipient_occupant?: unknown; recipient_key?: unknown }): string {
+  const existing = String(t.recipient_key ?? "");
+  if (existing.includes("|as:")) return existing; // already in the two-signal format
+  const m = /:g(\d+)$/.exec(existing);
+  const recorded = String(t.recipient_occupant ?? "").trim() || t.recipient_name;
+  return recipientKey({
+    recipient_ref: t.recipient_ref,
+    slot_generation: m ? Number(m[1]) : 0,
+    occupant_name: recorded,
+  });
 }
 
 export async function planArtifact(batchId: string) {

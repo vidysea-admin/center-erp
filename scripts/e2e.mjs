@@ -3811,6 +3811,117 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
     (await fetch(BASE + `/api/public/plan/${legacyTok.token}`)).status === 404,
     String((await fetch(BASE + `/api/public/plan/${legacyTok.token}`)).status));
 
+  // ══ QA-558 / QA-621 cycle 5 — ONE SLOT, TWO PEOPLE, AT TWO DIFFERENT TIMES ══════════════════
+  // Every pin above this line puts two different people on the centre AT THE SAME MOMENT. That is
+  // the shape four fixes were written and tested against, and it is not the shape that kept killing
+  // links: -195 shipped with `ref:spoc` as the identity and a checker moved the SPOC slot from one
+  // human to another, which no simultaneous-pair test can see. The seven pins below are all the
+  // over-TIME shape, on both kinds of ref, and two of them deliberately break the mechanism that is
+  // supposed to catch it to prove something else still does.
+  const ts = "T" + Date.now().toString().slice(-6);
+  const slotLoc = (await req("POST", "/api/locations", { code: "SL" + ts, name: "Slot Centre " + ts, external_id: "SL" + ts, approval_status: "Approved", city: "Jhansi",
+    spoc_name: "Sunita " + ts, spoc_phone: "9800000001",
+    contacts: [{ name: "Alice Row " + ts, role_label: "Contact" }] }, 201)).data.item;
+  const slotBatch = (await req("POST", "/api/batches", { location: slotLoc._id, program: prog._id, planned_start: "2027-07-01", target_size: 3 }, 201)).data.item;
+  await req("PATCH", `/api/batches/${slotBatch._id}/milestones`, { create: true }, 200);
+  // Recipients always come from the product's own picker, never hand-built: a fixture that invents
+  // a ref tests the fixture (QA-624, where a stripped `_id` made the collision under test
+  // impossible and the pin could not fail).
+  const slotPick = async (startsWith) => ((await req("GET", `/api/batches/${slotBatch._id}/plan`)).data.recipients ?? [])
+    .find((r) => String(r.name).startsWith(startsWith));
+  const slotMint = async (r) => (await req("POST", "/api/public-tokens", { purpose: "plan", batch: slotBatch._id, recipient_name: r.name, recipient_phone: r.phone, recipient_role_label: r.role_label, recipient_ref: r.ref }, 201)).data.item;
+  const slotLive = async (t) => (await fetch(BASE + `/api/public/plan/${t.token}`)).status;
+
+  // (1) The -195 shape itself, through the product's own doors: the centre's SPOC is replaced.
+  const sunita = await slotPick("Sunita");
+  const sunitaTok = await slotMint(sunita);
+  await req("PATCH", `/api/locations/${slotLoc._id}`, { spoc_name: "Vikram " + ts }, 200);
+  const vikram = await slotPick("Vikram");
+  ok("QA-621 cycle 5 fixture: the SPOC slot really did change hands, and still offers the same ref",
+    !!vikram && vikram.ref === "spoc" && vikram.key !== sunita.key,
+    JSON.stringify({ ref: vikram?.ref, keyMoved: vikram?.key !== sunita.key }));
+  const vikramTok = await slotMint(vikram);
+  ok("QA-621 cycle 5: handing a centre's SPOC slot to a DIFFERENT person does not revoke the previous SPOC's live link",
+    (await slotLive(sunitaTok)) === 200 && (await slotLive(vikramTok)) === 200,
+    JSON.stringify({ sunita: await slotLive(sunitaTok), vikram: await slotLive(vikramTok) }));
+
+  // (2) ...and the other half of REQ-393: the same occupant re-sent still replaces their OWN link.
+  const vikramAgainTok = await slotMint(await slotPick("Vikram"));
+  ok("REQ-393: re-sending to the SAME occupant of a slot rotates that person's own link off, and nobody else's",
+    (await slotLive(vikramTok)) === 404 && (await slotLive(vikramAgainTok)) === 200 && (await slotLive(sunitaTok)) === 200,
+    JSON.stringify({ vikramOld: await slotLive(vikramTok), vikramNew: await slotLive(vikramAgainTok), sunita: await slotLive(sunitaTok) }));
+
+  // (3) THE FOURTH SHAPE, and the one -195's generation counters cannot see: a `contact:<id>` row
+  // renamed IN PLACE. The subdocument id is durable (QA-615) - which is exactly the problem, because
+  // an admin replacing a centre's contact person by typing over the name keeps the id and changes
+  // the human. Same failure as `spoc_name` being edited, one level down, with no counter on it.
+  const aliceRow = await slotPick("Alice Row");
+  const aliceRowTok = await slotMint(aliceRow);
+  const locNow = (await req("GET", `/api/locations/${slotLoc._id}`)).data.item;
+  await req("PATCH", `/api/locations/${slotLoc._id}`, { contacts: (locNow.contacts ?? []).map((c) => ({
+    _id: c._id, phone: c.phone, role_label: c.role_label,
+    name: String(c.name).startsWith("Alice Row") ? "Zoe Row " + ts : c.name,
+  })) }, 200);
+  const zoeRow = await slotPick("Zoe Row");
+  ok("QA-558 cycle 5 fixture: the renamed contact really is the SAME row - same id, different person, so the collision is genuinely possible",
+    !!zoeRow && zoeRow.ref === aliceRow.ref,
+    JSON.stringify({ before: aliceRow.ref, after: zoeRow?.ref }));
+  const zoeRowTok = await slotMint(zoeRow);
+  ok("QA-558 cycle 5: a contact row typed over with a DIFFERENT person's name does not revoke the previous person's link",
+    (await slotLive(aliceRowTok)) === 200 && (await slotLive(zoeRowTok)) === 200,
+    JSON.stringify({ alice: await slotLive(aliceRowTok), zoe: await slotLive(zoeRowTok) }));
+
+  // (4) The generation counters are maintained by four write paths remembering to call
+  // slotGenerationBumps(). "Remembering to" is how each of the four earlier fixes died, so this pin
+  // BREAKS that mechanism on purpose - the occupant is changed by a raw write, exactly as a future
+  // write path that forgets would - and asserts nobody's link dies anyway.
+  {
+    const { MongoClient, ObjectId } = await import("mongodb");
+    const mc = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+    await mc.connect();
+    await mc.db(process.env.MONGODB_DB).collection("locations")
+      .updateOne({ _id: new ObjectId(String(slotLoc._id)) }, { $set: { spoc_name: "Farida " + ts } });
+    await mc.close();
+  }
+  const faridaTok = await slotMint(await slotPick("Farida"));
+  ok("QA-558 cycle 5: an occupant change written by a path that FORGETS to bump the slot generation still cannot revoke the previous occupant's link",
+    (await slotLive(vikramAgainTok)) === 200 && (await slotLive(faridaTok)) === 200,
+    JSON.stringify({ vikram: await slotLive(vikramAgainTok), farida: await slotLive(faridaTok) }));
+
+  // (5) ...and the mirror case, which is why the generation stays in the key rather than being
+  // replaced by the occupant snapshot: a NAME can come back to a slot in a different person. The
+  // generation moves forward and never returns, so the earlier holder is still safe.
+  await req("PATCH", `/api/locations/${slotLoc._id}`, { spoc_name: "Vikram " + ts }, 200);
+  const vikramTheSecondTok = await slotMint(await slotPick("Vikram"));
+  ok("QA-621 cycle 5: a name RETURNING to a slot as a different person does not revoke the earlier holder of that name's link",
+    (await slotLive(vikramAgainTok)) === 200 && (await slotLive(vikramTheSecondTok)) === 200,
+    JSON.stringify({ firstVikram: await slotLive(vikramAgainTok), secondVikram: await slotLive(vikramTheSecondTok) }));
+
+  // (6) The rows already in production carry the OLD single-signal key. Here are two of them
+  // wearing the identical old key - the -193/-195 collision, on disk - and the send has to tell
+  // them apart by what each row itself recorded, then rotate only the right one.
+  {
+    const { MongoClient, ObjectId } = await import("mongodb");
+    const mc = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+    await mc.connect();
+    const col = mc.db(process.env.MONGODB_DB).collection("publictokens");
+    // Exactly what a row minted before this change looks like: the old single-signal key, and no
+    // `recipient_occupant` at all - so the upgrade has nothing to read but the name each row
+    // itself recorded, which is the only recorded fact such a row has.
+    for (const t of [aliceRowTok, zoeRowTok]) {
+      await col.updateOne({ _id: new ObjectId(String(t._id)) },
+        { $set: { recipient_key: `ref:${zoeRow.ref}` }, $unset: { recipient_occupant: "" } });
+    }
+    await mc.close();
+  }
+  const zoeAgainTok = await slotMint(await slotPick("Zoe Row"));
+  ok("QA-558 cycle 5: two pre-existing links wearing the identical OLD key are told apart by what each recorded - the current occupant's own link rotates",
+    (await slotLive(zoeRowTok)) === 404 && (await slotLive(zoeAgainTok)) === 200,
+    JSON.stringify({ zoeOld: await slotLive(zoeRowTok), zoeNew: await slotLive(zoeAgainTok) }));
+  ok("QA-558 cycle 5: ...and the OTHER person's pre-existing link, which shared that same old key, survives it",
+    (await slotLive(aliceRowTok)) === 200,
+    JSON.stringify({ alice: await slotLive(aliceRowTok) }));
+
   // QA-617 — "may this user share?" was asked in two places that disagreed in BOTH directions. The
   // direction pinned here is the one my own first fix got wrong: an Admin with `can_edit: false` -
   // the schema's DEFAULT - can mint a link (requireEdit exempts Admin) but was shown nobody to send
