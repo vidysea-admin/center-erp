@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-257";
+export const RELEASE = "2026.08.14-258";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -138,6 +138,29 @@ const RELEASE_NOTE_ARCHIVE_254 =
   "screen for a real number sitting one tab over.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-258 restores two rights decided on the day of the 2026-08-24 outage but never written into "  +
+  "what a fresh install or a matrix reset would carry: a Trainer can mark a candidate Pass/Fail and "  +
+  "upload a certificate, and a centre principal can import the government portal's attendance file "  +
+  "for their own centre. Both had already been switched on for the live matrix by hand that day; "  +
+  "this makes them the default going forward, exactly as decided, instead of a setting only one "  +
+  "person remembered to apply. "  +
+  "Alongside it: a slot's generation number - the thing that decides whether a saved plan link still "  +
+  "points at the person it was sent to - now advances on the schema itself whenever who holds a slot "  +
+  "changes, rather than depending on every write path remembering to bump it by hand; two write "  +
+  "paths (the Sync Inbox's Apply-value button, and reverting a synced change) had not, so a plan "  +
+  "link could keep pointing at whoever used to hold a slot after someone else took it over. A plan "  +
+  "link's identity is also now recorded against the centre it was minted for, not re-derived from "  +
+  "wherever the batch happens to sit today, so moving a batch between two centres whose principals "  +
+  "share a name can no longer cross a link from one person to the other. "  +
+  "And: deleting a course now tells an Admin what it actually affects - real batch, candidate and "  +
+  "target counts - before the confirmation, instead of a blind \"are you sure\"; the delete itself "  +
+  "is unchanged and stays unconditional, exactly as already decided. "  +
+  "The remainder is checking: a wall-check script that scans for internal rule numbers leaking onto "  +
+  "a screen was silently corrupting its own reading of one file whenever a MIME-type attribute like "  +
+  "accept=\"image/*\" appeared in it, misreading real code below that point as deleted - found and "  +
+  "fixed with no product code involved.";
+
+const RELEASE_NOTE_ARCHIVE_257 =
   "-257 exists to correct something -256 got wrong, and to say so plainly. When the Enrollment tab "  +
   "gained its Edit-candidate button, the list of students behind a batch started being sent to the "  +
   "browser in full rather than as the handful of details that list actually shows. Anyone who could "  +
@@ -835,6 +858,10 @@ const RELEASE_NOTE_ARCHIVE =
   // anywhere - the same shape the comment above records for -245, and the same shape QA-265 records
   // for 329 lines of this file. Wired in here together with -255's, archived by this bump. Adding a
   // note to this chain is the second half of every bump, not an optional one.
+  // -258: ARCHIVE_257 wired in here in the SAME bump that declared it, deliberately, per the two
+  // warnings above (QA-265, then -256's own repeat of it) - the chain, not the declaration, is what
+  // publishes a note.
+  RELEASE_NOTE_ARCHIVE_257 + " " +
   RELEASE_NOTE_ARCHIVE_256 + " " +
   RELEASE_NOTE_ARCHIVE_255 + " " + RELEASE_NOTE_ARCHIVE_254 + " " + RELEASE_NOTE_ARCHIVE_253 + " " +
   RELEASE_NOTE_ARCHIVE_252 + " " + RELEASE_NOTE_ARCHIVE_251 + " " + RELEASE_NOTE_ARCHIVE_250 + " " + RELEASE_NOTE_ARCHIVE_249 + " " + RELEASE_NOTE_ARCHIVE_248 + " " + RELEASE_NOTE_ARCHIVE_247 + " " + RELEASE_NOTE_ARCHIVE_246 + " " + RELEASE_NOTE_ARCHIVE_245 + " " +
