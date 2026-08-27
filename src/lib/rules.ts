@@ -2404,13 +2404,27 @@ export type Basis = { key: string; label: string; date: Date | null; blocking?: 
 // the raw driver collection.
 export { SLOT_OCCUPANT_FIELDS, slotGenerationBumps } from "@/models";
 
-// The generation currently in effect for a slot ref (`spoc` / `principal` / `cluster_head`), read
-// off the location that offers it. Anything else (a `contact:<id>` ref, or an unrecognised ref)
-// has no generation of its own - 0, so recipientKey() below falls back to the un-suffixed form.
+// The generation currently in effect for a ref, read off the location that offers it.
+//
+// QA-1516: a `contact:<id>` ref used to fall through to the unconditional `0` this function
+// returned for "anything that is not one of the three named slots" - which made the two-signal
+// scheme (see the OCCUPANT SNAPSHOT block below) a ONE-signal scheme for exactly the part of the
+// audience an Admin can freely add to. A contact row's `_id` is durable, but its OCCUPANT can be
+// retyped in place (same `_id`, a different human) - the same class of failure the three named
+// slots have `*_gen` for, just one level down. `contacts[].gen` (models/index.ts) is that same
+// counter, per-row instead of per-Location, maintained by the same middleware. An unrecognised
+// ref, or a `contact:<id>` naming a row that no longer exists on this centre, still has no
+// generation of its own - 0, so recipientKey() below falls back to the un-suffixed form.
 export function slotGeneration(loc: Record<string, unknown> | null | undefined, ref: string): number {
-  const field = SLOT_OCCUPANT_FIELDS[ref];
-  if (!field) return 0;
-  return Number((loc as any)?.[field.genField] ?? 0);
+  const r = String(ref ?? "").trim();
+  const field = SLOT_OCCUPANT_FIELDS[r];
+  if (field) return Number((loc as any)?.[field.genField] ?? 0);
+  if (r.startsWith("contact:")) {
+    const id = r.slice("contact:".length);
+    const c = ((loc as any)?.contacts ?? []).find((x: any) => x?._id && String(x._id) === id);
+    return Number(c?.gen ?? 0);
+  }
+  return 0;
 }
 
 // QA-558 / QA-621 cycle 5 - the OCCUPANT SNAPSHOT, and the reason it is ANDed with the ref rather

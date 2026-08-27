@@ -47,16 +47,25 @@ pairing is listed in §3.
 **This file also carries BEHAVIOUR, and only in one place** (QA-1502, 2026-08-27). `LocationSchema`
 has two pieces of middleware beside it — a `pre("save")` and a `pre([...update])` — that (a) advance
 the `spoc_gen` / `principal_gen` / `cluster_head_gen` counters whenever the matching `*_name` field
-is set to a different value, and (b) refuse a `contacts[]` array with two entries sharing one `_id`.
-Both exist because a plan link's identity (`recipientKey()` in `lib/rules.ts`) is built from a slot
-ref + that slot's generation + an occupant snapshot + the centre, and for five releases the counter
-was maintained by every write path *remembering* to call a helper — two shipped routes did not
-(`sync.ts` "Apply value", `sheet-changes/[id]/revert`), and a real person's live link died each time.
-`SLOT_OCCUPANT_FIELDS` and `slotGenerationBumps()` therefore live HERE, not in `rules.ts` (which
-imports this module and so cannot be imported by it); `rules.ts` re-exports both names, so there is
-one definition and every caller is unchanged. The **one** remaining explicit caller is
+is set to a different value, (b) advance each `contacts[].gen` (QA-1516, 2026-08-27) whenever THAT
+row's own `name` changes — read by re-fetching the document's pre-write `contacts` by `_id`, because
+a whole-array reassignment (`Object.assign(existing, {contacts:[...]})`, what `crud.ts`'s PATCH
+always does) recasts every element into a brand-new subdocument and destroys the `isModified`/`isNew`
+trail `isModified` normally relies on — and (c) refuse a `contacts[]` array with two entries sharing
+one `_id`. All three exist because a plan link's identity (`recipientKey()` in `lib/rules.ts`) is
+built from a ref (a named slot OR a `contact:<id>`) + that ref's generation + an occupant snapshot +
+the centre, and for five releases the counter was maintained by every write path *remembering* to
+call a helper — two shipped routes did not (`sync.ts` "Apply value", `sheet-changes/[id]/revert`),
+and a real person's live link died each time; QA-1516 found the same disease one ref-kind lower:
+`contact:<id>` refs had no generation at all; `slotGeneration()` in `rules.ts` returned a hardcoded
+`0` for every one of them, so a retyped contact row (same `_id`, a different human) collapsed the
+two-signal scheme to one signal for exactly the part of the recipient audience an Admin can freely
+add to. `SLOT_OCCUPANT_FIELDS` and `slotGenerationBumps()` therefore live HERE, not in `rules.ts`
+(which imports this module and so cannot be imported by it); `rules.ts` re-exports both names, so
+there is one definition and every caller is unchanged. The **one** remaining explicit caller is
 `admin/avpl-rebase/route.ts`, whose upsert goes through the raw driver collection and can never
-reach Mongoose middleware — it says so at the call site.
+reach Mongoose middleware — it says so at the call site. (`scripts/seed-rpl.mjs` is a second such
+raw-driver writer of `spoc_name`/`cluster_head_name`, not this fix's concern — QA-1515.)
 
 Key enums: `TRAINER_PIPELINE` (:26) · `TRAINER_DOC_TYPE` (:42) · `SCHEME` · `LIFECYCLE_STATUS` ·
 `ASSESSMENT_RESULT` · `CERTIFICATE_STATUS` (:65) · `BATCH_STATUS` (:68) · `ENROLLMENT_ISSUE` (:70) ·

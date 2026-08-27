@@ -185,11 +185,17 @@ const LocationSchema = new Schema({
   cluster_head_gen: { type: Number, default: 0 },
   // 2026-08-11 meeting: "एक SPOC, दो SPOC… कोई और contact person है तो वो सब ऐड कर पाऊं" —
   // any number of named contacts beyond the two legacy slots above (which stay untouched).
+  // QA-1516: `gen` is this ROW's own generation, the same mechanism as spoc_gen/principal_gen/
+  // cluster_head_gen above but per-subdocument rather than per-Location - a contact row's `_id`
+  // is durable but its OCCUPANT can be retyped in place (same _id, a different human), and
+  // `slotGeneration()` in lib/rules.ts had no per-contact counter to read, so it returned 0 for
+  // every `contact:<id>` ref unconditionally. See the middleware below for how it is maintained.
   contacts: [{
     name: { type: String, required: true },
     phone: String,
     role_label: { type: String, default: "Contact" }, // SPOC / Principal / Cluster Head / Contact…
     user: oid("User"),
+    gen: { type: Number, default: 0 },
   }],
 }, { timestamps: true });
 
@@ -287,6 +293,38 @@ function assertContactIdsUnique(contacts: unknown) {
       this.set(genField, Number(this.get(genField) ?? 0) + 1);
     }
   }
+  // QA-1516: each CONTACT ROW's own generation, maintained the same way but per-subdocument.
+  // This cannot reuse the `isModified`/`isNew` trick above: `crud.ts`'s PATCH does
+  // `Object.assign(existing, data)` with a whole new `contacts` ARRAY (plain objects off the
+  // wire, not the loaded subdocuments), and Mongoose recasts a whole-array reassignment into
+  // brand-new subdocument instances - every element reports `isNew: true` and
+  // `isModified(...) === true` regardless of whether its `_id` matches an existing row (verified
+  // empirically before writing this: hydrate a doc, Object.assign a same-`_id` renamed contact
+  // onto it, and the resulting subdocument's `isNew` is `true`). So subdocument identity is gone
+  // by the time this hook runs, and there is nothing to compare `this.contacts[i]` against.
+  // The DB still holds the pre-write row, though - re-read it by `_id`, the same "ask the
+  // database what was there before" the query hook below already relies on for its case.
+  if (this.isModified("contacts")) {
+    const current: any[] = this.get("contacts") ?? [];
+    if (current.length) {
+      const prior = await this.constructor.findById(this._id).select("contacts").lean();
+      const priorById = new Map<string, any>((prior?.contacts ?? []).map((c: any) => [String(c._id), c]));
+      for (const c of current) {
+        const id = c?._id ? String(c._id) : "";
+        const before = id ? priorById.get(id) : null;
+        if (!before) continue; // no matching row existed before: a genuinely new contact, stays at the schema default (0)
+        const beforeName = String(before.name ?? "").trim();
+        const afterName = String(c.name ?? "").trim();
+        // Never trust whatever `gen` rode in on the wire (the whole array is client-writable) -
+        // this is the one place that decides it, same as occupantName() is the one place that
+        // decides who a ref's occupant is. A same-name edit (e.g. only the phone changed)
+        // explicitly PRESERVES the prior generation rather than letting the whole-array
+        // reassignment silently default it back to 0, which would undo this row's protection on
+        // the very next unrelated edit.
+        c.gen = beforeName !== afterName ? Number(before.gen ?? 0) + 1 : Number(before.gen ?? 0);
+      }
+    }
+  }
 });
 
 // The query path: `findByIdAndUpdate` / `findOneAndUpdate` / `updateOne` / `updateMany` /
@@ -307,6 +345,33 @@ function assertContactIdsUnique(contacts: unknown) {
     nameField in flat
     && !(genField in flat)                                   // an explicit counter write wins
     && !(genField in (raw.$inc ?? {})));
+
+  // QA-1516: the query path can also rewrite `contacts` wholesale - `approvals/[id]/route.ts`
+  // applies a Location-role user's parked `contacts` suggestion through `findByIdAndUpdate`, which
+  // never touches `LocationSchema.pre("save")` at all. Unlike the three scalar slots, a whole
+  // array can't be advanced with a single per-document `$inc` (there is no array index to target
+  // blindly), but the incoming array is already sitting in `flat.contacts` / `raw.$set.contacts`
+  // (the same object, not a copy - `{...raw.$set}` only shallow-copies the outer object) and
+  // hasn't been sent to Mongo yet, so each row's `gen` can be stamped directly onto it before the
+  // update proceeds. Reuses the exact same "ask the DB what each row was called before" logic as
+  // the document hook above; see that comment for why `isModified` can't be used here either (a
+  // query hook has no document in hand to ask in the first place).
+  if ("contacts" in flat && Array.isArray(flat.contacts) && flat.contacts.length) {
+    const docs = await this.model.find(this.getQuery()).select("contacts").lean();
+    for (const doc of docs) {
+      const priorById = new Map<string, any>(((doc as any).contacts ?? []).map((c: any) => [String(c._id), c]));
+      for (const c of flat.contacts as any[]) {
+        const id = c?._id ? String(c._id) : "";
+        const before = id ? priorById.get(id) : null;
+        if (!before) { if (c && typeof c === "object" && c.gen === undefined) c.gen = 0; continue; }
+        const beforeName = String(before.name ?? "").trim();
+        const afterName = String(c?.name ?? "").trim();
+        c.gen = beforeName !== afterName ? Number(before.gen ?? 0) + 1 : Number(before.gen ?? 0);
+      }
+    }
+    this.setUpdate(raw); // explicit, though the in-place mutation above already touches the same object
+  }
+
   if (!touched.length) return;
 
   const docs = await this.model.find(this.getQuery())

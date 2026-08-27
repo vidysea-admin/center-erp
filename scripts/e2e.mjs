@@ -4021,6 +4021,21 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
       await col.updateOne({ _id: new ObjectId(String(t._id)) },
         { $set: { recipient_key: `ref:${zoeRow.ref}` }, $unset: { recipient_occupant: "" } });
     }
+    // QA-1516: this fixture simulates data from BEFORE `recipient_key` encoded name at all - the
+    // -193/-195 era, which for a `contact:<id>` ref also predates `contacts[].gen` existing (that
+    // field is new in this same change). A genuinely pre-migration row's generation was never 0
+    // "as of now" in the sense the live counter means it - it simply never existed. The closest
+    // honest simulation is resetting the row's OWN counter back to 0 too, alongside its token's
+    // degraded key: this pin is about disambiguating two identically-keyed rows by what each
+    // recorded, a property that is orthogonal to whether a generation has since moved (that is
+    // its own, separately pinned case - "QA-1516 fixture" above, and QA-1503 cycle 6 disclosure
+    // #3 for slots: a legacy row whose ref's generation moved since it was minted is un-rotatable
+    // by design). Without this reset, pin (3)'s Alice->Zoe rename (which correctly bumps the
+    // generation) leaks into this unrelated assertion and this pin would be testing THAT case
+    // by accident instead of the one its own title names.
+    await mc.db(process.env.MONGODB_DB).collection("locations").updateOne(
+      { _id: new ObjectId(String(slotLoc._id)), "contacts._id": new ObjectId(String(zoeRow.ref.slice("contact:".length))) },
+      { $set: { "contacts.$.gen": 0 } });
     await mc.close();
   }
   const zoeAgainTok = await slotMint(await slotPick("Zoe Row"));
@@ -4226,6 +4241,69 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
   const orphanLive = { orphan: await liveOf(orphanTok), fresh: await liveOf(orphanFreshTok) };
   ok("QA-1503: ...and re-sending to that same slot leaves the unmatched link alive rather than revoking a link the system cannot prove is theirs",
     orphanLive.orphan === 200 && orphanLive.fresh === 200, JSON.stringify(orphanLive));
+
+  // ══ QA-1516 — the EIGHTH SHAPE: a contact:<id> ref had no generation of its own ══════════════
+  // `SLOT_OCCUPANT_FIELDS` only ever named the three role slots, so `slotGeneration()` returned a
+  // hardcoded 0 for every `contact:<id>` ref - the two-signal scheme (ref + generation, AND-ed
+  // with an occupant snapshot) collapsed to ONE signal for exactly the part of a centre's
+  // audience an Admin can freely add to. Pin (3) above (Alice -> Zoe) only proves the snapshot
+  // half works when the two names DIFFER; this is pin (5)'s shape (a name RETURNING to the same
+  // ref as a different person) applied to a contact row instead of a slot, which is the one
+  // combination nothing above ever drove through a `contact:<id>` ref. `contacts[].gen`
+  // (models/index.ts) closes it the same way spoc_gen/etc. already do.
+  const g16Loc = (await req("POST", "/api/locations", { code: "GN" + cy, name: "Gen Contact Centre " + cy, external_id: "GN" + cy, approval_status: "Approved", city: "Jhansi",
+    contacts: [{ name: "Ravi Contact " + cy, phone: "9700000001", role_label: "Contact" }] }, 201)).data.item;
+  const g16Batch = await planBatchFor(g16Loc._id, "2027-08-01");
+  const g16Pick = async (startsWith) => ((await req("GET", `/api/batches/${g16Batch._id}/plan`)).data.recipients ?? [])
+    .find((r) => String(r.name).startsWith(startsWith));
+  const g16Mint = async (r) => (await req("POST", "/api/public-tokens", { purpose: "plan", batch: g16Batch._id, recipient_name: r.name, recipient_phone: r.phone, recipient_role_label: r.role_label, recipient_ref: r.ref }, 201)).data.item;
+
+  // person 1 - "Ravi" - link minted
+  const g16RaviOne = await g16Pick("Ravi Contact");
+  const g16RaviOneTok = await g16Mint(g16RaviOne);
+  // person 2 - the SAME row retyped to "Sonal" - link minted; person 1 must still be safe (this
+  // much already held before QA-1516 - it is the control, not the new claim)
+  const g16LocAfterSonal = (await req("GET", `/api/locations/${g16Loc._id}`)).data.item;
+  await req("PATCH", `/api/locations/${g16Loc._id}`, { contacts: (g16LocAfterSonal.contacts ?? []).map((c) => ({
+    _id: c._id, phone: c.phone, role_label: c.role_label,
+    name: String(c.name).startsWith("Ravi Contact") ? "Sonal Contact " + cy : c.name,
+  })) }, 200);
+  const g16Sonal = await g16Pick("Sonal Contact");
+  const g16SonalTok = await g16Mint(g16Sonal);
+  ok("QA-1516 control: a contact row typed over with a DIFFERENT name still leaves the earlier person's link alive",
+    (await liveOf(g16RaviOneTok)) === 200 && (await liveOf(g16SonalTok)) === 200,
+    JSON.stringify({ raviOne: await liveOf(g16RaviOneTok), sonal: await liveOf(g16SonalTok) }));
+  // person 3 - the SAME row typed BACK to "Ravi", a genuinely DIFFERENT human (different phone) -
+  // this is the exact QA-1516 measurement: before the fix, the key at this mint is
+  // byte-identical to person 1's key, and minting for person 3 silently revoked person 1's link.
+  const g16LocAfterRavi2 = (await req("GET", `/api/locations/${g16Loc._id}`)).data.item;
+  await req("PATCH", `/api/locations/${g16Loc._id}`, { contacts: (g16LocAfterRavi2.contacts ?? []).map((c) => ({
+    _id: c._id, role_label: c.role_label,
+    name: String(c.name).startsWith("Sonal Contact") ? "Ravi Contact " + cy : c.name,
+    phone: String(c.name).startsWith("Sonal Contact") ? "9700000099" : c.phone, // a DIFFERENT human, different phone
+  })) }, 200);
+  const g16RaviTwo = await g16Pick("Ravi Contact");
+  ok("QA-1516 fixture: the row returning to 'Ravi' carries a generation that has moved, so the collision this pin measures is genuinely available",
+    !!g16RaviTwo && g16RaviTwo.ref === g16RaviOne.ref && g16RaviTwo.key !== g16RaviOne.key,
+    JSON.stringify({ ref: g16RaviTwo?.ref, sameRefAsFirst: g16RaviTwo?.ref === g16RaviOne.ref, keyMoved: g16RaviTwo?.key !== g16RaviOne.key, key1: g16RaviOne.key, key3: g16RaviTwo?.key }));
+  const g16RaviTwoTok = await g16Mint(g16RaviTwo);
+  ok("QA-1516: a contact row typed over TWICE (A -> B -> a DIFFERENT A) does not revoke the FIRST holder's live link",
+    (await liveOf(g16RaviOneTok)) === 200 && (await liveOf(g16RaviTwoTok)) === 200,
+    JSON.stringify({ firstRavi: await liveOf(g16RaviOneTok), thirdRavi: await liveOf(g16RaviTwoTok) }));
+  // ...and the control the ledger row itself ran: the identical A->B->A sequence on a role slot
+  // (which already had a generation counter) must behave the same way — the fix is symmetric
+  // between the two ref kinds, not a special case bolted onto one of them.
+  const g16SlotBatch = await planBatchFor(g16Loc._id, "2027-08-08");
+  await req("PATCH", `/api/locations/${g16Loc._id}`, { spoc_name: "Slot Ravi " + cy }, 200);
+  const g16SlotRaviOne = await pickFrom(g16SlotBatch._id, "Slot Ravi");
+  const g16SlotRaviOneTok = await mintFor(g16SlotBatch._id, g16SlotRaviOne);
+  await req("PATCH", `/api/locations/${g16Loc._id}`, { spoc_name: "Slot Priya " + cy }, 200);
+  await mintFor(g16SlotBatch._id, await pickFrom(g16SlotBatch._id, "Slot Priya"));
+  await req("PATCH", `/api/locations/${g16Loc._id}`, { spoc_name: "Slot Ravi " + cy }, 200);
+  const g16SlotRaviTwoTok = await mintFor(g16SlotBatch._id, await pickFrom(g16SlotBatch._id, "Slot Ravi"));
+  ok("QA-1516 control: the identical A->B->A sequence on a SLOT ref (which always had a generation) also leaves the first holder's link alive",
+    (await liveOf(g16SlotRaviOneTok)) === 200 && (await liveOf(g16SlotRaviTwoTok)) === 200,
+    JSON.stringify({ slotFirstRavi: await liveOf(g16SlotRaviOneTok), slotThirdRavi: await liveOf(g16SlotRaviTwoTok) }));
 
   // QA-617 — "may this user share?" was asked in two places that disagreed in BOTH directions. The
   // direction pinned here is the one my own first fix got wrong: an Admin with `can_edit: false` -
