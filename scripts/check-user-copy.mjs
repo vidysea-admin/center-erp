@@ -27,22 +27,88 @@ function* walk(dir) {
 }
 
 function stripComments(src) {
-  // block comments (incl. JSX {/* */}) → same number of newlines so line numbers hold
-  let s = src.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "));
-  // line comments — but not "//" inside a string ("https://…") — approximate: only when preceded
-  // by start-of-line/whitespace/;/{/( and not inside quotes on that line before it
-  s = s.split("\n").map((line) => {
-    let out = "", q = null;
-    for (let i = 0; i < line.length; i++) {
-      const c = line[i];
-      if (q) { out += c; if (c === "\\") { out += line[++i] ?? ""; continue; } if (c === q) q = null; continue; }
-      if (c === '"' || c === "'" || c === "`") { q = c; out += c; continue; }
-      if (c === "/" && line[i + 1] === "/") break;
+  // QA-1422 investigation found two independent corruption sources here, both fixed by doing
+  // ALL of string-tracking + comment-stripping in ONE character pass instead of two:
+  //
+  // (1) The old code stripped /* */ with a regex over the RAW source, before any string-tracking
+  //     ran - so it had no idea a "/*" could be sitting inside a string. `accept="image/*"` (and
+  //     "video/*" etc - ordinary MIME-wildcard attributes) starts a fake block comment right there,
+  //     and the regex greedily ate everything up to the NEXT real "*/" in the file (a genuine JSX
+  //     comment lines later), silently deleting real code in between. Confirmed on
+  //     batches/[id]/page.tsx:2636's `accept="image/*"`, which swallowed lines 2637-2641 whole.
+  // (2) The old code additionally tracked the in-string quote character `q` PER LINE (reset at
+  //     every line boundary), so a genuine multi-line template literal (this file has 5, e.g.
+  //     batches/[id]/page.tsx:123-125) also desynced everything after it.
+  //
+  // Both together are why fnBody() on ClosureTab/CandidateResults returned truncated/garbled
+  // bodies and made two ALREADY-FIXED findings (confirmed via git history: the correct
+  // `const closed = statusClosedTab || !mayMarkTab;` line already existed at the commit QA-1422
+  // was filed against) misread as still-broken. Now: /* is only a comment-start when NOT inside a
+  // string (checked the same way // already was), and `q` threads across the whole file.
+  //
+  // (3) Fixing (1) and (2) surfaced a THIRD, pre-existing corruption source they had been masking:
+  //     a bare quote/apostrophe in prose - JSX text ("the sheet's own header") or a comment
+  //     ("QA-1190's banned phrase") - is not a string delimiter at all, but this scanner has no
+  //     notion of JSX-text-vs-JS-expression context, so it opened a "string" there anyway and
+  //     desynced everything after it (candidates/page.tsx:1011's "sheet's" onward). No valid JS/TSX
+  //     ever opens a real string with a quote char stuck directly onto a preceding letter/digit -
+  //     that would be a syntax error - so a quote is only treated as an opener when the previous
+  //     emitted character is not a word character. Contractions and possessives (letter-attached)
+  //     fall through as literal text; genuine string opens (preceded by `=`, `(`, `,`, `[`,
+  //     whitespace, start-of-file, ...) are untouched.
+  // (4) A single `q` variable also cannot represent a template literal that embeds ANOTHER one in
+  //     its `${...}` (e.g. batches/[id]/page.tsx:1376's title={`... ${cond ? `${n} rows` : "a row"}
+  //     ...`}` ) - the inner backtick reads as closing the outer, desyncing the rest of the file
+  //     exactly like (2) did. Fixed with a real stack: a 'tpl' frame owns literal-text mode and
+  //     hands off to a 'subst' frame (tracked by its own brace depth, so nested {} inside the
+  //     substitution can't be mistaken for the substitution's own closing brace) for everything
+  //     between `${` and the matching `}` - and a `${...}` is ordinary code, so it can itself open
+  //     a nested string/template, which pushes its own frame the same way.
+  let out = "";
+  const stack = []; // {type:'str', ch} | {type:'tpl'} | {type:'subst', depth}
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    const top = stack[stack.length - 1];
+
+    if (top && top.type === "str") {
       out += c;
+      if (c === "\\") { out += src[++i] ?? ""; continue; }
+      if (c === top.ch) stack.pop();
+      continue;
     }
-    return out;
-  }).join("\n");
-  return s;
+    if (top && top.type === "tpl") {
+      if (c === "\\") { out += c; out += src[++i] ?? ""; continue; }
+      if (c === "`") { out += c; stack.pop(); continue; }
+      if (c === "$" && src[i + 1] === "{") { out += "${"; i++; stack.push({ type: "subst", depth: 1 }); continue; }
+      out += c;
+      continue;
+    }
+    if (top && top.type === "subst") {
+      if (c === "{") { top.depth++; out += c; continue; }
+      if (c === "}") { top.depth--; out += c; if (top.depth === 0) stack.pop(); continue; }
+    }
+
+    if ((c === '"' || c === "'") && !/[A-Za-z0-9_]/.test(out[out.length - 1] ?? "")) { stack.push({ type: "str", ch: c }); out += c; continue; }
+    if (c === "`" && !/[A-Za-z0-9_]/.test(out[out.length - 1] ?? "")) { stack.push({ type: "tpl" }); out += c; continue; }
+    if (c === "/" && src[i + 1] === "*") {
+      // Skip the block comment's interior, preserving newlines so line numbers hold; land on
+      // the closing "/" so the outer loop's i++ steps past it.
+      let j = i + 2;
+      while (j < src.length && !(src[j] === "*" && src[j + 1] === "/")) { out += src[j] === "\n" ? "\n" : " "; j++; }
+      i = j + 1;
+      out += "  ";
+      continue;
+    }
+    if (c === "/" && src[i + 1] === "/") {
+      // Skip to end of line WITHOUT consuming the newline itself, so the outer loop's next
+      // iteration lands on "\n" and appends it normally - line numbers stay intact.
+      while (i < src.length && src[i] !== "\n") i++;
+      i--;
+      continue;
+    }
+    out += c;
+  }
+  return out;
 }
 
 // QA-681 / QA-685 (-204, two checkers on the same day): every pin in this file that wanted to look
@@ -56,16 +122,39 @@ function stripComments(src) {
 // brace scan cannot be thrown by a `{` or `}` inside a literal, and the index it finds still points
 // at the right place in the ORIGINAL text.
 function blankStrings(s) {
-  let out = "", q = null;
+  // Same corruption class as stripComments (QA-1422 investigation): a single `q` cannot represent
+  // a template literal nesting another one inside its `${...}`, and a bare apostrophe in JSX prose
+  // ("batch's", "don't" - see the QA-1067 pin below, which routes around this exact bug by calling
+  // stripComments instead) is not a string delimiter at all. Same fixes as stripComments: a
+  // str/tpl/subst stack so a `${...}` substitution's own braces and nested strings count correctly
+  // instead of being blanked away, and a quote only opens when the preceding character isn't a
+  // word character.
+  let out = "";
+  const stack = []; // {type:'str', ch} | {type:'tpl'} | {type:'subst', depth}
   for (let i = 0; i < s.length; i++) {
     const c = s[i];
-    if (q) {
+    const top = stack[stack.length - 1];
+
+    if (top && top.type === "str") {
       if (c === "\\") { out += "  "; i++; continue; }
-      if (c === q) { q = null; out += c; continue; }
+      if (c === top.ch) { stack.pop(); out += c; continue; }
       out += (c === "\n" ? "\n" : " ");
       continue;
     }
-    if (c === '"' || c === "'" || c === "`") { q = c; out += c; continue; }
+    if (top && top.type === "tpl") {
+      if (c === "\\") { out += "  "; i++; continue; }
+      if (c === "`") { out += c; stack.pop(); continue; }
+      if (c === "$" && s[i + 1] === "{") { out += "${"; i++; stack.push({ type: "subst", depth: 1 }); continue; }
+      out += (c === "\n" ? "\n" : " ");
+      continue;
+    }
+    if (top && top.type === "subst") {
+      if (c === "{") { top.depth++; out += c; continue; }
+      if (c === "}") { top.depth--; out += c; if (top.depth === 0) stack.pop(); continue; }
+    }
+
+    if ((c === '"' || c === "'") && !/[A-Za-z0-9_]/.test(out[out.length - 1] ?? "")) { stack.push({ type: "str", ch: c }); out += c; continue; }
+    if (c === "`" && !/[A-Za-z0-9_]/.test(out[out.length - 1] ?? "")) { stack.push({ type: "tpl" }); out += c; continue; }
     out += c;
   }
   return out;
