@@ -851,12 +851,22 @@ constant's own comment:
   is the noise QA-607's own checker named when it flagged the (declined) backfill option. `Active`
   sits OUTSIDE that query, which is why widening to Active is alert-neutral — measured, not argued,
   in `qa/manifests/qa-607-plan-on-active-batches.md`.
-- **Regeneration was NOT widened.** `{ create: true }` accepts Planning or Active;
-  `{ regenerate: true }` is still Planning-only, because regenerating recuts every due date from
-  `planned_start` and a running batch's plan is a record of what happened, not a schedule.
-  Consequently the "Regenerate" buttons on both client screens keep their `status === "Planning"`
-  test — a rare case where the two conditions on one screen are DELIBERATELY different, so do not
-  "tidy" them into one.
+- **Regeneration was NOT widened, and the refusal is about the RECUT, not about the word.**
+  `{ create: true }` accepts Planning or Active *for a batch that has no plan yet*; regenerating an
+  existing plan is Planning-only, because regenerating recuts every due date from `planned_start`
+  and a running batch's plan is a record of what happened, not a schedule. Consequently the
+  "Regenerate" buttons on both client screens keep their `status === "Planning"` test — a rare case
+  where the two conditions on one screen are DELIBERATELY different, so do not "tidy" them into one.
+  **QA-1529 (checker on qa-607 cycle 1) is why that sentence now says "an existing plan" instead of
+  "`{ regenerate: true }`".** Cycle 1 enforced it as `body.regenerate && status !== "Planning"` — a
+  test of what the CALLER CALLED the operation. A second `{ create: true }` on an Active batch that
+  already had a plan therefore returned 200 and recut every due date and label, discarding a
+  planner's hand-edits, through the very door this unit opened. The guard now reads SERVER state
+  (`!batch.plan_enabled` decides "creating"), which is the same fact the route's own audit line
+  always used (`creating ? "plan created" : "plan regenerated"`). **A gate on a request's own
+  self-description is not a gate** — same class as QA-660 on this file and QA-616's "two readers of
+  one fact". Pinned in `scripts/e2e.mjs` by editing a due date on an Active batch's plan, re-sending
+  `{ create: true }`, and asserting the edit survived.
 
 ### 3.13 "Was this batch recorded AFTER it ran?" — COLLAPSED (QA-957/958/965), do not re-grow it
 

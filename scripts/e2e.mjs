@@ -2377,7 +2377,10 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
     JSON.stringify({ status: activeNow.status, plan_enabled: activeNow.plan_enabled }));
 
   // THE FIX. Before it this returned 409 "A backward plan is made while the batch is in Planning."
-  const made = (await req("PATCH", `/api/batches/${ab._id}/milestones`, { create: true }, 200)).data.item;
+  // `?? {}` (QA-1529 observation): when this pin legitimately FAILS the response carries no item,
+  // and `.data.item.milestones` then threw a TypeError that took the whole 1497-assertion suite
+  // down — a future regression here would surface as a CRASHED suite instead of one red line.
+  const made = (await req("PATCH", `/api/batches/${ab._id}/milestones`, { create: true }, 200)).data.item ?? {};
   ok("QA-607: 'Create backward plan' works on a RUNNING batch — the 8 milestones exist and the plan is enabled",
     made.milestones?.length === 8 && made.plan_enabled === true,
     JSON.stringify({ n: made.milestones?.length, plan_enabled: made.plan_enabled }));
@@ -2388,6 +2391,35 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
   ok("QA-607: regenerate is still refused on a running batch (creation widened, regeneration not)",
     regenActive.status === 409 && /regenerated while the batch is in Planning/.test(String(regenActive.data?.error)),
     JSON.stringify({ s: regenActive.status, e: regenActive.data?.error }));
+
+  // QA-1529 (checker on cycle 1): the assertion above is a pin on a BODY KEY, and the guard it was
+  // pinning tested the same body key — so both agreed with each other and neither saw the operation.
+  // A second `{ create: true }` on a batch that already HAS a plan reaches the identical mergePlan
+  // call `{ regenerate: true }` does: it takes due_date and label from the freshly computed plan and
+  // keeps only done_on/notes/owner_label/custom. On live -191 code that returned 200 and silently
+  // recut a running batch's plan — a plan that is now a publicly shareable artifact (QA-558/621),
+  // so an external recipient's link changes under them. This pin tests the OPERATION: hand-edit a
+  // row the way a planner would, re-send the create-shaped body, and assert the edit SURVIVED.
+  const HAND_DATE = "2027-09-15", HAND_LABEL = "HAND EDITED BY PLANNER";
+  await req("PATCH", `/api/batches/${ab._id}/milestones`, { edit: { key: "mobilization", due_date: HAND_DATE, label: HAND_LABEL } }, 200);
+  const recut = await req("PATCH", `/api/batches/${ab._id}/milestones`, { create: true });
+  ok("QA-1529: a SECOND create-shaped call on a running batch that already has a plan is refused as the regeneration it is",
+    recut.status === 409 && /regenerated while the batch is in Planning/.test(String(recut.data?.error)),
+    JSON.stringify({ s: recut.status, e: recut.data?.error }));
+  const afterRecut = (await req("GET", `/api/batches/${ab._id}`)).data.item ?? {};
+  const handRow = (afterRecut.milestones ?? []).find((m) => m.key === "mobilization");
+  ok("QA-1529: …and the planner's hand-edited due date and label survived it (the pin is the DATA, not the status code)",
+    String(handRow?.due_date ?? "").slice(0, 10) === HAND_DATE && handRow?.label === HAND_LABEL,
+    JSON.stringify({ due_date: handRow?.due_date, label: handRow?.label }));
+  // The other half of the same fact: the refusal is about the RECUT, not about being Active. A
+  // Planning batch that already has a plan may still be recut by either body shape — otherwise this
+  // fix would have quietly broken the one workflow the feature was built for.
+  const planningRecut = await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { create: true }, 200);
+  ok("QA-1529: a create-shaped call on a PLANNING batch that already has a plan still recuts — the guard is the recut, not the door",
+    (planningRecut.data.item?.milestones?.length ?? 0) === 8 && planningRecut.data.item?.plan_enabled === true,
+    JSON.stringify({ n: planningRecut.data.item?.milestones?.length }));
+  // Put the row back so the retroactive-overdue assertion below measures the generated plan.
+  await req("PATCH", `/api/batches/${ab._id}/milestones`, { edit: { key: "mobilization", due_date: today, label: "Candidate mobilization complete" } }, 200);
 
   // "Ready" is NOT in the widened list, and that is load-bearing rather than an oversight:
   // alerts.ts's milestone_overdue rule queries `status: { $in: ["Planning", "Ready"] }`, so a plan

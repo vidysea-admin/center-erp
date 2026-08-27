@@ -35,9 +35,19 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
     // on a Ready batch whose dates have passed would raise a wall of alerts the moment it exists —
     // which is exactly the risk that got the QA-607 backfill option declined. Active is outside
     // that query, so a backward plan on a running batch raises nothing. See the manifest.
-    if (body.regenerate && batch.status !== "Planning") throw new HttpError(409, "Plan can only be regenerated while the batch is in Planning.");
     if (body.create && !PLAN_CREATE_STATUSES.includes(batch.status)) throw new HttpError(409, "A backward plan is made while the batch is in Planning, or while it is running.");
+    // QA-1529 (checker on qa-607 cycle 1): the guard above used to be joined by
+    // `body.regenerate && batch.status !== "Planning"` — a test of what the CALLER CALLED the
+    // operation, not of what the operation IS. Sending `{ create: true }` a SECOND time to a batch
+    // that already has a plan returned 200 and recut every due date and label from planned_start,
+    // discarding a planner's hand-edits, on a running batch — the exact thing the line above says
+    // cannot happen. This route's own audit line already knew: `creating ? "plan created" :
+    // "plan regenerated"`. So the refusal is about the RECUT, and it reads SERVER state: a plan
+    // that already exists is regenerated whatever the body called it. Same class as QA-660 on this
+    // very file ("the guard tested one shape and the next line tested truthiness") and QA-616 /
+    // QA-558-621's "two readers of one fact".
     const creating = !batch.plan_enabled;
+    if (!creating && batch.status !== "Planning") throw new HttpError(409, "Plan can only be regenerated while the batch is in Planning.");
     batch.plan_enabled = true;
     // QA-460 (-164): the batch's own trainer decides whether TOT rows belong in this plan. Read
     // here rather than inside the planner so the planner stays a pure function.
