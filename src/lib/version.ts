@@ -155,6 +155,20 @@ export const RELEASE_NOTE_CURRENT =
   "And: deleting a course now tells an Admin what it actually affects - real batch, candidate and "  +
   "target counts - before the confirmation, instead of a blind \"are you sure\"; the delete itself "  +
   "is unchanged and stays unconditional, exactly as already decided. "  +
+  "A student who enrols today, and so belongs on today's roster by the product's own default "  +
+  "joining date, could not have that day's attendance recorded at all: the count a daily log is "  +
+  "checked against was frozen at the day's start and refused to grow to admit them. That count may "  +
+  "now increase to admit a member who has genuinely joined by that day, and is flagged for review if "  +
+  "the day's government-facing figure was already on record - it never shrinks, and a flagged day is "  +
+  "never silently resubmitted. "  +
+  "Saving ANY edit to a candidate who has no APAAR ID or Aadhaar number on file was refused with a "  +
+  "confusing \"must be 12 digits\" error, because the edit screen resends every field on every save "  +
+  "and an empty one of these two was being read as the four-letter word \"null\" instead of nothing "  +
+  "at all. It is read correctly now, and a record with neither on file can be edited again. "  +
+  "And: a single failed attempt to reach the database used to be remembered as a permanent failure - "  +
+  "every request after one brief database blip kept retrying the SAME failed attempt forever instead "  +
+  "of trying again, which looked from outside like the whole system being down long after the "  +
+  "database itself had recovered. It now retries properly. "  +
   "The remainder is checking: a wall-check script that scans for internal rule numbers leaking onto "  +
   "a screen was silently corrupting its own reading of one file whenever a MIME-type attribute like "  +
   "accept=\"image/*\" appeared in it, misreading real code below that point as deleted - found and "  +
