@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-259";
+export const RELEASE = "2026.08.14-260";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -138,6 +138,22 @@ const RELEASE_NOTE_ARCHIVE_254 =
   "screen for a real number sitting one tab over.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-260 closes the one door -259 left open, and stops every uploaded photo from losing the "  +
+  "location it was taken at. -259 gave each contact row its own counter so retyping a name could "  +
+  "no longer silently kill someone else's plan link - but that protection only ran when a contact "  +
+  "was added through an edit. Adding one at the moment a centre itself is created skipped it "  +
+  "entirely, so a centre built with contacts already on it could still reuse a link address the "  +
+  "same way. It now runs at creation too, the same as every other write. "  +
+  "Alongside it: every photo the product asks a trainer to upload as proof of on-site work - daily "  +
+  "training photos, assessment photos, the assessment group photo, post-certification photos - was "  +
+  "having its GPS location silently stripped on the way to storage, by both the phone-side and "  +
+  "server-side compression that runs on every upload. Five of the eight document types the client's "  +
+  "RPL mandate requires are specified as geo-tagged, and none of them could have been, after the "  +
+  "fact. The location is now read off the original photo before either compression step touches it "  +
+  "and kept with the stored file. Nothing is shown on any screen and nothing is refused at upload - "  +
+  "this only makes sure the record is there if it is ever needed.";
+
+const RELEASE_NOTE_ARCHIVE_259 =
   "-259 closes two ways a plan link could die without anyone being told. A centre's contact list "  +
   "is the part of the recipient list a coordinator can add to freely, and until now a contact row "  +
   "carried no version of its own. Retyping one person's name over another's on that list rebuilt "  +
@@ -888,6 +904,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -258: ARCHIVE_257 wired in here in the SAME bump that declared it, deliberately, per the two
   // warnings above (QA-265, then -256's own repeat of it) - the chain, not the declaration, is what
   // publishes a note.
+  // -260: ARCHIVE_259 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_259 + " " +
   RELEASE_NOTE_ARCHIVE_258 + " " +
   RELEASE_NOTE_ARCHIVE_257 + " " +
   RELEASE_NOTE_ARCHIVE_256 + " " +
