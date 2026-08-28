@@ -5176,12 +5176,27 @@ ok(`-111: no API error in this run carries a Rule/DEC/QA code (${codeLeaks.lengt
     // 26 deg 51' 46.8" N, 80 deg 56' 30" E — Lucknow, a plausible ITI. Written as sharp wants it:
     // IFD3 IS the GPS IFD (IFD2 is the Exif IFD). Getting that wrong silently writes NO GPS block,
     // which is how the first attempt at this pin "proved" a bug that was really an empty fixture.
-    const withGps = await sharpMod({ create: { width: 900, height: 700, channels: 3, background: { r: 90, g: 120, b: 60 } } })
-      .jpeg({ quality: 80 })
+    // QA-1552 (checker, cycle 1 FAIL): these fixtures used to be 900x700 solid colour, ~4.3 KB.
+    // compressForStorage() returns at its "none:already small" early branch for anything under BOTH
+    // 300 KB and 1600 px, so sharp never re-encoded them and pin (b) - the ONLY pin covering
+    // .keepExif() - passed on the PRE-FIX tree too. It proved nothing. A real trainer photo is
+    // neither small nor flat, so the fixture is now 2400x1800 of incompressible noise: over 1600 px
+    // AND over 300 KB, which is what forces the re-encode branch the fix actually lives on.
+    const noise = (seed) => {
+      const px = Buffer.allocUnsafe(2400 * 1800 * 3);
+      let x = seed >>> 0;
+      for (let i = 0; i < px.length; i++) { x = (x * 1664525 + 1013904223) >>> 0; px[i] = x >>> 24; }
+      return sharpMod(px, { raw: { width: 2400, height: 1800, channels: 3 } });
+    };
+    const withGps = await noise(7)
+      .jpeg({ quality: 90 })
       .withExif({ IFD3: { GPSLatitudeRef: "N", GPSLatitude: "26/1 51/1 468/10", GPSLongitudeRef: "E", GPSLongitude: "80/1 56/1 30/1" } })
       .toBuffer();
-    const noGps = await sharpMod({ create: { width: 900, height: 700, channels: 3, background: { r: 20, g: 20, b: 20 } } })
-      .jpeg({ quality: 80 }).toBuffer();
+    const noGps = await noise(11).jpeg({ quality: 90 }).toBuffer();
+    // The pin below is worthless unless the fixture actually reaches the re-encode branch, so SAY so
+    // rather than assume it - this is the exact thing cycle 1 got wrong.
+    ok("QA-1548 (b0): the fixture is big enough to reach the re-encode branch at all (>1600px, >300KB)",
+      withGps.length > 300 * 1024, `bytes=${withGps.length}`);
 
     const put = async (buf, name, extra = {}) => {
       const fd = new FormData();
@@ -5236,6 +5251,33 @@ ok(`-111: no API error in this run carries a Rule/DEC/QA code (${codeLeaks.lengt
     ok("QA-1548 (e): an impossible client-supplied coordinate is dropped, and the upload still succeeds",
       upBad.status === 200 && !!rowBad && (rowBad.geo == null || rowBad.geo.lat == null),
       JSON.stringify({ st: upBad.status, geo: rowBad?.geo ?? null }));
+
+    // (f) QA-1553: HEIC. .heic/.heif are first-class in ALLOWED_UPLOAD_EXT - an iPhone photograph is
+    // exactly what a trainer uploads - and cycle 1 read GPS only out of a JPEG APP1 segment, so that
+    // whole device class stayed unfixed while the JPEG path was declared done. HEIF is a box tree,
+    // so the EXIF block sits at an offset no JPEG walk reaches; the shared parser now finds it by
+    // its own signature ("Exif\0\0" + a valid TIFF header) and BOTH sides call that one function.
+    // The fixture is that block placed inside a real ISO-BMFF ftyp/heic container prefix, which is
+    // what makes this a test of the scan rather than of the JPEG walk.
+    const exifBlock = (() => {
+      const i = withGps.indexOf(Buffer.from("Exif\0\0", "latin1"));
+      return i < 0 ? null : withGps.subarray(i, i + 2048);
+    })();
+    if (!exifBlock) {
+      ok("QA-1548 (f): HEIC fixture could be built", false, "no Exif marker found in the JPEG fixture");
+    } else {
+      const ftyp = Buffer.from([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63, 0, 0, 0, 0, 0x6d, 0x69, 0x66, 0x31, 0x68, 0x65, 0x69, 0x63]);
+      const heic = Buffer.concat([ftyp, Buffer.alloc(4096), exifBlock, Buffer.alloc(1024)]);
+      const fdH = new FormData();
+      fdH.append("file", new File([heic], "iphone-field-photo.heic", { type: "image/heic" }));
+      fdH.append("folder_centre", "_e2e"); fdH.append("folder_kind", "geo");
+      const rH = await fetch(BASE + "/api/upload", { method: "POST", headers: { cookie }, body: fdH });
+      const dH = await rH.json().catch(() => ({}));
+      const rowH = dH?.url ? await rowOf(dH.url) : null;
+      ok("QA-1548 (f): a HEIC whose EXIF sits where no JPEG walk reaches still records its coordinates",
+        rH.status === 200 && !!rowH && near(rowH?.geo?.lat, 26.863) && near(rowH?.geo?.lng, 80.941667),
+        JSON.stringify({ st: rH.status, geo: rowH?.geo ?? null }));
+    }
 
     await mcg.close();
   }

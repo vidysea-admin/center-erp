@@ -1,6 +1,6 @@
 "use client";
 import { BASE_PATH } from "@/lib/base-path";
-import { exifGpsFromJpeg } from "@/lib/validate";
+import { exifGpsFromImage } from "@/lib/validate";
 
 // Client-side image compression (spec §0: budget for compression + retry on weak connections).
 // Downscales to max 1600px and re-encodes JPEG q0.75. Non-images pass through untouched.
@@ -45,11 +45,18 @@ export async function compressImage(file: File): Promise<Blob> {
 // nothing here can refuse or delay an upload, and a throw is swallowed.
 async function readGeoHint(file: File): Promise<{ geo_lat: number; geo_lng: number } | undefined> {
   try {
-    if (!/.jpe?g$/i.test(file.name) && file.type !== "image/jpeg") return undefined;
-    // The EXIF block sits in the first APP1 segment; 256 KiB is far more than any camera writes,
-    // and reading a slice keeps a 12 MP photo off the main thread's heap.
-    const head = new Uint8Array(await file.slice(0, 256 * 1024).arrayBuffer());
-    const g = exifGpsFromJpeg(head);
+    // QA-1553 (checker, cycle 1 FAIL): this used to be JPEG-only, which left every iPhone in the
+    // programme unfixed — .heic/.heif are first-class in ALLOWED_UPLOAD_EXT, compressImage() below
+    // converts them with heic2any BEFORE anything leaves the device, and heic2any carries no
+    // metadata forward. So a HEIC's coordinates had to be read HERE or they were never read at all.
+    const isHeic = /\.hei[cf]$/i.test(file.name) || /image\/hei[cf]/i.test(file.type);
+    const isJpeg = /\.jpe?g$/i.test(file.name) || file.type === "image/jpeg";
+    if (!isHeic && !isJpeg) return undefined;
+    // A JPEG's APP1 is at the front; HEIF is a box tree, and on iPhone output the Exif item can sit
+    // well past the first quarter-megabyte, so that container gets a bigger window. Reading a SLICE
+    // rather than the whole file keeps a 12 MP photo off the main thread's heap either way.
+    const head = new Uint8Array(await file.slice(0, isHeic ? 4 * 1024 * 1024 : 256 * 1024).arrayBuffer());
+    const g = exifGpsFromImage(head);
     return g ? { geo_lat: g.lat, geo_lng: g.lng } : undefined;
   } catch {
     return undefined;

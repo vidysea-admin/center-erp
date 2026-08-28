@@ -336,3 +336,43 @@ export function exifGpsFromJpeg(bytes: Uint8Array): { lat: number; lng: number }
     return null;
   }
 }
+
+// QA-1553 (checker, cycle 1 FAIL): the JPEG walk above is not enough, and the gap was a whole
+// device class. `.heic`/`.heif` are first-class in ALLOWED_UPLOAD_EXT — an iPhone photograph IS
+// what a trainer uploads from the field — and on that path the coordinates died twice over:
+// readGeoHint only looked at JPEGs, and compressImage() converts HEIC to JPEG via heic2any
+// BEFORE anything leaves the device, which carries no metadata forward. So the original S1 stayed
+// fully open for every iPhone in the programme while the JPEG path was declared fixed.
+//
+// HEIF is an ISO-BMFF box tree and the EXIF payload is an `iloc`-addressed item, not a segment we
+// can walk to the way a JPEG's APP1 can be. Rather than implement box parsing — the amount of
+// code where a silent mistake hides — locate the payload by its own SIGNATURE: an EXIF block
+// always begins "Exif\0\0" followed immediately by a valid TIFF header ("II" + 0x2a or "MM" +
+// 0x2a). That pair is 8 bytes of structure, not a guess, and readExifGps re-validates everything
+// after it anyway; a false positive can only produce null.
+function exifGpsByScan(bytes: Uint8Array): { lat: number; lng: number } | null {
+  for (let i = 0; i + 12 <= bytes.length; i++) {
+    if (bytes[i] !== 0x45 /* E */ || bytes[i + 1] !== 0x78 /* x */) continue;
+    if (bytes[i + 2] !== 0x69 /* i */ || bytes[i + 3] !== 0x66 /* f */) continue;
+    if (bytes[i + 4] !== 0 || bytes[i + 5] !== 0) continue;
+    const b0 = bytes[i + 6], b1 = bytes[i + 7];
+    const le = b0 === 0x49 && b1 === 0x49, be = b0 === 0x4d && b1 === 0x4d;
+    if (!le && !be) continue;
+    const magic = le ? bytes[i + 8] | (bytes[i + 9] << 8) : (bytes[i + 8] << 8) | bytes[i + 9];
+    if (magic !== 0x2a) continue;
+    const g = readExifGps(bytes.subarray(i));
+    if (g) return g;
+  }
+  return null;
+}
+
+// The one entry point the browser calls. JPEG gets the exact segment walk; anything else — HEIC,
+// HEIF, and incidentally PNG/WebP, which carry EXIF in their own chunk types — gets the signature
+// scan. Never throws; null is the ordinary answer, not an error.
+export function exifGpsFromImage(bytes: Uint8Array): { lat: number; lng: number } | null {
+  try {
+    return exifGpsFromJpeg(bytes) ?? exifGpsByScan(bytes);
+  } catch {
+    return null;
+  }
+}

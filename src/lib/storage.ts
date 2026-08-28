@@ -27,7 +27,7 @@ import crypto from "crypto";
 import path from "path";
 import { getDefaults } from "@/lib/defaults";
 // QA-1548: the EXIF GPS parser is client-safe and shared — see the block above imageGps().
-import { readExifGps } from "@/lib/validate";
+import { readExifGps, exifGpsFromImage } from "@/lib/validate";
 const execFileP = promisify(execFile);
 
 let cachedDrive: drive_v3.Drive | null = null;
@@ -610,12 +610,18 @@ const IMAGE_EXT = new Set([".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"]);
 // Read the GPS of an image buffer, using sharp only to locate the EXIF block. Never throws.
 export async function imageGps(buf: Buffer, ext: string): Promise<{ lat: number; lng: number } | null> {
   if (!IMAGE_EXT.has(ext)) return null;
+  // QA-1553 (checker, cycle 1 FAIL): sharp is the FIRST reader, no longer the only one. It hands
+  // back a clean EXIF block when it can decode the container, but this project accepts .heic/.heif
+  // as first-class uploads and a sharp build without libheif returns nothing for them - which read
+  // as "this photo has no geo-tag" rather than "I could not look". The shared signature scan in
+  // lib/validate.ts finds the same block by its own 8 bytes of structure, so a container sharp
+  // cannot open no longer silently loses the coordinates. Same parser the BROWSER runs.
   const sharp = loadSharp();
-  if (!sharp) return null;
   try {
-    return readExifGps((await sharp(buf, { failOn: "none" }).metadata())?.exif);
+    const exif = sharp ? (await sharp(buf, { failOn: "none" }).metadata())?.exif : null;
+    return readExifGps(exif) ?? exifGpsFromImage(buf);
   } catch {
-    return null;
+    try { return exifGpsFromImage(buf); } catch { return null; }
   }
 }
 const VIDEO_EXT = new Set([".mp4", ".mov", ".3gp", ".webm"]);
