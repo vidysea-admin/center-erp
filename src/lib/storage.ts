@@ -26,6 +26,8 @@ import os from "os";
 import crypto from "crypto";
 import path from "path";
 import { getDefaults } from "@/lib/defaults";
+// QA-1548: the EXIF GPS parser is client-safe and shared — see the block above imageGps().
+import { readExifGps } from "@/lib/validate";
 const execFileP = promisify(execFile);
 
 let cachedDrive: drive_v3.Drive | null = null;
@@ -574,6 +576,11 @@ export type PutResult = {
   backend: "gcs" | "drive" | "local"; drive_file_id?: string; folder_path?: string;
   // -87 (QA-157): what the ONE door did to the bytes — recorded on every StoredFile row.
   name: string; mime: string; original_size: number; size: number; compressed: boolean; compression: string; compression_ms: number; needs_compression: boolean;
+  // QA-1548: the photograph's own coordinates, read from the ORIGINAL bytes before any
+  // re-encode. `null` whenever the file is not an image, carries no GPS EXIF, or the block is
+  // unreadable — which is the ordinary case, not an error (Umesh 2026-08-27: "sirf record karo,
+  // kuch mat dikhao" — never refuse an upload for this, never show anything about it).
+  geo: { lat: number; lng: number } | null;
 };
 
 // ---------- -87 (QA-157, Umesh 15/08 22:55: "jo kuch bhi media jaye — photo, certificate PDF, sab
@@ -584,6 +591,33 @@ export type PutResult = {
 // The one allowlist every upload door uses (multipart route + direct-to-Drive intent).
 export const ALLOWED_UPLOAD_EXT = new Set([".jpg", ".jpeg", ".png", ".webp", ".heic", ".pdf", ".mp4", ".mov", ".3gp", ".webm", ".mp3", ".m4a", ".wav", ".amr", ".xlsx", ".xls", ".csv", ".doc", ".docx"]);
 const IMAGE_EXT = new Set([".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"]);
+
+// QA-1548 (S1, 2026-08-27) — READ THE COORDINATES BEFORE THE PIPELINE CAN LOSE THEM.
+// The client's RPL mandate names five document classes as "geo-tagged". compressForStorage()
+// below re-encodes every image through sharp, and sharp DISCARDS all input metadata unless told
+// otherwise, so until this release a correctly geo-tagged field photo reached storage with its
+// GPS gone — measured on the shipped pipeline: 218 EXIF bytes in, 0 out. `.keepExif()` there now
+// keeps the block in the stored file; imageGps() below additionally lifts the coordinates OUT
+// into a field, so a report can answer "where was this taken" without every reader re-parsing
+// EXIF, and so the answer survives the paths where the bytes are NOT re-encoded at all (small
+// images, HEIC that sharp cannot decode, sharp missing at runtime).
+//
+// The parser itself lives in lib/validate.ts, NOT here: the browser destroys the same tag a
+// second time (compressImage() re-encodes through a canvas, which carries no metadata) and this
+// module cannot be imported client-side — it loads sharp, googleapis and fs. One parser, two
+// callers, no drifting copy of TIFF offset arithmetic.
+
+// Read the GPS of an image buffer, using sharp only to locate the EXIF block. Never throws.
+export async function imageGps(buf: Buffer, ext: string): Promise<{ lat: number; lng: number } | null> {
+  if (!IMAGE_EXT.has(ext)) return null;
+  const sharp = loadSharp();
+  if (!sharp) return null;
+  try {
+    return readExifGps((await sharp(buf, { failOn: "none" }).metadata())?.exif);
+  } catch {
+    return null;
+  }
+}
 const VIDEO_EXT = new Set([".mp4", ".mov", ".3gp", ".webm"]);
 let gsPath: string | null | undefined; // undefined = not probed yet
 function findGs(): string | null {
@@ -636,7 +670,13 @@ export async function compressForStorage(name: string, buf: Buffer, mime: string
       const within = Math.max(w, h) <= maxPx;
       const isHeic = ext === ".heic" || ext === ".heif";
       if (within && buf.length < 300 * 1024 && !isHeic) return done(buf, name, mime, "none:already small");
-      let pipe = img.resize({ width: maxPx, height: maxPx, fit: "inside", withoutEnlargement: true });
+      // QA-1548: `.keepExif()` — WITHOUT this sharp drops every metadata block on output, which
+      // silently destroyed the geo-tag on every photo the RPL mandate requires to carry one.
+      // Umesh 2026-08-27, asked with the trade-off named ("candidate documents will also retain
+      // camera/time/GPS"): "Har image par EXIF rakho." So it is applied to the whole image branch,
+      // not just to the five photo classes. Compression is unaffected — an EXIF block is a few
+      // hundred bytes against a re-encode that saves megabytes.
+      let pipe = img.resize({ width: maxPx, height: maxPx, fit: "inside", withoutEnlargement: true }).keepExif();
       let outName = name, outMime = mime, label = `image-${maxPx}-q${quality}`;
       if (ext === ".png" && meta.hasAlpha) { pipe = pipe.png({ compressionLevel: 9, palette: true }); label = `image-${maxPx}-png`; }
       else if (ext === ".png") { pipe = pipe.jpeg({ quality, mozjpeg: true }); outName = name.replace(/\.png$/i, ".jpg"); outMime = "image/jpeg"; }
@@ -676,9 +716,14 @@ export async function compressForStorage(name: string, buf: Buffer, mime: string
 // -87: the bytes are compressed FIRST (images via sharp, PDFs via Ghostscript) — the returned
 // name/mime may differ from the request (PNG→JPEG, HEIC→JPEG); callers store what came back.
 export async function putFile(nameIn: string, bufIn: Buffer, mimeIn: string, folderSegments: string[]): Promise<PutResult> {
+  // QA-1548: read the coordinates from the ORIGINAL bytes, before compressForStorage() touches
+  // them. Order matters — reading after the re-encode would depend on `.keepExif()` having
+  // succeeded, and on the format branch that ran; reading here is true on every path, including
+  // the ones that skip compression entirely.
+  const geo = await imageGps(bufIn, path.extname(nameIn).toLowerCase());
   const c = await compressForStorage(nameIn, bufIn, mimeIn);
   const name = c.name, buf = c.buf, mime = c.mime;
-  const meta = { name, mime, original_size: bufIn.length, size: buf.length, compressed: c.compressed, compression: c.compression, compression_ms: c.ms, needs_compression: c.needs_compression };
+  const meta = { name, mime, original_size: bufIn.length, size: buf.length, compressed: c.compressed, compression: c.compression, compression_ms: c.ms, needs_compression: c.needs_compression, geo };
   if (storageMode() === "gcs") {
     try {
       const key = gcsKey(folderSegments, name);

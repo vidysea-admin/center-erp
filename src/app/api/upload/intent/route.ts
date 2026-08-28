@@ -57,6 +57,17 @@ export const POST = apiHandler(async (req: NextRequest) => {
     })(),
     ...(Number(body.client_original_size) > size ? { original_size: Number(body.client_original_size) } : {}),
     entity: seg("entity") || undefined, entity_id: /^[a-f0-9]{24}$/.test(seg("entity_id")) ? seg("entity_id") : undefined,
+    // QA-1548: on THIS door the bytes go browser -> Google and never touch the container, so the
+    // server can never read the EXIF itself — the coordinates the browser lifted off the original
+    // file are the only ones that will ever exist for this row. Range-checked, never trusted; an
+    // absent geo-tag stays absent rather than becoming a point in the Atlantic.
+    ...((): { geo?: { lat: number; lng: number } } => {
+      const lat = Number(body.geo_lat), lng = Number(body.geo_lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return {};
+      if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return {};
+      if (lat === 0 && lng === 0) return {};
+      return { geo: { lat, lng } };
+    })(),
     uploaded_by: user.id,
   });
   return NextResponse.json({

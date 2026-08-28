@@ -5158,5 +5158,88 @@ ok("QA-099: HSTS present", /max-age=\d+/.test(verRes.headers.get("strict-transpo
 // refusal in this whole run carried a Rule/DEC/QA code — plain() at apiHandler is the door.
 ok(`-111: no API error in this run carries a Rule/DEC/QA code (${codeLeaks.length} leak(s))`, codeLeaks.length === 0, codeLeaks.slice(0, 5).join(" | "));
 
+// ---------------------------------------------------------------------------------------------
+// QA-1548 (S1) — THE GEO-TAG THE SYSTEM WAS DESTROYING.
+// The client's RPL mandate names five document classes "geo-tagged", and until this release the
+// ERP stripped that tag off every one of them, in two places: sharp on the server re-encodes with
+// no metadata preservation, and compressImage() in the browser re-encodes through a canvas, which
+// has no metadata to carry at all. Neither refused anything or logged anything — a trainer's
+// correctly geo-tagged photo simply arrived with no coordinates, and the one thing the client
+// asked to be able to prove could not be proven from the stored file.
+// These pins go RED on the pre-fix build: (a) and (b) because nothing wrote the field and sharp
+// dropped the EXIF, (d) because the geo_lat/geo_lng fields did not exist on the door.
+{
+  const sharpMod = await import("sharp").then((m) => m.default).catch(() => null);
+  if (!sharpMod) {
+    ok("QA-1548: sharp is available to build the GPS fixture", false, "sharp did not load - the geo pins could not run");
+  } else {
+    // 26 deg 51' 46.8" N, 80 deg 56' 30" E — Lucknow, a plausible ITI. Written as sharp wants it:
+    // IFD3 IS the GPS IFD (IFD2 is the Exif IFD). Getting that wrong silently writes NO GPS block,
+    // which is how the first attempt at this pin "proved" a bug that was really an empty fixture.
+    const withGps = await sharpMod({ create: { width: 900, height: 700, channels: 3, background: { r: 90, g: 120, b: 60 } } })
+      .jpeg({ quality: 80 })
+      .withExif({ IFD3: { GPSLatitudeRef: "N", GPSLatitude: "26/1 51/1 468/10", GPSLongitudeRef: "E", GPSLongitude: "80/1 56/1 30/1" } })
+      .toBuffer();
+    const noGps = await sharpMod({ create: { width: 900, height: 700, channels: 3, background: { r: 20, g: 20, b: 20 } } })
+      .jpeg({ quality: 80 }).toBuffer();
+
+    const put = async (buf, name, extra = {}) => {
+      const fd = new FormData();
+      fd.append("file", new File([buf], name, { type: "image/jpeg" }));
+      fd.append("folder_centre", "_e2e"); fd.append("folder_kind", "geo");
+      for (const [k, v] of Object.entries(extra)) fd.append(k, String(v));
+      const r = await fetch(BASE + "/api/upload", { method: "POST", headers: { cookie }, body: fd });
+      return { status: r.status, data: await r.json().catch(() => ({})) };
+    };
+    const { MongoClient } = await import("mongodb");
+    const mcg = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+    await mcg.connect();
+    const dbg = mcg.db(process.env.MONGODB_DB || "center_erp_ci");
+    const rowOf = async (url) => dbg.collection("storedfiles").findOne({ name: String(url).split("/").pop() });
+    const near = (a, b) => typeof a === "number" && Math.abs(a - b) < 0.0005;
+
+    // (a) the server reads the coordinates off the ORIGINAL bytes and keeps them on the row
+    const upGeo = await put(withGps, "geo-tagged-training-day.jpg");
+    const rowGeo = upGeo.data?.url ? await rowOf(upGeo.data.url) : null;
+    ok("QA-1548 (a): a geo-tagged photo arrives with its coordinates on the StoredFile row",
+      !!rowGeo && near(rowGeo?.geo?.lat, 26.863) && near(rowGeo?.geo?.lng, 80.941667),
+      JSON.stringify({ st: upGeo.status, geo: rowGeo?.geo ?? null }));
+
+    // (b) ...and the STORED FILE still carries the EXIF, so the tag is provable from the artefact
+    // itself and not only from our own database row. This is what keepExif() buys.
+    if (upGeo.data?.url) {
+      const back = Buffer.from(await (await fetch(BASE + String(upGeo.data.url).replace(/^\/erp/, ""), { headers: { cookie } })).arrayBuffer());
+      const meta = await sharpMod(back, { failOn: "none" }).metadata().catch(() => null);
+      ok("QA-1548 (b): the compressed file the ERP stored still carries its EXIF block (sharp keepExif)",
+        !!meta?.exif && meta.exif.length > 0, JSON.stringify({ exif: meta?.exif?.length ?? 0, inBytes: withGps.length, outBytes: back.length }));
+    } else ok("QA-1548 (b): stored file readable", false, "no url from the upload door");
+
+    // (c) no GPS in the photo is the ORDINARY case: absent stays absent, never 0,0 in the Atlantic
+    const upNone = await put(noGps, "plain-photo.jpg");
+    const rowNone = upNone.data?.url ? await rowOf(upNone.data.url) : null;
+    ok("QA-1548 (c): a photo with no geo-tag records no coordinates - not a zero pair",
+      !!rowNone && (rowNone.geo == null || (rowNone.geo.lat == null && rowNone.geo.lng == null)),
+      JSON.stringify(rowNone?.geo ?? null));
+
+    // (d) THE CLIENT HALF. compressImage() in the browser re-encodes through a canvas, so by the
+    // time a real upload reaches this door the EXIF is already gone - exactly like noGps here.
+    // The browser reads the coordinates off the original File first and sends them as a hint.
+    const upHint = await put(noGps, "canvas-recompressed.jpg", { geo_lat: 26.863, geo_lng: 80.941667 });
+    const rowHint = upHint.data?.url ? await rowOf(upHint.data.url) : null;
+    ok("QA-1548 (d): coordinates the BROWSER read off the original file survive a canvas re-encode",
+      !!rowHint && near(rowHint?.geo?.lat, 26.863) && near(rowHint?.geo?.lng, 80.941667),
+      JSON.stringify(rowHint?.geo ?? null));
+
+    // (e) the hint is a client-controlled form field, so it is range-checked, not trusted
+    const upBad = await put(noGps, "impossible-coordinates.jpg", { geo_lat: 999, geo_lng: 12 });
+    const rowBad = upBad.data?.url ? await rowOf(upBad.data.url) : null;
+    ok("QA-1548 (e): an impossible client-supplied coordinate is dropped, and the upload still succeeds",
+      upBad.status === 200 && !!rowBad && (rowBad.geo == null || rowBad.geo.lat == null),
+      JSON.stringify({ st: upBad.status, geo: rowBad?.geo ?? null }));
+
+    await mcg.close();
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -52,6 +52,16 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // browser) the client says so; the row records that label instead of "none:video".
   const clientComp = seg("client_compression").slice(0, 120);
   const clientOriginal = Number(seg("client_original_size")) || 0;
+  // QA-1548: coordinates the BROWSER read off the ORIGINAL file (lib/upload.ts readGeoHint),
+  // before compressImage() re-encoded it through a canvas and dropped every metadata block.
+  // Range-checked rather than trusted — this arrives in a form field the client controls.
+  const clientGeo = ((): { lat: number; lng: number } | null => {
+    const lat = Number(seg("geo_lat")), lng = Number(seg("geo_lng"));
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+    if (lat === 0 && lng === 0) return null;
+    return { lat, lng };
+  })();
   // -97 (QA-164): "none:<reason>" from the device is a REASON, not a compression — the row keeps
   // it (why the device did not shrink it) next to whatever the server managed; a real device
   // label is combined with the server's when both did something.
@@ -68,6 +78,14 @@ export const POST = apiHandler(async (req: NextRequest) => {
     needs_compression: clientDid ? false : put.needs_compression,
     backend: put.backend, drive_file_id: put.drive_file_id, folder_path: put.folder_path,
     entity: seg("entity") || undefined, entity_id: /^[a-f0-9]{24}$/.test(seg("entity_id")) ? seg("entity_id") : undefined,
+    // QA-1548: the photo's own coordinates when its EXIF carried any. `undefined` — not a
+    // zero pair — when it did not, so an absent geo-tag stays absent rather than becoming a
+    // point in the Atlantic. Nothing refuses an upload for this and no screen reads it.
+    // The SERVER's own read wins when it got one: it saw the bytes this row is about. The client
+    // hint is the fallback for the ordinary case where the browser already re-encoded through a
+    // canvas (compressImage), so by the time these bytes arrived the EXIF was gone and only the
+    // device ever saw the geo-tag.
+    geo: put.geo ?? clientGeo ?? undefined,
     uploaded_by: user.id,
   });
   // Served via /api/files/[name] — the app proxies the bytes; the user never sees Drive.

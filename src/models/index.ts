@@ -285,29 +285,33 @@ function assertContactIdsUnique(contacts: unknown) {
 // shape Mongoose calls the same way for all of them.)
 (LocationSchema as any).pre("save", async function (this: any) {
   if (this.isModified("contacts")) assertContactIdsUnique(this.get("contacts"));
-  if (this.isNew) return;
-  for (const { nameField, genField } of Object.values(SLOT_OCCUPANT_FIELDS)) {
-    // A caller that set the counter itself in the same save wins - nothing in `src/` does, but
-    // a bump applied twice would be silently wrong in the rotation direction rather than loudly.
-    if (this.isModified(nameField) && !this.isModified(genField)) {
-      this.set(genField, Number(this.get(genField) ?? 0) + 1);
-    }
-  }
   // QA-1516: each CONTACT ROW's own generation, maintained the same way but per-subdocument.
-  // This cannot reuse the `isModified`/`isNew` trick above: `crud.ts`'s PATCH does
-  // `Object.assign(existing, data)` with a whole new `contacts` ARRAY (plain objects off the
-  // wire, not the loaded subdocuments), and Mongoose recasts a whole-array reassignment into
-  // brand-new subdocument instances - every element reports `isNew: true` and
+  // This cannot reuse the `isModified`/`isNew` trick below (for the scalar slots): `crud.ts`'s
+  // PATCH does `Object.assign(existing, data)` with a whole new `contacts` ARRAY (plain objects
+  // off the wire, not the loaded subdocuments), and Mongoose recasts a whole-array reassignment
+  // into brand-new subdocument instances - every element reports `isNew: true` and
   // `isModified(...) === true` regardless of whether its `_id` matches an existing row (verified
   // empirically before writing this: hydrate a doc, Object.assign a same-`_id` renamed contact
   // onto it, and the resulting subdocument's `isNew` is `true`). So subdocument identity is gone
   // by the time this hook runs, and there is nothing to compare `this.contacts[i]` against.
   // The DB still holds the pre-write row, though - re-read it by `_id`, the same "ask the
   // database what was there before" the query hook below already relies on for its case.
+  //
+  // QA-1546 (cycle 3): this block used to sit AFTER `if (this.isNew) return;`, so a Location
+  // CREATE never reached it at all - `POST /api/locations` let a caller set any contacts[]._id
+  // and contacts[].gen it liked (contacts is in the route's field allowlist), including a
+  // negative gen that stayed negative through later renames and kept every mint on
+  // recipientKey()'s un-suffixed branch: the exact {404,200} key collision this whole mechanism
+  // exists to prevent, reachable by any locations.manage holder via a hand-crafted body. Moved
+  // above the `isNew` return so create goes through the identical protection PATCH already had.
+  // No special-casing needed for "new": `findById(this._id)` on a document that has never been
+  // saved simply finds nothing, so `prior` is empty and every row correctly takes the "no
+  // matching prior row" branch below - fresh server-minted `_id`, `gen` forced to 0 - which is
+  // exactly right for a row on a location that didn't exist a moment ago.
   if (this.isModified("contacts")) {
     const current: any[] = this.get("contacts") ?? [];
     if (current.length) {
-      const prior = await this.constructor.findById(this._id).select("contacts").lean();
+      const prior = this.isNew ? null : await this.constructor.findById(this._id).select("contacts").lean();
       const priorById = new Map<string, any>((prior?.contacts ?? []).map((c: any) => [String(c._id), c]));
       for (const c of current) {
         const id = c?._id ? String(c._id) : "";
@@ -324,7 +328,8 @@ function assertContactIdsUnique(contacts: unknown) {
           // row's identity: mint a fresh `_id` so the old `contact:<oldId>` ref stays permanently
           // associated with whoever held it before, and this row gets its own, never-seen ref -
           // and force `gen` to 0 regardless of what the wire supplied (also closes the sibling gap
-          // where a brand-new row could carry a caller-supplied `gen`, e.g. 999, straight in).
+          // where a brand-new row could carry a caller-supplied `gen`, e.g. 999, straight in, and,
+          // per QA-1546, the create path's own equivalent of the same gap).
           c._id = new Types.ObjectId();
           c.gen = 0;
           continue;
@@ -339,6 +344,14 @@ function assertContactIdsUnique(contacts: unknown) {
         // the very next unrelated edit.
         c.gen = beforeName !== afterName ? Number(before.gen ?? 0) + 1 : Number(before.gen ?? 0);
       }
+    }
+  }
+  if (this.isNew) return;
+  for (const { nameField, genField } of Object.values(SLOT_OCCUPANT_FIELDS)) {
+    // A caller that set the counter itself in the same save wins - nothing in `src/` does, but
+    // a bump applied twice would be silently wrong in the rotation direction rather than loudly.
+    if (this.isModified(nameField) && !this.isModified(genField)) {
+      this.set(genField, Number(this.get(genField) ?? 0) + 1);
     }
   }
 });
@@ -366,17 +379,28 @@ function assertContactIdsUnique(contacts: unknown) {
   // applies a Location-role user's parked `contacts` suggestion through `findByIdAndUpdate`, which
   // never touches `LocationSchema.pre("save")` at all. Unlike the three scalar slots, a whole
   // array can't be advanced with a single per-document `$inc` (there is no array index to target
-  // blindly), but the incoming array is already sitting in `flat.contacts` / `raw.$set.contacts`
-  // (the same object, not a copy - `{...raw.$set}` only shallow-copies the outer object) and
-  // hasn't been sent to Mongo yet, so each row's `gen` can be stamped directly onto it before the
-  // update proceeds. Reuses the exact same "ask the DB what each row was called before" logic as
-  // the document hook above; see that comment for why `isModified` can't be used here either (a
-  // query hook has no document in hand to ask in the first place).
+  // blindly).
+  //
+  // QA-1547 (cycle 3): this used to mutate `flat.contacts` - ONE shared array/object set - once
+  // per matched document inside the loop below. That is safe for exactly one matched document
+  // (the only case any write path in `src/` produces today), but a query matching MORE than one
+  // Location let a later document's "row not recognised" branch overwrite the `_id`/`gen` an
+  // EARLIER document's pass had just correctly resolved, since both passes were reading and
+  // writing the SAME `c` objects. A shared array cannot carry per-document identity decisions.
+  // Mirrors the scalar-slot block right below: clone the wire array fresh per matched document,
+  // resolve identity against THAT document's own prior `contacts`, and write it with its own
+  // `collection.updateOne` rather than letting one shared `$set.contacts` apply identically to
+  // every matched document. `contacts` is then stripped from the shared update (below) so the
+  // main query doesn't re-apply the unresolved wire array on top of what was just written here.
   if ("contacts" in flat && Array.isArray(flat.contacts) && flat.contacts.length) {
     const docs = await this.model.find(this.getQuery()).select("contacts").lean();
     for (const doc of docs) {
       const priorById = new Map<string, any>(((doc as any).contacts ?? []).map((c: any) => [String(c._id), c]));
-      for (const c of flat.contacts as any[]) {
+      // Fresh, per-document clone - never the shared `flat.contacts` array itself - so this
+      // document's identity resolution cannot be seen, let alone overwritten, by any other
+      // matched document's pass through this same loop.
+      const perDocContacts = (flat.contacts as any[]).map((c) => (c && typeof c === "object" ? { ...c } : c));
+      for (const c of perDocContacts) {
         const id = c?._id ? String(c._id) : "";
         const before = id ? priorById.get(id) : null;
         if (!before) {
@@ -392,8 +416,18 @@ function assertContactIdsUnique(contacts: unknown) {
         const afterName = String(c?.name ?? "").trim();
         c.gen = beforeName !== afterName ? Number(before.gen ?? 0) + 1 : Number(before.gen ?? 0);
       }
+      // Written directly (through `collection`, same as the scalar-slot `$inc` below, so this
+      // middleware does not re-enter itself) rather than left for the primary update to apply -
+      // that is what makes each matched document's resolution independent of every other's.
+      await this.model.collection.updateOne({ _id: (doc as any)._id }, { $set: { contacts: perDocContacts } });
     }
-    this.setUpdate(raw); // explicit, though the in-place mutation above already touches the same object
+    // The per-document writes above already applied `contacts` for every matched document -
+    // remove it from the shared update so the primary query does not re-apply the untouched,
+    // still-shared wire array on top (which would silently undo everything just resolved).
+    delete flat.contacts;
+    if (raw.$set && typeof raw.$set === "object" && "contacts" in raw.$set) delete (raw.$set as any).contacts;
+    if (Object.prototype.hasOwnProperty.call(raw, "contacts")) delete (raw as any).contacts;
+    this.setUpdate(raw);
   }
 
   if (!touched.length) return;
@@ -1310,6 +1344,17 @@ const StoredFileSchema = new Schema({
   compression: String,
   compression_ms: Number,
   needs_compression: { type: Boolean, default: false },
+  // QA-1548 (2026-08-27): the photograph's own coordinates, lifted out of its EXIF at upload.
+  // Five of the eight document classes the client's RPL mandate requires are specified as
+  // "geo-tagged"; until this release the upload pipeline re-encoded every image through sharp
+  // and threw the EXIF block away, so no stored photo could evidence where it was taken.
+  // ABSENT is the ordinary case, not a fault — a gallery pick, a phone with location off, a
+  // PDF, a video. Umesh, asked directly: "Sirf record karo, kuch mat dikhao" — nothing on any
+  // screen depends on this field and no upload is ever refused for lacking it.
+  geo: {
+    lat: { type: Number, default: null },
+    lng: { type: Number, default: null },
+  },
   // -90: direct-to-Drive (resumable) uploads live as "pending" between intent and complete;
   // "ready" is the only state /api/files serves; abandoned pendings are swept to "failed".
   status: { type: String, enum: ["ready", "pending", "failed", "deleted"], default: "ready" }, // -97: deleted = object gone, row kept for audit

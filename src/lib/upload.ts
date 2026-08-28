@@ -1,5 +1,6 @@
 "use client";
 import { BASE_PATH } from "@/lib/base-path";
+import { exifGpsFromJpeg } from "@/lib/validate";
 
 // Client-side image compression (spec §0: budget for compression + retry on weak connections).
 // Downscales to max 1600px and re-encodes JPEG q0.75. Non-images pass through untouched.
@@ -32,6 +33,29 @@ export async function compressImage(file: File): Promise<Blob> {
   }
 }
 
+// QA-1548 (S1) — READ THE GEO-TAG BEFORE compressImage() ABOVE DESTROYS IT.
+// The client's RPL mandate names five document classes as "geo-tagged". compressImage() decodes
+// to a canvas and re-encodes JPEG, and a canvas has NO metadata to carry — so the coordinates
+// die on the device, before a single byte leaves it. The server's own `.keepExif()` cannot
+// reach that, and files that take the direct-to-Drive door (≥ 8 MiB, every video) never pass
+// through the server at all. So the coordinates are lifted here, from the ORIGINAL File, and
+// travel as a hint the server records.
+// JPEG only, by design: HEIC would need the wasm decoder loaded before we know there is anything
+// to read, and heic2any drops metadata anyway. A null is the ordinary case, never an error —
+// nothing here can refuse or delay an upload, and a throw is swallowed.
+async function readGeoHint(file: File): Promise<{ geo_lat: number; geo_lng: number } | undefined> {
+  try {
+    if (!/.jpe?g$/i.test(file.name) && file.type !== "image/jpeg") return undefined;
+    // The EXIF block sits in the first APP1 segment; 256 KiB is far more than any camera writes,
+    // and reading a slice keeps a 12 MP photo off the main thread's heap.
+    const head = new Uint8Array(await file.slice(0, 256 * 1024).arrayBuffer());
+    const g = exifGpsFromJpeg(head);
+    return g ? { geo_lat: g.lat, geo_lng: g.lng } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // -83 (queue integrity): an item remembers WHICH batch and WHAT it is. Before this the
 // queue was global — a photo parked on batch A landed on batch B's daily log at "Retry
 // now", and document uploads queued from the trainer/candidate screens were jammed into a
@@ -42,7 +66,7 @@ const QUEUEABLE = new Set(["photos", "videos", "govt_screenshot", "attendance_sh
 
 // Where a file belongs — becomes the Drive folder <Centre>/<Batch>/<kind> and the
 // StoredFile's entity link ("which files belong to this batch?" finally has an answer).
-export type UploadHints = { folder_centre?: string; folder_batch?: string; folder_kind?: string; entity?: string; entity_id?: string; batch_id?: string; client_compression?: string; client_original_size?: number };
+export type UploadHints = { folder_centre?: string; folder_batch?: string; folder_kind?: string; entity?: string; entity_id?: string; batch_id?: string; client_compression?: string; client_original_size?: number; geo_lat?: number; geo_lng?: number };
 
 export function getQueue(batchId?: string): QueueItem[] {
   try {
@@ -67,7 +91,7 @@ async function blobToDataUrl(b: Blob): Promise<string> {
 async function post(blob: Blob, name: string, hints?: UploadHints): Promise<string> {
   const fd = new FormData();
   fd.append("file", new File([blob], name, { type: blob.type }));
-  for (const k of ["folder_centre", "folder_batch", "folder_kind", "entity", "entity_id", "client_compression", "client_original_size"] as const) {
+  for (const k of ["folder_centre", "folder_batch", "folder_kind", "entity", "entity_id", "client_compression", "client_original_size", "geo_lat", "geo_lng"] as const) {
     if (hints?.[k]) fd.append(k, String(hints[k]));
   }
   // TEAM-BLOCKER root cause (15/08): this was the ONE fetch in the app without the
@@ -276,6 +300,10 @@ export async function uploadWithRetry(fileIn: File, kind: string, hintsIn?: Uplo
   const isVideo = isVideoName(file.name) || file.type.startsWith("video/");
   const isImage = file.type.startsWith("image/") || /\.(jpe?g|png|webp|gif|bmp|tiff?|hei[cf])$/i.test(file.name);
   let compressedBlob: Blob | null = null; // the multipart fallback must not compress twice
+  // QA-1548: BEFORE step 1. Both compressors below re-encode, and neither carries metadata out;
+  // reading here is the only point at which the original bytes still exist on this path.
+  const geo = await readGeoHint(fileIn);
+  if (geo) hints = { ...(hints ?? {}), ...geo };
   let name = file.name;
   // 1) COMPRESS — on the device, size-blind.
   if (isVideo) {

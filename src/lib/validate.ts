@@ -221,3 +221,118 @@ export const canonicalGovtBatchId = (v: unknown): string | null => {
   const raw = String(v ?? "").trim();
   return raw.length ? raw : null;
 };
+
+// QA-1548 (S1, 2026-08-27) — GPS OUT OF EXIF, CLIENT-SAFE ON PURPOSE.
+// The client's RPL mandate names five document classes as "geo-tagged", and this repo destroyed
+// that tag twice over: sharp on the server discards all input metadata on re-encode, and
+// compressImage() in the BROWSER (lib/upload.ts) decodes to a canvas and re-encodes JPEG — a
+// canvas has no metadata to carry, so the coordinates are gone before a byte leaves the device.
+// The server-side `.keepExif()` cannot reach that, and the direct-to-Drive path (≥ 8 MiB, every
+// video) never passes the bytes through the server at all.
+// So the parser lives HERE, in the module whose whole reason for existing is "one rule, two
+// callers, no drifting copy" (canonicalPhone above): lib/storage.ts calls it on the server with
+// sharp's EXIF block, lib/upload.ts calls it in the browser on the ORIGINAL file before it
+// compresses. Two callers, one parser — a second hand-written copy of TIFF offset arithmetic is
+// exactly what ARCHITECTURE §3 exists to prevent.
+//
+// Deliberately hand-rolled and GPS-only rather than adding an EXIF dependency: `node_modules` is
+// a SHARED surface in this repo with no isolation hook (CLAUDE.md, QA-583) and peer checkers run
+// walls against it continuously, so an install here can break a neighbour's run.
+//
+// Takes any Uint8Array (a Node Buffer is one), so it needs no Buffer polyfill in the browser.
+// Returns null for anything it cannot vouch for, and NEVER throws: a malformed EXIF block on a
+// trainer's photo must not fail their upload.
+export function readExifGps(exif: Uint8Array | null | undefined): { lat: number; lng: number } | null {
+  try {
+    if (!exif || exif.length < 16) return null;
+    const str = (o: number, n: number) => String.fromCharCode(...exif.subarray(o, o + n));
+    // sharp hands back the JPEG APP1 payload, which starts with the "Exif\0\0" marker; a raw
+    // TIFF block (some WebP/HEIC paths) starts at the byte order mark itself.
+    const base = str(0, 4) === "Exif" ? 6 : 0;
+    const order = str(base, 2);
+    if (order !== "II" && order !== "MM") return null;
+    const LE = order === "II";
+    const dv = new DataView(exif.buffer, exif.byteOffset, exif.byteLength);
+    const u16 = (o: number) => dv.getUint16(o, LE);
+    const u32 = (o: number) => dv.getUint32(o, LE);
+    if (u16(base + 2) !== 0x2a) return null; // TIFF magic
+
+    // One IFD = a count, then 12-byte entries: tag, type, count, value-or-offset.
+    type Ent = { type: number; count: number; valOff: number };
+    const entries = (ifdOff: number) => {
+      const out = new Map<number, Ent>();
+      if (ifdOff <= 0 || base + ifdOff + 2 > exif.length) return out;
+      const count = u16(base + ifdOff);
+      for (let i = 0; i < count; i++) {
+        const e = base + ifdOff + 2 + i * 12;
+        if (e + 12 > exif.length) break;
+        out.set(u16(e), { type: u16(e + 2), count: u32(e + 4), valOff: e + 8 });
+      }
+      return out;
+    };
+    // RATIONAL (type 5) is two uint32s; three of them make degrees/minutes/seconds.
+    const rationals = (ent?: Ent) => {
+      if (!ent || ent.type !== 5) return null;
+      const at = base + u32(ent.valOff);
+      const out: number[] = [];
+      for (let i = 0; i < ent.count; i++) {
+        const o = at + i * 8;
+        if (o < 0 || o + 8 > exif.length) return null;
+        const den = u32(o + 4);
+        out.push(den === 0 ? 0 : u32(o) / den);
+      }
+      return out;
+    };
+    // ASCII (type 2) is inline when it fits in the 4-byte value slot, out-of-line otherwise.
+    const ascii = (ent?: Ent) => {
+      if (!ent || ent.type !== 2) return "";
+      const at = ent.count <= 4 ? ent.valOff : base + u32(ent.valOff);
+      if (at < 0 || at + ent.count > exif.length) return "";
+      return str(at, ent.count).replace(/\0.*$/, "").trim();
+    };
+
+    const gpsPtr = entries(u32(base + 4)).get(0x8825); // GPSInfoIFDPointer, lives in IFD0
+    if (!gpsPtr) return null;
+    const gps = entries(u32(gpsPtr.valOff));
+    const latDms = rationals(gps.get(2)), lonDms = rationals(gps.get(4));
+    if (!latDms || !lonDms || latDms.length < 3 || lonDms.length < 3) return null;
+    const dms = (d: number[]) => d[0] + d[1] / 60 + d[2] / 3600;
+    let lat = dms(latDms), lng = dms(lonDms);
+    if (ascii(gps.get(1)).toUpperCase() === "S") lat = -lat;
+    if (ascii(gps.get(3)).toUpperCase() === "W") lng = -lng;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+    // A camera that wrote an empty GPS block reports 0,0 — the Atlantic, never a training centre.
+    if (lat === 0 && lng === 0) return null;
+    return { lat: Number(lat.toFixed(6)), lng: Number(lng.toFixed(6)) };
+  } catch {
+    return null;
+  }
+}
+
+// The APP1 hunt the browser needs and the server does not: sharp already extracts the EXIF
+// block, but a File in the browser is a whole JPEG. Walk its segment markers to the first APP1
+// that starts with "Exif" and hand that payload to readExifGps. JPEG only — a PNG/WebP/HEIC
+// original returns null here, which is the ordinary case and never an error.
+export function exifGpsFromJpeg(bytes: Uint8Array): { lat: number; lng: number } | null {
+  try {
+    if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null; // not SOI
+    let p = 2;
+    // Bounded by the buffer AND by the segment sizes; a corrupt length can only shorten the walk.
+    while (p + 4 <= bytes.length) {
+      if (bytes[p] !== 0xff) return null;
+      const marker = bytes[p + 1];
+      if (marker === 0xd8 || (marker >= 0xd0 && marker <= 0xd9)) { p += 2; continue; }
+      if (marker === 0xda) return null; // start of scan — no metadata past here
+      const len = (bytes[p + 2] << 8) | bytes[p + 3];
+      if (len < 2) return null;
+      if (marker === 0xe1 && String.fromCharCode(...bytes.subarray(p + 4, p + 8)) === "Exif") {
+        return readExifGps(bytes.subarray(p + 4, Math.min(p + 2 + len, bytes.length)));
+      }
+      p += 2 + len;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
