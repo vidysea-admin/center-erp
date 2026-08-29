@@ -603,10 +603,17 @@ export type PutResult = {
 // photo that carries no geo-tag - and read as widely as it was being read, it would forbid refusing
 // a `.exe`. Nothing in REQUIREMENTS.md or its thirteen addenda governs this allowlist at all.
 //
-// So this line has NO user ruling behind it, and says so instead of borrowing one. Its authority is
-// internal consistency: three other places in this codebase already treat .heic and .heif as one
-// format, and only this door disagreed. If a product decision is ever wanted on WHICH formats the
-// door accepts, that decision is Umesh's and does not exist yet.
+// So cycle 3 stopped reaching for a citation and ASKED. Umesh, 2026-08-29, asked with the whole
+// situation named - including both citations above being wrong, and that no clause in REQUIREMENTS.md
+// or its thirteen addenda governs this allowlist at all - answered: "Haan, .heif accept karo."
+// Recorded verbatim in qa/feedback-inbox.md. THAT is the authority for this line; the
+// internal-consistency argument below is now only the reason the question was worth asking, not a
+// permission. Six places in this codebase already treat .heic and .heif as one format, and only this
+// door disagreed.
+//
+// NOT settled by that answer, and deliberately left alone: api/batches/[id]/certificates/route.ts:20
+// keeps its own narrower allowlist which excludes .heic AND .heif symmetrically (QA-1572). Whether an
+// iPhone photo of a paper certificate belongs there is a different question and was not asked.
 export const ALLOWED_UPLOAD_EXT = new Set([".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".pdf", ".mp4", ".mov", ".3gp", ".webm", ".mp3", ".m4a", ".wav", ".amr", ".xlsx", ".xls", ".csv", ".doc", ".docx"]);
 const IMAGE_EXT = new Set([".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"]);
 
