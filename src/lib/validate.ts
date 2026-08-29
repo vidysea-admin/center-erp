@@ -369,9 +369,19 @@ function exifGpsByScan(bytes: Uint8Array): { lat: number; lng: number } | null {
 // The one entry point the browser calls. JPEG gets the exact segment walk; anything else — HEIC,
 // HEIF, and incidentally PNG/WebP, which carry EXIF in their own chunk types — gets the signature
 // scan. Never throws; null is the ordinary answer, not an error.
+//
+// QA-1560 (checker, cycle 2, second concurrent check): the scan used to run whenever the JPEG walk
+// came back null, which does not distinguish "this is a JPEG with no GPS of its own" from "this is
+// not a JPEG at all". A JPEG's compressed scan data can have a second image appended after it —
+// Motion Photo (Samsung/Google), MPO dual-camera, or a stripped primary with a surviving embedded
+// remnant — and the unbounded scan would find THAT image's GPS and report it as the primary's.
+// Fixed by checking the container up front: a real JPEG (SOI marker) trusts the segment walk's
+// answer, including null, and never falls through to the scan; only a genuinely non-JPEG buffer
+// reaches exifGpsByScan.
 export function exifGpsFromImage(bytes: Uint8Array): { lat: number; lng: number } | null {
   try {
-    return exifGpsFromJpeg(bytes) ?? exifGpsByScan(bytes);
+    const isJpeg = bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xd8;
+    return isJpeg ? exifGpsFromJpeg(bytes) : exifGpsByScan(bytes);
   } catch {
     return null;
   }

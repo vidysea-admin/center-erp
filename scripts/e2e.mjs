@@ -5279,6 +5279,22 @@ ok(`-111: no API error in this run carries a Rule/DEC/QA code (${codeLeaks.lengt
         JSON.stringify({ st: rH.status, geo: rowH?.geo ?? null }));
     }
 
+    // (g) QA-1560: a JPEG whose OWN EXIF has no GPS must never report a DIFFERENT image's
+    // coordinates, even when a second, geotagged image is appended after it - the shape Motion
+    // Photo (Samsung/Google) and MPO dual-camera JPEGs actually produce, and the one the unbounded
+    // scan (added for QA-1553's HEIC fix) picked up by mistake. The primary here is the same
+    // no-GPS fixture pin (c) already trusts; a small geotagged JPEG is concatenated after it.
+    const motionPhoto = Buffer.concat([noGps, withGps]);
+    const fdM = new FormData();
+    fdM.append("file", new File([motionPhoto], "motion-photo.jpg", { type: "image/jpeg" }));
+    fdM.append("folder_centre", "_e2e"); fdM.append("folder_kind", "geo");
+    const rM = await fetch(BASE + "/api/upload", { method: "POST", headers: { cookie }, body: fdM });
+    const dM = await rM.json().catch(() => ({}));
+    const rowM = dM?.url ? await rowOf(dM.url) : null;
+    ok("QA-1560 (g): a no-GPS JPEG with a geotagged image appended after it still records no coordinates",
+      rM.status === 200 && !!rowM && (rowM.geo == null || (rowM.geo.lat == null && rowM.geo.lng == null)),
+      JSON.stringify({ st: rM.status, geo: rowM?.geo ?? null }));
+
     await mcg.close();
   }
 }
