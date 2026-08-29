@@ -19,12 +19,123 @@
 // `import mongoose, { Schema, model, models, Types } from "mongoose"` (a named import of a CJS
 // package) is refused by Node's native TypeScript execution when the file is run bareback
 // (`node src/models/index.ts`) — confirmed empirically, same failure the cycle-3 checker hit and
-// worked around the same way. THIS IS A REAL MAINTENANCE RISK: if the query hook's logic changes
-// in `src/models/index.ts` and this copy is not updated to match, this probe silently stops
-// testing the real code. Flagged here, in the QA-1551 manifest section, and in the e2e.mjs call
-// site's own comment, so a future editor of the query hook is warned three times.
+// worked around the same way.
+//
+// QA-1576 (qa-1551 fix cycle 2): a checker mutation-tested this probe — reverted
+// `src/models/index.ts` to its pre-QA-1547-fix state in an isolated copy and reran this file — and
+// it stayed fully GREEN, proving the copy above was never actually coupled to the real file: it
+// drives its own replica schema and never imports or executes anything from
+// `src/models/index.ts`, so a real regression (or a straight revert) would NOT trip it. The
+// `runFidelityCheck()` below closes that gap: at every run, it re-reads the CURRENT
+// `src/models/index.ts` from disk, extracts the exact same two logical pieces the copy above
+// mirrors (the `assertContactIdsUnique(flat.contacts)` guard line and the whole
+// `if ("contacts" in flat && …) { … }` block), strips the handful of TS-only tokens that
+// necessarily differ between a `.ts` file and this plain-JS copy (`as any` casts, `Map<…>` generic
+// args, `(c: any)` param types) plus comments and incidental whitespace, and asserts the result is
+// BYTE-IDENTICAL to the same normalization applied to the copy embedded below. Any real drift in
+// the hook's logic — including a full revert to the pre-fix code — changes the normalized real-file
+// text and no longer matches the embedded copy, so this assertion goes RED instead of silently
+// staying green. This does not remove the maintenance burden (the embedded copy still has to be
+// updated by hand when the real hook changes) but it now makes a stale copy a loud, immediate
+// failure instead of an invisible one.
 import mongoose from "mongoose";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 const { Schema, Types } = mongoose;
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// ── Fidelity check (QA-1576 fix): does the copy below still match the real hook? ──────────────
+const ASSERT_ANCHOR = 'if ("contacts" in flat) assertContactIdsUnique(flat.contacts);';
+const CONTACTS_IF_MARKER = 'if ("contacts" in flat && Array.isArray(flat.contacts) && flat.contacts.length) {';
+
+// Finds the `}` matching the `{` at `openIdx`, skipping braces inside `//` line comments and
+// string literals so comment prose or string contents can never desync the count.
+function findMatchingBrace(text, openIdx) {
+  let depth = 0;
+  let inLineComment = false;
+  let inString = null;
+  for (let i = openIdx; i < text.length; i++) {
+    const ch = text[i];
+    if (inLineComment) { if (ch === "\n") inLineComment = false; continue; }
+    if (inString) { if (ch === inString && text[i - 1] !== "\\") inString = null; continue; }
+    if (ch === "/" && text[i + 1] === "/") { inLineComment = true; continue; }
+    if (ch === '"' || ch === "'" || ch === "`") { inString = ch; continue; }
+    if (ch === "{") depth++;
+    else if (ch === "}") { depth--; if (depth === 0) return i; }
+  }
+  return -1;
+}
+
+// Pulls out the two logically-connected pieces this probe's embedded copy mirrors — the guard
+// line and the contacts if-block — skipping whatever sits between them (in the real file, the
+// unrelated scalar name/gen-slot handling; in the probe, a blank line) so both sides compare
+// apples-to-apples regardless of source-file line numbers.
+function extractContactsLogic(sourceText, label, fromIndex = 0) {
+  const anchorIdx = sourceText.indexOf(ASSERT_ANCHOR, fromIndex);
+  if (anchorIdx === -1) throw new Error(`fidelity check: guard line not found in ${label}`);
+  const anchorEndIdx = anchorIdx + ASSERT_ANCHOR.length;
+
+  const ifIdx = sourceText.indexOf(CONTACTS_IF_MARKER, anchorEndIdx);
+  if (ifIdx === -1) throw new Error(`fidelity check: contacts if-block not found in ${label}`);
+  const braceOpenIdx = sourceText.indexOf("{", ifIdx);
+  const braceCloseIdx = findMatchingBrace(sourceText, braceOpenIdx);
+  if (braceCloseIdx === -1) throw new Error(`fidelity check: unbalanced braces in ${label}`);
+
+  return sourceText.slice(anchorIdx, anchorEndIdx) + "\n" + sourceText.slice(ifIdx, braceCloseIdx + 1);
+}
+
+// Strips the TS-only tokens a `.ts` source necessarily carries that this plain-JS copy cannot
+// (type casts / generic args / param types), plus comments, then collapses whitespace — so what's
+// left is pure logic, comparable byte-for-byte against the same normalization of the embedded copy.
+function normalizeForFidelity(code) {
+  return code
+    .replace(/\(\s*([\w.$]+)\s+as\s+any(\[\])?\s*\)/g, "$1")   // (doc as any) / (x as any[]) -> x
+    .replace(/new Map<[^>]*>/g, "new Map")                       // new Map<string, any> -> new Map
+    .replace(/\(\s*(\w+)\s*:\s*any\s*\)/g, "($1)")               // (c: any) -> (c)
+    .replace(/\/\/[^\n]*/g, "")                                  // strip line comments
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Where the actual embedded copy starts in THIS file — search for the anchor/marker strings only
+// after this point, so `extractContactsLogic` cannot match its own literal-string definitions
+// above (`ASSERT_ANCHOR`/`CONTACTS_IF_MARKER` themselves contain the anchor text as a substring).
+const PROBE_COPY_START_MARKER = '// ══ VERBATIM COPY of LocationSchema.pre(["findOneAndUpdate", ...]) — src/models/index.ts:365-444 ══';
+
+function runFidelityCheck(ok) {
+  const realPath = path.join(__dirname, "..", "src", "models", "index.ts");
+  const realSource = fs.readFileSync(realPath, "utf8");
+  const probeSource = fs.readFileSync(__filename, "utf8");
+  const probeCopyStart = probeSource.indexOf(PROBE_COPY_START_MARKER);
+  if (probeCopyStart === -1) throw new Error("fidelity check: could not find this probe's own embedded-copy marker");
+
+  const realLogic = normalizeForFidelity(extractContactsLogic(realSource, "src/models/index.ts"));
+  const probeLogic = normalizeForFidelity(extractContactsLogic(probeSource, "this probe's own embedded copy", probeCopyStart));
+
+  ok(
+    "QA-1576 FIDELITY: the embedded query-hook copy in this probe still matches src/models/index.ts's real contacts-handling logic",
+    realLogic === probeLogic,
+    realLogic === probeLogic ? "" : `\n  real (normalized): ${realLogic}\n  copy (normalized): ${probeLogic}`
+  );
+}
+
+let pass = 0, fail = 0;
+function ok(name, cond, extra = "") {
+  if (cond) { pass++; console.log(`PASS  ${name}`); }
+  else { fail++; console.log(`FAIL  ${name} ${extra}`); }
+}
+
+// Run the fidelity check first and fail fast — if the embedded copy has drifted from the real
+// file, the DB-driven assertions below would be testing a fixture that no longer represents the
+// product code at all, so there is no point spinning up Mongo to find that out.
+runFidelityCheck(ok);
+if (fail > 0) {
+  console.log(`\nTOTAL: ${pass} passed, ${fail} failed`);
+  process.exit(1);
+}
 
 const url = process.env.MONGODB_URL || "mongodb://127.0.0.1:27017";
 const dbName = process.env.MONGODB_DB || "center_erp_ci";
@@ -96,11 +207,8 @@ ProbeLocationSchema.pre(["findOneAndUpdate", "updateOne", "updateMany", "replace
 const ProbeLocation = mongoose.model("QA1547ProbeLocation", ProbeLocationSchema, "qa1547_probe_locations");
 await ProbeLocation.deleteMany({});
 
-let pass = 0, fail = 0;
-function ok(name, cond, extra = "") {
-  if (cond) { pass++; console.log(`PASS  ${name}`); }
-  else { fail++; console.log(`FAIL  ${name} ${extra}`); }
-}
+// `pass`/`fail`/`ok` are declared once, above, so the fidelity check's result is folded into the
+// same totals and exit code as the assertions below.
 
 // Two Locations, each with ONE existing contact row: doc A's row named "Alice" (gen 0), doc B's
 // row named "Bob" (gen 0, untouched by the wire payload at all). A single query matching BOTH
