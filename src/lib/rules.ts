@@ -15,6 +15,9 @@ export { isCertificateSettled, SETTLED_CERTIFICATE_STATUSES } from "@/lib/candid
 import { getDefaults } from "@/lib/defaults";
 import { nameKey, normalizeCan, unresolvedPortalRowsByName } from "@/lib/govt-attendance";
 import { HttpError, isScoped } from "@/lib/authz";
+// QA-1575: trainerDocsAccess() needs the permission level, not just the role. permissions.ts
+// imports authz.ts and models only, so this direction adds no cycle.
+import { hasEditLevel, requirePerm } from "@/lib/permissions";
 // QA-1074: which pending sheet changes can actually move the report's figures. IMPORTED, never
 // re-listed — this is the predicate the apply door and the Sync Inbox screen already share
 // (-242 / QA-946), and a third copy of "what is a target-row field" is exactly the ARCHITECTURE
@@ -128,6 +131,38 @@ export async function assertTrainerInScope(user: SessionUser, trainerId: string)
   if (!isScoped(user)) return;
   const t = await Trainer.findById(trainerId).select("nominated_for_location home_location capable_locations").lean<any>();
   assertTrainerDocInScope(user, t);
+}
+
+// QA-1575 (client RPL mandate item 7, relayed by Umesh 2026-08-27; his decision, asked directly and
+// recorded verbatim in qa/feedback-inbox.md: "Trainer sirf APNE documents daal sake").
+//
+// The mandate requires "Trainer documentation, including experience certificates and relevant
+// qualifications/certificates" for every RPL batch. Seven of the client's eight document classes
+// already ship; this one did not, for one reason: BOTH doors of
+// /api/trainers/[id]/documents demanded `trainers.manage`, and the Trainer role carries
+// ["batches.daily_log", "closure.manage"]. So the person who OWNS the certificate was the one
+// person who could not file it, and every trainer certificate had to travel through an operator.
+//
+// Two levels, deliberately not one:
+//   "manage" - today's right, unchanged, still scope-checked (QA-125: Aadhaar/PAN are personnel
+//              data, so the right alone was never enough and still is not).
+//   "self"   - a Trainer login on ITS OWN trainer record, resolved through trainerForLogin() and
+//              nothing else. Never by name, never by e-mail alone at this door - that resolver is
+//              the ONE place a login becomes a trainer (QA-149) and re-deriving it here is exactly
+//              what ARCHITECTURE section 3 exists to prevent.
+//
+// Returns which level was granted so the caller can narrow what "self" may do; throws the
+// project's own worded 403 otherwise, so a stranger sees no difference between "no right" and
+// "not your record".
+export async function trainerDocsAccess(user: SessionUser, trainerId: string): Promise<"manage" | "self"> {
+  if (await hasEditLevel(user, "trainers.manage")) {
+    await assertTrainerInScope(user, trainerId);
+    return "manage";
+  }
+  const me = await trainerForLogin(user);
+  if (me && String(me._id) === String(trainerId)) return "self";
+  await requirePerm(user, "trainers.manage"); // throws with the wording every other door uses
+  throw new HttpError(403, "You do not have the \"Trainers\" right. Ask an Admin to grant it.");
 }
 // QA-125 follow-up (checker design note, 15/08): capable_locations is a TEACHING tie — a
 // trainer capable at ten centres would hand all ten SPOCs delete rights over their

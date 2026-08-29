@@ -2023,5 +2023,98 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
 const anon = await fetch(BASE + "/api/locations");
 ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}`);
 
+
+// ---------------------------------------------------------------------------------------------
+// QA-1575 — THE ONE DOCUMENT CLASS THE PERSON WHO OWNS IT COULD NOT FILE.
+// The client's RPL mandate (Umesh, 2026-08-27, verbatim in qa/feedback-inbox.md) requires "Trainer
+// documentation, including experience certificates and relevant qualifications/certificates" for
+// every batch. Seven of its eight classes already shipped. This one did not, because BOTH doors of
+// /api/trainers/[id]/documents demanded `trainers.manage` while the Trainer role carries only
+// ["batches.daily_log", "closure.manage"] - so every trainer certificate had to travel through an
+// operator. Umesh, asked directly: "Trainer sirf APNE documents daal sake."
+// RED before the fix: (a) and (b) are 403. (c)-(f) must hold in BOTH directions - opening a door
+// for the owner must not reopen QA-125, where writing a file onto a FOREIGN trainer was live-proved.
+{
+  const stampT = Date.now().toString().slice(-8);
+  // The phone must differ per fixture: it is a unique key, and computing it from the shared stamp
+  // alone handed both trainers the SAME number, so the second create was correctly refused and the
+  // pin read as a product failure. My fixture, not the door.
+  let seqT = 0;
+  const mk = async (nm, mail) => (await req(admin, "POST", "/api/trainers", {
+    name: nm, phone: String(7700000000 + (Number(stampT) % 90000000) * 10 + (seqT++)).slice(0, 10),
+    email: mail, skills: ["Reasoning"], day_rate: 500,
+  })).data?.item;
+  const meT = await mk("QA1575 Own " + stampT, `qa1575.own.${stampT}@vidysea.com`);
+  const otherT = await mk("QA1575 Other " + stampT, `qa1575.other.${stampT}@vidysea.com`);
+  if (!meT?._id || !otherT?._id) {
+    ok("QA-1575: two trainer fixtures could be created", false, JSON.stringify({ meT, otherT }).slice(0, 200));
+  } else {
+    const madeLogin = await req(admin, "POST", `/api/trainers/${meT._id}/create-login`, { password: PW });
+    const selfCookie = madeLogin.status === 201 || madeLogin.status === 200
+      ? await login(`qa1575.own.${stampT}@vidysea.com`, PW) : null;
+    ok("QA-1575 (pre): the trainer fixture has a working login linked to its own record",
+      !!selfCookie, JSON.stringify({ st: madeLogin.status, err: madeLogin.data?.error }).slice(0, 200));
+
+    if (selfCookie) {
+      // (a) the owner can READ their own documents
+      const rOwn = await req(selfCookie, "GET", `/api/trainers/${meT._id}/documents`);
+      ok("QA-1575 (a): a trainer can read the documents on their OWN record",
+        rOwn.status === 200 && Array.isArray(rOwn.data?.items), `got ${rOwn.status} ${JSON.stringify(rOwn.data).slice(0, 140)}`);
+
+      // (b) ...and can FILE one. This is the mandate's item 7, from the person who holds the paper.
+      const wOwn = await req(selfCookie, "POST", `/api/trainers/${meT._id}/documents`, {
+        doc_type: "Teaching Experience", file_url: "/erp/api/files/qa1575own.pdf", original_name: "experience.pdf",
+      });
+      ok("QA-1575 (b): a trainer can file a document onto their OWN record - RPL mandate item 7",
+        wOwn.status === 201, `got ${wOwn.status} ${JSON.stringify(wOwn.data).slice(0, 140)}`);
+
+      // (c)+(d) QA-125 must NOT reopen: a foreign record stays shut in both directions.
+      const rOther = await req(selfCookie, "GET", `/api/trainers/${otherT._id}/documents`);
+      ok("QA-1575 (c): ...and still cannot read ANOTHER trainer's documents",
+        rOther.status === 403, `got ${rOther.status}`);
+      const wOther = await req(selfCookie, "POST", `/api/trainers/${otherT._id}/documents`, {
+        doc_type: "Teaching Experience", file_url: "/erp/api/files/qa1575foreign.pdf",
+      });
+      ok("QA-1575 (d): ...and still cannot write onto ANOTHER trainer's record (QA-125 stays closed)",
+        wOther.status === 403, `got ${wOther.status}`);
+
+      // (e) uploading REPLACES the same doc_type, so a verified document must not be quietly
+      // overwritten by its owner. Nothing in the product sets `verified` yet, so this is a FORWARD
+      // guard and the fixture sets the flag directly - stated rather than implied.
+      const { MongoClient } = await import("mongodb");
+      const mc1575 = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+      await mc1575.connect();
+      const db1575 = mc1575.db(process.env.MONGODB_DB || "center_erp_ci");
+      const upd = await db1575.collection("trainerdocuments").updateOne(
+        { file_url: "/erp/api/files/qa1575own.pdf" }, { $set: { verified: true } });
+      ok("QA-1575 (pre): the filed document could be marked verified for the guard test",
+        upd.matchedCount === 1, JSON.stringify(upd));
+      const reUp = await req(selfCookie, "POST", `/api/trainers/${meT._id}/documents`, {
+        doc_type: "Teaching Experience", file_url: "/erp/api/files/qa1575own-v2.pdf",
+      });
+      ok("QA-1575 (e): a trainer cannot silently replace their OWN document once it is verified",
+        reUp.status === 409 && /verified/i.test(String(reUp.data?.error)),
+        `got ${reUp.status} ${JSON.stringify(reUp.data).slice(0, 160)}`);
+
+      // (f) an operator with the right keeps today's behaviour - the guard is on the SELF path only.
+      const adminRe = await req(admin, "POST", `/api/trainers/${meT._id}/documents`, {
+        doc_type: "Teaching Experience", file_url: "/erp/api/files/qa1575admin-v2.pdf",
+      });
+      ok("QA-1575 (f): an operator with trainers.manage can still replace it - the guard narrows SELF, not the right",
+        adminRe.status === 201, `got ${adminRe.status} ${JSON.stringify(adminRe.data).slice(0, 140)}`);
+      await mc1575.close();
+
+      // (g) deleting is not filing. "daal sake" opened upload, not removal.
+      const docs = await req(admin, "GET", `/api/trainers/${meT._id}/documents`);
+      const anyDoc = docs.data?.items?.[0]?._id;
+      if (anyDoc) {
+        const delSelf = await req(selfCookie, "DELETE", `/api/trainers/${meT._id}/documents/${anyDoc}`);
+        ok("QA-1575 (g): a trainer still cannot DELETE a document - the decision opened filing, not removal",
+          delSelf.status === 403, `got ${delSelf.status}`);
+      } else ok("QA-1575 (g): a document existed to attempt a delete on", false, "no documents returned");
+    }
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
