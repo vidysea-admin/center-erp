@@ -86,7 +86,19 @@ export async function linkTrainerLoginByEmail(userId: unknown, emailIn: string):
   const unlinked = await Trainer.find({ email: rx, $or: [{ user: null }, { user: { $exists: false } }] })
     .select("_id").limit(2).lean<any[]>();
   if (unlinked.length !== 1) return null;
-  await Trainer.updateOne({ _id: unlinked[0]._id }, { $set: { user: userId } });
+  // QA-1581 (checker, qa-1575 cycle 2): folding the two copies together turned an ATOMIC write into
+  // a read-then-write. The original `updateOne` carried `$or: [{user:null},{user:{$exists:false}}]`
+  // in its own FILTER, so a row claimed between the read and the write could not be overwritten;
+  // splitting the query out lost that. Not exploitable today (`User.email` is unique, so two logins
+  // cannot race for one address), but introducing a TOCTOU while removing a duplication is a bad
+  // trade at any severity. The guard goes back where it was - in the filter - so the write itself
+  // refuses a row that stopped being unlinked. A lost race now returns null, which is the same
+  // answer an ambiguous email gets: link nothing rather than guess.
+  const claimed = await Trainer.updateOne(
+    { _id: unlinked[0]._id, $or: [{ user: null }, { user: { $exists: false } }] },
+    { $set: { user: userId } },
+  );
+  if (!claimed.modifiedCount) return null;
   return unlinked[0];
 }
 

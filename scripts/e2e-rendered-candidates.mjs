@@ -538,5 +538,66 @@ for (const r of results) {
   console.log(`  ${(decodeURIComponent(r.qs.split("=")[1] || "(none)")).padEnd(24)} | ${r.kind.padEnd(11)} | ${r.bucket.padEnd(9)} | tab ${r.activeTab.padEnd(26)} | pill ${(r.activePills[0] || "-").padEnd(22)} | announced ${String(r.announced).padStart(4)} | rows ${String(r.rows).padStart(4)}`);
 }
 
+// ---------------------------------------------------------------------------------------------
+// QA-1584 (checker, qa-1575 cycle 2) — THE CARD NOTHING COULD CATCH.
+// qa-1575 put the trainer's own documents on Home, and the cycle-2 checker had to open a browser by
+// hand to know it rendered. Nothing in this wall would have noticed if it stopped rendering
+// tomorrow: the API pins (a)-(j) all pass against a screen that draws nothing at all. That is the
+// same shape as QA-1145, the defect this whole suite exists because of — a count announced, no rows
+// drawn, found by a person and never by the wall.
+//
+// So this asserts what the TRAINER sees, signed in as a trainer, using only what the product tells
+// them: nothing is pasted in from the fixture beyond creating it.
+{
+  const ts = stamp("TD");
+  const tEmail = `qa1584.${ts}@vidysea.com`;
+  const tr = (await req(admin, "POST", "/api/trainers", {
+    name: "QA1584 Trainer " + ts, phone: phone("76"), email: tEmail,
+    skills: ["RCSkill" + s], day_rate: 500,
+  }, 201)).data?.item;
+  const TPW = "CiOnly@123";
+  const made = tr?._id ? await req(admin, "POST", `/api/trainers/${tr._id}/create-login`, { password: TPW }) : { status: 0 };
+  ok("QA-1584 [precondition] a trainer with a linked login exists to render the card for",
+    !!tr?._id && (made.status === 200 || made.status === 201),
+    JSON.stringify({ tr: !!tr?._id, login: made.status }));
+
+  if (tr?._id && (made.status === 200 || made.status === 201)) {
+    await req(admin, "POST", `/api/trainers/${tr._id}/documents`, {
+      doc_type: "Teaching Experience", file_url: `/erp/api/files/qa1584-${ts}.pdf`, original_name: `experience-${ts}.pdf`,
+    });
+
+    const tctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const tpage = await tctx.newPage();
+    await tpage.goto(BASE, { waitUntil: "domcontentloaded" });
+    await tpage.waitForTimeout(1200);
+    const box = tpage.locator('input[type="email"], input[name="email"], input[id="email"]').first();
+    if (await box.count()) {
+      await box.fill(tEmail);
+      await tpage.locator('input[type="password"]').first().fill(TPW);
+      await tpage.locator('button[type="submit"], button:has-text("Sign in"), button:has-text("Log in")').first().click();
+      await tpage.waitForURL((u) => !/login/i.test(String(u)), { timeout: 30000 }).catch(() => {});
+    }
+    ok("QA-1584 [precondition] the trainer's own browser session is signed in",
+      !/login/i.test(tpage.url()), tpage.url());
+
+    const drew = await tpage.waitForFunction(
+      () => /My documents/i.test(document.body.innerText) && /Teaching Experience/i.test(document.body.innerText),
+      undefined, { timeout: 45000 }).then(() => true).catch(() => false);
+    ok("QA-1584 (a): a trainer's Home actually RENDERS the My documents card with its doc types",
+      drew, drew ? "" : `body did not settle; url=${tpage.url()}`);
+
+    const body = await tpage.innerText("body").catch(() => "");
+    ok("QA-1584 (b): ...and the document filed through the API is VISIBLE on it, not an empty card",
+      new RegExp(`experience-${ts}`, "i").test(body), body.slice(0, 260));
+    ok("QA-1584 (c): ...and the card offers the trainer NO delete control",
+      !/\bdelete\b|\bremove\b/i.test(body), (body.match(/.{0,40}(delete|remove).{0,40}/i) || [""])[0]);
+    ok("QA-1584 (d): ...and names no OTHER trainer anywhere on that screen",
+      !/QA1578 |QA1575 /.test(body), (body.match(/QA15\d\d [A-Za-z]+/) || [""])[0]);
+
+    await tctx.close();
+  }
+
 await browser.close();
+}
+
 finish();
