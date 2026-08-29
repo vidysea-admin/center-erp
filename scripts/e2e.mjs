@@ -4388,6 +4388,85 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
   }
   await req("PUT", "/api/approvals", { action: "location.edit", enabled: false }, 200); // restore default OFF
 
+  // ══ QA-1546 (QA-1516 cycle 3) — the CREATE door bypassed the whole contacts[].gen mechanism ═══
+  // The QA-1516/QA-1537 per-contact generation block above (models/index.ts, LocationSchema's
+  // `pre("save")` document hook) used to sit AFTER `if (this.isNew) return;`, so a Location
+  // CREATE (`POST /api/locations`) never reached it at all — `contacts` is in the create route's
+  // field allowlist, so a caller could seed `contacts[]._id` and `contacts[].gen` directly,
+  // including a NEGATIVE gen that stayed negative through every later rename, minting the exact
+  // byte-identical {404,200} key collision this whole mechanism exists to prevent — reachable on
+  // the CREATE door specifically, a shape neither the QA-1516 nor the QA-1537 fixtures above drove
+  // (both mint their contact row through PATCH). Closed by moving the block above the `isNew`
+  // return, same code, no special-casing: `findById` on a document that was never saved finds
+  // nothing, so a fresh document's contacts correctly take the "no matching prior row" branch —
+  // server-minted `_id`, `gen` forced to 0. This pin was added by QA-1551 (backfilling the
+  // regression coverage QA-1516 cycle 3's own manifest promised but never wrote).
+  const g1546Loc = (await req("POST", "/api/locations", {
+    code: "G46" + cy, name: "Gen Create Centre " + cy, external_id: "G46" + cy, approval_status: "Approved", city: "Jhansi",
+    contacts: [{ _id: "aaaaaaaaaaaaaaaaaaaaaa01", name: "Anita Create " + cy, phone: "9700000301", role_label: "Contact", gen: -5 }],
+  }, 201)).data.item;
+  const g1546Row = g1546Loc.contacts.find((c) => String(c.name).startsWith("Anita Create"));
+  ok("QA-1546: the CREATE door does NOT keep a caller-supplied contact _id verbatim",
+    !!g1546Row && String(g1546Row._id) !== "aaaaaaaaaaaaaaaaaaaaaa01", JSON.stringify(g1546Row));
+  ok("QA-1546: the CREATE door does NOT keep a caller-supplied NEGATIVE gen verbatim (forced to 0)",
+    g1546Row?.gen === 0, JSON.stringify(g1546Row));
+
+  // The actual QA-1516 collision shape, but the row's ORIGIN is the create door, not a later PATCH:
+  // rename A -> B -> a different A (same display name as the original, different phone) and confirm
+  // the first holder's link is still alive after the third mint.
+  const g1546Batch = await planBatchFor(g1546Loc._id, "2027-08-22");
+  const g1546Pick = async (s) => ((await req("GET", `/api/batches/${g1546Batch._id}/plan`)).data.recipients ?? []).find((r) => String(r.name).startsWith(s));
+  const g1546Mint = async (r) => (await req("POST", "/api/public-tokens", { purpose: "plan", batch: g1546Batch._id, recipient_name: r.name, recipient_phone: r.phone, recipient_role_label: r.role_label, recipient_ref: r.ref }, 201)).data.item;
+
+  const g1546AnitaOne = await g1546Pick("Anita Create");
+  const g1546AnitaOneTok = await g1546Mint(g1546AnitaOne);
+  await req("PATCH", `/api/locations/${g1546Loc._id}`, { contacts: [{ _id: g1546Row._id, name: "Bilal Create " + cy, phone: g1546Row.phone, role_label: "Contact" }] }, 200);
+  await g1546Mint(await g1546Pick("Bilal Create"));
+  await req("PATCH", `/api/locations/${g1546Loc._id}`, { contacts: [{ _id: g1546Row._id, name: "Anita Create " + cy, phone: "9700000399", role_label: "Contact" }] }, 200);
+  const g1546AnitaTwo = await g1546Pick("Anita Create");
+  const g1546AnitaTwoTok = await g1546Mint(g1546AnitaTwo);
+  ok("QA-1546 CORE: a contact row seeded through the CREATE door, retyped A->B->a DIFFERENT A, does NOT revoke the FIRST holder's live link",
+    (await liveOf(g1546AnitaOneTok)) === 200 && (await liveOf(g1546AnitaTwoTok)) === 200,
+    JSON.stringify({ firstAnita: await liveOf(g1546AnitaOneTok), thirdAnita: await liveOf(g1546AnitaTwoTok), sameKey: g1546AnitaTwo?.key === g1546AnitaOne?.key }));
+
+  // ══ QA-1547 (QA-1516 cycle 3) — the query-hook's multi-document clobber ═══════════════════════
+  // No HTTP door in `src/` sends a `contacts` update matching more than one Location in one call
+  // (re-confirmed by grep before writing this pin: only `approvals/[id]/route.ts`'s
+  // `location.edit` case and `lib/sync.ts` write `contacts` through the query hook, both
+  // single-`_id` `findByIdAndUpdate`), so this cannot be driven over HTTP like every other pin in
+  // this file — it has to call the Mongoose middleware directly. `scripts/qa1547-queryhook-
+  // probe.mjs` carries a verbatim copy of the query hook (models/index.ts:365-444) attached to a
+  // throwaway replica schema (see that file's own header for why it can't just import the real
+  // model, and the maintenance risk that comes with a copy: if the query hook changes and this
+  // copy is not updated to match, this pin silently stops testing the real code) and drives a real
+  // `updateMany` across two documents, one row resolving as a rename on document A, one row
+  // matching neither document — the exact shape that let the pre-cycle-3 code's single shared
+  // `flat.contacts` array leak document A's resolved row onto document B. Spawned as a child
+  // process against the SAME database this wall is already using (own throwaway collection,
+  // dropped before and after) and its exit code is the one assertion this pin makes; its own
+  // PASS/FAIL lines are echoed here for visibility in the wall log. This pin was added by QA-1551.
+  {
+    const { spawnSync } = await import("node:child_process");
+    const { fileURLToPath } = await import("node:url");
+    const path = (await import("node:path")).default;
+    const probePath = path.join(path.dirname(fileURLToPath(import.meta.url)), "qa1547-queryhook-probe.mjs");
+    const r = spawnSync(process.execPath, [probePath], { encoding: "utf-8", env: process.env, maxBuffer: 8 * 1024 * 1024 });
+    // The probe's own "TOTAL: N passed, M failed" line must NOT reach this suite's stdout
+    // verbatim — run-e2e.mjs's own summary parser (`/(\d+) passed, (\d+) failed\s*$/m`) takes the
+    // FIRST such line in the whole suite's output, not the last, so an unmodified echo here would
+    // make run-e2e.mjs report THIS probe's totals as e2e.mjs's own (confirmed by reproducing it
+    // during QA-1551's own verification before this rewording). Reworded on the way out so the
+    // line no longer matches that pattern; the real assertion below still reads the ORIGINAL text.
+    if (r.stdout) process.stdout.write(r.stdout.split("\n")
+      .map((l) => (l ? "    [qa1547-probe] " + l.replace(/^TOTAL: (\d+) passed, (\d+) failed$/, "TOTAL: $1 ok / $2 bad") : l))
+      .join("\n"));
+    if (r.stderr) process.stderr.write(r.stderr);
+    const m = (r.stdout ?? "").match(/TOTAL: (\d+) passed, (\d+) failed/);
+    ok("QA-1547: the query hook's multi-document updateMany resolves EACH document's contact identity independently (no cross-document clobbering)",
+      r.status === 0 && !!m && Number(m[1]) > 0 && Number(m[2]) === 0,
+      JSON.stringify({ exit: r.status, matched: m ? { passed: Number(m[1]), failed: Number(m[2]) } : null }));
+  }
+
   // QA-617 — "may this user share?" was asked in two places that disagreed in BOTH directions. The
   // direction pinned here is the one my own first fix got wrong: an Admin with `can_edit: false` -
   // the schema's DEFAULT - can mint a link (requireEdit exempts Admin) but was shown nobody to send
