@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-262";
+export const RELEASE = "2026.08.14-263";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -138,6 +138,14 @@ const RELEASE_NOTE_ARCHIVE_254 =
   "screen for a real number sitting one tab over.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-263 accepts .heif photographs at the upload door - the same picture format as .heic, which "  +
+  "already worked, but under the file extension some phones use instead. A .heif photograph used "  +
+  "to be refused outright; it is now accepted, its location recorded exactly like a .heic photo's, "  +
+  "and the stored file is shown as a photo everywhere a .heic photo already is, rather than pushed "  +
+  "out as an unlabelled download. Nothing is shown on any screen and nothing else about uploading "  +
+  "changes - this only widens which of a phone's own photo formats the door accepts.";
+
+const RELEASE_NOTE_ARCHIVE_262 =
   "-262 corrects a mistake -261's own fix made: a photo taken as a phone's \"Motion Photo\" (a "  +
   "still frame with a few seconds of video bundled into the same file, the default on most "  +
   "Android cameras) could have the WRONG location recorded against it - the location the bundled "  +
@@ -929,6 +937,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -260: ARCHIVE_259 wired in here in the SAME bump that declared it, same discipline.
   // -261: ARCHIVE_260 wired in here in the SAME bump that declared it, same discipline.
   // -262: ARCHIVE_261 wired in here in the SAME bump that declared it, same discipline.
+  // -263: ARCHIVE_262 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_262 + " " +
   RELEASE_NOTE_ARCHIVE_261 + " " +
   RELEASE_NOTE_ARCHIVE_260 + " " +
   RELEASE_NOTE_ARCHIVE_259 + " " +
