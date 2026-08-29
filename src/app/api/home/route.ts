@@ -436,6 +436,14 @@ export const GET = apiHandler(async () => {
     } : {}),
   };
   return NextResponse.json({
+    // QA-1577 (checker, qa-1575 cycle 1 FAIL): `myTrainer` has been resolved a few lines above for
+    // the batch filter since QA-149, and was never returned. That omission is what made the
+    // trainer-documents door of qa-1575 UNREACHABLE rather than merely screenless: a correctly
+    // linked Trainer login could not obtain its own Trainer._id from ANY door it is allowed to call
+    // (/api/trainers is 403; home, batches, session and notifications carried it nowhere), so the
+    // person the door was opened for still had to ask an operator - just for their own id instead of
+    // to hand over a certificate. Returned only for a Trainer login, and only its OWN id.
+    my_trainer_id: myTrainer ? String(myTrainer._id) : null,
     kpis,
     queues: {
       // -102: goes to the lean roles too — these are their OWN batches, so QA-096's rule

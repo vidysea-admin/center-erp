@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
 import { api, fmtDT, fmtDate } from "@/lib/client";
+import { uploadWithRetry } from "@/lib/upload"; // QA-1577: the trainer files their own certificates from Home
 import { Chip, KPI, Section, Btn, ErrorBanner } from "@/components/ui";
 import { IconPin, IconCap, IconUsers, IconUser, IconAlert } from "@/components/icons";
 import { usePerms } from "@/components/shell";
@@ -194,6 +195,16 @@ export default function HomePage() {
           )}
         </div>
       )}
+
+      {/* QA-1577 (checker, qa-1575 cycle 1 FAIL): qa-1575 opened the documents door for the person
+          who owns the certificate, and the checker found the door UNREACHABLE - a linked Trainer
+          login could not obtain its own Trainer._id from anything it may call, so it still had to
+          ask an operator, just for an id instead of for a favour. This is the surface, and it is on
+          HOME on purpose: the CEO's 14/08 ruling (src/components/shell.tsx:96) keeps a trainer out
+          of the Trainers directory entirely, so the answer could never be a /trainers nav entry.
+          The client's RPL mandate item 7 names experience certificates and qualifications; those
+          four doc types lead, the identity ones follow. */}
+      {role === "Trainer" && data.my_trainer_id && <MyDocuments trainerId={data.my_trainer_id} />}
 
       {!leanHome && (data.kpis.trainers_by_role ?? []).length > 0 && (
         <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
@@ -393,5 +404,74 @@ function FollowUpButtons({ id, onDone }: { id: string; onDone: () => void }) {
       <Btn small disabled={busy} onClick={() => act("Done")}>Done</Btn>
       <Btn small kind="ghost" disabled={busy} onClick={() => act("Skipped")}>Skip</Btn>
     </div>
+  );
+}
+
+// QA-1577: the trainer's own documents, on Home, because Home is one of the two doors a trainer has.
+// Reads and writes the SAME /api/trainers/<id>/documents that an operator uses - qa-1575 widened the
+// door, this does not add a second one. It never lists another trainer and never offers a delete:
+// Umesh's decision was "Trainer sirf APNE documents daal sake", and removal is somebody else's
+// verification trail.
+const MY_DOC_TYPES = [
+  "Educational Qualification", "CITS Certificate", "Industry Experience", "Teaching Experience",
+  "Aadhaar", "PAN", "Photo", "CV",
+];
+
+function MyDocuments({ trainerId }: { trainerId: string }) {
+  const [items, setItems] = useState<any[] | null>(null);
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const load = async () => {
+    try { setItems((await api(`/api/trainers/${trainerId}/documents`)).items ?? []); }
+    catch (e: any) { setErr(e.message); }
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [trainerId]);
+
+  async function upload(docType: string, file: File) {
+    setBusy(docType); setErr("");
+    try {
+      const url = await uploadWithRetry(file, "document",
+        { folder_centre: "_trainers", folder_kind: "documents", entity: "Trainer", entity_id: trainerId },
+        (p) => { if (p.phase === "uploading") setBusy(`${docType} — ${p.pct}%`); });
+      await api(`/api/trainers/${trainerId}/documents`, { method: "POST", json: { doc_type: docType, file_url: url, original_name: file.name } });
+      await load();
+    } catch (e: any) {
+      // The 409 a verified document returns is an ANSWER, not a crash - it names who to ask.
+      setErr(e.message);
+    } finally { setBusy(""); }
+  }
+
+  const byType = new Map((items ?? []).map((d: any) => [d.doc_type, d]));
+  return (
+    <Section title="My documents">
+      <div className="px-3 pt-2 text-xs text-gray-500">Your certificates and IDs. Only you and the office can see these.</div>
+      {err && <ErrorBanner msg={err} onDismiss={() => setErr("")} />}
+      {items === null ? <div className="p-3 text-sm text-gray-500">Loading…</div> : (
+        <div className="divide-y divide-gray-100">
+          {MY_DOC_TYPES.map((t) => {
+            const doc: any = byType.get(t);
+            return (
+              <div key={t} className="flex flex-wrap items-center gap-3 px-3 py-2 text-sm">
+                <span className="min-w-[180px] font-medium text-gray-700">{t}</span>
+                {doc ? (
+                  <>
+                    <a href={doc.file_url} target="_blank" rel="noreferrer" className="text-blue-700 hover:underline">{doc.original_name || "View"}</a>
+                    {doc.verified
+                      ? <span className="rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-[11px] font-semibold text-green-700" title="Checked by the office — ask them if this needs to change">Verified ✓</span>
+                      : <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">On file</span>}
+                  </>
+                ) : <span className="text-gray-400">Not uploaded</span>}
+                <label className="ml-auto cursor-pointer text-xs font-medium text-blue-700 hover:underline">
+                  {busy.startsWith(t) ? busy.slice(t.length + 3) || "…" : doc ? "Replace" : "Upload"}
+                  <input type="file" className="hidden" disabled={!!busy}
+                    accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,.heic,.heif"
+                    onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) upload(t, f); }} />
+                </label>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Section>
   );
 }

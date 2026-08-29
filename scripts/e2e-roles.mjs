@@ -2104,6 +2104,39 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
         adminRe.status === 201, `got ${adminRe.status} ${JSON.stringify(adminRe.data).slice(0, 140)}`);
       await mc1575.close();
 
+      // (h) QA-1577 (checker, qa-1575 cycle 1 FAIL): the door was open and UNREACHABLE - a linked
+      // Trainer login could not obtain its own Trainer._id from anything it may call, so the person
+      // the door was opened for still had to ask an operator, just for an id. /api/home resolved it
+      // internally since QA-149 and never returned it.
+      const homeSelf = await req(selfCookie, "GET", "/api/home");
+      ok("QA-1577 (h): a trainer's own /api/home hands back its own trainer id, so the door it may use is findable",
+        homeSelf.status === 200 && String(homeSelf.data?.my_trainer_id) === String(meT._id),
+        `got ${homeSelf.status} my_trainer_id=${JSON.stringify(homeSelf.data?.my_trainer_id)} expected=${meT._id}`);
+      // ...and it is the caller's OWN id only - never a way to learn another trainer's.
+      const homeAdmin = await req(admin, "GET", "/api/home");
+      ok("QA-1577 (i): a non-Trainer login gets null there - it is an identity, not a directory",
+        homeAdmin.status === 200 && homeAdmin.data?.my_trainer_id === null,
+        `got ${JSON.stringify(homeAdmin.data?.my_trainer_id)}`);
+
+      // (j) QA-1578: Trainer.email has no unique index and /p/trainer-apply is public and dedupes on
+      // phone only, so two UNLINKED rows can share one email. The self-heal used to attach to
+      // whichever findOne returned - and after qa-1575 that record is also the one whose documents
+      // the login may write. An ambiguous email must now link NOTHING.
+      const dupMail = `qa1578.dup.${stampT}@vidysea.com`;
+      const dupA = await mk("QA1578 DupA " + stampT, dupMail);
+      const dupB = await mk("QA1578 DupB " + stampT, dupMail);
+      if (dupA?._id && dupB?._id) {
+        const uMade = await req(admin, "POST", "/api/users", {
+          name: "QA1578 Login " + stampT, email: dupMail, role: "Trainer", password: PW, can_edit: true, status: "Approved",
+        });
+        const dupCookie = uMade.status === 201 || uMade.status === 200 ? await login(dupMail, PW) : null;
+        if (dupCookie) {
+          const grab = await req(dupCookie, "GET", `/api/trainers/${dupA._id}/documents`);
+          ok("QA-1578 (j): an email matching TWO unlinked trainer rows links to neither - no land-grab",
+            grab.status === 403, `got ${grab.status}`);
+        } else ok("QA-1578 (j): the duplicate-email login could be created", false, `users POST ${uMade.status} ${JSON.stringify(uMade.data).slice(0, 140)}`);
+      } else ok("QA-1578 (j): two same-email trainer rows could be created", false, JSON.stringify({ dupA: !!dupA, dupB: !!dupB }));
+
       // (g) deleting is not filing. "daal sake" opened upload, not removal.
       const docs = await req(admin, "GET", `/api/trainers/${meT._id}/documents`);
       const anyDoc = docs.data?.items?.[0]?._id;

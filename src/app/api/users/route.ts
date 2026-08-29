@@ -3,7 +3,8 @@ import bcrypt from "bcryptjs";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, requireRole, HttpError } from "@/lib/authz";
 import { requirePerm, requireView } from "@/lib/permissions";
-import { Trainer, User } from "@/models";
+import { User } from "@/models";
+import { linkTrainerLoginByEmail } from "@/lib/rules"; // QA-1578: one email-link rule, two callers
 import { audit } from "@/lib/audit";
 import { emailError, canonicalPhone, phoneError } from "@/lib/validate";
 import { renderMail, sendMail } from "@/lib/mailer";
@@ -73,12 +74,13 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // QA-149: an Add-User login with role Trainer and a trainer's email IS that trainer's login —
   // link it now so "My batches" works from the first sign-in (the other direction, Add Trainer
   // → Create login, lives on the trainer page).
+  // QA-1578 (checker, qa-1575 cycle 1): this used to hold its OWN copy of the email-link query,
+  // character for character identical to the one in rules.ts - and when cycle 2 hardened that copy
+  // against an ambiguous email, this door went on linking the first arbitrary match. The pin caught
+  // it in the same run. Both halves now call the one helper, which refuses to guess when more than
+  // one unlinked row shares the email; ARCHITECTURE section 3 is exactly about this.
   if (doc.role === "Trainer") {
-    const em = String(doc.email).trim().toLowerCase();
-    await Trainer.updateOne(
-      { email: new RegExp(`^${em.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"), $or: [{ user: null }, { user: { $exists: false } }] },
-      { $set: { user: doc._id } },
-    );
+    await linkTrainerLoginByEmail(doc._id, String(doc.email));
   }
   // QA-115: welcome mail — NEVER the password (that stays out-of-band with the admin).
   // A Pending-created account is told on APPROVAL instead, not here.

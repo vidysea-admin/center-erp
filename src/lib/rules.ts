@@ -63,6 +63,34 @@ export async function assertLocationOperational(locationId: unknown, action = "T
   }
 }
 
+// QA-1578 (checker, qa-1575 cycle 1) — THE ONE PLACE AN EMAIL BECOMES A TRAINER LINK.
+// This logic existed TWICE, character for character: here (via trainerForLogin's fallback) and in
+// POST /api/users, which links an Add-User login of role Trainer to a trainer row of the same
+// email. Cycle 2 hardened only this copy, and the pin caught it immediately — the users door went on
+// linking the first arbitrary match. Both callers now share this function, which is what
+// ARCHITECTURE section 3 asks for and what would have prevented the split in the first place.
+//
+// `Trainer.email` carries no unique index and `/p/trainer-apply` is PUBLIC and dedupes on phone
+// only, so two unlinked rows can share one email. After qa-1575 the row a login attaches to is also
+// the row whose DOCUMENTS it may read and write. It is not a cross-account read — both rows are
+// unclaimed, and an explicit `user` link always wins on later calls — but it is a real
+// land-grab-and-denial: whoever applied first decides which row a genuine trainer attaches to.
+//
+// So an AMBIGUOUS email links NOTHING. A trainer who cannot be resolved teaches nothing and files
+// nothing, which is the same safe answer this code has always given for an unresolvable login.
+// The unique index is a separate migration question and is deliberately not attempted here.
+export async function linkTrainerLoginByEmail(userId: unknown, emailIn: string): Promise<{ _id: unknown } | null> {
+  const email = String(emailIn ?? "").trim().toLowerCase();
+  if (!email) return null;
+  const rx = new RegExp(`^${email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
+  const unlinked = await Trainer.find({ email: rx, $or: [{ user: null }, { user: { $exists: false } }] })
+    .select("_id").limit(2).lean<any[]>();
+  if (unlinked.length !== 1) return null;
+  await Trainer.updateOne({ _id: unlinked[0]._id }, { $set: { user: userId } });
+  return unlinked[0];
+}
+
+
 // QA-149 (Manish, 15/08): "Add Trainer se trainer banaya, certified kiya, batch assign kiya —
 // login karun to batch dikhta hi nahi." Trainer.user was declared in 2026-08-11 but NOTHING
 // ever set it — Add Trainer makes no login, Add User links to no trainer — so is_mine was
@@ -75,12 +103,9 @@ export async function trainerForLogin(user: { id: string; email?: string | null;
   if (byLink) return byLink;
   const email = String(user.email ?? "").trim().toLowerCase();
   if (!email) return null;
-  const byEmail = await Trainer.findOne({ email: new RegExp(`^${email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"), $or: [{ user: null }, { user: { $exists: false } }] }).select("_id").lean<any>();
-  if (byEmail) {
-    await Trainer.updateOne({ _id: byEmail._id }, { $set: { user: user.id } });
-    return byEmail;
-  }
-  return null;
+  // QA-1578: the ambiguity rule and the write both live in linkTrainerLoginByEmail above, because
+  // POST /api/users holds the other half of this and the two copies had already drifted apart.
+  return await linkTrainerLoginByEmail(user.id, email);
 }
 
 // Rule 38 on by-ID access: scoped users may only touch batches at their locations.
