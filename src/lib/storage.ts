@@ -589,7 +589,13 @@ export type PutResult = {
 // trainer's 4G data; the server is what makes the rule true. Tools are optional at runtime —
 // missing → store as-is and RECORD why, never silently.
 // The one allowlist every upload door uses (multipart route + direct-to-Drive intent).
-export const ALLOWED_UPLOAD_EXT = new Set([".jpg", ".jpeg", ".png", ".webp", ".heic", ".pdf", ".mp4", ".mov", ".3gp", ".webm", ".mp3", ".m4a", ".wav", ".amr", ".xlsx", ".xls", ".csv", ".doc", ".docx"]);
+// QA-1561 (checker, cycle 2): `.heif` was MISSING here while `.heic` was present, and everything
+// else in the codebase already treats the two as one format - IMAGE_EXT below lists both, the
+// browser's compressImage() converts both, and readGeoHint() reads both. Measured live before
+// this line changed: `.heic` -> 200, `.heif` -> 400 "File type not allowed". Same container,
+// same camera, one of them refused at the door. Added rather than documented away, per the
+// standing "restrict mat karo - data mil jaye" ruling.
+export const ALLOWED_UPLOAD_EXT = new Set([".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".pdf", ".mp4", ".mov", ".3gp", ".webm", ".mp3", ".m4a", ".wav", ".amr", ".xlsx", ".xls", ".csv", ".doc", ".docx"]);
 const IMAGE_EXT = new Set([".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"]);
 
 // QA-1548 (S1, 2026-08-27) — READ THE COORDINATES BEFORE THE PIPELINE CAN LOSE THEM.

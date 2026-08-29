@@ -5295,6 +5295,25 @@ ok(`-111: no API error in this run carries a Rule/DEC/QA code (${codeLeaks.lengt
       rM.status === 200 && !!rowM && (rowM.geo == null || (rowM.geo.lat == null && rowM.geo.lng == null)),
       JSON.stringify({ st: rM.status, geo: rowM?.geo ?? null }));
 
+    // (g) QA-1561 (checker, cycle 2): `.heif` was missing from ALLOWED_UPLOAD_EXT while `.heic` was
+    // present - the SAME container from the SAME camera, one of them refused at the door with a 400
+    // while every other part of the codebase (IMAGE_EXT, compressImage, readGeoHint) treated the two
+    // as one thing. Measured before the fix: .heic -> 200, .heif -> 400. Both must now land, and
+    // the .heif must carry its coordinates exactly like its twin.
+    if (exifBlock) {
+      const ftyp2 = Buffer.from([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63, 0, 0, 0, 0, 0x6d, 0x69, 0x66, 0x31, 0x68, 0x65, 0x69, 0x63]);
+      const heif = Buffer.concat([ftyp2, Buffer.alloc(4096), exifBlock, Buffer.alloc(1024)]);
+      const fdF = new FormData();
+      fdF.append("file", new File([heif], "iphone-field-photo.heif", { type: "image/heif" }));
+      fdF.append("folder_centre", "_e2e"); fdF.append("folder_kind", "geo");
+      const rF = await fetch(BASE + "/api/upload", { method: "POST", headers: { cookie }, body: fdF });
+      const dF = await rF.json().catch(() => ({}));
+      const rowF = dF?.url ? await rowOf(dF.url) : null;
+      ok("QA-1561 (g): a .heif is accepted at the door exactly like its .heic twin, coordinates and all",
+        rF.status === 200 && !!rowF && near(rowF?.geo?.lat, 26.863) && near(rowF?.geo?.lng, 80.941667),
+        JSON.stringify({ st: rF.status, err: dF?.error, geo: rowF?.geo ?? null }));
+    }
+
     await mcg.close();
   }
 }

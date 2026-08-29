@@ -366,9 +366,15 @@ function exifGpsByScan(bytes: Uint8Array): { lat: number; lng: number } | null {
   return null;
 }
 
-// The one entry point the browser calls. JPEG gets the exact segment walk; anything else — HEIC,
-// HEIF, and incidentally PNG/WebP, which carry EXIF in their own chunk types — gets the signature
-// scan. Never throws; null is the ordinary answer, not an error.
+// The one entry point the browser calls. JPEG gets the exact segment walk; anything else — HEIC
+// and HEIF — gets the signature scan. Never throws; null is the ordinary answer, not an error.
+//
+// QA-1561 (checker, cycle 2): this comment used to add "and incidentally PNG/WebP". That was
+// FALSE and it was tested false: a PNG carries its EXIF in an `eXIf` chunk holding a BARE TIFF
+// header, with no "Exif\0\0" marker for the scan to find, so a geo-tagged PNG records nothing on
+// either side. Not fixed here — no camera in this programme emits PNG, and the client's mandate is
+// about photographs — but the claim is removed rather than left to be believed. It is the same
+// defect class as QA-1554: a comment describing more than the code does.
 //
 // QA-1560 (checker, cycle 2, second concurrent check): the scan used to run whenever the JPEG walk
 // came back null, which does not distinguish "this is a JPEG with no GPS of its own" from "this is
