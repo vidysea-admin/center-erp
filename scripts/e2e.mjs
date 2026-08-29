@@ -5259,6 +5259,7 @@ ok(`-111: no API error in this run carries a Rule/DEC/QA code (${codeLeaks.lengt
     // its own signature ("Exif\0\0" + a valid TIFF header) and BOTH sides call that one function.
     // The fixture is that block placed inside a real ISO-BMFF ftyp/heic container prefix, which is
     // what makes this a test of the scan rather than of the JPEG walk.
+    let heicUrl = null; // (f) records it so (h) can compare the two containers' response headers
     const exifBlock = (() => {
       const i = withGps.indexOf(Buffer.from("Exif\0\0", "latin1"));
       return i < 0 ? null : withGps.subarray(i, i + 2048);
@@ -5274,6 +5275,7 @@ ok(`-111: no API error in this run carries a Rule/DEC/QA code (${codeLeaks.lengt
       const rH = await fetch(BASE + "/api/upload", { method: "POST", headers: { cookie }, body: fdH });
       const dH = await rH.json().catch(() => ({}));
       const rowH = dH?.url ? await rowOf(dH.url) : null;
+      heicUrl = dH?.url ?? null;
       ok("QA-1548 (f): a HEIC whose EXIF sits where no JPEG walk reaches still records its coordinates",
         rH.status === 200 && !!rowH && near(rowH?.geo?.lat, 26.863) && near(rowH?.geo?.lng, 80.941667),
         JSON.stringify({ st: rH.status, geo: rowH?.geo ?? null }));
@@ -5312,6 +5314,21 @@ ok(`-111: no API error in this run carries a Rule/DEC/QA code (${codeLeaks.lengt
       ok("QA-1561 (g): a .heif is accepted at the door exactly like its .heic twin, coordinates and all",
         rF.status === 200 && !!rowF && near(rowF?.geo?.lat, 26.863) && near(rowF?.geo?.lng, 80.941667),
         JSON.stringify({ st: rF.status, err: dF?.error, geo: rowF?.geo ?? null }));
+      // (h) QA-1562 (checker, cycle 1 FAIL): (g) stopped at "the upload returned 200", and that is
+      // exactly where the first attempt at this went wrong - widening the door that ACCEPTS a file
+      // without widening the one that SERVES it back. Measured then: .heic came out image/heic
+      // inline, .heif came out application/octet-stream as an ATTACHMENT. Same bytes, same camera.
+      // So the twin claim is now tested where it is actually visible to a user: the response headers.
+      if (dF?.url && upGeo.data?.url) {
+        const serve = async (url) => {
+          const r = await fetch(BASE + String(url).replace(/^\/erp/, ""), { headers: { cookie } });
+          return { type: r.headers.get("content-type") ?? "", disp: r.headers.get("content-disposition") ?? "" };
+        };
+        const heicHdr = await serve(heicUrl ?? dF.url), heifHdr = await serve(dF.url);
+        ok("QA-1562 (h): ...and it is SERVED like its twin too - an image content-type, shown inline, not pushed as a download",
+          /^image\//.test(heifHdr.type) && /inline/.test(heifHdr.disp) && heifHdr.type.replace("heif", "hei") === heicHdr.type.replace("heic", "hei"),
+          JSON.stringify({ heif: heifHdr, heic: heicHdr }));
+      }
     }
 
     await mcg.close();

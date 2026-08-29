@@ -13,7 +13,7 @@ import { auth } from "@/auth";
 // inline where a browser can render it — .mov/.heic/.m4a were being handed out as
 // application/octet-stream attachments (write-only evidence).
 const TYPES: Record<string, string> = {
-  ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".heic": "image/heic",
+  ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".heic": "image/heic", ".heif": "image/heif",
   ".pdf": "application/pdf",
   ".mp4": "video/mp4", ".mov": "video/quicktime", ".3gp": "video/3gpp", ".webm": "video/webm",
   ".m4a": "audio/mp4", ".mp3": "audio/mpeg", ".wav": "audio/wav", ".amr": "audio/amr", ".ogg": "audio/ogg",
@@ -21,7 +21,13 @@ const TYPES: Record<string, string> = {
   ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xls": "application/vnd.ms-excel",
   ".doc": "application/msword", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 };
-const INLINE = new Set([".jpg", ".jpeg", ".png", ".webp", ".heic", ".pdf", ".mp4", ".mov", ".3gp", ".webm", ".m4a", ".mp3", ".wav", ".amr", ".ogg"]);
+// QA-1562 (checker, cycle 1 FAIL): .heif belongs in BOTH sets, not just the upload allowlist.
+// qa-1561 widened the door that ACCEPTS a file and not the door that SERVES it back, so a stored
+// .heif came out as application/octet-stream + attachment while its .heic twin - the same bytes
+// from the same camera - came out image/heic + inline. Measured live under three names: .heic
+// inline, .heif ATTACHMENT, .jpg inline. Widening an allowlist is never one edit here; this file
+// is the other half of it.
+const INLINE = new Set([".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".pdf", ".mp4", ".mov", ".3gp", ".webm", ".m4a", ".mp3", ".wav", ".amr", ".ogg"]);
 
 function parseRange(h: string | null): { start: number; end?: number } | { suffix: number } | null {
   if (!h) return null;
