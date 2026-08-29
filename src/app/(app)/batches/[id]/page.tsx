@@ -2347,7 +2347,7 @@ function BatchDocuments({ batchId, batch, error, setError, onGo }: any) {
           </Field>
           <Field label="Files — pick several at once (PDF / Word / photos)" required>
             <input type="file" multiple className={inputCls} disabled={busy}
-              accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,.heic"
+              accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,.heic,.heif"
               onChange={(e) => {
                 const files = Array.from(e.target.files ?? []);
                 const sel = document.getElementById("bdt") as HTMLSelectElement | null;
@@ -2972,7 +2972,7 @@ function ClosureFileSlot({ label, value, onUpload, disabled }: any) {
       {!disabled && (
         <label className="cursor-pointer rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50">
           {value ? "Replace" : "Upload"}
-          <input type="file" className="hidden" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,.heic,.xlsx,.xls,.csv" onChange={onUpload} />
+          <input type="file" className="hidden" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,.heic,.heif,.xlsx,.xls,.csv" onChange={onUpload} />
         </label>
       )}
     </div>

@@ -568,7 +568,7 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
           </Field>
           <Field label="Files — pick several at once (PDF / Word / photos)" required>
             <input type="file" multiple className={inputCls} disabled={busy}
-              accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,.heic"
+              accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,.heic,.heif"
               onChange={(e) => {
                 const files = Array.from(e.target.files ?? []);
                 const sel = document.getElementById("dt") as HTMLSelectElement | null;

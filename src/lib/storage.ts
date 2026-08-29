@@ -589,12 +589,24 @@ export type PutResult = {
 // trainer's 4G data; the server is what makes the rule true. Tools are optional at runtime —
 // missing → store as-is and RECORD why, never silently.
 // The one allowlist every upload door uses (multipart route + direct-to-Drive intent).
-// QA-1561 (checker, cycle 2): `.heif` was MISSING here while `.heic` was present, and everything
-// else in the codebase already treats the two as one format - IMAGE_EXT below lists both, the
-// browser's compressImage() converts both, and readGeoHint() reads both. Measured live before
-// this line changed: `.heic` -> 200, `.heif` -> 400 "File type not allowed". Same container,
-// same camera, one of them refused at the door. Added rather than documented away, per the
-// standing "restrict mat karo - data mil jaye" ruling.
+// QA-1561: `.heif` was MISSING here while `.heic` was present, and everything else in the codebase
+// already treats the two as one format - IMAGE_EXT below lists both, the browser's compressImage()
+// converts both (`/\.hei[cf]$/i`), and readGeoHint() reads both. Measured live before this line
+// changed: `.heic` -> 200, `.heif` -> 400 "File type not allowed". Same container, same camera, one
+// of them refused at the door. Added rather than documented away.
+//
+// QA-1566/QA-1567 (checker, cycle 2 FAIL): TWO earlier versions of this comment cited a user ruling
+// to authorise the change, and NEITHER held up. The first quoted "restrict mat karo - data mil jaye"
+// as a standing ruling of this project; it is in no contract file here and its subject is bulk-import
+// columns. The second offered Umesh 2026-08-27 decision 2 ("Sirf record karo, kuch mat dikhao"),
+// which IS verbatim in qa/feedback-inbox.md but answers a different question - what to do with a
+// photo that carries no geo-tag - and read as widely as it was being read, it would forbid refusing
+// a `.exe`. Nothing in REQUIREMENTS.md or its thirteen addenda governs this allowlist at all.
+//
+// So this line has NO user ruling behind it, and says so instead of borrowing one. Its authority is
+// internal consistency: three other places in this codebase already treat .heic and .heif as one
+// format, and only this door disagreed. If a product decision is ever wanted on WHICH formats the
+// door accepts, that decision is Umesh's and does not exist yet.
 export const ALLOWED_UPLOAD_EXT = new Set([".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".pdf", ".mp4", ".mov", ".3gp", ".webm", ".mp3", ".m4a", ".wav", ".amr", ".xlsx", ".xls", ".csv", ".doc", ".docx"]);
 const IMAGE_EXT = new Set([".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"]);
 

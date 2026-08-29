@@ -5319,14 +5319,22 @@ ok(`-111: no API error in this run carries a Rule/DEC/QA code (${codeLeaks.lengt
       // without widening the one that SERVES it back. Measured then: .heic came out image/heic
       // inline, .heif came out application/octet-stream as an ATTACHMENT. Same bytes, same camera.
       // So the twin claim is now tested where it is actually visible to a user: the response headers.
-      if (dF?.url && upGeo.data?.url) {
+      // QA-1568 (checker, cycle 2 FAIL): the guard used to test an unrelated variable and the twin
+      // used to fall back to `heicUrl ?? dF.url` - so exactly when pin (f) had failed and there was
+      // no .heic to compare against, this pin compared the .heif WITH ITSELF and passed. A pin that
+      // turns green precisely when its sibling breaks is worse than no pin. It now REFUSES to score
+      // without a real twin and says which one is missing.
+      if (!dF?.url || !heicUrl) {
+        ok("QA-1562 (h): the .heic twin and the .heif are both stored, so their headers can be compared",
+          false, JSON.stringify({ heifUrl: dF?.url ?? null, heicUrl }));
+      } else {
         const serve = async (url) => {
           const r = await fetch(BASE + String(url).replace(/^\/erp/, ""), { headers: { cookie } });
           return { type: r.headers.get("content-type") ?? "", disp: r.headers.get("content-disposition") ?? "" };
         };
-        const heicHdr = await serve(heicUrl ?? dF.url), heifHdr = await serve(dF.url);
+        const heicHdr = await serve(heicUrl), heifHdr = await serve(dF.url);
         ok("QA-1562 (h): ...and it is SERVED like its twin too - an image content-type, shown inline, not pushed as a download",
-          /^image\//.test(heifHdr.type) && /inline/.test(heifHdr.disp) && heifHdr.type.replace("heif", "hei") === heicHdr.type.replace("heic", "hei"),
+          heifHdr.type === "image/heif" && heicHdr.type === "image/heic" && /inline/.test(heifHdr.disp) && /inline/.test(heicHdr.disp),
           JSON.stringify({ heif: heifHdr, heic: heicHdr }));
       }
     }

@@ -55,7 +55,7 @@ export function CandidateDocs({ candidateId, setError }: { candidateId: string; 
           </li>
         ))}
       </ul>
-      <input type="file" multiple disabled={busy} accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,.heic" onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }} />
+      <input type="file" multiple disabled={busy} accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,.heic,.heif" onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }} />
       <p className="mt-1 text-[11px] text-gray-400">Pick several files at once — the type is detected from each filename. Wrong type? Delete the document and upload it again.</p>
     </div>
   );
