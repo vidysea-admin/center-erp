@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-260";
+export const RELEASE = "2026.08.14-261";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -138,6 +138,16 @@ const RELEASE_NOTE_ARCHIVE_254 =
   "screen for a real number sitting one tab over.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-261 closes the one gap -260's geo-tag fix left open: a photograph taken on an iPhone was still "  +
+  "recording no location at all. -260 read a photo's GPS location before the compression that runs "  +
+  "on every upload could strip it, but the reader only understood one photo format, and the format "  +
+  "an iPhone saves by default was not it - so every iPhone photograph in the programme, the device "  +
+  "most trainers actually carry, kept losing its location exactly as before. The reader now "  +
+  "understands that format too, on both the phone side and the server side, using the same single "  +
+  "check either way. Nothing is shown on any screen and nothing is refused at upload, the same as "  +
+  "before - this only makes sure the record is captured regardless of which phone took the photo.";
+
+const RELEASE_NOTE_ARCHIVE_260 =
   "-260 closes the one door -259 left open, and stops every uploaded photo from losing the "  +
   "location it was taken at. -259 gave each contact row its own counter so retyping a name could "  +
   "no longer silently kill someone else's plan link - but that protection only ran when a contact "  +
@@ -905,6 +915,8 @@ const RELEASE_NOTE_ARCHIVE =
   // warnings above (QA-265, then -256's own repeat of it) - the chain, not the declaration, is what
   // publishes a note.
   // -260: ARCHIVE_259 wired in here in the SAME bump that declared it, same discipline.
+  // -261: ARCHIVE_260 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_260 + " " +
   RELEASE_NOTE_ARCHIVE_259 + " " +
   RELEASE_NOTE_ARCHIVE_258 + " " +
   RELEASE_NOTE_ARCHIVE_257 + " " +
