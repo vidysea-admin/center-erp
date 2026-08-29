@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-263";
+export const RELEASE = "2026.08.14-264";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -138,6 +138,18 @@ const RELEASE_NOTE_ARCHIVE_254 =
   "screen for a real number sitting one tab over.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-264 lets a Trainer file their own experience and qualification certificates - the one RPL "  +
+  "document class only an Admin could file before, now filed by the person who holds the papers. "  +
+  "A Trainer signing in now sees a My Documents card on their Home screen, with the same upload "  +
+  "checklist an Admin already used on their behalf, and a Trainer can only ever see and add to "  +
+  "their own record, never anyone else's. A document already marked verified cannot be replaced "  +
+  "from here - that stays an Admin action - and nothing else about who can remove a document has "  +
+  "changed. Alongside it, a small correction: two different places in the system used to decide "  +
+  "separately whether a sign-in's email address matched a Trainer's record on file; a shared email "  +
+  "that matched more than one record could link to either at random. Both places now agree, and "  +
+  "an address matching more than one record links to neither, rather than guessing.";
+
+const RELEASE_NOTE_ARCHIVE_263 =
   "-263 accepts .heif photographs at the upload door - the same picture format as .heic, which "  +
   "already worked, but under the file extension some phones use instead. A .heif photograph used "  +
   "to be refused outright; it is now accepted, its location recorded exactly like a .heic photo's, "  +
@@ -938,6 +950,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -261: ARCHIVE_260 wired in here in the SAME bump that declared it, same discipline.
   // -262: ARCHIVE_261 wired in here in the SAME bump that declared it, same discipline.
   // -263: ARCHIVE_262 wired in here in the SAME bump that declared it, same discipline.
+  // -264: ARCHIVE_263 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_263 + " " +
   RELEASE_NOTE_ARCHIVE_262 + " " +
   RELEASE_NOTE_ARCHIVE_261 + " " +
   RELEASE_NOTE_ARCHIVE_260 + " " +
