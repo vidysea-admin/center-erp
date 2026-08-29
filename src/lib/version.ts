@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-261";
+export const RELEASE = "2026.08.14-262";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -138,6 +138,18 @@ const RELEASE_NOTE_ARCHIVE_254 =
   "screen for a real number sitting one tab over.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-262 corrects a mistake -261's own fix made: a photo taken as a phone's \"Motion Photo\" (a "  +
+  "still frame with a few seconds of video bundled into the same file, the default on most "  +
+  "Android cameras) could have the WRONG location recorded against it - the location the bundled "  +
+  "video clip was taken at, not the still photo. -261 taught the reader to look further into a "  +
+  "file when a photo's own information held no location, so it could still find a location saved "  +
+  "in a different format; but that same search did not stop at the still photo's own boundary, so "  +
+  "for a Motion Photo it kept going and picked up the bundled clip's location instead - a wrong "  +
+  "answer where the honest one is simply none. It now stops exactly where the still photo ends. "  +
+  "Nothing is shown on any screen and nothing is refused at upload, the same as before - this only "  +
+  "makes sure a recorded location is the right one.";
+
+const RELEASE_NOTE_ARCHIVE_261 =
   "-261 closes the one gap -260's geo-tag fix left open: a photograph taken on an iPhone was still "  +
   "recording no location at all. -260 read a photo's GPS location before the compression that runs "  +
   "on every upload could strip it, but the reader only understood one photo format, and the format "  +
@@ -916,6 +928,8 @@ const RELEASE_NOTE_ARCHIVE =
   // publishes a note.
   // -260: ARCHIVE_259 wired in here in the SAME bump that declared it, same discipline.
   // -261: ARCHIVE_260 wired in here in the SAME bump that declared it, same discipline.
+  // -262: ARCHIVE_261 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_261 + " " +
   RELEASE_NOTE_ARCHIVE_260 + " " +
   RELEASE_NOTE_ARCHIVE_259 + " " +
   RELEASE_NOTE_ARCHIVE_258 + " " +
