@@ -607,9 +607,25 @@ for (const r of results) {
         .filter((n) => /My documents/i.test(n.textContent || "") && n.querySelector("input[type=file]"))
         .pop();
       if (!card) return ["__NO_CARD__"];
-      return [...card.querySelectorAll("button,a,[role=button],input[type=submit]")]
-        .map((el) => [el.getAttribute("aria-label"), el.getAttribute("title"), el.textContent, el.getAttribute("name")].filter(Boolean).join(" "))
-        .filter((t) => /delete|remove|discard|trash|hatao/i.test(t) || /[\u{1F5D1}\u2715\u2716\u00D7]/u.test(t));
+      // QA-1605 (checker, cycle 2 FAIL): the selector listed button/a/[role=button]/input and NO
+      // LABEL - and the card is BUILT from labels. Each doc type's control is a <label> wrapping a
+      // hidden file input, eight of them. So this pin matched ZERO of the card's real controls, and
+      // a checker slipped three delete controls past it in one div, including that same label idiom.
+      // A pin blind to the only control shape its own screen uses is the cycle-1 defect verbatim.
+      // Widened to every interactive shape the card can carry, and the affordance is now read from
+      // the computed ::before / ::after content and any SVG <title> too, because an icon can live
+      // entirely in CSS or in a child node with no text of its own.
+      const CONTROL = "button,a,label,summary,[role=button],[role=menuitem],[onclick],input[type=submit],input[type=button]";
+      return [...card.querySelectorAll(CONTROL)]
+        .map((el) => {
+          const pseudo = ["::before", "::after"]
+            .map((q) => { try { return getComputedStyle(el, q).content || ""; } catch { return ""; } })
+            .join(" ");
+          const svgTitle = [...el.querySelectorAll("title,desc")].map((n) => n.textContent || "").join(" ");
+          return [el.getAttribute("aria-label"), el.getAttribute("title"), el.getAttribute("name"),
+                  el.textContent, svgTitle, pseudo].filter(Boolean).join(" ");
+        })
+        .filter((t) => /delete|remove|discard|trash|hatao|mitao/i.test(t) || /[\u{1F5D1}\u2715\u2716\u00D7]/u.test(t));
     });
     ok("QA-1584 (c): the card offers the trainer NO delete control - checked on the CONTROLS, including icon-only ones",
       deleteish.length === 0, JSON.stringify(deleteish).slice(0, 300));
