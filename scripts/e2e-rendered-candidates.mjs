@@ -614,8 +614,24 @@ for (const r of results) {
     ok("QA-1584 (c): the card offers the trainer NO delete control - checked on the CONTROLS, including icon-only ones",
       deleteish.length === 0, JSON.stringify(deleteish).slice(0, 300));
 
-    // (d) is now anchored to a trainer this suite CREATED, so it cannot go vacuous when another
-    // suite's fixtures change, and it asserts the real claim: a name that is not this trainer's.
+    // (d) — QA-1603 (checker, qa-1581 cycle 2 FAIL): the previous version of this pin only checked
+    // that ONE dynamically-created trainer's name was absent. That closed the VACUOUS-REGEX hole (a
+    // hardcoded fixture-name list that would silently stop testing anything if another suite renamed
+    // its fixtures) but not the LEAKED-NAME hole it was dispatched to close - a static string that
+    // reads as a person's name, sourced from nowhere this suite created, still passed silently. The
+    // checker proved it with the exact mutation this test still runs below:
+    // `<span>Also on file: Rajesh Kumar Sharma</span>` inside the card stayed GREEN.
+    //
+    // The robust form (checker's own recommendation): this card has a CLOSED vocabulary. Reading the
+    // component directly (src/app/(app)/page.tsx MyDocuments) it renders, per row, only: one of the
+    // eight fixed MY_DOC_TYPES labels, a fixed status word ("Verified ✓" / "On file" / "Not
+    // uploaded"), a fixed control word ("Replace" / "Upload" / "View" / "…"), the fixed static
+    // description line, and — the one piece of real data — the trainer's OWN uploaded file name.
+    // Nothing else has any legitimate reason to appear in that subtree. So strip every one of those
+    // known tokens plus anything shaped like this trainer's own uploaded file name, and assert
+    // NOTHING is left — not "this one known name is absent", but "no unaccounted text survives at
+    // all", which catches any leaked name (this suite's own, another suite's fixture, or a
+    // hardcoded string that was never a fixture anywhere) without needing to enumerate it.
     const otherName = "QA1584 Other " + ts;
     const otherTr = (await req(admin, "POST", "/api/trainers", {
       name: otherName, phone: phone("75"), email: `qa1584.other.${ts}@vidysea.com`,
@@ -624,10 +640,35 @@ for (const r of results) {
     ok("QA-1584 [precondition] a SECOND trainer exists, so 'names no other trainer' has something to be wrong about",
       !!otherTr?._id, JSON.stringify(otherTr).slice(0, 120));
     await tpage.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
-    await tpage.waitForFunction(() => /My documents/i.test(document.body.innerText), undefined, { timeout: 45000 }).catch(() => {});
-    const body2 = await tpage.innerText("body").catch(() => "");
-    ok("QA-1584 (d): ...and names no OTHER trainer on that screen - anchored to one this suite created",
-      !body2.includes(otherName), (body2.match(/QA1584 [A-Za-z]+ \w+/g) || []).join(" | ").slice(0, 200));
+    // Wait for the card to actually FINISH loading (its upload inputs mounted), not just for the
+    // section title to appear - the card renders "Loading…" with no file inputs until its own fetch
+    // resolves, and evaluating against it too early is exactly the false-negative shape this whole
+    // suite exists to avoid.
+    await tpage.waitForFunction(
+      () => [...document.querySelectorAll("section,div")]
+        .some((n) => /My documents/i.test(n.textContent || "") && n.querySelector("input[type=file]")),
+      undefined, { timeout: 45000 }).catch(() => {});
+
+    const DOC_TYPES = ["Educational Qualification", "CITS Certificate", "Industry Experience",
+      "Teaching Experience", "Aadhaar", "PAN", "Photo", "CV"];
+    const KNOWN_WORDS = ["My documents",
+      "Your certificates and IDs. Only you and the office can see these.",
+      "Verified ✓", "On file", "Not uploaded", "Replace", "Upload", "View", "…"];
+    const leftover = await tpage.evaluate(({ docTypes, knownWords }) => {
+      const card = [...document.querySelectorAll("section,div")]
+        .filter((n) => /My documents/i.test(n.textContent || "") && n.querySelector("input[type=file]"))
+        .pop();
+      if (!card) return "__NO_CARD__";
+      let text = card.textContent || "";
+      for (const t of [...docTypes, ...knownWords]) text = text.split(t).join("");
+      // A document's own file name is the one piece of real, legitimate data on this card - strip
+      // anything shaped like an uploaded file (any run of non-space characters ending in a known
+      // document extension) before judging what's left.
+      text = text.replace(/\S*\.(pdf|docx?|jpe?g|png|webp|heic|heif)\b/gi, "");
+      return text.replace(/[\s ]+/g, " ").trim();
+    }, { docTypes: DOC_TYPES, knownWords: KNOWN_WORDS });
+    ok("QA-1584 (d): ...and names no OTHER trainer anywhere on that screen - the card's text is a CLOSED vocabulary, anything left over after stripping every known label/status/control/filename is a leak",
+      leftover === "", JSON.stringify(leftover).slice(0, 300));
 
     await tctx.close();
   }

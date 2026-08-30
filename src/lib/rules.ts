@@ -85,34 +85,45 @@ export async function linkTrainerLoginByEmail(userId: unknown, emailIn: string):
   const rx = new RegExp(`^${email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
   const unlinked = await Trainer.find({ email: rx, $or: [{ user: null }, { user: { $exists: false } }] })
     .select("_id").limit(2).lean<any[]>();
-  if (unlinked.length !== 1) return null;
   // QA-1581 (checker, qa-1575 cycle 2): folding the two copies together turned an ATOMIC write into
   // a read-then-write. The original `updateOne` carried `$or: [{user:null},{user:{$exists:false}}]`
   // in its own FILTER, so a row claimed between the read and the write could not be overwritten;
   // splitting the query out lost that. Not exploitable today (`User.email` is unique, so two logins
   // cannot race for one address), but introducing a TOCTOU while removing a duplication is a bad
   // trade at any severity. The guard goes back where it was - in the filter - so the write itself
-  // refuses a row that stopped being unlinked. A lost race now returns null, which is the same
-  // answer an ambiguous email gets: link nothing rather than guess.
-  const claimed = await Trainer.updateOne(
-    { _id: unlinked[0]._id, $or: [{ user: null }, { user: { $exists: false } }] },
-    { $set: { user: userId } },
-  );
-  if (claimed.modifiedCount) return unlinked[0];
-  // QA-1596 (checker, cycle 1 FAIL): losing this race is NOT the same as not knowing who you are,
-  // and returning null for it was wrong. The manifest claimed the race was unreachable because
-  // `User.email` is unique - true, and irrelevant: the other caller is trainerForLogin, so the
-  // racers are ONE user's own parallel requests on first sign-in. Measured through product doors
-  // only: 7 of 8 concurrent GET /api/home answered `my_trainer_id: null`, which renders a trainer's
-  // Home WITHOUT the documents card the whole unit exists to put there. (The parent, live as -264,
-  // gives 6 of 8 - so this is not a regression this unit caused, but it is real and it is ours now.)
+  // refuses a row that stopped being unlinked.
+  if (unlinked.length === 1) {
+    const claimed = await Trainer.updateOne(
+      { _id: unlinked[0]._id, $or: [{ user: null }, { user: { $exists: false } }] },
+      { $set: { user: userId } },
+    );
+    if (claimed.modifiedCount) return unlinked[0];
+    // Lost the claim between the find and the updateOne above - fall through to the re-read below
+    // instead of answering null for a race we might have actually won a moment ago.
+  } else if (unlinked.length >= 2) {
+    // Genuinely ambiguous: two-or-more still-UNLINKED rows share this email right now. That is the
+    // one case with no re-read that can save it - link nothing rather than guess which.
+    return null;
+  }
+  // QA-1596 (checker, qa-1581 cycle 1 FAIL) fixed the loser of the updateOne race above by re-reading
+  // the row it lost. QA-1602 (checker, qa-1581 cycle 2 FAIL) found that fix only fires when THIS
+  // call's OWN find() returned exactly 1 unlinked row and its OWN updateOne then lost - it never
+  // fires when this call's OWN find() above already returns ZERO unlinked rows (`unlinked.length ===
+  // 0`), which is the DOMINANT branch under real concurrency: by the time a later of several parallel
+  // first-sign-in requests runs its find, an earlier sibling has usually already flipped `user`, so
+  // the row no longer matches the unlinked filter at all and the old code returned null immediately,
+  // never reaching any re-read. Reproduced 3/3 fresh-DB runs, never 8/8 agreement (4/8, 2/8, 2/8).
   //
-  // A lost claim means somebody else linked this row a millisecond ago - which is an ANSWER, not an
-  // absence. Re-read it. Only a row claimed by a DIFFERENT user is a genuine no, and that keeps the
-  // ambiguity rule intact: we still never guess, we just stop discarding a fact we already have.
-  const winner = await Trainer.findOne({ _id: unlinked[0]._id }).select("_id user").lean<any>();
-  if (winner && String(winner.user) === String(userId)) return { _id: winner._id };
-  return null;
+  // Both paths - "I lost my own claim" and "the row was never unlinked by the time I looked" - mean
+  // exactly the same thing: somebody may already hold this email's link, and if that somebody is ME
+  // (this same signed-in user, on a sibling request), that is an ANSWER, not an absence. So both fall
+  // through to one re-read, keyed on (email, already-linked-to-ME) rather than on the `_id` of a row
+  // this branch may never have seen - which is the only key that is correct in every branch that
+  // reaches here. Only a row genuinely linked to a DIFFERENT user, or no row at all, still answers
+  // null: the ambiguity rule stays intact, we still never guess, we just stop discarding a fact we
+  // already hold.
+  const winner = await Trainer.findOne({ email: rx, user: userId }).select("_id").lean<any>();
+  return winner ? { _id: winner._id } : null;
 }
 
 
