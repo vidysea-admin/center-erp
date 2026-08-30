@@ -98,8 +98,21 @@ export async function linkTrainerLoginByEmail(userId: unknown, emailIn: string):
     { _id: unlinked[0]._id, $or: [{ user: null }, { user: { $exists: false } }] },
     { $set: { user: userId } },
   );
-  if (!claimed.modifiedCount) return null;
-  return unlinked[0];
+  if (claimed.modifiedCount) return unlinked[0];
+  // QA-1596 (checker, cycle 1 FAIL): losing this race is NOT the same as not knowing who you are,
+  // and returning null for it was wrong. The manifest claimed the race was unreachable because
+  // `User.email` is unique - true, and irrelevant: the other caller is trainerForLogin, so the
+  // racers are ONE user's own parallel requests on first sign-in. Measured through product doors
+  // only: 7 of 8 concurrent GET /api/home answered `my_trainer_id: null`, which renders a trainer's
+  // Home WITHOUT the documents card the whole unit exists to put there. (The parent, live as -264,
+  // gives 6 of 8 - so this is not a regression this unit caused, but it is real and it is ours now.)
+  //
+  // A lost claim means somebody else linked this row a millisecond ago - which is an ANSWER, not an
+  // absence. Re-read it. Only a row claimed by a DIFFERENT user is a genuine no, and that keeps the
+  // ambiguity rule intact: we still never guess, we just stop discarding a fact we already have.
+  const winner = await Trainer.findOne({ _id: unlinked[0]._id }).select("_id user").lean<any>();
+  if (winner && String(winner.user) === String(userId)) return { _id: winner._id };
+  return null;
 }
 
 

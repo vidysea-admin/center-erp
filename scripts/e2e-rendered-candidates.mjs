@@ -589,10 +589,45 @@ for (const r of results) {
     const body = await tpage.innerText("body").catch(() => "");
     ok("QA-1584 (b): ...and the document filed through the API is VISIBLE on it, not an empty card",
       new RegExp(`experience-${ts}`, "i").test(body), body.slice(0, 260));
-    ok("QA-1584 (c): ...and the card offers the trainer NO delete control",
-      !/\bdelete\b|\bremove\b/i.test(body), (body.match(/.{0,40}(delete|remove).{0,40}/i) || [""])[0]);
-    ok("QA-1584 (d): ...and names no OTHER trainer anywhere on that screen",
-      !/QA1578 |QA1575 /.test(body), (body.match(/QA15\d\d [A-Za-z]+/) || [""])[0]);
+    // QA-1595 (checker, cycle 1 FAIL): both of these used to read `innerText`, and the checker
+    // defeated them on purpose - it built the card with an ICON-ONLY delete (aria-label + title + a
+    // glyph) and a leaked other-trainer name in the same build, and the wall went 91 / 0. innerText
+    // carries no aria-label, so (c) was blind to every delete control that is not literally the word
+    // "Delete"; and (d)'s regex named two e2e-roles.mjs fixtures, so it tested "not these two", not
+    // "no other trainer" - and would go vacuous the day that OTHER suite renames them.
+    // Both now interrogate the DOM for the thing itself.
+    // Two bugs of my own in the first version of this pin, both the very class it exists to catch:
+    //   1. the glyph class used a plain 4-hex-digit escape, so it read as U+2715, U+2716, U+1F5D
+    //      and the DIGIT 1 - and every Tailwind class carrying a 1 (gap-1.5) matched. The pin went
+    //      red on the Help button. It needs the braced form with the u flag.
+    //   2. Falling back to document.body when the card was not found turned a MISSING CARD into a
+    //      scan of the whole page, nav included. An absent card is a failure, not a wider search.
+    const deleteish = await tpage.evaluate(() => {
+      const card = [...document.querySelectorAll("section,div")]
+        .filter((n) => /My documents/i.test(n.textContent || "") && n.querySelector("input[type=file]"))
+        .pop();
+      if (!card) return ["__NO_CARD__"];
+      return [...card.querySelectorAll("button,a,[role=button],input[type=submit]")]
+        .map((el) => [el.getAttribute("aria-label"), el.getAttribute("title"), el.textContent, el.getAttribute("name")].filter(Boolean).join(" "))
+        .filter((t) => /delete|remove|discard|trash|hatao/i.test(t) || /[\u{1F5D1}\u2715\u2716\u00D7]/u.test(t));
+    });
+    ok("QA-1584 (c): the card offers the trainer NO delete control - checked on the CONTROLS, including icon-only ones",
+      deleteish.length === 0, JSON.stringify(deleteish).slice(0, 300));
+
+    // (d) is now anchored to a trainer this suite CREATED, so it cannot go vacuous when another
+    // suite's fixtures change, and it asserts the real claim: a name that is not this trainer's.
+    const otherName = "QA1584 Other " + ts;
+    const otherTr = (await req(admin, "POST", "/api/trainers", {
+      name: otherName, phone: phone("75"), email: `qa1584.other.${ts}@vidysea.com`,
+      skills: ["RCSkill" + s], day_rate: 500,
+    }, 201)).data?.item;
+    ok("QA-1584 [precondition] a SECOND trainer exists, so 'names no other trainer' has something to be wrong about",
+      !!otherTr?._id, JSON.stringify(otherTr).slice(0, 120));
+    await tpage.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
+    await tpage.waitForFunction(() => /My documents/i.test(document.body.innerText), undefined, { timeout: 45000 }).catch(() => {});
+    const body2 = await tpage.innerText("body").catch(() => "");
+    ok("QA-1584 (d): ...and names no OTHER trainer on that screen - anchored to one this suite created",
+      !body2.includes(otherName), (body2.match(/QA1584 [A-Za-z]+ \w+/g) || []).join(" | ").slice(0, 200));
 
     await tctx.close();
   }

@@ -2137,6 +2137,37 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
         } else ok("QA-1578 (j): the duplicate-email login could be created", false, `users POST ${uMade.status} ${JSON.stringify(uMade.data).slice(0, 140)}`);
       } else ok("QA-1578 (j): two same-email trainer rows could be created", false, JSON.stringify({ dupA: !!dupA, dupB: !!dupB }));
 
+      // (k) QA-1596 (checker, qa-1581 cycle 1 FAIL): the manifest called this race unreachable
+      // because User.email is unique. That is true and it was the wrong reason - the OTHER caller of
+      // the helper is trainerForLogin, so the racers are ONE user's own parallel requests on first
+      // sign-in. The checker measured 7 of 8 concurrent GET /api/home answering `my_trainer_id: null`,
+      // which renders a trainer's Home WITHOUT the documents card this whole unit exists to put there.
+      // A lost claim now re-reads the winner instead of discarding it, so every concurrent caller
+      // gets the same answer. Eight at once, all must agree.
+      const raceMail = `qa1596.race.${stampT}@vidysea.com`;
+      const raceTr = await mk("QA1596 Race " + stampT, raceMail);
+      const raceUser = raceTr?._id ? await req(admin, "POST", "/api/users", {
+        name: "QA1596 Login " + stampT, email: raceMail, role: "Trainer", password: PW, can_edit: true, status: "Approved",
+      }) : { status: 0 };
+      if (raceTr?._id && (raceUser.status === 200 || raceUser.status === 201)) {
+        // Unlink first, so the very next requests genuinely race for the claim.
+        const { MongoClient: MC } = await import("mongodb");
+        const mcr = new MC(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+        await mcr.connect();
+        await mcr.db(process.env.MONGODB_DB || "center_erp_ci").collection("trainers")
+          .updateOne({ _id: new (await import("mongodb")).ObjectId(String(raceTr._id)) }, { $unset: { user: "" } });
+        await mcr.close();
+        const raceCookie = await login(raceMail, PW);
+        const answers = raceCookie
+          ? await Promise.all(Array.from({ length: 8 }, () => req(raceCookie, "GET", "/api/home").then((r) => r.data?.my_trainer_id ?? null)))
+          : [];
+        const agreed = answers.filter((a) => String(a) === String(raceTr._id)).length;
+        ok("QA-1596 (k): eight concurrent first-sign-in requests all resolve the SAME trainer - a lost race re-reads the winner, it does not answer null",
+          answers.length === 8 && agreed === 8, JSON.stringify({ agreed, answers }).slice(0, 300));
+      } else {
+        ok("QA-1596 (k): the race fixture could be built", false, JSON.stringify({ tr: !!raceTr?._id, user: raceUser.status }));
+      }
+
       // (g) deleting is not filing. "daal sake" opened upload, not removal.
       const docs = await req(admin, "GET", `/api/trainers/${meT._id}/documents`);
       const anyDoc = docs.data?.items?.[0]?._id;
