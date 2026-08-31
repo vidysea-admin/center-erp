@@ -194,6 +194,17 @@ const STATUS_FIELDS = ["approval_status", "operational_status", "pipeline_status
 // this project once already.
 const DUAL_HOME_FIELDS = new Set([...TARGET_ROW_FIELDS].filter((f) => LOCATION_FIELDS.has(f)));
 
+// QA-1652 (S2, checker, qa-1075 cycle 1). DUAL_HOME_FIELDS has SIX members and the first version of
+// the sentence below told all six that "the report counts the ROWS". That is true of exactly one.
+// `tc_status` is the only dual-home field a counted figure reads (rules.ts:4465 builds `row_status`
+// from the row, bucketed by `tcVerdict`). `tc_id` occurs only in `readinessBlockers` (rules.ts:3907),
+// and `mobile_otp` / `aebas_link` / `aebas_id` / `aebas_password` have ZERO occurrences in rules.ts
+// at all - there is no report figure of theirs to move, so the warning was simply false on them.
+// The unit exists because the screen set a wrong expectation about a press; saying this to all six
+// replaced one wrong expectation with a different one. Generalising a single true reading across a
+// whole set is the same mistake QA-1640 caught in this session's other unit, one unit earlier.
+const REPORT_COUNTED_DUAL_HOME = new Set(["tc_status"]);
+
 // When the changed field IS an operational status, the sheet's new value names the action.
 const LIFECYCLE_BY_VALUE: Record<string, string> = {
   "not started": "Start location",
@@ -343,7 +354,11 @@ export function classifyChange(c: ClassifiableChange): ActionVerdict[] {
     ? (clears
       ? `The sheet has CLEARED this cell, so applying it ERASES ${field} on this ${isEntity ? entityType.toLowerCase() : "centre"}. Nothing else changes.`
       : dualHome
-        ? `Copy the sheet's value into ${field} on the CENTRE. Audited as external sync, and revertible afterwards - but read this first: "${field}" also lives on each of this centre's (centre x job role) rows, and the report counts the ROWS. A row that already has its own value keeps it, so this write may not move the figure you are looking at; it shows through only on rows that have none. To change what the report counts, the sheet must address the job role - map its "Job role" column, or use "Update target" on a row-scoped change.`
+        ? `Copy the sheet's value into ${field} on the CENTRE. Audited as external sync, and revertible afterwards - but read this first: "${field}" also lives on each of this centre's (centre x job role) rows, and this write touches the CENTRE ONLY. Every row keeps whatever it already carries. To reach the rows, the sheet has to address the job role - map its "Job role" column, or use "Update target" on a row-scoped change.${
+            REPORT_COUNTED_DUAL_HOME.has(field)
+              ? ` One more thing worth knowing before you press: the report's status counts read the ROW and never fall back to the centre, so a row left blank is still counted as unknown after this. What the centre value does reach is the readiness check, on rows that carry no status of their own.`
+              : ``
+          }`
         : `Copy the sheet's value straight into ${field} on this ${isEntity ? entityType.toLowerCase() : "centre"}. Audited as external sync, and revertible afterwards.`)
     : !hasRecord ? noRecord
     : rowField ? `"${field}" lives on a (centre x job role) target row - use "Update target" so it reaches the right row.`

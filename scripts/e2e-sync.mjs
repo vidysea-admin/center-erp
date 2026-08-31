@@ -1273,10 +1273,10 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
   // and the credential column - the exact row Umesh was looking at.
   // QA-1632: the fourth kind is the one nothing had ever carried — a field that is BOTH secret and
   // row-scoped, so it arrives as "aebas_password:<CODE>" rather than as a bare name.
-  const u9 = await mkUp9(`Center ID,City,Target,TC Password,AEBAS Password,TC Status\n${s9},Kota,150,pw${s9},ae${s9},Approved\n`, "cls" + s9 + ".csv");
+  const u9 = await mkUp9(`Center ID,City,Target,TC Password,AEBAS Password,TC Status,AEBAS ID\n${s9},Kota,150,pw${s9},ae${s9},Approved,AEB${s9}\n`, "cls" + s9 + ".csv");
   const src9 = (await req("POST", "/api/sync-sources", {
     name: "Cls " + s9, source_url: new URL(u9.url, BASE).href,
-    field_mappings: { "Center ID": "external_id", "City": "city", "Target": `approved_target:P${s9}`, "TC Password": "tc_password", "AEBAS Password": `aebas_password:P${s9}`, "TC Status": "tc_status" },
+    field_mappings: { "Center ID": "external_id", "City": "city", "Target": `approved_target:P${s9}`, "TC Password": "tc_password", "AEBAS Password": `aebas_password:P${s9}`, "TC Status": "tc_status", "AEBAS ID": "aebas_id" },
   }, 201)).data.item;
   await req("POST", `/api/sync-sources/${src9._id}/run`, undefined, 200);
 
@@ -1352,11 +1352,39 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
       A(tcRow)?.recommended === true, JSON.stringify({ recommended: A(tcRow)?.recommended }));
 
     ok("QA-1075: ...and the row says so in words, so the reviewer learns it BEFORE pressing",
-      /report counts the ROWS/.test(String(A(tcRow)?.why ?? "")), String(A(tcRow)?.why ?? "").slice(0, 220));
+      /touches the CENTRE ONLY/.test(String(A(tcRow)?.why ?? "")), String(A(tcRow)?.why ?? "").slice(0, 220));
+
+    // QA-1653 (S3, checker cycle 1). Cycle 1's last clause was "it shows through only on rows that
+    // have none" - the one a reviewer would actually act on ("fine, it will at least help the blank
+    // rows"). It is false of the report: a row with no status of its own gives row_status "" ->
+    // tcVerdict("") -> `unknown`, and rules.ts:4465 has no centre fallback. The place the centre
+    // value DOES show through is the readiness check. Both halves are pinned, because a wrong
+    // sentence buried the true and useful one.
+    ok("QA-1075: ...and it does not promise the blank rows - they stay unknown, and it names what the write DOES reach",
+      /still counted as unknown/.test(String(A(tcRow)?.why ?? ""))
+      && /readiness check/.test(String(A(tcRow)?.why ?? "")),
+      String(A(tcRow)?.why ?? "").slice(-260));
 
     ok("QA-1075: exactly one recommendation survives on that row - the screen never stars two",
       (tcRow?.actions ?? []).filter((x) => x.recommended === true).length <= 1,
       JSON.stringify((tcRow?.actions ?? []).filter((x) => x.recommended === true).map((x) => x.action)));
+
+    // QA-1652 (S2, checker cycle 1) - THE pin this cycle exists for. `DUAL_HOME_FIELDS` has six
+    // members and cycle 1 emitted the report warning on all six. Only `tc_status` is read by a
+    // counted figure; `aebas_id`, `aebas_link`, `mobile_otp` and `aebas_password` have ZERO
+    // occurrences in rules.ts, and `tc_id` only a readiness one. Telling an `aebas_id` reviewer
+    // that "the report counts the ROWS" was simply false - a DIFFERENT wrong expectation in place
+    // of the one this unit was raised to remove. `aebas_id` is mapped BARE in the fixture above
+    // precisely so a row exists to ask this of.
+    const aeIdRow = rows9.find((c) => c.field_name === "aebas_id");
+    ok("QA-1652: a dual-home field with no report figure still gets the dual-home warning...",
+      !!aeIdRow && /touches the CENTRE ONLY/.test(String(A(aeIdRow)?.why ?? "")),
+      JSON.stringify({ found: !!aeIdRow }) + " " + String(A(aeIdRow)?.why ?? "").slice(0, 200));
+
+    ok("QA-1652: ...but is NOT told a report figure will or will not move - there is no such figure",
+      !!aeIdRow && !/report's status counts/.test(String(A(aeIdRow)?.why ?? ""))
+      && !/counted as unknown/.test(String(A(aeIdRow)?.why ?? "")),
+      String(A(aeIdRow)?.why ?? "").slice(0, 260));
 
     // CONTROL 1: an ordinary centre field keeps its star. This is what makes the pin above a
     // statement about dual-home fields rather than about centre fields as a class.
@@ -1400,14 +1428,29 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
     // question that cannot be satisfied by the field merely being MENTIONED somewhere. A value is
     // written through the ordinary door and read back through another. Any tree whose schema does
     // not carry these paths fails here regardless of how complete the rest of the feature looks.
+    //
+    // QA-1646 (S2, checker on qa-1639 cycle 2): cycle 2 wrote and asserted only `aebas_id` and
+    // `mobile_otp` on both doors - `aebas_link` and `aebas_password` were never touched, so a tree
+    // that dropped THOSE two fields from either schema (the other half of the four the client
+    // asked for) still scored clean. All four fields now go through both doors, asserted
+    // individually so a single dropped path is still a single named failure, not a masked one.
+    // `aebas_password` reads back in plain for Admin (`maskLocationSecrets(items, role==="Admin")`
+    // in `api/locations/route.ts`, the same door QA-1316's precondition already exercises), so this
+    // asserts the real value rather than a masked placeholder.
     {
       const st = "AEB" + s9;
-      await req("PATCH", `/api/locations/${l9._id}`, { aebas_id: st, mobile_otp: "9876500000" }, 200);
+      const lnk = "https://aebas.example/" + s9;
+      const pw = "AePw" + s9;
+      await req("PATCH", `/api/locations/${l9._id}`, { aebas_id: st, mobile_otp: "9876500000", aebas_link: lnk, aebas_password: pw }, 200);
       const readBack = (await req("GET", `/api/locations/${l9._id}`)).data.item;
       ok("QA-1639: an AEBAS id written through the door is still there when the door is asked again",
         readBack?.aebas_id === st, JSON.stringify({ wrote: st, read: readBack?.aebas_id ?? null }));
       ok("QA-1639: ...and so is the OTP mobile - a strict-mode drop takes the whole group, not one field",
         readBack?.mobile_otp === "9876500000", JSON.stringify({ read: readBack?.mobile_otp ?? null }));
+      ok("QA-1646: ...and the AEBAS link - QA-1639/1640 asserted only aebas_id/mobile_otp, this field went uncovered",
+        readBack?.aebas_link === lnk, JSON.stringify({ wrote: lnk, read: readBack?.aebas_link ?? null }));
+      ok("QA-1646: ...and the AEBAS password too, in plain for Admin - the fourth field the client asked for",
+        readBack?.aebas_password === pw, JSON.stringify({ wrote: pw, read: readBack?.aebas_password ?? null }));
 
       // QA-1640 (S2, checker on qa-1639 cycle 1): the two pins above guard the CENTRE door only,
       // and the checker built the tree that proves it - HEAD's models file with just
@@ -1421,13 +1464,19 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
       // catches "any tree whose schema lacks these paths". A skip is not a pass, and I should not
       // have generalised over one.
       const rowSt = "ROW" + s9;
-      await req("PUT", `/api/locations/${l9._id}/targets`, { program: p9._id, approved_target: 25, aebas_id: rowSt, mobile_otp: "9876511111" }, 200);
+      const rowLnk = "https://aebas.example/row-" + s9;
+      const rowPw = "RowPw" + s9;
+      await req("PUT", `/api/locations/${l9._id}/targets`, { program: p9._id, approved_target: 25, aebas_id: rowSt, mobile_otp: "9876511111", aebas_link: rowLnk, aebas_password: rowPw }, 200);
       const tRow = ((await req("GET", `/api/locations/${l9._id}/targets`)).data.items ?? [])
         .find((t) => String(t.program?._id ?? t.program) === String(p9._id));
       ok("QA-1640: a PER-JOB-ROLE AEBAS id survives the round trip too - the row schema is guarded",
         tRow?.aebas_id === rowSt, JSON.stringify({ wrote: rowSt, read: tRow?.aebas_id ?? null }));
       ok("QA-1640: ...and the row's own OTP mobile with it",
         tRow?.mobile_otp === "9876511111", JSON.stringify({ read: tRow?.mobile_otp ?? null }));
+      ok("QA-1646: ...and the row's own AEBAS link, per job role, not just at the centre",
+        tRow?.aebas_link === rowLnk, JSON.stringify({ wrote: rowLnk, read: tRow?.aebas_link ?? null }));
+      ok("QA-1646: ...and the row's own AEBAS password too - the fourth field, row-scoped",
+        tRow?.aebas_password === rowPw, JSON.stringify({ wrote: rowPw, read: tRow?.aebas_password ?? null }));
     }
 
     ok("QA-1632: a per-job-role AEBAS password arrives as a row-scoped change at all",
