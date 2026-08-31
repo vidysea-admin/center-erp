@@ -356,7 +356,7 @@ export function classifyChange(c: ClassifiableChange): ActionVerdict[] {
       : dualHome
         ? `Copy the sheet's value into ${field} on the CENTRE. Audited as external sync, and revertible afterwards - but read this first: "${field}" also lives on each of this centre's (centre x job role) rows, and this write touches the CENTRE ONLY. Every row keeps whatever it already carries. To reach the rows, the sheet has to address the job role - map its "Job role" column, or use "Update target" on a row-scoped change.${
             REPORT_COUNTED_DUAL_HOME.has(field)
-              ? ` One more thing worth knowing before you press: the report's status counts read the ROW and never fall back to the centre, so a row left blank is still counted as unknown after this. What the centre value does reach is the readiness check, on rows that carry no status of their own.`
+              ? ` One more thing worth knowing before you press: the report's approved/not-approved counts read the ROW and never fall back to the centre, so a row left blank is still counted as unknown after this. The centre value does reach two other places on a blank row: it can clear an enrolment blocker in the readiness check, and it moves the report's separate "waiting on a field, not the client" count (verdict_not_on_row) - a real effect, just not the counted approval figure this row is about.`
               : ``
           }`
         : `Copy the sheet's value straight into ${field} on this ${isEntity ? entityType.toLowerCase() : "centre"}. Audited as external sync, and revertible afterwards.`)
