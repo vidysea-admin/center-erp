@@ -2279,12 +2279,25 @@ function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
               : <span className="text-gray-400" title="No matched portal import yet">—</span>,
           },
           {
-            // -251: same sheet's "Days Attendance %" — govt days present over the programme's total
-            // training days (data.program_days, the sync source's "duration_days").
-            key: "govt_days_pct", label: "Days Attendance %", sortValue: (r: any) => r.govt?.days_present != null && data.program_days ? Math.round((100 * r.govt.days_present) / data.program_days) : -1, sortable: true,
-            render: (r: any) => r.govt?.days_present != null && data.program_days
-              ? <span className="text-xs tabular-nums">{Math.round((100 * r.govt.days_present) / data.program_days)}%</span>
-              : <span className="text-gray-400" title="No matched portal import yet">—</span>,
+            // -251, denominator amended 2026-08-31 (REQ-417, Umesh direct answer): same sheet's
+            // "Days Attendance %", now govt days present over the PORTAL'S OWN "Total Training
+            // Days (QP)" figure for this row (r.govt.working_days — the same field the "Govt
+            // days" column above already shows as the "/ Y" half) — this is a client-facing
+            // number and should read the way the client's own portal export reads it, not our
+            // internal programme-duration master. Falls back to data.program_days (the old
+            // batch-level denominator) only when THIS row has no portal working-days figure of
+            // its own, so QA-1383's own fix — the percentage rendering at all for a file with no
+            // QP column, previously blank — is not regressed: that fixture's whole point was a
+            // row with total_working_days genuinely null, estimated from the programme figure
+            // rather than left blank.
+            key: "govt_days_pct", label: "Days Attendance %",
+            sortValue: (r: any) => { const d = r.govt?.working_days ?? data.program_days; return r.govt?.days_present != null && d ? Math.round((100 * r.govt.days_present) / d) : -1; }, sortable: true,
+            render: (r: any) => {
+              const denom = r.govt?.working_days ?? data.program_days;
+              return r.govt?.days_present != null && denom
+                ? <span className="text-xs tabular-nums">{Math.round((100 * r.govt.days_present) / denom)}%</span>
+                : <span className="text-gray-400" title="No matched portal import yet">—</span>;
+            },
           },
           {
             // QA-085: the green mark is PORTAL-VERIFIED only — an estimate can never
