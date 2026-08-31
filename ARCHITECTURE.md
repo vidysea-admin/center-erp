@@ -1012,6 +1012,20 @@ behind a batch this user can see does not reopen the pool door) and passing just
 centre as `locations`. A future third caller that skips this and relies on the fallback will silently
 403 for any Trainer — check the component's own effect comments before wiring a new caller.
 
+### 3.16 The govt-portal row Resolve shutter — COLLAPSED to one copy (QA-1643, 2026-08-31)
+
+Same move as §3.15, for the "which candidate is this?" drawer that resolves an Ambiguous/Unmatched
+`GovtAttendanceRow`. Was inlined as `ResolveDrawer` in `govt-attendance/page.tsx`, single-caller.
+Extracted to `src/components/govt-row-resolve-drawer.tsx` — exports `GovtRowResolveDrawer`, taking
+`{importId, rowId}` (not a pre-loaded row; it self-fetches `GET /api/govt-attendance/[id]/rows/
+[rowId]/match`, the same endpoint the picker's options come from, and reads display fields off
+`data.row`) — and now shared by `govt-attendance/page.tsx` and the batch detail page's Roster and
+Attendance tabs (`batches/[id]/page.tsx`), opened from the "portal hrs — match pending" /
+"Portal hours waiting on a match" labels once `unresolvedPortalRowsByName` (govt-attendance.ts) has
+threaded a `{rowId, importId}` ref through `awaitingMatchFor`/`batchAttendanceRows` (rules.ts) to
+that row. A name with more than one unresolved ref opens a small picker first — never auto-picks.
+Do not re-inline a second copy for a fourth caller; import this one.
+
 ---
 
 ## 4. Key entry points
