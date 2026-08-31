@@ -78,7 +78,13 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
       // portal ID is not a live option for this row, so say so instead of offering it as if
       // nothing happened since the sibling row was resolved.
       const theirId = portalIdKey(c.sidh_candidate_id);
-      const contradicted = sameName && !sameId && !!theirId && theirId !== gid ? c.sidh_candidate_id : null;
+      // QA-1658 (S2, checker on qa-govt-row-suggest-remaining cycle 1): the guard this comment
+      // claims to reuse (govt-attendance.ts:610) requires `gid` truthy before firing — this one
+      // omitted it, so a row with NO portal ID of its own (gid="") marked any same-name candidate
+      // holding ANY unrelated portal ID as "contradicted" and, if that left one candidate, starred
+      // it "confirmed by elimination" — a false claim, since this row has nothing to be different
+      // FROM. QA-725/726/730 already treat a blank-portal-ID row as a normal, tested shape.
+      const contradicted = !!gid && sameName && !sameId && !!theirId && theirId !== gid ? c.sidh_candidate_id : null;
       return {
         candidate: c._id, name: c.name, phone: c.phone ?? null,
         sidh_candidate_id: c.sidh_candidate_id ?? null,
