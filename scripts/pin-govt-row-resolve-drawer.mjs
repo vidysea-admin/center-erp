@@ -110,5 +110,44 @@ if (refs1.length >= 2) {
   fail++; console.log("FAIL  (skipped resolve — fewer than 2 refs to work with)");
 }
 
+// QA-1658 (S2, checker on cycle 1): a row with NO portal ID of its own (gid blank) must NOT mark
+// a same-name candidate "contradicted" just because that candidate happens to already hold SOME
+// unrelated portal ID from elsewhere — there is nothing on this row to be different FROM. Fresh
+// candidates so this segment cannot interact with the c1/c2 flow above.
+const c3 = (await req(admin, "POST", "/api/candidates", { name: `${NAME} Suresh Yadav`, phone: `${STAMP}03`, location: loc._id, program: program._id }, 201)).data.item;
+const c4 = (await req(admin, "POST", "/api/candidates", { name: `${NAME} Suresh Yadav`, phone: `${STAMP}04`, location: loc._id, program: program._id }, 201)).data.item;
+ok("QA-1658 fixture: two more same-named candidates created", !!c3?._id && !!c4?._id);
+await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: c3._id }, 201);
+await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: c4._id }, 201);
+// c3 already holds a portal ID from something UNRELATED to this import (a direct PATCH, the same
+// shape the checker's live probe used) — nothing to do with the row we're about to upload.
+await req(admin, "PATCH", `/api/candidates/${c3._id}`, { sidh_candidate_id: `CAN_UNREL${STAMP}` }, 200);
+
+const csv2 = `Name,Candidate ID,Total Working Days,Total Days Attended,Total Hours\n`
+  + `${NAME} Suresh Yadav,,10,4,30\n`; // BLANK Candidate ID — the row itself names nobody
+const fd2 = new FormData();
+fd2.append("file", new File([Buffer.from(csv2)], "pin2.csv", { type: "text/csv" }));
+fd2.append("batch", batch._id); fd2.append("confirm", "1"); fd2.append("period_label", `pin2 ${STAMP}`);
+const uploadRes2 = await fetch(`${BASE}/api/govt-attendance`, { method: "POST", headers: { cookie: admin }, body: fd2 });
+const uploadData2 = await uploadRes2.json().catch(() => ({}));
+ok("QA-1658 fixture: blank-portal-ID import committed", uploadRes2.status === 201, JSON.stringify(uploadData2).slice(0, 200));
+
+const att2 = (await req(admin, "GET", `/api/batches/${batch._id}/attendance`)).data;
+const m3 = (att2.members ?? []).find((m) => String(m.candidate_id) === String(c3._id));
+const refs3 = m3?.awaiting_match?.refs ?? [];
+if (refs3.length >= 1) {
+  const row3 = refs3[0];
+  const row3Get = await req(admin, "GET", `/api/govt-attendance/${row3.importId}/rows/${row3.rowId}/match`);
+  const options3 = row3Get.data.options ?? [];
+  const c3Opt = options3.find((o) => String(o.candidate) === String(c3._id));
+  const c4Opt = options3.find((o) => String(o.candidate) === String(c4._id));
+  ok("QA-1658: a blank-portal-ID row does NOT contradict a candidate merely for holding SOME unrelated portal ID",
+    !c3Opt?.contradicted, JSON.stringify(c3Opt));
+  ok("QA-1658: ...and so the OTHER candidate is not falsely 'confirmed by elimination' either",
+    c4Opt?.suggested !== true, JSON.stringify(c4Opt));
+} else {
+  fail++; console.log("FAIL  QA-1658: (fixture produced no awaiting_match ref to check)");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
