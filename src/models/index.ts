@@ -152,6 +152,16 @@ const LocationSchema = new Schema({
   district: String,
   tc_id: String,
   tc_password: String,
+  // 2026-08-31 (client added 4 new columns to the same OneDrive workbook, right after `Remark`):
+  // AEBAS is a SECOND govt portal (biometric attendance), with its own login separate from the
+  // TC ID/Password above — mobile_otp is the OTP mobile the client's sheet carries for that portal.
+  // aebas_password is a live credential: masked for non-Admins exactly like tc_password (see
+  // SECRET_FIELDS in src/app/api/locations/route.ts, AUDIT_SECRET_FIELDS in src/lib/audit.ts, and
+  // SHEET_CHANGE_SECRET_FIELDS in src/lib/sync.ts).
+  mobile_otp: String,
+  aebas_link: String,
+  aebas_id: String,
+  aebas_password: String,
   tc_status: String,              // free text from the sheet ("Approved", blank, …)
   operating_partner: String,      // "Vidysea" / "Vidysea/RPTO" / "Vidysea/No Center"
   cluster_head_name: String,
@@ -479,6 +489,13 @@ const LocationTargetSchema = new Schema({
   // stays as the fallback for pre-migration rows.
   tc_id: String,
   tc_status: String, // free text from the sheet ("Approved", blank, …)
+  // 2026-08-31: the AEBAS login carried per (centre x job role), same reasoning as tc_id above —
+  // the sheet's row is the unit of government registration, not the centre. See LocationSchema's
+  // matching fields for the masking note (aebas_password is a live credential).
+  mobile_otp: String,
+  aebas_link: String,
+  aebas_id: String,
+  aebas_password: String,
   // 2026-08-13 (Karunn: "chaaron cheezein le lo, soft data ki tarah — hamare data ko hum
   // MATCH karenge"): the sheet's three CLAIMED trainer counts, enrolled_reported-pattern —
   // stored BESIDE our derived counts (trainerCountsFor), never merged, so claim-vs-ours
