@@ -401,11 +401,10 @@ for (const file of walk(root)) {
   //   then hard-failed a good tree - QA-1615's harm through a different door, and version.ts's own
   //   chain comments already sit a few words from that text.
   //
-  // RULE 2 - git. CURRENT must not contain what the PREVIOUS COMMIT published. This is the one
-  // source of truth a deletion cannot erase, so it closes QA-1618: remove the archive constant and
-  // history still remembers the note. When history is unavailable (shallow clone, first commit, an
-  // archive with no repo) it passes - a missing tool is not evidence of a defect. Said out loud
-  // because silent skipping is how five of the eight holes got here.
+  // RULE 1 (file, unconditional). CURRENT must not contain the opening of any archive constant
+  // STILL PRESENT in the file. Needs no git, no guess about prose, and has no sign problem because
+  // a missing constant is simply not in the set - which is exactly why it cannot close QA-1618 on
+  // its own: delete the constant and this rule's set no longer contains it either.
   const archived = [...src.matchAll(/^(?:export )?const RELEASE_NOTE_ARCHIVE_(\d+) =/gm)]
     .map((m) => Number(m[1]))
     .filter((k) => k < n)
@@ -417,25 +416,65 @@ for (const file of walk(root)) {
   const spliced = archived.filter((k) => { const o = openingOf(k); return o.length >= 40 && curText.includes(o); });
   const stunted = archived.filter((k) => openingOf(k).length < 40);
 
-  let prevPublished = "";
+  // RULE 2 - git, FULL HISTORY, unconditional. Rewritten 2026-09-01 (QA-1618/1620, Umesh's direct
+  // "structural rewrite" answer, qa/feedback-inbox.md 2026-09-01) after the single-source design
+  // proved dormant exactly where the push gate needs it: it compared CURRENT only against the
+  // PREVIOUS COMMIT, gated on `headRel !== rel` (the release number having just changed) - false on
+  // every commit in this guard's own fix history, and structurally false on any clean CI checkout
+  // (disk == HEAD by construction). That let an archive constant be deleted and its note spliced
+  // into CURRENT, RELEASE unchanged, sail through untouched - QA-1618's namesake defect.
+  //
+  // This reads every release this file has EVER published - structured data (release number ->
+  // published text), read straight from git, not re-derived from whatever source text happens to
+  // exist on disk right now - and compares CURRENT against ALL of it, always, with no
+  // release-number precondition. One `git cat-file --batch` call reads every historical blob for
+  // this path in a single process (301 commits in ~0.3s measured, vs ~9s for one `git show` per
+  // commit) - fast enough to run unconditionally on every check, not just when RELEASE moves. For
+  // each release number, the FIRST (= most recent, since `git log` lists newest-first) text seen is
+  // kept, so a later wording correction to an already-archived note (QA-1156 was exactly such a
+  // correction) is what gets checked against, not a stale first draft. The current release's own
+  // entry (key === n) is excluded, so an unchanged, already-committed tree does not fail by matching
+  // itself. When git or history is unavailable (shallow clone, first commit, an archive with no
+  // repo) the map stays empty and this rule passes - a missing tool is not evidence of a defect.
+  const published = new Map();
   try {
-    // spawnSync to match this file's style. `git show HEAD:<path>` resolves from the REPO ROOT
-    // regardless of cwd, so running it from `root` (which is src/) is fine when that sits in a repo;
-    // when it does not, status is non-zero and prevPublished stays empty.
-    const g = spawnSync("git", ["show", "HEAD:src/lib/version.ts"], { cwd: root, encoding: "utf-8" });
-    const head = g.status === 0 ? (g.stdout ?? "") : "";
-    const headCur = (head.split("export const RELEASE_NOTE_CURRENT =")[1] ?? "").split(/\n(?=(?:export )?const )/)[0];
-    const headRel = (head.match(/export const RELEASE = "([^"]+)"/) ?? [])[1] ?? "";
-    if (headRel && headRel !== rel) prevPublished = joinLiterals(headCur).trim().slice(0, 60);
+    const log = spawnSync("git", ["log", "--format=%H", "--", "lib/version.ts"], { cwd: root, encoding: "utf-8" });
+    const shas = log.status === 0 ? (log.stdout ?? "").split("\n").filter(Boolean) : [];
+    if (shas.length) {
+      const batch = spawnSync("git", ["cat-file", "--batch"], {
+        cwd: root, encoding: "utf-8", maxBuffer: 1024 * 1024 * 256,
+        input: shas.map((sha) => `${sha}:src/lib/version.ts`).join("\n") + "\n",
+      });
+      const buf = batch.status === 0 ? (batch.stdout ?? "") : "";
+      let i = 0;
+      while (i < buf.length) {
+        const nl = buf.indexOf("\n", i);
+        if (nl === -1) break;
+        const header = buf.slice(i, nl);
+        const m = header.match(/^[0-9a-f]+ blob (\d+)$/);
+        if (!m) break; // "<sha> missing" or a parse we don't recognise - stop rather than misread the rest
+        const size = Number(m[1]);
+        const text = buf.slice(nl + 1, nl + 1 + size);
+        i = nl + 1 + size + 1; // +1 skips the trailing newline git-cat-file appends after each blob
+        const kRel = (text.match(/export const RELEASE = "([^"]+)"/) ?? [])[1] ?? "";
+        const k = parseInt((kRel.split("-").pop() ?? ""), 10);
+        if (!k || published.has(k)) continue;
+        const kCur = (text.split("export const RELEASE_NOTE_CURRENT =")[1] ?? "").split(/\n(?=(?:export )?const )/)[0];
+        published.set(k, joinLiterals(kCur).trim().slice(0, 60));
+      }
+    }
   } catch { /* no git, no history, or an archive without a repo */ }
+  const historicalSplice = [...published.entries()]
+    .filter(([k]) => k !== n)
+    .find(([, text]) => text.length >= 40 && curText.includes(text));
 
   if (!n) passed++;
   else if (spliced.length) {
     failed++;
     pushStructural(`lib/version.ts: RELEASE_NOTE_CURRENT contains the OPENING of the -${spliced[0]} note — an older note was spliced in rather than moved to the archive, so the public marker publishes two releases`);
-  } else if (prevPublished.length >= 40 && curText.includes(prevPublished)) {
+  } else if (historicalSplice) {
     failed++;
-    pushStructural(`lib/version.ts: RELEASE_NOTE_CURRENT still contains the note the PREVIOUS COMMIT published — it was spliced in rather than moved to the archive. Read from git history, so deleting the archive constant does not hide it`);
+    pushStructural(`lib/version.ts: RELEASE_NOTE_CURRENT still contains the note -${historicalSplice[0]} published (read from git history, so deleting its archive constant does not hide it) — it was spliced in rather than moved to the archive`);
   } else if (stunted.length) {
     failed++;
     pushStructural(`lib/version.ts: the -${stunted[0]} archive note reads only ${openingOf(stunted[0]).length} characters, too short to check CURRENT against — the splice test cannot run on it, and silently passing that is how this guard has failed eight times`);
