@@ -1389,10 +1389,9 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
                 // promised in a fixed sentence.
                 if (h.awaiting_match) {
                   const refs: { rowId: string; importId: string }[] = h.awaiting_match.refs ?? [];
-                  const title = `The government export carries ${h.awaiting_match.count > 1 ? `${h.awaiting_match.count} rows` : "a row"} under this name${h.awaiting_match.hours_minutes != null ? ` (${Math.round(h.awaiting_match.hours_minutes / 60)} hrs)` : ", though its hours column could not be read"}. Nothing is attached to a student yet.`;
-                  if (!canResolveGovt || !refs.length) return <span className="text-xs text-amber-700" title={`${title}${canResolveGovt ? " Resolve it on the Government Attendance screen." : ""}`}>portal hrs — match pending</span>;
+                  if (!canResolveGovt || !refs.length) return <span className="text-xs text-amber-700" title={`The government export carries ${h.awaiting_match.count > 1 ? `${h.awaiting_match.count} rows` : "a row"} under this name${h.awaiting_match.hours_minutes != null ? ` (${Math.round(h.awaiting_match.hours_minutes / 60)} hrs)` : ", though its hours column could not be read"}. Nothing is attached to a student yet.${canResolveGovt ? " Resolve it on the Government Attendance screen." : ""}`}>portal hrs — match pending</span>;
                   return (
-                    <button type="button" className="text-xs text-amber-700 underline decoration-dotted hover:text-amber-900" title={`${title} Click to resolve it right here.`}
+                    <button type="button" className="text-xs text-amber-700 underline decoration-dotted hover:text-amber-900" title={`The government export carries ${h.awaiting_match.count > 1 ? `${h.awaiting_match.count} rows` : "a row"} under this name${h.awaiting_match.hours_minutes != null ? ` (${Math.round(h.awaiting_match.hours_minutes / 60)} hrs)` : ", though its hours column could not be read"}. Nothing is attached to a student yet. Click to resolve it right here.`}
                       onClick={() => (refs.length === 1 ? setOpenResolve(refs[0]) : setRefsPicker(refs))}>
                       portal hrs — match pending
                     </button>
@@ -1478,7 +1477,7 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
 
       {/* More than one unresolved portal row under this name (rare — usually one) — never guess
           which is theirs, same discipline the matcher itself follows. */}
-      <Drawer open={!!refsPicker} onClose={() => setRefsPicker(null)} title="Which portal row is this?">
+      <Drawer open={!!refsPicker} onClose={() => setRefsPicker(null)} title="Which portal row is this?" error={error}>
         <div className="space-y-1">
           <p className="mb-2 text-xs text-gray-500">{refsPicker?.length} unresolved rows carry this name. Pick one to resolve first.</p>
           {refsPicker?.map((r) => (
@@ -2309,10 +2308,9 @@ function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
                   : r.awaiting_match
                     ? (() => {
                         const refs: { rowId: string; importId: string }[] = r.awaiting_match.refs ?? [];
-                        const title = r.verdict?.state === "awaiting_match" ? r.verdict.detail : `The government export carries ${(r.awaiting_match?.count ?? 1) > 1 ? `${r.awaiting_match.count} rows` : "a row"} under this name, not attached to a student yet.`;
-                        if (!canResolveGovt || !refs.length) return <Link href="/govt-attendance" className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800 hover:underline" title={`${title} Resolve it on the Government Attendance screen.`}>Portal hours waiting on a match →</Link>;
+                        if (!canResolveGovt || !refs.length) return <Link href="/govt-attendance" className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800 hover:underline" title={`${r.verdict?.state === "awaiting_match" ? r.verdict.detail : `The government export carries ${(r.awaiting_match?.count ?? 1) > 1 ? `${r.awaiting_match.count} rows` : "a row"} under this name, not attached to a student yet.`} Resolve it on the Government Attendance screen.`}>Portal hours waiting on a match →</Link>;
                         return (
-                          <button type="button" className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800 hover:underline" title={`${title} Click to resolve it right here.`}
+                          <button type="button" className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800 hover:underline" title={`${r.verdict?.state === "awaiting_match" ? r.verdict.detail : `The government export carries ${(r.awaiting_match?.count ?? 1) > 1 ? `${r.awaiting_match.count} rows` : "a row"} under this name, not attached to a student yet.`} Click to resolve it right here.`}
                             onClick={() => (refs.length === 1 ? setOpenResolve(refs[0]) : setRefsPicker(refs))}>
                             Portal hours waiting on a match →
                           </button>
@@ -2335,7 +2333,7 @@ function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
           },
         ]} empty="No students on this batch’s active roster." />
 
-      <Drawer open={!!refsPicker} onClose={() => setRefsPicker(null)} title="Which portal row is this?">
+      <Drawer open={!!refsPicker} onClose={() => setRefsPicker(null)} title="Which portal row is this?" error={error}>
         <div className="space-y-1">
           <p className="mb-2 text-xs text-gray-500">{refsPicker?.length} unresolved rows carry this name. Pick one to resolve first.</p>
           {refsPicker?.map((r) => (
