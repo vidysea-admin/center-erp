@@ -2168,6 +2168,42 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
         ok("QA-1596 (k): the race fixture could be built", false, JSON.stringify({ tr: !!raceTr?._id, user: raceUser.status }));
       }
 
+      // (l) QA-1582 (checker, qa-1575 cycle 2): a trainer row holding " x@y.com " stranded the
+      // person it belonged to. emailError() TRIMS to decide and the write door then stored the raw
+      // value, so linkTrainerLoginByEmail's ^...$ never matched, my_trainer_id came back null, and
+      // the documents door qa-1575 opened was unreachable - with no message anywhere saying why.
+      // The case variant of the same probe linked fine (the regex carries `i`), which is exactly
+      // what made whitespace silent rather than obvious.
+      // Two halves, and both are pinned here: the WRITE is canonicalised, and the RESOLVER tolerates
+      // padding that is already in the database, because a fix that only helps new rows leaves the
+      // real trainer this was found on exactly where they were.
+      const padMail = `  qa1582.pad.${stampT}@vidysea.com  `;
+      const padTr = await mk("QA1582 Pad " + stampT, padMail);
+      ok("QA-1582 (l1): the trainer door STORES the canonical email, not what was typed",
+        !!padTr && padTr.email === padMail.trim().toLowerCase(),
+        JSON.stringify({ stored: padTr?.email, typed: padMail }));
+
+      if (padTr?._id) {
+        // ...and a row that ALREADY holds padding (written straight to Mongo, as the live one was)
+        // still resolves, which is the half a write-side fix cannot reach.
+        const { MongoClient: MC2, ObjectId: OID } = await import("mongodb");
+        const mc2 = new MC2(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+        await mc2.connect();
+        await mc2.db(process.env.MONGODB_DB || "center_erp_ci").collection("trainers")
+          .updateOne({ _id: new OID(String(padTr._id)) }, { $set: { email: padMail }, $unset: { user: "" } });
+        await mc2.close();
+        const padUser = await req(admin, "POST", "/api/users", {
+          name: "QA1582 Login " + stampT, email: padMail.trim().toLowerCase(),
+          role: "Trainer", password: PW, can_edit: true, status: "Approved",
+        });
+        const padCookie = (padUser.status === 200 || padUser.status === 201)
+          ? await login(padMail.trim().toLowerCase(), PW) : null;
+        const home = padCookie ? await req(padCookie, "GET", "/api/home") : { status: 0, data: {} };
+        ok("QA-1582 (l2): a row that already holds a padded email still resolves its own trainer",
+          String(home.data?.my_trainer_id) === String(padTr._id),
+          JSON.stringify({ st: home.status, got: home.data?.my_trainer_id, want: padTr._id }));
+      }
+
       // (g) deleting is not filing. "daal sake" opened upload, not removal.
       const docs = await req(admin, "GET", `/api/trainers/${meT._id}/documents`);
       const anyDoc = docs.data?.items?.[0]?._id;
