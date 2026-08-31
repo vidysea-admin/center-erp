@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-267";
+export const RELEASE = "2026.08.14-268";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -138,6 +138,19 @@ const RELEASE_NOTE_ARCHIVE_254 =
   "screen for a real number sitting one tab over.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-268 closes the same padded-email lockout on the product's own sign-in, not just a Trainer's: "  +
+  "a login created by pasting an address with a stray leading or trailing space could never sign "  +
+  "back in, because the address was normalised for case on the way in but not for whitespace. The "  +
+  "fix lives in the schema itself, so every writer is covered - the doors, imports, and sheet sync "  +
+  "alike - rather than only the ones a form happens to remember. "  +
+  "The Location Master sheet also gained a second government portal login - AEBAS, for biometric "  +
+  "attendance, distinct from the existing TC portal - synced in per the same per-centre/per-job-role "  +
+  "shape the TC fields already use, its password masked by default the same way the existing one "  +
+  "is, in every place that masking already applies. A gap in that masking, found while building it, "  +
+  "is closed in the same release: a password recorded per job-role was slipping past the mask "  +
+  "because it checked for the field's bare name and the row-scoped form did not match it exactly.";
+
+const RELEASE_NOTE_ARCHIVE_267 =
   "-267 fixes a Trainer who could sign in but never reach their own documents, because their "  +
   "record's email carried invisible padding - a stray space typed once, stored, and then never "  +
   "matched again. Signing in was checked in isolation and looked fine; the match itself runs "  +
@@ -981,6 +994,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -265: ARCHIVE_264 wired in here in the SAME bump that declared it, same discipline.
   // -266: ARCHIVE_265 wired in here in the SAME bump that declared it, same discipline.
   // -267: ARCHIVE_266 wired in here in the SAME bump that declared it, same discipline.
+  // -268: ARCHIVE_267 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_267 + " " +
   RELEASE_NOTE_ARCHIVE_266 + " " +
   RELEASE_NOTE_ARCHIVE_265 + " " +
   RELEASE_NOTE_ARCHIVE_264 + " " +
