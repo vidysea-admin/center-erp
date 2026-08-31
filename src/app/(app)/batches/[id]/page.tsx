@@ -1643,6 +1643,8 @@ function Enrollment({ batchId, batch, error, setError }: any) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkMsg, setBulkMsg] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [search, setSearch] = useState("");
 
   const load = () => api(`/api/batches/${batchId}/members`).then((d) => setMembers(activeOnly(d.items))).catch((e: any) => setError(e.message));
   useEffect(() => { load(); }, [batchId]);
@@ -1654,7 +1656,27 @@ function Enrollment({ batchId, batch, error, setError }: any) {
     } catch (e: any) { setError(e.message); }
   }
   const toggleSel = (id: string) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
-  const pending = members.filter((m) => m.enrollment_status !== "Completed");
+
+  // Umesh, 31/08, looking at Closure's search box: "similar kind of search candidate option
+  // chahiye enrollment wale tab par bhi" + "top par analytics... kitno ka registration ho gaya,
+  // kitno ka ekyc". Mirrors Closure tab's own search+pill pattern (this file, 3873-3922) instead
+  // of inventing a second one — pill counts double as the requested per-step analytics.
+  const ENROL_FILTERS: { value: string; label: string; test: (m: any) => boolean }[] = [
+    { value: "all", label: "All", test: () => true },
+    { value: "not_started", label: "Not Started", test: (m) => m.enrollment_status === "Not Started" },
+    { value: "in_progress", label: "In Progress", test: (m) => m.enrollment_status === "In Progress" },
+    { value: "completed", label: "Completed", test: (m) => m.enrollment_status === "Completed" },
+    { value: "failed", label: "Failed", test: (m) => m.enrollment_status === "Failed" },
+  ];
+  const q = search.trim().toLowerCase();
+  const matchesSearch = (m: any) => !q || [m.candidate?.name, m.candidate?.phone, m.candidate?.sidh_candidate_id, m.candidate?.apaar_id]
+    .some((v) => String(v ?? "").toLowerCase().includes(q));
+  const shown = members.filter((m) => (ENROL_FILTERS.find((f) => f.value === statusFilter)?.test ?? (() => true))(m) && matchesSearch(m));
+  // QA-779's lesson, same file: narrowing the list must put the pager back at the start.
+  useEffect(() => { setIdx(0); }, [statusFilter, search]);
+  // Bulk actions act on what is actually visible, not the whole batch — searching for one
+  // candidate and clicking "Select all pending" must not silently reach the ones off-screen.
+  const pending = shown.filter((m) => m.enrollment_status !== "Completed");
   async function bulk(step: string) {
     if (bulkBusy) return;
     const targets = selected.size ? [...selected] : pending.map((m) => m._id);
@@ -1674,15 +1696,48 @@ function Enrollment({ batchId, batch, error, setError }: any) {
   if (!members.length) return <p className="p-6 text-center text-sm text-gray-400">No active members to enroll.</p>;
   const done = members.filter((m) => m.enrollment_status === "Completed").length;
   const scope = selected.size ? `${selected.size} selected` : `all ${pending.length} pending`;
-  const cur = members[Math.min(idx, members.length - 1)];
+  const cur = shown[Math.min(idx, shown.length - 1)];
 
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2 text-sm text-gray-600">
         <span>{done}/{members.length} enrolled · Failed: {members.filter((m) => m.enrollment_status === "Failed").length}</span>
+        <span className="text-gray-300">·</span>
+        <span>Registration: {members.filter((m) => m.reg_done).length}/{members.length}</span>
+        <span>e-KYC: {members.filter((m) => m.kyc_done).length}/{members.length}</span>
+        <span>Batch Accept: {members.filter((m) => m.accept_done).length}/{members.length}</span>
         {bulkMsg && <span className="text-green-700">✓ {bulkMsg}</span>}
       </div>
-      {/* QA-147: bulk actions — the 135-click wall becomes three clicks (or one). */}
+      {/* QA-748's search+pill pattern (Closure tab, this file 3873-3922), mirrored here so the
+          same interaction works the same way on both tabs; pill counts read against the full
+          batch, so they double as the analytics Umesh asked for. */}
+      <div className="space-y-2">
+        <FilterPills active={statusFilter} onChange={setStatusFilter}
+          options={ENROL_FILTERS.map((f) => ({ value: f.value, label: f.label, count: members.filter(f.test).length }))} />
+        <div className="flex flex-wrap items-center gap-2">
+          <input className="w-64 rounded-lg border border-gray-300 px-2 py-1 text-sm"
+            placeholder="Search name, phone, Candidate ID or APAAR ID…"
+            value={search} onChange={(e) => setSearch(e.target.value)} />
+          {(statusFilter !== "all" || q) && (
+            <>
+              <span className="text-xs text-gray-500">showing {shown.length} of {members.length}</span>
+              <button type="button" className="text-xs font-medium text-blue-700 hover:underline"
+                onClick={() => { setStatusFilter("all"); setSearch(""); }}>clear</button>
+            </>
+          )}
+        </div>
+      </div>
+      {/* An empty result says so — a screen that just goes blank reads as broken (same lesson as
+          Closure's identical guard, 4550-4556). */}
+      {shown.length === 0 && (
+        <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-4 text-sm text-gray-600">
+          No candidate on this batch matches {statusFilter === "all" ? "that search" : `"${ENROL_FILTERS.find((f) => f.value === statusFilter)?.label}"`}
+          {q ? ` and "${search.trim()}"` : ""}. <button type="button" className="font-medium text-blue-700 hover:underline" onClick={() => { setStatusFilter("all"); setSearch(""); }}>Show everyone</button>
+        </div>
+      )}
+      {/* QA-147: bulk actions — the 135-click wall becomes three clicks (or one). Scoped to what
+          is actually visible (`pending` now derives from `shown`), so a filtered search never
+          bulk-acts on candidates off-screen. */}
       {canEnrol && pending.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs">
           <span className="font-medium text-blue-900">Bulk ({scope}):</span>
@@ -1697,15 +1752,15 @@ function Enrollment({ batchId, batch, error, setError }: any) {
       )}
       {/* Desktop: all cards. Mobile: one at a time with prev/next (spec §0 Rule B) */}
       <div className="hidden gap-3 md:grid md:grid-cols-2 xl:grid-cols-3">
-        {members.map((m) => <EnrolCard key={m._id} m={m} onUpdate={update} selected={selected.has(m._id)} onSelect={toggleSel} canEdit={canEnrol} canEditCandidate={canEditCandidate} onEditCandidate={setEditCandidate} />)}
+        {shown.map((m) => <EnrolCard key={m._id} m={m} onUpdate={update} selected={selected.has(m._id)} onSelect={toggleSel} canEdit={canEnrol} canEditCandidate={canEditCandidate} onEditCandidate={setEditCandidate} />)}
       </div>
       <div className="md:hidden">
-        <EnrolCard m={cur} onUpdate={update} selected={selected.has(cur._id)} onSelect={toggleSel} canEdit={canEnrol} canEditCandidate={canEditCandidate} onEditCandidate={setEditCandidate} />
-        <div className="mt-3 flex items-center justify-between">
+        {shown.length > 0 && <EnrolCard m={cur} onUpdate={update} selected={selected.has(cur._id)} onSelect={toggleSel} canEdit={canEnrol} canEditCandidate={canEditCandidate} onEditCandidate={setEditCandidate} />}
+        {shown.length > 0 && <div className="mt-3 flex items-center justify-between">
           <Btn kind="ghost" onClick={() => setIdx((i) => Math.max(0, i - 1))} disabled={idx === 0}>← Prev</Btn>
-          <span className="text-sm text-gray-500">{idx + 1} / {members.length}</span>
-          <Btn kind="ghost" onClick={() => setIdx((i) => Math.min(members.length - 1, i + 1))} disabled={idx >= members.length - 1}>Next →</Btn>
-        </div>
+          <span className="text-sm text-gray-500">{Math.min(idx + 1, Math.max(shown.length, 1))} / {shown.length}</span>
+          <Btn kind="ghost" onClick={() => setIdx((i) => Math.min(shown.length - 1, i + 1))} disabled={idx >= shown.length - 1}>Next →</Btn>
+        </div>}
       </div>
       {/* QA-1436: scoped to this tab only (Umesh: "ye enrollment walde usme rahae ga") — no other
           tab mounts this drawer. `candidate` is passed pre-loaded (see the members route above) so
