@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-273";
+export const RELEASE = "2026.08.14-274";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -149,6 +149,16 @@ const RELEASE_NOTE_ARCHIVE_270 =
   "and no other tab or screen is touched.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-274 makes the candidate import screen say two things it already knew but never said. "  +
+  "Uploading a spreadsheet has, for a while now, checked whether a mapped column can actually be "  +
+  "written and whether a SIDH status cell reads as one of the four values the portal accepts - "  +
+  "but a column this import cannot handle, and a status value it does not recognise, were both "  +
+  "computed and then dropped silently before reaching the preview screen an operator actually "  +
+  "reads. Both now show up there, next to the identical warning this screen already gives for an "  +
+  "unrecognised Education value or batch-interest answer, naming the value and the destination "  +
+  "so nothing imports quietly wrong.";
+
+const RELEASE_NOTE_ARCHIVE_273 =
   "-273 is checking, not building - it repairs a hole in the tool that checks every other "  +
   "release's own note before it ships (scripts/check-user-copy.mjs, internal only, never reaches "  +
   "a user). That guard's job is to refuse a note that copies an OLDER release's opening instead of "  +
@@ -1063,6 +1073,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -271: ARCHIVE_270 wired in here in the SAME bump that declared it, same discipline.
   // -272: ARCHIVE_271 wired in here in the SAME bump that declared it, same discipline.
   // -273: ARCHIVE_272 wired in here in the SAME bump that declared it, same discipline.
+  // -274: ARCHIVE_273 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_273 + " " +
   RELEASE_NOTE_ARCHIVE_272 + " " +
   RELEASE_NOTE_ARCHIVE_271 + " " +
   RELEASE_NOTE_ARCHIVE_270 + " " +
