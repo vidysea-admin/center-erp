@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-272";
+export const RELEASE = "2026.08.14-273";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -149,6 +149,17 @@ const RELEASE_NOTE_ARCHIVE_270 =
   "and no other tab or screen is touched.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-273 is checking, not building - it repairs a hole in the tool that checks every other "  +
+  "release's own note before it ships (scripts/check-user-copy.mjs, internal only, never reaches "  +
+  "a user). That guard's job is to refuse a note that copies an OLDER release's opening instead of "  +
+  "moving it to the archive; three earlier attempts at it each closed one hole while leaving an "  +
+  "adjacent one open, and the guard could still be defeated by deleting an archived note's own "  +
+  "declaration and pasting its text back into the current note. It now reads every note this file "  +
+  "has ever published straight from git history - including a note whose wording was corrected "  +
+  "after it was archived, which a same-day fix to this same guard initially missed - so a deletion "  +
+  "cannot hide what was already said. Nothing on any screen looks different.";
+
+const RELEASE_NOTE_ARCHIVE_272 =
   "-272 changes what the batch Attendance tab's Days Attendance % column divides by. The figure "  +
   "used to divide every student's government-reported days present by this project's own internal "  +
   "programme length, even on a row whose imported portal file states its own \"Total Training Days "  +
@@ -1051,6 +1062,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -270: ARCHIVE_269 wired in here in the SAME bump that declared it, same discipline.
   // -271: ARCHIVE_270 wired in here in the SAME bump that declared it, same discipline.
   // -272: ARCHIVE_271 wired in here in the SAME bump that declared it, same discipline.
+  // -273: ARCHIVE_272 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_272 + " " +
   RELEASE_NOTE_ARCHIVE_271 + " " +
   RELEASE_NOTE_ARCHIVE_270 + " " +
   RELEASE_NOTE_ARCHIVE_269 + " " +
