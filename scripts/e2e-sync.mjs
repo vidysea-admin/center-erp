@@ -1365,6 +1365,15 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
       && /readiness check/.test(String(A(tcRow)?.why ?? "")),
       String(A(tcRow)?.why ?? "").slice(-260));
 
+    // QA-1657 (S3, checker cycle 2). Cycle 2's "readiness check" clause was ALSO an exclusivity
+    // claim ("what the centre value does reach IS the readiness check") - false, because a blank
+    // row's centre write also moves `sync_gap.verdict_not_on_row` (rules.ts:4507-4511), a second
+    // report-rendered figure. Pinned so "names one destination" cannot regress into "names it as
+    // the only one" a third time.
+    ok("QA-1075: ...and readiness is not the ONLY other place the centre write reaches",
+      /verdict_not_on_row/.test(String(A(tcRow)?.why ?? "")),
+      String(A(tcRow)?.why ?? "").slice(-300));
+
     ok("QA-1075: exactly one recommendation survives on that row - the screen never stars two",
       (tcRow?.actions ?? []).filter((x) => x.recommended === true).length <= 1,
       JSON.stringify((tcRow?.actions ?? []).filter((x) => x.recommended === true).map((x) => x.action)));
