@@ -3534,8 +3534,8 @@ export type EligibilityVerdict = {
 // which is a different question and keeps its own gate below.
 export function awaitingMatchFor(opts: {
   basis: "portal" | "estimate" | null;
-  hit?: { count: number; hours_minutes: number | null } | null;
-}): { count: number; hours_minutes: number | null } | null {
+  hit?: { count: number; hours_minutes: number | null; refs?: { rowId: string; importId: string }[] } | null;
+}): { count: number; hours_minutes: number | null; refs?: { rowId: string; importId: string }[] } | null {
   // A member the portal has already answered for is never pulled back into limbo by a namesake.
   if (opts.basis === "portal") return null;
   return opts.hit && opts.hit.count > 0 ? opts.hit : null;

@@ -373,7 +373,7 @@ export const nameKey = (s: string | undefined) =>
  * can pull an unresolved row into view - and that is honest, because such a row genuinely might be
  * either person's, which is what "waiting on a match" says.
  */
-export async function unresolvedPortalRowsByName(scope: { batchId: unknown; locationId?: unknown }): Promise<Map<string, { count: number; hours_minutes: number | null; days_present: number | null }>> {
+export async function unresolvedPortalRowsByName(scope: { batchId: unknown; locationId?: unknown }): Promise<Map<string, { count: number; hours_minutes: number | null; days_present: number | null; refs: { rowId: string; importId: string }[] }>> {
   const where: Record<string, unknown> = scope.locationId
     ? { $or: [{ batch: scope.batchId }, { location: scope.locationId, batch: null }] }
     : { batch: scope.batchId };
@@ -388,7 +388,7 @@ export async function unresolvedPortalRowsByName(scope: { batchId: unknown; loca
   // the two students this was written for would have been told "6 rows". Rows are newest-first
   // above, so the FIRST import seen for a name is the newest, and only that import counts.
   const newestImportForName = new Map<string, string>();
-  const byName = new Map<string, { count: number; hours_minutes: number | null; days_present: number | null }>();
+  const byName = new Map<string, { count: number; hours_minutes: number | null; days_present: number | null; refs: { rowId: string; importId: string }[] }>();
   for (const r of rows) {
     // -148/QA-332: a trainer's row is the centre's own delivery record, not a student's missing
     // hours. It must never be offered as the explanation for a student having none.
@@ -403,6 +403,9 @@ export async function unresolvedPortalRowsByName(scope: { batchId: unknown; loca
       count: (prev?.count ?? 0) + 1,
       hours_minutes: r.total_hours_minutes ?? prev?.hours_minutes ?? null,
       days_present: r.total_days_present ?? prev?.days_present ?? null,
+      // Which rows, so a caller (the batch Attendance screen) can open the resolve drawer directly
+      // instead of dead-ending the operator on the general Government Attendance list.
+      refs: [...(prev?.refs ?? []), { rowId: String(r._id), importId: imp }],
     });
   }
   return byName;
