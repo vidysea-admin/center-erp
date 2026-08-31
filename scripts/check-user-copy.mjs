@@ -357,28 +357,38 @@ for (const file of walk(root)) {
     else { failed++; pushStructural(`lib/crud.ts: itemRoutes' PATCH must run its saved record through cfg.mapItems before replying, the same as its own GET does — otherwise a masked secret (locations' tc_password, trainers' pay fields, programs' contract_amount) rides out in the writer's own PATCH response (QA-1350)`); }
   }
 
-  // -128: and the archive must NOT ride along. QA-265 split the note in two precisely so the
-  // unauthenticated build marker publishes what THIS build changed rather than forty releases of
-  // internal commentary — and then the very next bump spliced the old note into CURRENT instead of
-  // moving it to the archive, silently republishing it. Prose may REFER to an older release ("-111
-  // built plain() so nobody reads Rule 45"); what must never appear is the archive's own opening.
-  const archive = (src.split("const RELEASE_NOTE_ARCHIVE =")[1] ?? "");
-  const archiveHead = (archive.match(/"([^"]{40,})"/) ?? [])[1] ?? "";
-  if (!archiveHead || !curNote.includes(archiveHead)) passed++;
-  else { failed++; pushStructural("lib/version.ts: RELEASE_NOTE_CURRENT contains the start of the archive — the old note was spliced in rather than moved, so the public marker republishes it"); }
-
-  // -129: and the sharper version of the same test, because the one above missed it. Splicing the
-  // PREVIOUS note into CURRENT leaves the archive's own opening untouched, so "does CURRENT contain
-  // the archive head" answers no while the marker still publishes two releases. I did exactly that
-  // on the -128 bump AND again on the -129 bump. The previous release's own opening marker is the
-  // thing that must not be there — mechanical, and it does not care how the text was moved.
+  // QA-1601 (2026-08-31) — BOTH halves of this guard were wrong, in OPPOSITE directions, which is
+  // exactly what QA-1541 recorded and neither half had been repaired. They are replaced by one test
+  // that reads what the ENDPOINT PUBLISHES rather than how the source happens to be wrapped.
+  //
+  // What was broken:
+  //  - The -128 test split on `const RELEASE_NOTE_ARCHIVE =`, which today matches only the CHAIN
+  //    constant, and its `"([^"]{40,})"` then grabbed a COMMENT FRAGMENT across the concatenation
+  //    (`" +\n  // -230 was built and never released...`). So it compared CURRENT against a comment
+  //    and passed for the wrong reason - a pin that could not go red, the class this repo keeps
+  //    finding.
+  //  - The -129 test looked for a double quote immediately followed by the previous tag. But
+  //    RELEASE_NOTE_CURRENT is a chain of concatenated literals, so EVERY line begins with a quote:
+  //    any prose mention of the previous release that happened to fall at a line break read as that
+  //    release's block opening. It fired on -265's perfectly good note (`"-264 made was tightened:`)
+  //    and, while it stood, check-user-copy returned 330/1 on EVERY tree - no session could obtain a
+  //    green wall, which made this project's own push gate unsatisfiable.
+  //
+  // The intent was always right and is stated three comments above: "Prose may REFER to an older
+  // release; what must never appear is the archive's own opening." So join the literals into the
+  // text a reader actually gets, and test THAT: the note must open with its own tag, and must not
+  // contain the previous note's opening sentence. Wrapping cannot affect either.
+  const joinLiterals = (block) => [...block.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1]).join("");
+  const curText = joinLiterals(curNote).trim();
   const n = parseInt((rel.split("-").pop() ?? "0"), 10);
-  const prevTag = n > 1 ? `"-${n - 1}` : "";  // -139: ANY separator. The -138 block opened `"-138,`
-  // and slipped past both `"-138 ` and `"-138:` — the pin's THIRD hole, found the same way as the
-  // first two: by reading the endpoint after a deploy rather than trusting the pin.           // how every block opens: `"-128 (QA-...`
-  const prevTagAlt = n > 1 ? `"-${n - 1}:` : "";         // older blocks open `"-126: ...`
-  if (!n || (!curNote.includes(prevTag) && !curNote.includes(prevTagAlt))) passed++;
-  else { failed++; pushStructural(`lib/version.ts: RELEASE_NOTE_CURRENT still opens a -${n - 1} block — the previous note was left in CURRENT instead of moved to the archive, so the public marker publishes two releases`); }
+
+  if (!n || curText.startsWith(`-${n}`)) passed++;
+  else { failed++; pushStructural(`lib/version.ts: the published note does not OPEN with -${n} — it opens "${curText.slice(0, 48)}", so the marker describes some other release`); }
+
+  const prevBlock = (src.split(`const RELEASE_NOTE_ARCHIVE_${n - 1} =`)[1] ?? "").split(";")[0];
+  const prevOpening = joinLiterals(prevBlock).trim().slice(0, 60);
+  if (!n || !prevOpening || prevOpening.length < 40 || !curText.includes(prevOpening)) passed++;
+  else { failed++; pushStructural(`lib/version.ts: RELEASE_NOTE_CURRENT contains the OPENING of the -${n - 1} note — the previous note was spliced in rather than moved to the archive, so the public marker publishes two releases`); }
 }
 
 // ---- -128 (QA-266): a drawer must be able to show its own failure ----
