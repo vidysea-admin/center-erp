@@ -167,6 +167,22 @@ export function emailError(v: unknown, opts?: { optional?: boolean }): string | 
   return EMAIL_RE.test(s) ? null : "That does not look like an email address (name@domain.tld).";
 }
 
+// QA-1582 (checker, qa-1575 cycle 2): emailError() above TRIMS before validating, so " x@y.com "
+// passes - and then the caller stored what the user typed, padding included. One row held
+// " c2979594863.ws@vidysea.com ", linkTrainerLoginByEmail anchored ^...$ against that stored value,
+// the trainer's own login never matched it, my_trainer_id came back null, and the documents door
+// qa-1575 opened was unreachable for that person with no message anywhere saying why. The case
+// variant of the same probe linked fine, because the regex carries `i` - only whitespace was
+// unhandled, which is what makes it silent rather than obvious.
+//
+// A validator that normalises to decide and then hands back the raw value is half a rule. This is
+// the other half, and it lives beside canonicalPhone for the same reason that one does: one rule,
+// two callers, no drifting copy.
+export function canonicalEmail(v: unknown): string | null {
+  const s = String(v ?? "").trim().toLowerCase();
+  return s || null;
+}
+
 // ---- The portal Candidate ID (SIDH "CAN" id) ----
 //
 // These three live HERE, in the pure module, and `lib/govt-attendance.ts` re-exports them for the

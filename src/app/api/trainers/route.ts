@@ -4,7 +4,7 @@ import { renderMail, sendMail } from "@/lib/mailer";
 import { hasPermission } from "@/lib/permissions";
 import { ACTIVE_BATCH_STATUSES, assertLocationOperational } from "@/lib/rules";
 import { HttpError, isScoped } from "@/lib/authz";
-import { emailError, canonicalPhone, phoneError } from "@/lib/validate";
+import { emailError, canonicalEmail, canonicalPhone, phoneError } from "@/lib/validate";
 
 // 2026-08-12, found by testing a real Trainer login: the directory is not location-scoped,
 // so every signed-in user could read all 19 trainers INCLUDING day_rate, compensation and
@@ -87,6 +87,10 @@ export const { GET, POST } = collectionRoutes({
     body.phone = canonicalPhone(body.phone)!;
     const eErr = emailError(body.email, { optional: true });
     if (eErr) throw new HttpError(400, eErr);
+    // QA-1582: store the canonical form, exactly as the phone line two lines above already does.
+    // Validation trimmed to DECIDE and then the raw value was written, so a padded address reached
+    // the database and stranded the trainer it belonged to.
+    if (body.email !== undefined) body.email = canonicalEmail(body.email);
     if (body.nominated_for_location) await assertLocationOperational(body.nominated_for_location, "Nominating a trainer for this centre");
     // QA-125: a scoped creator must tie the new trainer to their own centre — otherwise
     // they either write into a foreign centre or create someone their own list will

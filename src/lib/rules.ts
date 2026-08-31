@@ -82,7 +82,12 @@ export async function assertLocationOperational(locationId: unknown, action = "T
 export async function linkTrainerLoginByEmail(userId: unknown, emailIn: string): Promise<{ _id: unknown } | null> {
   const email = String(emailIn ?? "").trim().toLowerCase();
   if (!email) return null;
-  const rx = new RegExp(`^${email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
+  // QA-1582 (checker, qa-1575 cycle 2): the anchors are padded on purpose. Canonicalising the
+  // WRITE door stops new rows carrying " x@y.com ", but it cannot reach rows already in the
+  // database - and one of those is a real trainer whose own login silently resolves to nothing.
+  // `^\\s*...\\s*$` matches the stored padding without a migration, and still anchors, so it can
+  // never match a DIFFERENT address that merely contains this one.
+  const rx = new RegExp(`^\\s*${email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`, "i");
   const unlinked = await Trainer.find({ email: rx, $or: [{ user: null }, { user: { $exists: false } }] })
     .select("_id").limit(2).lean<any[]>();
   if (unlinked.length !== 1) return null;
