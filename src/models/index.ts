@@ -519,7 +519,7 @@ const RoomSchema = new Schema({
 const TrainerSchema = new Schema({
   name: { type: String, required: true },
   phone: { type: String, required: true },
-  email: String,
+  email: { type: String, trim: true }, // QA-1628: same class as UserSchema below
   skills: { type: [String], required: true },
   home_location: oid("Location"),
   // 2026-08-13 (Manish): "Others ka option bhi hona chahiye" — a trainer's home town is
@@ -758,7 +758,7 @@ const CandidateSchema = new Schema({
   sidh_failure_reason: String, // why the portal refused — the queue is useless without the why
   // 15/08 (Umesh): email mandatory on SELF-registration (the email pipeline is coming) —
   // optional everywhere else (drawer, imports), so old data never blocks.
-  email: String,
+  email: { type: String, trim: true }, // QA-1628: same class as UserSchema below
   // Portal "Candidate ID" (CAN_40918461). The government attendance export keys on this, so it
   // is the only reliable join — names repeat within a centre.
   sidh_candidate_id: { type: String, default: null },
@@ -1414,7 +1414,7 @@ const PublicTokenSchema = new Schema({
   allow_updates: { type: Boolean, default: false }, // plan: the link holder may tick milestones
   // email_otp / phone_otp: the challenge state. Only the HASH of the code is stored; 10-minute
   // expiry; 5 wrong attempts burn the token. -110: phone_otp proves a mobile number instead.
-  email: String,
+  email: { type: String, trim: true }, // QA-1628: same class as UserSchema below
   phone: String,
   otp_hash: String,
   otp_expires_at: Date,
@@ -1483,7 +1483,7 @@ FeedbackSchema.index({ batch_member: 1 }, { unique: true }); // one response per
 // ---------- User ----------
 const UserSchema = new Schema({
   name: { type: String, required: true },
-  email: { type: String, required: true, unique: true, lowercase: true },
+  email: { type: String, required: true, unique: true, lowercase: true, trim: true }, // QA-1628: case was normalised here and whitespace was not
   phone: String,
   password_hash: { type: String, required: true },
   role: { type: String, enum: USER_ROLE, required: true },

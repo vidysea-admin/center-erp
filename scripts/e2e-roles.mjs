@@ -2238,6 +2238,40 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       ok("QA-1626 (m): every whitespace the write door strips is also FINDABLE by the resolver - measured through Mongo, not Node",
         wsMisses.length === 0, wsMisses.join(" | "));
 
+      // (n) QA-1628: a login created by PASTING an address could never be used. POST /api/users
+      // stored body.email raw, UserSchema normalised CASE and not whitespace, and auth.ts lowercased
+      // the credential without trimming - so the stored row was "  x@y.com  ", the browser submits
+      // the trimmed value, and the exact-match lookup on a unique index missed every time. The
+      // person is told their password is wrong, forever.
+      // Both halves are pinned because either alone leaves someone locked out: the WRITE must store
+      // the canonical value, and SIGN-IN must tolerate a stray space in what was typed.
+      const padUserMail = `  qa1628.pad.${stampT}@vidysea.com  `;
+      const plain = padUserMail.trim();
+      const madeU = await req(admin, "POST", "/api/users", {
+        name: "QA1628 Pad " + stampT, email: padUserMail, role: "Trainer",
+        password: PW, can_edit: true, status: "Approved",
+      });
+      ok("QA-1628 (n1): Add User with a pasted, padded address is accepted",
+        madeU.status === 201 || madeU.status === 200, `got ${madeU.status} ${JSON.stringify(madeU.data).slice(0, 120)}`);
+
+      if (madeU.status === 201 || madeU.status === 200) {
+        const { MongoClient: MC4 } = await import("mongodb");
+        const mc4 = new MC4(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+        await mc4.connect();
+        const stored = await mc4.db(process.env.MONGODB_DB || "center_erp_ci")
+          .collection("users").findOne({ email: plain }, { projection: { email: 1 } });
+        await mc4.close();
+        ok("QA-1628 (n2): ...and the row STORES the trimmed address, so the unique index means what it says",
+          !!stored && stored.email === plain, JSON.stringify({ found: !!stored, stored: stored?.email }));
+
+        // The one that actually matters to a person: can they sign in with what they were given?
+        ok("QA-1628 (n3): the person can SIGN IN with the plain address - the account is reachable",
+          !!(await login(plain, PW)), plain);
+        // ...and a stray space typed into the login box is not a wrong password.
+        ok("QA-1628 (n4): ...and a stray space typed at sign-in is tolerated, not read as a bad password",
+          !!(await login(`  ${plain} `, PW)), plain);
+      }
+
       // (g) deleting is not filing. "daal sake" opened upload, not removal.
       const docs = await req(admin, "GET", `/api/trainers/${meT._id}/documents`);
       const anyDoc = docs.data?.items?.[0]?._id;
