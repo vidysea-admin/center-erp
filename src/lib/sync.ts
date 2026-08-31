@@ -86,6 +86,9 @@ const LOCATION_FIELDS = new Set([
   "external_id", "name", "city", "state", "address",
   "approval_status", "spoc_name", "spoc_phone", "principal_name", "principal_phone",
   "tc_status", "tc_id", "tc_password",
+  // 2026-08-31: client added 4 columns to the same workbook (AEBAS portal login + its OTP
+  // mobile) — captured at both centre and job-role-row level, per row below, unlike tc_password.
+  "mobile_otp", "aebas_link", "aebas_id", "aebas_password",
 ]);
 
 // QA-497 (-166): fields that live on the (centre x job role) ROW, addressed as
@@ -102,7 +105,10 @@ const LOCATION_FIELDS = new Set([
 //
 // One Set, read by BOTH the diff loop and the apply switch, because two lists of "what is a row
 // field" is exactly the ARCHITECTURE section 3 disease.
-const TARGET_ROW_FIELDS = new Set(["approved_target", "tc_status", "tc_id"]);
+const TARGET_ROW_FIELDS = new Set([
+  "approved_target", "tc_status", "tc_id",
+  "mobile_otp", "aebas_link", "aebas_id", "aebas_password",
+]);
 
 // QA-1263 (client call 2026-08-25). The client's question had no answer anywhere in the product:
 //   "sheet me isko boliye 12398, yaha pe 12,090 hai, kis aadhar pe hai? Aur sath me yeh bhi match
@@ -184,6 +190,10 @@ const TARGET_BASE_LABEL: Record<string, string> = {
   approved_target: "approved target",
   tc_status: "TC status",
   tc_id: "TC ID",
+  mobile_otp: "Mobile number (OTP)",
+  aebas_link: "AEBAS link",
+  aebas_id: "AEBAS ID",
+  aebas_password: "AEBAS password",
 };
 
 // Everything the verdict is decided from. Deliberately the stored fields and nothing else - a
@@ -440,7 +450,7 @@ export function canRevert(c: { status?: string; action_taken?: string | null; fi
 // The lesson is not "we miscounted properties" any more than cycle 1's was "we miscounted doors".
 // It is that a per-route spread makes the count somebody's memory. This function is the count, once.
 // ARCHITECTURE.md section 3 exists for this exact codebase habit.
-export const SHEET_CHANGE_SECRET_FIELDS = new Set(["tc_password"]);
+export const SHEET_CHANGE_SECRET_FIELDS = new Set(["tc_password", "aebas_password"]);
 
 export function isSecretSheetField(field?: string | null): boolean {
   return SHEET_CHANGE_SECRET_FIELDS.has(String(field ?? ""));

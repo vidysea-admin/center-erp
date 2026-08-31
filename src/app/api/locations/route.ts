@@ -7,7 +7,7 @@ import { tcVerdict, trainerTiesFor } from "@/lib/rules";
 // locations.manage, and the saved matrix grants that to Operations AND every SPOC — so the
 // password sat in plain text for exactly the logins it should be hidden from. The gate is
 // the ROLE now, same as the Sheet Watch column: Admin sees it, nobody else does.
-const SECRET_FIELDS = ["tc_password"];
+const SECRET_FIELDS = ["tc_password", "aebas_password"];
 // -251 (QA-289, S1): "A live credential is not on screen unless somebody asks for it." Role-masking
 // was the OLD fix and it answered the wrong question — it decided WHO may see the password, never
 // WHETHER it should be on screen unasked. For an Admin the answer stayed "always": a column nobody
@@ -42,7 +42,7 @@ export const { GET, POST } = collectionRoutes({
   // -129 (QA-271): "active" joins the whitelist so a centre can be retired through the same
   // audited door as everything else. A field the model has and the route does not is the -116
   // lesson — it looks saved and is gone on the next read.
-  fields: ["code", "external_id", "institution_id", "name", "city", "state", "address", "approval_status", "operational_status", "status_reason", "status_changed_on", "spoc_name", "spoc_phone", "spoc_user", "principal_name", "principal_phone", "principal_user", "contacts", "district", "tc_id", "tc_password", "tc_status", "operating_partner", "cluster_head_name", "cluster_head_phone", "active"],
+  fields: ["code", "external_id", "institution_id", "name", "city", "state", "address", "approval_status", "operational_status", "status_reason", "status_changed_on", "spoc_name", "spoc_phone", "spoc_user", "principal_name", "principal_phone", "principal_user", "contacts", "district", "tc_id", "tc_password", "tc_status", "mobile_otp", "aebas_link", "aebas_id", "aebas_password", "operating_partner", "cluster_head_name", "cluster_head_phone", "active"],
   searchFields: ["code", "name", "city", "external_id", "institution_id", "tc_id", "district"],
   // QA-095: the CEO shut the Trainer's locations door — the API answers 403 now, not with
   // the centre's commercials. Batch/home surfaces carry the centre NAME on their own.
@@ -63,7 +63,7 @@ export const { GET, POST } = collectionRoutes({
     const locIds = items.map((l: any) => l._id);
     const [targets, trainerRows] = await Promise.all([
       LocationTarget.find({ location: { $in: locIds } })
-        .select("location program tc_status tc_id approved_target trainers_required enrolled_reported pending_reported nominations_received_reported nominated_nsdc_reported trainers_certified_reported")
+        .select("location program tc_status tc_id mobile_otp aebas_id approved_target trainers_required enrolled_reported pending_reported nominations_received_reported nominated_nsdc_reported trainers_certified_reported")
         .populate("program", "name code scheme")
         .lean<any[]>(),
       // QA-1262 (client call 2026-08-25, "Zero zero dikh raha hai. Aur nomination ja chuka tha
@@ -88,6 +88,10 @@ export const { GET, POST } = collectionRoutes({
         program_id: t.program?._id ?? null,
         tc_verdict: tcVerdict(t.tc_status),
         tc_id: t.tc_id ?? null, tc_status: t.tc_status ?? null, approved_target: t.approved_target ?? null,
+        // 2026-08-31: per-job-role AEBAS ID/OTP mobile, same shape as tc_id above. The password
+        // stays off this list payload entirely (QA-289) — see maskLocationSecrets for the centre-
+        // level secret and the Capacity & Target tab for the per-row "set/not set" indicator.
+        aebas_id: t.aebas_id ?? null, mobile_otp: t.mobile_otp ?? null,
         trainers_required: t.trainers_required ?? null,
         enrolled_reported: t.enrolled_reported ?? null, pending_reported: t.pending_reported ?? null,
         nominations_received_reported: t.nominations_received_reported ?? null,

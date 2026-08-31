@@ -67,7 +67,9 @@ function Overview({ loc, onSaved, setError }: any) {
       // empty value is never sent (and their PATCH would 403 anyway).
       for (const f of ["name", "city", "state", "address", "approval_status", "operational_status", "status_reason", "spoc_name", "spoc_phone", "principal_name", "principal_phone", "external_id",
         "institution_id", // QA-117
-        "district", "tc_id", "tc_status", "tc_password", "operating_partner", "cluster_head_name", "cluster_head_phone"]) {
+        "district", "tc_id", "tc_status", "tc_password",
+        "mobile_otp", "aebas_link", "aebas_id", "aebas_password",
+        "operating_partner", "cluster_head_name", "cluster_head_phone"]) {
         if (form[f] !== loc[f]) patch[f] = form[f];
       }
       const res = await api(`/api/locations/${loc._id}`, { method: "PATCH", json: patch });
@@ -113,6 +115,14 @@ function Overview({ loc, onSaved, setError }: any) {
         <Field label="TC status"><input className={inputCls} value={form.tc_status ?? ""} onChange={(e) => set("tc_status", e.target.value)} placeholder="Approved / …" /></Field>
         <Field label="TC password (visible to locations.manage only)">
           <input type="password" className={inputCls} value={form.tc_password ?? ""} onChange={(e) => set("tc_password", e.target.value)} />
+        </Field>
+        {/* 2026-08-31: client added 4 columns to the same OneDrive workbook — a second govt
+            portal login (AEBAS, biometric attendance), separate from TC ID/Password above. */}
+        <Field label="Mobile number (OTP)"><input className={inputCls} value={form.mobile_otp ?? ""} onChange={(e) => set("mobile_otp", e.target.value)} /></Field>
+        <Field label="AEBAS link"><input className={inputCls} value={form.aebas_link ?? ""} onChange={(e) => set("aebas_link", e.target.value)} /></Field>
+        <Field label="AEBAS ID"><input className={inputCls} value={form.aebas_id ?? ""} onChange={(e) => set("aebas_id", e.target.value)} /></Field>
+        <Field label="AEBAS password (visible to locations.manage only)">
+          <input type="password" className={inputCls} value={form.aebas_password ?? ""} onChange={(e) => set("aebas_password", e.target.value)} />
         </Field>
         <Field label="Operating partner"><input className={inputCls} value={form.operating_partner ?? ""} onChange={(e) => set("operating_partner", e.target.value)} /></Field>
         <Field label="Cluster head"><input className={inputCls} value={form.cluster_head_name ?? ""} onChange={(e) => set("cluster_head_name", e.target.value)} /></Field>
@@ -301,6 +311,21 @@ function Targets({ locationId, setError }: any) {
                 <span className="text-xs">
                   {r.tc_id ?? <span className="text-gray-400">no TC ID</span>}
                   <span className="block">{r.tc_status ? <Chip value={r.tc_status} /> : <span className="text-gray-400">status —</span>}</span>
+                </span>
+              ),
+            },
+            {
+              // 2026-08-31: the row's own AEBAS login, same reasoning as the TC column above.
+              // Never renders the raw password (QA-289's "not on screen unless asked" — the same
+              // rule the centre-level door already follows), just whether one is set.
+              key: "aebas", label: "AEBAS (per job role)", mobile: false,
+              filterText: (r: any) => `${r.aebas_id ?? ""} ${r.mobile_otp ?? ""}`,
+              render: (r: any) => (
+                <span className="text-xs">
+                  {r.aebas_id ?? <span className="text-gray-400">no AEBAS ID</span>}
+                  <span className="block text-gray-400">
+                    {(r.aebas_password || r.aebas_password_set) ? "password set" : "password —"}
+                  </span>
                 </span>
               ),
             },
