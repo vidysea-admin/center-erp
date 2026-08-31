@@ -7,6 +7,11 @@ import { capacitySummary, trainerCountsFor } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { requireApproval } from "@/lib/approvals";
 import { audit } from "@/lib/audit";
+// 2026-08-31: LocationTarget now carries aebas_password (per job-role AEBAS login, same reason
+// tc_id is duplicated onto this schema). This GET has no role gate of its own — every reader
+// with location scope reaches it — so it needs the SAME masking the centre-level door already
+// applies to tc_password, reusing that one function rather than a second copy of SECRET_FIELDS.
+import { maskLocationSecrets } from "../../route";
 
 // GET: targets for a location with capacity math (§5)
 export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
@@ -64,7 +69,8 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
       },
     };
   }));
-  return NextResponse.json({ items });
+  // Admin-only reveal, same gate as the centre-level door (locations/[id]/route.ts).
+  return NextResponse.json({ items: maskLocationSecrets(items, user.role === "Admin") });
 });
 
 // PUT: upsert a target row { program, approved_target?, allocated_target?, start_date?, end_date? }
@@ -87,6 +93,8 @@ export const PUT = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   // fresh approval reaches the board without waiting for the next sheet sync.
   for (const f of ["approved_target", "allocated_target", "start_date", "end_date",
     "trainers_required", "enrolled_reported", "pending_reported", "tc_id", "tc_status",
+    // 2026-08-31: per-job-role AEBAS login, same reason tc_id is a row field.
+    "mobile_otp", "aebas_link", "aebas_id", "aebas_password",
     // 2026-08-13 (Karunn): the sheet's claimed trainer counts — soft data kept beside ours.
     "nominations_received_reported", "nominated_nsdc_reported", "trainers_certified_reported"]) {
     if (body[f] !== undefined) set[f] = body[f];

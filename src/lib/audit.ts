@@ -71,7 +71,7 @@ export async function auditDiff(
 // as present-or-absent and nothing more; aadhaar keeps its ****1234 tail because there the tail is
 // how a human recognises the right record.
 const AUDIT_MASK_FIELDS = new Set(["aadhaar_no"]);
-const AUDIT_SECRET_FIELDS = new Set(["tc_password"]);
+const AUDIT_SECRET_FIELDS = new Set(["tc_password", "aebas_password"]);
 function maskSensitive(field: string, value: unknown): unknown {
   if (AUDIT_SECRET_FIELDS.has(field)) {
     const s = String(value ?? "");

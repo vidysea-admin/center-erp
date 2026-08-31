@@ -163,10 +163,19 @@ export const FIELD_CATALOG: Record<"Candidate" | "Trainer" | "Location", FieldSp
     { key: "principal_phone", label: "Principal phone", type: "phone", aliases: ["principal phone", "principal mobile"] },
     { key: "tc_id", label: "TC ID (portal)", type: "text", aliases: ["tc id"] },
     { key: "tc_status", label: "TC status", type: "text", aliases: ["tc status"] },
-    { key: "tc_password", label: "TC password", type: "text", aliases: ["tc password", "password"] },
+    // "password" (bare) moved off this entry 2026-08-31 — the sheet's literal header for THIS
+    // field is "TC Password", never bare "Password" (that now belongs to aebas_password below).
+    { key: "tc_password", label: "TC password", type: "text", aliases: ["tc password"] },
     { key: "operating_partner", label: "Operating partner", type: "text", aliases: ["operating partner", "partner"] },
     { key: "cluster_head_name", label: "Cluster head", type: "text", aliases: ["cluster head", "cluster head name"] },
     { key: "cluster_head_phone", label: "Cluster head phone", type: "phone", aliases: ["cluster head phone", "cluster head mobile"] },
+    // 2026-08-31: client added 4 columns to the same workbook, right after `Remark` (AEBAS Link/
+    // ID/Password) and right after TC Password (Mobile Number - OTP). AEBAS is a second govt
+    // portal (biometric attendance) with its own login, separate from tc_id/tc_password above.
+    { key: "mobile_otp", label: "Mobile number (OTP)", type: "phone", aliases: ["mobile number - otp", "mobile number otp", "otp mobile"] },
+    { key: "aebas_link", label: "AEBAS link", type: "text", aliases: ["aebas link"] },
+    { key: "aebas_id", label: "AEBAS ID", type: "text", aliases: ["id"] },
+    { key: "aebas_password", label: "AEBAS password", type: "text", aliases: ["password"] },
   ],
 };
 

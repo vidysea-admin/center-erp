@@ -247,6 +247,13 @@ function LocationsInner() {
             },
           },
           { key: "tc_status", label: "TC Status", filterable: true, filterText: (r: any) => r.jr?.tc_status ?? "", render: (r: any) => r.jr?.tc_status ? <Chip value={r.jr.tc_status} /> : <span className="text-gray-400">—</span> },
+          // 2026-08-31: client added 4 columns to the same workbook — a second govt portal login
+          // (AEBAS, biometric attendance), per job role like tc_id/tc_status above. The password
+          // itself deliberately gets no list column (QA-289's "not on screen unless asked") — it
+          // stays reachable from the centre's own Capacity & Target tab, which already shows
+          // whether one is set without printing it.
+          { key: "aebas_id", label: "AEBAS ID", mobile: false, filterText: (r: any) => r.jr?.aebas_id ?? "", render: (r: any) => r.jr?.aebas_id ? <span className="font-mono text-xs">{r.jr.aebas_id}</span> : <span className="text-gray-400">—</span> },
+          { key: "mobile_otp", label: "Mobile (OTP)", mobile: false, filterText: (r: any) => r.jr?.mobile_otp ?? "", render: (r: any) => r.jr?.mobile_otp ? <span className="text-xs">{r.jr.mobile_otp}</span> : <span className="text-gray-400">—</span> },
           // QA-223 (Manish 17/08 M4-08: "ye trainer required — aise click kara to yahan pe koi field hai
           // hi nahi"): the number lives on the location's own edit form ("Trainers required"), but this
           // cell used to land on a generic Overview with nothing to type into. It opens that form now,

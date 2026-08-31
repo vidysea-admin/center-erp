@@ -11,7 +11,7 @@ export const { GET, PATCH } = itemRoutes({
   async mapItems(items, user) {
     return maskLocationSecrets(items, user.role === "Admin");
   },
-  fields: ["code", "external_id", "institution_id", "name", "city", "state", "address", "approval_status", "operational_status", "status_reason", "status_changed_on", "spoc_name", "spoc_phone", "spoc_user", "principal_name", "principal_phone", "principal_user", "contacts", "district", "tc_id", "tc_password", "tc_status", "operating_partner", "cluster_head_name", "cluster_head_phone", "active"],
+  fields: ["code", "external_id", "institution_id", "name", "city", "state", "address", "approval_status", "operational_status", "status_reason", "status_changed_on", "spoc_name", "spoc_phone", "spoc_user", "principal_name", "principal_phone", "principal_user", "contacts", "district", "tc_id", "tc_password", "tc_status", "mobile_otp", "aebas_link", "aebas_id", "aebas_password", "operating_partner", "cluster_head_name", "cluster_head_phone", "active"],
   readRoles: ["Admin", "Operations", "Location", "Enrollment"], // QA-095: not the Trainer's door
   writeRoles: ["Admin", "Operations", "Location"],
   permission: "locations.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
@@ -31,7 +31,7 @@ export const { GET, PATCH } = itemRoutes({
       // QA-089: district and operating_partner ride the AVPL rebase too — everything the
       // master sheet writes is fixed the same way, or the next rebase silently undoes an
       // approved SPOC edit.
-      const FIXED = ["code", "external_id", "name", "city", "state", "district", "operating_partner", "tc_id", "tc_password", "tc_status", "approval_status", "operational_status"];
+      const FIXED = ["code", "external_id", "name", "city", "state", "district", "operating_partner", "tc_id", "tc_password", "tc_status", "mobile_otp", "aebas_link", "aebas_id", "aebas_password", "approval_status", "operational_status"];
       const touched = FIXED.filter((f) => data[f] !== undefined && String(data[f]) !== String((existing as any)[f] ?? ""));
       if (touched.length) {
         throw new HttpError(403, `Fixed by the Admin/master sheet — a centre login cannot change: ${touched.join(", ")}.`);
