@@ -1041,6 +1041,23 @@ function CandidatesInner() {
                   valid values are Below 10th · 10th Pass · 12th Pass · Graduate · Post Graduate.
                 </div>
               )}
+              {/* QA-446: the route has computed and returned these two keys since -154 (REQ-379),
+                  same lane as education_unmatched/batch_interest_unmatched above — the API's own
+                  comment says "surfaced on the PREVIEW so it is seen before the import runs", but
+                  no screen ever rendered them. Same silent-drop shape QA-1235 already caught once
+                  for batch_interest_unmatched; these two were the two siblings that fix missed. */}
+              {importState.preview?.sidh_status_unmatched?.length > 0 && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  SIDH status values not recognised (left at the default, never guessed): {importState.preview.sidh_status_unmatched.join(" · ")} —
+                  valid values are Not Registered · Link Sent · Registered · Registration Failed.
+                </div>
+              )}
+              {importState.preview?.unhandled_fields?.length > 0 && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  Mapped to a field this import cannot write, so nothing is saved for it: {importState.preview.unhandled_fields.join(" · ")} —
+                  map it to a different destination, or leave it unmapped.
+                </div>
+              )}
               {/* QA-1235 (checker on qa-1191 cycle 1). The route reported these and NOTHING SHOWED
                   THEM — proved in a browser, not by reading the diff: the drawer printed the
                   education warning above and said nothing about batch interest. The whole point of
