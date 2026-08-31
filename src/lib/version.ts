@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-269";
+export const RELEASE = "2026.08.14-270";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -138,6 +138,17 @@ const RELEASE_NOTE_ARCHIVE_254 =
   "screen for a real number sitting one tab over.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-270 adds a search box and status filters to the Enrollment tab, matching the ones the Closure "  +
+  "tab already had, plus a small analytics line at the top showing how many students have finished "  +
+  "Registration, e-KYC and Batch Accept. Typing a name, phone number or Candidate ID narrows the "  +
+  "list of cards to the one being looked for instead of scrolling past everyone else; clicking a "  +
+  "status pill (Not Started / In Progress / Completed / Failed) does the same by stage, and each "  +
+  "pill shows its own count. The bulk-action buttons (Mark Registration, Mark e-KYC, and so on) now "  +
+  "act only on whatever the search or filter is currently showing, not the whole batch, so narrowing "  +
+  "the list before using one of them is safe. Nothing about who can see or edit a student changed, "  +
+  "and no other tab or screen is touched.";
+
+const RELEASE_NOTE_ARCHIVE_269 =
   "-269 finishes what -268 announced but did not fully ship: the AEBAS government-portal login "  +
   "columns on Location Master had their sync, their screen, and their masking live, but not the "  +
   "underlying field on the record itself, so a write reached the database and was silently kept "  +
@@ -1005,6 +1016,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -267: ARCHIVE_266 wired in here in the SAME bump that declared it, same discipline.
   // -268: ARCHIVE_267 wired in here in the SAME bump that declared it, same discipline.
   // -269: ARCHIVE_268 wired in here in the SAME bump that declared it, same discipline.
+  // -270: ARCHIVE_269 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_269 + " " +
   RELEASE_NOTE_ARCHIVE_268 + " " +
   RELEASE_NOTE_ARCHIVE_267 + " " +
   RELEASE_NOTE_ARCHIVE_266 + " " +
