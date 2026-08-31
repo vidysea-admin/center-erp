@@ -452,8 +452,16 @@ export function canRevert(c: { status?: string; action_taken?: string | null; fi
 // ARCHITECTURE.md section 3 exists for this exact codebase habit.
 export const SHEET_CHANGE_SECRET_FIELDS = new Set(["tc_password", "aebas_password"]);
 
+// QA-1632 (checker on qa-1636, cycle 1): tc_password was never a target-row field, so this only
+// ever had to match the bare form. aebas_password is BOTH secret and row-scoped (Umesh's per-
+// job-role ask), stored as "aebas_password:<CODE>" — an exact-string Set.has() never matched
+// that, so a per-job-role AEBAS password reached every Sync-Inbox reader (list, single-record,
+// apply-approval-summary, revert) as plaintext. Resolve to the row form's BASE first, the same
+// normalisation targetRowField() already performs for every other purpose in this file — the row
+// form and the bare form must stay one concept, not a second copy that only agrees by accident.
 export function isSecretSheetField(field?: string | null): boolean {
-  return SHEET_CHANGE_SECRET_FIELDS.has(String(field ?? ""));
+  const f = String(field ?? "");
+  return SHEET_CHANGE_SECRET_FIELDS.has(targetRowField(f)?.base ?? f);
 }
 
 // QA-1026 (S1): the list route now masks a secret field unconditionally (see maskSheetChange's own
