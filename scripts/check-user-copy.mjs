@@ -385,35 +385,44 @@ for (const file of walk(root)) {
   if (!n || curText.startsWith(`-${n}`)) passed++;
   else { failed++; pushStructural(`lib/version.ts: the published note does not OPEN with -${n} — it opens "${curText.slice(0, 48)}", so the marker describes some other release`); }
 
-  // QA-1613 / QA-1614 (checker, qa-1601 cycle 1) — the fix for the fourth hole had a fifth and a
-  // sixth inside it, both of the same family it had just closed: A TEST THAT PASSES FOR THE WRONG
-  // REASON. Neither was hypothetical; the checker scored the first one byte-identical to baseline.
+  // QA-1615 (checker, qa-1613 cycle 1 FAIL) — THE SEVENTH HOLE, and it was mine, of the OPPOSITE
+  // SIGN to the sixth. Making "no RELEASE_NOTE_ARCHIVE_<n-1>" a hard failure false-positived on
+  // legitimate trees: releases 228 and 232-235 were NEVER BUILT in this repo (d:/erp/CLAUDE.md; and
+  // :990 below records the same for -230), so `n-1` can be absent BY DESIGN. Proven on the real
+  // historical -236 tree: post-change 329/2 with "there is no RELEASE_NOTE_ARCHIVE_235", pre-change
+  // 330/1 clean on identical bytes. That is precisely the trade QA-1601 existed to undo - a silent
+  // pass swapped for a false alarm - and while such a release is current the wall cannot go green,
+  // so the push gate is unsatisfiable again. Same harm, opposite direction.
   //
-  //  - QA-1613: if `RELEASE_NOTE_ARCHIVE_<n-1>` does not exist, `prevOpening` was "" and the whole
-  //    test short-circuited to a pass. So appending the entire previous note to CURRENT *and
-  //    deleting its archive constant* — which is the defect's own wording, "spliced in rather than
-  //    MOVED to the archive", in its purest form — scored clean. A missing archive constant is not
-  //    an absence of evidence, it IS the finding: the previous note went somewhere, and if it is not
-  //    archived it is still in CURRENT.
-  //  - QA-1614: `split(";")[0]` cut the block at the first semicolon CHARACTER, including one inside
-  //    the note's own prose, truncating the reference below the 40-char floor and skipping SILENTLY.
-  //    Latent today - none of the 56 archive constants trips it - and latent is how the first four
-  //    holes in this guard also started. The block now ends where a block actually ends: at the next
-  //    top-level declaration.
-  const afterName = src.split(`const RELEASE_NOTE_ARCHIVE_${n - 1} =`)[1] ?? "";
-  const prevBlock = afterName ? afterName.split(/\n(?=(?:export )?const )/)[0] : "";
-  const prevOpening = joinLiterals(prevBlock).trim().slice(0, 60);
+  // The rule that has no sign problem: CURRENT must not contain the opening of ANY archived note.
+  // It needs no arithmetic about which release came before, so a skipped number is simply not a
+  // question; and it closes QA-1617 (splicing the n-2 note, which the n-1-only test never saw) in
+  // the same stroke. A release with NOTHING archived below it is still a real finding - the note
+  // that was there went somewhere - but "the number below me was never built" is not.
+  const archived = [...src.matchAll(/const RELEASE_NOTE_ARCHIVE_(\d+) =/g)]
+    .map((m) => Number(m[1]))
+    .filter((k) => k < n)
+    .sort((a, b) => b - a);
+  const openingOf = (k) => {
+    const after = src.split(`const RELEASE_NOTE_ARCHIVE_${k} =`)[1] ?? "";
+    return joinLiterals(after.split(/\n(?=(?:export )?const )/)[0]).trim().slice(0, 60);
+  };
   if (!n) passed++;
-  else if (!afterName) {
+  else if (!archived.length) {
     failed++;
-    pushStructural(`lib/version.ts: there is no RELEASE_NOTE_ARCHIVE_${n - 1} — the -${n - 1} note was not moved to the archive, so nothing can check whether it is still sitting in RELEASE_NOTE_CURRENT`);
-  } else if (prevOpening.length < 40) {
-    failed++;
-    pushStructural(`lib/version.ts: the -${n - 1} archive note reads only ${prevOpening.length} characters, too short to check CURRENT against — the splice test cannot run, and silently passing it is how this guard has failed five times`);
-  } else if (curText.includes(prevOpening)) {
-    failed++;
-    pushStructural(`lib/version.ts: RELEASE_NOTE_CURRENT contains the OPENING of the -${n - 1} note — the previous note was spliced in rather than moved to the archive, so the public marker publishes two releases`);
-  } else passed++;
+    pushStructural(`lib/version.ts: RELEASE is -${n} and NOTHING below it is archived — whatever note preceded this one went somewhere, and if it was not moved to an archive constant it may still be sitting in RELEASE_NOTE_CURRENT`);
+  } else {
+    // QA-1614 stays closed: a block too short to compare is named, not skipped.
+    const stunted = archived.filter((k) => openingOf(k).length < 40);
+    const spliced = archived.filter((k) => { const o = openingOf(k); return o.length >= 40 && curText.includes(o); });
+    if (spliced.length) {
+      failed++;
+      pushStructural(`lib/version.ts: RELEASE_NOTE_CURRENT contains the OPENING of the -${spliced[0]} note — an older note was spliced in rather than moved to the archive, so the public marker publishes two releases`);
+    } else if (stunted.length) {
+      failed++;
+      pushStructural(`lib/version.ts: the -${stunted[0]} archive note reads only ${openingOf(stunted[0]).length} characters, too short to check CURRENT against — the splice test cannot run on it, and silently passing that is how this guard has failed six times`);
+    } else passed++;
+  }
 }
 
 // ---- -128 (QA-266): a drawer must be able to show its own failure ----
