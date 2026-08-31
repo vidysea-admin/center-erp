@@ -82,12 +82,35 @@ export async function assertLocationOperational(locationId: unknown, action = "T
 export async function linkTrainerLoginByEmail(userId: unknown, emailIn: string): Promise<{ _id: unknown } | null> {
   const email = String(emailIn ?? "").trim().toLowerCase();
   if (!email) return null;
-  // QA-1582 (checker, qa-1575 cycle 2): the anchors are padded on purpose. Canonicalising the
-  // WRITE door stops new rows carrying " x@y.com ", but it cannot reach rows already in the
-  // database - and one of those is a real trainer whose own login silently resolves to nothing.
-  // `^\\s*...\\s*$` matches the stored padding without a migration, and still anchors, so it can
-  // never match a DIFFERENT address that merely contains this one.
-  const rx = new RegExp(`^\\s*${email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`, "i");
+  // QA-1582: the anchors are padded so a row already carrying " x@y.com " still resolves.
+  // Canonicalising the WRITE door stops new rows being padded but cannot reach rows already in
+  // the database - and one of those is a real trainer whose own login silently resolves to null.
+  //
+  // QA-1626 (checker, cycle 1 FAIL) - THE WHITESPACE CLASS IS SPELLED OUT BECAUSE THIS REGEX DOES
+  // NOT RUN IN NODE. It is handed to MongoDB (`Trainer.find({ email: rx })` below), and Mongo's
+  // `\s` is ASCII-ONLY while the write door trims with Node's Unicode-aware String.trim().
+  // So NBSP, EM-space, narrow-NBSP, ideographic space and BOM were all stripped on write and
+  // UNFINDABLE on read - exactly the rows this half exists to reach. Cycle 1 verified the pattern
+  // with rx.test() in Node, where it passed in all four directions, and the `i` flag DOES cross
+  // into Mongo, so the case half really was confirmed and made the whitespace half look confirmed
+  // too. Verify a regex in the engine that will run it.
+  // QA-1626 cycle 2, corrected by MongoDB itself: the first attempt spelled the class with `\uXXXX`
+  // escapes and Mongo rejected the whole query - "PCRE2 does not support \F, \L, \l, \N{name}, \U,
+  // or \u" (error 51091), 52 times in one wall, crashing three suites. `\x{00A0}` does not match
+  // here either. Probed against a real collection, only the LITERAL CHARACTER matches - so the
+  // class is built from actual code points. The escape SYNTAX has to belong to the engine that
+  // runs it, not only the escape MEANING: that is the same lesson as cycle 1, one layer down.
+  // Cycle 2 again, and again the engine had the answer: U+2028 and U+2029 are LEFT OUT, measured
+  // one code point at a time against a real collection. They are JavaScript line terminators, so
+  // the driver emits them into the pattern as `\u2028`/`\u2029` - and PCRE2 rejects `\u` outright
+  // (error 51091). With them in, EVERY login failed: 52 rejected queries, three suites crashed, and
+  // the wall read 2623/9. Every other code point below was accepted. They are LINE and PARAGRAPH
+  // SEPARATOR - not plausible padding on a typed email - so the honest trade is to cover what this
+  // engine can express and say which two it cannot, rather than break sign-in for everyone.
+  const WS = "[" + String.raw`\s` + [0x00A0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006,
+    0x2007, 0x2008, 0x2009, 0x200A, 0x202F, 0x205F, 0x3000, 0xFEFF]
+    .map((c) => String.fromCharCode(c)).join("") + "]*";
+  const rx = new RegExp(`^${WS}${email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}${WS}$`, "i");
   const unlinked = await Trainer.find({ email: rx, $or: [{ user: null }, { user: { $exists: false } }] })
     .select("_id").limit(2).lean<any[]>();
   if (unlinked.length !== 1) return null;

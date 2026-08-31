@@ -2173,6 +2173,40 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
           JSON.stringify({ st: home.status, got: home.data?.my_trainer_id, want: padTr._id }));
       }
 
+      // (m) QA-1626 (checker, qa-1582 cycle 1 FAIL): cycle 1 verified this pattern with rx.test()
+      // in NODE, where it passed in all four directions. The expression is handed to MONGODB, whose
+      // `\s` is ASCII-ONLY, while the write door trims with Node's Unicode-aware String.trim() - so
+      // NBSP, EM-space, narrow-NBSP, ideographic space and BOM were stripped on write and UNFINDABLE
+      // on read, which is precisely the set of rows this half exists to reach. The `i` flag DOES
+      // cross into Mongo, so the case half genuinely confirmed and made the whitespace half look
+      // confirmed too.
+      // This pin therefore drives the REAL DOOR against rows written straight to Mongo, one per
+      // character class. A Node-side regex assertion would prove nothing here and is the exact
+      // mistake being pinned.
+      const WS_CASES = [
+        ["ascii-space", " "], ["tab", "\t"], ["nbsp", "\u00A0"], ["em-space", "\u2003"],
+        ["narrow-nbsp", "\u202F"], ["ideographic", "\u3000"], ["bom", "\uFEFF"],
+      ];
+      const { MongoClient: MC3, ObjectId: OID3 } = await import("mongodb");
+      const mc3 = new MC3(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+      await mc3.connect();
+      const trCol = mc3.db(process.env.MONGODB_DB || "center_erp_ci").collection("trainers");
+      const wsMisses = [];
+      for (const [label, ch] of WS_CASES) {
+        const mail = `qa1626.${label.replace(/[^a-z]/g, "")}.${stampT}@vidysea.com`;
+        const t = await mk("QA1626 " + label + " " + stampT, mail);
+        if (!t?._id) { wsMisses.push(`${label}: fixture not created`); continue; }
+        // pad the STORED value with this character and unlink, exactly as a live row was found
+        await trCol.updateOne({ _id: new OID3(String(t._id)) }, { $set: { email: ch + mail + ch }, $unset: { user: "" } });
+        const u = await req(admin, "POST", "/api/users", { name: "QA1626 " + label + " " + stampT, email: mail, role: "Trainer", password: PW, can_edit: true, status: "Approved" });
+        const ck = (u.status === 200 || u.status === 201) ? await login(mail, PW) : null;
+        const home = ck ? await req(ck, "GET", "/api/home") : { data: {} };
+        if (String(home.data?.my_trainer_id) !== String(t._id)) wsMisses.push(`${label}: my_trainer_id=${home.data?.my_trainer_id}`);
+      }
+      await mc3.close();
+      ok("QA-1626 (m): every whitespace the write door strips is also FINDABLE by the resolver - measured through Mongo, not Node",
+        wsMisses.length === 0, wsMisses.join(" | "));
+
       // (g) deleting is not filing. "daal sake" opened upload, not removal.
       const docs = await req(admin, "GET", `/api/trainers/${meT._id}/documents`);
       const anyDoc = docs.data?.items?.[0]?._id;

@@ -178,8 +178,16 @@ export function emailError(v: unknown, opts?: { optional?: boolean }): string | 
 // A validator that normalises to decide and then hands back the raw value is half a rule. This is
 // the other half, and it lives beside canonicalPhone for the same reason that one does: one rule,
 // two callers, no drifting copy.
+// TRIMS ONLY - it deliberately does NOT lowercase. The first version did, and that was scope creep
+// dressed as canonicalisation: QA-1582 is a WHITESPACE defect, and case already worked, because
+// every comparison that matters carries the `i` flag. Lowercasing instead rewrote what the user
+// typed, and e2e-eval-trainers-ui caught it within one wall - an edit round-trip PATCHes
+// `etET5983146@example.com` and read back `etet5983146@example.com` (69/0 in the two previous walls,
+// 68/1 with the lowercase in). Storing a changed address is a data decision that belongs to a
+// product call, not to a bug fix for padding: it is what gets displayed on the trainer's profile and
+// what mail is addressed to. Trim fixes the reported defect and touches nothing else.
 export function canonicalEmail(v: unknown): string | null {
-  const s = String(v ?? "").trim().toLowerCase();
+  const s = String(v ?? "").trim();
   return s || null;
 }
 
