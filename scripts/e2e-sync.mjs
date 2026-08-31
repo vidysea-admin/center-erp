@@ -1330,9 +1330,14 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
   // centre field and can never be anything else. `aebas_password` is the first field that is both
   // secret and per-job-role, so it is stored as "aebas_password:<CODE>" — and the secret-field test
   // was an exact-string Set.has(), which that form never matched. Four surfaces inherited the miss.
-  // The pins below are deliberately written against the ROW form only: run them on the pre-fix tree
-  // and every one of them goes red while every tc_password pin above stays green, which is the whole
-  // point — the rule existed, it just did not recognise this shape of the same thing.
+  // The pins below are deliberately written against the ROW form only: on the pre-fix tree FOUR of
+  // the six go red while every tc_password pin above stays green, which is the whole point — the
+  // rule existed, it just did not recognise this shape of the same thing. The other two are green
+  // in both directions on purpose and are labelled where they sit: one is an over-masking control
+  // (the Admin reveal door must still open), and the first is an anti-vacuity guard — the two
+  // payload-scan pins below assert a string is ABSENT, so they would pass for the wrong reason if
+  // the fixture ever stopped producing the row at all. "Every one of them goes red" is what this
+  // comment used to say, and it was wrong by two (QA-1637).
   {
     const aeRow = rows9.find((c) => String(c.field_name).startsWith("aebas_password:"));
 
