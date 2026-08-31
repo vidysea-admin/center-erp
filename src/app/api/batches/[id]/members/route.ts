@@ -5,7 +5,7 @@ import { requirePerm, hasEditLevel } from "@/lib/permissions";
 
 // The fields the roster itself renders - the chip, both attendance pickers, the enrolment card.
 // Named once so the QA-1459 branch below cannot drift from what -212 established.
-const ROSTER_CANDIDATE_FIELDS = "name phone lifecycle_status sidh_candidate_id apaar_id";
+export const ROSTER_CANDIDATE_FIELDS = "name phone lifecycle_status sidh_candidate_id apaar_id";
 import { Batch, BatchMember, Candidate, DailyLog, GovtAttendanceRow } from "@/models";
 import { addMemberChecked, assertBatchInScope, assertLocationOperational, assessmentHoursBar, awaitingMatchFor, memberAttendedHours, slotHoursPerDay } from "@/lib/rules";
 import { nameKey, unresolvedPortalRowsByName } from "@/lib/govt-attendance";

@@ -5,6 +5,7 @@ import { requirePerm } from "@/lib/permissions";
 import { assertMemberInScope, updateEnrollment } from "@/lib/rules";
 import { BatchMember, Candidate, CandidateResult, DailyLog, GovtAttendanceRow } from "@/models";
 import { audit } from "@/lib/audit";
+import { ROSTER_CANDIDATE_FIELDS } from "@/app/api/batches/[id]/members/route";
 
 // PATCH enrollment worklist update (Rules 22–24).
 // Body: { reg_done?, kyc_done?, accept_done?, failed?, issue?, issue_note?, source? }
@@ -26,6 +27,12 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   // service credential and its own actor_type — never client-declared.
   delete body.source;
   const m = await updateEnrollment(id, body);
+  // The Enrollment tab's client merges this response straight over its cached roster row
+  // (`{ ...x, ...res.item }`, batches/[id]/page.tsx) — updateEnrollment returns the raw saved
+  // doc with `candidate` unpopulated, so without this the merge clobbered a candidate's own
+  // name/phone with a bare ObjectId, rendering "(unnamed candidate)" until the next full reload.
+  // Same restricted field list the roster's own GET already uses, so the two can never drift.
+  await m.populate("candidate", ROSTER_CANDIDATE_FIELDS);
   await audit({
     entity: "BatchMember", entityId: m._id, field: "enrollment",
     newValue: { status: m.enrollment_status, reg: m.reg_done, kyc: m.kyc_done, accept: m.accept_done, issue: m.issue },
