@@ -1445,7 +1445,7 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
       const readBack = (await req("GET", `/api/locations/${l9._id}`)).data.item;
       ok("QA-1639: an AEBAS id written through the door is still there when the door is asked again",
         readBack?.aebas_id === st, JSON.stringify({ wrote: st, read: readBack?.aebas_id ?? null }));
-      ok("QA-1639: ...and so is the OTP mobile - a strict-mode drop takes the whole group, not one field",
+      ok("QA-1639: ...and so is the OTP mobile - QA-1647 (S3): strict mode drops PER PATH, not per group, so this is its own independent check",
         readBack?.mobile_otp === "9876500000", JSON.stringify({ read: readBack?.mobile_otp ?? null }));
       ok("QA-1646: ...and the AEBAS link - QA-1639/1640 asserted only aebas_id/mobile_otp, this field went uncovered",
         readBack?.aebas_link === lnk, JSON.stringify({ wrote: lnk, read: readBack?.aebas_link ?? null }));
