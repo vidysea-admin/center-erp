@@ -46,8 +46,23 @@ ok("exactly 18 today → eligible", (await eligOf(dobExactly18)).eligible === tr
 ok("exactly 40 today → eligible (18–40 inclusive)", (await eligOf(dobExactly40)).eligible === true);
 ok("41 → not eligible", (await eligOf(dob41)).eligible === false);
 ok("17 (18 in 2 days) → not eligible yet", (await eligOf(dob17)).eligible === false);
-const cd6m = new Date(today); cd6m.setMonth(cd6m.getMonth() - 6); cd6m.setDate(cd6m.getDate() - 1); // cooldown lapsed yesterday
-const cd6mIn = new Date(today); cd6mIn.setMonth(cd6mIn.getMonth() - 6); cd6mIn.setDate(cd6mIn.getDate() + 2); // still inside
+// QA-1594 (S3): `setMonth(getMonth() - 6)` overflows the day. Run on 31 August it asks for
+// "31 February" and JS answers 3 March - five months and 29 days back, INSIDE the cooldown - so
+// this fixture demanded eligible=true for a candidate the product correctly still blocks. It fails
+// only on the 29th, 30th and 31st of a month, which is why it read as a flake for weeks. The
+// product's own rule (rules.ts candidateEligibility) applies setMonth(+cooldown) to the training
+// date, so the fixture has to hand it a date whose day EXISTS in the target month.
+const monthsAgo = (base, n) => {
+  const d = new Date(base);
+  const day = d.getDate();
+  d.setDate(1);                                  // never overflow while changing the month
+  d.setMonth(d.getMonth() - n);
+  const lastOfMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+  d.setDate(Math.min(day, lastOfMonth));         // clamp: 31 Aug -> 28 Feb, not 3 Mar
+  return d;
+};
+const cd6m = monthsAgo(today, 6); cd6m.setDate(cd6m.getDate() - 1);      // cooldown lapsed yesterday
+const cd6mIn = monthsAgo(today, 6); cd6mIn.setDate(cd6mIn.getDate() + 2); // still inside
 ok("training 6mo+1d ago → eligible again", (await eligOf(new Date("2000-06-15"), { last_training_date: cd6m.toISOString() })).eligible === true);
 ok("training just under 6mo ago → still blocked", (await eligOf(new Date("2000-06-15"), { last_training_date: cd6mIn.toISOString() })).eligible === false);
 ok("no dob+education → Unverified (eligible w/ unknowns, never hard-fail)", await (async () => {
