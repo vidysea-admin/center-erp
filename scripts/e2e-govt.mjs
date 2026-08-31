@@ -2063,6 +2063,34 @@ ok("removal is real", (await req(admin, "GET", `/api/sync-sources/${srcId}`)).st
       program_days: att.data.program_days, pct }));
   if (nqImp.data?._id) await req(admin, "DELETE", `/api/govt-attendance/${nqImp.data._id}`); // no residue
 
+  // 1b2. QA-1689 (REQ-417 amended 2026-08-31, Umesh direct answer): Days Attendance % must divide
+  //      by the PORTAL'S OWN "Total Training Days (QP)" figure for the row, not the programme's
+  //      internal duration_days — the exact opposite of what 1b just proved is the correct
+  //      FALLBACK for a row with no QP figure at all. This file DOES carry a QP column (18, same
+  //      shape as -248's sidhFile()), deliberately picked to differ from the batch's own
+  //      att.data.program_days (asserted below, not assumed) — so if the fix regressed back to
+  //      the batch-level denominator, this pin would compute the WRONG percentage silently
+  //      rather than merely going blank, which is why it is worth a pin of its own beside 1b's.
+  const qpCsv = [
+    "S.No,Candidate Name,Candidate ID,Total Days Attended,Total Training Days (QP),Total Hours Attended",
+    `1,${NAME} Alpha,CAN_${STAMP}0001,9,18,63.45`,
+  ].join(String.fromCharCode(10));
+  const qpFile = () => new File([Buffer.from(qpCsv)], "sidh-with-qp.csv", { type: "text/csv" });
+  const qpImp = await upload(admin, { file: qpFile(), batch: batch._id, confirm: "1", period_label: `with-qp ${STAMP}` });
+  const att2 = await req(admin, "GET", `/api/batches/${batch._id}/attendance`);
+  const att2Alpha = (att2.data.members ?? []).find((m) => m.name === `${NAME} Alpha`);
+  ok("QA-1689: the row's own portal working_days (18) differs from the batch's program_days - fixture is a real discriminator",
+    qpImp.status === 201 && att2Alpha?.govt?.working_days === 18 && att2.data.program_days !== 18,
+    JSON.stringify({ imp: qpImp.status, wd: att2Alpha?.govt?.working_days, program_days: att2.data.program_days }));
+  const rowDenomPct = att2Alpha?.govt?.days_present != null && att2Alpha?.govt?.working_days
+    ? Math.round((100 * att2Alpha.govt.days_present) / att2Alpha.govt.working_days) : null;
+  const batchDenomPct = att2Alpha?.govt?.days_present != null && att2.data.program_days
+    ? Math.round((100 * att2Alpha.govt.days_present) / att2.data.program_days) : null;
+  ok("QA-1689: Days Attendance % (page.tsx's formula, r.govt.working_days preferred) matches the ROW denominator, not the batch's program_days",
+    rowDenomPct != null && rowDenomPct !== batchDenomPct && Math.round((100 * 9) / 18) === rowDenomPct,
+    JSON.stringify({ days_present: att2Alpha?.govt?.days_present, rowDenomPct, batchDenomPct }));
+  if (qpImp.data?._id) await req(admin, "DELETE", `/api/govt-attendance/${qpImp.data._id}`); // no residue
+
   // 1c. QA-1393 (checker, cycle 1). CYCLE 1's OWN REGRESSION, AND AN OLDER HOLE BESIDE IT.
   //
   //     Cycle 1 ordered only the EXACT pass across fields and left the PREFIX pass walking the
