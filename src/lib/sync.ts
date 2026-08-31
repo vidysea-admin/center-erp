@@ -177,6 +177,23 @@ export type ActionVerdict = {
 // guard reads THIS list rather than keeping its own copy.
 const STATUS_FIELDS = ["approval_status", "operational_status", "pipeline_status", "lifecycle_status"];
 
+// QA-1075 (S2). Fields that live at BOTH levels: on the centre, and on each (centre x job role)
+// target row. A sheet that is one row per CENTRE writes the centre copy; every count in the
+// report reads the ROW copy (`rules.ts:4465` takes `row_status` from `LocationTarget.tc_status`
+// with no fallback). So on a centre whose rows already carry their own status, `Apply value`
+// writes a real field, audits it honestly, and moves nothing the reviewer was looking at.
+//
+// It is NOT a dead control and it is deliberately not refused: the centre copy is the FALLBACK a
+// row without its own status inherits (`rules.ts:4650`, `:4693`) and it gates enrolment through
+// `readinessBlockers` (`rules.ts:3908`). Writing it is legitimate. What is wrong is the STAR - the
+// product recommends this press to someone who is trying to move an approval, and QA-988 already
+// established the rule this borrows: "offered is not the same as recommended".
+//
+// Derived from the two Sets rather than typed out again, because a third hand-written list of
+// "which fields are per job role" is exactly the ARCHITECTURE section 3 disease that QA-497 cost
+// this project once already.
+const DUAL_HOME_FIELDS = new Set([...TARGET_ROW_FIELDS].filter((f) => LOCATION_FIELDS.has(f)));
+
 // When the changed field IS an operational status, the sheet's new value names the action.
 const LIFECYCLE_BY_VALUE: Record<string, string> = {
   "not started": "Start location",
@@ -282,6 +299,9 @@ export function classifyChange(c: ClassifiableChange): ActionVerdict[] {
 
   const canUpdateTarget = hasRecord && !isEntity && !!rowField && !targetRowMissing;
   const canApplyValue = hasRecord && (isEntity ? !!spec : isCentreField);
+  // QA-1075: a bare field that also lives per job role. Only meaningful on a Location - a Trainer
+  // or Candidate has no target rows for it to be confused with.
+  const dualHome = canApplyValue && !isEntity && DUAL_HOME_FIELDS.has(field);
   const canLifecycle = hasRecord && !isEntity;
 
   // Exactly one recommendation, decided from the row's kind - never guessed.
@@ -300,6 +320,11 @@ export function classifyChange(c: ClassifiableChange): ActionVerdict[] {
     } else {
       pick = LIFECYCLE_BY_VALUE[String(c.new_value ?? "").trim().toLowerCase()] ?? "No action";
     }
+  // QA-1075: the star STAYS. Removing it on a dual-home field left the row with no recommendation
+  // at all, and QA-946's pin ("exactly ONE recommendation per row - never two, never none") went
+  // red on it. That pin is a criterion, not an obstacle: a review queue whose row recommends
+  // nothing is the screen Umesh complained about in the first place. So the fix is in what the
+  // option SAYS, not in whether it is offered - see whyApplyValue below.
   } else if (canApplyValue) pick = "Apply value";
 
   const noRecord = isEntity
@@ -317,7 +342,9 @@ export function classifyChange(c: ClassifiableChange): ActionVerdict[] {
   const whyApplyValue = canApplyValue
     ? (clears
       ? `The sheet has CLEARED this cell, so applying it ERASES ${field} on this ${isEntity ? entityType.toLowerCase() : "centre"}. Nothing else changes.`
-      : `Copy the sheet's value straight into ${field} on this ${isEntity ? entityType.toLowerCase() : "centre"}. Audited as external sync, and revertible afterwards.`)
+      : dualHome
+        ? `Copy the sheet's value into ${field} on the CENTRE. Audited as external sync, and revertible afterwards - but read this first: "${field}" also lives on each of this centre's (centre x job role) rows, and the report counts the ROWS. A row that already has its own value keeps it, so this write may not move the figure you are looking at; it shows through only on rows that have none. To change what the report counts, the sheet must address the job role - map its "Job role" column, or use "Update target" on a row-scoped change.`
+        : `Copy the sheet's value straight into ${field} on this ${isEntity ? entityType.toLowerCase() : "centre"}. Audited as external sync, and revertible afterwards.`)
     : !hasRecord ? noRecord
     : rowField ? `"${field}" lives on a (centre x job role) target row - use "Update target" so it reaches the right row.`
     : isStatus ? `"${field}" changes what the centre IS, not one of its details, so it goes through its own action (Start / Put on hold / Stop / Close) rather than a plain write.`

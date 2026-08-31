@@ -1273,10 +1273,10 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
   // and the credential column - the exact row Umesh was looking at.
   // QA-1632: the fourth kind is the one nothing had ever carried — a field that is BOTH secret and
   // row-scoped, so it arrives as "aebas_password:<CODE>" rather than as a bare name.
-  const u9 = await mkUp9(`Center ID,City,Target,TC Password,AEBAS Password\n${s9},Kota,150,pw${s9},ae${s9}\n`, "cls" + s9 + ".csv");
+  const u9 = await mkUp9(`Center ID,City,Target,TC Password,AEBAS Password,TC Status\n${s9},Kota,150,pw${s9},ae${s9},Approved\n`, "cls" + s9 + ".csv");
   const src9 = (await req("POST", "/api/sync-sources", {
     name: "Cls " + s9, source_url: new URL(u9.url, BASE).href,
-    field_mappings: { "Center ID": "external_id", "City": "city", "Target": `approved_target:P${s9}`, "TC Password": "tc_password", "AEBAS Password": `aebas_password:P${s9}` },
+    field_mappings: { "Center ID": "external_id", "City": "city", "Target": `approved_target:P${s9}`, "TC Password": "tc_password", "AEBAS Password": `aebas_password:P${s9}`, "TC Status": "tc_status" },
   }, 201)).data.item;
   await req("POST", `/api/sync-sources/${src9._id}/run`, undefined, 200);
 
@@ -1325,6 +1325,53 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
       JSON.stringify(mine ? { field: mine.field_name, old: mine.old_value, new: mine.new_value } : "row not in the ten most recent"));
   }
 
+  // ---- QA-1075 (S2): the press works, and the expectation it sets is wrong ----
+  // `tc_status` lives at BOTH levels - on the centre and on each (centre x job role) row - and the
+  // report counts the ROW (`rules.ts:4465`, no fallback). A sheet that is one row per CENTRE files
+  // a bare `tc_status` change, and the drawer used to STAR `Apply value` on it. The write is real,
+  // audited and revertible, so refusing it would be wrong: the centre copy is the fallback a row
+  // without its own status inherits (`rules.ts:4650`), and it gates enrolment through
+  // readinessBlockers (`rules.ts:3908`). What was wrong is the STAR - the product recommended that
+  // press to someone trying to move an approval.
+  //
+  // The two controls below are the point of this block. If the star had been removed from centre
+  // fields generally, `city` would have gone with it and this fix would be a regression wearing a
+  // pass.
+  {
+    const tcRow = rows9.find((c) => c.field_name === "tc_status");
+    const A = (row) => (row?.actions ?? []).find((x) => x.action === "Apply value");
+
+    ok("QA-1075: a centre-level TC Status change is still filed and still APPLIABLE - not refused",
+      !!tcRow && A(tcRow)?.ok === true, JSON.stringify({ found: !!tcRow, apply: A(tcRow) }).slice(0, 240));
+
+    // The star STAYS, and this pin records why the first attempt to remove it was wrong: with no
+    // recommendation the row showed none at all, and QA-946's "exactly ONE recommendation per row -
+    // never two, never none" caught it. A queue row that recommends nothing is the screen this
+    // whole area exists to fix, so the criterion won and the design changed.
+    ok("QA-1075: the row still carries exactly one recommendation, and it is Apply value",
+      A(tcRow)?.recommended === true, JSON.stringify({ recommended: A(tcRow)?.recommended }));
+
+    ok("QA-1075: ...and the row says so in words, so the reviewer learns it BEFORE pressing",
+      /report counts the ROWS/.test(String(A(tcRow)?.why ?? "")), String(A(tcRow)?.why ?? "").slice(0, 220));
+
+    ok("QA-1075: exactly one recommendation survives on that row - the screen never stars two",
+      (tcRow?.actions ?? []).filter((x) => x.recommended === true).length <= 1,
+      JSON.stringify((tcRow?.actions ?? []).filter((x) => x.recommended === true).map((x) => x.action)));
+
+    // CONTROL 1: an ordinary centre field keeps its star. This is what makes the pin above a
+    // statement about dual-home fields rather than about centre fields as a class.
+    ok("QA-1075 control: a plain centre field (city) is STILL the recommended Apply value",
+      A(cityRow)?.ok === true && A(cityRow)?.recommended === true,
+      JSON.stringify({ ok: A(cityRow)?.ok, recommended: A(cityRow)?.recommended }));
+
+    // CONTROL 2: tc_password is centre-only (not in TARGET_ROW_FIELDS), so it must be untouched.
+    // Stated here as well as in QA-946's own pin because this change edits the very line that
+    // decides it.
+    ok("QA-1075 control: the credential row is centre-only and keeps its star",
+      A(pwRow)?.ok === true && A(pwRow)?.recommended === true,
+      JSON.stringify({ ok: A(pwRow)?.ok, recommended: A(pwRow)?.recommended }));
+  }
+
   // ---- QA-1632 (S1, checker on qa-1636 cycle 1): the SAME credential rule, on a ROW-SCOPED field ----
   // Every masking pin this file already carries was written about `tc_password`, which is a bare
   // centre field and can never be anything else. `aebas_password` is the first field that is both
@@ -1340,6 +1387,48 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
   // comment used to say, and it was wrong by two (QA-1637).
   {
     const aeRow = rows9.find((c) => String(c.field_name).startsWith("aebas_password:"));
+
+    // ---- QA-1639 (S1): the feature shipped WITHOUT its schema, and nothing anywhere said so ----
+    // Release -268 carried the AEBAS work in eight files - the page, the API routes, sync.ts's
+    // LOCATION_FIELDS and TARGET_ROW_FIELDS, field-catalog, audit - and NOT `src/models/index.ts`.
+    // Mongoose is strict by default, so every production write of these four fields was discarded
+    // SILENTLY: no error, no log, a green build, and a UI that renders the field it cannot store.
+    // Proven by round-trip against the shipped tree (0 passed / 3 failed) and the local tree
+    // (3 passed / 0 failed) with the ONE file swapped between the two runs.
+    //
+    // So this pin does not read the schema file, and that is the whole point: it asks the only
+    // question that cannot be satisfied by the field merely being MENTIONED somewhere. A value is
+    // written through the ordinary door and read back through another. Any tree whose schema does
+    // not carry these paths fails here regardless of how complete the rest of the feature looks.
+    {
+      const st = "AEB" + s9;
+      await req("PATCH", `/api/locations/${l9._id}`, { aebas_id: st, mobile_otp: "9876500000" }, 200);
+      const readBack = (await req("GET", `/api/locations/${l9._id}`)).data.item;
+      ok("QA-1639: an AEBAS id written through the door is still there when the door is asked again",
+        readBack?.aebas_id === st, JSON.stringify({ wrote: st, read: readBack?.aebas_id ?? null }));
+      ok("QA-1639: ...and so is the OTP mobile - a strict-mode drop takes the whole group, not one field",
+        readBack?.mobile_otp === "9876500000", JSON.stringify({ read: readBack?.mobile_otp ?? null }));
+
+      // QA-1640 (S2, checker on qa-1639 cycle 1): the two pins above guard the CENTRE door only,
+      // and the checker built the tree that proves it - HEAD's models file with just
+      // LocationTargetSchema's four AEBAS lines deleted scored 421/0 with both pins green. That is
+      // a tree which silently discards every PER-JOB-ROLE AEBAS write, which is the half of the
+      // feature the client actually asked for by job role. All four fields are in
+      // TARGET_ROW_FIELDS (`lib/sync.ts:108-111`), so the schema has two places to be wrong and
+      // this block was only checking one.
+      //
+      // My own round-trip recorded this case as SKIPped, twice, and I then wrote that the pin
+      // catches "any tree whose schema lacks these paths". A skip is not a pass, and I should not
+      // have generalised over one.
+      const rowSt = "ROW" + s9;
+      await req("PUT", `/api/locations/${l9._id}/targets`, { program: p9._id, approved_target: 25, aebas_id: rowSt, mobile_otp: "9876511111" }, 200);
+      const tRow = ((await req("GET", `/api/locations/${l9._id}/targets`)).data.items ?? [])
+        .find((t) => String(t.program?._id ?? t.program) === String(p9._id));
+      ok("QA-1640: a PER-JOB-ROLE AEBAS id survives the round trip too - the row schema is guarded",
+        tRow?.aebas_id === rowSt, JSON.stringify({ wrote: rowSt, read: tRow?.aebas_id ?? null }));
+      ok("QA-1640: ...and the row's own OTP mobile with it",
+        tRow?.mobile_otp === "9876511111", JSON.stringify({ read: tRow?.mobile_otp ?? null }));
+    }
 
     ok("QA-1632: a per-job-role AEBAS password arrives as a row-scoped change at all",
       !!aeRow, JSON.stringify(rows9.map((c) => c.field_name)));
