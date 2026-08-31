@@ -1271,10 +1271,12 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
   const l9 = (await req("POST", "/api/locations", { code: "L" + s9, name: "Cls Loc " + s9, external_id: s9, approval_status: "Approved", city: "Jaipur" }, 201)).data.item;
   // One centre, three row KINDS at once: a plain centre field, a (centre x job role) target row,
   // and the credential column - the exact row Umesh was looking at.
-  const u9 = await mkUp9(`Center ID,City,Target,TC Password\n${s9},Kota,150,pw${s9}\n`, "cls" + s9 + ".csv");
+  // QA-1632: the fourth kind is the one nothing had ever carried — a field that is BOTH secret and
+  // row-scoped, so it arrives as "aebas_password:<CODE>" rather than as a bare name.
+  const u9 = await mkUp9(`Center ID,City,Target,TC Password,AEBAS Password\n${s9},Kota,150,pw${s9},ae${s9}\n`, "cls" + s9 + ".csv");
   const src9 = (await req("POST", "/api/sync-sources", {
     name: "Cls " + s9, source_url: new URL(u9.url, BASE).href,
-    field_mappings: { "Center ID": "external_id", "City": "city", "Target": `approved_target:P${s9}`, "TC Password": "tc_password" },
+    field_mappings: { "Center ID": "external_id", "City": "city", "Target": `approved_target:P${s9}`, "TC Password": "tc_password", "AEBAS Password": `aebas_password:P${s9}` },
   }, 201)).data.item;
   await req("POST", `/api/sync-sources/${src9._id}/run`, undefined, 200);
 
@@ -1321,6 +1323,48 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
     ok("QA-1231: ...and it is masked, not dropped - the reviewer still sees there is a change to review",
       !mine || (mine.field_name === "tc_password" && mine.new_value !== `pw${s9}`),
       JSON.stringify(mine ? { field: mine.field_name, old: mine.old_value, new: mine.new_value } : "row not in the ten most recent"));
+  }
+
+  // ---- QA-1632 (S1, checker on qa-1636 cycle 1): the SAME credential rule, on a ROW-SCOPED field ----
+  // Every masking pin this file already carries was written about `tc_password`, which is a bare
+  // centre field and can never be anything else. `aebas_password` is the first field that is both
+  // secret and per-job-role, so it is stored as "aebas_password:<CODE>" — and the secret-field test
+  // was an exact-string Set.has(), which that form never matched. Four surfaces inherited the miss.
+  // The pins below are deliberately written against the ROW form only: run them on the pre-fix tree
+  // and every one of them goes red while every tc_password pin above stays green, which is the whole
+  // point — the rule existed, it just did not recognise this shape of the same thing.
+  {
+    const aeRow = rows9.find((c) => String(c.field_name).startsWith("aebas_password:"));
+
+    ok("QA-1632: a per-job-role AEBAS password arrives as a row-scoped change at all",
+      !!aeRow, JSON.stringify(rows9.map((c) => c.field_name)));
+
+    ok("QA-1632: the Sync Inbox LIST masks it, exactly as it already masks the centre-level credential",
+      !!aeRow && aeRow.new_value !== `ae${s9}`,
+      JSON.stringify({ field: aeRow?.field_name, new: aeRow?.new_value }));
+
+    // Searched over the WHOLE payload, not over new_value — the credential also rides in
+    // impact_snapshot.{apply,revert}, and a pin reading one property goes green on a fix that
+    // missed the others. That is how QA-1253 reached cycle 3.
+    const listJson = JSON.stringify((await req("GET", "/api/sheet-changes?status=Open")).data);
+    ok("QA-1632: ...and the plaintext is nowhere else in the list payload either",
+      !listJson.includes(`ae${s9}`), "raw AEBAS password present somewhere in GET /api/sheet-changes");
+
+    const homeJson2 = JSON.stringify((await req("GET", "/api/home", undefined, 200)).data);
+    ok("QA-1632: the landing page does not carry it either",
+      !homeJson2.includes(`ae${s9}`), "raw AEBAS password present in /api/home payload");
+
+    // The control, same shape as QA-1231's: the deliberate door must still open, or a mask that
+    // simply broke everything would score green here.
+    const aeRevealed = (await req("GET", `/api/sheet-changes/${aeRow?._id}`)).data.item;
+    ok("QA-1632 control: an Admin who asks the reveal door still gets the real value",
+      aeRevealed?.new_value === `ae${s9}`,
+      JSON.stringify({ field: aeRevealed?.field_name, value: aeRevealed?.new_value }));
+    // The LIST row is where the flag lives (`secret_revealable`, api/sheet-changes/route.ts:120) —
+    // it is what the UI draws the Show button from, so if it stayed false the door above would open
+    // for a button nobody is offered. Dead control in the other direction.
+    ok("QA-1632: ...and the list row advertises it as revealable, so the Show button is offered at all",
+      aeRow?.secret_revealable === true, JSON.stringify({ secret_revealable: aeRow?.secret_revealable }));
   }
 
 
