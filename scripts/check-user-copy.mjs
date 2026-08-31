@@ -414,7 +414,6 @@ for (const file of walk(root)) {
     const after = src.split(`const RELEASE_NOTE_ARCHIVE_${k} =`)[1] ?? "";
     return joinLiterals(after.split(/\n(?=(?:export )?const )/)[0]).trim().slice(0, 60);
   };
-  if (process.env.DBG1613) { console.error("DBG n=", n, "archived=", JSON.stringify(archived.slice(0,4)), "op265len=", openingOf(265).length, "op265=", JSON.stringify(openingOf(265).slice(0,40)), "srcLen=", src.length); }
   const spliced = archived.filter((k) => { const o = openingOf(k); return o.length >= 40 && curText.includes(o); });
   const stunted = archived.filter((k) => openingOf(k).length < 40);
 
