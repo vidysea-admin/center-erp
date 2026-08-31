@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-271";
+export const RELEASE = "2026.08.14-272";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -149,6 +149,17 @@ const RELEASE_NOTE_ARCHIVE_270 =
   "and no other tab or screen is touched.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-272 changes what the batch Attendance tab's Days Attendance % column divides by. The figure "  +
+  "used to divide every student's government-reported days present by this project's own internal "  +
+  "programme length, even on a row whose imported portal file states its own \"Total Training Days "  +
+  "(QP)\" figure - so a student whose portal file recorded fewer or more working days than the "  +
+  "programme's default could show a percentage that does not match what the government portal "  +
+  "itself would report for them. The column now prefers that row's own portal figure when the "  +
+  "import carried one, and falls back to the programme length only when it did not - the case an "  +
+  "earlier fix (QA-1383) already depends on to avoid showing a blank percentage. Nothing changes "  +
+  "for a batch whose imports never carry that column.";
+
+const RELEASE_NOTE_ARCHIVE_271 =
   "-271 collects several fixes that landed after -270 shipped, and adds tests behind work that "  +
   "was already running without any. On the Sync inbox, applying a value the sheet holds for a "  +
   "field that lives BOTH on a centre and on each of that centre's job-role rows writes the "  +
@@ -1039,6 +1050,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -269: ARCHIVE_268 wired in here in the SAME bump that declared it, same discipline.
   // -270: ARCHIVE_269 wired in here in the SAME bump that declared it, same discipline.
   // -271: ARCHIVE_270 wired in here in the SAME bump that declared it, same discipline.
+  // -272: ARCHIVE_271 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_271 + " " +
   RELEASE_NOTE_ARCHIVE_270 + " " +
   RELEASE_NOTE_ARCHIVE_269 + " " +
   RELEASE_NOTE_ARCHIVE_268 + " " +
