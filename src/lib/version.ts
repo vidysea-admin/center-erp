@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-268";
+export const RELEASE = "2026.08.14-269";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -138,6 +138,15 @@ const RELEASE_NOTE_ARCHIVE_254 =
   "screen for a real number sitting one tab over.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-269 finishes what -268 announced but did not fully ship: the AEBAS government-portal login "  +
+  "columns on Location Master had their sync, their screen, and their masking live, but not the "  +
+  "underlying field on the record itself, so a write reached the database and was silently kept "  +
+  "off it every time. Nothing about the earlier fixes was wrong; a database change that belonged "  +
+  "with them stayed behind, found by checking what actually shipped rather than trusting a local "  +
+  "build. It is added directly here, and confirmed to hold this time by writing to it and reading "  +
+  "the value back.";
+
+const RELEASE_NOTE_ARCHIVE_268 =
   "-268 closes the same padded-email lockout on the product's own sign-in, not just a Trainer's: "  +
   "a login created by pasting an address with a stray leading or trailing space could never sign "  +
   "back in, because the address was normalised for case on the way in but not for whitespace. The "  +
@@ -995,6 +1004,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -266: ARCHIVE_265 wired in here in the SAME bump that declared it, same discipline.
   // -267: ARCHIVE_266 wired in here in the SAME bump that declared it, same discipline.
   // -268: ARCHIVE_267 wired in here in the SAME bump that declared it, same discipline.
+  // -269: ARCHIVE_268 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_268 + " " +
   RELEASE_NOTE_ARCHIVE_267 + " " +
   RELEASE_NOTE_ARCHIVE_266 + " " +
   RELEASE_NOTE_ARCHIVE_265 + " " +
