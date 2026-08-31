@@ -6,7 +6,7 @@ import { Batch, Trainer, TrainerDocument } from "@/models";
 import { hasPermission, requirePerm } from "@/lib/permissions";
 import { assertLocationOperational, assertTrainerDocDeleteInScope, assertTrainerDocInScope, TRAINER_FLOW } from "@/lib/rules";
 import { audit } from "@/lib/audit";
-import { emailError, canonicalPhone, phoneError } from "@/lib/validate";
+import { emailError, canonicalEmail, canonicalPhone, phoneError } from "@/lib/validate";
 import { maskTrainerSecrets } from "../route";
 
 // Same masking as the list route (2026-08-12) — opening one trainer by id was the obvious way
@@ -50,6 +50,12 @@ export const { GET, PATCH } = itemRoutes({
     if (body.email !== undefined && body.email !== "") {
       const eErr = emailError(body.email, { optional: true });
       if (eErr) throw new HttpError(400, eErr);
+      // QA-1627 (checker, qa-1582 cycle 1): this door canonicalised the PHONE three lines above and
+      // stored the email raw, the same asymmetry qa-1582 fixed on the CREATE door and did not look
+      // for here. Its own "declared limits" named the users and candidate doors and missed this one,
+      // which is the door most likely to reintroduce a padded address - someone correcting a
+      // trainer's email by pasting it.
+      body.email = canonicalEmail(body.email);
     }
     if (body.nominated_for_location && String(body.nominated_for_location) !== String(existing.nominated_for_location ?? "")) {
       await assertLocationOperational(body.nominated_for_location, "Nominating a trainer for this centre");
