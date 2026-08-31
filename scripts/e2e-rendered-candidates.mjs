@@ -602,33 +602,90 @@ for (const r of results) {
     //      red on the Help button. It needs the braced form with the u flag.
     //   2. Falling back to document.body when the card was not found turned a MISSING CARD into a
     //      scan of the whole page, nav included. An absent card is a failure, not a wider search.
-    const deleteish = await tpage.evaluate(() => {
+    // QA-1608 (checker, qa-1581 cycle 3 FAIL): the cycle-2 widening above fixed the SELECTOR
+    // half and left the AFFORDANCE half denylisted, so four injected delete controls rendered on a
+    // trainer's card while the suite reported 93 passed, 0 failed. Two of them were plain <button>
+    // elements the selector DID match: one labelled through aria-labelledby (never resolved) and one
+    // whose icon was a CSS background-image (no text at all). Both extracted to the empty string,
+    // and the old line FILTERED EMPTY OUT - so an unlabelled control was invisible by construction.
+    // The other two were a <span onClick> and a <div role=link onClick>: [onclick] cannot match them
+    // because React attaches synthetic handlers and emits no onclick ATTRIBUTE, making that selector
+    // term inert in this codebase.
+    //
+    // A denylist of delete-ish WORDS can only ever catch the spellings someone thought of. This card
+    // has a CLOSED control vocabulary - read straight off MyDocuments in src/app/(app)/page.tsx and
+    // Section/Notice in src/components/ui.tsx - so the pin is inverted to an ALLOWLIST: enumerate
+    // every control the card actually carries and require each one to be a known-safe shape. An
+    // unknown control fails whether or not it says "delete", and a control with NO discernible
+    // affordance is the loudest failure of all rather than a filtered-out blank.
+    const audit = await tpage.evaluate((knownFile) => {
       const card = [...document.querySelectorAll("section,div")]
         .filter((n) => /My documents/i.test(n.textContent || "") && n.querySelector("input[type=file]"))
         .pop();
-      if (!card) return ["__NO_CARD__"];
-      // QA-1605 (checker, cycle 2 FAIL): the selector listed button/a/[role=button]/input and NO
-      // LABEL - and the card is BUILT from labels. Each doc type's control is a <label> wrapping a
-      // hidden file input, eight of them. So this pin matched ZERO of the card's real controls, and
-      // a checker slipped three delete controls past it in one div, including that same label idiom.
-      // A pin blind to the only control shape its own screen uses is the cycle-1 defect verbatim.
-      // Widened to every interactive shape the card can carry, and the affordance is now read from
-      // the computed ::before / ::after content and any SVG <title> too, because an icon can live
-      // entirely in CSS or in a child node with no text of its own.
-      const CONTROL = "button,a,label,summary,[role=button],[role=menuitem],[onclick],input[type=submit],input[type=button]";
-      return [...card.querySelectorAll(CONTROL)]
-        .map((el) => {
-          const pseudo = ["::before", "::after"]
-            .map((q) => { try { return getComputedStyle(el, q).content || ""; } catch { return ""; } })
-            .join(" ");
-          const svgTitle = [...el.querySelectorAll("title,desc")].map((n) => n.textContent || "").join(" ");
-          return [el.getAttribute("aria-label"), el.getAttribute("title"), el.getAttribute("name"),
-                  el.textContent, svgTitle, pseudo].filter(Boolean).join(" ");
-        })
-        .filter((t) => /delete|remove|discard|trash|hatao|mitao/i.test(t) || /[\u{1F5D1}\u2715\u2716\u00D7]/u.test(t));
-    });
-    ok("QA-1584 (c): the card offers the trainer NO delete control - checked on the CONTROLS, including icon-only ones",
-      deleteish.length === 0, JSON.stringify(deleteish).slice(0, 300));
+      if (!card) return { noCard: true, unknown: [], seen: 0 };
+
+      // Only ACTIVATION handlers count. Notice's wrapper carries onMouseEnter/onMouseLeave for its
+      // auto-hide pause and is not a control; counting those would red the pin on an error banner.
+      const ACTIVATION = ["onClick", "onMouseDown", "onMouseUp", "onPointerDown", "onKeyDown", "onKeyPress", "onDoubleClick", "onTouchStart"];
+      const handlers = (el) => {
+        const k = Object.keys(el).find((x) => x.startsWith("__reactProps$"));
+        const props = k ? (el[k] || {}) : {};
+        return ACTIVATION.filter((h) => typeof props[h] === "function");
+      };
+      const affordance = (el) => {
+        const byId = (ids) => (ids || "").split(/\s+/).filter(Boolean)
+          .map((id) => document.getElementById(id)?.textContent || "").join(" ");
+        const pseudo = ["::before", "::after"]
+          .map((q) => { try { return getComputedStyle(el, q).content || ""; } catch { return ""; } })
+          .filter((c) => c && c !== "none" && c !== "normal").join(" ");
+        const svgTitle = [...el.querySelectorAll("title,desc")].map((n) => n.textContent || "").join(" ");
+        return [el.getAttribute("aria-label"), byId(el.getAttribute("aria-labelledby")),
+                el.getAttribute("title"), el.getAttribute("name"), el.textContent, svgTitle, pseudo]
+          .filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+      };
+
+      // The closed vocabulary. Each rule is (element, affordance) -> is this exactly a control the
+      // card is SUPPOSED to have? Shape is checked as well as text, so <a href="/x">Delete</a> is
+      // not admitted by the link rule.
+      const ALLOWED = [
+        // the eight file pickers: a <label> wrapping the hidden input, reading Upload / Replace /
+        // the busy ellipsis / an upload percentage
+        (el, t) => el.tagName === "LABEL" && !!el.querySelector('input[type="file"]')
+          && (/^(upload|replace|\u2026|\.\.\.)$/i.test(t) || /^\d{1,3}%$/.test(t) || /^.{1,40} \u2014 \d{1,3}%$/.test(t)),
+        (el) => el.tagName === "INPUT" && el.getAttribute("type") === "file",
+        // the one document link: a real href, and its text is the trainer's OWN file name (or "View")
+        (el, t) => el.tagName === "A" && /^(https?:|\/)/.test(el.getAttribute("href") || "")
+          && (t === "View" || (!!knownFile && t === knownFile)),
+        // ErrorBanner's dismiss, only ever rendered on an error
+        (el, t) => el.tagName === "BUTTON" && /^(dismiss|\u00d7|dismiss \u00d7)$/i.test(t),
+      ];
+
+      const INTERACTIVE_TAGS = ["BUTTON", "A", "LABEL", "SUMMARY", "INPUT", "SELECT", "TEXTAREA"];
+      const isControl = (el) => {
+        if (INTERACTIVE_TAGS.includes(el.tagName)) return true;
+        if (/^(button|link|menuitem|tab|checkbox|switch|option)$/i.test(el.getAttribute("role") || "")) return true;
+        if (el.hasAttribute("onclick") || el.hasAttribute("tabindex")) return true;
+        if (handlers(el).length) return true;
+        try { if (getComputedStyle(el).cursor === "pointer") return true; } catch { /* detached */ }
+        return false;
+      };
+
+      const controls = [...card.querySelectorAll("*")].filter(isControl);
+      const unknown = controls.map((el) => {
+        const t = affordance(el);
+        if (ALLOWED.some((rule) => rule(el, t))) return null;
+        return { tag: el.tagName, text: t.slice(0, 60), role: el.getAttribute("role"),
+                 aria: el.getAttribute("aria-label"), labelledby: el.getAttribute("aria-labelledby"),
+                 title: el.getAttribute("title"), react: handlers(el),
+                 cls: String(el.className || "").slice(0, 40) };
+      }).filter(Boolean);
+      return { noCard: false, unknown, seen: controls.length };
+    }, `experience-${ts}.pdf`);
+
+    ok("QA-1584 (c): the card offers the trainer NO delete control - its controls are an ALLOWLIST, so an UNKNOWN control fails even when it is unlabelled or spelled a way nobody predicted",
+      !audit.noCard && audit.unknown.length === 0, JSON.stringify(audit).slice(0, 600));
+    ok("QA-1608: ...and that allowlist is actually looking at controls, not at an empty card",
+      !audit.noCard && audit.seen >= 9, JSON.stringify({ seen: audit.seen, noCard: audit.noCard }));
 
     // (d) — QA-1603 (checker, qa-1581 cycle 2 FAIL): the previous version of this pin only checked
     // that ONE dynamically-created trainer's name was absent. That closed the VACUOUS-REGEX hole (a
