@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-266";
+export const RELEASE = "2026.08.14-267";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -138,6 +138,15 @@ const RELEASE_NOTE_ARCHIVE_254 =
   "screen for a real number sitting one tab over.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-267 fixes a Trainer who could sign in but never reach their own documents, because their "  +
+  "record's email carried invisible padding - a stray space typed once, stored, and then never "  +
+  "matched again. Signing in was checked in isolation and looked fine; the match itself runs "  +
+  "inside the database, and the database's own rules for what counts as a matching space are not "  +
+  "the same ones a quick check outside it would suggest. New records are stored without the "  +
+  "padding now, and a record that already carries it is still found. Nothing on any screen looks "  +
+  "different.";
+
+const RELEASE_NOTE_ARCHIVE_266 =
   "-266 is checking, not building - it repairs the tool that checks every other release. This "  +
   "file's own note is scanned by an automated guard before anything ships, to catch a note that "  +
   "accidentally repeats an old release's opening line instead of the current one. That guard had "  +
@@ -971,6 +980,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -264: ARCHIVE_263 wired in here in the SAME bump that declared it, same discipline.
   // -265: ARCHIVE_264 wired in here in the SAME bump that declared it, same discipline.
   // -266: ARCHIVE_265 wired in here in the SAME bump that declared it, same discipline.
+  // -267: ARCHIVE_266 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_266 + " " +
   RELEASE_NOTE_ARCHIVE_265 + " " +
   RELEASE_NOTE_ARCHIVE_264 + " " +
   RELEASE_NOTE_ARCHIVE_263 + " " +
