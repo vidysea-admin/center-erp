@@ -429,13 +429,23 @@ for (const file of walk(root)) {
   // exist on disk right now - and compares CURRENT against ALL of it, always, with no
   // release-number precondition. One `git cat-file --batch` call reads every historical blob for
   // this path in a single process (301 commits in ~0.3s measured, vs ~9s for one `git show` per
-  // commit) - fast enough to run unconditionally on every check, not just when RELEASE moves. For
-  // each release number, the FIRST (= most recent, since `git log` lists newest-first) text seen is
-  // kept, so a later wording correction to an already-archived note (QA-1156 was exactly such a
-  // correction) is what gets checked against, not a stale first draft. The current release's own
-  // entry (key === n) is excluded, so an unchanged, already-committed tree does not fail by matching
-  // itself. When git or history is unavailable (shallow clone, first commit, an archive with no
-  // repo) the map stays empty and this rule passes - a missing tool is not evidence of a defect.
+  // commit) - fast enough to run unconditionally on every check, not just when RELEASE moves.
+  //
+  // QA-1694 (checker, cycle 1): the first version of this rewrite built `published` from historical
+  // RELEASE_NOTE_CURRENT text ONLY, keyed by the release active in that same commit. That misses a
+  // note corrected AFTER it was archived - its wording edited directly inside
+  // RELEASE_NOTE_ARCHIVE_<k> at some later commit, never sitting in CURRENT again (a real precedent
+  // exists for this shape: QA-1156's correction to -245's archived wording). Deleting that
+  // corrected constant and splicing its corrected text into CURRENT reproduced QA-1618/1620's own
+  // defect uncaught, because `published[k]` still held the ORIGINAL pre-correction text. So each
+  // historical blob is now read TWICE: once for its own CURRENT (keyed by that blob's own RELEASE),
+  // and once for every RELEASE_NOTE_ARCHIVE_<j> constant present IN THAT BLOB (keyed by j,
+  // independent of the blob's own release number). Either source can supply a release's entry, and
+  // whichever is found FIRST while walking newest-first wins - the most recent wording, wherever in
+  // the file it happened to live when it was published. The current release's own entry (key === n)
+  // is excluded, so an unchanged, already-committed tree does not fail by matching itself. When git
+  // or history is unavailable (shallow clone, first commit, an archive with no repo) the map stays
+  // empty and this rule passes - a missing tool is not evidence of a defect.
   const published = new Map();
   try {
     const log = spawnSync("git", ["log", "--format=%H", "--", "lib/version.ts"], { cwd: root, encoding: "utf-8" });
@@ -456,11 +466,23 @@ for (const file of walk(root)) {
         const size = Number(m[1]);
         const text = buf.slice(nl + 1, nl + 1 + size);
         i = nl + 1 + size + 1; // +1 skips the trailing newline git-cat-file appends after each blob
+
+        // (a) this blob's own CURRENT, keyed by the release active in this same commit.
         const kRel = (text.match(/export const RELEASE = "([^"]+)"/) ?? [])[1] ?? "";
         const k = parseInt((kRel.split("-").pop() ?? ""), 10);
-        if (!k || published.has(k)) continue;
-        const kCur = (text.split("export const RELEASE_NOTE_CURRENT =")[1] ?? "").split(/\n(?=(?:export )?const )/)[0];
-        published.set(k, joinLiterals(kCur).trim().slice(0, 60));
+        if (k && !published.has(k)) {
+          const kCur = (text.split("export const RELEASE_NOTE_CURRENT =")[1] ?? "").split(/\n(?=(?:export )?const )/)[0];
+          published.set(k, joinLiterals(kCur).trim().slice(0, 60));
+        }
+        // (b) every archive constant PRESENT in this same blob, keyed by its own number - not
+        // gated on whether (a) already set something this iteration, and not skipped once any key
+        // is known, since a DIFFERENT j here may still be unrecorded.
+        for (const am of text.matchAll(/^(?:export )?const RELEASE_NOTE_ARCHIVE_(\d+) =/gm)) {
+          const j = Number(am[1]);
+          if (published.has(j)) continue;
+          const body = text.slice(am.index + am[0].length).split(/\n(?=(?:export )?const )/)[0];
+          published.set(j, joinLiterals(body).trim().slice(0, 60));
+        }
       }
     }
   } catch { /* no git, no history, or an archive without a repo */ }
