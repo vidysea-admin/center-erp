@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-270";
+export const RELEASE = "2026.08.14-271";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -137,7 +137,7 @@ const RELEASE_NOTE_ARCHIVE_254 =
   "blocking yet, so an operator working ahead of enrolment is not left looking at an empty "  +
   "screen for a real number sitting one tab over.";
 
-export const RELEASE_NOTE_CURRENT =
+const RELEASE_NOTE_ARCHIVE_270 =
   "-270 adds a search box and status filters to the Enrollment tab, matching the ones the Closure "  +
   "tab already had, plus a small analytics line at the top showing how many students have finished "  +
   "Registration, e-KYC and Batch Accept. Typing a name, phone number or Candidate ID narrows the "  +
@@ -147,6 +147,27 @@ export const RELEASE_NOTE_CURRENT =
   "act only on whatever the search or filter is currently showing, not the whole batch, so narrowing "  +
   "the list before using one of them is safe. Nothing about who can see or edit a student changed, "  +
   "and no other tab or screen is touched.";
+
+export const RELEASE_NOTE_CURRENT =
+  "-271 collects several fixes that landed after -270 shipped, and adds tests behind work that "  +
+  "was already running without any. On the Sync inbox, applying a value the sheet holds for a "  +
+  "field that lives BOTH on a centre and on each of that centre's job-role rows writes the "  +
+  "centre and leaves the rows alone. That is correct, but the screen did not say so, and for TC "  +
+  "Status the report the reviewer is watching counts the rows - so the figure did not move and "  +
+  "nothing explained why. The row now says what the press will and will not change before it is "  +
+  "pressed, and says it only where it is true: fields that have no such figure on the report are "  +
+  "no longer told about one. Who may press it, what it writes and the audit trail behind it are "  +
+  "unchanged. "  +
+  "A government attendance row that is waiting to be matched to a student can now be resolved "  +
+  "from the batch screen where it is noticed, instead of dead-ending on the separate government "  +
+  "attendance list, and once one row of a pair is resolved the remaining pairing is suggested. "  +
+  "An enrollment card no longer loses the student's name after Registration, e-KYC or Batch "  +
+  "Accept is toggled. And a student with no portal ID recorded no longer produces a contradiction "  +
+  "or a suggestion about somebody else's portal ID. "  +
+  "The rest is test coverage for behaviour already live and previously untested: the per-job-role "  +
+  "AEBAS credential masking, the AEBAS fields restored in -269, and an eligibility test whose own "  +
+  "fixture asked for a date that does not exist (31 February) and so failed only in the last "  +
+  "three days of a month.";
 
 const RELEASE_NOTE_ARCHIVE_269 =
   "-269 finishes what -268 announced but did not fully ship: the AEBAS government-portal login "  +
@@ -1017,6 +1038,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -268: ARCHIVE_267 wired in here in the SAME bump that declared it, same discipline.
   // -269: ARCHIVE_268 wired in here in the SAME bump that declared it, same discipline.
   // -270: ARCHIVE_269 wired in here in the SAME bump that declared it, same discipline.
+  // -271: ARCHIVE_270 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_270 + " " +
   RELEASE_NOTE_ARCHIVE_269 + " " +
   RELEASE_NOTE_ARCHIVE_268 + " " +
   RELEASE_NOTE_ARCHIVE_267 + " " +
