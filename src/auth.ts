@@ -36,7 +36,11 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     Credentials({
       credentials: { email: {}, password: {} },
       async authorize(credentials) {
-        const email = String(credentials?.email || "").toLowerCase();
+        // QA-1628: TRIM as well as lowercase. This lookup is an exact match on a unique index,
+        // so an untrimmed credential misses a correctly-stored row - a person typing one stray
+        // space is simply told their password is wrong. Case was already handled here and on the
+        // schema; whitespace was handled in neither.
+        const email = String(credentials?.email || "").trim().toLowerCase();
         const password = String(credentials?.password || "");
         if (!email || !password) return null;
         await dbConnect();
