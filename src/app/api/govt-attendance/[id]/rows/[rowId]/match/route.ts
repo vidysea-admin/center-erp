@@ -70,6 +70,15 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
       const c = m.candidate;
       const sameId = !!gid && portalIdKey(c.sidh_candidate_id) === gid;
       const sameName = !!nk && nameKey(c.name) === nk;
+      // Umesh, walking through the Bhadohi Anil Kumar pair: "jo 2 mai se agar ek mai select ek ho
+      // jayegi tho doosre mai automatically remaining wali aa jyaegi naa" — the same contradiction
+      // guard matchGovtRows already applies at import time (govt-attendance.ts:582-613: "refuses a
+      // name-only match if the resolved candidate already has a different portal ID on record"),
+      // reused here rather than re-derived: a same-name candidate who already holds a DIFFERENT
+      // portal ID is not a live option for this row, so say so instead of offering it as if
+      // nothing happened since the sibling row was resolved.
+      const theirId = portalIdKey(c.sidh_candidate_id);
+      const contradicted = sameName && !sameId && !!theirId && theirId !== gid ? c.sidh_candidate_id : null;
       return {
         candidate: c._id, name: c.name, phone: c.phone ?? null,
         sidh_candidate_id: c.sidh_candidate_id ?? null,
@@ -82,14 +91,27 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
         joined_on: m.joined_on ?? null,
         enrollment_status: m.enrollment_status ?? null,
         collides: sameId ? "same portal ID" : sameName ? "same name" : null,
+        contradicted,
       };
     })
     .sort((a, b) => (a.collides ? 0 : 1) - (b.collides ? 0 : 1) || String(a.name).localeCompare(String(b.name)));
 
+  // Pre-select by elimination, never by guessing: only when at least one sibling was actually
+  // contradicted AND exactly one same-name candidate remains live does that survivor get flagged —
+  // a human still confirms it (the client pre-checks the radio but still requires the explicit
+  // "This one — match it" click).
+  const sameNameLive = options.filter((o) => o.collides === "same name" && !o.contradicted);
+  const contradictedCount = options.filter((o) => o.contradicted).length;
+  const withSuggestion = contradictedCount > 0 && sameNameLive.length === 1
+    ? options.map((o) => o === sameNameLive[0]
+        ? { ...o, suggested: true, suggested_reason: `the other ${contradictedCount} candidate${contradictedCount > 1 ? "s" : ""} sharing this name already hold${contradictedCount > 1 ? "" : "s"} a different portal ID` }
+        : o)
+    : options;
+
   return NextResponse.json({
     row, reason: row.match_note ?? null,
     scope: imp.batch ? "batch" : "centre",
-    options,
+    options: withSuggestion,
     collisions: options.filter((o) => o.collides).length,
   });
 });

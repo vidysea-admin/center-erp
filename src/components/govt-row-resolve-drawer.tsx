@@ -31,7 +31,16 @@ export function GovtRowResolveDrawer({ importId, rowId, canEdit, onClose, onReso
     setData(null); setPick(""); setReason(""); setError("");
     if (!rowId || !importId) return;
     api(`/api/govt-attendance/${importId}/rows/${rowId}/match`)
-      .then(setData).catch((e) => setError(e.message));
+      .then((d) => {
+        setData(d);
+        // Umesh: "jo 2 mai se agar ek mai select ek ho jayegi tho doosre mai automatically
+        // remaining wali aa jyaegi naa?? aur admin chaahe tho edit krr legaa" — pre-select the
+        // sole surviving candidate when the server has eliminated the rest by contradiction, but
+        // this is only ever a DEFAULT: the radio can still be changed, and "This one — match it"
+        // still has to be clicked before anything is written.
+        const suggested = (d.options ?? []).find((o: any) => o.suggested);
+        if (suggested) setPick(String(suggested.candidate));
+      }).catch((e) => setError(e.message));
   }, [rowId, importId]);
   if (!rowId) return null;
   const row = data?.row;
@@ -87,10 +96,20 @@ export function GovtRowResolveDrawer({ importId, rowId, canEdit, onClose, onReso
               <div className="text-xs font-medium text-gray-600">
                 Which candidate is this? {data.collisions > 0 && <span className="font-normal text-amber-700">({data.collisions} collided with this row — shown first)</span>}
               </div>
+              {(() => {
+                const suggested = data.options.find((o: any) => o.suggested);
+                return suggested ? (
+                  <p className="rounded-lg border border-green-200 bg-green-50 p-2 text-xs text-green-800">
+                    Only one candidate is still possible for this row — <b>{suggested.name}{suggested.phone ? ` (${suggested.phone})` : ""}</b>, pre-selected below.
+                    Confirmed by elimination, not a guess: {suggested.suggested_reason}. Pick a different one below if this is wrong.
+                  </p>
+                ) : null;
+              })()}
               <div className="max-h-64 space-y-1 overflow-y-auto rounded-lg border border-gray-200 p-1">
                 {data.options.map((o: any) => (
-                  <label key={String(o.candidate)} className={`flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs ${pick === String(o.candidate) ? "bg-blue-50" : "hover:bg-gray-50"}`}>
-                    <input type="radio" name="cand" checked={pick === String(o.candidate)} onChange={() => setPick(String(o.candidate))} />
+                  <label key={String(o.candidate)} className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs ${o.contradicted ? "cursor-not-allowed opacity-60" : "cursor-pointer"} ${pick === String(o.candidate) ? "bg-blue-50" : o.contradicted ? "" : "hover:bg-gray-50"}`}>
+                    <input type="radio" name="cand" checked={pick === String(o.candidate)} disabled={!!o.contradicted}
+                      onChange={() => setPick(String(o.candidate))} />
                     {/* -104: two same-name candidates with no portal ID used to render as two
                         IDENTICAL rows, which made this screen unusable for the one case it exists
                         for. The phone separates them (required, one per candidate) and the enrolment
@@ -107,7 +126,11 @@ export function GovtRowResolveDrawer({ importId, rowId, canEdit, onClose, onReso
                         {o.left_on ? <span className="text-red-600"> · dropped {fmtDate(o.left_on)}</span> : null}
                       </span>
                     </span>
-                    {o.collides && <span className="shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">{o.collides}</span>}
+                    {o.contradicted
+                      ? <span className="shrink-0 rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-600">already matched to {o.contradicted}</span>
+                      : o.suggested
+                        ? <span className="shrink-0 rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-800">only match left</span>
+                        : o.collides && <span className="shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">{o.collides}</span>}
                   </label>
                 ))}
               </div>

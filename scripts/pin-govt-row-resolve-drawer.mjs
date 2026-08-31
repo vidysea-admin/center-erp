@@ -47,8 +47,11 @@ ok("fixture: two same-named candidates created", !!c1?._id && !!c2?._id);
 await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: c1._id }, 201);
 await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: c2._id }, 201);
 
-// One portal row under that shared name, no portal ID on either candidate — this must come back Ambiguous.
-const csv = `Name,Total Working Days,Total Days Attended,Total Hours\n${NAME} Anil Kumar,10,5,40\n`;
+// TWO portal rows under that shared name — the real Bhadohi shape (CAN_41019211/CAN_40951102) —
+// no portal ID on either candidate, so both must come back Ambiguous.
+const csv = `Name,Candidate ID,Total Working Days,Total Days Attended,Total Hours\n`
+  + `${NAME} Anil Kumar,PIN${STAMP}A,10,5,40\n`
+  + `${NAME} Anil Kumar,PIN${STAMP}B,10,3,20\n`;
 const fd = new FormData();
 fd.append("file", new File([Buffer.from(csv)], "pin.csv", { type: "text/csv" }));
 fd.append("batch", batch._id); fd.append("confirm", "1"); fd.append("period_label", `pin ${STAMP}`);
@@ -63,25 +66,48 @@ const m2 = (att.members ?? []).find((m) => String(m.candidate_id) === String(c2.
 ok("attendance: both same-named members show awaiting_match", !!m1?.awaiting_match && !!m2?.awaiting_match, JSON.stringify({ m1: m1?.awaiting_match, m2: m2?.awaiting_match }));
 const refs1 = m1?.awaiting_match?.refs ?? [];
 ok("attendance: awaiting_match carries at least one {rowId, importId} ref — THE POINT of this unit", refs1.length > 0 && !!refs1[0].rowId && !!refs1[0].importId, JSON.stringify(refs1));
+ok("attendance: TWO unresolved rows under this name are both named (the Bhadohi shape)", refs1.length === 2, JSON.stringify(refs1));
 
-if (refs1.length) {
-  const { rowId, importId } = refs1[0];
+if (refs1.length >= 2) {
+  const [rowA, rowB] = refs1;
   // Same GET the drawer itself calls — confirm it resolves against the refs the attendance screen handed us.
-  const rowGet = await req(admin, "GET", `/api/govt-attendance/${importId}/rows/${rowId}/match`);
+  const rowGet = await req(admin, "GET", `/api/govt-attendance/${rowA.importId}/rows/${rowA.rowId}/match`);
   ok("drawer GET: resolves using the importId/rowId the batch screen supplied", rowGet.status === 200 && rowGet.data.row?.name === `${NAME} Anil Kumar`, JSON.stringify(rowGet.data).slice(0, 200));
   const options = rowGet.data.options ?? [];
-  const pickC1 = options.find((o) => String(o.candidate) === String(c1._id));
-  ok("drawer GET: both same-named candidates are offered, phone-distinguished", options.length >= 2 && options.some((o) => o.phone === c1.phone) && options.some((o) => o.phone === c2.phone));
+  ok("drawer GET: both same-named candidates are offered, phone-distinguished, no suggestion yet (nobody resolved)",
+    options.length >= 2 && options.some((o) => o.phone === c1.phone) && options.some((o) => o.phone === c2.phone) && !options.some((o) => o.suggested));
 
-  // Resolve it — exactly what the drawer's "This one — match it" button does.
-  const resolve = await req(admin, "POST", `/api/govt-attendance/${importId}/rows/${rowId}/match`, { candidate: c1._id, reason: "pin: phone matches c1" });
+  // Resolve the FIRST row to c1 — exactly what the drawer's "This one — match it" button does.
+  const resolve = await req(admin, "POST", `/api/govt-attendance/${rowA.importId}/rows/${rowA.rowId}/match`, { candidate: c1._id, reason: "pin: phone matches c1" });
   ok("resolve: POST succeeds via the refs threaded from the batch screen", resolve.status === 200, JSON.stringify(resolve.data).slice(0, 200));
+
+  const c1After = (await req(admin, "GET", `/api/candidates/${c1._id}`)).data.item;
+  ok("resolve: c1 is now stamped with the FIRST row's portal ID (from the sheet, not typed)", c1After?.sidh_candidate_id?.replace(/_/g, "") === `PIN${STAMP}A`, c1After?.sidh_candidate_id);
+
+  // THE POINT of this plan: open the SECOND (sibling) ambiguous row and confirm c1 is now
+  // excluded/contradicted (they hold a DIFFERENT portal ID) and c2 is pre-selected by elimination.
+  const rowBGet = await req(admin, "GET", `/api/govt-attendance/${rowB.importId}/rows/${rowB.rowId}/match`);
+  const optionsB = rowBGet.data.options ?? [];
+  const c1OptB = optionsB.find((o) => String(o.candidate) === String(c1._id));
+  const c2OptB = optionsB.find((o) => String(o.candidate) === String(c2._id));
+  ok("sibling row: c1 (already matched elsewhere) shows contradicted, not a live option",
+    !!c1OptB?.contradicted, JSON.stringify(c1OptB));
+  ok("sibling row: c2 is pre-suggested as the sole remaining candidate — THE ASK",
+    c2OptB?.suggested === true && typeof c2OptB.suggested_reason === "string" && c2OptB.suggested_reason.length > 0, JSON.stringify(c2OptB));
+
+  // Resolve the sibling row WITHOUT overriding the suggestion — the drawer would pre-fill this
+  // exact pick; POSTing it as-is proves the "admin chaahe tho edit krr lega, but the default is
+  // already right" flow end to end.
+  const resolveB = await req(admin, "POST", `/api/govt-attendance/${rowB.importId}/rows/${rowB.rowId}/match`, { candidate: c2._id, reason: "pin: pre-selected by elimination" });
+  ok("sibling resolve: POST succeeds on the pre-selected pick", resolveB.status === 200, JSON.stringify(resolveB.data));
 
   const attAfter = (await req(admin, "GET", `/api/batches/${batch._id}/attendance`)).data;
   const m1After = (attAfter.members ?? []).find((m) => String(m.candidate_id) === String(c1._id));
-  ok("attendance AFTER resolve: c1's awaiting_match is cleared (now has real govt hours)", !m1After?.awaiting_match && !!m1After?.govt, JSON.stringify(m1After?.awaiting_match ?? m1After?.govt));
+  const m2After = (attAfter.members ?? []).find((m) => String(m.candidate_id) === String(c2._id));
+  ok("attendance AFTER both resolves: c1's awaiting_match is cleared (now has real govt hours)", !m1After?.awaiting_match && !!m1After?.govt, JSON.stringify(m1After?.awaiting_match ?? m1After?.govt));
+  ok("attendance AFTER both resolves: c2's awaiting_match is ALSO cleared", !m2After?.awaiting_match && !!m2After?.govt, JSON.stringify(m2After?.awaiting_match ?? m2After?.govt));
 } else {
-  fail++; console.log("FAIL  (skipped resolve — no refs to work with)");
+  fail++; console.log("FAIL  (skipped resolve — fewer than 2 refs to work with)");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
