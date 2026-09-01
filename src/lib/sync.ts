@@ -186,7 +186,7 @@ const STATUS_FIELDS = ["approval_status", "operational_status", "pipeline_status
 //
 // It is NOT a dead control and it is deliberately not refused: the centre copy is the FALLBACK a
 // row without its own status inherits, here (`rules.ts:4438`) as well as in `readinessBlockers`'s
-// two callers (`rules.ts:4660` in `mappingReadinessBulk`, `:4705` in `mappingReadiness`) and the
+// two callers (`rules.ts:4664` in `mappingReadinessBulk`, `:4713` in `mappingReadiness`) and the
 // enrolment gate itself (`rules.ts:3908`). Writing it is
 // legitimate. What is wrong is the STAR - the product recommends this press to someone who is
 // trying to move an approval, and QA-988 already established the rule this borrows: "offered is
