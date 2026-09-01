@@ -4,8 +4,10 @@ import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { BatchMember, Candidate, CandidateResult } from "@/models";
 import { assertBatchInScope, bulkMarkResults, summarizeBatchResults } from "@/lib/rules";
-import { looksLikeCan, apaarError, canonicalApaar, canonicalAadhaar, sameGovtNumber } from "@/lib/validate";
+import { looksLikeCan, normalizeCan, apaarError, canonicalApaar, canonicalAadhaar, sameGovtNumber } from "@/lib/validate";
 import { audit } from "@/lib/audit";
+
+const CAN_SHAPE = /CAN/i;
 
 // GET — every roster member left-joined to its result row, so the marking grid renders
 // before anything has been marked. Pure read: no writes, no aggregate recompute (Rule 41).
@@ -98,6 +100,22 @@ export const PUT = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
       key: "sidh_candidate_id", label: "portal Candidate ID",
       ok: (s: string) => looksLikeCan(s),
       canon: (s: string) => s.trim(),
+      // QA-793 (checker on qa-217, cycle 3): CAN_x / can_x / CAN-x / "CAN x" all read as one
+      // identity everywhere else this field is matched (certificates, the health screen, QA-447's
+      // own create/edit doors) - normalizeCan is documented as THE matcher for exactly that reason
+      // ("Everything that decides WHO MATCHES WHOM goes through this", lib/validate.ts). This door
+      // used to key its uniqueness on the raw, as-typed string, so two differently-spelled
+      // spellings of one real portal ID passed both the DB pre-check and the same-request check
+      // and were handed to two different students. `?? s` falls back to the raw string only when
+      // normalizeCan cannot read the value at all - never silently treating two unreadable ids as
+      // the same identity by coincidence.
+      matchKey: (s: string) => normalizeCan(s) ?? s,
+      findClash: async (next: string, excludeId: string) => {
+        const holders = await Candidate.find({ sidh_candidate_id: CAN_SHAPE, _id: { $ne: excludeId } })
+          .select("name sidh_candidate_id").lean<any[]>();
+        const want = normalizeCan(next) ?? next;
+        return holders.find((h) => (normalizeCan(h.sidh_candidate_id) ?? h.sidh_candidate_id) === want) ?? null;
+      },
       formatError: (raw: string) => `"${raw}" is not a portal Candidate ID. It reads like CAN_12345678 - the letters CAN followed by the number. Copy it from SIDH exactly as it appears there. Nothing has been saved.`,
       crossCheck: () => null,
     },
@@ -105,6 +123,12 @@ export const PUT = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
       key: "apaar_id", label: "APAAR ID",
       ok: (s: string) => apaarError(s, { optional: true }) === null,
       canon: (s: string) => canonicalApaar(s)!,
+      // APAAR is stored canonicalized on every writer (canonicalApaar runs before the save below),
+      // so the stored value already IS its own match key - a plain exact query is correct and
+      // needs no fuzzy matching (unlike the portal ID above, which is stored exactly as typed).
+      matchKey: (s: string) => s,
+      findClash: (next: string, excludeId: string) =>
+        Candidate.findOne({ apaar_id: next, _id: { $ne: excludeId } }).select("name").lean<any>(),
       formatError: (raw: string) => `${apaarError(raw, { optional: true })} Nothing has been saved.`,
       // The QA-414 guard. APAAR and Aadhaar are BOTH 12 digits, and models/index.ts records that 55
       // live candidates already had a government id typed into the wrong box once. This is the one
@@ -181,12 +205,17 @@ export const PUT = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
       if (cross) throw new HttpError(400, cross);
       // QA-417's partial unique index would throw E11000 halfway through the loop, after earlier
       // rows had already been written. Asked here instead, so the refusal costs nothing.
-      const clash = await Candidate.findOne({ [w.field.key]: next, _id: { $ne: cand._id } }).select("name").lean<any>();
+      // QA-793: findClash (per field, above) reads what actually collides - a byte-exact query for
+      // apaar_id (already canonical on write), a normalizeCan-matched scan for sidh_candidate_id
+      // (stored as typed, so "CAN_x"/"can_x"/"CAN-x" must all be read as the one identity they are
+      // everywhere else this field is matched).
+      const clash = await w.field.findClash(next, String(cand._id));
       if (clash) {
         throw new HttpError(409, `"${next}" is already the ${w.field.label} of ${clash.name ?? "another candidate"}. Nothing has been saved.`);
       }
-      // …and against the ids this same request is about to claim.
-      const ck = `${w.field.key}:${next}`;
+      // …and against the ids this same request is about to claim, keyed the SAME normalized way -
+      // CAN_16114311 onto one row and can_16114311 onto another must collide here too.
+      const ck = `${w.field.key}:${w.field.matchKey(next)}`;
       const twin = claimedHere.get(ck);
       if (twin && twin !== String(cand._id)) {
         throw new HttpError(409, `"${next}" was given to two different students in the same save. A ${w.field.label} belongs to one person. Nothing has been saved.`);
