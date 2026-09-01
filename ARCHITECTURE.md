@@ -1035,9 +1035,10 @@ Same move as §3.15/§3.16. `Roster` (Candidates tab) and `Enrollment` (Enrollme
 QA-1740 (Delete-button fallback on the Enrollment tab), deliberately copied verbatim from
 `Roster`'s pre-existing copy to match its already-trusted behaviour — making a real second copy.
 Extracted to `src/components/drop-member.tsx` — exports `useDropMember(onDropped, onError)` (owns
-the state, fetches drop-reasons once on mount, exposes `drop()`) and `DropMemberDrawer` (the JSX,
-taking the hook's return values plus the caller's own `error` string) — now shared by both. Do not
-re-inline a third copy for a new caller; import this one.
+the state, fetches drop-reasons on mount AND on every drawer-open — QA-1743, since drop-reasons is
+an Admin-editable master list, not static data — and exposes `drop()`) and `DropMemberDrawer` (the
+JSX, taking the hook's return values plus the caller's own `error` string) — now shared by both.
+Do not re-inline a third copy for a new caller; import this one.
 
 ---
 
