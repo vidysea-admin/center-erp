@@ -1620,6 +1620,39 @@ console.log("\n--- FL19 (-235): a cancelled batch can be RESTORED, and a typed j
     afterLog && (afterLog.govt_present ?? null) === (frozenLog.govt_present ?? null),
     JSON.stringify({ before: frozenLog?.govt_present ?? null, after: afterLog?.govt_present ?? null }));
 
+  // QA-1063 (checker on qa-235): b1 at this point is exactly the shape the checker's attack used —
+  // genuinely started (actual_start set at :1380), real daily logs against it (:1471, :1531). Cancel
+  // it fresh here (it is still Active, not yet cancelled again since the :1380 restore) so it is
+  // Cancelled-with-actual_start when the restore attempts below run. Before this fix, restoring such
+  // a batch to Planning/Ready kept actual_start while putting the status back to "not yet begun", and
+  // the next Start silently re-stamped or orphaned those logs.
+  await req(admin, "POST", `/api/batches/${b1._id}/transition`, { target: "Cancelled", reason: "QA-1063 fixture" }, 200);
+  const restorePastPlanning = await req(admin, "POST", `/api/batches/${b1._id}/transition`,
+    { target: "Planning", reason: "QA-1063 attempt" });
+  ok("FL19 (QA-1063): restoring a batch that already started to Planning is refused, not silently allowed",
+    restorePastPlanning.status === 409 && /already ran|real start date/i.test(String(restorePastPlanning.data?.error ?? "")),
+    `${restorePastPlanning.status} ${JSON.stringify(restorePastPlanning.data)}`);
+
+  const restorePastReady = await req(admin, "POST", `/api/batches/${b1._id}/transition`,
+    { target: "Ready", reason: "QA-1063 attempt" });
+  ok("FL19 (QA-1063): ...and the same refusal holds for Ready, even though this batch would otherwise pass readiness's own chain first",
+    restorePastReady.status === 409 && /already ran|real start date/i.test(String(restorePastReady.data?.error ?? "")),
+    `${restorePastReady.status} ${JSON.stringify(restorePastReady.data)}`);
+
+  // The door this refusal points to must still work: restoring the SAME batch to Active is unaffected.
+  const restorePastActive = await req(admin, "POST", `/api/batches/${b1._id}/transition`,
+    { target: "Active", reason: "QA-1063 restore to where it belongs" });
+  ok("FL19 (QA-1063): ...while restoring it to Active - where it genuinely was - still succeeds",
+    restorePastActive.status === 200 && restorePastActive.data?.item?.status === "Active",
+    `${restorePastActive.status} ${JSON.stringify(restorePastActive.data?.item?.status ?? restorePastActive.data)}`);
+
+  // And its actual_start is untouched by any of the three attempts above - a refused restore, like
+  // an accepted one, changes no dates.
+  const b1After = (await req(admin, "GET", `/api/batches/${b1._id}`)).data.item;
+  ok("FL19 (QA-1063): actual_start survived all three restore attempts unchanged",
+    String(b1After?.actual_start ?? "").slice(0, 10) === istDay(-30),
+    JSON.stringify({ actual_start: b1After?.actual_start ?? null, expected: istDay(-30) }));
+
   await req(admin, "POST", `/api/batches/${b1._id}/transition`, { target: "Cancelled", reason: "FL19 cleanup" }, 200);
   await req(admin, "POST", `/api/batches/${b3._id}/transition`, { target: "Planning", reason: "FL19 cleanup" }, 200);
 }
