@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-281";
+export const RELEASE = "2026.08.14-282";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -149,6 +149,17 @@ const RELEASE_NOTE_ARCHIVE_270 =
   "and no other tab or screen is touched.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-282 fixes a Delete button on the Batch Enrollment tab that looked like it did nothing. Every "  +
+  "candidate reachable from that tab already has a history on this batch, and deleting a candidate "  +
+  "with batch history has always been refused, correctly, to protect their attendance and results. "  +
+  "But the refusal appeared as a small note at the very top of a long edit panel, while the Delete "  +
+  "button sits at the bottom, so pressing it and confirming looked like it did nothing at all. "  +
+  "Delete now opens the same drop-from-batch dialog already used on the Candidates tab, asking for "  +
+  "the day the student left and a reason, and it actually removes them from the batch once "  +
+  "confirmed. The underlying rule is unchanged - a candidate with batch history is still never "  +
+  "hard-deleted from this tab, and their attendance and results are kept exactly as before.";
+
+const RELEASE_NOTE_ARCHIVE_281 =
   "-281 closes a way a batch's real history could be stranded when a cancelled batch was brought "  +
   "back. A batch that genuinely ran - it has a real start date and real daily attendance logs - "  +
   "could be restored from Cancelled straight back to Planning or Ready while keeping that real "  +
@@ -1186,6 +1197,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -279: ARCHIVE_278 wired in here in the SAME bump that declared it, same discipline.
   // -280: ARCHIVE_279 wired in here in the SAME bump that declared it, same discipline.
   // -281: ARCHIVE_280 wired in here in the SAME bump that declared it, same discipline.
+  // -282: ARCHIVE_281 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_281 + " " +
   RELEASE_NOTE_ARCHIVE_280 + " " +
   RELEASE_NOTE_ARCHIVE_279 + " " +
   RELEASE_NOTE_ARCHIVE_278 + " " +
