@@ -663,6 +663,69 @@ console.log("\n--- -155 (QA-414 S1 / 415 / 424 / 425 / 426): the portal ID lands
     JSON.stringify([...(prev2.data.unhandled_fields ?? [])].sort()) === JSON.stringify(["sidh_link_sent_at"]),
     JSON.stringify(prev2.data.unhandled_fields));
 
+  // QA-448 (REQ-385): QA-425 above spot-checks THREE fields by hand - exactly the species of
+  // hand-maintained list that cost 55 records (QA-414). This loop is the mechanical version:
+  // it walks every non-identity, non-list key CANDIDATE_IMPORT_FIELDS actually offers today
+  // (imported live from field-catalog.ts, not copied), so it goes red the day a field STOPS
+  // being offered - not just the day one of the three hand-picked ones breaks.
+  //
+  // FIELD_TESTS below is the INDEPENDENT half that makes this a real mutation-detector rather
+  // than a loop testing itself: it is hand-authored, not derived from the catalog, so (a) a
+  // catalog key silently REMOVED still fails here (the "is it in CANDIDATE_IMPORT_FIELDS"
+  // assertion below), and (b) a NEW catalog key with no entry here fails LOUD instead of
+  // silently riding along untested (the "no FIELD_TESTS entry" branch below) - the exact shape
+  // of defect QA-425/QA-448 exist to catch, proved failing by construction rather than assumed.
+  {
+    const { CANDIDATE_IMPORT_FIELDS } = await import("../src/lib/field-catalog.ts");
+    // Always the identity/dedup key on every import in this whole suite - not re-tested here.
+    const IDENTITY_EXCLUDED = new Set(["name", "phone"]);
+    // Resolve by NAME against real Program/Location documents (list-typed) - a generic
+    // single-cell round-trip can't synthesize a matching entity safely; documented exclusion,
+    // same shape as location/program's own exclusion from CANDIDATE_IMPORT_FIELDS itself.
+    const LIST_TYPE_EXCLUDED = new Set(["interested_programs", "interested_locations"]);
+    const FIELD_TESTS = {
+      alt_phone: { cell: "97" + stamp.slice(-8), expect: (v, sent) => v === sent },
+      gender: { cell: "Female", expect: (v) => v === "Female" },
+      dob: { cell: "15-06-2001", expect: (v) => typeof v === "string" && v.slice(0, 10) === "2001-06-15" },
+      education: { cell: "12th Pass", expect: (v) => v === "12th Pass" },
+      source: { cell: `QA448-${stamp}`, expect: (v, sent) => v === sent },
+      sidh_status: { cell: "Registered", expect: (v) => v === "Registered" },
+      sidh_candidate_id: { cell: `CAN_${stamp}9Q`, expect: (v, sent) => v === sent },
+      apaar_id: { cell: "190305516099", expect: (v) => v === "190305516099" },
+      email: { cell: `q448.${stamp}@t.local`, expect: (v, sent) => v === sent },
+      aadhaar_no: { cell: "234567890123", expect: (v) => v === "234567890123" },
+      batch_interest: { cell: "current", expect: (v) => v === "Current" },
+      id_reference: { cell: `IDREF-${stamp}`, expect: (v, sent) => v === sent },
+      last_training_date: { cell: "01-01-2024", expect: (v) => typeof v === "string" && v.slice(0, 10) === "2024-01-01" },
+    };
+    const catalogKeys = new Set(CANDIDATE_IMPORT_FIELDS.map((f) => f.key));
+    const tested = new Set();
+    for (const [key, t] of Object.entries(FIELD_TESTS)) {
+      if (!catalogKeys.has(key)) {
+        ok(`QA-448: "${key}" is still offered by CANDIDATE_IMPORT_FIELDS`, false,
+          "field-catalog.ts no longer offers this key - either update this suite's FIELD_TESTS (deliberate removal) or the catalog regressed");
+        continue;
+      }
+      const uniquePhone = "96" + String(Date.now() + tested.size).slice(-8);
+      const rowsQ = [{ "Name": `Q448 ${key} ${stamp}`, "Phone": uniquePhone, "V": t.cell }];
+      const wsQ = XLSX.utils.json_to_sheet(rowsQ);
+      const wbQ = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wbQ, wsQ, "S1");
+      const fileQ = new File([XLSX.write(wbQ, { type: "buffer", bookType: "xlsx" })], `q448-${key}.xlsx`, { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const mappingQ = JSON.stringify({ "Name": "name", "Phone": "phone", "V": key });
+      const confQ = await multipart(admin, "/api/candidates/import", { file: fileQ, location: loc._id, program: prog._id, mapping: mappingQ, confirm: "1" }, 201);
+      ok(`QA-448: "${key}" is accepted (offered+written), not dropped`, confQ.status === 201 && confQ.data.imported === 1, JSON.stringify({ key, status: confQ.status, data: confQ.data }));
+      const landedQ = ((await req(admin, "GET", `/api/candidates?q=${encodeURIComponent(uniquePhone)}&limit=5`, undefined, 200)).data.items ?? [])[0];
+      const detailQ = landedQ ? (await req(admin, "GET", `/api/candidates/${landedQ._id}`, undefined, 200)).data.item : null;
+      ok(`QA-448: "${key}" round-trips through the detail route`, !!detailQ && t.expect(detailQ[key], t.cell), JSON.stringify({ key, got: detailQ?.[key], sent: t.cell }));
+      tested.add(key);
+    }
+    const eligible = [...catalogKeys].filter((k) => !IDENTITY_EXCLUDED.has(k) && !LIST_TYPE_EXCLUDED.has(k));
+    ok("QA-448 (REQ-385): every loop-eligible catalog key has a FIELD_TESTS entry - a NEW key ships tested or fails here, not silently untested",
+      eligible.every((k) => Object.prototype.hasOwnProperty.call(FIELD_TESTS, k)),
+      JSON.stringify({ eligible, missing: eligible.filter((k) => !Object.prototype.hasOwnProperty.call(FIELD_TESTS, k)) }));
+  }
+
   // Umesh ("blank ko accept hi kyun kar raha hai - it should ask"): a mapped column whose cells
   // are EMPTY is reported per column - never blocked (a fresh roster legitimately has no CANs),
   // never silent (an all-blank mapped column is what a mis-aligned sheet looks like).
