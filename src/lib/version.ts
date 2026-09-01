@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-274";
+export const RELEASE = "2026.08.14-275";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -149,6 +149,20 @@ const RELEASE_NOTE_ARCHIVE_270 =
   "and no other tab or screen is touched.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-275 closes a gap in how one portal Candidate ID is told apart from another. Every screen that "  +
+  "reads this government identity - certificates, attendance matching, the health screen - already "  +
+  "treated \"CAN_5302339001\", \"CAN5302339001\" and \"can 5302339001\" as the same person, but "  +
+  "saving a candidate only ever checked for an exact, character-for-character repeat. Three "  +
+  "different-looking but identical portal IDs could be typed onto three different candidates, and "  +
+  "the health screen that is supposed to flag exactly this kept reporting none. Adding or editing a "  +
+  "candidate's portal Candidate ID now checks the same way every other screen already reads it, and "  +
+  "refuses a second candidate holding what is really the first candidate's own ID, naming who "  +
+  "already has it. The health screen's own duplicate list reads the same way now too, so an "  +
+  "existing pair like this is found rather than silently missed. This release also adds automated "  +
+  "test coverage behind -274's own fix (the two import warnings render correctly and stay caught if "  +
+  "a future change removes them) - no visible change on its own.";
+
+const RELEASE_NOTE_ARCHIVE_274 =
   "-274 makes the candidate import screen say two things it already knew but never said. "  +
   "Uploading a spreadsheet has, for a while now, checked whether a mapped column can actually be "  +
   "written and whether a SIDH status cell reads as one of the four values the portal accepts - "  +
@@ -1074,6 +1088,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -272: ARCHIVE_271 wired in here in the SAME bump that declared it, same discipline.
   // -273: ARCHIVE_272 wired in here in the SAME bump that declared it, same discipline.
   // -274: ARCHIVE_273 wired in here in the SAME bump that declared it, same discipline.
+  // -275: ARCHIVE_274 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_274 + " " +
   RELEASE_NOTE_ARCHIVE_273 + " " +
   RELEASE_NOTE_ARCHIVE_272 + " " +
   RELEASE_NOTE_ARCHIVE_271 + " " +
