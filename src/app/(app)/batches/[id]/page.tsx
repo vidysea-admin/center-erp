@@ -1595,7 +1595,7 @@ function EnrolCard({ m, onUpdate, selected, onSelect, canEdit = true, canEditCan
               above, which gates candidates.assign (the enrollment-step toggles) — those are two
               different rights and conflating them would silently mis-gate this button. */}
           {canEditCandidate && m.candidate?._id && (
-            <Btn small kind="ghost" onClick={() => onEditCandidate(m.candidate)}>Edit</Btn>
+            <Btn small kind="ghost" onClick={() => onEditCandidate(m.candidate, m)}>Edit</Btn>
           )}
           <Chip value={m.enrollment_status} />
         </div>
@@ -1641,6 +1641,9 @@ function Enrollment({ batchId, batch, error, setError }: any) {
   // since GET /api/candidates/[id] is deliberately closed to Trainer (QA-060/095). Passing the
   // pre-loaded record sidesteps that door entirely, the same way candidates/page.tsx already does.
   const [editCandidate, setEditCandidate] = useState<any>(null);
+  // QA-1741: the BatchMember row behind editCandidate — needed only for the Drop fallback below,
+  // since dropping (unlike deleting) acts on the roster row, not the candidate record.
+  const [editMember, setEditMember] = useState<any>(null);
   const [members, setMembers] = useState<any[]>([]);
   const [idx, setIdx] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -1648,9 +1651,25 @@ function Enrollment({ batchId, batch, error, setError }: any) {
   const [bulkMsg, setBulkMsg] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [search, setSearch] = useState("");
+  // QA-1741: Delete on this tab always 409s "has batch history" (every candidate reachable here
+  // is, by construction, a member of this batch — see candidate-edit-drawer.tsx's
+  // onBlockedByBatchHistory). This mirrors the Candidates tab's own Drop dialog (Roster
+  // component, same file) rather than inventing a second delete path — Rule 25 stays the one way
+  // a candidate leaves a batch.
+  const [dropTarget, setDropTarget] = useState<any>(null);
+  const [dropForm, setDropForm] = useState<any>({});
+  const [dropReasons, setDropReasons] = useState<any[]>([]);
+  useEffect(() => { api("/api/master-lists/drop-reasons").then((d) => setDropReasons(d.items)).catch(() => {}); }, []);
 
   const load = () => api(`/api/batches/${batchId}/members`).then((d) => setMembers(activeOnly(d.items))).catch((e: any) => setError(e.message));
   useEffect(() => { load(); }, [batchId]);
+
+  async function drop() {
+    try {
+      await api(`/api/members/${dropTarget._id}/drop`, { method: "POST", json: dropForm });
+      setDropTarget(null); setDropForm({}); load();
+    } catch (e: any) { setError(e.message); }
+  }
 
   async function update(m: any, patch: any) {
     try {
@@ -1755,10 +1774,10 @@ function Enrollment({ batchId, batch, error, setError }: any) {
       )}
       {/* Desktop: all cards. Mobile: one at a time with prev/next (spec §0 Rule B) */}
       <div className="hidden gap-3 md:grid md:grid-cols-2 xl:grid-cols-3">
-        {shown.map((m) => <EnrolCard key={m._id} m={m} onUpdate={update} selected={selected.has(m._id)} onSelect={toggleSel} canEdit={canEnrol} canEditCandidate={canEditCandidate} onEditCandidate={setEditCandidate} />)}
+        {shown.map((m) => <EnrolCard key={m._id} m={m} onUpdate={update} selected={selected.has(m._id)} onSelect={toggleSel} canEdit={canEnrol} canEditCandidate={canEditCandidate} onEditCandidate={(c: any, mm: any) => { setEditCandidate(c); setEditMember(mm); }} />)}
       </div>
       <div className="md:hidden">
-        {shown.length > 0 && <EnrolCard m={cur} onUpdate={update} selected={selected.has(cur._id)} onSelect={toggleSel} canEdit={canEnrol} canEditCandidate={canEditCandidate} onEditCandidate={setEditCandidate} />}
+        {shown.length > 0 && <EnrolCard m={cur} onUpdate={update} selected={selected.has(cur._id)} onSelect={toggleSel} canEdit={canEnrol} canEditCandidate={canEditCandidate} onEditCandidate={(c: any, mm: any) => { setEditCandidate(c); setEditMember(mm); }} />}
         {shown.length > 0 && <div className="mt-3 flex items-center justify-between">
           <Btn kind="ghost" onClick={() => setIdx((i) => Math.max(0, i - 1))} disabled={idx === 0}>← Prev</Btn>
           <span className="text-sm text-gray-500">{Math.min(idx + 1, Math.max(shown.length, 1))} / {shown.length}</span>
@@ -1782,7 +1801,24 @@ function Enrollment({ batchId, batch, error, setError }: any) {
         canDelete={canDeleteCandidate}
         onClose={() => setEditCandidate(null)}
         onSaved={load}
+        onBlockedByBatchHistory={() => setDropTarget(editMember)}
       />
+      {/* QA-1741: the Delete button's actual working path from this tab — see
+          onBlockedByBatchHistory above. Same fields/behaviour as the Candidates tab's Drop
+          dialog (Roster component, this file) so a batch history removal always looks and
+          works the same way regardless of which tab it was opened from. */}
+      <Drawer error={error} open={!!dropTarget} onClose={() => setDropTarget(null)} title={`Drop ${dropTarget?.candidate?.name}?`}>
+        <div className="space-y-3">
+          <Field label="Left on" required><input type="date" className={inputCls} value={dropForm.left_on ?? ""} onChange={(e) => setDropForm({ ...dropForm, left_on: e.target.value })} /></Field>
+          <Field label="Drop reason" required>
+            <select className={inputCls} value={dropForm.drop_reason ?? ""} onChange={(e) => setDropForm({ ...dropForm, drop_reason: e.target.value })}>
+              <option value="">Select…</option>
+              {dropReasons.map((r) => <option key={r._id}>{r.name}</option>)}
+            </select>
+          </Field>
+          <Btn kind="danger" onClick={drop} disabled={!dropForm.left_on || !dropForm.drop_reason}>Confirm Drop</Btn>
+        </div>
+      </Drawer>
     </div>
   );
 }

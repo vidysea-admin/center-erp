@@ -91,6 +91,7 @@ export function CandidateEditDrawer({
   locations, programs,
   canDelete = false,
   onClose, onSaved,
+  onBlockedByBatchHistory,
 }: {
   open: boolean;
   mode: "add" | "edit";
@@ -101,6 +102,14 @@ export function CandidateEditDrawer({
   canDelete?: boolean;
   onClose: () => void;
   onSaved: () => void;          // caller re-runs its own list refresh
+  // QA-1741: DELETE /api/candidates/[id] always 409s "has batch history" for anyone reachable
+  // from a batch roster — every candidate this drawer opens for on the Enrollment tab qualifies,
+  // so Delete there was refused every time. The refusal message rendered in the drawer's OWN
+  // error banner at the top, ~180 lines above this button, and looked like the button did
+  // nothing. A caller with batch context (the Enrollment tab) passes this to hand the operator
+  // straight into the drop-from-batch dialog the refusal message already names; a caller without
+  // one (candidates/page.tsx) omits it and keeps today's error-banner behavior.
+  onBlockedByBatchHistory?: () => void;
 }) {
   const [form, setForm] = useState<any>({});
   const [error, setError] = useState("");
@@ -364,7 +373,10 @@ export function CandidateEditDrawer({
           <Btn kind="ghost" onClick={async () => {
             if (!window.confirm(`Delete "${form.name}" (${form.phone}) permanently? Their documents go too. A candidate with batch history should be dropped from the batch, not deleted.`)) return;
             try { await api(`/api/candidates/${candidateId}`, { method: "DELETE" }); onSaved(); onClose(); }
-            catch (e: any) { setError(e.message); }
+            catch (e: any) {
+              if (onBlockedByBatchHistory && /batch history/i.test(e.message)) { onClose(); onBlockedByBatchHistory(); return; }
+              setError(e.message);
+            }
           }}>Delete</Btn>
         )}
       </div>
