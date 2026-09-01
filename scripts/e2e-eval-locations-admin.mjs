@@ -133,6 +133,23 @@ ok("[avg] …and surfaces that row's own TC id", rdy?.location?.tc_id === "TCROW
     (q1731Rdy?.blockers ?? []).some((b) => /TC status is "Rejected"/.test(b)),
     JSON.stringify(q1731Rdy?.blockers).slice(0, 200));
 }
+
+// ---- QA-1732: the SAME gap as QA-1731, for tc_id, opposite failure direction - a row's tc_id
+// blanked via "Update target" (a real "", not the row's never-set state) must still fall back to
+// the centre's tc_id, or readinessBlockers' truthy-guarded "no TC ID on record" check fires a
+// FALSE blocker on a centre that genuinely has one. tc_status left at "Approved" on both centre
+// and row (implicitly, via PUT never sending one - the target starts with none - falling back to
+// the centre's own "Approved") so this fixture isolates the tc_id behaviour alone.
+{
+  const q1732Loc = (await req(admin, "POST", "/api/locations", { code: "Q1732" + s, name: "TEST-Q1732Fallback " + s, approval_status: "Approved", city: "Meerut", tc_id: "Q1732TC" + s, tc_status: "Approved" }, 201)).data.item;
+  const q1732Prog = (await req(admin, "POST", "/api/programs", { code: "Q1732P" + s, name: "Q1732Role " + s, scheme: "RPL-AVPL", trainer_skill: "Q1732Skill" + s }, 201)).data.item;
+  await req(admin, "PUT", `/api/locations/${q1732Loc._id}/targets`, { program: q1732Prog._id, approved_target: 30, tc_id: "" }, 200);
+  const q1732Rdy = ((await req(admin, "GET", `/api/mapping/readiness?location=${q1732Loc._id}`, undefined, 200)).data.items ?? [])
+    .find((r) => String(r.program?._id) === String(q1732Prog._id));
+  ok("QA-1732: a row explicitly blanked (tc_id \"\") falls back to the CENTRE's TC id - no FALSE 'no TC ID on record' blocker on a centre that genuinely has one",
+    !(q1732Rdy?.blockers ?? []).some((b) => /no TC ID on record/.test(b)),
+    JSON.stringify(q1732Rdy?.blockers).slice(0, 200));
+}
 // [avg] the locations LIST carries scheme + job-role approval counts for the new columns.
 const locRow = ((await req(admin, "GET", "/api/locations?limit=2000", undefined, 200)).data.items ?? []).find((l) => String(l._id) === String(loc._id));
 ok("[avg] locations list exposes job_roles + schemes + approved_job_roles", Array.isArray(locRow?.job_roles) && Array.isArray(locRow?.schemes) && typeof locRow?.approved_job_roles === "number",
