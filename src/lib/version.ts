@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-277";
+export const RELEASE = "2026.08.14-278";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -149,6 +149,21 @@ const RELEASE_NOTE_ARCHIVE_270 =
   "and no other tab or screen is touched.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-278 fixes a report figure and a bulk import in the same release. On the reports screen, a "  +
+  "(centre x job role) row that has never carried its own TC Status used to count as unknown "  +
+  "forever, even when the centre's own record already reads Approved - so the client's sheet "  +
+  "approval never reached the number Karunn sir reads. That figure now falls back to the centre's "  +
+  "own status when the row has none of its own, the same way a related readiness count on this "  +
+  "product already does; the row's own value is still shown beside it, unchanged, so nothing about "  +
+  "what the screen displays is hidden. "  +
+  "Second: uploading a spreadsheet of candidates has always caught an APAAR ID or a portal "  +
+  "Candidate ID repeated within that one file, but a value that already belonged to a DIFFERENT, "  +
+  "existing candidate was invisible on the preview and crashed the import partway through - "  +
+  "measured, 11 of 20 rows silently lost with no count shown. The preview now names exactly which "  +
+  "rows collide with an existing candidate and who already holds the value; confirming the import "  +
+  "still creates every row, just without the one field that was never really theirs to claim.";
+
+const RELEASE_NOTE_ARCHIVE_277 =
   "-277 is checking, not building - it closes two gaps in the tool that checks every other "  +
   "release for a leaked internal rule code or a scope filter a sibling key can silently overwrite "  +
   "(scripts/check-user-copy.mjs, internal only, never reaches a user). The scope-collision guard "  +
@@ -1117,6 +1132,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -275: ARCHIVE_274 wired in here in the SAME bump that declared it, same discipline.
   // -276: ARCHIVE_275 wired in here in the SAME bump that declared it, same discipline.
   // -277: ARCHIVE_276 wired in here in the SAME bump that declared it, same discipline.
+  // -278: ARCHIVE_277 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_277 + " " +
   RELEASE_NOTE_ARCHIVE_276 + " " +
   RELEASE_NOTE_ARCHIVE_275 + " " +
   RELEASE_NOTE_ARCHIVE_274 + " " +
