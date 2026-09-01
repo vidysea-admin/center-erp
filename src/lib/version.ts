@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-275";
+export const RELEASE = "2026.08.14-276";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -149,6 +149,17 @@ const RELEASE_NOTE_ARCHIVE_270 =
   "and no other tab or screen is touched.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-276 tells an operator, on the government attendance import PREVIEW, which rows a name collides "  +
+  "on - not just how many. When a file carries a name that matches more than one student here and "  +
+  "no portal Candidate ID breaks the tie, that row has always imported as Ambiguous rather than a "  +
+  "guess; the preview said how many such rows there were, but never which ones, so finding them "  +
+  "meant opening the row grid afterwards and reading every status one at a time. The preview now "  +
+  "names them, the same way it already names a name-matched row or a shifted column - and, unlike "  +
+  "those two, this is not a hold: importing an Ambiguous row writes no guess at all, so there is "  +
+  "nothing here to consent past, only something to see while the file is still open. It resolves "  +
+  "the same way it always has, from that row's own \"why?\" button after import.";
+
+const RELEASE_NOTE_ARCHIVE_275 =
   "-275 closes a gap in how one portal Candidate ID is told apart from another. Every screen that "  +
   "reads this government identity - certificates, attendance matching, the health screen - already "  +
   "treated \"CAN_5302339001\", \"CAN5302339001\" and \"can 5302339001\" as the same person, but "  +
@@ -1089,6 +1100,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -273: ARCHIVE_272 wired in here in the SAME bump that declared it, same discipline.
   // -274: ARCHIVE_273 wired in here in the SAME bump that declared it, same discipline.
   // -275: ARCHIVE_274 wired in here in the SAME bump that declared it, same discipline.
+  // -276: ARCHIVE_275 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_275 + " " +
   RELEASE_NOTE_ARCHIVE_274 + " " +
   RELEASE_NOTE_ARCHIVE_273 + " " +
   RELEASE_NOTE_ARCHIVE_272 + " " +
