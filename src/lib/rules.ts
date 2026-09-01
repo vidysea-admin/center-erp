@@ -4429,7 +4429,14 @@ export async function reportRollup(scope: Record<string, unknown> = {}, opts: { 
     // two. The target lands in exactly ONE of the three, so approved + not_approved + unknown is
     // always target and a reader can check the row adds up without being told to.
     const tgt = t.approved_target ?? 0;
-    const verdict = tcVerdict(t.tc_status);
+    // QA-1075: the row's own tc_status wins when it has one (a per-target verdict is more specific
+    // than the centre's), but a row that has never been told its own verdict falls back to the
+    // centre's — same precedence rules.ts:4650 already uses for readinessBlockers. `||`, not `??`:
+    // sync.ts's "Update target" write stores a cleared cell as "" (QA-497 — "a BLANK is a real
+    // value here, not a missing one"), so the row can be genuinely, deliberately blank without ever
+    // being null/undefined, and `??` alone would never reach the centre's value for that row.
+    const rowTc = String(t.tc_status ?? "").trim();
+    const verdict = tcVerdict(rowTc || t.location.tc_status);
     const odd = unrecognisedTcStatus(t.tc_status);
     if (odd) unrecognised.set(odd, (unrecognised.get(odd) ?? 0) + 1);
     const one: ReportCell = {
