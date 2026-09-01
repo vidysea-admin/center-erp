@@ -736,6 +736,10 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
     const r = await fetch(B + "/api/public/enrol-otp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     return { status: r.status, data: await r.json().catch(() => ({})) };
   };
+  // QA-1136: enrol-otp reads HALTED_LOCATION_STATUSES at two sites (route.ts:38 hides a halted
+  // centre from this public form's own centre list; route.ts:148 refuses a registration naming
+  // one directly) and neither had a suite assertion before this.
+  const otpHaltLoc = (await req(admin, "POST", "/api/locations", { name: `OTP Halted ${Date.now()}`, code: "OTPH" + Date.now().toString().slice(-6), approval_status: "Approved", operational_status: "Stopped" }, 201)).data.item;
   const em = `otp.${Date.now()}@test.local`;
   const reqOtp = await pj({ action: "request", email: em });
   ok("QA-116: OTP request lands (mail skipped in CI, challenge stored)", reqOtp.status === 200 && !!reqOtp.data.token, `got ${reqOtp.status}`);
@@ -756,6 +760,8 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   const ctxD = await ctxRes.json().catch(() => ({}));
   ok("QA-116: a verified session serves the form (operational centres + active programs)",
     ctxRes.status === 200 && (ctxD.locations ?? []).length > 0 && (ctxD.programs ?? []).length > 0);
+  ok("QA-1136: a halted centre is never offered on the public enrolment form",
+    !(ctxD.locations ?? []).some((l) => String(l._id) === String(otpHaltLoc._id)), JSON.stringify((ctxD.locations ?? []).map((l) => l._id)));
   ok("QA-116/141: the OTP form refuses a junk phone too",
     (await pj({ action: "register", token: tok, name: "OTP Cand", phone: "12345", location: ctxD.locations?.[0]?._id, program: ctxD.programs?.[0]?._id })).status === 400);
   const reg = await pj({ action: "register", token: tok, name: "OTP Cand E2E", phone: "97" + Date.now().toString().slice(-8), location: ctxD.locations?.[0]?._id, program: ctxD.programs?.[0]?._id });
@@ -764,6 +770,19 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
     (await pj({ action: "register", token: tok, name: "X", phone: "9733333331", location: ctxD.locations?.[0]?._id, program: ctxD.programs?.[0]?._id })).status === 404);
   const found = ((await req(admin, "GET", `/api/candidates?q=${encodeURIComponent("OTP Cand E2E")}`)).data.items ?? []).find((c) => c.email === em);
   ok("QA-116: the row carries the VERIFIED email and the OTP source", !!found && found.source === "Self Registration (OTP)", JSON.stringify(found?.source ?? null));
+
+  // QA-1136 (site 2): registration is refused even if a halted centre's id is sent directly - the
+  // list already hides it (asserted above), but a scripted POST does not go through that list. A
+  // FRESH challenge, since the one above is already single-used.
+  {
+    const em2 = `otp1136.${Date.now()}@test.local`;
+    const r1136 = await pj({ action: "request", email: em2 });
+    await db.collection("publictokens").updateOne({ token: r1136.data.token }, { $set: { otp_hash: nodeCrypto.createHash("sha256").update("424242").digest("hex"), otp_attempts: 0 } });
+    await pj({ action: "verify", token: r1136.data.token, code: "424242" });
+    const regHalted = await pj({ action: "register", token: r1136.data.token, name: "OTP Halted Attempt", phone: "98" + Date.now().toString().slice(-8), location: otpHaltLoc._id, program: ctxD.programs?.[0]?._id });
+    ok("QA-1136: registering directly at a halted centre id is refused, not silently accepted",
+      regHalted.status === 400 && /not taking registrations/i.test(String(regHalted.data?.error ?? "")), `got ${regHalted.status} ${JSON.stringify(regHalted.data).slice(0, 150)}`);
+  }
 
   // ---- -130 (QA-275): the OTP door is a SECOND public intake, and -126 only fixed the first ----
   // -126 put the nine Skill India fields on p/register and on both internal routes. p/enrol is the
