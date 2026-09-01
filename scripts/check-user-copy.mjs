@@ -696,41 +696,154 @@ for (const file of walk(root)) {
       else if (/\.tsx?$/.test(e.name)) files.push(f);
     }
   })(root);
+  // QA-346 (checker on qa-1705, 2026-09-01): two real blind spots survived the digit-suffix fix.
+  // (c) the collision itself can be written across MULTIPLE LINES - `{ ...batchScope,\n  batch: {
+  // $nin: [...] },\n}` is the EXACT QA-302 shape - and this scanner used to compare keys only on
+  // the spread's own physical line, so it never saw them. (d) 15 of 18 real `...scope` sites build
+  // the const from `locationFilter(user[, field])`, not an object literal, so the old owned-keys
+  // harvest (which only regexes literal `{ key:` pairs out of the const's initialiser text) found
+  // nothing to compare against and stayed silently blind on every one of them.
+  //
+  // Both are fixed by reading structure instead of one line's text: find the object literal that
+  // ENCLOSES the spread (brace-matched, string-aware so a quoted "{" or "}" cannot fake a boundary
+  // - this file's own release-notes prose in lib/version.ts quotes "...batchScope" verbatim inside
+  // a string literal, which is exactly the shape that would misfire on a naive text scan), then
+  // collect every SIBLING key at that literal's own top level - not one line, not a nested child
+  // literal - and compare against `owned`. `owned` itself now also resolves the one function-call
+  // shape actually used in this tree: `locationFilter(user)` defines "location" (its default
+  // parameter), `locationFilter(user, "x")` defines "x". Anything else - a variable second
+  // argument, a different function entirely - is left UNRESOLVED (owned stays whatever the
+  // existing object-literal harvest found, often empty), which means it can add a missed
+  // collision but can never MANUFACTURE a false one: an empty `owned` set never matches any real
+  // sibling key. That asymmetry is deliberate - the class of bug this guard exists to catch
+  // (QA-1601, a fail-closed scanner failing EVERYONE's build over a guess) is a false NEGATIVE-to-
+  // POSITIVE flip, and resolving only the one pattern this codebase actually uses, verbatim,
+  // cannot produce one.
+  function skipStrings(text) {
+    // Returns `text` with every //-comment, /* */-comment, and '...'/"..."/`...` string/template
+    // literal (backslash-escaped chars respected) replaced by same-length spaces - newlines are
+    // always kept as real newlines even inside a masked span, so line numbers stay correct - so
+    // brace-counting below can never be fooled by a "{" or "}" typed inside a string, which is the
+    // exact version.ts landmine named above. Comments are masked for a DIFFERENT reason, found by
+    // this fix's own mutation test: this file's comments are full of possessive apostrophes
+    // ("QA-302's", "codebase's") that a naive quote-scanner reads as OPENING a string - which then
+    // swallows every real brace until the next stray quote anywhere later in the file, silently
+    // blinding the whole scan. Masking comments first means an apostrophe inside one is never seen
+    // as a quote character at all.
+    let out = "";
+    let i = 0;
+    while (i < text.length) {
+      const c = text[i], c2 = text[i + 1];
+      if (c === "/" && c2 === "/") {
+        while (i < text.length && text[i] !== "\n") { out += " "; i++; }
+        continue;
+      }
+      if (c === "/" && c2 === "*") {
+        out += "  "; i += 2;
+        while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) {
+          out += text[i] === "\n" ? "\n" : " ";
+          i++;
+        }
+        if (i < text.length) { out += "  "; i += 2; }
+        continue;
+      }
+      if (c === "'" || c === '"' || c === "`") {
+        out += " ";
+        i++;
+        while (i < text.length && text[i] !== c) {
+          if (text[i] === "\\") { out += text[i + 1] === "\n" ? " \n" : "  "; i += 2; continue; }
+          out += text[i] === "\n" ? "\n" : " ";
+          i++;
+        }
+        if (i < text.length) { out += " "; i++; } // closing quote
+        continue;
+      }
+      out += c;
+      i++;
+    }
+    return out;
+  }
+  function enclosingLiteral(masked, pos) {
+    // Walk BACKWARD from pos over the string-masked text to find the nearest unmatched "{" -
+    // that is the object literal this position sits directly inside.
+    let depth = 0;
+    for (let i = pos - 1; i >= 0; i--) {
+      const c = masked[i];
+      if (c === "}") depth++;
+      else if (c === "{") { if (depth === 0) return i; depth--; }
+    }
+    return -1;
+  }
+  function matchingClose(masked, openPos) {
+    let depth = 0;
+    for (let i = openPos; i < masked.length; i++) {
+      const c = masked[i];
+      if (c === "{") depth++;
+      else if (c === "}") { depth--; if (depth === 0) return i; }
+    }
+    return -1;
+  }
+  function topLevelKeys(masked, from, to) {
+    // Every `identifier:` found at brace/bracket depth 0 WITHIN (from, to) - i.e. a direct
+    // property of this literal, never a key belonging to a nested object or array literal inside
+    // one of its values.
+    const out = [];
+    let depth = 0;
+    const re = /([a-z_][a-zA-Z_]*)\s*:/g;
+    re.lastIndex = from;
+    let m;
+    while ((m = re.exec(masked)) && m.index < to) {
+      // depth AT this key's own position: count braces/brackets between `from` and m.index.
+      let d = 0;
+      for (let i = from; i < m.index; i++) {
+        const c = masked[i];
+        if (c === "{" || c === "[") d++;
+        else if (c === "}" || c === "]") d--;
+      }
+      if (d === 0) out.push({ key: m[1], pos: m.index });
+    }
+    return out;
+  }
+  function lineOf(src, pos) { return src.slice(0, pos).split(/\r?\n/).length; }
+
   let collisions = 0;
   for (const f of files) {
     const src = fs.readFileSync(f, "utf-8");
-    for (const line of src.split(/\r?\n/).entries()) {
-      const [i, l] = line;
-      // a scanner that flags PROSE is a scanner people switch off - this pin's own
-      // explanatory comment quotes the bad pattern verbatim and tripped it.
-      const t = l.trim();
-      if (t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")) continue;
-      // QA-346 (checker on qa-147b-vacuous-pin, 2026-08-19): this used to end the capture at
-      // "[Ss]cope" exactly, so \b required the very next character to be a non-word one. A scope
-      // const renamed with a trailing digit (e.g. a second copy, `trainerScope2`) has "2"
-      // immediately after "e" - word-to-word, no boundary - so the whole match failed and the
-      // spread was invisible to this scanner. `\d*` after "[Ss]cope" lets the boundary land after
-      // any trailing digits instead, without widening the match to swallow unrelated words: a
-      // spread like `...scopeless` or `...outOfScopeItems` still does not match (there is no bare
-      // "[Ss]cope" immediately before a digit-or-boundary in those names).
-      const m = /\.\.\.(\w*[Ss]cope\d*)\b/.exec(l);
-      if (!m) continue;
-      const scopeName = m[1];
-      // what does that scope object define? read its const in the same file
+    const masked = skipStrings(src);
+    const spreadRe = /\.\.\.(\w*[Ss]cope\d*)\b/g;
+    let sm;
+    while ((sm = spreadRe.exec(masked))) {
+      const pos = sm.index;
+      // a scanner that flags PROSE is a scanner people switch off - `masked` has already erased
+      // every comment (see skipStrings above), so a spread MENTIONED in a comment is no longer
+      // text `spreadRe` can even match; nothing further to skip here.
+      const scopeName = sm[1];
+      // what does that scope object define? read its const in the same file.
       const def = new RegExp("const\\s+" + scopeName + "\\s*=[^;]*", "s").exec(src);
       if (!def) continue;
       const owned = new Set([...def[0].matchAll(/\{\s*([a-z_][a-zA-Z_]*)\s*:/g)].map((x) => x[1]));
-      // QA-323 taught this the mirror case: a key declared BEFORE the spread is overwritten BY it,
-      // and looking only at what follows the spread misses exactly half the class. Both sides now.
-      const before = l.slice(0, m.index);
-      const after = l.slice(m.index + m[0].length);
-      const keys = [...before.matchAll(/([a-z_][a-zA-Z_]*)\s*:/g), ...after.matchAll(/([a-z_][a-zA-Z_]*)\s*:/g)].map((x) => x[1]);
-      for (const k of keys) {
+      // QA-346 (d): resolve the ONE function-call shape this codebase actually uses for a scope
+      // const. locationFilter(user, field = "location") - a literal second argument names the
+      // field it filters on; no second argument means the function's own default, "location".
+      const lf = /locationFilter\s*\(\s*[a-zA-Z_$][\w$]*\s*(?:,\s*"([^"]*)")?\s*\)/.exec(def[0]);
+      if (lf) owned.add(lf[1] || "location");
+      if (!owned.size) continue;
+      const openPos = enclosingLiteral(masked, pos);
+      if (openPos === -1) continue;
+      const closePos = matchingClose(masked, openPos);
+      if (closePos === -1) continue;
+      // QA-323 taught this the mirror case: a key declared BEFORE the spread is overwritten BY
+      // it, and looking only at what follows the spread misses exactly half the class. Scanning
+      // the WHOLE enclosing literal (not "before"/"after" the spread on one line) already covers
+      // both sides - a sibling key anywhere in this literal, spread's line or not, is compared.
+      for (const { key: k, pos: kpos } of topLevelKeys(masked, openPos + 1, closePos)) {
+        if (kpos === pos) continue; // the spread's own "..." is never itself a `key:` match, but guard anyway
         if (!owned.has(k)) continue;
         collisions++;
         pushStructural(
-          path.relative(root, f).replace(/\\/g, "/") + ":" + (i + 1) +
-          ": the literal key '" + k + "' sits beside '..." + scopeName + "', which also defines '" + k +
+          path.relative(root, f).replace(/\\/g, "/") + ":" + lineOf(src, kpos) +
+          ": the literal key '" + k + "' sits in the same object literal as '..." + scopeName +
+          "' (line " + lineOf(src, pos) + "), which also defines '" + k +
           "'. The literal wins and the scope is silently dropped. Merge both conditions into one '" +
           k + "' object instead."
         );
