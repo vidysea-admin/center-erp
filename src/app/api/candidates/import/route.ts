@@ -40,6 +40,8 @@ const HANDLED_IMPORT_FIELDS = new Set<string>([
   "interested_programs", "interested_locations", // resolved by name
 ]);
 
+const CAN_SHAPE = /CAN/i;
+
 // Excel import: upload → map → preview → confirm (screen spec).
 // POST multipart: file, location, program, mapping (JSON {excelCol: name|phone|alt_phone|gender|source}), confirm ("1" to write)
 export const POST = apiHandler(async (req: NextRequest) => {
@@ -353,6 +355,62 @@ export const POST = apiHandler(async (req: NextRequest) => {
     }
   }
 
+  // QA-991: apaarSeen/candidateIdInvalid above only ever caught trouble WITHIN this one sheet -
+  // a value that already belongs to ANOTHER candidate already in the database was invisible to
+  // every one of the four APAAR report lists (all stayed empty, HTTP 200) and confirm crashed
+  // insertMany on the database's own unique index partway through, silently dropping every row
+  // after it (measured: 9 of 20 landed, 11 lost, no `imported` field to reveal a partial write
+  // had even happened). The Closure card's own single-candidate door (results/route.ts:160) has
+  // carried this exact pre-check for a while; the bulk importer, the door 45 students at a time
+  // actually arrive through, never did.
+  //
+  // Unlike an unreadable value (harmless to store as given - QA-902/QA-941's own posture), a
+  // value that already belongs to someone else is WRONG to store: it would misattribute a real
+  // government identity, and the database would refuse the write anyway. So this is the one field
+  // in this file that is DROPPED rather than stored-as-given - QA-141's "a row is never dropped
+  // over format" still holds, because it is the FIELD that is dropped, not the row.
+  const apaarTaken: string[] = [];
+  if (apaarSeen.size) {
+    const holders = await Candidate.find({ apaar_id: { $in: [...apaarSeen.keys()] } }).select("name apaar_id").lean<any[]>();
+    const byKey = new Map(holders.map((h) => [String(h.apaar_id), h.name]));
+    for (const c of candidates) {
+      if (typeof c.apaar_id !== "string") continue;
+      const holder = byKey.get(c.apaar_id);
+      if (!holder) continue;
+      apaarTaken.push(`${personLabel(c)} — "${c.apaar_id}" is already the APAAR ID of ${holder}`);
+      delete c.apaar_id;
+    }
+  }
+
+  // The identical gap exists on the portal Candidate ID (QA-991's own text: "bilkul yahi gap hai").
+  // Matched the same way every other screen already reads it (QA-447): "CAN_5302339001",
+  // "CAN5302339001" and "can 5302339001" are one government identity, not three.
+  const sidhTaken: string[] = [];
+  {
+    const wanted = new Set<string>();
+    for (const c of candidates) {
+      if (typeof c.sidh_candidate_id !== "string") continue;
+      const canon = normalizeCan(c.sidh_candidate_id);
+      if (canon) wanted.add(canon);
+    }
+    if (wanted.size) {
+      const holders = await Candidate.find({ sidh_candidate_id: CAN_SHAPE }).select("name sidh_candidate_id").lean<any[]>();
+      const byCanon = new Map<string, string>();
+      for (const h of holders) {
+        const hc = normalizeCan(h.sidh_candidate_id);
+        if (hc && wanted.has(hc) && !byCanon.has(hc)) byCanon.set(hc, h.name);
+      }
+      for (const c of candidates) {
+        if (typeof c.sidh_candidate_id !== "string") continue;
+        const canon = normalizeCan(c.sidh_candidate_id);
+        const holder = canon ? byCanon.get(canon) : undefined;
+        if (!holder) continue;
+        sidhTaken.push(`${personLabel(c)} — "${c.sidh_candidate_id}" is already recorded for ${holder} (the same government identity, written differently)`);
+        delete c.sidh_candidate_id;
+      }
+    }
+  }
+
   // Rule 7: the import path is where bulk duplicates actually enter. Flag them, never block —
   // the operator decides. Checks both against existing records and within the file itself.
   const seen = new Map<string, number>();
@@ -409,6 +467,11 @@ export const POST = apiHandler(async (req: NextRequest) => {
       apaar_invalid: apaarInvalid.slice(0, 25), apaar_invalid_count: apaarInvalid.length,
       apaar_duplicate: apaarDuplicate.slice(0, 25), apaar_duplicate_count: apaarDuplicate.length,
       apaar_same_as_aadhaar: apaarSameAsAadhaar.slice(0, 25), apaar_same_as_aadhaar_count: apaarSameAsAadhaar.length,
+      // QA-991: an APAAR/portal ID this sheet carries but a DIFFERENT, EXISTING candidate already
+      // holds. The field is dropped from that row on confirm (never the row) rather than crashing
+      // the whole batch on the database's own unique index - said here so it is seen before that.
+      apaar_taken: apaarTaken.slice(0, 25), apaar_taken_count: apaarTaken.length,
+      sidh_taken: sidhTaken.slice(0, 25), sidh_taken_count: sidhTaken.length,
       unknown_columns: unknownCols,
       // QA-110: say the quiet part — which columns are about to be DROPPED vs stored.
       ignored_columns: acceptUnknown ? [] : unknownCols,
@@ -420,5 +483,5 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // QA-896: the ids, so the screen can offer to put exactly these students on the batch the
   // operator came from. Without them the offer would have to guess "the newest N", which is wrong
   // the moment two people import at once.
-  return NextResponse.json({ imported: docs.length, imported_ids: docs.map((d) => String(d._id)), skipped: rows.length - candidates.length, duplicate_count: duplicates.length, date_unparseable: dateUnparseable.slice(0, 25), date_unparseable_count: dateUnparseable.length, phone_invalid: phoneInvalid.slice(0, 25), phone_invalid_count: phoneInvalid.length, candidate_id_invalid: candidateIdInvalid.slice(0, 25), candidate_id_invalid_count: candidateIdInvalid.length, aadhaar_invalid: aadhaarInvalid.slice(0, 25), aadhaar_invalid_count: aadhaarInvalid.length, apaar_invalid: apaarInvalid.slice(0, 25), apaar_invalid_count: apaarInvalid.length, apaar_duplicate: apaarDuplicate.slice(0, 25), apaar_duplicate_count: apaarDuplicate.length, apaar_same_as_aadhaar: apaarSameAsAadhaar.slice(0, 25), apaar_same_as_aadhaar_count: apaarSameAsAadhaar.length, ignored_columns: acceptUnknown ? [] : unknownCols, unhandled_fields: [...new Set(unhandledFields)], sidh_status_unmatched: [...new Set(sidhStatusUnmatched)].slice(0, 25), batch_interest_unmatched: [...new Set(batchInterestUnmatched)].slice(0, 25), blank_by_field: blankByField }, { status: 201 });
+  return NextResponse.json({ imported: docs.length, imported_ids: docs.map((d) => String(d._id)), skipped: rows.length - candidates.length, duplicate_count: duplicates.length, date_unparseable: dateUnparseable.slice(0, 25), date_unparseable_count: dateUnparseable.length, phone_invalid: phoneInvalid.slice(0, 25), phone_invalid_count: phoneInvalid.length, candidate_id_invalid: candidateIdInvalid.slice(0, 25), candidate_id_invalid_count: candidateIdInvalid.length, aadhaar_invalid: aadhaarInvalid.slice(0, 25), aadhaar_invalid_count: aadhaarInvalid.length, apaar_invalid: apaarInvalid.slice(0, 25), apaar_invalid_count: apaarInvalid.length, apaar_duplicate: apaarDuplicate.slice(0, 25), apaar_duplicate_count: apaarDuplicate.length, apaar_same_as_aadhaar: apaarSameAsAadhaar.slice(0, 25), apaar_same_as_aadhaar_count: apaarSameAsAadhaar.length, apaar_taken: apaarTaken.slice(0, 25), apaar_taken_count: apaarTaken.length, sidh_taken: sidhTaken.slice(0, 25), sidh_taken_count: sidhTaken.length, ignored_columns: acceptUnknown ? [] : unknownCols, unhandled_fields: [...new Set(unhandledFields)], sidh_status_unmatched: [...new Set(sidhStatusUnmatched)].slice(0, 25), batch_interest_unmatched: [...new Set(batchInterestUnmatched)].slice(0, 25), blank_by_field: blankByField }, { status: 201 });
 });

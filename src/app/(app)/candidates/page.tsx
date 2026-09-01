@@ -966,6 +966,35 @@ function CandidatesInner() {
                         </div>
                       </div>
                     )}
+                    {/* QA-991: unlike apaar_duplicate above (two rows of THIS sheet clashing, which
+                        still fails the batch part-way through if imported as-is), this is a row
+                        clashing with a candidate ALREADY IN THE DATABASE — the importer catches it
+                        before insertMany and drops only the one field, so nothing here fails the
+                        batch. Same amber "stored as given, but" shape as the invalid-value boxes
+                        above it, because the consequence for the operator is the same: fix it, or
+                        that student counts as having no ID until they do. */}
+                    {(importState.preview?.apaar_taken_count ?? 0) > 0 && (
+                      <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                        <b>{importState.preview.apaar_taken_count} APAAR ID{importState.preview.apaar_taken_count === 1 ? " is" : "s are"} already recorded for a different candidate.</b>{" "}
+                        Those rows will still import, but without the APAAR ID — it is someone else&rsquo;s, so it is not saved here.
+                        Confirm which candidate it really belongs to and correct the sheet or the record directly.
+                        <div className="mt-1 font-mono text-[11px] text-amber-800">
+                          {(importState.preview.apaar_taken ?? []).slice(0, 5).join(" · ")}
+                          {importState.preview.apaar_taken_count > 5 ? ` · +${importState.preview.apaar_taken_count - 5} more` : ""}
+                        </div>
+                      </div>
+                    )}
+                    {(importState.preview?.sidh_taken_count ?? 0) > 0 && (
+                      <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                        <b>{importState.preview.sidh_taken_count} portal Candidate ID{importState.preview.sidh_taken_count === 1 ? " is" : "s are"} already recorded for a different candidate.</b>{" "}
+                        Those rows will still import, but without the portal Candidate ID — it is someone else&rsquo;s (even if typed
+                        differently), so it is not saved here. Confirm which candidate it really belongs to before correcting either record.
+                        <div className="mt-1 font-mono text-[11px] text-amber-800">
+                          {(importState.preview.sidh_taken ?? []).slice(0, 5).join(" · ")}
+                          {importState.preview.sidh_taken_count > 5 ? ` · +${importState.preview.sidh_taken_count - 5} more` : ""}
+                        </div>
+                      </div>
+                    )}
                     {/* QA-976, found by this unit's own class pin rather than by a person: the
                         importer has reported unreadable DATES since QA-097 and no screen has ever
                         rendered it. Not this unit's defect - older than it - but the pin exists to
