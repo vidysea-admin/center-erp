@@ -1026,6 +1026,19 @@ threaded a `{rowId, importId}` ref through `awaitingMatchFor`/`batchAttendanceRo
 that row. A name with more than one unresolved ref opens a small picker first — never auto-picks.
 Do not re-inline a second copy for a fourth caller; import this one.
 
+### 3.17 The Drop-member dialog — COLLAPSED to one copy (QA-1740 DRY follow-up, 2026-09-02)
+
+Same move as §3.15/§3.16. `Roster` (Candidates tab) and `Enrollment` (Enrollment tab), both in
+`batches/[id]/page.tsx`, each had their own hand-copied Drop-member dialog: `dropTarget`/
+`dropForm`/`dropReasons` state, a `drop()` handler (`POST /api/members/[id]/drop`), and identical
+`<Drawer>` JSX (Left-on date, Drop-reason select, Confirm Drop). `Enrollment`'s copy was added by
+QA-1740 (Delete-button fallback on the Enrollment tab), deliberately copied verbatim from
+`Roster`'s pre-existing copy to match its already-trusted behaviour — making a real second copy.
+Extracted to `src/components/drop-member.tsx` — exports `useDropMember(onDropped, onError)` (owns
+the state, fetches drop-reasons once on mount, exposes `drop()`) and `DropMemberDrawer` (the JSX,
+taking the hook's return values plus the caller's own `error` string) — now shared by both. Do not
+re-inline a third copy for a new caller; import this one.
+
 ---
 
 ## 4. Key entry points
