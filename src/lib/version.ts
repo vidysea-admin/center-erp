@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-276";
+export const RELEASE = "2026.08.14-277";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -149,6 +149,21 @@ const RELEASE_NOTE_ARCHIVE_270 =
   "and no other tab or screen is touched.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-277 is checking, not building - it closes two gaps in the tool that checks every other "  +
+  "release for a leaked internal rule code or a scope filter a sibling key can silently overwrite "  +
+  "(scripts/check-user-copy.mjs, internal only, never reaches a user). The scope-collision guard "  +
+  "used to compare a spread against a sibling key only on the SAME physical line, so the exact "  +
+  "shape a live scope leak once took - the spread on its own line, the colliding key a line below "  +
+  "it - was invisible to the guard meant to catch it; and it could only read what a scope filter "  +
+  "defines when that filter was written as an object literal, so the 15 of 18 real cases in this "  +
+  "codebase that build one by calling a shared helper function were never checked at all. Both are "  +
+  "closed: the guard now reads the whole object literal a spread sits in, not one line of it, and "  +
+  "resolves the one helper call this codebase actually uses to build a scope filter. A separate, "  +
+  "smaller gap in a different guard is closed alongside it - the one that scans for a stray control "  +
+  "character in source now covers the full byte range its own header already claimed to. Nothing "  +
+  "on any screen looks different, and the live tree these tools check is unaffected either way.";
+
+const RELEASE_NOTE_ARCHIVE_276 =
   "-276 tells an operator, on the government attendance import PREVIEW, which rows a name collides "  +
   "on - not just how many. When a file carries a name that matches more than one student here and "  +
   "no portal Candidate ID breaks the tie, that row has always imported as Ambiguous rather than a "  +
@@ -1101,6 +1116,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -274: ARCHIVE_273 wired in here in the SAME bump that declared it, same discipline.
   // -275: ARCHIVE_274 wired in here in the SAME bump that declared it, same discipline.
   // -276: ARCHIVE_275 wired in here in the SAME bump that declared it, same discipline.
+  // -277: ARCHIVE_276 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_276 + " " +
   RELEASE_NOTE_ARCHIVE_275 + " " +
   RELEASE_NOTE_ARCHIVE_274 + " " +
   RELEASE_NOTE_ARCHIVE_273 + " " +
