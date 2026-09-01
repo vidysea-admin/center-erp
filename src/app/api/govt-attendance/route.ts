@@ -229,6 +229,23 @@ export const POST = apiHandler(async (req: NextRequest) => {
           name: r.name, id: r.govt_candidate_id, sl_no: r.sl_no ?? null,
         })),
       } } : {}),
+      // QA-416: `ambiguous_count` above answers "how many" but never "who" - an operator with the
+      // file still open in front of them (the whole point of catching this on the PREVIEW, same as
+      // column_shift_detail/name_match_detail beside it) had no way to see WHICH rows collided
+      // without opening the row grid and reading 50 status chips one at a time. Same "named on the
+      // PREVIEW" shape as its two siblings above; deliberately NOT a blocking gate like theirs -
+      // those two exist because consenting past them writes a GUESS onto a candidate record
+      // (the wrong name, or a shifted column, both silently corrupt data). An Ambiguous row writes
+      // no guess at all - matchGovtRows never resolves it - so there is nothing here for a consent
+      // checkbox to be consenting TO; the row already exists to be resolved after import, on this
+      // same screen's own row-level "why?" button (GovtRowResolveDrawer). This is visibility, not a
+      // new hold - filed as a disclosed, narrower fix.
+      ...(counts.ambiguous_count > 0 ? { ambiguous_detail: {
+        count: counts.ambiguous_count,
+        rows: matched.filter((r) => r.match_status === "Ambiguous").slice(0, 50).map((r) => ({
+          name: r.name, sl_no: r.sl_no ?? null,
+        })),
+      } } : {}),
     });
   }
 
