@@ -4651,10 +4651,13 @@ export async function mappingReadinessBulk(targetFilter: Record<string, unknown>
     const rc = byRoom.get(String(t.location._id)) ?? { rooms: 0, labs: 0 };
     // 2026-08-13 (Manish: "31 approved"): the government approves each centre×job-role ROW with
     // its own TC ID — a per-target TC wins over the centre-level one when the target carries it.
+    // QA-1731: `tc_status` uses `||`, not `??` - the same reason QA-1075 gave reportRollup this
+    // fallback (rules.ts:4438-4439): "Update target" stores a cleared cell as a real "", not
+    // null/undefined, and `??` alone never reaches the centre's value for a row blanked that way.
     const tcView = {
       ...t.location,
       tc_id: t.tc_id ?? t.location.tc_id,
-      tc_status: t.tc_status ?? t.location.tc_status,
+      tc_status: String(t.tc_status ?? "").trim() || t.location.tc_status,
     };
     const blockers = readinessBlockers(tcView, counts, cc.registered, needed,
       { rooms: rc.rooms, labs: rc.labs, requires_lab: !!t.program.requires_lab });
@@ -4697,7 +4700,9 @@ export async function mappingReadiness(locationId: string, programId: string) {
   const rooms = await Room.find({ location: locationId, active: { $ne: false } }).select("type").lean<any[]>();
   const needed = prog.default_batch_size ?? 30;
   // Per-target TC (own id + approval per job role) wins over the centre-level fallback.
-  const tcView = { ...loc, tc_id: target?.tc_id ?? loc.tc_id, tc_status: target?.tc_status ?? loc.tc_status };
+  // QA-1731: `tc_status` uses `||`, not `??` - see the sibling tcView in mappingReadinessBulk above
+  // for why (`??` never reaches the centre's value for a row genuinely blanked to "").
+  const tcView = { ...loc, tc_id: target?.tc_id ?? loc.tc_id, tc_status: String(target?.tc_status ?? "").trim() || loc.tc_status };
   const blockers = readinessBlockers(tcView, counts, registered, needed, {
     rooms: rooms.length,
     labs: rooms.filter((r) => r.type === "Lab").length,
