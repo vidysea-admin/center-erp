@@ -177,17 +177,19 @@ export type ActionVerdict = {
 // guard reads THIS list rather than keeping its own copy.
 const STATUS_FIELDS = ["approval_status", "operational_status", "pipeline_status", "lifecycle_status"];
 
-// QA-1075 (S2). Fields that live at BOTH levels: on the centre, and on each (centre x job role)
-// target row. A sheet that is one row per CENTRE writes the centre copy; every count in the
-// report reads the ROW copy (`rules.ts:4465` takes `row_status` from `LocationTarget.tc_status`
-// with no fallback). So on a centre whose rows already carry their own status, `Apply value`
-// writes a real field, audits it honestly, and moves nothing the reviewer was looking at.
+// QA-1075 (S2, fixed in rules.ts:4438-4439). Fields that live at BOTH levels: on the centre, and
+// on each (centre x job role) target row. A sheet that is one row per CENTRE writes the centre
+// copy; the report's counted verdict (`rules.ts:4432` in `reportRollup`) now reads the ROW when it
+// has one and falls back to the centre when it does not - so on a centre whose rows already carry
+// their OWN status, `Apply value` writes a real field, audits it honestly, and moves nothing the
+// reviewer was looking at; on a centre with a blank row, it does move the counted figure.
 //
 // It is NOT a dead control and it is deliberately not refused: the centre copy is the FALLBACK a
-// row without its own status inherits (`rules.ts:4650`, `:4693`) and it gates enrolment through
-// `readinessBlockers` (`rules.ts:3908`). Writing it is legitimate. What is wrong is the STAR - the
-// product recommends this press to someone who is trying to move an approval, and QA-988 already
-// established the rule this borrows: "offered is not the same as recommended".
+// row without its own status inherits, here (`rules.ts:4438`) as well as in `readinessBlockers`
+// (`rules.ts:4650`, `:4693`) and the enrolment gate itself (`rules.ts:3908`). Writing it is
+// legitimate. What is wrong is the STAR - the product recommends this press to someone who is
+// trying to move an approval, and QA-988 already established the rule this borrows: "offered is
+// not the same as recommended".
 //
 // Derived from the two Sets rather than typed out again, because a third hand-written list of
 // "which fields are per job role" is exactly the ARCHITECTURE section 3 disease that QA-497 cost
@@ -356,7 +358,7 @@ export function classifyChange(c: ClassifiableChange): ActionVerdict[] {
       : dualHome
         ? `Copy the sheet's value into ${field} on the CENTRE. Audited as external sync, and revertible afterwards - but read this first: "${field}" also lives on each of this centre's (centre x job role) rows, and this write touches the CENTRE ONLY. Every row keeps whatever it already carries. To reach the rows, the sheet has to address the job role - map its "Job role" column, or use "Update target" on a row-scoped change.${
             REPORT_COUNTED_DUAL_HOME.has(field)
-              ? ` One more thing worth knowing before you press: the report's approved/not-approved counts read the ROW and never fall back to the centre, so a row left blank is still counted as unknown after this. The centre value does reach two other places on a blank row: it can clear an enrolment blocker in the readiness check, and it moves the report's separate "waiting on a field, not the client" count (verdict_not_on_row) - a real effect, just not the counted approval figure this row is about.`
+              ? ` One more thing worth knowing before you press: the report's approved/not-approved counts read the ROW when it has one of its own, and fall back to THIS centre value when it does not - so a row that has never carried its own TC status will now count as whatever this write says, not as unknown. A row that already carries its own status is unaffected; only a truly blank row inherits this. It also still clears an enrolment blocker in the readiness check on a blank row.`
               : ``
           }`
         : `Copy the sheet's value straight into ${field} on this ${isEntity ? entityType.toLowerCase() : "centre"}. Audited as external sync, and revertible afterwards.`)

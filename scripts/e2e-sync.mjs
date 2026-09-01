@@ -1354,25 +1354,22 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
     ok("QA-1075: ...and the row says so in words, so the reviewer learns it BEFORE pressing",
       /touches the CENTRE ONLY/.test(String(A(tcRow)?.why ?? "")), String(A(tcRow)?.why ?? "").slice(0, 220));
 
-    // QA-1653 (S3, checker cycle 1). Cycle 1's last clause was "it shows through only on rows that
-    // have none" - the one a reviewer would actually act on ("fine, it will at least help the blank
-    // rows"). It is false of the report: a row with no status of its own gives row_status "" ->
-    // tcVerdict("") -> `unknown`, and rules.ts:4465 has no centre fallback. The place the centre
-    // value DOES show through is the readiness check. Both halves are pinned, because a wrong
-    // sentence buried the true and useful one.
-    ok("QA-1075: ...and it does not promise the blank rows - they stay unknown, and it names what the write DOES reach",
-      /still counted as unknown/.test(String(A(tcRow)?.why ?? ""))
-      && /readiness check/.test(String(A(tcRow)?.why ?? "")),
-      String(A(tcRow)?.why ?? "").slice(-260));
+    // QA-1727 (S2, checker on qa-1075-tc-status-row-centre-fallback). The cycle 1/2 pins below this
+    // comment (QA-1653, QA-1657) asserted "still counted as unknown" and "verdict_not_on_row" -
+    // both TRUE of the report as it stood on 2026-08-31, and both made FALSE by QA-1075's own fix
+    // (rules.ts:4438-4439, commit 15d06b4): a blank row now falls back to the centre for the
+    // counted verdict, so it does NOT stay unknown, and `sync_gap.verdict_not_on_row` (rules.ts
+    // :4505-4518) can no longer be nonzero for exactly the case this sentence describes (filed
+    // separately as QA-1729 - not this pin's concern). Re-pinned to the new, true sentence.
+    ok("QA-1075/QA-1727: a blank row now inherits the centre's verdict for counting, and the text says so - not the old 'stays unknown' claim",
+      /count as whatever this write says, not as unknown/.test(String(A(tcRow)?.why ?? ""))
+      && !/still counted as unknown/.test(String(A(tcRow)?.why ?? "")),
+      String(A(tcRow)?.why ?? "").slice(-320));
 
-    // QA-1657 (S3, checker cycle 2). Cycle 2's "readiness check" clause was ALSO an exclusivity
-    // claim ("what the centre value does reach IS the readiness check") - false, because a blank
-    // row's centre write also moves `sync_gap.verdict_not_on_row` (rules.ts:4507-4511), a second
-    // report-rendered figure. Pinned so "names one destination" cannot regress into "names it as
-    // the only one" a third time.
-    ok("QA-1075: ...and readiness is not the ONLY other place the centre write reaches",
-      /verdict_not_on_row/.test(String(A(tcRow)?.why ?? "")),
-      String(A(tcRow)?.why ?? "").slice(-300));
+    ok("QA-1075/QA-1727: ...and a row that already carries its own status is named as unaffected, plus the readiness-check effect is still there",
+      /already carries its own status is unaffected/.test(String(A(tcRow)?.why ?? ""))
+      && /readiness check/.test(String(A(tcRow)?.why ?? "")),
+      String(A(tcRow)?.why ?? "").slice(-320));
 
     ok("QA-1075: exactly one recommendation survives on that row - the screen never stars two",
       (tcRow?.actions ?? []).filter((x) => x.recommended === true).length <= 1,
