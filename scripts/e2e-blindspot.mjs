@@ -2,7 +2,13 @@
 // Focus: exact-boundary eligibility, slot boundaries, TC Password masking per role,
 // duplicate sheet keys, header-below-totals-row detection, REAL OneDrive fetch,
 // capability warnings, instant trainer-request notification, interested[] round-trip.
-const BASE = process.env.BASE_URL || "http://localhost:3000/erp";
+//
+// QA-1692/QA-1741: guarded via requireLocalBase (db-guard.mjs) — this file writes
+// (/api/programs, /api/public/register/:token, /api/candidates/import) through whatever
+// server BASE_URL names. Missed in QA-1692's first pass (name confusion with the sibling
+// e2e-flows-blindspot.mjs, which was fixed); the checker caught the miss and filed QA-1741.
+import { requireLocalBase } from "./db-guard.mjs";
+const BASE = requireLocalBase("e2e-blindspot", process.env.BASE_URL || "http://localhost:3000/erp");
 let pass = 0, fail = 0;
 const ok = (n, c, x = "") => { if (c) { pass++; console.log("PASS  " + n); } else { fail++; console.log("FAIL  " + n + " " + x); } };
 
