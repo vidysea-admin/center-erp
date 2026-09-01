@@ -79,24 +79,26 @@ async function plan(user: Awaited<ReturnType<typeof requireUser>>, batchId?: str
     return ref && c.sidh_candidate_id && normalizeCan(c.sidh_candidate_id) !== ref;
   }).map((c) => ({ candidate: c._id, name: c.name, phone: c.phone ?? null, on_record: c.sidh_candidate_id, in_id_reference: c.id_reference }));
 
-  // d) one portal identity on two people. The unique index stops a THIRD from being written; it
-  // cannot arbitrate the two that already exist - only a human can say whose it is.
-  const dupRows = await Candidate.aggregate([
-    { $match: { sidh_candidate_id: { $type: "string", $ne: "" }, ...scope } },
-    { $group: { _id: "$sidh_candidate_id", n: { $sum: 1 }, members: { $push: { candidate: "$_id", name: "$name", phone: "$phone" } } } },
-    { $match: { n: { $gt: 1 } } },
-  ]);
-
-  // e) unattached rows whose CAN matches EXACTLY ONE candidate - attachable by ID equality, which
-  // is not a guess (QA-085 intact: identity decides, never the name). Rows from an import whose
-  // rows carry the -154 shift signature are excluded: a corrupt file's row must not become
-  // anybody's newest figure through this door.
+  // d) one portal identity on two people, AND e) unattached rows whose CAN matches EXACTLY ONE
+  // candidate - attachable by ID equality (QA-085 intact: identity decides, never the name).
+  //
+  // ONE MAP FOR BOTH, not a separate raw-grouped aggregate for (d) - QA-447 (checker on qa-155):
+  // the old (d) grouped on the RAW `$sidh_candidate_id` string, so "CAN_5302339001",
+  // "CAN5302339001" and "can 5302339001" - the same government identity to every reader of this
+  // field, INCLUDING the (e) map two lines below in the same file - grouped as three singletons
+  // and `duplicates` reported 0 while three candidates held one real CAN. The unique index only
+  // ever stopped a byte-identical second write, so a raw-grouped (d) could never see a
+  // differently-spelled collision even in principle. Grouping both on the SAME normalised key
+  // this file already builds for (e) fixes (d) and removes a second, driftable query.
   const canOwners = new Map<string, any[]>();
   for (const c of await Candidate.find({ sidh_candidate_id: { $type: "string", $ne: "" }, ...scope })
-    .select("name sidh_candidate_id").lean<any[]>()) {
+    .select("name phone sidh_candidate_id").lean<any[]>()) {
     const can = normalizeCan(c.sidh_candidate_id);
     if (can) canOwners.set(can, [...(canOwners.get(can) ?? []), c]);
   }
+  const dupRows = [...canOwners.entries()]
+    .filter(([, members]) => members.length > 1)
+    .map(([can, members]) => ({ _id: can, n: members.length, members: members.map((c) => ({ candidate: c._id, name: c.name, phone: c.phone ?? null })) }));
   const unattached = await GovtAttendanceRow.find({ match_status: { $ne: "Matched" }, govt_candidate_id: CAN_SHAPE, ...locationFilter(user, "location") })
     .select("name govt_candidate_id import batch location total_hours_raw").lean<any[]>();
   const importIds = [...new Set(unattached.map((r) => String(r.import)))];

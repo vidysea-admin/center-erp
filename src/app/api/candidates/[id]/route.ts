@@ -8,7 +8,10 @@ import { requirePerm } from "@/lib/permissions";
 import { dbConnect } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { aadhaarError, canonicalAadhaar, apaarError, canonicalApaar, sameGovtNumber, emailError, canonicalPhone, phoneError } from "@/lib/validate";
-import { looksLikeCan } from "@/lib/govt-attendance";
+import { looksLikeCan, normalizeCan } from "@/lib/govt-attendance";
+
+// QA-447: same prefilter portal-id-health/route.ts uses for the identical reason.
+const CAN_SHAPE = /CAN/i;
 
 export const { GET, PATCH } = itemRoutes({
   model: Candidate, entity: "Candidate",
@@ -38,7 +41,7 @@ export const { GET, PATCH } = itemRoutes({
   writeRoles: ["Admin", "Operations", "Location", "Enrollment"],
   permission: "candidates.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
   // QA-141 (Umesh): edits are as strict as creates — fixed-up numbers land as the bare 10.
-  beforeUpdate(_id, body, existing, user) {
+  async beforeUpdate(_id, body, existing, user) {
     // -156 (QA-450): null, not "" - clearing the field has to stay possible, and the QA-417 partial
     // index does not index null. Same reasoning as the create door one file over.
     if (typeof body.sidh_candidate_id === "string" && !body.sidh_candidate_id.trim()) body.sidh_candidate_id = null;
@@ -70,6 +73,27 @@ export const { GET, PATCH } = itemRoutes({
     // collide with the same id another candidate already holds, and the health screen's duplicate
     // bucket groups on the raw value too - so neither sees the pair.
     if (typeof body.sidh_candidate_id === "string") body.sidh_candidate_id = body.sidh_candidate_id.trim();
+    // QA-447: the QA-417 unique index (and QA-730's own trim above) only stop a BYTE-IDENTICAL
+    // second write - "CAN_5302339001", "CAN5302339001" and "can 5302339001" are the same government
+    // identity to every reader of this field but three different strings to the index. Same "only
+    // when the value actually CHANGED" gate QA-726 established above (a record already holding an
+    // old id must stay editable for everything else about it), checked here rather than by widening
+    // the index to a normalised key, which would need migrating everything already stored (QA-719,
+    // Umesh's call).
+    if (typeof body.sidh_candidate_id === "string" && body.sidh_candidate_id
+      && body.sidh_candidate_id !== String((existing as any)?.sidh_candidate_id ?? "").trim()) {
+      const canon = normalizeCan(body.sidh_candidate_id);
+      if (canon) {
+        const holders = await Candidate.find({ sidh_candidate_id: CAN_SHAPE, _id: { $ne: _id } })
+          .select("name sidh_candidate_id").lean<any[]>();
+        const clash = holders.find((c) => normalizeCan(c.sidh_candidate_id) === canon);
+        if (clash) {
+          throw new HttpError(409, `This portal Candidate ID is already recorded for ${clash.name} `
+            + `(stored there as "${clash.sidh_candidate_id}" - the same government identity, written `
+            + `differently). One portal ID belongs to one candidate.`);
+        }
+      }
+    }
     // -135 (QA-283): the caller may say "these documents were done on SIDH". It does NOT get to say
     // WHO confirmed it or WHEN — the server stamps both from the session, because a mark whose
     // provenance the client can write is not evidence, it is a field. Clearing it clears them too,

@@ -1,12 +1,16 @@
 import { collectionRoutes } from "@/lib/crud";
 import { BatchMember, Candidate, CandidateResult, Location, Program } from "@/models";
 import { assertLocationInScope, HttpError, isScoped } from "@/lib/authz";
-import { looksLikeCan } from "@/lib/govt-attendance";
+import { looksLikeCan, normalizeCan } from "@/lib/govt-attendance";
 import { aadhaarError, canonicalAadhaar, apaarError, canonicalApaar, sameGovtNumber, emailError, canonicalPhone, phoneError } from "@/lib/validate";
 import { candidateEligibility } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { renderMail, sendMail } from "@/lib/mailer";
 import { sendSms } from "@/lib/sms";
+
+// QA-447: narrows the normalised-duplicate check below to records that could plausibly collide,
+// same prefilter portal-id-health/route.ts already uses for the identical reason.
+const CAN_SHAPE = /CAN/i;
 
 export const { GET, POST } = collectionRoutes({
   model: Candidate, entity: "Candidate",
@@ -45,7 +49,7 @@ export const { GET, POST } = collectionRoutes({
     { path: "program", select: "name code" },
   ],
   // Rule 38: creating a record at someone else's location was previously unchecked.
-  beforeCreate(data, user) {
+  async beforeCreate(data, user) {
     // -156 (QA-450): a blank portal ID is the ABSENCE of an identity, and "" is a string, so the
     // QA-417 partial unique index indexed it and the SECOND person saved with a blank field was
     // told "That sidh candidate id is already in use." - naming a duplicate identity that does not
@@ -69,6 +73,26 @@ export const { GET, POST } = collectionRoutes({
     }
     // QA-730: store what was validated, without the whitespace the partial unique index would miss.
     if (typeof data.sidh_candidate_id === "string") data.sidh_candidate_id = data.sidh_candidate_id.trim();
+    // QA-447: the QA-417 unique index (and QA-730's own trim above) only stop a BYTE-IDENTICAL
+    // second write - "CAN_5302339001", "CAN5302339001" and "can 5302339001" are the same government
+    // identity to every reader of this field (normalizeCan, the health screen, the attendance/
+    // certificate matchers) but three different strings to the index, so all three saved as three
+    // separate candidates, each "holding" the same real-world CAN. Checked here, not by widening the
+    // index to a normalised key: that would need a migration of everything already stored, which is
+    // QA-719 and Umesh's call, not a side effect of this door refusing new collisions.
+    if (typeof data.sidh_candidate_id === "string" && data.sidh_candidate_id) {
+      const canon = normalizeCan(data.sidh_candidate_id);
+      if (canon) {
+        const holders = await Candidate.find({ sidh_candidate_id: CAN_SHAPE })
+          .select("name sidh_candidate_id").lean<any[]>();
+        const clash = holders.find((c) => normalizeCan(c.sidh_candidate_id) === canon);
+        if (clash) {
+          throw new HttpError(409, `This portal Candidate ID is already recorded for ${clash.name} `
+            + `(stored there as "${clash.sidh_candidate_id}" - the same government identity, written `
+            + `differently). One portal ID belongs to one candidate.`);
+        }
+      }
+    }
     // QA-141 (Umesh): manual entry is strict; bulk import keeps its own normalize-and-report
     // lane (rows are client data and are never dropped over format).
     const pErr = phoneError(data.phone);
