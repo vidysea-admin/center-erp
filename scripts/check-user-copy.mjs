@@ -705,7 +705,15 @@ for (const file of walk(root)) {
       // explanatory comment quotes the bad pattern verbatim and tripped it.
       const t = l.trim();
       if (t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")) continue;
-      const m = /\.\.\.(\w*[Ss]cope)\b/.exec(l);
+      // QA-346 (checker on qa-147b-vacuous-pin, 2026-08-19): this used to end the capture at
+      // "[Ss]cope" exactly, so \b required the very next character to be a non-word one. A scope
+      // const renamed with a trailing digit (e.g. a second copy, `trainerScope2`) has "2"
+      // immediately after "e" - word-to-word, no boundary - so the whole match failed and the
+      // spread was invisible to this scanner. `\d*` after "[Ss]cope" lets the boundary land after
+      // any trailing digits instead, without widening the match to swallow unrelated words: a
+      // spread like `...scopeless` or `...outOfScopeItems` still does not match (there is no bare
+      // "[Ss]cope" immediately before a digit-or-boundary in those names).
+      const m = /\.\.\.(\w*[Ss]cope\d*)\b/.exec(l);
       if (!m) continue;
       const scopeName = m[1];
       // what does that scope object define? read its const in the same file
