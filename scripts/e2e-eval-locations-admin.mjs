@@ -122,7 +122,9 @@ ok("[avg] …and surfaces that row's own TC id", rdy?.location?.tc_id === "TCROW
 // own record said "Rejected". A fresh location/programme, so this cannot inherit `loc`'s own
 // tc_status state from the pin just above.
 {
-  const q1731Loc = (await req(admin, "POST", "/api/locations", { code: "Q1731" + s, name: "TEST-Q1731Fallback " + s, approval_status: "Approved", city: "Meerut", tc_status: "Rejected" }, 201)).data.item;
+  // tc_id must be set too - readinessBlockers' TC checks are `if (!loc.tc_id) ... else if (loc.tc_status ...)`,
+  // so a centre with no TC ID at all never reaches the tc_status branch this pin means to exercise.
+  const q1731Loc = (await req(admin, "POST", "/api/locations", { code: "Q1731" + s, name: "TEST-Q1731Fallback " + s, approval_status: "Approved", city: "Meerut", tc_id: "Q1731TC" + s, tc_status: "Rejected" }, 201)).data.item;
   const q1731Prog = (await req(admin, "POST", "/api/programs", { code: "Q1731P" + s, name: "Q1731Role " + s, scheme: "RPL-AVPL", trainer_skill: "Q1731Skill" + s }, 201)).data.item;
   await req(admin, "PUT", `/api/locations/${q1731Loc._id}/targets`, { program: q1731Prog._id, approved_target: 30, tc_status: "" }, 200);
   const q1731Rdy = ((await req(admin, "GET", `/api/mapping/readiness?location=${q1731Loc._id}`, undefined, 200)).data.items ?? [])
