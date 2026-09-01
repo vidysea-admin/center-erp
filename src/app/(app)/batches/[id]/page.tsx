@@ -18,6 +18,7 @@ import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, Fi
 import { Activity } from "@/components/activity";
 import { usePerms } from "@/components/shell";
 import { CandidateEditDrawer } from "@/components/candidate-edit-drawer";
+import { useDropMember, DropMemberDrawer } from "@/components/drop-member";
 import { GovtRowResolveDrawer } from "@/components/govt-row-resolve-drawer";
 import { compressImage, flushQueue, fmtBytes, getLastUploadInfo, getQueue, pickRecorderMime, uploadWithRetry, videoKnobs, type VideoKnobs } from "@/lib/upload";
 import { BASE_PATH } from "@/lib/base-path";
@@ -1175,9 +1176,6 @@ function Roster({ batchId, batch, error, setError, onChanged }: any) {
   const [members, setMembers] = useState<any[]>([]);
   const [pool, setPool] = useState<any[]>([]);
   const [showPool, setShowPool] = useState(false);
-  const [dropTarget, setDropTarget] = useState<any>(null);
-  const [dropForm, setDropForm] = useState<any>({});
-  const [dropReasons, setDropReasons] = useState<any[]>([]);
   const [attLinks, setAttLinks] = useState<any[] | null>(null);
   // A-03
   const [regLink, setRegLink] = useState<string | null>(null);
@@ -1246,7 +1244,6 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
     api(`/api/candidates?location=${batch.location?._id ?? batch.location}&limit=2000`).then((d) =>
       setPool(d.items.filter((c: any) => ["Unassigned", "Dropped"].includes(c.lifecycle_status)
         && (!c.program || String(c.program?._id ?? c.program) === String(batch.program?._id ?? batch.program))))),
-    api("/api/master-lists/drop-reasons").then((d) => setDropReasons(d.items)),
   ]).catch((e: any) => setError(e.message)).finally(() => setLoaded(true));
   useEffect(() => { load(); }, [batchId]);
 
@@ -1265,12 +1262,8 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
     try { await api(`/api/batches/${batchId}/members`, { method: "POST", json: { candidate: candidateId, joined_on: joinOn || undefined } }); load(); onChanged(); }
     catch (e: any) { setError(e.message); }
   }
-  async function drop() {
-    try {
-      await api(`/api/members/${dropTarget._id}/drop`, { method: "POST", json: dropForm });
-      setDropTarget(null); setDropForm({}); load(); onChanged();
-    } catch (e: any) { setError(e.message); }
-  }
+  const { dropTarget, setDropTarget, dropForm, setDropForm, dropReasons, drop } =
+    useDropMember(() => { load(); onChanged(); }, setError);
 
   const active = activeOnly(members);
   return (
@@ -1466,18 +1459,7 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
         </div>
       </Drawer>
 
-      <Drawer error={error} open={!!dropTarget} onClose={() => setDropTarget(null)} title={`Drop ${dropTarget?.candidate?.name}?`}>
-        <div className="space-y-3">
-          <Field label="Left on" required><input type="date" className={inputCls} value={dropForm.left_on ?? ""} onChange={(e) => setDropForm({ ...dropForm, left_on: e.target.value })} /></Field>
-          <Field label="Drop reason" required>
-            <select className={inputCls} value={dropForm.drop_reason ?? ""} onChange={(e) => setDropForm({ ...dropForm, drop_reason: e.target.value })}>
-              <option value="">Select…</option>
-              {dropReasons.map((r) => <option key={r._id}>{r.name}</option>)}
-            </select>
-          </Field>
-          <Btn kind="danger" onClick={drop} disabled={!dropForm.left_on || !dropForm.drop_reason}>Confirm Drop</Btn>
-        </div>
-      </Drawer>
+      <DropMemberDrawer dropTarget={dropTarget} setDropTarget={setDropTarget} dropForm={dropForm} setDropForm={setDropForm} dropReasons={dropReasons} drop={drop} error={error} />
 
       {/* More than one unresolved portal row under this name (rare — usually one) — never guess
           which is theirs, same discipline the matcher itself follows. */}
@@ -1654,22 +1636,13 @@ function Enrollment({ batchId, batch, error, setError }: any) {
   // QA-1741: Delete on this tab always 409s "has batch history" (every candidate reachable here
   // is, by construction, a member of this batch — see candidate-edit-drawer.tsx's
   // onBlockedByBatchHistory). This mirrors the Candidates tab's own Drop dialog (Roster
-  // component, same file) rather than inventing a second delete path — Rule 25 stays the one way
-  // a candidate leaves a batch.
-  const [dropTarget, setDropTarget] = useState<any>(null);
-  const [dropForm, setDropForm] = useState<any>({});
-  const [dropReasons, setDropReasons] = useState<any[]>([]);
-  useEffect(() => { api("/api/master-lists/drop-reasons").then((d) => setDropReasons(d.items)).catch(() => {}); }, []);
-
+  // component, same file — both now share useDropMember/DropMemberDrawer from
+  // @/components/drop-member) rather than inventing a second delete path — Rule 25 stays the
+  // one way a candidate leaves a batch.
   const load = () => api(`/api/batches/${batchId}/members`).then((d) => setMembers(activeOnly(d.items))).catch((e: any) => setError(e.message));
   useEffect(() => { load(); }, [batchId]);
 
-  async function drop() {
-    try {
-      await api(`/api/members/${dropTarget._id}/drop`, { method: "POST", json: dropForm });
-      setDropTarget(null); setDropForm({}); load();
-    } catch (e: any) { setError(e.message); }
-  }
+  const { dropTarget, setDropTarget, dropForm, setDropForm, dropReasons, drop } = useDropMember(load, setError);
 
   async function update(m: any, patch: any) {
     try {
@@ -1804,21 +1777,10 @@ function Enrollment({ batchId, batch, error, setError }: any) {
         onBlockedByBatchHistory={() => setDropTarget(editMember)}
       />
       {/* QA-1741: the Delete button's actual working path from this tab — see
-          onBlockedByBatchHistory above. Same fields/behaviour as the Candidates tab's Drop
-          dialog (Roster component, this file) so a batch history removal always looks and
-          works the same way regardless of which tab it was opened from. */}
-      <Drawer error={error} open={!!dropTarget} onClose={() => setDropTarget(null)} title={`Drop ${dropTarget?.candidate?.name}?`}>
-        <div className="space-y-3">
-          <Field label="Left on" required><input type="date" className={inputCls} value={dropForm.left_on ?? ""} onChange={(e) => setDropForm({ ...dropForm, left_on: e.target.value })} /></Field>
-          <Field label="Drop reason" required>
-            <select className={inputCls} value={dropForm.drop_reason ?? ""} onChange={(e) => setDropForm({ ...dropForm, drop_reason: e.target.value })}>
-              <option value="">Select…</option>
-              {dropReasons.map((r) => <option key={r._id}>{r.name}</option>)}
-            </select>
-          </Field>
-          <Btn kind="danger" onClick={drop} disabled={!dropForm.left_on || !dropForm.drop_reason}>Confirm Drop</Btn>
-        </div>
-      </Drawer>
+          onBlockedByBatchHistory above. Shares useDropMember/DropMemberDrawer with the
+          Candidates tab's Drop dialog (Roster component, this file) so a batch history removal
+          always looks and works the same way regardless of which tab it was opened from. */}
+      <DropMemberDrawer dropTarget={dropTarget} setDropTarget={setDropTarget} dropForm={dropForm} setDropForm={setDropForm} dropReasons={dropReasons} drop={drop} error={error} />
     </div>
   );
 }
