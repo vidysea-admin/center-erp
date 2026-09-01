@@ -3226,6 +3226,34 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
         JSON.stringify(rep.labels ?? null));
     }
 
+    // ---- QA-1075: a row with no verdict of its own inherits the centre's, not "unknown" ----
+    // Umesh: "jaise hi hum sheet mein approve karte rahe, kuch ko inhone approved se no-verdict
+    // wale mein convert kar diya" - a centre the client's sheet already marked Approved, synced to
+    // Location.tc_status, but whose (centre x job role) row has never carried its OWN tc_status,
+    // used to count as unknown/Pending forever: the row was blank, not disagreeing, and the
+    // client's own approval never reached the number Karunn sir reads. `tc_status: ""` here, not
+    // an omitted field - QA-497 already established a blank is a real, stored row value ("Update
+    // target" writes it as ""), so this is the exact shape a live blank row takes, and it is the
+    // shape a `??` fallback (rather than `||`) would still have missed.
+    {
+      const tcLoc = (await req("POST", "/api/locations", { code: "TC" + stamp, name: "TEST-TcFallback " + stamp, city: "Meerut", tc_status: "Approved" }, 201)).data.item;
+      const tcRole = "TcFallback Role " + stamp;
+      const tcProg = (await req("POST", "/api/programs", { code: "TCP" + stamp, name: tcRole, scheme: "RPL-AVPL", trainer_skill: "TcSkill" + stamp }, 201)).data.item;
+      if (tcLoc?._id && tcProg?._id) {
+        await req("PUT", `/api/locations/${tcLoc._id}/targets`, { program: tcProg._id, approved_target: 150, tc_status: "" }, 200);
+        const repTc = (await req("GET", "/api/reports/rollup", undefined, 200)).data;
+        const tcRow = (repTc.rows ?? []).find((r) => String(r.location._id) === String(tcLoc._id));
+        ok("QA-1075: a target row with a blank tc_status counts as Approved when its CENTRE already reads Approved, not as Pending",
+          tcRow?.cells?.[tcRole]?.approved === 150 && tcRow?.cells?.[tcRole]?.unknown === 0,
+          JSON.stringify({ cell: tcRow?.cells?.[tcRole] ?? null, expected: { approved: 150, unknown: 0 } }));
+
+        const tcDetail = (repTc.detail ?? []).find((d) => String(d.location?._id) === String(tcLoc._id) && d.role === tcRole);
+        ok("QA-1075: the detail row still tells the truth - row_status stays blank (nothing was ever written to the row itself), only the COUNT falls back to the centre",
+          tcDetail?.row_status === "" && tcDetail?.centre_status === "Approved" && tcDetail?.approved === 150,
+          JSON.stringify(tcDetail ?? null));
+      }
+    }
+
     // Mobilised is every candidate for that centre x job role at any stage, off
     // Candidate.location + Candidate.program. NOT interested_programs - measured, those carry
     // data on 2 of 252 records, so a report built on them reads near-empty and gets believed.
