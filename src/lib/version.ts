@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-278";
+export const RELEASE = "2026.08.14-279";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -149,6 +149,21 @@ const RELEASE_NOTE_ARCHIVE_270 =
   "and no other tab or screen is touched.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-279 closes a mismatch and a second gap in how a portal Candidate ID is read. The Sync Inbox's "  +
+  "own explanation of what pressing Apply-value does had gone stale the moment -278 shipped - it "  +
+  "still told a reviewer that clearing a centre's TC Status left the report counting that row as "  +
+  "unknown, when -278 made the report fall back to reading the centre's own status instead. The "  +
+  "text now says what actually happens. "  +
+  "Second: marking results on a batch already refused a portal Candidate ID repeated byte-for-byte "  +
+  "across two students, but \"CAN_12345678\", \"can_12345678\" and \"CAN-12345678\" are the same "  +
+  "government identity everywhere else this product reads the field - certificates, the health "  +
+  "screen, the candidate record itself - and this one door still saw them as three different ids. "  +
+  "Two differently-typed spellings of one real portal ID could be saved onto two different "  +
+  "students, in one save or across two, and their certificates would then both be refused as "  +
+  "ambiguous. Marking results now reads the field the same normalized way every other screen "  +
+  "already does, and refuses a spelling that is really someone else's, naming who holds it.";
+
+const RELEASE_NOTE_ARCHIVE_278 =
   "-278 fixes a report figure and a bulk import in the same release. On the reports screen, a "  +
   "(centre x job role) row that has never carried its own TC Status used to count as unknown "  +
   "forever, even when the centre's own record already reads Approved - so the client's sheet "  +
@@ -1133,6 +1148,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -276: ARCHIVE_275 wired in here in the SAME bump that declared it, same discipline.
   // -277: ARCHIVE_276 wired in here in the SAME bump that declared it, same discipline.
   // -278: ARCHIVE_277 wired in here in the SAME bump that declared it, same discipline.
+  // -279: ARCHIVE_278 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_278 + " " +
   RELEASE_NOTE_ARCHIVE_277 + " " +
   RELEASE_NOTE_ARCHIVE_276 + " " +
   RELEASE_NOTE_ARCHIVE_275 + " " +
