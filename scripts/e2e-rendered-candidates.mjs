@@ -258,15 +258,20 @@ if (await card.count() > 0) {
 // So the question moves to the instrument that answers it directly: the DOM. Deleting the render
 // fails this. No comment, in any shape, can pass it.
 {
-  const bad = { interest: "maybe later idk", edu: "not-a-level", onlyInterest: "sometime next year" };
+  // QA-1701 (checker on qa-446): sidh added alongside interest/edu - same fixture, same round
+  // trip, so the new field earns the same "on its own line, not crossed with a sibling" rigor
+  // this block already pays for interest/education, at the cost of one extra column, not a
+  // second browser flow ("ONE FLOW, CALLED TWICE" below is exactly the discipline this follows).
+  const bad = { interest: "maybe later idk", edu: "not-a-level", onlyInterest: "sometime next year", sidh: "not-a-real-sidh-status" };
   const rows = [
-    { Name: "TEST-IP " + s + " A", Phone: phone("77"), Interest: "The current batch", Edu: "10th Pass", AltPhone: "", Junk: "" },
-    { Name: "TEST-IP " + s + " B", Phone: phone("77"), Interest: bad.interest, Edu: bad.edu, AltPhone: "", Junk: "" },
+    { Name: "TEST-IP " + s + " A", Phone: phone("77"), Interest: "The current batch", Edu: "10th Pass", Sidh: "Registered", AltPhone: "", Junk: "" },
+    { Name: "TEST-IP " + s + " B", Phone: phone("77"), Interest: bad.interest, Edu: bad.edu, Sidh: bad.sidh, AltPhone: "", Junk: "" },
     // QA-1366 (checker, cycle 2): row B was the ONLY bad row and it was bad in BOTH columns, so
     // "the interest warning renders" and "it renders only when education's does" were the SAME
     // measurement - QA-1235 returning invisibly. Row C is bad in interest and VALID in education,
-    // which is the only shape that can tell the two apart.
-    { Name: "TEST-IP " + s + " C", Phone: phone("77"), Interest: bad.onlyInterest, Edu: "Graduate", AltPhone: "", Junk: "" },
+    // which is the only shape that can tell the two apart. Sidh stays clean on row C too, so it
+    // never rides on interest's warning either.
+    { Name: "TEST-IP " + s + " C", Phone: phone("77"), Interest: bad.onlyInterest, Edu: "Graduate", Sidh: "Link Sent", AltPhone: "", Junk: "" },
   ];
   // ONE FLOW, CALLED TWICE - not two copies, and the reason is this file's own history: every
   // guard in this block that went quietly wrong went wrong by drifting away from the thing beside
@@ -325,7 +330,7 @@ if (await card.count() > 0) {
 
   let text = null;
   try {
-    text = await previewSheet(rows, ["name", "phone", "batch_interest", "education", "alt_phone", ""], "a");
+    text = await previewSheet(rows, ["name", "phone", "batch_interest", "education", "sidh_status", "alt_phone", ""], "a");
   } catch (e) {
     // NOT a skip. A flow that never reached the preview verified nothing, and says so in red.
     ok("[QA-1268] the import preview was reachable in a browser", false, String((e && e.message) || e).slice(0, 200));
@@ -384,6 +389,30 @@ if (await card.count() > 0) {
     // substring, line-anchored by construction, nothing to escape.
     ok("[QA-1267] ...and no blank-column warning names NOTHING - 'the column mapped to .' is a report lane lying about a column",
       !mapped.some((l) => l.indexOf("mapped to .") >= 0), JSON.stringify(mapped.slice(0, 3)) || "(no blank-column warning at all)");
+
+    // QA-1701 (checker on qa-446): unhandled_fields + sidh_status_unmatched were computed by the
+    // route since -154 (QA-426/REQ-379) and rendered nowhere - the same silent-drop shape QA-1268
+    // above already caught once for batch_interest_unmatched. QA-446 added the render; this is its
+    // first DOM-level coverage, same rigor as the education/interest pair above: on its own line,
+    // not crossed with a sibling.
+    const sLine = lineWith(/SIDH status values not recognised/i);
+    ok("[QA-1701] the preview names an unrecognised SIDH STATUS value ON ITS OWN LINE - the render QA-446 added is not a comment or a dead branch",
+      sLine.includes(bad.sidh), sLine || "(no SIDH status line rendered)");
+    ok("[QA-1701] ...and it is NOT crossed with education or batch-interest's values - a coupling bug would put the wrong warning's value on this line",
+      !sLine.includes(bad.edu) && !sLine.includes(bad.interest), sLine || "(no SIDH status line rendered)");
+    ok("[QA-1701] ...and the education/batch-interest lines do not carry the SIDH value either - the crossing check runs both directions",
+      !eLine.includes(bad.sidh) && !iLine.includes(bad.sidh), JSON.stringify({ eLine: eLine.slice(0, 90), iLine: iLine.slice(0, 90) }));
+    // unhandled_fields has NO regression pin here, on purpose, not by oversight: the import
+    // drawer's own mapping <select> only ever offers CANDIDATE_IMPORT_FIELDS options
+    // (page.tsx:876), and every one of those is handled by some branch in
+    // api/candidates/import/route.ts (TEXT_IMPORT_FIELDS / the explicit per-field ifs) - verified
+    // directly, field by field, while building qa-446 and independently re-verified by two
+    // separate checkers since. There is no sheet a real user can build, mapped through this real
+    // dropdown, that reaches unhandledFields.push(field) at all - it is a defensive check for a
+    // FUTURE catalog addition with no handler wired up yet. A DOM pin needs a live path to drive;
+    // this one does not exist today. scripts/e2e-blindspot.mjs pins the JSON key directly (a
+    // genuine, narrower substitute); qa/QA-ISSUES.jsonl QA-1701 and this comment are where that
+    // gap is recorded, not silently skipped.
   }
 
   // ---------------------------------------------------------------------------------------------
