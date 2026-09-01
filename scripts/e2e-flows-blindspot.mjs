@@ -468,6 +468,11 @@ console.log("\n--- FL8: the day holds two slotted batches per trainer, never thr
 
 console.log("\n--- FL9: trainer import — stages by display name, nominations by centre/role name ---");
 {
+  // QA-1136: this file's own trainer-import route is one of the six UNCOVERED
+  // HALTED_LOCATION_STATUSES readers - route.ts:184 leaves nominated_for_location blank (F-B5:
+  // "a halted centre does not hire") when the row's centre name resolves to a halted centre, and
+  // no suite ever drove a row through it. Stamped so a warm DB cannot collide with itself.
+  const fl9HaltLoc = (await req(admin, "POST", "/api/locations", { code: "FL9H" + stamp, name: `FL9 Halted ${stamp}`, approval_status: "Approved", operational_status: "Stopped" }, 201)).data.item;
   const rows = [
     { "Name": `FL Tr A ${stamp}`, "Phone": "9822200001", "Stage": "TOT Payment Done", "Centre": loc.name, "Role": prog.name, "TR": "", "Skill": "" },
     { "Name": `FL Tr B ${stamp}`, "Phone": "9822200002", "Stage": "Random Stage", "Centre": "No Such Centre", "Role": "", "TR": "", "Skill": "" },
@@ -477,6 +482,9 @@ console.log("\n--- FL9: trainer import — stages by display name, nominations b
     // same words as a real job role in a different order. One spreadsheet column, read verbatim.
     { "Name": `FL Tr E ${stamp}`, "Phone": `77${stamp}05`.slice(0, 10), "Stage": "", "Centre": "", "Role": "", "TR": "", "Skill": `Battery Repair System Technician ${stamp}` },
     { "Name": `FL Tr F ${stamp}`, "Phone": `77${stamp}06`.slice(0, 10), "Stage": "", "Centre": "", "Role": "", "TR": "", "Skill": "Totally Made Up Role" },
+    // QA-1136 (site: route.ts:184) - a REAL, resolvable centre name that is halted, distinct from
+    // row B's "No Such Centre" (unmatched) case just above.
+    { "Name": `FL Tr G ${stamp}`, "Phone": `77${stamp}07`.slice(0, 10), "Stage": "", "Centre": fl9HaltLoc.name, "Role": "", "TR": "", "Skill": "" },
   ];
   // -132 (QA-281): the near-match only means something if the correct spelling is a role we KNOW, so
   // put it in the job-roles master first. Stamped, so a warm DB does not collide with itself.
@@ -497,8 +505,13 @@ console.log("\n--- FL9: trainer import — stages by display name, nominations b
     JSON.stringify(prev.data.stage_unmatched));
   ok("FL9: the unknown centre is reported", (prev.data.centre_unmatched ?? []).includes("No Such Centre"), JSON.stringify(prev.data.centre_unmatched));
   ok("FL9: the in-file phone duplicate is flagged and excluded (phone is unique)",
-    (prev.data.duplicates ?? []).some((d) => /same number as row/.test(d)) && prev.data.importable === 5, JSON.stringify({ dupes: prev.data.duplicates, importable: prev.data.importable }));
+    (prev.data.duplicates ?? []).some((d) => /same number as row/.test(d)) && prev.data.importable === 6, JSON.stringify({ dupes: prev.data.duplicates, importable: prev.data.importable }));
   ok("FL9: Certified without a TR ID is warned by name", (prev.data.warnings ?? []).some((w) => /no TR ID/.test(w)), JSON.stringify(prev.data.warnings));
+  // QA-1136: row G names a real, halted centre - the nomination must be left BLANK (not silently
+  // pointed at a centre that "does not hire", F-B5) and the warning must name the centre and why.
+  ok("QA-1136: a halted centre's nomination is warned by name, not silently dropped",
+    (prev.data.warnings ?? []).some((w) => new RegExp(`FL9 Halted ${stamp}.*Stopped`).test(String(w)) && /halted centre does not hire/.test(String(w))),
+    JSON.stringify((prev.data.warnings ?? []).filter((w) => /Stopped/.test(String(w)))));
 
   // ---- -132 (QA-281): the skills column is checked like its three neighbours ----
   // It used to be stored verbatim while pipeline_status, nominated_for_location and
@@ -522,13 +535,17 @@ console.log("\n--- FL9: trainer import — stages by display name, nominations b
   }
 
   const done = await multipart(admin, "/api/trainers/import", { file, mapping, confirm: "1" }, 201);
-  // -132 (QA-281): 5, not 3 — the fixture gained the two job-role rows this release is about. The
+  // -132 (QA-281) / QA-1136: 6, not 3 — the fixture gained the two job-role rows -132 is about plus
+  // QA-1136's own halted-centre row G (imported as a trainer, just without the nomination). The
   // assertion still says exactly what it always said (every unique row lands, the phone duplicate
   // never does); only the size of the fixture changed.
-  ok("FL9: confirm imports the 5 unique rows, never the phone dupe", done.data.imported === 5, String(done.data.imported));
+  ok("FL9: confirm imports the 6 unique rows, never the phone dupe", done.data.imported === 6, String(done.data.imported));
   const trA = (await req(admin, "GET", `/api/trainers?q=9822200001`)).data.items.find((t) => t.name === `FL Tr A ${stamp}`);
   ok("FL9: 'Payment Done' (legacy sheet value) landed as 'TOT Payment Done'", trA?.pipeline_status === "TOT Payment Done", trA?.pipeline_status);
   ok("FL9: the centre name resolved to a real nomination", (trA?.nominated_for_location?.name ?? "") === loc.name, JSON.stringify(trA?.nominated_for_location));
+  const trG = (await req(admin, "GET", `/api/trainers?q=${`77${stamp}07`.slice(0, 10)}`)).data.items.find((t) => t.name === `FL Tr G ${stamp}`);
+  ok("QA-1136: the trainer still lands, but with no nomination to the halted centre",
+    !!trG && !trG.nominated_for_location, JSON.stringify({ found: !!trG, nom: trG?.nominated_for_location }));
 
   // 15/08 (Umesh): custom columns ride the trainer importer too.
   const wbT = XLSX.utils.book_new();

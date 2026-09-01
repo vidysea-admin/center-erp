@@ -1728,7 +1728,7 @@ await req("POST", `/api/batches/${batch3._id}/members`, { candidate: cand4._id }
 
 // ---- Rule 1: location-status gating (2026-08) ----
 const gateLoc = (await req("POST", "/api/locations", { code: "GATE" + stamp, name: "Gate Location " + stamp, approval_status: "Approved" }, 201)).data.item;
-await req("POST", "/api/batches", { location: gateLoc._id, program: prog._id, planned_start: today, target_size: 3 }, 201); // Not Started is allowed (advance planning)
+const gateBatch = (await req("POST", "/api/batches", { location: gateLoc._id, program: prog._id, planned_start: today, target_size: 3 }, 201)).data.item; // Not Started is allowed (advance planning)
 await req("PATCH", `/api/locations/${gateLoc._id}`, { operational_status: "Stopped", status_reason: "test" }, 200);
 await req("POST", "/api/batches", { location: gateLoc._id, program: prog._id, planned_start: today, target_size: 3 }, 409); // Rule 1
 
@@ -1816,6 +1816,32 @@ await req("PUT", `/api/locations/${gateLoc._id}/targets`, { program: p2._id, app
 const sf3 = await req("POST", "/api/trainer-requests/from-shortfall", { location: gateLoc._id }, 200);
 ok("F-A9: a halted centre's gap is skipped with the F-B5 reason",
   sf3.data.summary?.created === 0 && sf3.data.skipped?.some((s) => /Stopped/.test(s.reason)), JSON.stringify(sf3.data.skipped));
+
+// ---- QA-1136: Rule 1 has EIGHT readers of HALTED_LOCATION_STATUSES; the block above only
+// exercises two (assertLocationOperational, from-shortfall). Six more read the same constant and
+// none had a suite assertion - a status removed from the halted canon could silently stop halting
+// all six and the wall would say nothing. gateLoc is still "Stopped" here (nothing between line
+// ~1732 and here re-activates it), and the target PUT just above already gives it a LocationTarget
+// for `p2`, so both fixtures this needs already exist without a new centre.
+{
+  // (1) readinessBlockers (rules.ts, the mapping-readiness screen's own blocker list) - the ONE
+  // place QA-1136's own checker verdict found this codebase had NOT already covered, distinct
+  // from from-shortfall's own separate skipped[] array asserted just above.
+  const gateReady = (await req("GET", `/api/mapping/readiness?location=${gateLoc._id}`)).data;
+  const gateRow = (gateReady.items ?? []).find((r) => String(r.program?._id ?? r.program) === String(p2._id));
+  ok("QA-1136: readinessBlockers names a halted centre on the mapping-readiness screen",
+    !!gateRow && (gateRow.blockers ?? []).some((b) => /centre is Stopped/.test(b)), JSON.stringify(gateRow?.blockers));
+
+  // (2)+(3) batchReadiness's own two reads - the Rule-16 Mark-Ready gate (location_approved) and
+  // the location_halted flag no suite mentioned at all before this. gateBatch was created BEFORE
+  // the centre halted (batch creation itself is refused at an already-halted centre, Rule 1 above),
+  // so it is the one fixture in this file that can observe the flip.
+  const gateBatchRead = (await req("GET", `/api/batches/${gateBatch._id}`)).data.readiness;
+  ok("QA-1136: Mark-Ready's location_approved check goes false the moment its centre halts",
+    gateBatchRead?.checks?.location_approved === false, JSON.stringify(gateBatchRead?.checks));
+  ok("QA-1136: batchReadiness.location_halted is true for a batch at a Stopped centre",
+    gateBatchRead?.location_halted === true, String(gateBatchRead?.location_halted));
+}
 
 // ================= Per-candidate assessment & certification (Rules 41–47) =================
 // Runs on its own batch so the legacy batch-level path above stays untouched.
