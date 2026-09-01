@@ -7,9 +7,11 @@
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import path from "path";
+// QA-1692: guarded via requireLocalBase (db-guard.mjs) — see e2e.mjs's own note.
+import { requireLocalBase } from "./db-guard.mjs";
 
 const localDate = (ms = Date.now()) => { const n = new Date(ms); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`; }; // LOCAL date = what the UI sends (IST-midnight window fix)
-const BASE = process.env.BASE_URL || "http://localhost:3000/erp";
+const BASE = requireLocalBase("e2e-govt", process.env.BASE_URL || "http://localhost:3000/erp");
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 let pass = 0, fail = 0;
 const ok = (n, c, x = "") => { if (c) { pass++; console.log("PASS  " + n); } else { fail++; console.log("FAIL  " + n + " " + x); } };

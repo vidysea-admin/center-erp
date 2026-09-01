@@ -1,5 +1,7 @@
 // Sync engine E2E: serves a CSV via /api/upload, syncs it, verifies Rules 1,2,3,5,7,8.
-const BASE = process.env.BASE_URL || "http://localhost:3000/erp";
+// QA-1692: guarded via requireLocalBase (db-guard.mjs) — see e2e.mjs's own note.
+import { requireLocalBase } from "./db-guard.mjs";
+const BASE = requireLocalBase("e2e-sync", process.env.BASE_URL || "http://localhost:3000/erp");
 let cookie = "";
 let pass = 0, fail = 0;
 const ok = (n, c, x = "") => { if (c) { pass++; console.log("PASS  " + n); } else { fail++; console.log("FAIL  " + n + " " + x); } };

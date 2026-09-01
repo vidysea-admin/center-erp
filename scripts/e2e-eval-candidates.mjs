@@ -1,7 +1,7 @@
 // Eval: Candidate registration + the 2026-08-13 edit surface. The candidates screen finally has
 // an edit path (sheet-imported rows carry sheet mistakes) — this pins the whole contract:
 // create validation, duplicate advisory, SIDH walk, edit round-trip, partial-PATCH semantics.
-import { ok, req, adminLogin, login, finish, stamp, phone, today } from "./e2e-lib.mjs";
+import { ok, req, adminLogin, login, finish, stamp, phone, today, BASE } from "./e2e-lib.mjs";
 
 const admin = await adminLogin();
 const s = stamp("EC");
@@ -57,7 +57,7 @@ const sidh = (await req(admin, "GET", `/api/candidates/${c1._id}`, undefined, 20
 ok("[best] SIDH walk lands Registered with the portal id", sidh.sidh_status === "Registered" && sidh.sidh_candidate_id === "CAN_" + s, JSON.stringify({ s: sidh.sidh_status, id: sidh.sidh_candidate_id }));
 
 // [best] the CRM export answers with a spreadsheet, not JSON.
-const exp = await fetch((process.env.BASE_URL || "http://localhost:3000/erp") + "/api/candidates/export-sidh?location=" + loc2._id, { headers: { cookie: admin } });
+const exp = await fetch(BASE + "/api/candidates/export-sidh?location=" + loc2._id, { headers: { cookie: admin } });
 ok("[best] SIDH CRM export downloads (xlsx content type)", exp.status === 200 && /sheet|excel|octet/.test(exp.headers.get("content-type") ?? ""), `${exp.status} ${exp.headers.get("content-type")}`);
 
 // ---- eligibility boundaries (defaults: min_age/max_age/cooldown) ----

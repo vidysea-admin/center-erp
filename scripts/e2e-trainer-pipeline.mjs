@@ -3,7 +3,9 @@
 // documents gate the nomination, an NSDC rejection can be corrected and resent, a TR ID is
 // required to certify, and the per-centre counters are derived rather than stored.
 // Run: node scripts/e2e-trainer-pipeline.mjs
-const BASE = process.env.BASE_URL || "http://localhost:3000/erp";
+// QA-1692: guarded via requireLocalBase (db-guard.mjs) — see e2e.mjs's own note.
+import { requireLocalBase } from "./db-guard.mjs";
+const BASE = requireLocalBase("e2e-trainer-pipeline", process.env.BASE_URL || "http://localhost:3000/erp");
 let cookie = "";
 let pass = 0, fail = 0;
 const ok = (n, c, x = "") => { if (c) { pass++; console.log("PASS  " + n); } else { fail++; console.log("FAIL  " + n + " " + x); } };

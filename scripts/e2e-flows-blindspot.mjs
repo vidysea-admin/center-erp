@@ -4,8 +4,10 @@
 // the import file's own duplicates, registration/batch decoupling, and the 2-slotted-batches
 // day cap. Each block names the transcript line it proves.
 import * as XLSX from "xlsx";
+// QA-1692: guarded via requireLocalBase (db-guard.mjs) — see e2e.mjs's own note.
+import { requireLocalBase } from "./db-guard.mjs";
 
-const BASE = process.env.BASE_URL || "http://localhost:3000/erp";
+const BASE = requireLocalBase("e2e-flows-blindspot", process.env.BASE_URL || "http://localhost:3000/erp");
 let pass = 0, fail = 0;
 const ok = (name, cond, detail = "") => {
   if (cond) { pass++; console.log("PASS ", name); }

@@ -1,6 +1,11 @@
 // End-to-end walkthrough + rule assertions against a running server (default http://localhost:3000).
 // Run: node scripts/e2e.mjs
-const BASE = process.env.BASE_URL || "http://localhost:3000/erp";
+//
+// QA-1692: guarded via requireLocalBase (db-guard.mjs) — this suite writes candidates/locations/
+// batches through whatever server BASE_URL names; without this it could write production data
+// with nothing to catch it, exactly the ingress that seeded QA-1692's fixture contamination.
+import { requireLocalBase } from "./db-guard.mjs";
+const BASE = requireLocalBase("e2e", process.env.BASE_URL || "http://localhost:3000/erp");
 let cookie = "";
 let pass = 0, fail = 0;
 

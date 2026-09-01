@@ -1,6 +1,6 @@
 // Eval: Trainers list + detail (the SCREENS, not the pipeline state machine — that lives in
 // e2e-trainer-pipeline.mjs). Before 2026-08-13 this surface had ~6 assertions, all masking.
-import { ok, req, adminLogin, finish, stamp, phone } from "./e2e-lib.mjs";
+import { ok, req, adminLogin, finish, stamp, phone, BASE } from "./e2e-lib.mjs";
 
 const admin = await adminLogin();
 const s = stamp("ET");
@@ -99,7 +99,9 @@ ok("[avg] nomination can be cleared again (wrong pick is reversible)", nomCleare
 
 // ---- 2026-08-14 (CEO): quick-invite + public trainer application ----
 {
-  const BASE = process.env.BASE_URL || "http://localhost:3000/erp";
+  // QA-1692: this used to re-read process.env.BASE_URL raw, shadowing e2e-lib.mjs's now-guarded
+  // BASE export and bypassing requireLocalBase for this block's own writes (quick-invite, a public
+  // POST). Reuse the imported, guarded BASE instead.
   const pub = (path, body) => fetch(BASE + path, body === undefined ? undefined : {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   });

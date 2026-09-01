@@ -5,8 +5,10 @@
 // These are the awkward cases, not the happy path: the happy path already has 67 assertions in
 // e2e-trainer-pipeline.mjs. Each probe here is something a real operator can do by accident.
 import { setTimeout as sleep } from "node:timers/promises";
+// QA-1692: guarded via requireLocalBase (db-guard.mjs) — see e2e.mjs's own note.
+import { requireLocalBase } from "./db-guard.mjs";
 
-const BASE = process.env.BASE_URL || "http://localhost:3000/erp";
+const BASE = requireLocalBase("e2e-rpl-blindspot", process.env.BASE_URL || "http://localhost:3000/erp");
 let pass = 0, fail = 0;
 const ok = (name, cond, detail = "") => {
   if (cond) { pass++; console.log("PASS ", name); }

@@ -1,7 +1,9 @@
 // Pin for qa-govt-row-resolve-drawer: proves the batch Attendance screen now gets enough data
 // (rowId/importId refs) to open the resolve drawer directly, and that resolving through it via
 // POST .../match (the same endpoint the drawer calls) actually clears the row.
-const BASE = process.env.BASE_URL || "http://localhost:3479/erp";
+// QA-1692: guarded via requireLocalBase (db-guard.mjs) — see e2e.mjs's own note.
+import { requireLocalBase } from "./db-guard.mjs";
+const BASE = requireLocalBase("pin-govt-row-resolve-drawer", process.env.BASE_URL || "http://localhost:3479/erp");
 let pass = 0, fail = 0;
 const ok = (n, c, x = "") => { if (c) { pass++; console.log("PASS  " + n); } else { fail++; console.log("FAIL  " + n + " " + x); } };
 

@@ -1,6 +1,13 @@
 // Shared harness for the section-wise eval suites (2026-08-13). The older suites carry their own
 // copy of this block; new suites import it so an assertion-style change happens in one place.
-export const BASE = process.env.BASE_URL || "http://localhost:3000/erp";
+//
+// QA-1692: requireLocalBase (db-guard.mjs) already exists for exactly this — a write-capable
+// suite pointed at a non-local BASE_URL writes through whatever server that is, production
+// included, with no test-database name to catch it. e2e-roles.mjs/seed-sample.mjs already call
+// it; this file's own BASE export reached nine suites (every e2e-eval-*.mjs plus
+// e2e-govt-batch-id.mjs and e2e-rendered-candidates.mjs) without it. One guard here covers all nine.
+import { requireLocalBase } from "./db-guard.mjs";
+export const BASE = requireLocalBase("e2e-lib", process.env.BASE_URL || "http://localhost:3000/erp");
 export const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin123";
 
 let pass = 0, fail = 0;
