@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError } from "@/lib/authz";
+import { requirePerm } from "@/lib/permissions";
 import { Room } from "@/models";
 import { requireApproval } from "@/lib/approvals";
 import { audit } from "@/lib/audit";
@@ -18,6 +19,11 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   await dbConnect();
   const user = await requireUser();
   requireEdit(user);
+  // QA-1084: the factory door this creates rooms for (api/rooms/[id]) requires "locations.manage"
+  // (2026-08-12 audit, auth S3-6 - the exact hole named there: revoking the permission still left
+  // rooms creatable). This door named the same requireEdit+scope stack but never asked the
+  // permission itself, so it was MORE permissive than the door that edits the very row it creates.
+  await requirePerm(user, "locations.manage");
   const { id } = await ctx.params;
   assertLocationInScope(user, id);
   const body = await req.json();
