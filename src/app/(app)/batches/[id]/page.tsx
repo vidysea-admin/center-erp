@@ -359,9 +359,13 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
   // a picker that silently omits a choice cannot tell you why it is missing. These strings only EXPLAIN
   // what the server will say; the server stays the decider. A client gate that tries to BE the decision
   // is the QA-733/QA-798 class, and this file is where that class lives.
+  // QA-1063: a batch carrying actual_start genuinely ran — restoring it to Planning/Ready would
+  // put it back before its own start with real daily logs against it (rules.ts's own new guard,
+  // same shape as the Active row below). This overrides the readiness reason on Ready because the
+  // server checks it first (the request-vs-batch ordering rules.ts documents at the same guard).
   const restoreBlocked: Record<string, string | null> = {
-    Planning: null,
-    Ready: r.ready ? null : "readiness checks are not met",
+    Planning: b.actual_start ? "this batch already started — restore it to Active instead" : null,
+    Ready: b.actual_start ? "this batch already started — restore it to Active instead" : (r.ready ? null : "readiness checks are not met"),
     Active: b.actual_start ? null : "this batch never started",
   };
   async function restoreBatch() {

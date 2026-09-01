@@ -1204,6 +1204,16 @@ export async function transitionBatch(batchId: string, target: string, opts: {
       // already calls .trim() — so a restore could be recorded with a reason of nothing at all while
       // the guard reported one was given. The two lines disagreed about what a reason IS.
       if (!String(opts.reason ?? "").trim()) fail("Restoring a cancelled batch needs a reason — it is audited.");
+      // QA-1063 (checker on qa-235): checked BEFORE the Ready readiness chain below on purpose — a
+      // batch carrying actual_start genuinely ran, and telling its restorer "trainer not ready" /
+      // "roster below threshold" would be answering a question about a batch that never started,
+      // for one that already did. Restoring it to Planning/Ready puts it back in a "not yet begun"
+      // status while keeping that date, and the next Start (Planning->Active / Ready->Active, :1083)
+      // then either strands real daily logs before a re-stamped actual_start (Rule 32 refuses every
+      // door to fix them) or, backdating, silently overwrites the real start with no record it moved.
+      if ((target === "Planning" || target === "Ready") && batch.actual_start) {
+        fail(`This batch already has a real start date on record (${dayKey(batch.actual_start).toISOString().slice(0, 10)}) — it genuinely ran, so restoring it to ${target} would put it back before its own start with real daily logs against it. Restore it to Active instead.`);
+      }
       // Restoring to Ready runs the SAME Rule 16 chain Planning->Ready runs (:786). Without this,
       // cancel-then-restore becomes a way to arrive at Ready without ever passing readiness.
       if (target === "Ready") {
