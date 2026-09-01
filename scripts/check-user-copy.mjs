@@ -756,7 +756,15 @@ for (const file of walk(root)) {
         const buf = fs.readFileSync(f);
         for (let k = 0; k < buf.length; k++) {
           const c = buf[k];
-          if (c <= 8 || c === 11 || c === 12) {
+          // QA-375 (checker, 2026-08-19): the header above claims "NO CONTROL CHARACTERS IN
+          // SOURCE" but the range below it only ever covered 0x00-0x08, 0x0B, 0x0C - so 0x0E-0x1F
+          // (including ESC, 0x1B) and 0x7F (DEL) passed silently, and the header overclaimed what
+          // this actually enforced. Widened to the checker's own specified range: every byte under
+          // 32 except the three legitimate whitespace control codes (tab 0x09, LF 0x0A, CR 0x0D),
+          // plus 0x7F. An independent full scan of src/ and scripts/ with this wider range found
+          // nothing beyond the pre-existing, correctly-excluded binary favicon.ico, so this is
+          // closing a gap in the CLAIM, not chasing a live miss.
+          if ((c < 32 && c !== 9 && c !== 10 && c !== 13) || c === 127) {
             const line = buf.slice(0, k).toString("utf8").split(/\r?\n/).length;
             ctrl.push(f.replace(/\\/g, "/") + ":" + line + ": a control character (byte 0x" +
               c.toString(16).padStart(2, "0") + ") is in the SOURCE. It is almost certainly an escape " +
