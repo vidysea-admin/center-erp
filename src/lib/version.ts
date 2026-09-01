@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-279";
+export const RELEASE = "2026.08.14-280";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -149,6 +149,23 @@ const RELEASE_NOTE_ARCHIVE_270 =
   "and no other tab or screen is touched.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-280 widens a fallback -278 introduced, closes a permission gap, and corrects two source "  +
+  "comments along the way. -278 taught the reports screen and the readiness check to read a "  +
+  "centre's own TC Status when a (centre x job role) row has never carried its own - but the "  +
+  "readiness check only looked for a genuinely BLANK row status, missing a row that has never had "  +
+  "a TC ID recorded at all either. Both a blank status and a missing TC ID now fall back to the "  +
+  "centre's own record the same way. "  +
+  "Second: creating a room asked less permission than editing one. Revoking the \"locations "  +
+  "management\" right correctly blocked editing a room, but the door that CREATES a room never "  +
+  "asked for that right at all - a login with the permission switched off could still add rooms, "  +
+  "just not touch them afterward. Creating a room now asks for the same right editing one already "  +
+  "does. "  +
+  "The rest is checking: two source-code comments that cite which line of the codebase a related "  +
+  "rule lives at had drifted out of date after the fallback change above shifted the file around "  +
+  "them - corrected, for whoever reads that code next. Nothing on any screen looks different from "  +
+  "either of these two.";
+
+const RELEASE_NOTE_ARCHIVE_279 =
   "-279 closes a mismatch and a second gap in how a portal Candidate ID is read. The Sync Inbox's "  +
   "own explanation of what pressing Apply-value does had gone stale the moment -278 shipped - it "  +
   "still told a reviewer that clearing a centre's TC Status left the report counting that row as "  +
@@ -1149,6 +1166,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -277: ARCHIVE_276 wired in here in the SAME bump that declared it, same discipline.
   // -278: ARCHIVE_277 wired in here in the SAME bump that declared it, same discipline.
   // -279: ARCHIVE_278 wired in here in the SAME bump that declared it, same discipline.
+  // -280: ARCHIVE_279 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_279 + " " +
   RELEASE_NOTE_ARCHIVE_278 + " " +
   RELEASE_NOTE_ARCHIVE_277 + " " +
   RELEASE_NOTE_ARCHIVE_276 + " " +
