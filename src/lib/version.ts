@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-280";
+export const RELEASE = "2026.08.14-281";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -149,6 +149,24 @@ const RELEASE_NOTE_ARCHIVE_270 =
   "and no other tab or screen is touched.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-281 closes a way a batch's real history could be stranded when a cancelled batch was brought "  +
+  "back. A batch that genuinely ran - it has a real start date and real daily attendance logs - "  +
+  "could be restored from Cancelled straight back to Planning or Ready while keeping that real "  +
+  "start date, with its status reading as though it had never begun. The next time someone started "  +
+  "it, the system either quietly stamped a new start date over the old one or accepted a typed-in "  +
+  "one, and either way the daily logs from before that new date became impossible to correct - the "  +
+  "product's own rule against attendance rows arriving before a batch's start date, working "  +
+  "correctly, now working against a government-facing record that already existed. Restoring a "  +
+  "batch that really started is now kept out of Planning and Ready - restoring it to Active, where "  +
+  "it genuinely was, still works, and a batch that never actually started restores exactly as "  +
+  "before. "  +
+  "Alongside it: the rule that a halted centre blocks activity is read in eight places across this "  +
+  "product, and only two of them had an automated check standing behind them - the other six could "  +
+  "have silently stopped enforcing that rule with nothing to say so. All eight now have one. "  +
+  "Nothing on any screen looks different; no centre on production is currently halted, so this is "  +
+  "a safeguard for a state nobody is in right now, not a fix to one anybody is in.";
+
+const RELEASE_NOTE_ARCHIVE_280 =
   "-280 widens a fallback -278 introduced, closes a permission gap, and corrects two source "  +
   "comments along the way. -278 taught the reports screen and the readiness check to read a "  +
   "centre's own TC Status when a (centre x job role) row has never carried its own - but the "  +
@@ -1167,6 +1185,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -278: ARCHIVE_277 wired in here in the SAME bump that declared it, same discipline.
   // -279: ARCHIVE_278 wired in here in the SAME bump that declared it, same discipline.
   // -280: ARCHIVE_279 wired in here in the SAME bump that declared it, same discipline.
+  // -281: ARCHIVE_280 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_280 + " " +
   RELEASE_NOTE_ARCHIVE_279 + " " +
   RELEASE_NOTE_ARCHIVE_278 + " " +
   RELEASE_NOTE_ARCHIVE_277 + " " +
