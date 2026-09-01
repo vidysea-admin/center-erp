@@ -4654,9 +4654,13 @@ export async function mappingReadinessBulk(targetFilter: Record<string, unknown>
     // QA-1731: `tc_status` uses `||`, not `??` - the same reason QA-1075 gave reportRollup this
     // fallback (rules.ts:4438-4439): "Update target" stores a cleared cell as a real "", not
     // null/undefined, and `??` alone never reaches the centre's value for a row blanked that way.
+    // QA-1732: `tc_id` uses `||` too, same reason as `tc_status` above - a row's tc_id can be
+    // deliberately cleared to a real "" via "Update target" (it is also a TARGET_ROW_FIELD), and
+    // `??` alone left that blank row reporting a FALSE "no TC ID on record" blocker instead of
+    // falling back to a centre that genuinely still has one.
     const tcView = {
       ...t.location,
-      tc_id: t.tc_id ?? t.location.tc_id,
+      tc_id: String(t.tc_id ?? "").trim() || t.location.tc_id,
       tc_status: String(t.tc_status ?? "").trim() || t.location.tc_status,
     };
     const blockers = readinessBlockers(tcView, counts, cc.registered, needed,
@@ -4700,9 +4704,14 @@ export async function mappingReadiness(locationId: string, programId: string) {
   const rooms = await Room.find({ location: locationId, active: { $ne: false } }).select("type").lean<any[]>();
   const needed = prog.default_batch_size ?? 30;
   // Per-target TC (own id + approval per job role) wins over the centre-level fallback.
-  // QA-1731: `tc_status` uses `||`, not `??` - see the sibling tcView in mappingReadinessBulk above
-  // for why (`??` never reaches the centre's value for a row genuinely blanked to "").
-  const tcView = { ...loc, tc_id: target?.tc_id ?? loc.tc_id, tc_status: String(target?.tc_status ?? "").trim() || loc.tc_status };
+  // QA-1731/QA-1732: both `tc_status` and `tc_id` use `||`, not `??` - see the sibling tcView in
+  // mappingReadinessBulk above for why (`??` never reaches the centre's value for a row genuinely
+  // blanked to "").
+  const tcView = {
+    ...loc,
+    tc_id: String(target?.tc_id ?? "").trim() || loc.tc_id,
+    tc_status: String(target?.tc_status ?? "").trim() || loc.tc_status,
+  };
   const blockers = readinessBlockers(tcView, counts, registered, needed, {
     rooms: rooms.length,
     labs: rooms.filter((r) => r.type === "Lab").length,
