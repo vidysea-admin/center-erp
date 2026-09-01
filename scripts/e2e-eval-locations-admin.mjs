@@ -114,6 +114,23 @@ const rdy = ((await req(admin, "GET", `/api/mapping/readiness?location=${loc._id
 ok("[best] readiness prefers the target's own TC status over the centre's", !(rdy?.blockers ?? []).some((b) => /TC status/.test(b)),
   JSON.stringify(rdy?.blockers).slice(0, 160));
 ok("[avg] …and surfaces that row's own TC id", rdy?.location?.tc_id === "TCROW" + s, String(rdy?.location?.tc_id));
+
+// ---- QA-1731: a row explicitly BLANKED (not merely never-touched) must still fall back to the
+// centre's TC status - mappingReadinessBulk's tcView used `??`, which never reaches the centre for
+// a row genuinely stored as "" (the exact "Update target" shape QA-497/QA-1075 already
+// established), so a deliberately-cleared row silently read as unblocked even when the centre's
+// own record said "Rejected". A fresh location/programme, so this cannot inherit `loc`'s own
+// tc_status state from the pin just above.
+{
+  const q1731Loc = (await req(admin, "POST", "/api/locations", { code: "Q1731" + s, name: "TEST-Q1731Fallback " + s, approval_status: "Approved", city: "Meerut", tc_status: "Rejected" }, 201)).data.item;
+  const q1731Prog = (await req(admin, "POST", "/api/programs", { code: "Q1731P" + s, name: "Q1731Role " + s, scheme: "RPL-AVPL", trainer_skill: "Q1731Skill" + s }, 201)).data.item;
+  await req(admin, "PUT", `/api/locations/${q1731Loc._id}/targets`, { program: q1731Prog._id, approved_target: 30, tc_status: "" }, 200);
+  const q1731Rdy = ((await req(admin, "GET", `/api/mapping/readiness?location=${q1731Loc._id}`, undefined, 200)).data.items ?? [])
+    .find((r) => String(r.program?._id) === String(q1731Prog._id));
+  ok("QA-1731: a row explicitly blanked (tc_status \"\") falls back to the CENTRE's TC status - a Rejected centre still blocks, not silently unblocked by a cleared row",
+    (q1731Rdy?.blockers ?? []).some((b) => /TC status is "Rejected"/.test(b)),
+    JSON.stringify(q1731Rdy?.blockers).slice(0, 200));
+}
 // [avg] the locations LIST carries scheme + job-role approval counts for the new columns.
 const locRow = ((await req(admin, "GET", "/api/locations?limit=2000", undefined, 200)).data.items ?? []).find((l) => String(l._id) === String(loc._id));
 ok("[avg] locations list exposes job_roles + schemes + approved_job_roles", Array.isArray(locRow?.job_roles) && Array.isArray(locRow?.schemes) && typeof locRow?.approved_job_roles === "number",
