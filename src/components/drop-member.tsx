@@ -7,20 +7,28 @@ import { Btn, Drawer, Field, inputCls } from "@/components/ui";
 // fetch, the submit handler, and the JSX — was hand-copied between the Candidates tab (Roster) and
 // the Enrollment tab (Enrollment) in batches/[id]/page.tsx. That is exactly the "second copy" class
 // of bug ARCHITECTURE.md section 3 warns about, so both call sites now share this one module.
-// Drop reasons are static master-list data, so this fetches them once on mount rather than
-// re-fetching on every roster reload the way Roster's inline copy used to — a strictly safe
-// simplification, not a behaviour change an operator can observe.
+// QA-1743 (checker on this unit, cycle 1): drop-reasons is an EDITABLE master list (an Admin can
+// rename/deactivate/add one anytime — src/app/api/master-lists/[list]/[id]/route.ts:7-9), not
+// static data, so a mount-only fetch could show a stale list for a whole session. Fetched on mount
+// AND every time the drawer opens (setDropTarget with a truthy target) instead — strictly fresher
+// than either pre-refactor copy (Roster refetched only on load(), Enrollment only on mount).
 
 export function useDropMember(onDropped: () => void, onError: (message: string) => void) {
-  const [dropTarget, setDropTarget] = useState<any>(null);
+  const [dropTarget, setDropTargetRaw] = useState<any>(null);
   const [dropForm, setDropForm] = useState<any>({});
   const [dropReasons, setDropReasons] = useState<any[]>([]);
-  useEffect(() => { api("/api/master-lists/drop-reasons").then((d) => setDropReasons(d.items)).catch(() => {}); }, []);
+  const fetchReasons = () => { api("/api/master-lists/drop-reasons").then((d) => setDropReasons(d.items)).catch(() => {}); };
+  useEffect(fetchReasons, []);
+
+  function setDropTarget(target: any) {
+    if (target) fetchReasons();
+    setDropTargetRaw(target);
+  }
 
   async function drop() {
     try {
       await api(`/api/members/${dropTarget._id}/drop`, { method: "POST", json: dropForm });
-      setDropTarget(null); setDropForm({});
+      setDropTargetRaw(null); setDropForm({});
       onDropped();
     } catch (e: any) { onError(e.message); }
   }
