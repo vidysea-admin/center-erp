@@ -202,6 +202,10 @@ ok("4 rows matched (2 by portal ID, 1 by name, 1 trainer)", pre.data.matched_cou
 ok("the duplicate-name pair is flagged Ambiguous, not guessed", pre.data.ambiguous_count === 2, `got ${pre.data.ambiguous_count}`);
 ok("the candidate the ERP has never seen is Unmatched", pre.data.unmatched_count === 1, `got ${pre.data.unmatched_count}`);
 
+// QA-416: ambiguous_count says HOW MANY; ambiguous_detail says WHO, on the same preview.
+ok("QA-416: ambiguous_detail carries the same count as ambiguous_count", pre.data.ambiguous_detail?.count === 2, JSON.stringify(pre.data.ambiguous_detail));
+ok("QA-416: ambiguous_detail names both Twin rows by name", (pre.data.ambiguous_detail?.rows ?? []).filter((r) => r.name === `${NAME} Twin`).length === 2, JSON.stringify(pre.data.ambiguous_detail?.rows));
+
 const byName = Object.fromEntries((pre.data.preview ?? []).map((r) => [r.name, r]));
 ok("Alpha matched on the portal ID, not the name", byName[`${NAME} Alpha`]?.match_by === "Portal ID", byName[`${NAME} Alpha`]?.match_by);
 ok("Charlie fell back to a name match", byName[`${NAME} Charlie`]?.match_by === "Name", byName[`${NAME} Charlie`]?.match_by);

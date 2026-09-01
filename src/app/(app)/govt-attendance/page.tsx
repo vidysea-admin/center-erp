@@ -408,6 +408,29 @@ function Inner() {
                 IDs — so each of these is a guess, and it used to be committed without a word. The ID
                 is printed beside the name because the ID is the evidence; the name is what is in
                 doubt. */}
+            {/* QA-416 (Umesh, 20/08: "usi time kuch popup ya preview me fix karwaya ja sakta hai
+                na?"). ambiguous_count (the chip above) says HOW MANY; this says WHO, while the file
+                is still open. Not a blocking gate like its two siblings on this screen - importing
+                an Ambiguous row writes no guess at all (matchGovtRows never resolves it), so there
+                is nothing to consent past. It resolves after import on this same screen's own
+                per-row "why?" button. */}
+            {!!upload.ambiguous_detail?.count && (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+                <b>
+                  {upload.ambiguous_detail.count} of {upload.row_count} rows share a name with another student here and cannot be told apart yet.
+                </b>{" "}
+                They will import as Ambiguous, not lost — resolve each one after import with the row's own &quot;why?&quot; button, or put
+                the portal Candidate ID on the right candidate first so the next import matches by ID instead of guessing.
+                <ul className="mt-2 max-h-40 list-disc overflow-auto pl-5">
+                  {upload.ambiguous_detail.rows.map((r: any, i: number) => (
+                    <li key={i}>{r.name}{r.sl_no != null ? ` (row ${r.sl_no})` : ""}</li>
+                  ))}
+                </ul>
+                {upload.ambiguous_detail.count > upload.ambiguous_detail.rows.length && (
+                  <p className="mt-1">…and {upload.ambiguous_detail.count - upload.ambiguous_detail.rows.length} more.</p>
+                )}
+              </div>
+            )}
             {upload.name_match_suspected && (
               <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
                 <b>
