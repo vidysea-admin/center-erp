@@ -39,9 +39,25 @@ export function personLabel(x?: {
 
 // -161 (QA-430): the same rule as personLabel for surfaces that render the name themselves and want
 // only the separator beneath it (the Attendance NameCell's `sub`). One rule, two shapes, one place.
+// QA-1766, 2026-09-02: this now has ZERO call sites. Its only caller was the Attendance Name
+// column, which sits beside PortalIdChip and therefore must show the PHONE (see personPhone). The
+// rule below is still REQ-389 for any surface that renders a name itself with NO id chip beside it,
+// so it is kept rather than deleted - but do NOT auto-import it onto a chip-bearing surface: that
+// is exactly the duplicate-id defect Umesh reported. Disclosed as a ledger row, not left silent.
 export function personSeparator(x?: Parameters<typeof personLabel>[0]): string {
   const can = String(x?.sidh_candidate_id ?? "").trim();
   if (can) return can;
+  const phones = (Array.isArray(x?.phones) ? x!.phones! : [x?.phone]).map((p) => String(p ?? "").trim()).filter(Boolean);
+  return phones[0] ?? "";
+}
+
+// QA-1766 (Umesh, 2026-09-02, from a client call and his own screenshot): the Attendance column
+// renders this separator BESIDE PortalIdChip, which already shows the portal ID. So the moment a
+// candidate had one, the row printed that id twice and dropped the phone entirely - and the phone
+// is the only field that tells two candidates of one name apart (Bhadohi has two "Anil Kumar").
+// His instruction: "vaha par phone number hi maintain rahe". A sibling, not a change to
+// personSeparator: that one is REQ-389/389a's rule for surfaces with no chip beside them.
+export function personPhone(x?: Parameters<typeof personLabel>[0]): string {
   const phones = (Array.isArray(x?.phones) ? x!.phones! : [x?.phone]).map((p) => String(p ?? "").trim()).filter(Boolean);
   return phones[0] ?? "";
 }

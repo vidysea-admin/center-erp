@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { api, fmtDate, istTodayInput, toInputDate } from "@/lib/client";
-import { personLabel, personList, personSeparator } from "@/lib/person";
+import { personLabel, personList, personPhone } from "@/lib/person";
 // -212 (QA-728): the shared portal-CAN helpers, from the PURE module. They used to live only in
 // lib/govt-attendance, which imports the mongoose models, so this screen could not reach them and
 // grew its own inline copy of the regex instead - the fifth spelling of one concept.
@@ -220,7 +220,12 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
   const running = ["Active", "Closing", "Completed", "Closed"].includes(b.status);
   const dayN = b.actual_start ? Math.max(1, Math.floor((Date.now() - new Date(b.actual_start).getTime()) / 864e5) + 1) : null;
   const dayM = b.program?.duration_days ?? (b.planned_start && b.planned_end ? Math.round((new Date(b.planned_end).getTime() - new Date(b.planned_start).getTime()) / 864e5) + 1 : null);
-  const withPortal = (att?.members ?? []).filter((m: any) => m.govt);
+  // QA-1767: active-only, matching the Attendance tab's own twin of this sentence (which filters
+  // activeMembers). This one did not, so a batch with a dropped member printed a different portal
+  // fraction on the Overview than on the tab beside it - and the whole point of dropping people is
+  // to make these counts agree with the government portal.
+  const activeAttMembers = (att?.members ?? []).filter((m: any) => !m.left_on);
+  const withPortal = activeAttMembers.filter((m: any) => m.govt);
   const portalDays = withPortal.length ? Math.max(0, ...withPortal.map((m: any) => Number(m.govt?.working_days ?? 0))) : 0;
   // Umesh role matrix: "no batch edit" for principal/SPOC — the server 403s regardless
   // (batches.manage removed from the Location role); the buttons simply are not offered.
@@ -529,8 +534,17 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
           {b.actual_start && <span>since {fmtDate(b.actual_start)}</span>}
           {dayN && dayM && b.status === "Active" && <span>· day {Math.min(dayN, dayM)} of {dayM}</span>}
           {att && <span>· our logs {att.days_held} day{att.days_held === 1 ? "" : "s"}</span>}
-          {att && (withPortal.length ? <span>· portal {portalDays} working day{portalDays === 1 ? "" : "s"} ({withPortal.length}/{att.members?.length} students)</span> : <span className="text-green-700/70">· portal not imported yet</span>)}
+          {att && (withPortal.length ? <span>· portal {portalDays} working day{portalDays === 1 ? "" : "s"} ({withPortal.length}/{activeAttMembers.length} students)</span> : <span className="text-green-700/70">· portal not imported yet</span>)}
           {att && <span>· {att.qualified_count} qualified for assessment</span>}
+          {/* QA-1763: never the bare count while portal rows sit unattached. The import screen has
+              said "3 not matched to an enrolled student" on Bhadohi for four consecutive uploads;
+              THIS is the line the client reads, and it said only "13" against SIDH's 16. */}
+          {att && att.unresolved_portal_rows > 0 && (
+            <a href="/govt-attendance" className="rounded-full bg-amber-100 px-2 py-0.5 font-medium text-amber-900 underline-offset-2 hover:underline"
+               title="These portal rows carry hours but are not attached to anyone on this roster, so they are not in the qualified count. Resolve them on the Government Attendance screen.">
+              · {att.unresolved_portal_rows} portal row{att.unresolved_portal_rows === 1 ? "" : "s"} not matched to a student — resolve
+            </a>
+          )}
         </div>
       )}
       {/* QA-150: the header counts the checks that gate Mark Ready and nothing else; the
@@ -553,7 +567,15 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
             <div><div className="text-xs text-gray-500">On the roster</div><div className="text-lg font-semibold">{data.readiness?.roster_count ?? 0}<span className="text-sm font-normal text-gray-500"> of {b.target_size ?? "—"}</span></div></div>
             <div><div className="text-xs text-gray-500">Days we logged</div><div className="text-lg font-semibold">{att ? att.days_held : "—"}</div></div>
             <div><div className="text-xs text-gray-500">Portal working days</div><div className="text-lg font-semibold">{att ? (portalDays || <span className="text-sm font-normal text-gray-500">not imported</span>) : "—"}</div></div>
-            <div><div className="text-xs text-gray-500">Qualified for assessment</div><div className="text-lg font-semibold text-green-700">{att ? att.qualified_count : "—"}</div></div>
+            <div><div className="text-xs text-gray-500">Qualified for assessment</div><div className="text-lg font-semibold text-green-700">{att ? att.qualified_count : "—"}</div>
+              {/* QA-1763: the tile carries the same caveat as the banner above it. A count and the
+                  list beneath it must never answer different questions (REQ-418). */}
+              {att && att.unresolved_portal_rows > 0 && (
+                <div className="text-[11px] font-medium text-amber-700" title="Portal rows with hours that are not attached to anyone on this roster.">
+                  +{att.unresolved_portal_rows} unmatched portal row{att.unresolved_portal_rows === 1 ? "" : "s"}
+                </div>
+              )}
+            </div>
           </div>
           {/* QA-750. Two rows, not one, and they are NOT a subtotal of each other: "qualified for
               assessment" is an ATTENDANCE verdict (enough hours to sit the exam) and pass/fail is a
@@ -2251,11 +2273,16 @@ function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
           // PHONE when there is no portal ID, so this column showed a phone for a student with no id
           // and showed an unreadable id exactly like a good one - the two states this whole thread is
           // about were the two it could not tell apart. The chip says which.
+          // QA-1766: and BECAUSE the chip says which, the separator beneath the name must not say it
+          // again. It did: with a portal ID present, personSeparator returned that same id, so the row
+          // read "Aamir Khan / CAN_40705677" with a CAN_40705677 chip beside it and NO phone anywhere
+          // - the one field that separates two candidates of one name. `personPhone` keeps the phone
+          // here unconditionally; the chip keeps the id. Both are visible, neither is doubled.
           {
             key: "name", label: "Name", sortable: true,
             render: (r: any) => (
               <div className="flex flex-wrap items-center gap-1.5">
-                <NameCell name={r.name} sub={personSeparator(r) || undefined} />
+                <NameCell name={r.name} sub={personPhone(r) || undefined} />
                 <PortalIdChip value={r.sidh_candidate_id} className="shrink-0" />
               </div>
             ),

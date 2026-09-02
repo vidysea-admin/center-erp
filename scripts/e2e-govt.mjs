@@ -492,6 +492,18 @@ ok("all 7 rows persisted", detail.data.rows?.length === 7, `got ${detail.data.ro
   const att = await req(admin, "GET", `/api/batches/${batch._id}/attendance`);
   ok("R-D: attendance endpoint answers with the full roster",
     att.status === 200 && (att.data.members ?? []).length === 5, `got ${att.status}, ${att.data.members?.length}`);
+  // QA-1763: the batch Overview prints a bare "N qualified for assessment" while THIS import
+  // screen says how many portal rows never reached a student. A client compared the uncaveated
+  // number against the portal (13 vs 16) and filed it as a defect; the gap was three unattached
+  // rows. The count the screen needs is over PORTAL ROWS, and deliberately not over members:
+  // awaiting_match is member-gated, so a portal row matching NOBODY on the roster sits in no
+  // member row and is invisible to it. This fixture has exactly that shape - two Ambiguous rows.
+  ok("QA-1763: the attendance payload carries unresolved_portal_rows at all",
+    typeof att.data.unresolved_portal_rows === "number", JSON.stringify(att.data.unresolved_portal_rows));
+  // Non-vacuous on purpose: a 0 here would satisfy any >= assertion while proving nothing, which
+  // is how a pin passes on an empty payload (QA-429).
+  ok("QA-1763: ...and it is NON-ZERO on a batch that genuinely has unattached portal rows",
+    att.data.unresolved_portal_rows > 0, String(att.data.unresolved_portal_rows));
   ok("R-D: the hours threshold is derived and positive",
     att.data.required_hours > 0 && att.data.min_attendance_pct > 0,
     JSON.stringify({ r: att.data.required_hours, pct: att.data.min_attendance_pct }));

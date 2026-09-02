@@ -100,7 +100,7 @@ export function GovtRowResolveDrawer({ importId, rowId, canEdit, onClose, onReso
                 const suggested = data.options.find((o: any) => o.suggested);
                 return suggested ? (
                   <p className="rounded-lg border border-green-200 bg-green-50 p-2 text-xs text-green-800">
-                    Only one candidate is still possible for this row — <b>{suggested.name}{suggested.phone ? ` (${suggested.phone})` : ""}</b>, pre-selected below.
+                    Only one candidate is still possible for this row — <b>{suggested.name}{suggested.sidh_candidate_id ? ` · ${suggested.sidh_candidate_id}` : ""}{suggested.phone ? ` · ${suggested.phone}` : ""}</b>, pre-selected below.
                     Confirmed by elimination, not a guess: {suggested.suggested_reason}. Pick a different one below if this is wrong.
                   </p>
                 ) : null;

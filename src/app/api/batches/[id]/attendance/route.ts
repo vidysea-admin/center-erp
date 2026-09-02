@@ -20,7 +20,7 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   // It could not before: the eight inputs behind a verdict were assembled inline here, in the route,
   // so writing a guard meant assembling them a second time somewhere else. The output of this
   // endpoint is unchanged; it reads the shared derivation instead of owning it.
-  const { batch, days, rows, requiredHours, minPct, minPctSource, hoursPerDay, portalWorkingDays, finished } =
+  const { batch, days, rows, requiredHours, minPct, minPctSource, hoursPerDay, portalWorkingDays, finished, unresolvedPortalRows } =
     await batchAttendanceRows(id);
 
   return NextResponse.json({
@@ -51,6 +51,12 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     // three surfaces disagreed with it. Counting the rows is the fix; widening the bucket would
     // break the -109 partition, which is the one thing that must not move.
     awaiting_match_rows: rows.filter((r) => !r.left_on && r.awaiting_match).length,
+    // QA-1763: the count the batch Overview must show beside "qualified for assessment", and it is
+    // deliberately NOT awaiting_match_rows above. That one is member-gated and read 2 on Bhadohi
+    // while the import screen read 3, because one portal row matched no roster member at all and so
+    // sat in no member row. A client compared the uncaveated 13 against SIDH's 16 and filed it as a
+    // defect; 13 + 3 = 16 and nothing was ever wrong but the sentence.
+    unresolved_portal_rows: unresolvedPortalRows,
     // A-04 / A-05 (24-Aug issues sheet). The buckets below partition the ACTIVE roster, because
     // every one of them filters `!r.left_on` - and that is deliberate and stays. What was missing is
     // the other half of the arithmetic: the screen's own chip counts the WHOLE roster, so on a batch

@@ -3805,7 +3805,16 @@ export async function batchAttendanceRows(batchId: string) {
     };
   });
 
-  return { batch, days, rows, requiredHours, minPct, minPctSource, hoursPerDay, portalWorkingDays, finished, govtRows };
+  // QA-1763: the number the govt-attendance import screen prints ("N not matched to an enrolled
+  // student") and the batch Overview never did. It is NOT the same as counting rows with
+  // awaiting_match: that is member-gated, so a portal row whose name matches NOBODY on the roster
+  // (live: Ashvini Vijay Chand Yadav, CAN_41052988, Bhadohi) appears in no member row at all and is
+  // invisible to it - 2 against the import screen's 3. These are portal rows, counted where they
+  // actually live, which is why the two screens can finally agree.
+  const unresolvedPortalRows = [...awaitingByName.values()].reduce((a, v) => a + v.count, 0);
+
+  return { batch, days, rows, requiredHours, minPct, minPctSource, hoursPerDay, portalWorkingDays, finished, govtRows, unresolvedPortalRows };
+
 }
 
 // A-09: the verdict per member, for any door that has to ASK rather than display. Computed once per

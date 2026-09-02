@@ -4211,6 +4211,79 @@ for (const file of walk(root)) {
   }
 }
 
+// QA-1766 (Umesh, 2026-09-02, from a client call and his own screenshot of AVP-GURU-RPLAVP-DST):
+// the Attendance Name column renders its sub-line BESIDE PortalIdChip. personSeparator returns the
+// portal ID when there is one, so the row printed that id twice - "Aamir Khan / CAN_40705677" with a
+// CAN_40705677 chip next to it - and the PHONE, the only field that separates two candidates of one
+// name, was nowhere on the screen. Bhadohi has two "Anil Kumar" and ops could not tell which portal
+// ID belonged to which; a wrong portal ID mis-routes a certificate. His instruction: "vaha par phone
+// number hi maintain rahe". These assert the SHAPE, because the rendered duplication is invisible to
+// tsc and to every behavioural suite.
+{
+  const pageSrc = stripComments(fs.readFileSync(path.join(root, "app/(app)/batches/[id]/page.tsx"), "utf8"));
+  // Non-emptiness first: every assertion below is a substring test, and a substring test over an
+  // empty or unreadable file passes vacuously in the direction that hides the defect (QA-429 #3,
+  // and QA-1765's fail-open extractor).
+  const pageRead = pageSrc.length > 10000 && pageSrc.includes("function AttendanceTab");
+  const nameCellIdx = pageSrc.indexOf("<NameCell name={r.name} sub={");
+  const nameCellCall = nameCellIdx < 0 ? "" : pageSrc.slice(nameCellIdx, nameCellIdx + 90);
+  const subIsPhone = nameCellCall.includes("sub={personPhone(r)");
+  const subIsNotSeparator = nameCellIdx >= 0 && !nameCellCall.includes("personSeparator");
+  // The import too: an unused personSeparator import is one editor auto-complete away from putting
+  // the duplicate id straight back, and tsc will not say a word about which of the two is used.
+  const personImportIdx = pageSrc.indexOf('from "@/lib/person"');
+  const personImportLine = personImportIdx < 0 ? "" : pageSrc.slice(Math.max(0, personImportIdx - 120), personImportIdx);
+  const importClean = personImportIdx >= 0 && personImportLine.includes("personPhone") && !personImportLine.includes("personSeparator");
+  if (pageRead && nameCellIdx >= 0 && subIsPhone && subIsNotSeparator && importClean) passed++;
+  else {
+    failed++;
+    pushStructural("app/(app)/batches/[id]: the Attendance Name column no longer shows the candidate's PHONE beneath the name"
+      + " (page read=" + pageRead + ", found the NameCell=" + (nameCellIdx >= 0) + ", sub is personPhone=" + subIsPhone
+      + ", sub is not personSeparator=" + subIsNotSeparator + ", import is personPhone not personSeparator=" + importClean + ")"
+      + " - QA-1766. The chip beside it already prints the portal ID, so a separator that also prints the portal ID"
+      + " renders the same string twice and drops the phone entirely - and the phone is the only thing that tells"
+      + " two candidates of one name apart when someone has to decide which portal ID is whose.");
+  }
+
+  // QA-1763: the batch Overview showed a bare "Qualified for assessment 13" while the government
+  // attendance import screen said "3 not matched to an enrolled student" - for four consecutive
+  // uploads. A client read the screen without the caveat, compared 13 against the portal's 16, and
+  // filed it as a defect. 13 + 3 = 16; the arithmetic was never wrong, only the sentence.
+  const attRouteSrc = stripComments(fs.readFileSync(path.join(root, "app/api/batches/[id]/attendance/route.ts"), "utf8"));
+  const rulesSrc = stripComments(fs.readFileSync(path.join(root, "lib/rules.ts"), "utf8"));
+  const routeRead = attRouteSrc.includes("qualified_count") && rulesSrc.includes("batchAttendanceRows");
+  const routeExposes = attRouteSrc.includes("unresolved_portal_rows: unresolvedPortalRows");
+  // Derived from the PORTAL rows, not from the member-gated awaiting_match flag: that one read 2 on
+  // Bhadohi while the import screen read 3, because one portal row matched no roster member at all
+  // and therefore sat in no member row. Counting members can never see it.
+  const rulesDerives = rulesSrc.includes("awaitingByName.values()") && rulesSrc.includes("unresolvedPortalRows");
+  const bannerShows = pageSrc.includes("att.unresolved_portal_rows > 0");
+  if (routeRead && routeExposes && rulesDerives && bannerShows) passed++;
+  else {
+    failed++;
+    pushStructural("batch Overview: the qualified count is printed again with no mention of portal rows that match nobody"
+      + " (route+rules read=" + routeRead + ", route returns unresolved_portal_rows=" + routeExposes
+      + ", rules derives it from the portal rows=" + rulesDerives + ", the screen shows it=" + bannerShows + ")"
+      + " - QA-1763. The import screen has been saying \"not matched to an enrolled student\" all along;"
+      + " this is the screen the client actually reads, and it said only the number.");
+  }
+
+  // QA-1767, found while checking QA-1763: the Overview's portal fraction counted DEPARTED members
+  // in its denominator while the Attendance tab's twin of the same sentence counted only active
+  // ones. Two populations, one sentence - and the whole point of dropping people from a batch is to
+  // make these counts agree with the government portal.
+  const activeOnlyDenominator = pageSrc.includes("const activeAttMembers")
+    && pageSrc.includes("{withPortal.length}/{activeAttMembers.length}");
+  if (pageRead && activeOnlyDenominator) passed++;
+  else {
+    failed++;
+    pushStructural("batch Overview: the portal-coverage fraction counts members who have LEFT the batch in its denominator"
+      + " (page read=" + pageRead + ", denominator is active-only=" + activeOnlyDenominator + ")"
+      + " - QA-1767. The Attendance tab prints the same sentence over active members only, so the two"
+      + " disagree on any batch where somebody was dropped.");
+  }
+}
+
   // -175: every finding, printed once, AFTER every check has had its say. See the note where this
   // loop used to live.
   for (const h of hits) console.log("  ✗ " + h);
