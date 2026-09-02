@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-283";
+export const RELEASE = "2026.08.14-284";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -148,7 +148,7 @@ const RELEASE_NOTE_ARCHIVE_270 =
   "the list before using one of them is safe. Nothing about who can see or edit a student changed, "  +
   "and no other tab or screen is touched.";
 
-export const RELEASE_NOTE_CURRENT =
+const RELEASE_NOTE_ARCHIVE_283 =
   "-283 is mostly checking, not building. The drop-from-batch dialog that -282 added to the "  +
   "Enrollment tab was a hand-copy of the one already on the Candidates tab; both now share a "  +
   "single piece of code, so a future fix to that dialog lands on both screens at once instead of "  +
@@ -156,6 +156,23 @@ export const RELEASE_NOTE_CURRENT =
   "refreshes every time it is opened, on both tabs - a reason an admin has just renamed, disabled "  +
   "or added now appears immediately, rather than only after the page is reloaded. Nothing else "  +
   "about how a candidate is dropped from a batch has changed.";
+
+export const RELEASE_NOTE_CURRENT =
+  "-284 is about how this product names a person. Wherever the system showed a name - a refusal "  +
+  "when something cannot be saved, a warning when a trainer is double-booked, a list of students "  +
+  "still waiting on a result, the trainer column on the planning tracker, the hiring lists on a "  +
+  "centre page - it now shows something alongside the name that tells two people of the same "  +
+  "name apart. For a student that is their portal Candidate ID when they have one and their "  +
+  "phone number otherwise; for a trainer it is the NSDC TR ID first, then the portal ID, then "  +
+  "the phone. Two students called the same thing on one roster, or two trainers called the same "  +
+  "thing at one centre, can now be told apart on the screen that is asking someone to act. "  +
+  "One refusal used to name nobody at all: when an assessment could not be completed because "  +
+  "some students had no final result, it said how many were missing but not which, because it "  +
+  "read the names from the results that did not exist yet. It reads the roster now. "  +
+  "Trainers can also send every enrolled candidate their assessment date by email, with a link "  +
+  "to their own attendance and eligibility page; the button refuses until a date is actually "  +
+  "saved, and reports back exactly who was sent to and who was not. Nothing else about how "  +
+  "batches, candidates or certificates work has changed.";
 
 const RELEASE_NOTE_ARCHIVE_282 =
   "-282 fixes a Delete button on the Batch Enrollment tab that looked like it did nothing. Every "  +
@@ -1208,6 +1225,9 @@ const RELEASE_NOTE_ARCHIVE =
   // -281: ARCHIVE_280 wired in here in the SAME bump that declared it, same discipline.
   // -282: ARCHIVE_281 wired in here in the SAME bump that declared it, same discipline.
   // -283: ARCHIVE_282 wired in here in the SAME bump that declared it, same discipline.
+  // -284: ARCHIVE_283 wired in here in the SAME bump that declared it, same discipline -
+  // QA-265/-247/-256 record what happens when a bump declares an archive and forgets this line.
+  RELEASE_NOTE_ARCHIVE_283 + " " +
   RELEASE_NOTE_ARCHIVE_282 + " " +
   RELEASE_NOTE_ARCHIVE_281 + " " +
   RELEASE_NOTE_ARCHIVE_280 + " " +
