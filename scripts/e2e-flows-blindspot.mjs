@@ -955,6 +955,53 @@ console.log("\n--- -155 (QA-414 S1 / 415 / 424 / 425 / 426): the portal ID lands
       .find((t) => String(t?.name ?? "") === `FL1752 CHAIN ${stamp}`);
     ok("QA-1752: once a TR ID exists it WINS over the portal CAN - the first link of the chain",
       posTr?.label === `FL1752 CHAIN ${stamp} (TR${stamp})`, JSON.stringify(posTr));
+
+    // QA-1760 (checker, on qa-1756 PASS): REQ-389b makes a `.select()` that omits `tr_id` a
+    // FAILURE, and the unit implementing REQ-389b widened FOUR selects while pinning ONE. The
+    // checker measured it: reverting tr_id in trainerTiesFor's nominated-trainer select goes RED,
+    // but reverting the OTHER THREE TOGETHER leaves the wall 515/0 fully green - a `.select()` is
+    // invisible to tsc, to a tree-wide grep and to every other assertion in this suite, which is
+    // exactly the QA-1751 failure mode REQ-389b now names in words.
+    //
+    // ONE fixture reaches all three unpinned selects, because each is a different code path to the
+    // same trainer: a trainer that HAS a tr_id, is NOT nominated anywhere (so it can only enter
+    // open-positions through the batch-assignment path, never the nominated one already pinned
+    // above), and is assigned to a batch at this centre.
+    {
+      const trPinned = (await req(admin, "POST", "/api/trainers", {
+        name: `FL1760 SELECT ${stamp}`, phone: phone(), skills: [`fl1760${stamp}`],
+        tr_id: `TRSEL${stamp}`, // no nomination on purpose
+      }, 201)).data.item;
+      const day1760 = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+      const made = (await req(admin, "POST", "/api/batches", {
+        location: loc._id, program: prog._id, trainer: trPinned._id, planned_start: day1760, target_size: 2,
+      }, 201)).data;
+      const w1760 = String(made.warning ?? "");
+      const expectLabel = `FL1760 SELECT ${stamp} (TRSEL${stamp})`;
+
+      // (1) rules.ts:544 - trainerBookingWarnings' own select. Its sentence, not the joined blob:
+      // asserting blob-wide is how two earlier pins in this file passed against a mutant.
+      const pipeSentence1760 = w1760.split(" — not yet Certified")[0] ?? "";
+      ok("QA-1760: the pipeline booking warning's OWN select carries tr_id - its sentence shows the TR ID",
+        pipeSentence1760.includes(expectLabel), pipeSentence1760 || w1760);
+
+      // (2) rules.ts:2933 - earliestPossibleStart's own select, a DIFFERENT fetch of the same
+      // trainer feeding a different sentence in the same response.
+      const availSentence1760 = (w1760.match(/[^.]*(?:is free from|has no availability date on file|is at the \d+-batch cap)[^.]*/) ?? [""])[0];
+      ok("QA-1760: the earliest-start note's OWN select carries tr_id - its sentence shows the TR ID",
+        availSentence1760.includes(expectLabel), availSentence1760 || w1760);
+
+      // (3) rules.ts:3905 - trainerTiesFor's BATCH-assignment select (the nominated-trainer select
+      // at :3899 is already pinned by the QA-1752 block above; this trainer is nominated nowhere,
+      // so it can only arrive here through the batch tie).
+      const staged1760 = ((await req(admin, "GET", "/api/open-positions?approved=all", undefined, 200)).data.items ?? [])
+        .flatMap((p) => Object.values(p.stage_trainers ?? {}).flat())
+        .find((t) => String(t?.name ?? "") === `FL1760 SELECT ${stamp}`);
+      ok("QA-1760: the batch-assigned trainer reaches open-positions at all (not via a nomination)",
+        !!staged1760, JSON.stringify({ batch: made.item?._id, found: staged1760 ?? null }));
+      ok("QA-1760: ...and trainerTiesFor's BATCH select carries tr_id too - the label shows the TR ID",
+        staged1760?.label === expectLabel, JSON.stringify(staged1760));
+    }
     ok("QA-1755: ...and every staged trainer carries a `label` separator, not just a bare name - the field BOTH the locations grid and the Open Positions drawer render",
       staged1749.every((t) => String(t.label ?? "").includes(`(${tr1749.phone})`)), JSON.stringify(staged1749));
 
