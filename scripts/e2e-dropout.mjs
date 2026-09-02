@@ -97,6 +97,10 @@ const people = [
   { key: "Mover",    name: `${NAME} Mover`,    id: `CAN_${S}0002` },
   { key: "Departed", name: `${NAME} Departed`, id: `CAN_${S}0003` },
   { key: "NoPortal", name: `${NAME} NoPortal`, id: null },   // never appears in any file -> estimate/no basis
+  // QA-1793: qualified AND frozen - see the note above. Without the qualified guard the frozen arm
+  // would flag them; the guard is the only thing stopping the ERP proposing to drop somebody who
+  // has already PASSED, which is the single worst suggestion this feature could make.
+  { key: "Passer",   name: `${NAME} Passer`,   id: `CAN_${S}0004` },
 ];
 const mem = {};
 for (const [i, p] of people.entries()) {
@@ -107,7 +111,7 @@ for (const [i, p] of people.entries()) {
   const m = (await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: c._id, joined_on: localDate(Date.now() - 20 * 86400_000) }, 201)).data.item;
   mem[p.key] = { cand: c, member: m };
 }
-ok("4 members on the roster", Object.keys(mem).length === 4);
+ok("5 members on the roster", Object.keys(mem).length === 5, JSON.stringify(Object.keys(mem)));
 
 const get = async () => (await req(admin, "GET", `/api/batches/${batch._id}/attendance`)).data;
 const sigOf = (d, key) => (d.members ?? []).find((m) => m.name === `${NAME} ${key}`);
@@ -118,6 +122,7 @@ const f1 = csv([
   [`${NAME} Frozen`,   `CAN_${S}0001`, 8, 1, "04:00:00"],
   [`${NAME} Mover`,    `CAN_${S}0002`, 8, 2, "08:00:00"],
   [`${NAME} Departed`, `CAN_${S}0003`, 8, 1, "04:00:00"],
+  [`${NAME} Passer`,   `CAN_${S}0004`, 8, 8, "64:00:00"],   // 64 h >= the 60 h bar -> qualified
 ]);
 const up1 = await upload(admin, { file: new File([Buffer.from(f1)], "probe-1.csv", { type: "text/csv" }), batch: batch._id, confirm: "1", period_label: `probe1 ${S}` });
 ok("import 1 committed", up1.status === 200 || up1.status === 201, JSON.stringify(up1.data).slice(0, 300));
@@ -156,6 +161,9 @@ const f2 = csv([
   [`${NAME} Frozen`,   `CAN_${S}0001`, 12, 1, "04:00:00"],   // unchanged -> stopped
   [`${NAME} Mover`,    `CAN_${S}0002`, 12, 6, "24:00:00"],   // real progress -> must NOT be stopped
   [`${NAME} Departed`, `CAN_${S}0003`, 12, 1, "04:00:00"],
+  [`${NAME} Passer`,   `CAN_${S}0004`, 12, 8, "64:00:00"],  // batch advanced 8->12 working days,
+                                                                 // their days did NOT move: frozen,
+                                                                 // and still over the bar
 ]);
 const up2 = await upload(admin, { file: new File([Buffer.from(f2)], "probe-2.csv", { type: "text/csv" }), batch: batch._id, confirm: "1", period_label: `probe2 ${S}` });
 ok("import 2 committed", up2.status === 200 || up2.status === 201, JSON.stringify(up2.data).slice(0, 300));
@@ -169,6 +177,20 @@ ok("[P5] a cumulative total that did NOT move across two imports is flagged stop
 ok("[P6] THE CONVERSE: a genuine second import WITH progress is NOT flagged stopped_coming",
   mv2 && (mv2.dropout_signal === null || mv2.dropout_signal.stopped_coming === false),
   JSON.stringify({ hours: mv2?.attended_hours, sig: mv2?.dropout_signal }));
+
+// ---------------------------------------------------------------- the QUALIFIED exclusion (REQ-480)
+// QA-1793. Three assertions, and the first two exist so the third cannot pass vacuously: a qualified
+// member who is NOT also frozen would be unflaggable anyway, and then deleting the guard would change
+// nothing and this pin would certify nothing - which is exactly how cycle 2 lost this coverage.
+const ps1 = sigOf(d1, "Passer"), ps2 = sigOf(d2, "Passer");
+ok("[P9-pre] the Passer actually MET the hours bar - otherwise the exclusion below is untested",
+  ps2?.qualified === true, JSON.stringify({ hours: ps2?.attended_hours, required: d2.required_hours, q: ps2?.qualified }));
+ok("[P9-pre] ...and their days-present did NOT move while the batch advanced, so the stopped arm WOULD reach them",
+  ps1?.govt?.days_present != null && ps2?.govt?.days_present === ps1.govt.days_present
+    && Number(ps2?.govt?.working_days) > Number(ps1?.govt?.working_days),
+  JSON.stringify({ d1: ps1?.govt, d2: ps2?.govt }));
+ok("[P9] a member who has already MET the hours bar is NEVER suggested for dropping (REQ-480)",
+  ps2?.dropout_signal === null, JSON.stringify({ q: ps2?.qualified, sig: ps2?.dropout_signal }));
 
 // ---------------------------------------------------------------- IMPORT 3: THE SAME FILE AS IMPORT 2, byte-identical content
 // The manifest claims: "two rows from the SAME upload are ONE observation, so re-importing the
