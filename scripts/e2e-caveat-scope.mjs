@@ -73,6 +73,7 @@ async function mkBatch(tag, memberNames) {
   })).data;
   if (!b?.item?._id) { console.log(`BATCH ${tag} CREATE FAILED: ` + JSON.stringify(b).slice(0, 400)); process.exit(1); }
   const bb = b.item;
+  const cands = [];
   for (let i = 0; i < memberNames.length; i++) {
     const c = (await req(admin, "POST", "/api/candidates", {
       name: memberNames[i], phone: `9${S.slice(1)}${tag === "A" ? "2" : "3"}${String(i).padStart(3, "0")}`,
@@ -80,10 +81,12 @@ async function mkBatch(tag, memberNames) {
     })).data.item;
     const m = (await req(admin, "POST", `/api/batches/${bb._id}/members`, { candidate: c._id, joined_on: localDate(Date.now() - 20 * 86400_000) })).data.item;
     await req(admin, "PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, accept_done: true });
+    cands.push(c);
   }
   await req(admin, "POST", `/api/batches/${bb._id}/transition`, { target: "Ready" });
   const a = await req(admin, "POST", `/api/batches/${bb._id}/transition`, { target: "Active" });
   ok(`[C0] batch ${tag} reached Active`, a.status === 200 || a.status === 201, JSON.stringify(a.data).slice(0, 200));
+  bb.cands = cands;
   return bb;
 }
 const b1 = await mkBatch("A", [TWIN, TWIN]);
@@ -153,6 +156,40 @@ ok("[C8] and the claim behind [C6] is measured, not assumed: A really does expla
   JSON.stringify((a1.members ?? []).map((m) => ({ n: m.name, aw: m.awaiting_match }))).slice(0, 300));
 ok("[C8] and A's OWN-batch caveat is unmoved by it - a centre row is never counted as the batch's own",
   afterTwin.b1 === afterB1.b1, `A own count ${afterB1.b1} -> ${afterTwin.b1}`);
+
+// ---- QA-1811: the exclusion must be about what a screen RENDERS, not about a name -------------
+// The checker's cycle-1 finding, promoted. awaitingMatchFor() returns null for basis "portal"
+// (rules.ts:3614 - a member the portal has already answered for is never pulled back into limbo by
+// a namesake). So once EVERY live member of the shared name has portal hours, NOTHING renders the
+// centre row - and an exclusion keyed on the name alone still drops it, putting the row on no
+// surface at all. That is the very defect QA-1776 exists to close, narrowed and still alive.
+//
+// Resolving A's two batch-filed orphan rows onto the two Twins is how both of them acquire portal
+// hours through the product's own door.
+{
+  const b1Rows = (await req(admin, "GET", `/api/govt-attendance/${b1Imp.data._id}`)).data.rows ?? [];
+  const orphans = b1Rows.filter((r) => /OrphanOne|OrphanTwo/.test(String(r.name)));
+  ok("[C9-pre] the two batch-filed orphan rows are there to resolve", orphans.length === 2,
+    JSON.stringify(b1Rows.map((r) => r.name)));
+  for (let i = 0; i < orphans.length; i++) {
+    const res = await req(admin, "POST", `/api/govt-attendance/${b1Imp.data._id}/rows/${orphans[i]._id}/match`,
+      { candidate: b1.cands[i]._id, reason: "e2e-caveat-scope: give the Twins portal hours" });
+    ok(`[C9-pre] orphan row ${i + 1} resolved onto Twin ${i + 1}`, res.status === 200 || res.status === 201,
+      `${res.status} ${JSON.stringify(res.data).slice(0, 200)}`);
+  }
+  const a1b = await att(b1);
+  ok("[C9-pre] and BOTH Twins now read on the portal basis, so nothing on A can render an awaiting_match",
+    (a1b.members ?? []).filter((m) => !m.left_on).every((m) => !m.awaiting_match),
+    JSON.stringify((a1b.members ?? []).map((m) => ({ n: m.name, aw: !!m.awaiting_match, b: m.basis }))).slice(0, 300));
+
+  const afterResolve = await counts();
+  console.log("AFTER RESOLVING BOTH TWINS " + JSON.stringify(afterResolve));
+  ok("[C9] QA-1811: with nothing left to render it, the shared-name centre row is COUNTED again - the exclusion is about what a screen SHOWS, never about a name being present on a roster",
+    afterResolve.b1c === afterTwin.b1c + 1,
+    `A centre count ${afterTwin.b1c} -> ${afterResolve.b1c}; if this is unchanged the row is on NO surface`);
+  ok("[C9] and B is untouched by A resolving its own rows",
+    afterResolve.b2c === afterTwin.b2c, `B centre count ${afterTwin.b2c} -> ${afterResolve.b2c}`);
+}
 
 console.log(`\nTOTAL: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

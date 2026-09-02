@@ -4284,13 +4284,23 @@ for (const file of walk(root)) {
   // scope (batchId null), it must drop names already explained on a member's own line, and the two
   // labels must actually say which question each answers (REQ-418). QA-1777: the label is half the
   // remedy and nothing asserted it, so the disclosure could be deleted silently.
+  // QA-1811 (checker, cycle 1): the exclusion must be keyed on a row that ACTUALLY RENDERED, not on
+  // a name being present. awaitingMatchFor returns null for basis "portal", so a name-keyed
+  // exclusion hides the row from every surface once each same-name member has portal hours - the
+  // QA-1776 defect narrowed, not closed. QA-1812: and neither centre label may be a DELTA form
+  // ("more", "+N"), because the chip renders independently of the batch chip it would be adding to,
+  // and beside "N qualified for assessment" that is the literal QA-1763 arithmetic all over again.
   const centreScoped = rulesSrc.includes("unresolvedPortalRowsByName({ batchId: null, locationId: batch.location })")
     && rulesSrc.includes("[...unresolvedCentreByName.entries()]")
-    && rulesSrc.includes("!sameNameCount.has(nk)");
+    && rulesSrc.includes("!explainedNames.has(nk)")
+    && rulesSrc.includes("if (r.left_on || !r.awaiting_match) continue;")
+    && !rulesSrc.includes("!sameNameCount.has(nk)");
   const centreExposed = attRouteSrc.includes("unresolved_portal_rows_centre: unresolvedCentreRows");
   const labelsDistinct = pageSrc.includes("on this batch not matched to a student")
     && pageSrc.includes("at this centre, filed under no batch")
-    && pageSrc.includes("att.unresolved_portal_rows_centre ?? 0) > 0");
+    && pageSrc.includes("att.unresolved_portal_rows_centre ?? 0) > 0")
+    && !pageSrc.includes("more at this centre")
+    && !pageSrc.includes("+{att.unresolved_portal_rows_centre}");
   if (routeRead && centreScoped && centreExposed && labelsDistinct) passed++;
   else {
     failed++;

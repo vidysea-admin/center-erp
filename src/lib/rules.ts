@@ -3955,8 +3955,26 @@ export async function batchAttendanceRows(batchId: string) {
   // roster: such a row is not silent, it is already shown on that member's own line by the
   // location-scoped `awaitingByName` map above, and counting it twice would tell one story twice.
   // What is left is the case that had no surface at all - a centre row matching nobody here.
+  //
+  // QA-1811 (checker, cycle 1) - AND THIS IS THE WHOLE FINDING, so it is worth stating plainly:
+  // cycle 1 excluded a name that is merely PRESENT on the roster. That premise is contradicted by
+  // the file it lives in. awaitingMatchFor() returns null for basis "portal" (rules.ts:3614) - a
+  // member the portal has already answered for is never pulled back into limbo by a namesake - so
+  // once EVERY live member of that name has portal hours, nothing renders the row and the exclusion
+  // still dropped it. Measured through the product's own resolve door: batch 0, centre 0, while the
+  // import screen read not_enrolled_count 1. That is the exact signature QA-1776 was filed on,
+  // narrowed and still alive.
+  //
+  // So the gate is not "is this name on the roster" but "did a row ACTUALLY render this". Anything
+  // else is a claim about a screen made without looking at it.
+  const explainedNames = new Set<string>();
+  for (const r of rows) {
+    if (r.left_on || !r.awaiting_match) continue;
+    const nk = nameKey(r.name);
+    if (nk) explainedNames.add(nk);
+  }
   const unresolvedCentreRows = [...unresolvedCentreByName.entries()]
-    .filter(([nk]) => !sameNameCount.has(nk))
+    .filter(([nk]) => !explainedNames.has(nk))
     .reduce((a, [, v]) => a + v.count, 0);
 
   return { batch, days, rows, requiredHours, minPct, minPctSource, hoursPerDay, portalWorkingDays, finished, govtRows, unresolvedPortalRows, unresolvedCentreRows };
