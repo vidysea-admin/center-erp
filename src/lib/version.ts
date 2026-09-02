@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-271";
+export const RELEASE = "2026.08.14-283";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -149,6 +149,163 @@ const RELEASE_NOTE_ARCHIVE_270 =
   "and no other tab or screen is touched.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-283 is mostly checking, not building. The drop-from-batch dialog that -282 added to the "  +
+  "Enrollment tab was a hand-copy of the one already on the Candidates tab; both now share a "  +
+  "single piece of code, so a future fix to that dialog lands on both screens at once instead of "  +
+  "needing to be made twice. Alongside that, the list of drop reasons offered in the dialog now "  +
+  "refreshes every time it is opened, on both tabs - a reason an admin has just renamed, disabled "  +
+  "or added now appears immediately, rather than only after the page is reloaded. Nothing else "  +
+  "about how a candidate is dropped from a batch has changed.";
+
+const RELEASE_NOTE_ARCHIVE_282 =
+  "-282 fixes a Delete button on the Batch Enrollment tab that looked like it did nothing. Every "  +
+  "candidate reachable from that tab already has a history on this batch, and deleting a candidate "  +
+  "with batch history has always been refused, correctly, to protect their attendance and results. "  +
+  "But the refusal appeared as a small note at the very top of a long edit panel, while the Delete "  +
+  "button sits at the bottom, so pressing it and confirming looked like it did nothing at all. "  +
+  "Delete now opens the same drop-from-batch dialog already used on the Candidates tab, asking for "  +
+  "the day the student left and a reason, and it actually removes them from the batch once "  +
+  "confirmed. The underlying rule is unchanged - a candidate with batch history is still never "  +
+  "hard-deleted from this tab, and their attendance and results are kept exactly as before.";
+
+const RELEASE_NOTE_ARCHIVE_281 =
+  "-281 closes a way a batch's real history could be stranded when a cancelled batch was brought "  +
+  "back. A batch that genuinely ran - it has a real start date and real daily attendance logs - "  +
+  "could be restored from Cancelled straight back to Planning or Ready while keeping that real "  +
+  "start date, with its status reading as though it had never begun. The next time someone started "  +
+  "it, the system either quietly stamped a new start date over the old one or accepted a typed-in "  +
+  "one, and either way the daily logs from before that new date became impossible to correct - the "  +
+  "product's own rule against attendance rows arriving before a batch's start date, working "  +
+  "correctly, now working against a government-facing record that already existed. Restoring a "  +
+  "batch that really started is now kept out of Planning and Ready - restoring it to Active, where "  +
+  "it genuinely was, still works, and a batch that never actually started restores exactly as "  +
+  "before. "  +
+  "Alongside it: the rule that a halted centre blocks activity is read in eight places across this "  +
+  "product, and only two of them had an automated check standing behind them - the other six could "  +
+  "have silently stopped enforcing that rule with nothing to say so. All eight now have one. "  +
+  "Nothing on any screen looks different; no centre on production is currently halted, so this is "  +
+  "a safeguard for a state nobody is in right now, not a fix to one anybody is in.";
+
+const RELEASE_NOTE_ARCHIVE_280 =
+  "-280 widens a fallback -278 introduced, closes a permission gap, and corrects two source "  +
+  "comments along the way. -278 taught the reports screen and the readiness check to read a "  +
+  "centre's own TC Status when a (centre x job role) row has never carried its own - but the "  +
+  "readiness check only looked for a genuinely BLANK row status, missing a row that has never had "  +
+  "a TC ID recorded at all either. Both a blank status and a missing TC ID now fall back to the "  +
+  "centre's own record the same way. "  +
+  "Second: creating a room asked less permission than editing one. Revoking the \"locations "  +
+  "management\" right correctly blocked editing a room, but the door that CREATES a room never "  +
+  "asked for that right at all - a login with the permission switched off could still add rooms, "  +
+  "just not touch them afterward. Creating a room now asks for the same right editing one already "  +
+  "does. "  +
+  "The rest is checking: two source-code comments that cite which line of the codebase a related "  +
+  "rule lives at had drifted out of date after the fallback change above shifted the file around "  +
+  "them - corrected, for whoever reads that code next. Nothing on any screen looks different from "  +
+  "either of these two.";
+
+const RELEASE_NOTE_ARCHIVE_279 =
+  "-279 closes a mismatch and a second gap in how a portal Candidate ID is read. The Sync Inbox's "  +
+  "own explanation of what pressing Apply-value does had gone stale the moment -278 shipped - it "  +
+  "still told a reviewer that clearing a centre's TC Status left the report counting that row as "  +
+  "unknown, when -278 made the report fall back to reading the centre's own status instead. The "  +
+  "text now says what actually happens. "  +
+  "Second: marking results on a batch already refused a portal Candidate ID repeated byte-for-byte "  +
+  "across two students, but \"CAN_12345678\", \"can_12345678\" and \"CAN-12345678\" are the same "  +
+  "government identity everywhere else this product reads the field - certificates, the health "  +
+  "screen, the candidate record itself - and this one door still saw them as three different ids. "  +
+  "Two differently-typed spellings of one real portal ID could be saved onto two different "  +
+  "students, in one save or across two, and their certificates would then both be refused as "  +
+  "ambiguous. Marking results now reads the field the same normalized way every other screen "  +
+  "already does, and refuses a spelling that is really someone else's, naming who holds it.";
+
+const RELEASE_NOTE_ARCHIVE_278 =
+  "-278 fixes a report figure and a bulk import in the same release. On the reports screen, a "  +
+  "(centre x job role) row that has never carried its own TC Status used to count as unknown "  +
+  "forever, even when the centre's own record already reads Approved - so the client's sheet "  +
+  "approval never reached the number Karunn sir reads. That figure now falls back to the centre's "  +
+  "own status when the row has none of its own, the same way a related readiness count on this "  +
+  "product already does; the row's own value is still shown beside it, unchanged, so nothing about "  +
+  "what the screen displays is hidden. "  +
+  "Second: uploading a spreadsheet of candidates has always caught an APAAR ID or a portal "  +
+  "Candidate ID repeated within that one file, but a value that already belonged to a DIFFERENT, "  +
+  "existing candidate was invisible on the preview and crashed the import partway through - "  +
+  "measured, 11 of 20 rows silently lost with no count shown. The preview now names exactly which "  +
+  "rows collide with an existing candidate and who already holds the value; confirming the import "  +
+  "still creates every row, just without the one field that was never really theirs to claim.";
+
+const RELEASE_NOTE_ARCHIVE_277 =
+  "-277 is checking, not building - it closes two gaps in the tool that checks every other "  +
+  "release for a leaked internal rule code or a scope filter a sibling key can silently overwrite "  +
+  "(scripts/check-user-copy.mjs, internal only, never reaches a user). The scope-collision guard "  +
+  "used to compare a spread against a sibling key only on the SAME physical line, so the exact "  +
+  "shape a live scope leak once took - the spread on its own line, the colliding key a line below "  +
+  "it - was invisible to the guard meant to catch it; and it could only read what a scope filter "  +
+  "defines when that filter was written as an object literal, so the 15 of 18 real cases in this "  +
+  "codebase that build one by calling a shared helper function were never checked at all. Both are "  +
+  "closed: the guard now reads the whole object literal a spread sits in, not one line of it, and "  +
+  "resolves the one helper call this codebase actually uses to build a scope filter. A separate, "  +
+  "smaller gap in a different guard is closed alongside it - the one that scans for a stray control "  +
+  "character in source now covers the full byte range its own header already claimed to. Nothing "  +
+  "on any screen looks different, and the live tree these tools check is unaffected either way.";
+
+const RELEASE_NOTE_ARCHIVE_276 =
+  "-276 tells an operator, on the government attendance import PREVIEW, which rows a name collides "  +
+  "on - not just how many. When a file carries a name that matches more than one student here and "  +
+  "no portal Candidate ID breaks the tie, that row has always imported as Ambiguous rather than a "  +
+  "guess; the preview said how many such rows there were, but never which ones, so finding them "  +
+  "meant opening the row grid afterwards and reading every status one at a time. The preview now "  +
+  "names them, the same way it already names a name-matched row or a shifted column - and, unlike "  +
+  "those two, this is not a hold: importing an Ambiguous row writes no guess at all, so there is "  +
+  "nothing here to consent past, only something to see while the file is still open. It resolves "  +
+  "the same way it always has, from that row's own \"why?\" button after import.";
+
+const RELEASE_NOTE_ARCHIVE_275 =
+  "-275 closes a gap in how one portal Candidate ID is told apart from another. Every screen that "  +
+  "reads this government identity - certificates, attendance matching, the health screen - already "  +
+  "treated \"CAN_5302339001\", \"CAN5302339001\" and \"can 5302339001\" as the same person, but "  +
+  "saving a candidate only ever checked for an exact, character-for-character repeat. Three "  +
+  "different-looking but identical portal IDs could be typed onto three different candidates, and "  +
+  "the health screen that is supposed to flag exactly this kept reporting none. Adding or editing a "  +
+  "candidate's portal Candidate ID now checks the same way every other screen already reads it, and "  +
+  "refuses a second candidate holding what is really the first candidate's own ID, naming who "  +
+  "already has it. The health screen's own duplicate list reads the same way now too, so an "  +
+  "existing pair like this is found rather than silently missed. This release also adds automated "  +
+  "test coverage behind -274's own fix (the two import warnings render correctly and stay caught if "  +
+  "a future change removes them) - no visible change on its own.";
+
+const RELEASE_NOTE_ARCHIVE_274 =
+  "-274 makes the candidate import screen say two things it already knew but never said. "  +
+  "Uploading a spreadsheet has, for a while now, checked whether a mapped column can actually be "  +
+  "written and whether a SIDH status cell reads as one of the four values the portal accepts - "  +
+  "but a column this import cannot handle, and a status value it does not recognise, were both "  +
+  "computed and then dropped silently before reaching the preview screen an operator actually "  +
+  "reads. Both now show up there, next to the identical warning this screen already gives for an "  +
+  "unrecognised Education value or batch-interest answer, naming the value and the destination "  +
+  "so nothing imports quietly wrong.";
+
+const RELEASE_NOTE_ARCHIVE_273 =
+  "-273 is checking, not building - it repairs a hole in the tool that checks every other "  +
+  "release's own note before it ships (scripts/check-user-copy.mjs, internal only, never reaches "  +
+  "a user). That guard's job is to refuse a note that copies an OLDER release's opening instead of "  +
+  "moving it to the archive; three earlier attempts at it each closed one hole while leaving an "  +
+  "adjacent one open, and the guard could still be defeated by deleting an archived note's own "  +
+  "declaration and pasting its text back into the current note. It now reads every note this file "  +
+  "has ever published straight from git history - including a note whose wording was corrected "  +
+  "after it was archived, which a same-day fix to this same guard initially missed - so a deletion "  +
+  "cannot hide what was already said. Nothing on any screen looks different.";
+
+const RELEASE_NOTE_ARCHIVE_272 =
+  "-272 changes what the batch Attendance tab's Days Attendance % column divides by. The figure "  +
+  "used to divide every student's government-reported days present by this project's own internal "  +
+  "programme length, even on a row whose imported portal file states its own \"Total Training Days "  +
+  "(QP)\" figure - so a student whose portal file recorded fewer or more working days than the "  +
+  "programme's default could show a percentage that does not match what the government portal "  +
+  "itself would report for them. The column now prefers that row's own portal figure when the "  +
+  "import carried one, and falls back to the programme length only when it did not - the case an "  +
+  "earlier fix (QA-1383) already depends on to avoid showing a blank percentage. Nothing changes "  +
+  "for a batch whose imports never carry that column.";
+
+const RELEASE_NOTE_ARCHIVE_271 =
   "-271 collects several fixes that landed after -270 shipped, and adds tests behind work that "  +
   "was already running without any. On the Sync inbox, applying a value the sheet holds for a "  +
   "field that lives BOTH on a centre and on each of that centre's job-role rows writes the "  +
@@ -1039,6 +1196,30 @@ const RELEASE_NOTE_ARCHIVE =
   // -269: ARCHIVE_268 wired in here in the SAME bump that declared it, same discipline.
   // -270: ARCHIVE_269 wired in here in the SAME bump that declared it, same discipline.
   // -271: ARCHIVE_270 wired in here in the SAME bump that declared it, same discipline.
+  // -272: ARCHIVE_271 wired in here in the SAME bump that declared it, same discipline.
+  // -273: ARCHIVE_272 wired in here in the SAME bump that declared it, same discipline.
+  // -274: ARCHIVE_273 wired in here in the SAME bump that declared it, same discipline.
+  // -275: ARCHIVE_274 wired in here in the SAME bump that declared it, same discipline.
+  // -276: ARCHIVE_275 wired in here in the SAME bump that declared it, same discipline.
+  // -277: ARCHIVE_276 wired in here in the SAME bump that declared it, same discipline.
+  // -278: ARCHIVE_277 wired in here in the SAME bump that declared it, same discipline.
+  // -279: ARCHIVE_278 wired in here in the SAME bump that declared it, same discipline.
+  // -280: ARCHIVE_279 wired in here in the SAME bump that declared it, same discipline.
+  // -281: ARCHIVE_280 wired in here in the SAME bump that declared it, same discipline.
+  // -282: ARCHIVE_281 wired in here in the SAME bump that declared it, same discipline.
+  // -283: ARCHIVE_282 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_282 + " " +
+  RELEASE_NOTE_ARCHIVE_281 + " " +
+  RELEASE_NOTE_ARCHIVE_280 + " " +
+  RELEASE_NOTE_ARCHIVE_279 + " " +
+  RELEASE_NOTE_ARCHIVE_278 + " " +
+  RELEASE_NOTE_ARCHIVE_277 + " " +
+  RELEASE_NOTE_ARCHIVE_276 + " " +
+  RELEASE_NOTE_ARCHIVE_275 + " " +
+  RELEASE_NOTE_ARCHIVE_274 + " " +
+  RELEASE_NOTE_ARCHIVE_273 + " " +
+  RELEASE_NOTE_ARCHIVE_272 + " " +
+  RELEASE_NOTE_ARCHIVE_271 + " " +
   RELEASE_NOTE_ARCHIVE_270 + " " +
   RELEASE_NOTE_ARCHIVE_269 + " " +
   RELEASE_NOTE_ARCHIVE_268 + " " +
