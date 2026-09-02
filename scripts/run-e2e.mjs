@@ -261,21 +261,34 @@ const SUITES = [
 }
 
 // QA-1771 (2026-09-02): the database's UNIQUE INDEXES, which nothing guarded. Mongoose builds them
-// when a model first connects - i.e. at SERVER START. Drop the database and re-seed it without
-// restarting the server (an easy mistake: the natural instinct is "clear the data", not "the
-// indexes live on the connection, not the data") and the collections come back with no unique
-// indexes at all. Every uniqueness assertion in the wall then INVERTS - "a duplicate trainer phone
-// is refused" gets 201, "a TR ID already in use is refused with 4xx" gets 200, member-collision
-// checks flip 409/201 - eight assertions in the most alarming possible area (duplicate protection)
-// look like real product regressions, and not one line of the output says why. Measured on
-// IDENTICAL code: correct order (stop server -> drop DB -> seed -> START server -> seed:sample ->
-// wall) = 5 failures (the pre-existing set); drop under a live server = 13.
+// when a MODEL FIRST TOUCHES ITS COLLECTION - not at server start, contrary to this guard's own
+// first version. Drop the database and re-seed it without restarting the server (an easy mistake:
+// the natural instinct is "clear the data", not "the indexes live on the connection, not the data")
+// and a collection that already had its indexes built in THAT process's lifetime never gets them
+// rebuilt - a document written through the same stale connection auto-creates the collection again,
+// bare. Every uniqueness assertion in the wall then INVERTS - "a duplicate trainer phone is
+// refused" gets 201, "a TR ID already in use is refused with 4xx" gets 200, member-collision checks
+// flip 409/201 - eight assertions in the most alarming possible area (duplicate protection) look
+// like real product regressions, and not one line of the output says why. Measured on IDENTICAL
+// code: correct order (stop server -> drop DB -> seed -> START server -> seed:sample -> wall) = 5
+// failures (the pre-existing set); drop under a live server = 13.
 //
-// So: ask the database itself, in the same shape as the QA-851/QA-1065 refusals above - loud, not a
-// warning, because a wall that can invert its own uniqueness assertions without saying why is an
-// instrument reporting the opposite of the truth. A small set of collections is enough: they are
-// the ones QA-1771 actually measured breaking, and a missing index on any one of them means the
-// same drop-without-restart happened to all of them (they are built from the same connection).
+// QA-1813 (self-caught, on this guard's OWN first real release wall, minutes after a checker
+// PASSed it): the first version of this guard only CHECKED for the three indexes and refused if
+// absent - which sounds right and is wrong, because on a genuinely fresh database (exactly what
+// CI's mongo:7 service container is, every single run) trainers/locations/batchmembers do not
+// EXIST yet at the point this guard runs - seed.mjs and seed-sample.mjs never touch them, and
+// Next.js does not eagerly load every model at server start, only on first request. So the
+// passive check refused every legitimately fresh wall, CI included - the manifest's own "healthy
+// database" verification had unknowingly reused collections left over from an earlier suite run
+// in the same database, the same class of instrument mistake this whole finding is about.
+//
+// The fix is to ASSERT the indexes rather than merely check for them - `createIndex` is idempotent
+// (a no-op if the correct index already exists) and MongoDB enforces uniqueness at the server for
+// every future writer once an index exists, regardless of which client created it. So: ensure the
+// three indexes ourselves, in the same shape as the QA-851/QA-1065 refusals above only as a REPAIR
+// rather than a passive detector - and refuse loudly only if the assertion itself fails, which
+// means real duplicate data already sits in the collection and creation is genuinely impossible.
 {
   const { MongoClient } = await import("mongodb");
   const url = process.env.MONGODB_URL || "mongodb://127.0.0.1:27017";
@@ -291,32 +304,41 @@ const SUITES = [
     client = new MongoClient(url, { serverSelectionTimeoutMS: 8000 });
     await client.connect();
     const db = client.db(dbName);
-    const missing = [];
+    const failed = [];
     for (const [coll, keySpec, label] of EXPECTED) {
-      const indexes = await db.collection(coll).indexes().catch(() => []);
-      const has = indexes.some((ix) => ix.unique && JSON.stringify(ix.key) === JSON.stringify(keySpec));
-      if (!has) missing.push(label);
+      // QA-1813 (found on THIS guard's own next release wall, right after the first fix landed):
+      // creating with a bare { unique: true } can collide by NAME with an index mongoose already
+      // built for the same key but with EXTRA schema-level options (Location.institution_id is
+      // `unique + sparse`, so mongoose's own index and a plain-unique one both default to the name
+      // "institution_id_1" but disagree on options - Mongo refuses the second as a name conflict,
+      // which is not a real duplicate at all). So: first check whether ANY unique index already
+      // covers this exact key, by KEY alone, ignoring name and any extra options a caller here would
+      // otherwise have to keep hand-synced with every schema file. Only if none exists do we create
+      // our OWN, under a name that can never collide with mongoose's auto-generated one.
+      const existing = await db.collection(coll).indexes().catch(() => []);
+      const already = existing.some((ix) => ix.unique && JSON.stringify(ix.key) === JSON.stringify(keySpec));
+      if (already) continue;
+      try {
+        await db.collection(coll).createIndex(keySpec, { unique: true, name: "qa1771_guard_" + coll });
+      } catch (e) {
+        failed.push(label + " - " + String(e?.message ?? e).slice(0, 140));
+      }
     }
-    if (missing.length) {
+    if (failed.length) {
       console.error("");
       console.error("################################################################");
       console.error("##  WALL REFUSED TO START (QA-1771)");
-      console.error("##  " + missing.length + " expected UNIQUE index(es) are missing from " + dbName + ":");
-      for (const m of missing) console.error("##    - " + m);
-      console.error("##  This almost always means the database was DROPPED while a server was");
-      console.error("##  already running against it. Mongoose builds unique indexes at connection");
-      console.error("##  time (server start), not at data-seed time - so a drop-and-reseed with no");
-      console.error("##  restart leaves every collection with no unique indexes at all, and every");
-      console.error("##  duplicate-protection assertion in the wall will invert.");
-      console.error("##  Fix: stop the server -> drop the database -> seed -> START the server ->");
-      console.error("##  seed:sample -> THEN run the wall. (QA-1771 correct-order measurement: 5");
-      console.error("##  failures. Same code, drop-under-live-server: 13.)");
+      console.error("##  " + failed.length + " expected UNIQUE index(es) could NOT be built on " + dbName + ":");
+      for (const m of failed) console.error("##    - " + m);
+      console.error("##  Creating a unique index fails only when the collection already holds a");
+      console.error("##  genuine DUPLICATE under that key - i.e. real corrupt data, not a harness");
+      console.error("##  timing issue. Fix the underlying duplicate before running the wall.");
       console.error("################################################################");
       console.error("");
       await client.close().catch(() => {});
       process.exit(2);
     }
-    console.log("WALL: expected unique indexes present (" + EXPECTED.length + " checked) - QA-1771");
+    console.log("WALL: expected unique indexes asserted (" + EXPECTED.length + " ensured) - QA-1771/QA-1813");
   } catch (e) {
     // Never fail a wall over the preflight's OWN connectivity - the suites' first assertion will
     // surface a genuinely unreachable database far more clearly than this guard could.
