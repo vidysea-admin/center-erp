@@ -1830,6 +1830,12 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
     ok("QA-1792 precondition: a fresh candidate with NO batch history exists and is not archived",
       !!before && !before.archived_at, JSON.stringify({ id: a._id, archived_at: before?.archived_at ?? null }));
 
+    // QA-1796: give them a document first - a pin over documents needs a document to exist.
+    await req(admin, "POST", `/api/candidates/${a._id}/documents`, { doc_type: "Aadhaar", file_url: "/erp/api/files/qa1796.pdf", original_name: "aadhaar.pdf" }, 201);
+    const docsBefore = (await req(admin, "GET", `/api/candidates/${a._id}/documents`, undefined, 200)).data.items ?? [];
+    ok("QA-1796 precondition: the candidate really has a document before the door is used",
+      docsBefore.length === 1, JSON.stringify({ count: docsBefore.length }));
+
     const del = await req(ops, "DELETE", `/api/candidates/${a._id}`, { reason: "QA-1792 duplicate lead" }, 200);
     ok("QA-1792: the door still answers 200 - the two pre-existing delete pins are unchanged",
       del.status === 200, `status=${del.status}`);
@@ -1844,9 +1850,22 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
 
     // REQ-417-421 stands (Umesh: "Archive is a separate state"): archiving must NOT touch the
     // lifecycle axis, and must not pretend the person was dropped from anything.
+    // QA-1802: `after?.x === before?.x` is TRUE when the field stops being returned at all
+    // (undefined === undefined), so this asserted nothing on a payload that dropped it. Both sides
+    // must actually carry a value before their equality means anything.
     ok("QA-1792: archiving does not disturb lifecycle_status - it is a separate axis",
-      after?.lifecycle_status === before?.lifecycle_status,
-      JSON.stringify({ before: before?.lifecycle_status, after: after?.lifecycle_status }));
+      !!before?.lifecycle_status && !!after?.lifecycle_status
+      && after.lifecycle_status === before.lifecycle_status,
+      JSON.stringify({ before: before?.lifecycle_status ?? null, after: after?.lifecycle_status ?? null }));
+
+    // QA-1796 (checker, on cycle 1): the S1 had TWO halves - the record AND its documents, which
+    // `CandidateDocument.deleteMany` took with it. The manifest claimed the documents survive and
+    // that claim was true, but NOTHING asserted it, so it could regress silently. It is the half
+    // that never had any guard at all, so it is the half that most needs one.
+    const docsAfter = (await req(admin, "GET", `/api/candidates/${a._id}/documents`, undefined, 200)).data.items ?? [];
+    ok("QA-1796: the candidate's DOCUMENTS survive the door too - the other half of the data loss",
+      docsAfter.length === 1 && String(docsAfter[0].doc_type) === "Aadhaar",
+      JSON.stringify({ count: docsAfter.length, types: docsAfter.map((d) => d.doc_type) }));
 
     const auditRows = (await req(admin, "GET", `/api/audit/Candidate/${a._id}`)).data.items ?? [];
     const arch = auditRows.find((x) => x.field === "archived_at");

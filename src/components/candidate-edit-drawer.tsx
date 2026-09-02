@@ -371,8 +371,15 @@ export function CandidateEditDrawer({
             candidates.delete. The API still refuses anyone with batch history. */}
         {mode === "edit" && candidateId && canDelete && (
           <Btn kind="ghost" onClick={async () => {
-            if (!window.confirm(`Delete "${form.name}" (${form.phone}) permanently? Their documents go too. A candidate with batch history should be dropped from the batch, not deleted.`)) return;
-            try { await api(`/api/candidates/${candidateId}`, { method: "DELETE" }); onSaved(); onClose(); }
+            // QA-1795/QA-1798: same correction as the Candidates list - it archives, it keeps the
+            // documents, and it now collects the reason the requirement asks for.
+            const reason = window.prompt(`Archive "${form.name}" (${form.phone})?
+
+The record and their documents are KEPT — they move out of active use, and a candidate with batch history should be dropped from the batch instead.
+
+Reason:`);
+            if (reason === null) return;
+            try { await api(`/api/candidates/${candidateId}`, { method: "DELETE", json: { reason } }); onSaved(); onClose(); }
             catch (e: any) {
               if (onBlockedByBatchHistory && /batch history/i.test(e.message)) { onClose(); onBlockedByBatchHistory(); return; }
               setError(e.message);

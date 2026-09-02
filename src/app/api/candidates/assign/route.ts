@@ -26,7 +26,11 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // 2026-08-11: assignment of an ineligible candidate warns (eligibility flips month to
   // month); enrollment completion is where the hard gate sits.
   const defaults = await getDefaults();
-  const candDocs = await Candidate.find({ _id: { $in: candidate_ids } })
+  // QA-1801: archived candidates are not assignable. This is the client's own driver for asking
+  // for Archive at all - "galti se ye deleted wale chale ja rahe hain" - unwanted leads being swept
+  // into bulk Assign-to-Batch by select-all. Excluding them from the ACTION is not the same as
+  // hiding them from the LIST, so REQ-417-421 is untouched.
+  const candDocs = await Candidate.find({ _id: { $in: candidate_ids }, archived_at: null })
     .select("name dob education last_training_date location program").lean<any[]>();
   const byId = new Map(candDocs.map((c) => [String(c._id), c]));
 

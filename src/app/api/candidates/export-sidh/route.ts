@@ -21,6 +21,11 @@ export const GET = apiHandler(async (req: NextRequest) => {
   await requirePerm(user, "candidates.manage");
   const sp = req.nextUrl.searchParams;
   const filter: Record<string, unknown> = { ...locationFilter(user) };
+  // QA-1801 (checker, on qa-1792 cycle 1): an ARCHIVED candidate must never be handed to the
+  // government SIDH registration run. This is an outbound consequence, not a visibility rule -
+  // REQ-417-421 governs who is SHOWN, and archiving them out of an external registration file is a
+  // different axis. `all=1` widens the sidh_status default; it deliberately does NOT un-archive.
+  filter.archived_at = null;
   const loc = sp.get("location");
   if (loc) { assertLocationInScope(user, loc); filter.location = loc; }
   if (sp.get("program")) filter.program = sp.get("program");

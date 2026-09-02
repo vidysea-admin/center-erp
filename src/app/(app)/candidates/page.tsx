@@ -663,8 +663,18 @@ function CandidatesInner() {
                 <Btn small kind="ghost" onClick={() => openEdit(r)}>Edit</Btn>
                 {canDeleteCandidate && (
                   <Btn small kind="ghost" onClick={async () => {
-                    if (!window.confirm(`Delete "${r.name}" (${r.phone}) permanently? Their documents go too. A candidate with batch history should be dropped from the batch, not deleted.`)) return;
-                    try { await api(`/api/candidates/${r._id}`, { method: "DELETE" }); load(); }
+                    // QA-1795/QA-1798: this used to promise permanent deletion "and their documents
+                    // go too" - untrue since QA-1792, so the button was lying about what it does. It
+                    // archives now, and the reason the client asked for ("with proper reason") is
+                    // collected HERE, because the API accepting a reason nobody can supply meant every
+                    // archive read "no reason given".
+                    const reason = window.prompt(`Archive "${r.name}" (${r.phone})?
+
+The record and their documents are KEPT — they move out of active use, and a candidate with batch history should be dropped from the batch instead.
+
+Reason:`);
+                    if (reason === null) return;
+                    try { await api(`/api/candidates/${r._id}`, { method: "DELETE", json: { reason } }); load(); }
                     catch (e: any) { setError(e.message); }
                   }}>Delete</Btn>
                 )}
