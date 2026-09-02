@@ -3735,14 +3735,19 @@ export function eligibilityVerdict(opts: {
  * this file drops anybody - the client and Umesh settled that on the call 2026-09-02, both sides,
  * in the same words: "auto drop nahi karega system" / "wo humse click karwayega tabhi karega".
  *
- * The client's MAIL asked for "not attended for more than one day = dropout". That is not
- * buildable from what the government portal gives us and it is not what they actually do. Two
- * reasons, and the call gave both:
+ * The client's MAIL asked for "not attended for more than one day = dropout". That rule is NOT
+ * built here, and the honest reason is narrower than "not computable" (QA-1789 - the checker
+ * disproved that wording): our OWN DailyLog.present_member_ids is day-wise and is walked a few
+ * lines below, so consecutive absence is derivable from internal logs. It is not used because
+ * (a) the recorded call superseded the mail with two different reasons, and (b) QA-085 - internal
+ * logs are an estimate and an estimate must not decide who gets removed from a batch. What the
+ * GOVERNMENT export cannot answer is which days were missed; that much is true of it. Two reasons,
+ * and the call gave both:
  *
  *   1. "jo candidates ek din ke baad gayab ho gaye ... unko remove kar dete hain" - people who
  *      stopped coming are inflating the enrolled count. Cumulative days-present that has NOT MOVED
- *      between two imports is exactly that, and it is the only absence signal a cumulative export
- *      can honestly carry.
+ *      while the BATCH's own working days advanced is exactly that (QA-1785 - comparing uploads
+ *      rather than periods flagged people who were actively attending).
  *   2. "ye nau nau ghante wale to kabhi complete nahi kar payenge ... ab to do-teen din hi batch
  *      chalenge" - the trainer's own arithmetic: hours that cannot reach the bar in the days left.
  *      That one is pure projection and needs no absence data at all.
@@ -3768,10 +3773,12 @@ export function dropoutSignalFor(x: {
 
   const days = x.latest?.total_days_present ?? null;
   const prevDays = x.prev?.total_days_present ?? null;
-  // Strictly "has not moved": equal, or (defensively) gone backwards. A single import gives no
-  // prior observation at all, so prevDays is null and this signal stays FALSE - it is not evidence
-  // of attendance, it is absence of evidence, and the two must not be confused on a screen that
-  // proposes removing someone from a batch.
+  // Strictly "has not moved": equal, or (defensively) gone backwards. `prev` is supplied only when
+  // an earlier row exists from a period with FEWER working days (QA-1785), so reaching here already
+  // means the batch itself moved on while this person's total did not. One import - or several
+  // uploads of the same period - gives no prior observation, prevDays is null, and this stays FALSE:
+  // that is absence of evidence, not evidence of absence, and the two must not be confused on a
+  // screen proposing to remove somebody from a batch.
   const stopped = days != null && prevDays != null && days <= prevDays;
 
   const remaining = x.programDays != null && x.portalWorkingDays != null
@@ -3813,24 +3820,36 @@ export async function batchAttendanceRows(batchId: string) {
     .select("candidate total_days_present total_working_days total_hours_minutes total_hours_raw createdAt import")
     .lean<any[]>();
   const govtByCand = new Map(govtRows.map((r) => [String(r.candidate), r]));
-  const govtByCandRunning = new Map<string, any>();
-  // Dropout signal (client call 2026-09-02, filed verbatim in qa/feedback-inbox.md): the portal
-  // export is CUMULATIVE per person (models/index.ts:964-968) - it never says WHICH days someone
-  // missed, so "absent two days running" is not computable from it and the mail's wording could not
-  // be built as written. What a cumulative total CAN show is that it stopped moving. So keep the
-  // previous import's row beside the newest one, per candidate, and compare.
-  // `import` is now selected for exactly this: two rows from the SAME upload are one observation,
-  // not two, so a re-import of the same file must not look like a second week of no progress.
   const govtPrevByCand = new Map<string, any>();
+  // Dropout signal (client call 2026-09-02, filed verbatim in qa/feedback-inbox.md). The portal
+  // export is CUMULATIVE per person (models/index.ts:964-968) - a running total, never a day-wise
+  // register - so what it CAN show is that somebody's total stopped moving.
+  //
+  // QA-1785 (checker, cycle 1): cycle 1 keyed the prior observation off the IMPORT ID, and claimed
+  // in three places that this made a re-upload of the same file harmless. It did the opposite. A
+  // second upload of identical figures is a NEW import id, so it read as a fresh observation of zero
+  // progress and flagged a member who had just gone 2 -> 6 days as having stopped coming. One
+  // corrective re-upload would have flagged every non-qualified member of the batch - the very
+  // false-positive shape this unit rejected the client's mail rule for.
+  //
+  // The prior observation must therefore be an earlier PERIOD, not merely an earlier upload. The
+  // export carries the batch's own progress in `total_working_days`, so: the previous row is the
+  // most recent one taken when the batch had had FEWER working days. Two uploads covering the same
+  // period yield no prior observation at all and no signal - which is correct, because re-uploading
+  // a file tells you nothing new about attendance.
   {
-    const seenImportForCand = new Map<string, string>();
+    const byCand = new Map<string, any[]>();
     for (const r of govtRows) {
       const cid = String(r.candidate);
-      const imp = String(r.import ?? "");
-      const lastImp = seenImportForCand.get(cid);
-      if (lastImp !== undefined && lastImp !== imp) govtPrevByCand.set(cid, govtByCandRunning.get(cid));
-      seenImportForCand.set(cid, imp);
-      govtByCandRunning.set(cid, r);
+      const list = byCand.get(cid);
+      if (list) list.push(r); else byCand.set(cid, [r]);
+    }
+    for (const [cid, list] of byCand) {
+      const latest = list[list.length - 1];
+      const latestWd = Number(latest?.total_working_days ?? 0);
+      for (let i = list.length - 2; i >= 0; i--) {
+        if (Number(list[i]?.total_working_days ?? 0) < latestWd) { govtPrevByCand.set(cid, list[i]); break; }
+      }
     }
   }
 

@@ -517,9 +517,19 @@ ok("all 7 rows persisted", detail.data.rows?.length === 7, `got ${detail.data.ro
       mem.length > 0 && mem.every((m) => "dropout_signal" in m),
       JSON.stringify(mem.filter((m) => !("dropout_signal" in m)).map((m) => m.name)));
     const flagged = mem.filter((m) => m.dropout_signal);
-    ok("dropout: re-importing the SAME file leaves at least one person flagged stopped_coming - a cumulative total that did not move",
-      flagged.length > 0 && flagged.every((m) => m.dropout_signal.stopped_coming === true),
-      JSON.stringify(flagged.map((m) => [m.name, m.dropout_signal])));
+    // QA-1785, and this pin is the reason the defect survived cycle 1: it used to assert that
+    // re-importing the SAME file SHOULD leave somebody flagged stopped_coming. That is the bug,
+    // written down as the expected result - so code and pin agreed and the wall stayed green while
+    // a member who had gone 2 -> 6 days was being reported as having stopped coming. A pin that
+    // encodes the defect is worse than no pin, because it defends it.
+    //
+    // The corrected rule: a prior observation must be an earlier PERIOD, not merely an earlier
+    // upload. This suite re-imports the same file (A-11), so the batch working-days never advance
+    // and NOBODY here may be flagged as having stopped. The positive case - the batch moved on and
+    // one person did not - lives in e2e-dropout.mjs, on a batch that carries a time slot.
+    ok("dropout: re-importing the SAME file flags NOBODY as stopped_coming - a re-upload is not a new period (QA-1785)",
+      mem.every((m) => !m.dropout_signal || m.dropout_signal.stopped_coming === false),
+      JSON.stringify(mem.filter((m) => m.dropout_signal?.stopped_coming).map((m) => [m.name, m.dropout_signal])));
     // The two exclusions that keep this a SUGGESTION rather than a hazard.
     ok("dropout: a member who already met the hours bar is NEVER suggested for dropping",
       mem.filter((m) => m.qualified).every((m) => m.dropout_signal === null),

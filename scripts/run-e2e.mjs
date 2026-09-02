@@ -33,6 +33,11 @@ const SUITES = [
   "e2e-roles.mjs",
   "e2e-blindspot.mjs",
   "e2e-govt.mjs",
+  // The dropout suggestion, on a batch that carries a TIME SLOT. e2e-govt.mjs keeps a slotless
+  // batch on purpose (QA-085 pins that), and that is exactly why half this feature could not fire
+  // there: the projection arm never ran and the estimate-exclusion guard could be deleted with
+  // every pin still green. Promoted from the checker probe that found both (QA-1787, QA-1791).
+  "e2e-dropout.mjs",
   "e2e-trainer-pipeline.mjs",
   "e2e-rpl-blindspot.mjs",
   "e2e-flows-blindspot.mjs",

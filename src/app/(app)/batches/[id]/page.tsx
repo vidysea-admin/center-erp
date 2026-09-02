@@ -2135,12 +2135,28 @@ function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
   // This proposes; a person disposes. NOTHING here drops anybody and nothing here writes: both
   // sides settled that on the call - "auto nahi karega, wo humse click karwayega tabhi karega".
   const dropoutSuggestions = activeMembers.filter((m: any) => m.dropout_signal);
+  // QA-1786 (checker, cycle 1): the heading used to read "N candidates may have stopped
+  // attending" over EVERY flagged person - including one whose days-present had gone 2 -> 7 and
+  // who was flagged only because their hours can no longer reach the bar. They are attending; the
+  // heading said they may have stopped. The client gave TWO reasons and they are not the same
+  // claim - absence is not arithmetic - so the heading is now neutral and each reason is counted
+  // on its own. The heading is what an ops person scans before clicking through to a drop.
+  const nStopped = dropoutSuggestions.filter((m: any) => m.dropout_signal.stopped_coming).length;
+  const nShort = dropoutSuggestions.filter((m: any) => m.dropout_signal.cannot_reach_bar).length;
   return (
     <div className="space-y-3">
       {dropoutSuggestions.length > 0 && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
-          <div className="mb-2 font-semibold">
-            {dropoutSuggestions.length} candidate{dropoutSuggestions.length === 1 ? "" : "s"} may have stopped attending
+          <div className="mb-2">
+            <div className="font-semibold">
+              {dropoutSuggestions.length} candidate{dropoutSuggestions.length === 1 ? "" : "s"} to review before this batch closes
+            </div>
+            <div className="text-amber-800">
+              {nStopped > 0 && <>{nStopped}{"\u00a0"}whose attendance has not moved since an earlier import</>}
+              {nStopped > 0 && nShort > 0 && <>{"\u2003\u00b7\u2003"}</>}
+              {nShort > 0 && <>{nShort} whose hours can no longer reach the bar{nStopped > 0 ? "" : ""}</>}
+              {nStopped > 0 && nShort > 0 && <> {"("}some may be both{")"}</>}
+            </div>
           </div>
           <ul className="space-y-1.5">
             {dropoutSuggestions.map((m: any) => {
