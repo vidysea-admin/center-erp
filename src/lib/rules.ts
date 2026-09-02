@@ -1,9 +1,10 @@
 // Business rules engine — implements the numbered rules from
 // center-erp-data-model-rules.md §4. Rule numbers are cited inline.
+import crypto from "crypto";
 import { Types } from "mongoose";
 import {
   AuditLog, Batch, BatchDocument, BATCH_DOC_TYPE, BatchMember, Candidate, CandidateResult, Closure, CostCategory, CostEntry, DailyLog, GovtAttendanceRow, Invoice, Location,
-  LocationTarget, Notification, Program, Room, Scheme, SheetChange, SLOT_OCCUPANT_FIELDS, SyncSource, TRAINER_PIPELINE, Trainer, TrainerDocument,
+  LocationTarget, Notification, Program, PublicToken, Room, Scheme, SheetChange, SLOT_OCCUPANT_FIELDS, SyncSource, TRAINER_PIPELINE, Trainer, TrainerDocument,
 } from "@/models";
 import { audit, auditDiff } from "@/lib/audit";
 import { currentStageOf, isCertificateSettled } from "@/lib/candidate-journey";
@@ -193,6 +194,34 @@ export async function assertMemberInScope(user: SessionUser, memberId: string) {
   const m = await BatchMember.findById(memberId).select("batch").lean<any>();
   if (!m) throw new HttpError(404, "Batch member not found");
   await assertBatchInScope(user, String(m.batch));
+}
+
+// QA-179 (2026-09-02): the one link-per-active-roster-member minting shape used to live only
+// inside api/public-tokens/route.ts's feedback/attendance branch. A second caller (the
+// trainer-triggered assessment-date mail) needed the exact same idempotent mint-or-reuse, and
+// this codebase has already paid once for a "one concept, several near-copies" mistake
+// (normalizeCan, QA-449) — so this is the shared definition, not a second inline copy.
+// `candidateSelect` defaults to the original caller's fields; a caller needing more (e.g. email,
+// for a mail send) passes its own projection.
+export async function mintMemberLinks(
+  purpose: "feedback" | "attendance",
+  batchId: string,
+  userId: string,
+  candidateSelect = "name phone",
+) {
+  const members = await BatchMember.find({ batch: batchId, left_on: null })
+    .populate("candidate", candidateSelect).lean<any[]>();
+  const items: any[] = [];
+  for (const m of members) {
+    const existing = await PublicToken.findOne({ purpose, batch_member: m._id, active: true }).lean<any>();
+    if (existing) { items.push({ ...existing, batch_member: m }); continue; }
+    const doc = await PublicToken.create({
+      token: crypto.randomBytes(16).toString("hex"),
+      purpose, batch_member: m._id, created_by: userId,
+    });
+    items.push({ ...doc.toObject(), batch_member: m });
+  }
+  return items;
 }
 
 // QA-125 (checker, 15/08): Rule 38 on by-ID TRAINER access. The trainers LIST hides

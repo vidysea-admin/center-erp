@@ -3147,6 +3147,8 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
   // button. "Could not load" and "loaded, and empty" are now different states, and the first one
   // disables.
   const [blockersFailed, setBlockersFailed] = useState(false);
+  // QA-179 (2026-09-02): the trainer-triggered "tell the candidates" send this row asked for.
+  const [notifying, setNotifying] = useState(false);
   const loadBlockers = () => api(`/api/batches/${batchId}/complete`)
     .then((b) => { setBlockers(b); setBlockersFailed(false); })
     .catch(() => { setBlockers(null); setBlockersFailed(true); });
@@ -3217,6 +3219,25 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
   async function saveClosure(patch: any) {
     try { await api(`/api/batches/${batchId}/closure`, { method: "PUT", json: patch }); load(); onChanged(); }
     catch (e: any) { setError(e.message); }
+  }
+
+  // QA-179: "trainer batayega ki kab aapki assessment date hai" — mails every enrolled candidate
+  // their assessment date plus their own attendance-status link. Not reversible once pressed, so
+  // it confirms first; the actual recipient count and per-person outcome come back from the send
+  // itself (the API is the only source that can name who was skipped and why).
+  async function notifyAssessment() {
+    if (!window.confirm(
+      `Email every candidate currently enrolled on this batch their assessment date`
+      + (form.assessment_date ? ` (${fmtDate(form.assessment_date)})` : "")
+      + `, with a link to their own attendance/eligibility page?\n\nThis is audited and cannot be recalled once sent.`
+    )) return;
+    setNotifying(true);
+    try {
+      const res = await api(`/api/batches/${batchId}/closure/notify-assessment`, { method: "POST" });
+      const skippedNote = res.skipped?.length ? ` — ${res.skipped.length} skipped (${res.skipped.map((s: any) => `${s.name}: ${s.reason}`).join("; ")})` : "";
+      window.alert(`Notified ${res.sent} of ${res.total} candidate(s).${skippedNote}`);
+    } catch (e: any) { setError(e.message); }
+    finally { setNotifying(false); }
   }
 
   // -224 (Umesh 24/08, measured on live BHA-ITI-RPLHSL-SPIT-01): "Start per-candidate marking"
@@ -3401,7 +3422,17 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
               Same dead-control class as QA-712/723/754/775/785/791 on this very tab, in its
               quietest form: not a button that refuses, an input that accepts and then discards.
               `closed` is the one that already gates Save, so the box and its Save now agree. */}
-          <Field label="Assessment date"><input type="date" disabled={closed} className={inputCls} value={toInputDate(form.assessment_date)} onChange={(e) => setForm({ ...form, assessment_date: e.target.value })} /></Field>
+          <Field label="Assessment date">
+            <div className="flex items-center gap-2">
+              <input type="date" disabled={closed} className={inputCls} value={toInputDate(form.assessment_date)} onChange={(e) => setForm({ ...form, assessment_date: e.target.value })} />
+              {/* QA-179: refuses server-side when there is no saved date yet — save it first. */}
+              <span title={!closure?.assessment_date ? "Save the assessment date first" : "Email every enrolled candidate this date"}>
+                <Btn small kind="ghost" disabled={notifying || !closure?.assessment_date} onClick={notifyAssessment}>
+                  {notifying ? "Sending…" : "Notify candidates"}
+                </Btn>
+              </span>
+            </div>
+          </Field>
           {/* -120 (M4-14, Manish 17/08 [09:17] — he typed the chain out on screen). These are the dates
               it asks for that the ERP never held, in his order. Every one is OPTIONAL and gates
               NOTHING: a batch that never ran a mock test leaves them blank and nothing changes. His

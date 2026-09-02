@@ -726,6 +726,56 @@ console.log("\n--- -155 (QA-414 S1 / 415 / 424 / 425 / 426): the portal ID lands
       JSON.stringify({ eligible, missing: eligible.filter((k) => !Object.prototype.hasOwnProperty.call(FIELD_TESTS, k)) }));
   }
 
+  // QA-179 (2026-09-02, Manish 17/08 + Umesh 17/08): the trainer-triggered "tell the candidates
+  // their assessment date" send. Real mail is never pressed here (this wall runs against a test
+  // database - lib/mailer.ts's testEnvironmentShape() suppresses every send structurally - so
+  // sendMail always returns "skipped", never "sent", and the assertions below are written for
+  // that): the proof this block gives is that the route REFUSES correctly, mints one link per
+  // enrolled candidate, attempts (and logs) exactly one mail per enrolled candidate with no one
+  // silently dropped, and reports the count back honestly - not that a real inbox receives mail.
+  {
+    const c1 = (await req(admin, "POST", "/api/candidates", { name: `FL179 A ${stamp}`, phone: phone(), email: `fl179a.${stamp}@t.local`, location: loc._id, program: prog._id }, 201)).data.item;
+    const c2 = (await req(admin, "POST", "/api/candidates", { name: `FL179 B ${stamp}`, phone: phone(), location: loc._id, program: prog._id }, 201)).data.item; // deliberately NO email
+    const b179 = (await req(admin, "POST", "/api/batches", {
+      location: loc._id, program: prog._id, target_size: 2,
+      planned_start: new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10),
+    }, 201)).data.item;
+    await req(admin, "POST", `/api/batches/${b179._id}/members`, { candidate: c1._id }, 201);
+    await req(admin, "POST", `/api/batches/${b179._id}/members`, { candidate: c2._id }, 201);
+
+    // Refusal BEFORE a date is ever saved - the safety requirement the ledger row itself named:
+    // "the first press mails every candidate a blank date and cannot be recalled".
+    const refused = await req(admin, "POST", `/api/batches/${b179._id}/closure/notify-assessment`, {}, 409);
+    ok("QA-179: refuses to notify when no assessment date is saved yet", refused.status === 409, JSON.stringify(refused.data));
+
+    await req(admin, "PUT", `/api/batches/${b179._id}/closure`, { assessment_date: "2026-10-15" }, 200);
+    const sent = (await req(admin, "POST", `/api/batches/${b179._id}/closure/notify-assessment`, {}, 200)).data;
+    ok("QA-179: once a date is saved, both enrolled candidates are attempted - nobody silently dropped",
+      sent.total === 2, JSON.stringify(sent));
+    ok("QA-179: the mailable candidate is not reported as skipped for a bad reason (only the test-suppression path applies here)",
+      !sent.skipped.find((s) => s.name.includes("FL179 A"))
+      || /test environment/i.test(sent.skipped.find((s) => s.name.includes("FL179 A")).reason),
+      JSON.stringify(sent.skipped));
+    ok("QA-179: the candidate with no email on record is reported by name, not silently skipped",
+      sent.skipped.some((s) => s.name.includes("FL179 B") && /recipient address/i.test(s.reason)), JSON.stringify(sent.skipped));
+
+    // MailLog is the audit trail QA-115 exists for - both attempts must land there, addressed to
+    // the right person, naming the right entity, even though the send itself was suppressed.
+    const logs179 = (await req(admin, "GET", "/api/test-email", undefined, 200)).data.log ?? [];
+    const rowA = logs179.find((l) => l.to === `fl179a.${stamp}@t.local`);
+    ok("QA-179: the mailable candidate's attempt is in MailLog, subject carries the date", !!rowA && /15 October 2026/.test(rowA.subject ?? ""), JSON.stringify(rowA));
+
+    // A second press must not mint a SECOND link per candidate - notify-assessment reuses the
+    // same idempotent mintMemberLinks door the roster's own "share attendance links" action uses.
+    const countLinks = (items) => items.filter((l) => l.batch_member && [c1._id, c2._id].map(String).includes(String(l.batch_member.candidate?._id))).length;
+    const linksBefore = (await req(admin, "GET", `/api/public-tokens?purpose=attendance`, undefined, 200)).data.items ?? [];
+    const countBefore = countLinks(linksBefore);
+    await req(admin, "POST", `/api/batches/${b179._id}/closure/notify-assessment`, {}, 200);
+    const linksAfter = (await req(admin, "GET", `/api/public-tokens?purpose=attendance`, undefined, 200)).data.items ?? [];
+    const countAfter = countLinks(linksAfter);
+    ok("QA-179: a second notify press reuses the same links rather than minting new ones", countAfter === countBefore && countBefore === 2, JSON.stringify({ countBefore, countAfter }));
+  }
+
   // Umesh ("blank ko accept hi kyun kar raha hai - it should ask"): a mapped column whose cells
   // are EMPTY is reported per column - never blocked (a fresh roster legitimately has no CANs),
   // never silent (an all-blank mapped column is what a mis-aligned sheet looks like).

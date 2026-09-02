@@ -4,7 +4,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireRole, requireEdit, assertLocationInScope, isScoped, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, BatchMember, Location, Program, PublicToken } from "@/models";
-import { assertBatchInScope, occupantName, recipientKey, slotGeneration, storedTokenKey } from "@/lib/rules";
+import { assertBatchInScope, mintMemberLinks, occupantName, recipientKey, slotGeneration, storedTokenKey } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
 // Admin/Ops management of public capability links (2026-08-11):
@@ -137,18 +137,10 @@ export const POST = apiHandler(async (req: NextRequest) => {
   if (purpose === "feedback" || purpose === "attendance") {
     if (!body.batch) throw new HttpError(400, `batch is required for ${purpose} links`);
     await assertBatchInScope(user, String(body.batch));
-    const members = await BatchMember.find({ batch: body.batch, left_on: null })
-      .populate("candidate", "name phone").lean<any[]>();
-    const items = [];
-    for (const m of members) {
-      const existing = await PublicToken.findOne({ purpose, batch_member: m._id, active: true }).lean<any>();
-      if (existing) { items.push({ ...existing, batch_member: m }); continue; }
-      const doc = await PublicToken.create({
-        token: crypto.randomBytes(16).toString("hex"),
-        purpose, batch_member: m._id, created_by: user.id,
-      });
-      items.push({ ...doc.toObject(), batch_member: m });
-    }
+    // QA-179: the mint-or-reuse-per-member shape moved to lib/rules.ts (mintMemberLinks) once a
+    // second caller (the trainer-triggered assessment-date mail) needed the exact same logic —
+    // one definition, not a second near-copy.
+    const items = await mintMemberLinks(purpose, String(body.batch), user.id);
     await audit({ entity: "Batch", entityId: body.batch, field: `${purpose}_links`, newValue: `${items.length} link(s)`, actor: user.id });
     return NextResponse.json({ items }, { status: 201 });
   }
