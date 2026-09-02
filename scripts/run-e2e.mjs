@@ -260,6 +260,72 @@ const SUITES = [
   }
 }
 
+// QA-1771 (2026-09-02): the database's UNIQUE INDEXES, which nothing guarded. Mongoose builds them
+// when a model first connects - i.e. at SERVER START. Drop the database and re-seed it without
+// restarting the server (an easy mistake: the natural instinct is "clear the data", not "the
+// indexes live on the connection, not the data") and the collections come back with no unique
+// indexes at all. Every uniqueness assertion in the wall then INVERTS - "a duplicate trainer phone
+// is refused" gets 201, "a TR ID already in use is refused with 4xx" gets 200, member-collision
+// checks flip 409/201 - eight assertions in the most alarming possible area (duplicate protection)
+// look like real product regressions, and not one line of the output says why. Measured on
+// IDENTICAL code: correct order (stop server -> drop DB -> seed -> START server -> seed:sample ->
+// wall) = 5 failures (the pre-existing set); drop under a live server = 13.
+//
+// So: ask the database itself, in the same shape as the QA-851/QA-1065 refusals above - loud, not a
+// warning, because a wall that can invert its own uniqueness assertions without saying why is an
+// instrument reporting the opposite of the truth. A small set of collections is enough: they are
+// the ones QA-1771 actually measured breaking, and a missing index on any one of them means the
+// same drop-without-restart happened to all of them (they are built from the same connection).
+{
+  const { MongoClient } = await import("mongodb");
+  const url = process.env.MONGODB_URL || "mongodb://127.0.0.1:27017";
+  const dbName = (process.env.MONGODB_DB || "center_erp_ci").trim();
+  // [collection, index key spec, human name] - one from each area QA-1771 measured inverting.
+  const EXPECTED = [
+    ["trainers", { phone: 1 }, "Trainer.phone unique"],
+    ["locations", { institution_id: 1 }, "Location.institution_id unique"],
+    ["batchmembers", { batch: 1, candidate: 1 }, "BatchMember (batch, candidate) unique"],
+  ];
+  let client;
+  try {
+    client = new MongoClient(url, { serverSelectionTimeoutMS: 8000 });
+    await client.connect();
+    const db = client.db(dbName);
+    const missing = [];
+    for (const [coll, keySpec, label] of EXPECTED) {
+      const indexes = await db.collection(coll).indexes().catch(() => []);
+      const has = indexes.some((ix) => ix.unique && JSON.stringify(ix.key) === JSON.stringify(keySpec));
+      if (!has) missing.push(label);
+    }
+    if (missing.length) {
+      console.error("");
+      console.error("################################################################");
+      console.error("##  WALL REFUSED TO START (QA-1771)");
+      console.error("##  " + missing.length + " expected UNIQUE index(es) are missing from " + dbName + ":");
+      for (const m of missing) console.error("##    - " + m);
+      console.error("##  This almost always means the database was DROPPED while a server was");
+      console.error("##  already running against it. Mongoose builds unique indexes at connection");
+      console.error("##  time (server start), not at data-seed time - so a drop-and-reseed with no");
+      console.error("##  restart leaves every collection with no unique indexes at all, and every");
+      console.error("##  duplicate-protection assertion in the wall will invert.");
+      console.error("##  Fix: stop the server -> drop the database -> seed -> START the server ->");
+      console.error("##  seed:sample -> THEN run the wall. (QA-1771 correct-order measurement: 5");
+      console.error("##  failures. Same code, drop-under-live-server: 13.)");
+      console.error("################################################################");
+      console.error("");
+      await client.close().catch(() => {});
+      process.exit(2);
+    }
+    console.log("WALL: expected unique indexes present (" + EXPECTED.length + " checked) - QA-1771");
+  } catch (e) {
+    // Never fail a wall over the preflight's OWN connectivity - the suites' first assertion will
+    // surface a genuinely unreachable database far more clearly than this guard could.
+    console.log("WALL NOTE: QA-1771 index preflight could not connect (" + String(e?.message ?? e).slice(0, 80) + ") - skipped, not refused.");
+  } finally {
+    await client?.close().catch(() => {});
+  }
+}
+
 // QA-638 / QA-645 (-197): BEFORE any suite runs, prove the server at BASE_URL is the build in this
 // working tree. On 2026-08-22 a wall reported "45 failed, 2 crashed" about a build it never started:
 // a `next start` from an earlier session held the port, `npm start` died with EADDRINUSE into a log
