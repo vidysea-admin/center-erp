@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-286";
+export const RELEASE = "2026.08.14-287";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -158,6 +158,22 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "about how a candidate is dropped from a batch has changed.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-287: a Delete button that permanently destroyed a candidate record and their uploaded " +
+  "documents is now Archive. The client asked for this directly: leads cleared by mistake were " +
+  "landing in the same door as junk rows, and once pressed there was no way back - the record, " +
+  "its Aadhaar and ID documents, all gone. Delete now archives instead: the person stays in the " +
+  "database with a status and a reason, the documents survive with them, and they stop showing " +
+  "up in bulk Assign-to-Batch and the government SIDH registration run - which is what the " +
+  "client actually needed, an unwanted lead out of the way rather than erased. A candidate " +
+  "already on a batch roster could not be removed this way at all, on the standing rule that a " +
+  "real person is Dropped from a batch, never deleted outright; that still holds, but archiving " +
+  "such a person is now possible with a second confirmation naming the batch history, so a " +
+  "lead who turned out to have history is not permanently stuck in the active list. Their " +
+  "portal ID, since it belongs to the government SIDH portal rather than to this app, stays " +
+  "reserved to them either way - archiving is a status change here, not a release of that " +
+  "identity. Nothing in the candidates list yet marks who has been archived, so the next " +
+  "release gives them their own place on that screen.";
+const RELEASE_NOTE_ARCHIVE_286 =
   "-286 closes a gap the -285 fix opened. Scoping the batch Overview's unmatched-portal-row "  +
   "caveat to a single batch was correct - a government-attendance file uploaded against a whole "  +
   "centre had been putting the same warning on every batch there. But it meant rows from a "  +
@@ -1261,6 +1277,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -285: ARCHIVE_284 wired in here in the SAME bump that declared it, same discipline.
   // -286: ARCHIVE_285 wired in here in the SAME bump that declared it, same discipline -
   // QA-265/-247/-256 record what happens when a bump declares an archive and forgets this line.
+  // -287: ARCHIVE_286 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_286 + " " +
   RELEASE_NOTE_ARCHIVE_285 + " " +
   RELEASE_NOTE_ARCHIVE_284 + " " +
   RELEASE_NOTE_ARCHIVE_283 + " " +
