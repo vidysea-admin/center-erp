@@ -3263,7 +3263,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
     setNotifying(true);
     try {
       const res = await api(`/api/batches/${batchId}/closure/notify-assessment`, { method: "POST" });
-      const skippedNote = res.skipped?.length ? ` — ${res.skipped.length} skipped (${res.skipped.map((s: any) => `${s.name}: ${s.reason}`).join("; ")})` : "";
+      const skippedNote = res.skipped?.length ? ` — ${res.skipped.length} skipped (${res.skipped.map((s: any) => `${s.label}: ${s.reason}`).join("; ")})` : "";
       window.alert(`Notified ${res.sent} of ${res.total} candidate(s).${skippedNote}`);
     } catch (e: any) { setError(e.message); }
     finally { setNotifying(false); }

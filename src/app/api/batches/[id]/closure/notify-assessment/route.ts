@@ -6,6 +6,9 @@ import { BASE_PATH } from "@/lib/base-path";
 import { Batch, Closure } from "@/models";
 import { assertBatchInScope, mintMemberLinks } from "@/lib/rules";
 import { renderMail, sendMail } from "@/lib/mailer";
+// QA-1770 (REQ-389/389a): the skipped list is shown to the operator, so it names people the
+// same way every other person list does - a bare name cannot separate two same-name candidates.
+import { personLabel } from "@/lib/person";
 import { audit } from "@/lib/audit";
 
 // QA-179 (2026-09-02, Manish 17/08 + Umesh 17/08: "trainer batayega ki kab aapki assessment
@@ -42,10 +45,10 @@ export const POST = apiHandler(async (_req: NextRequest, ctx: { params: Promise<
 
   // Reuse (never re-mint) the same per-member attendance capability links the roster's own
   // "share attendance links" action already mints — one link per candidate, the same door.
-  const links = await mintMemberLinks("attendance", id, user.id, "name phone email");
+  const links = await mintMemberLinks("attendance", id, user.id, "name phone email sidh_candidate_id");
 
   let sent = 0;
-  const skipped: { name: string; reason: string }[] = [];
+  const skipped: { name: string; label: string; reason: string }[] = [];
   for (const l of links) {
     const candidate = l.batch_member?.candidate;
     const name = candidate?.name ?? "candidate";
@@ -61,7 +64,7 @@ export const POST = apiHandler(async (_req: NextRequest, ctx: { params: Promise<
     });
     const result = await sendMail({ to, subject: `Your assessment date is ${dateStr}`, html, text, entity: "BatchMember", entity_id: l.batch_member._id });
     if (result.status === "sent") sent++;
-    else skipped.push({ name, reason: result.reason ?? result.status });
+    else skipped.push({ name, label: personLabel(candidate) || name, reason: result.reason ?? result.status });
   }
 
   await audit({
