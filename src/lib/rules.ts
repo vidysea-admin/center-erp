@@ -26,6 +26,9 @@ import { hasEditLevel, requirePerm } from "@/lib/permissions";
 // behalf, and sync.ts never imports rules.ts, so this adds no cycle and no new module to the graph.
 import { targetRowField } from "@/lib/sync";
 import type { SessionUser } from "@/auth";
+// QA-491 (REQ-389a, Umesh: "har jagah, bina exception"): the same person-naming rule the client
+// tooltips already use, so a REFUSAL and the tooltip that preceded it never disagree.
+import { personLabel, personList } from "@/lib/person";
 
 export const ACTIVE_BATCH_STATUSES = ["Planning", "Ready", "Active", "Closing"];
 
@@ -1823,14 +1826,23 @@ export async function assessmentCompleteness(batchId: string) {
   const roster = closure?.assessment_date
     ? await rosterOnDate(batchId, new Date(closure.assessment_date))
     : await activeRoster(batchId);
+  // QA-491: rosterOnDate/activeRoster return a bare unpopulated `candidate` ObjectId — the name
+  // was previously read off the RESULT row instead, which is exactly why a member with no row
+  // yet (the case this function exists to catch) came back with no name at all.
+  await BatchMember.populate(roster, { path: "candidate", select: "name phone sidh_candidate_id" });
   // Walk the ROSTER, not the rows: a member with no row yet is pending too — otherwise a
   // batch where only two of thirty were marked would count as complete.
   const byMember = new Map(rows.map((r) => [String(r.batch_member), r]));
-  const pending: { member: string; name?: string }[] = [];
+  const pending: { member: string; name?: string; phone?: string | null; sidh_candidate_id?: string | null }[] = [];
   for (const m of roster) {
     const row = byMember.get(String(m._id));
     if (!row || row.result === "Pending") {
-      pending.push({ member: String(m._id), name: row?.candidate?.name });
+      pending.push({
+        member: String(m._id),
+        name: m.candidate?.name,
+        phone: m.candidate?.phone ?? null,
+        sidh_candidate_id: m.candidate?.sidh_candidate_id ?? null,
+      });
     }
   }
   return {
@@ -1873,7 +1885,9 @@ export async function enrolledWithoutCan(batchId: string) {
 
 // Rules 45/46: certification completes when every Pass candidate holds an Issued certificate.
 export async function certificationCompleteness(batchId: string) {
-  const rows = await CandidateResult.find({ batch: batchId }).populate("candidate", "name").lean<any[]>();
+  // QA-491: phone/sidh_candidate_id ride along too, so the Rule 46 refusal can separate two
+  // same-name people the same way the client tooltip already does — a bare name is not enough.
+  const rows = await CandidateResult.find({ batch: batchId }).populate("candidate", "name phone sidh_candidate_id").lean<any[]>();
   if (!rows.length) return { legacy: true, pass_count: 0, issued: 0, blocking: [] as any[], complete: true };
   // 2026-08-12 audit (S0): a candidate who has left the batch kept blocking certification
   // forever, because this walked every result row regardless of membership.
@@ -1888,7 +1902,12 @@ export async function certificationCompleteness(batchId: string) {
     legacy: false,
     pass_count: passes.length,
     issued: passes.length - blocking.length,
-    blocking: blocking.map((b) => ({ name: b.candidate?.name, status: b.certificate_status })),
+    blocking: blocking.map((b) => ({
+      name: b.candidate?.name,
+      phone: b.candidate?.phone ?? null,
+      sidh_candidate_id: b.candidate?.sidh_candidate_id ?? null,
+      status: b.certificate_status,
+    })),
     complete: blocking.length === 0,
   };
 }
@@ -2230,7 +2249,7 @@ export async function upsertClosureChecked(batchId: string, patch: Record<string
     if (patch.assessment_status === "Completed") {
       const c = await assessmentCompleteness(batchId);
       if (!c.complete) {
-        throw new HttpError(409, `Rule 43: ${c.total - c.final} candidate(s) still have no final result — ${c.pending.map((p) => p.name).filter(Boolean).slice(0, 5).join(", ")}`);
+        throw new HttpError(409, `Rule 43: ${c.total - c.final} candidate(s) still have no final result — ${personList(c.pending.slice(0, 5))}`);
       }
     }
     // -155 (Umesh, 20/08): "ye bas unke paas mandatory hoga na jo already enrolled hai" - the
@@ -2255,14 +2274,14 @@ export async function upsertClosureChecked(batchId: string, patch: Record<string
       const noCan = await enrolledWithoutCan(batchId);
       if (noCan.length) {
         throw new HttpError(409,
-          `${noCan.length} enrolled student(s) have no portal Candidate ID, and the government issues no certificate without one: ${noCan.map((m) => m.name).filter(Boolean).slice(0, 5).join(", ")}${noCan.length > 5 ? "…" : ""}. Fix it from Candidates → Portal ID health (a misfiled or unattached ID may already be in the system), or set the ID on each candidate's card.`);
+          `${noCan.length} enrolled student(s) have no portal Candidate ID, and the government issues no certificate without one: ${personList(noCan.slice(0, 5))}${noCan.length > 5 ? "…" : ""}. Fix it from Candidates → Portal ID health (a misfiled or unattached ID may already be in the system), or set the ID on each candidate's card.`);
       }
     }
     // Rules 45/46
     if (patch.certification_status === "Completed") {
       const c = await certificationCompleteness(batchId);
       if (!c.complete) {
-        throw new HttpError(409, `Rule 46: certificates not yet Issued for ${c.blocking.map((b) => `${b.name} (${b.status})`).slice(0, 5).join(", ")}`);
+        throw new HttpError(409, `Rule 46: certificates not yet Issued for ${c.blocking.slice(0, 5).map((b) => `${personLabel(b)} (${b.status})`).join(", ")}`);
       }
     }
   }

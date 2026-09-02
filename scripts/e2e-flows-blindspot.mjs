@@ -776,6 +776,46 @@ console.log("\n--- -155 (QA-414 S1 / 415 / 424 / 425 / 426): the portal ID lands
     ok("QA-179: a second notify press reuses the same links rather than minting new ones", countAfter === countBefore && countBefore === 2, JSON.stringify({ countBefore, countAfter }));
   }
 
+  // QA-491 (REQ-389a, Umesh: "har jagah, bina exception"): the three server-side person lists
+  // that back a closure REFUSAL must name people the same way the client tooltip that warned
+  // about them already does - portal ID when present, otherwise phone. Two faults measured live
+  // on -161: Rule 43's refusal named NOBODY for a roster member with no CandidateResult row yet
+  // (the exact case the gate exists to catch - the name was read off the row, not the roster),
+  // and Rule 46 / the noCan gate both used bare names with no separator for two same-name people.
+  {
+    const c491pass = (await req(admin, "POST", "/api/candidates", { name: `FL491PASS ${stamp}`, phone: phone(), location: loc._id, program: prog._id }, 201)).data.item;
+    const c491p1 = (await req(admin, "POST", "/api/candidates", { name: `FL491DUP ${stamp}`, phone: phone(), location: loc._id, program: prog._id }, 201)).data.item;
+    const c491p2 = (await req(admin, "POST", "/api/candidates", { name: `FL491DUP ${stamp}`, phone: phone(), location: loc._id, program: prog._id }, 201)).data.item; // same name as c491p1 on purpose (REQ-389a boundary)
+    const b491 = (await req(admin, "POST", "/api/batches", {
+      location: loc._id, program: prog._id, target_size: 3,
+      planned_start: new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10),
+    }, 201)).data.item;
+    const m491pass = (await req(admin, "POST", `/api/batches/${b491._id}/members`, { candidate: c491pass._id }, 201)).data.item;
+    const m491p1 = (await req(admin, "POST", `/api/batches/${b491._id}/members`, { candidate: c491p1._id }, 201)).data.item;
+    const m491p2 = (await req(admin, "POST", `/api/batches/${b491._id}/members`, { candidate: c491p2._id }, 201)).data.item;
+    for (const m of [m491pass, m491p1, m491p2]) await req(admin, "PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+
+    // One Pass row exists (switches the batch into per-candidate mode, batchUsesPerCandidateResults);
+    // the other two members deliberately have NO CandidateResult row at all - exactly the case
+    // assessmentCompleteness walks the ROSTER (not the rows) to catch. Pre-fix, their name was
+    // read off the nonexistent row, so the refusal named nobody at all.
+    await req(admin, "PUT", `/api/batches/${b491._id}/results`, { rows: [{ member: m491pass._id, result: "Pass" }] }, 200);
+    await req(admin, "PUT", `/api/batches/${b491._id}/closure`, { assessment_date: "2026-10-20" }, 200);
+    const r43 = await req(admin, "PUT", `/api/batches/${b491._id}/closure`, { assessment_status: "Completed" }, 409);
+    ok("QA-491: Rule 43's refusal names the pending candidates, not nobody",
+      r43.data.error?.includes("FL491DUP"), JSON.stringify(r43.data));
+    ok("QA-491: Rule 43's refusal separates the two same-name pending candidates by phone",
+      r43.data.error?.includes(c491p1.phone) && r43.data.error?.includes(c491p2.phone), JSON.stringify(r43.data));
+
+    // noCan gate: both DUP members are enrolled (Completed), no portal Candidate ID on record,
+    // and share a name - the REQ-389a boundary case ("har jagah, bina exception").
+    const r46noCan = await req(admin, "PUT", `/api/batches/${b491._id}/closure`, { certification_status: "Completed" }, 409);
+    ok("QA-491: the noCan refusal names the candidates missing a portal ID, not just a count",
+      r46noCan.data.error?.includes("FL491DUP"), JSON.stringify(r46noCan.data));
+    ok("QA-491: the noCan refusal separates the two same-name candidates by phone, not silently merging them",
+      r46noCan.data.error?.includes(c491p1.phone) && r46noCan.data.error?.includes(c491p2.phone), JSON.stringify(r46noCan.data));
+  }
+
   // Umesh ("blank ko accept hi kyun kar raha hai - it should ask"): a mapped column whose cells
   // are EMPTY is reported per column - never blocked (a fresh roster legitimately has no CANs),
   // never silent (an all-blank mapped column is what a mis-aligned sheet looks like).
