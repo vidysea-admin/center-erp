@@ -816,6 +816,61 @@ console.log("\n--- -155 (QA-414 S1 / 415 / 424 / 425 / 426): the portal ID lands
       r46noCan.data.error?.includes(c491p1.phone) && r46noCan.data.error?.includes(c491p2.phone), JSON.stringify(r46noCan.data));
   }
 
+  // QA-1745 (REQ-389a, filed by the checker against qa-491): the TRAINER half of lib/rules.ts.
+  // QA-491 routed the three candidate lists through personList and left fifteen bare
+  // `Trainer ${name}` / `${t.name}` interpolations standing in the same file. A trainer is a human
+  // being and these are server messages a user is shown, so REQ-389a ("har jagah, bina exception")
+  // binds them too. Pinned on the Rule 10 slot-clash refusal, which is the one an operator hits
+  // routinely, with two same-name trainers so a bare name would be provably ambiguous.
+  {
+    const trName = `FL1745 TWIN ${stamp}`;
+    const tr1 = (await req(admin, "POST", "/api/trainers", {
+      name: trName, phone: phone(), skills: [`fl1745${stamp}`],
+      nominated_for_location: loc._id, nominated_for_program: prog._id,
+    }, 201)).data.item;
+    const tr2 = (await req(admin, "POST", "/api/trainers", {
+      name: trName, phone: phone(), skills: [`fl1745${stamp}`], // SAME name, different phone
+      nominated_for_location: loc._id, nominated_for_program: prog._id,
+    }, 201)).data.item;
+    ok("QA-1745: two trainers may share a name - the case the separator exists for", tr1._id !== tr2._id && tr1.phone !== tr2.phone, JSON.stringify({ p1: tr1.phone, p2: tr2.phone }));
+
+    const day1745 = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+    const mk = (extra) => req(admin, "POST", "/api/batches", {
+      location: loc._id, program: prog._id, trainer: tr1._id, planned_start: day1745, target_size: 3, ...extra,
+    }, extra.expect ?? 201);
+    await mk({ slot_start: "09:00", slot_end: "13:00" });
+    // Same trainer, same day, overlapping slot -> Rule 10's time-slot clash refusal.
+    const clash = await req(admin, "POST", "/api/batches", {
+      location: loc._id, program: prog._id, trainer: tr1._id, planned_start: day1745, target_size: 3,
+      slot_start: "10:00", slot_end: "14:00",
+    }, 409);
+    ok("QA-1745: the Rule 10 slot-clash refusal names the trainer at all", clash.data.error?.includes("FL1745 TWIN"), JSON.stringify(clash.data));
+    ok("QA-1745: ...and separates the two same-name trainers by phone, so the operator knows WHICH one is double-booked",
+      clash.data.error?.includes(tr1.phone) && !clash.data.error?.includes(tr2.phone), JSON.stringify(clash.data));
+
+    // trainerBookingWarnings: a second, independent site in the same file (its own Trainer.findById
+    // with its own .select, which had to gain phone + govt_candidate_id for this to be possible).
+    const warnB = (await req(admin, "POST", "/api/batches", {
+      location: loc._id, program: prog._id, trainer: tr2._id, planned_start: day1745, target_size: 3,
+    }, 201)).data;
+    // NOTE: the route returns `warning` (singular, joined), not `warnings` — reading the plural
+    // key made both assertions below pass vacuously against `[]` on the first draft.
+    const warnText = String(warnB.warning ?? "");
+    // Written STRICTLY on purpose: the permissive form of this assertion ("either the name is
+    // absent or the phone is present") passes vacuously if the warning never fires at all, which
+    // would pin nothing. tr2 is a Fresh Lead, so trainerBookingWarnings must produce the
+    // not-yet-Certified warning, and it must carry the separator.
+    ok("QA-1745: the pipeline-status booking WARNING actually fires for a Fresh Lead trainer",
+      warnText.includes("not yet Certified"), warnText);
+    // Targeted at THIS sentence, not at the joined blob: the first draft asserted the joined
+    // string contained `Name (phone)` and passed even with this site reverted, because the
+    // trainer-availability note in the same blob (another site this unit fixed) supplied it.
+    // A pin that survives a revert of the line it names is pinning something else.
+    const pipelineSentence = warnText.split(" — not yet Certified")[0] ?? "";
+    ok("QA-1745: ...and THAT sentence names the trainer with its separator, not bare",
+      pipelineSentence.includes(`FL1745 TWIN ${stamp} (${tr2.phone})`), pipelineSentence);
+  }
+
   // Umesh ("blank ko accept hi kyun kar raha hai - it should ask"): a mapped column whose cells
   // are EMPTY is reported per column - never blocked (a fresh roster legitimately has no CANs),
   // never silent (an all-blank mapped column is what a mis-aligned sheet looks like).

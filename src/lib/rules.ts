@@ -479,6 +479,12 @@ export async function assertTrainerAvailableForBatch(
 ) {
   const trainer = await Trainer.findById(trainerId).lean<any>();
   if (!trainer) throw new HttpError(400, "Trainer not found");
+  // QA-1745 (REQ-389a): a trainer is a human being and these four refusals are messages a user is
+  // shown, so they carry the same separator every other person list in this product carries. The
+  // portal-ID slot is `govt_candidate_id` — the portal "Candidate ID" (CAN_…), the SAME identity a
+  // candidate's `sidh_candidate_id` holds — NOT `tr_id`, which is the NSDC TR certification number
+  // and a different thing. `phone` is required on TrainerSchema, so this never renders a bare name.
+  const trainerName = personLabel({ name: trainer.name, phone: trainer.phone, sidh_candidate_id: trainer.govt_candidate_id });
   const others = await Batch.find({
     trainer: trainerId,
     status: { $in: ACTIVE_BATCH_STATUSES },
@@ -491,7 +497,7 @@ export async function assertTrainerAvailableForBatch(
   const clash = overlapping.find((b) => slotsClash(slot?.slot_start, slot?.slot_end, b.slot_start, b.slot_end));
   if (clash) {
     throw new HttpError(409,
-      `Time slot clash: Trainer ${trainer.name} already teaches batch ${clash.code} at ${clash.location?.name ?? "?"} during ${clash.slot_start}–${clash.slot_end}.`);
+      `Time slot clash: Trainer ${trainerName} already teaches batch ${clash.code} at ${clash.location?.name ?? "?"} during ${clash.slot_start}–${clash.slot_end}.`);
   }
   // Two 4-hour batches a day is the sanctioned pattern (Manish, 2026-08-12). Only slotted
   // batches are counted — an unslotted batch is "whole day" and is already governed by the
@@ -502,7 +508,7 @@ export async function assertTrainerAvailableForBatch(
     const sameDaySlotted = overlapping.filter((b) => b.slot_start && b.slot_end);
     if (sameDaySlotted.length + 1 > maxPerDay) {
       throw new HttpError(409,
-        `Scheme guideline: at most ${maxPerDay} sessions a day. Trainer ${trainer.name} already runs ${sameDaySlotted.length} slotted batch(es) over these dates (${sameDaySlotted.map((b) => `${b.code} ${b.slot_start}–${b.slot_end}`).join(", ")}).`);
+        `Scheme guideline: at most ${maxPerDay} sessions a day. Trainer ${trainerName} already runs ${sameDaySlotted.length} slotted batch(es) over these dates (${sameDaySlotted.map((b) => `${b.code} ${b.slot_start}–${b.slot_end}`).join(", ")}).`);
     }
     // QA-144: the CEO's 8-hour rule. The session cap above bounds HOW MANY sessions; this
     // bounds their TOTAL hours, because two 4-hour sessions pass the count while 4+8 must
@@ -512,7 +518,7 @@ export async function assertTrainerAvailableForBatch(
     const hours = [slot, ...sameDaySlotted].reduce((sum, b) => sum + (slotHoursPerDay(b) ?? 0), 0);
     if (hours > maxDailyHours) {
       throw new HttpError(409,
-        `Trainer ${trainer.name} would teach ${hours}h on overlapping days (${sameDaySlotted.map((b) => `${b.code} ${b.slot_start}–${b.slot_end}`).join(", ")} + this batch ${slot.slot_start}–${slot.slot_end}); max daily hours = ${maxDailyHours}.`);
+        `Trainer ${trainerName} would teach ${hours}h on overlapping days (${sameDaySlotted.map((b) => `${b.code} ${b.slot_start}–${b.slot_end}`).join(", ")} + this batch ${slot.slot_start}–${slot.slot_end}); max daily hours = ${maxDailyHours}.`);
     }
   }
   // 2026-08-12 audit F-001: Admin → Defaults shows a "Max concurrent batches" field, but Rule 10
@@ -524,7 +530,7 @@ export async function assertTrainerAvailableForBatch(
   if (overlapping.length + 1 > cap) {
     const c = overlapping[0];
     throw new HttpError(409,
-      `Trainer ${trainer.name} already assigned to batch ${c.code} at ${c.location?.name ?? "?"} (${new Date(batchRange(c)[0]).toDateString()} – ${new Date(batchRange(c)[1]).toDateString()}); max concurrent = ${cap}.`);
+      `Trainer ${trainerName} already assigned to batch ${c.code} at ${c.location?.name ?? "?"} (${new Date(batchRange(c)[0]).toDateString()} – ${new Date(batchRange(c)[1]).toDateString()}); max concurrent = ${cap}.`);
   }
 }
 
@@ -533,16 +539,19 @@ export async function assertTrainerAvailableForBatch(
 // actual start. Same for location capability ("trainer कहाँ-कहाँ training ले सकता है"):
 // an empty list means "anywhere"; a non-empty list that excludes the batch's location warns.
 export async function trainerBookingWarnings(trainerId: string, locationId?: unknown): Promise<string[]> {
-  const t = await Trainer.findById(trainerId).select("name pipeline_status capable_locations").lean<any>();
+  // QA-1745 (REQ-389a): phone + govt_candidate_id ride along so these two warnings name a trainer
+  // the same way every other person list does — a bare name does not separate two same-name people.
+  const t = await Trainer.findById(trainerId).select("name phone govt_candidate_id pipeline_status capable_locations").lean<any>();
   if (!t) return [];
+  const tName = personLabel({ name: t.name, phone: t.phone, sidh_candidate_id: t.govt_candidate_id });
   const warnings: string[] = [];
   if (t.pipeline_status && t.pipeline_status !== "Certified") {
-    warnings.push(`Trainer ${t.name} is still "${t.pipeline_status}" — not yet Certified, so they have no TR ID for the portal.`);
+    warnings.push(`Trainer ${tName} is still "${t.pipeline_status}" — not yet Certified, so they have no TR ID for the portal.`);
   }
   if (locationId && t.capable_locations?.length &&
       !t.capable_locations.map(String).includes(String(locationId))) {
     const loc = await Location.findById(locationId).select("name").lean<any>();
-    warnings.push(`Trainer ${t.name} is not listed as able to train at ${loc?.name ?? "this location"} — check travel/availability.`);
+    warnings.push(`Trainer ${tName} is not listed as able to train at ${loc?.name ?? "this location"} — check travel/availability.`);
   }
   return warnings;
 }
@@ -2919,17 +2928,20 @@ export async function earliestPossibleStart(
   // 2. Trainer — available_from, and if they are already at their concurrency cap, the day the
   // earliest of those batches frees a slot. Both are real blocks Rule 10 would enforce anyway.
   if (opts?.trainerId) {
-    const t = await Trainer.findById(opts.trainerId as any).select("name available_from max_concurrent_batches").lean<any>();
+    // QA-1745 (REQ-389a): phone + govt_candidate_id ride along so this note names a trainer the
+    // same way every other person mention does.
+    const t = await Trainer.findById(opts.trainerId as any).select("name phone govt_candidate_id available_from max_concurrent_batches").lean<any>();
     if (t) {
+      const tName = personLabel({ name: t.name, phone: t.phone, sidh_candidate_id: t.govt_candidate_id });
       let when: Date | null = t.available_from ? dayStart(t.available_from) : null;
-      let note = t.available_from ? `${t.name} is free from ${dayStart(t.available_from).toDateString()}` : `${t.name} has no availability date on file`;
+      let note = t.available_from ? `${tName} is free from ${dayStart(t.available_from).toDateString()}` : `${tName} has no availability date on file`;
       const cap = t.max_concurrent_batches ?? defaults.max_concurrent_batches ?? 1;
       const booked = await Batch.find({ trainer: opts.trainerId as any, status: { $in: ACTIVE_BATCH_STATUSES } }).lean<any[]>();
       if (booked.length >= cap) {
         // The cap frees up when the earliest-ending of the booked batches ends.
         const firstFree = addDays(booked.map((b) => batchRange(b)[1]).sort((a, b) => a.getTime() - b.getTime())[0], 1);
         if (!when || firstFree > when) { when = firstFree; }
-        note = `${t.name} is at the ${cap}-batch cap until ${firstFree.toDateString()}`;
+        note = `${tName} is at the ${cap}-batch cap until ${firstFree.toDateString()}`;
       }
       basis.push({ key: "trainer", label: "Trainer availability", date: when, note });
     }
@@ -3190,8 +3202,10 @@ export async function transitionTrainer(
 ) {
   const t = await Trainer.findById(trainerId);
   if (!t) throw new HttpError(404, "Trainer not found");
+  // QA-1745 (REQ-389a): same separator as every other person mention in this file.
+  const tName = personLabel({ name: t.name, phone: t.phone, sidh_candidate_id: t.govt_candidate_id });
   const from = t.pipeline_status ?? "Fresh Lead";
-  if (from === target) throw new HttpError(409, `${t.name} is already at "${target}".`);
+  if (from === target) throw new HttpError(409, `${tName} is already at "${target}".`);
   // Computed once, before the bypass branch, so the bypass cannot skip the check the way it skips
   // the gates. Skipping GATES is what a bypass is for; writing a date from next year is not.
   const when = stampDate(opts.date);
@@ -3233,7 +3247,7 @@ export async function transitionTrainer(
       // what gets the profile bounced back by NSDC, which is the delay this pipeline exists to stop.
       const d = await trainerDocSummary(trainerId);
       if (!d.complete) {
-        throw new HttpError(409, `Rule T2: ${t.name} is still missing ${d.missing.join(", ")}. Collect every mandatory document before preparing the nomination.`);
+        throw new HttpError(409, `Rule T2: ${tName} is still missing ${d.missing.join(", ")}. Collect every mandatory document before preparing the nomination.`);
       }
       if (!t.nominated_for_location || !t.nominated_for_program) {
         throw new HttpError(409, "Rule T3: say which centre and job role this nomination is for - a nomination is always against a specific vacancy.");
@@ -3275,7 +3289,7 @@ export async function transitionTrainer(
             location: t.nominated_for_location || undefined,
             category: cat._id,
             amount: t.eligibility_payment_amount ?? 3250,
-            note: `NSDC eligibility payment for ${t.name}${t.payment_reference ? ` (ref ${t.payment_reference})` : ""}`,
+            note: `NSDC eligibility payment for ${tName}${t.payment_reference ? ` (ref ${t.payment_reference})` : ""}`,
             entered_by: opts.actor,
           });
         }
@@ -3309,7 +3323,7 @@ export async function transitionTrainer(
         .select("code status").lean<any[]>();
       if (booked.length) {
         throw new HttpError(409,
-          `Rule T7: ${t.name} is still assigned to ${booked.map((b) => `${b.code} (${b.status})`).join(", ")}. ` +
+          `Rule T7: ${tName} is still assigned to ${booked.map((b) => `${b.code} (${b.status})`).join(", ")}. ` +
           `Reassign ${booked.length === 1 ? "that batch" : "those batches"} to another trainer before dropping them.`);
       }
       t.dropped_reason = opts.reason;
@@ -3374,6 +3388,8 @@ export async function correctTrainerDates(
 ) {
   const t = await Trainer.findById(trainerId);
   if (!t) throw new HttpError(404, "Trainer not found");
+  // QA-1745 (REQ-389a): same separator as every other person mention in this file.
+  const tName = personLabel({ name: t.name, phone: t.phone, sidh_candidate_id: t.govt_candidate_id });
 
   // ALLOW-list, never a refuse-list. QA-660 (-200) was exactly this shape one door over: a guard
   // that listed the shapes to REJECT let 0 walk through into new Date(0) and stored 1 Jan 1970.
@@ -3432,8 +3448,8 @@ export async function correctTrainerDates(
     // the stage rather than announced every time.
     if (stage !== "Certified" && !!before.tot_done_on !== !!t.tot_done_on) {
       warnings.push(t.tot_done_on
-        ? `${t.name} is at "${stage}", not Certified, so this date alone now marks the TOT as done: the three TOT steps will DROP OUT of every plan regenerated from here${codes ? ` (${codes})` : ""}.`
-        : `${t.name} is at "${stage}", so clearing this date brings the three TOT steps BACK into every plan regenerated from here${codes ? ` (${codes})` : ""}.`);
+        ? `${tName} is at "${stage}", not Certified, so this date alone now marks the TOT as done: the three TOT steps will DROP OUT of every plan regenerated from here${codes ? ` (${codes})` : ""}.`
+        : `${tName} is at "${stage}", so clearing this date brings the three TOT steps BACK into every plan regenerated from here${codes ? ` (${codes})` : ""}.`);
     }
   }
 
@@ -3445,7 +3461,7 @@ export async function correctTrainerDates(
     const cat = await CostCategory.findOne({ name: "Trainer eligibility fee" }).lean<any>();
     const entry = cat ? await CostEntry.findOne({ trainer: t._id, category: cat._id }) : null;
     if (!entry) {
-      warnings.push(`There is no eligibility-fee entry in Costs for ${t.name} - a trainer moved by bypass never books one. This records the payment on the profile only.`);
+      warnings.push(`There is no eligibility-fee entry in Costs for ${tName} - a trainer moved by bypass never books one. This records the payment on the profile only.`);
     } else if (!t.paid_on) {
       // QA-687 (checker on qa-202): this arm used to fall through to "someone with cost rights has
       // to move it", which told a Costs-right holder they lacked a right they were holding. Clearing
