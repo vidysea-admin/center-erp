@@ -687,10 +687,10 @@ export async function addMemberChecked(batchId: string, candidateId: string, joi
   // The message names the fix, because a refusal that does not say what to do next is a dead end -
   // the -224 fault this project shipped two days ago was precisely a correct guard whose stated
   // remedy did not exist on screen.
-  const cand = await Candidate.findById(candidateId).select("name batch_interest").lean<any>();
+  const cand = await Candidate.findById(candidateId).select("name phone sidh_candidate_id batch_interest").lean<any>(); // QA-1749: REQ-389a separator fields
   if (cand?.batch_interest === "Future") {
     throw new HttpError(409,
-      `${cand.name ?? "This candidate"} is marked as interested in the Upcoming batch, so they are not being enrolled yet. ` +
+      `${personLabel(cand) || "This candidate"} is marked as interested in the Upcoming batch, so they are not being enrolled yet. ` +
       `Open their record and change "Interested in" to "The current batch" first — then add them.`);
   }
 
@@ -867,17 +867,17 @@ export async function updateEnrollment(memberId: string, patch: {
     }
     // 2026-08-11: eligibility hard-gates enrollment completion (assignment only warns).
     // Only definitive failures block — unknown DOB/education never do.
-    const cand = await Candidate.findById(m.candidate).select("name dob education last_training_date fee_paid_on").lean<any>();
+    const cand = await Candidate.findById(m.candidate).select("name phone sidh_candidate_id dob education last_training_date fee_paid_on").lean<any>(); // QA-1749: REQ-389a separator fields
     if (cand) {
       const defaults = await getDefaults();
       const elig = candidateEligibility(cand, defaults);
       if (!elig.eligible) {
-        throw new HttpError(409, `Candidate ${cand.name} is not eligible: ${elig.reasons.join("; ")}`);
+        throw new HttpError(409, `Candidate ${personLabel(cand)} is not eligible: ${elig.reasons.join("; ")}`);
       }
       // R-J (QA-049, CEO: "enrolled = fees paid"): gates only when the Defaults toggle is
       // ON — government-funded schemes charge the candidate nothing, so OFF is the default.
       if (defaults.fee_required_for_enrollment && !cand.fee_paid_on) {
-        throw new HttpError(409, `Rule 54: ${cand.name} has no fee payment on record, and this environment requires the fee before enrollment completes. Record the payment on the candidate first.`);
+        throw new HttpError(409, `Rule 54: ${personLabel(cand)} has no fee payment on record, and this environment requires the fee before enrollment completes. Record the payment on the candidate first.`);
       }
     }
   }
@@ -1330,8 +1330,8 @@ export async function validateDailyLog(batchId: string, log_date: Date, payload:
   for (const id of payload.present_member_ids) {
     if (!rosterIds.has(String(id))) {
       // Name who and when — the operator cannot act on "a present member" (audit F-007).
-      const m = await BatchMember.findById(id).populate("candidate", "name").lean<any>();
-      const who = m?.candidate?.name ?? "That candidate";
+      const m = await BatchMember.findById(id).populate("candidate", "name phone sidh_candidate_id").lean<any>(); // QA-1749
+      const who = personLabel(m?.candidate) || "That candidate";
       const when = D.toLocaleDateString("en-IN");
       throw new HttpError(400, m?.left_on
         ? `${who} left this batch on ${new Date(m.left_on).toLocaleDateString("en-IN")}, so they were not on the roster on ${when}. Untick them to save.`
@@ -1344,8 +1344,8 @@ export async function validateDailyLog(batchId: string, log_date: Date, payload:
     const presentSet = new Set(payload.present_member_ids.map(String));
     for (const id of payload.biometric_member_ids) {
       if (!presentSet.has(String(id))) {
-        const m = await BatchMember.findById(id).populate("candidate", "name").lean<any>();
-        throw new HttpError(400, `Rule 51: ${m?.candidate?.name ?? "That student"} is marked "biometric done" but not present — biometric done & not present cannot happen. Tick them present first, or clear the biometric tick.`);
+        const m = await BatchMember.findById(id).populate("candidate", "name phone sidh_candidate_id").lean<any>(); // QA-1749
+        throw new HttpError(400, `Rule 51: ${personLabel(m?.candidate) || "That student"} is marked "biometric done" but not present — biometric done & not present cannot happen. Tick them present first, or clear the biometric tick.`);
       }
     }
   }
@@ -1739,12 +1739,12 @@ export async function settleCertificatesFromFiles(batchId: string, actorId?: str
       batch: batchId, result: "Pass",
       certificate_file: { $nin: [null, ""] },
       certificate_status: "Pending",
-    }).populate("candidate", "name");
+    }).populate("candidate", "name phone sidh_candidate_id"); // QA-1749
     for (const row of stale) {
       row.certificate_status = "Issued";
       if (!row.certificate_date) row.certificate_date = new Date();
       await row.save();
-      await audit({ entity: "CandidateResult", entityId: row._id, field: "certificate_status", oldValue: "Pending", newValue: `Issued — the attached certificate file is the evidence (${row.candidate?.name ?? "candidate"})`, actor: actorId ?? null, actorType: "SYSTEM" });
+      await audit({ entity: "CandidateResult", entityId: row._id, field: "certificate_status", oldValue: "Pending", newValue: `Issued — the attached certificate file is the evidence (${personLabel(row.candidate) || "candidate"})`, actor: actorId ?? null, actorType: "SYSTEM" });
     }
     return stale.length;
   } catch (e) {
@@ -1979,7 +1979,7 @@ export async function upsertCandidateResult(batchId: string, memberId: string, p
   // its unmarked list from activeRoster, so a departed member is never in it and closing a batch
   // cannot trip this.
   if (member.left_on) {
-    const who = (await Candidate.findById(member.candidate).select("name").lean<any>())?.name ?? "That candidate";
+    const who = personLabel(await Candidate.findById(member.candidate).select("name phone sidh_candidate_id").lean<any>()) || "That candidate"; // QA-1749
     throw new HttpError(409,
       `${who} left this batch on ${new Date(member.left_on).toLocaleDateString("en-IN")}. `
       + "Their result stays on record exactly as it is and cannot be changed here. Nothing has been saved.");
@@ -2019,7 +2019,7 @@ export async function upsertCandidateResult(batchId: string, memberId: string, p
       const reason = String(patch.eligibility_override_reason ?? "").trim();
       if (!reason) {
         throw new HttpError(400,
-          `${v.name ?? "This candidate"} is Not eligible${v.detail ? ` — ${v.detail}` : " — they did not meet the attendance requirement"}. `
+          `${personLabel(v) || "This candidate"} is Not eligible${v.detail ? ` — ${v.detail}` : " — they did not meet the attendance requirement"}. `
           + "Passing them anyway is allowed, but the reason has to be recorded first.");
       }
       row.eligibility_override_reason = reason;
@@ -3812,7 +3812,7 @@ export async function batchAttendanceRows(batchId: string) {
 // batch and handed down, because a bulk mark of 45 candidates must not assemble this 45 times.
 export async function eligibilityByMember(batchId: string): Promise<Map<string, any>> {
   const { rows } = await batchAttendanceRows(batchId);
-  return new Map(rows.map((r) => [String(r.member_id), { ...r.verdict, name: r.name }]));
+  return new Map(rows.map((r) => [String(r.member_id), { ...r.verdict, name: r.name, phone: r.phone, sidh_candidate_id: r.sidh_candidate_id }])); // QA-1749: separator rides along
 }
 
 export function courseIsFinished(batch: any, portalWorkingDays: number | null | undefined): boolean {
@@ -3881,7 +3881,7 @@ export async function trainerTiesFor(locIds: unknown[], progIds?: unknown[]) {
   // centre x job role" is exactly the second copy this function was extracted to remove, so the
   // names come from here or the migration is only half done.
   const out = new Map<string, { nominated: number; certified: number; nsdc: number; in_pipeline: number;
-    in_pipeline_nominated: number; trainers: { _id: string; name: string; stage: string }[] }>();
+    in_pipeline_nominated: number; trainers: { _id: string; name: string; label: string; stage: string }[] }>();
   if (!locIds.length) return out;
 
   const nomMatch: Record<string, unknown> = { nominated_for_location: { $in: locIds }, active: true };
@@ -3896,16 +3896,21 @@ export async function trainerTiesFor(locIds: unknown[], progIds?: unknown[]) {
   if (progIds) { nomMatch.nominated_for_program = { $in: progIds }; batchMatch.program = { $in: progIds }; }
 
   const [nominatedRows, batches] = await Promise.all([
-    Trainer.find(nomMatch).select("_id name pipeline_status nominated_for_location nominated_for_program").lean<any[]>(),
+    Trainer.find(nomMatch).select("_id name phone govt_candidate_id pipeline_status nominated_for_location nominated_for_program").lean<any[]>(), // QA-1749: REQ-389a separator
     Batch.find(batchMatch).select("location program trainer").lean<any[]>(),
   ]);
   // The batch only carries the trainer's id; its pipeline_status decides which counter it lands in.
   const batchTrainerIds = [...new Set(batches.map((b) => String(b.trainer)))];
   const batchTrainers = batchTrainerIds.length
-    ? await Trainer.find({ _id: { $in: batchTrainerIds }, active: true }).select("_id name pipeline_status").lean<any[]>()
+    ? await Trainer.find({ _id: { $in: batchTrainerIds }, active: true }).select("_id name phone govt_candidate_id pipeline_status").lean<any[]>() // QA-1749
     : [];
   const statusById = new Map(batchTrainers.map((t) => [String(t._id), String(t.pipeline_status ?? "")]));
   const nameById = new Map<string, string>([...nominatedRows, ...batchTrainers].map((t: any) => [String(t._id), String(t.name ?? "")]));
+  // QA-1749 (REQ-389a): the LABEL rides alongside the raw name, because locations/[id] renders this
+  // array as a numbered trainer list an operator acts on - a bare name there cannot separate two
+  // people. `name` is kept for sorting and for any consumer that wants the raw value.
+  const labelById = new Map<string, string>([...nominatedRows, ...batchTrainers].map((t: any) =>
+    [String(t._id), personLabel({ name: t.name, phone: t.phone, sidh_candidate_id: t.govt_candidate_id })]));
 
   // Keyed per (centre x job role) then per TRAINER, so a trainer who is both nominated here and
   // running a batch here counts ONCE. A union that double-counted would replace one wrong number
@@ -3938,7 +3943,7 @@ export async function trainerTiesFor(locIds: unknown[], progIds?: unknown[]) {
 
   for (const [k, trainers] of seen) {
     let nominated = 0, certified = 0, in_pipeline = 0, in_pipeline_nominated = 0, nsdc = 0;
-    const people: { _id: string; name: string; stage: string }[] = [];
+    const people: { _id: string; name: string; label: string; stage: string }[] = [];
     for (const [id, st] of trainers) {
       if ((NOMINATED_STATES as readonly string[]).includes(st)) nominated++;
       // QA-1284: our own answer to the client's "Nominated to NSDC" column, counted from the
@@ -3949,7 +3954,7 @@ export async function trainerTiesFor(locIds: unknown[], progIds?: unknown[]) {
         in_pipeline++;
         if (nominatedOnly.has(`${k}|${id}`)) in_pipeline_nominated++;
       }
-      people.push({ _id: id, name: nameById.get(id) ?? "", stage: st });
+      people.push({ _id: id, name: nameById.get(id) ?? "", label: labelById.get(id) || (nameById.get(id) ?? ""), stage: st });
     }
     people.sort((a, b) => a.name.localeCompare(b.name));
     out.set(k, { nominated, certified, nsdc, in_pipeline, in_pipeline_nominated, trainers: people });

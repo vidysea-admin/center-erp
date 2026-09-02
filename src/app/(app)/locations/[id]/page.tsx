@@ -6,6 +6,8 @@ import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, Se
 import { Activity } from "@/components/activity";
 import { usePerms } from "@/components/shell";
 import Link from "next/link";
+// QA-1749 (REQ-389a): this screen renders a numbered trainer list an operator acts on.
+import { personLabel } from "@/lib/person";
 
 // -115 (QA-221): a RETIRED programme (active === false) leaves the pickers where something new is
 // created, but never disappears from a record that already points at one — editing such a record must
@@ -552,7 +554,7 @@ function TrainersInfra({ locationId, setError }: any) {
               const people: any[] = (r.trainers?.people ?? []).length
                 ? r.trainers.people.filter((t: any) => t.stage !== "Dropped")
                 : trainers.filter((t: any) => (t.nominated_for_program?._id ?? t.nominated_for_program) === progId && t.pipeline_status !== "Dropped")
-                    .map((t: any) => ({ _id: t._id, name: t.name, stage: t.pipeline_status }));
+                    .map((t: any) => ({ _id: t._id, name: t.name, label: personLabel({ name: t.name, phone: t.phone, sidh_candidate_id: t.govt_candidate_id }), stage: t.pipeline_status }));
               const named = people;
               const required = r.trainers?.required ?? Math.max(named.length, 1);
               const slots = Array.from({ length: Math.max(required, named.length) }, (_, i) => named[i] ?? null);
@@ -568,7 +570,7 @@ function TrainersInfra({ locationId, setError }: any) {
                         <span className="w-16 shrink-0 text-xs text-gray-400">Trainer {i + 1}</span>
                         {t ? (
                           <Link href={`/trainers/${t._id}`} className="flex items-center gap-1.5 text-blue-700 hover:underline">
-                            {t.name}
+                            {t.label || t.name}
                             <span className={`rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${
                               t.stage === "Certified" ? "border-green-200 bg-green-50 text-green-700" : "border-amber-200 bg-amber-50 text-amber-700"}`}>
                               {t.stage || "—"}

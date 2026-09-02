@@ -871,6 +871,61 @@ console.log("\n--- -155 (QA-414 S1 / 415 / 424 / 425 / 426): the portal ID lands
       pipelineSentence.includes(`FL1745 TWIN ${stamp} (${tr2.phone})`), pipelineSentence);
   }
 
+  // QA-1749 + QA-1751 (checker FAIL on qa-1745 cycle 1). Two separate lessons pinned here:
+  //   QA-1749 - the trainer sweep missed the CANDIDATE names in the same file, because its verify
+  //     grep was scoped to `${t.name}`/`${trainer.name}` - the exact class being fixed. The Rule 51
+  //     attendance refusal below is the surface REQ-389's founding failure story is about.
+  //   QA-1751 - a `.select()` that stops fetching the separator fields degrades the message to a
+  //     bare name while tsc, a tree-wide grep and the whole suite all stay green. Only a
+  //     behavioural pin catches it, so the earliest-start note gets one.
+  {
+    const dupName = `FL1749 SAME ${stamp}`;
+    const cA = (await req(admin, "POST", "/api/candidates", { name: dupName, phone: phone(), location: loc._id, program: prog._id }, 201)).data.item;
+    const cB = (await req(admin, "POST", "/api/candidates", { name: dupName, phone: phone(), location: loc._id, program: prog._id }, 201)).data.item;
+    const tr1749 = (await req(admin, "POST", "/api/trainers", {
+      name: `FL1749 TR ${stamp}`, phone: phone(), skills: [`fl1749${stamp}`],
+      nominated_for_location: loc._id, nominated_for_program: prog._id,
+    }, 201)).data.item;
+
+    const day1749 = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+    const room1749 = (await req(admin, "POST", `/api/locations/${loc._id}/rooms`, { name: `FL1749 Room ${stamp}`, type: "Classroom", capacity: 30 }, 201)).data.item;
+    // target_size 2 with 2 enrolled = 100% roster, and a room, so the batch can reach Active
+    // (readiness gates room_assigned + roster_80pct).
+    const created = (await req(admin, "POST", "/api/batches", {
+      location: loc._id, program: prog._id, trainer: tr1749._id, room: room1749._id, planned_start: day1749, target_size: 2,
+    }, 201)).data;
+
+    // QA-1751: the trainer-availability note comes from earliestPossibleStart's OWN .select(),
+    // a different fetch from the two the pipeline warning uses. Reverting just that .select()
+    // leaves tsc/grep/suite green, so this pin is the only thing standing under it.
+    // Targeted at the availability SENTENCE, not the joined blob. The blob also carries the
+    // pipeline warning, which names the same trainer with the same separator from a DIFFERENT
+    // fetch - so a blob-wide assertion passes even with this .select() reverted. That mistake was
+    // made twice in this unit (cycle 1 on the pipeline sentence, cycle 2 here) before being caught
+    // by mutation both times; a pin that survives a revert of the line it names pins nothing.
+    const noteText = String(created.warning ?? "");
+    const availSentence = (noteText.match(/[^.]*(?:is free from|has no availability date on file|is at the \d+-batch cap)[^.]*/) ?? [""])[0];
+    ok("QA-1751: the earliest-start trainer note fires at all", availSentence.length > 0, noteText);
+    ok("QA-1751: ...and THAT sentence carries the separator, not a bare name",
+      availSentence.includes(`FL1749 TR ${stamp} (${tr1749.phone})`), availSentence || noteText);
+
+    const b1749 = created.item;
+    const mA = (await req(admin, "POST", `/api/batches/${b1749._id}/members`, { candidate: cA._id }, 201)).data.item;
+    const mB = (await req(admin, "POST", `/api/batches/${b1749._id}/members`, { candidate: cB._id }, 201)).data.item;
+    for (const m of [mA, mB]) await req(admin, "PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+    await req(admin, "POST", `/api/batches/${b1749._id}/transition`, { target: "Ready" }, 200);
+    await req(admin, "POST", `/api/batches/${b1749._id}/transition`, { target: "Active" }, 200);
+
+    // QA-1749 / Rule 51: biometric-done but not present. Two candidates share a name, so a bare
+    // name in this refusal cannot tell the operator which student to tick.
+    const r51 = await req(admin, "POST", `/api/batches/${b1749._id}/logs`, {
+      log_date: day1749, present_member_ids: [String(mA._id)], biometric_member_ids: [String(mB._id)], actual_topic: "QA-1749",
+    }, 400);
+    ok("QA-1749: the Rule 51 attendance refusal names the student at all", r51.data.error?.includes("FL1749 SAME"), JSON.stringify(r51.data));
+    ok("QA-1749: ...and separates the two same-name students by phone - the surface REQ-389 was written for",
+      r51.data.error?.includes(cB.phone) && !r51.data.error?.includes(cA.phone), JSON.stringify(r51.data));
+  }
+
   // Umesh ("blank ko accept hi kyun kar raha hai - it should ask"): a mapped column whose cells
   // are EMPTY is reported per column - never blocked (a fresh roster legitimately has no CANs),
   // never silent (an all-blank mapped column is what a mis-aligned sheet looks like).
