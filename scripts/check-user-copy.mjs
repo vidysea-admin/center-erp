@@ -4256,7 +4256,15 @@ for (const file of walk(root)) {
   // Derived from the PORTAL rows, not from the member-gated awaiting_match flag: that one read 2 on
   // Bhadohi while the import screen read 3, because one portal row matched no roster member at all
   // and therefore sat in no member row. Counting members can never see it.
-  const rulesDerives = rulesSrc.includes("awaitingByName.values()") && rulesSrc.includes("unresolvedPortalRows");
+  // QA-1772 (checker, cycle 1): it is NOT enough that rules.ts derives this from portal rows - it
+  // must derive it from rows scoped to THIS BATCH. The shared helper's other arm also matches
+  // { location, batch: null }, which is correct for the member-gated awaiting_match map and WRONG
+  // for a count printed on one batch's screen: a location-scoped import of 2 unmatched rows put
+  // "2 portal rows not matched" on two unrelated batches at that centre. So: the count must reduce
+  // over the batch-only call, and must NOT reduce over the location-scoped map.
+  const rulesDerives = rulesSrc.includes("unresolvedPortalRowsByName({ batchId })")
+    && rulesSrc.includes("[...unresolvedHereByName.values()]")
+    && !rulesSrc.includes("[...awaitingByName.values()]");
   const bannerShows = pageSrc.includes("att.unresolved_portal_rows > 0");
   if (routeRead && routeExposes && rulesDerives && bannerShows) passed++;
   else {

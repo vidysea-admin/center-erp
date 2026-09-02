@@ -3752,6 +3752,10 @@ export async function batchAttendanceRows(batchId: string) {
   const govtByCand = new Map(govtRows.map((r) => [String(r.candidate), r]));
 
   const awaitingByName = await unresolvedPortalRowsByName({ batchId, locationId: batch.location });
+  // QA-1772: deliberately a SECOND call, scoped to this batch alone (no locationId). The map above
+  // must keep its location arm - that is how a member with no hours learns their row arrived on a
+  // centre-wide import - but a COUNT printed on one batch's Overview may only describe that batch.
+  const unresolvedHereByName = await unresolvedPortalRowsByName({ batchId });
   const sameNameCount = new Map<string, number>();
   for (const m of members) {
     if (m.left_on) continue;
@@ -3805,13 +3809,21 @@ export async function batchAttendanceRows(batchId: string) {
     };
   });
 
-  // QA-1763: the number the govt-attendance import screen prints ("N not matched to an enrolled
-  // student") and the batch Overview never did. It is NOT the same as counting rows with
-  // awaiting_match: that is member-gated, so a portal row whose name matches NOBODY on the roster
-  // (live: Ashvini Vijay Chand Yadav, CAN_41052988, Bhadohi) appears in no member row at all and is
-  // invisible to it - 2 against the import screen's 3. These are portal rows, counted where they
-  // actually live, which is why the two screens can finally agree.
-  const unresolvedPortalRows = [...awaitingByName.values()].reduce((a, v) => a + v.count, 0);
+  // QA-1763: the count the batch Overview prints beside "qualified for assessment". It is NOT the
+  // count of rows carrying awaiting_match: that flag is member-gated, so a portal row whose name
+  // matches NOBODY on the roster (live: Ashvini Vijay Chand Yadav, CAN_41052988, Bhadohi) sits in no
+  // member row at all and is invisible to it - 2 where the import screen said 3.
+  //
+  // QA-1773: this is a BATCH-LEVEL AGGREGATE and it deliberately does NOT equal any single import
+  // screen's not_enrolled_count. The import screen answers "in THIS FILE, how many rows reached no
+  // student"; this answers "on THIS BATCH, how many portal rows are still unattached", across every
+  // import, deduped newest-import-per-name. On a batch with one import they coincide, which is the
+  // live Bhadohi case this was built for; on a batch with two they will not (measured by the
+  // checker: 3 here against 2 and 1 on the two import screens). Two honest answers to two different
+  // questions - so the screen must not imply it is quoting the import screen, and its label says
+  // "on this batch". An earlier version of this comment claimed the two screens "can finally agree";
+  // that was unproven and, on a multi-import batch, false.
+  const unresolvedPortalRows = [...unresolvedHereByName.values()].reduce((a, v) => a + v.count, 0);
 
   return { batch, days, rows, requiredHours, minPct, minPctSource, hoursPerDay, portalWorkingDays, finished, govtRows, unresolvedPortalRows };
 

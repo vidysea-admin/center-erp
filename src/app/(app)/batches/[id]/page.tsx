@@ -224,7 +224,9 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
   // activeMembers). This one did not, so a batch with a dropped member printed a different portal
   // fraction on the Overview than on the tab beside it - and the whole point of dropping people is
   // to make these counts agree with the government portal.
-  const activeAttMembers = (att?.members ?? []).filter((m: any) => !m.left_on);
+  // QA-1774: activeOnly(), not a fourth hand-rolled !left_on in this same file - ARCHITECTURE.md
+  // section 3 is about exactly this, and the Attendance tab two thousand lines below already uses it.
+  const activeAttMembers = activeOnly(att?.members ?? []);
   const withPortal = activeAttMembers.filter((m: any) => m.govt);
   const portalDays = withPortal.length ? Math.max(0, ...withPortal.map((m: any) => Number(m.govt?.working_days ?? 0))) : 0;
   // Umesh role matrix: "no batch edit" for principal/SPOC — the server 403s regardless
@@ -542,7 +544,7 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
           {att && att.unresolved_portal_rows > 0 && (
             <a href="/govt-attendance" className="rounded-full bg-amber-100 px-2 py-0.5 font-medium text-amber-900 underline-offset-2 hover:underline"
                title="These portal rows carry hours but are not attached to anyone on this roster, so they are not in the qualified count. Resolve them on the Government Attendance screen.">
-              · {att.unresolved_portal_rows} portal row{att.unresolved_portal_rows === 1 ? "" : "s"} not matched to a student — resolve
+              · {att.unresolved_portal_rows} portal row{att.unresolved_portal_rows === 1 ? "" : "s"} on this batch not matched to a student — resolve
             </a>
           )}
         </div>
@@ -571,8 +573,8 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
               {/* QA-1763: the tile carries the same caveat as the banner above it. A count and the
                   list beneath it must never answer different questions (REQ-418). */}
               {att && att.unresolved_portal_rows > 0 && (
-                <div className="text-[11px] font-medium text-amber-700" title="Portal rows with hours that are not attached to anyone on this roster.">
-                  +{att.unresolved_portal_rows} unmatched portal row{att.unresolved_portal_rows === 1 ? "" : "s"}
+                <div className="text-[11px] font-medium text-amber-700" title="Portal rows imported against THIS batch that carry hours but are attached to nobody on its roster. Counted across every import for this batch, so it is not necessarily the figure any single import screen shows.">
+                  +{att.unresolved_portal_rows} unmatched on this batch
                 </div>
               )}
             </div>
