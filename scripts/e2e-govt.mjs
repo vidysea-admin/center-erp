@@ -504,6 +504,30 @@ ok("all 7 rows persisted", detail.data.rows?.length === 7, `got ${detail.data.ro
   // is how a pin passes on an empty payload (QA-429).
   ok("QA-1763: ...and it is NON-ZERO on a batch that genuinely has unattached portal rows",
     att.data.unresolved_portal_rows > 0, String(att.data.unresolved_portal_rows));
+  // The dropout SUGGESTION (client call 2026-09-02). The portal export is cumulative, so the only
+  // absence signal it can honestly carry is that a person's running total STOPPED MOVING between
+  // two imports - which is exactly the shape this suite already creates, because the A-11 block
+  // re-imports the same file. Nothing here drops anybody; the ERP proposes and a person disposes.
+  {
+    const mem = att.data.members ?? [];
+    // Non-emptiness first: every assertion below is over a collection, and .every() on an empty
+    // array is true - the exact way a pin certifies nothing (QA-429).
+    ok("dropout: the attendance payload actually carried members to judge", mem.length > 0, String(mem.length));
+    ok("dropout: every member row carries the dropout_signal field (null when there is no signal)",
+      mem.length > 0 && mem.every((m) => "dropout_signal" in m),
+      JSON.stringify(mem.filter((m) => !("dropout_signal" in m)).map((m) => m.name)));
+    const flagged = mem.filter((m) => m.dropout_signal);
+    ok("dropout: re-importing the SAME file leaves at least one person flagged stopped_coming - a cumulative total that did not move",
+      flagged.length > 0 && flagged.every((m) => m.dropout_signal.stopped_coming === true),
+      JSON.stringify(flagged.map((m) => [m.name, m.dropout_signal])));
+    // The two exclusions that keep this a SUGGESTION rather than a hazard.
+    ok("dropout: a member who already met the hours bar is NEVER suggested for dropping",
+      mem.filter((m) => m.qualified).every((m) => m.dropout_signal === null),
+      JSON.stringify(mem.filter((m) => m.qualified && m.dropout_signal).map((m) => m.name)));
+    ok("dropout: nobody is suggested on internally-estimated hours - only the portal meter decides (QA-085)",
+      flagged.every((m) => m.basis === "portal"),
+      JSON.stringify(flagged.map((m) => [m.name, m.basis])));
+  }
   ok("R-D: the hours threshold is derived and positive",
     att.data.required_hours > 0 && att.data.min_attendance_pct > 0,
     JSON.stringify({ r: att.data.required_hours, pct: att.data.min_attendance_pct }));

@@ -3730,6 +3730,69 @@ export function eligibilityVerdict(opts: {
 // second time, in a second place, which is the drift ARCHITECTURE.md 3.1 catalogues (QA-273 is the
 // same shape - two doors, one rule, and they disagreed). Extracted here so the route and the write
 // door read ONE derivation. The route's output is unchanged; it now calls this and spreads the rows.
+/**
+ * The dropout SUGGESTION, and the emphasis matters: this proposes, a person disposes. Nothing in
+ * this file drops anybody - the client and Umesh settled that on the call 2026-09-02, both sides,
+ * in the same words: "auto drop nahi karega system" / "wo humse click karwayega tabhi karega".
+ *
+ * The client's MAIL asked for "not attended for more than one day = dropout". That is not
+ * buildable from what the government portal gives us and it is not what they actually do. Two
+ * reasons, and the call gave both:
+ *
+ *   1. "jo candidates ek din ke baad gayab ho gaye ... unko remove kar dete hain" - people who
+ *      stopped coming are inflating the enrolled count. Cumulative days-present that has NOT MOVED
+ *      between two imports is exactly that, and it is the only absence signal a cumulative export
+ *      can honestly carry.
+ *   2. "ye nau nau ghante wale to kabhi complete nahi kar payenge ... ab to do-teen din hi batch
+ *      chalenge" - the trainer's own arithmetic: hours that cannot reach the bar in the days left.
+ *      That one is pure projection and needs no absence data at all.
+ *
+ * Deliberately NOT suggested: anyone already qualified (they met the bar - dropping them would
+ * destroy the very outcome), anyone already departed, and anyone whose hours are an internal
+ * estimate rather than the portal's meter (QA-085: an estimate never decides anything).
+ */
+export function dropoutSignalFor(x: {
+  left_on: unknown; qualified: boolean | null; basis: string | null;
+  latest?: { total_days_present?: number | null } | null;
+  prev?: { total_days_present?: number | null } | null;
+  attendedHours: number | null; requiredHours: number;
+  hoursPerDay: number | null; programDays: number | null; portalWorkingDays: number | null;
+}): null | {
+  stopped_coming: boolean; cannot_reach_bar: boolean;
+  days_present: number | null; days_present_prev: number | null;
+  remaining_days: number | null; projected_hours: number | null;
+} {
+  if (x.left_on) return null;            // already gone; nothing to suggest
+  if (x.qualified === true) return null; // met the bar - never suggest dropping a pass
+  if (x.basis !== "portal") return null; // QA-085: an estimate decides nothing, here least of all
+
+  const days = x.latest?.total_days_present ?? null;
+  const prevDays = x.prev?.total_days_present ?? null;
+  // Strictly "has not moved": equal, or (defensively) gone backwards. A single import gives no
+  // prior observation at all, so prevDays is null and this signal stays FALSE - it is not evidence
+  // of attendance, it is absence of evidence, and the two must not be confused on a screen that
+  // proposes removing someone from a batch.
+  const stopped = days != null && prevDays != null && days <= prevDays;
+
+  const remaining = x.programDays != null && x.portalWorkingDays != null
+    ? Math.max(0, x.programDays - x.portalWorkingDays)
+    : null;
+  const projected = x.attendedHours != null && remaining != null && x.hoursPerDay != null
+    ? x.attendedHours + remaining * x.hoursPerDay
+    : null;
+  const cannotReach = projected != null && projected < x.requiredHours;
+
+  if (!stopped && !cannotReach) return null;
+  return {
+    stopped_coming: stopped,
+    cannot_reach_bar: cannotReach,
+    days_present: days,
+    days_present_prev: prevDays,
+    remaining_days: remaining,
+    projected_hours: projected == null ? null : Math.round(projected),
+  };
+}
+
 export async function batchAttendanceRows(batchId: string) {
   const batch = await Batch.findById(batchId).populate("program", "name hours duration_days scheme").lean<any>();
   if (!batch) throw new HttpError(404, "Batch not found");
@@ -3747,9 +3810,29 @@ export async function batchAttendanceRows(batchId: string) {
   const candIds = members.map((m) => m.candidate?._id).filter(Boolean);
   const govtRows = await GovtAttendanceRow.find({ candidate: { $in: candIds }, match_status: "Matched" })
     .sort({ createdAt: 1 })
-    .select("candidate total_days_present total_working_days total_hours_minutes total_hours_raw createdAt")
+    .select("candidate total_days_present total_working_days total_hours_minutes total_hours_raw createdAt import")
     .lean<any[]>();
   const govtByCand = new Map(govtRows.map((r) => [String(r.candidate), r]));
+  const govtByCandRunning = new Map<string, any>();
+  // Dropout signal (client call 2026-09-02, filed verbatim in qa/feedback-inbox.md): the portal
+  // export is CUMULATIVE per person (models/index.ts:964-968) - it never says WHICH days someone
+  // missed, so "absent two days running" is not computable from it and the mail's wording could not
+  // be built as written. What a cumulative total CAN show is that it stopped moving. So keep the
+  // previous import's row beside the newest one, per candidate, and compare.
+  // `import` is now selected for exactly this: two rows from the SAME upload are one observation,
+  // not two, so a re-import of the same file must not look like a second week of no progress.
+  const govtPrevByCand = new Map<string, any>();
+  {
+    const seenImportForCand = new Map<string, string>();
+    for (const r of govtRows) {
+      const cid = String(r.candidate);
+      const imp = String(r.import ?? "");
+      const lastImp = seenImportForCand.get(cid);
+      if (lastImp !== undefined && lastImp !== imp) govtPrevByCand.set(cid, govtByCandRunning.get(cid));
+      seenImportForCand.set(cid, imp);
+      govtByCandRunning.set(cid, r);
+    }
+  }
 
   const awaitingByName = await unresolvedPortalRowsByName({ batchId, locationId: batch.location });
   // QA-1772: deliberately a SECOND call, scoped to this batch alone (no locationId). The map above
@@ -3806,6 +3889,18 @@ export async function batchAttendanceRows(batchId: string) {
       }),
       awaiting_match: awaiting,
       enrollment_status: m.enrollment_status ?? null,
+      dropout_signal: dropoutSignalFor({
+        left_on: m.left_on ?? null,
+        qualified: h.qualified,
+        basis: h.basis,
+        latest: g,
+        prev: m.candidate ? govtPrevByCand.get(String(m.candidate._id)) : undefined,
+        attendedHours: h.attended_hours,
+        requiredHours,
+        hoursPerDay,
+        programDays: batch.program?.duration_days ?? null,
+        portalWorkingDays,
+      }),
     };
   });
 

@@ -2129,8 +2129,57 @@ function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
     </div>
   );
   const portalAsOf = activeMembers.map((m: any) => m.govt?.as_of).filter(Boolean).sort().pop();
+  // The dropout SUGGESTION (client call 2026-09-02, verbatim in qa/feedback-inbox.md). The centre
+  // removes people from the portal who stopped coming, because otherwise they keep counting as
+  // enrolled - "wo saare count ho jayenge aur hamara enrol kehlayenge ... aapke loss pe loss hai".
+  // This proposes; a person disposes. NOTHING here drops anybody and nothing here writes: both
+  // sides settled that on the call - "auto nahi karega, wo humse click karwayega tabhi karega".
+  const dropoutSuggestions = activeMembers.filter((m: any) => m.dropout_signal);
   return (
     <div className="space-y-3">
+      {dropoutSuggestions.length > 0 && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+          <div className="mb-2 font-semibold">
+            {dropoutSuggestions.length} candidate{dropoutSuggestions.length === 1 ? "" : "s"} may have stopped attending
+          </div>
+          <ul className="space-y-1.5">
+            {dropoutSuggestions.map((m: any) => {
+              const d = m.dropout_signal;
+              const why: string[] = [];
+              // Stated as an observation, never a verdict: the screen must not claim to know that
+              // somebody left, only what the portal file stopped showing.
+              if (d.stopped_coming) {
+                why.push(
+                  d.days_present === d.days_present_prev
+                    ? "still " + d.days_present + " day" + (d.days_present === 1 ? "" : "s") + " attended, unchanged since the previous import"
+                    : "days attended went from " + d.days_present_prev + " to " + d.days_present + " between imports",
+                );
+              }
+              if (d.cannot_reach_bar) {
+                why.push(
+                  d.remaining_days === 0
+                    ? "no scheduled days left, at " + (m.attended_hours ?? 0) + " of " + data.required_hours + " hours"
+                    : "even attending every one of the " + d.remaining_days + " day" + (d.remaining_days === 1 ? "" : "s") + " left reaches about " + d.projected_hours + " of " + data.required_hours + " hours",
+                );
+              }
+              return (
+                <li key={m.member_id} className="flex flex-wrap items-baseline gap-x-2">
+                  <span className="font-medium">{m.name}</span>
+                  {m.phone && <span className="text-amber-700">{m.phone}</span>}
+                  <span className="text-amber-800">{"\u2014"} {why.join("; ")}</span>
+                </li>
+              );
+            })}
+          </ul>
+          <p className="mt-2 border-t border-amber-200 pt-2 text-amber-800">
+            Nobody is dropped automatically. This is read from the government attendance file, which
+            gives a running total per person and never says which days were missed{"\u2014"}so it is
+            what the file stopped showing, not a record of absence. Drop them from the Candidates tab,
+            where a date and a reason are recorded.
+            {onGo && <> <button type="button" className="underline underline-offset-2" onClick={() => onGo("Candidates")}>Open Candidates</button></>}
+          </p>
+        </div>
+      )}
       {/* -208 (Umesh, 23/08): "even attendance wale tab me bhi vo kar de". Same component as the
           Closure tab, mounted where the centre works every day - one widget, two homes. It
           renders nothing when there is no gap. */}
