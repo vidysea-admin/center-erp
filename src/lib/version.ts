@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-285";
+export const RELEASE = "2026.08.14-286";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -158,6 +158,16 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "about how a candidate is dropped from a batch has changed.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-286 closes a gap the -285 fix opened. Scoping the batch Overview's unmatched-portal-row "  +
+  "caveat to a single batch was correct - a government-attendance file uploaded against a whole "  +
+  "centre had been putting the same warning on every batch there. But it meant rows from a "  +
+  "centre-wide upload that match nobody stopped appearing on any batch's Overview at all, which "  +
+  "is the exact complaint that started this: a centre's qualified count reading lower than the "  +
+  "government portal's, with nothing on the screen explaining why. The Overview now carries a "  +
+  "second line for exactly that case, worded so it is never read as part of the batch's own "  +
+  "figure: portal rows filed against the centre, attached to nobody, are named separately and "  +
+  "linked to the same place to resolve them.";
+const RELEASE_NOTE_ARCHIVE_285 =
   "-285 finishes what -284 started, on the one screen where naming a person decides money. On a "  +
   "batch's Attendance list a student's phone number now always sits under their name, with their "  +
   "portal Candidate ID beside it. Before, the ID replaced the phone the moment a student had one - "  +
@@ -1249,6 +1259,9 @@ const RELEASE_NOTE_ARCHIVE =
   // -284: ARCHIVE_283 wired in here in the SAME bump that declared it, same discipline -
   // QA-265/-247/-256 record what happens when a bump declares an archive and forgets this line.
   // -285: ARCHIVE_284 wired in here in the SAME bump that declared it, same discipline.
+  // -286: ARCHIVE_285 wired in here in the SAME bump that declared it, same discipline -
+  // QA-265/-247/-256 record what happens when a bump declares an archive and forgets this line.
+  RELEASE_NOTE_ARCHIVE_285 + " " +
   RELEASE_NOTE_ARCHIVE_284 + " " +
   RELEASE_NOTE_ARCHIVE_283 + " " +
   RELEASE_NOTE_ARCHIVE_282 + " " +
