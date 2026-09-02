@@ -58,7 +58,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
   // leaving this one behind would have shipped the disagreement rather than the fix. It reads
   // `trainerTiesFor` now — the same function, the same trainer-level de-duplication (a trainer both
   // nominated here AND running a batch here counts once), and the same `NOMINATED_STATES`.
-  const byPosition = new Map<string, { counts: Record<string, number>; names: Record<string, { _id: string; name: string; stage: string }[]> }>();
+  const byPosition = new Map<string, { counts: Record<string, number>; names: Record<string, { _id: string; name: string; label: string; stage: string }[]> }>(); // QA-1753: label rides through
   if (rows.length) {
     const ties = await trainerTiesFor(
       [...new Set(rows.map((t) => t.location._id))],
@@ -66,7 +66,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
     );
     for (const [k, v] of ties) {
       const counts: Record<string, number> = {};
-      const names: Record<string, { _id: string; name: string; stage: string }[]> = {};
+      const names: Record<string, { _id: string; name: string; label: string; stage: string }[]> = {};
       for (const t of v.trainers) {
         const bucket = STAGE_BUCKETS[t.stage || "Fresh Lead"];
         if (!bucket) continue; // Dropped never counts toward a position

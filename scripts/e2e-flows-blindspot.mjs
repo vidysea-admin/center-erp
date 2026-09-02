@@ -921,6 +921,21 @@ console.log("\n--- -155 (QA-414 S1 / 415 / 424 / 425 / 426): the portal ID lands
     const r51 = await req(admin, "POST", `/api/batches/${b1749._id}/logs`, {
       log_date: day1749, present_member_ids: [String(mA._id)], biometric_member_ids: [String(mB._id)], actual_topic: "QA-1749",
     }, 400);
+    // QA-1755 / QA-1753: the FOURTH widened .select() is trainerTiesFor's own, and reverting it
+    // left the whole suite green while BOTH its consumer screens (locations/[id] and the trainers
+    // Open Positions drawer) silently degraded to bare names. One API-level pin on the payload
+    // covers both screens, because both read this same array.
+    // open-positions is driven by LocationTarget rows (tc_status Approved at an Approved centre),
+    // so the fixture needs one or the payload is empty and the pin below passes vacuously on an
+    // empty array - which is exactly what the first draft of this block did.
+    await req(admin, "PUT", `/api/locations/${loc._id}/targets`, { program: prog._id, approved_target: 40, trainers_required: 2, tc_id: `TC1755${stamp}`, tc_status: "Approved" }, 200);
+    const posItems = (await req(admin, "GET", "/api/open-positions?approved=all", undefined, 200)).data.items ?? [];
+    const allStaged = posItems.flatMap((p) => Object.values(p.stage_trainers ?? {}).flat());
+    const staged1749 = allStaged.filter((t) => String(t?.name ?? "").includes(`FL1749 TR ${stamp}`));
+    ok("QA-1755: the trainer reaches the open-positions payload at all", staged1749.length > 0, JSON.stringify(allStaged.slice(0, 4)));
+    ok("QA-1755: ...and every staged trainer carries a `label` separator, not just a bare name - the field BOTH the locations grid and the Open Positions drawer render",
+      staged1749.every((t) => String(t.label ?? "").includes(`(${tr1749.phone})`)), JSON.stringify(staged1749));
+
     ok("QA-1749: the Rule 51 attendance refusal names the student at all", r51.data.error?.includes("FL1749 SAME"), JSON.stringify(r51.data));
     ok("QA-1749: ...and separates the two same-name students by phone - the surface REQ-389 was written for",
       r51.data.error?.includes(cB.phone) && !r51.data.error?.includes(cA.phone), JSON.stringify(r51.data));

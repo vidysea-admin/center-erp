@@ -479,7 +479,7 @@ function BatchesInner() {
                     </div>}
                   </span>);
                 })() : <span className="text-xs text-gray-400">— none yet</span> },
-              { key: "trainer", label: "Trainer", sortable: true, sortValue: (r: any) => r.trainer?.name ?? null, render: (r: any) => r.trainer?.name ?? "—" },
+              { key: "trainer", label: "Trainer", sortable: true, sortValue: (r: any) => r.trainer?.name ?? null, render: (r: any) => r.trainer?.label || r.trainer?.name || "—" }, // QA-1754 (REQ-389a): sortValue stays the raw name so ordering is unchanged
               { key: "planned_start", label: "Start", sortable: true, sortValue: (r: any) => r.planned_start ? new Date(r.planned_start).getTime() : null, render: (r: any) => fmtDate(r.planned_start) },
               // 2026-08-13 (Manish): source link per row — click lands on that sheet tab.
               // QA-022: "Entered in ERP" told nobody anything — an app-created row's

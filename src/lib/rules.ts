@@ -4028,7 +4028,7 @@ export async function planTrackerRows(scope: Record<string, unknown> = {}) {
     .populate("location", "name code")
     .populate("program", "name code scheme")
     .populate("trainer",
-      "name tr_id pipeline_status sidh_profile_verified_on eligibility_checked_on "
+      "name phone govt_candidate_id tr_id pipeline_status sidh_profile_verified_on eligibility_checked_on " // QA-1754: REQ-389a separator
       + "nomination_sent_on nsdc_submitted_on nsdc_result_on nsdc_remarks paid_on payment_reference "
       + "tot_scheduled_on tot_done_on tot_result_expected_on tot_certificate_no")
     .sort({ planned_start: 1 })
@@ -4106,7 +4106,10 @@ export async function planTrackerRows(scope: Record<string, unknown> = {}) {
       job_role: b.program?.name ?? null,                            // 3
       scheme: b.program?.scheme ?? null,
       batch: { _id: String(b._id), code: b.code, status: b.status },
-      trainer: t ? { _id: String(t._id), name: t.name, tr_id: t.tr_id ?? null } : null, // 4
+      // QA-1754 (REQ-389a): `label` rides beside the raw name. The cycle-2 manifest deferred this
+      // to QA-1746 on the claim that its consumers were the plan pages; they are not - they are
+      // batches/page.tsx's Back-dated Planning column and plan-tracker/export. Fixed in place.
+      trainer: t ? { _id: String(t._id), name: t.name, label: personLabel({ name: t.name, phone: t.phone, sidh_candidate_id: t.govt_candidate_id }), tr_id: t.tr_id ?? null } : null, // 4
       sidh_profile_verified_on: t?.sidh_profile_verified_on ?? null, // 5
       eligibility_checked_on: t?.eligibility_checked_on ?? null,     // 6
       ready_for_tot: need ? (ms(b, "trainer_ready_for_tot")?.done_on ?? ms(b, "trainer_ready_for_tot")?.due_date ?? null) : "Not needed", // 7

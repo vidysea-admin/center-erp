@@ -340,7 +340,7 @@ function TrainersInner() {
               <ul className="space-y-2">
                 {(posDetail.pos.stage_trainers?.[posDetail.bucket] ?? []).map((t: any) => (
                   <li key={t._id}>
-                    <Link className="text-sm font-medium text-blue-700 hover:underline" href={`/trainers/${t._id}`}>{t.name}</Link>
+                    <Link className="text-sm font-medium text-blue-700 hover:underline" href={`/trainers/${t._id}`}>{t.label || t.name}</Link>{/* QA-1753 (REQ-389): this drawer is a numbered person list an operator clicks through to decide hiring - the sibling consumer of the same trainerTiesFor payload as locations/[id] */}
                     <span className="ml-2 text-xs text-gray-500">{t.stage}</span>
                   </li>
                 ))}
