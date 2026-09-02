@@ -479,7 +479,7 @@ function BatchesInner() {
                     </div>}
                   </span>);
                 })() : <span className="text-xs text-gray-400">— none yet</span> },
-              { key: "trainer", label: "Trainer", sortable: true, sortValue: (r: any) => r.trainer?.name ?? null, render: (r: any) => r.trainer?.label || r.trainer?.name || "—" }, // QA-1754 (REQ-389a): sortValue stays the raw name so ordering is unchanged
+              { key: "trainer", label: "Trainer", sortable: true, sortValue: (r: any) => r.trainer?.name ?? null, render: (r: any) => r.trainer?.name ?? "—" },
               { key: "planned_start", label: "Start", sortable: true, sortValue: (r: any) => r.planned_start ? new Date(r.planned_start).getTime() : null, render: (r: any) => fmtDate(r.planned_start) },
               // 2026-08-13 (Manish): source link per row — click lands on that sheet tab.
               // QA-022: "Entered in ERP" told nobody anything — an app-created row's
@@ -1244,7 +1244,7 @@ function PlanningTable({ rows, onSaved, onError }: { rows: any[] | null; onSaved
     { key: "location", label: "Location", minWidth: 200, sortable: true, sortValue: (r: any) => r.location?.name ?? "", filterText: (r: any) => r.location?.name ?? "", render: (r: any) => r.location?.name ?? "—" },
     { key: "job_role", label: "Job Role", minWidth: 170, sortable: true, filterText: (r: any) => `${r.job_role ?? ""} ${r.scheme ?? ""}`, render: (r: any) => <>{r.job_role ?? "—"}{r.scheme && <span className="block text-[10px] text-gray-400">{r.scheme}</span>}</> },
     { key: "batch", label: "Batch", minWidth: 150, filterText: (r: any) => r.batch?.code ?? "", render: (r: any) => <Link className="text-blue-700 hover:underline" href={`/batches/${r.batch._id}`}>{r.batch.code}</Link> },
-    { key: "trainer", label: "Trainer Name", minWidth: 160, sortable: true, sortValue: (r: any) => r.trainer?.name ?? "", filterText: (r: any) => `${r.trainer?.name ?? ""} ${r.trainer?.tr_id ?? ""}`, render: (r: any) => r.trainer ? <>{r.trainer.name}{r.trainer.tr_id && <span className="block text-[10px] text-gray-400">{r.trainer.tr_id}</span>}</> : <span className="text-amber-700">no trainer</span> },
+    { key: "trainer", label: "Trainer Name", minWidth: 160, sortable: true, sortValue: (r: any) => r.trainer?.name ?? "", filterText: (r: any) => `${r.trainer?.name ?? ""} ${r.trainer?.tr_id ?? ""}`, render: (r: any) => r.trainer ? <>{r.trainer.label || r.trainer.name}{r.trainer.tr_id && <span className="block text-[10px] text-gray-400">{r.trainer.tr_id}</span>}</> : <span className="text-amber-700">no trainer</span> }, // QA-1756 (REQ-389a): the plan-tracker column, fed by /api/plan-tracker which carries `label`. sortValue/filterText keep the raw name so ordering and search are unchanged.
     { key: "sidh_profile_verified_on", label: "Trainer profile verified on SIDH", minWidth: 210, render: (r: any) => cell(r, "sidh_profile_verified_on") },
     { key: "eligibility_checked_on", label: "Trainer eligibility check", minWidth: 170, render: (r: any) => cell(r, "eligibility_checked_on") },
     { key: "ready_for_tot", label: "Trainer available & ready for TOT", minWidth: 218, render: (r: any) => mcell(r, "ready_for_tot", "trainer_ready_for_tot") },

@@ -49,3 +49,28 @@ export function personSeparator(x?: Parameters<typeof personLabel>[0]): string {
 export const personList = (
   xs?: Array<Parameters<typeof personLabel>[0]> | null,
 ) => (xs ?? []).map(personLabel).filter(Boolean).join(", ");
+
+// QA-1752 (Umesh, 2026-09-02, answering a gate the maker escalated after two checkers and the
+// maker disagreed across three cycles): a TRAINER's identity chain is
+//   NSDC TR ID  ->  portal Candidate ID (CAN_...)  ->  phone
+// and it lives HERE, in one function, rather than as `t.tr_id || t.govt_candidate_id` repeated at
+// each of the eight call sites. That repetition is precisely the ARCHITECTURE section 3 disease
+// this module was created to cure (QA-484: seven server-side copies of one sentence), and the
+// chain grows a new call site nearly every cycle.
+//
+// Why a trainer needs its own function while a candidate does not: a candidate has ONE portal
+// identity (`sidh_candidate_id`), a trainer has two and they are not interchangeable. `tr_id` is
+// the certification number NSDC issues after TOT and is what a centre quotes; `govt_candidate_id`
+// is the portal CAN, populated only for trainers who also appear on an attendance export.
+export function trainerLabel(t?: {
+  name?: string | null;
+  tr_id?: string | null;
+  govt_candidate_id?: string | null;
+  phone?: string | null;
+} | null): string {
+  return personLabel({
+    name: t?.name,
+    sidh_candidate_id: String(t?.tr_id ?? "").trim() || t?.govt_candidate_id,
+    phone: t?.phone,
+  });
+}

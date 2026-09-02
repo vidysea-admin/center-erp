@@ -933,6 +933,28 @@ console.log("\n--- -155 (QA-414 S1 / 415 / 424 / 425 / 426): the portal ID lands
     const allStaged = posItems.flatMap((p) => Object.values(p.stage_trainers ?? {}).flat());
     const staged1749 = allStaged.filter((t) => String(t?.name ?? "").includes(`FL1749 TR ${stamp}`));
     ok("QA-1755: the trainer reaches the open-positions payload at all", staged1749.length > 0, JSON.stringify(allStaged.slice(0, 4)));
+
+    // QA-1752 (Umesh's answer, 2026-09-02): a trainer's identity chain is
+    // TR ID -> portal CAN -> phone. tr1749 has NO tr_id and NO govt_candidate_id, so it must fall
+    // all the way to phone (asserted above). These two pin the earlier links of the chain, which
+    // nothing else exercises - every other trainer pin in this file reaches the phone fallback only.
+    const trChain = (await req(admin, "POST", "/api/trainers", {
+      name: `FL1752 CHAIN ${stamp}`, phone: phone(), skills: [`fl1752${stamp}`],
+      govt_candidate_id: `CAN${stamp}`,
+      nominated_for_location: loc._id, nominated_for_program: prog._id,
+    }, 201)).data.item;
+    const posCan = ((await req(admin, "GET", "/api/open-positions?approved=all", undefined, 200)).data.items ?? [])
+      .flatMap((p) => Object.values(p.stage_trainers ?? {}).flat())
+      .find((t) => String(t?.name ?? "") === `FL1752 CHAIN ${stamp}`);
+    ok("QA-1752: with a portal CAN but no TR ID, the label uses the CAN - not the phone",
+      posCan?.label === `FL1752 CHAIN ${stamp} (CAN${stamp})`, JSON.stringify(posCan));
+
+    await req(admin, "PATCH", `/api/trainers/${trChain._id}`, { tr_id: `TR${stamp}` }, 200);
+    const posTr = ((await req(admin, "GET", "/api/open-positions?approved=all", undefined, 200)).data.items ?? [])
+      .flatMap((p) => Object.values(p.stage_trainers ?? {}).flat())
+      .find((t) => String(t?.name ?? "") === `FL1752 CHAIN ${stamp}`);
+    ok("QA-1752: once a TR ID exists it WINS over the portal CAN - the first link of the chain",
+      posTr?.label === `FL1752 CHAIN ${stamp} (TR${stamp})`, JSON.stringify(posTr));
     ok("QA-1755: ...and every staged trainer carries a `label` separator, not just a bare name - the field BOTH the locations grid and the Open Positions drawer render",
       staged1749.every((t) => String(t.label ?? "").includes(`(${tr1749.phone})`)), JSON.stringify(staged1749));
 

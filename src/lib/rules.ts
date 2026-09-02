@@ -28,7 +28,7 @@ import { targetRowField } from "@/lib/sync";
 import type { SessionUser } from "@/auth";
 // QA-491 (REQ-389a, Umesh: "har jagah, bina exception"): the same person-naming rule the client
 // tooltips already use, so a REFUSAL and the tooltip that preceded it never disagree.
-import { personLabel, personList } from "@/lib/person";
+import { personLabel, personList, trainerLabel } from "@/lib/person";
 
 export const ACTIVE_BATCH_STATUSES = ["Planning", "Ready", "Active", "Closing"];
 
@@ -484,7 +484,7 @@ export async function assertTrainerAvailableForBatch(
   // portal-ID slot is `govt_candidate_id` — the portal "Candidate ID" (CAN_…), the SAME identity a
   // candidate's `sidh_candidate_id` holds — NOT `tr_id`, which is the NSDC TR certification number
   // and a different thing. `phone` is required on TrainerSchema, so this never renders a bare name.
-  const trainerName = personLabel({ name: trainer.name, phone: trainer.phone, sidh_candidate_id: trainer.govt_candidate_id });
+  const trainerName = trainerLabel(trainer);
   const others = await Batch.find({
     trainer: trainerId,
     status: { $in: ACTIVE_BATCH_STATUSES },
@@ -541,9 +541,9 @@ export async function assertTrainerAvailableForBatch(
 export async function trainerBookingWarnings(trainerId: string, locationId?: unknown): Promise<string[]> {
   // QA-1745 (REQ-389a): phone + govt_candidate_id ride along so these two warnings name a trainer
   // the same way every other person list does — a bare name does not separate two same-name people.
-  const t = await Trainer.findById(trainerId).select("name phone govt_candidate_id pipeline_status capable_locations").lean<any>();
+  const t = await Trainer.findById(trainerId).select("name phone govt_candidate_id tr_id pipeline_status capable_locations").lean<any>();
   if (!t) return [];
-  const tName = personLabel({ name: t.name, phone: t.phone, sidh_candidate_id: t.govt_candidate_id });
+  const tName = trainerLabel(t);
   const warnings: string[] = [];
   if (t.pipeline_status && t.pipeline_status !== "Certified") {
     warnings.push(`Trainer ${tName} is still "${t.pipeline_status}" — not yet Certified, so they have no TR ID for the portal.`);
@@ -2930,9 +2930,9 @@ export async function earliestPossibleStart(
   if (opts?.trainerId) {
     // QA-1745 (REQ-389a): phone + govt_candidate_id ride along so this note names a trainer the
     // same way every other person mention does.
-    const t = await Trainer.findById(opts.trainerId as any).select("name phone govt_candidate_id available_from max_concurrent_batches").lean<any>();
+    const t = await Trainer.findById(opts.trainerId as any).select("name phone govt_candidate_id tr_id available_from max_concurrent_batches").lean<any>();
     if (t) {
-      const tName = personLabel({ name: t.name, phone: t.phone, sidh_candidate_id: t.govt_candidate_id });
+      const tName = trainerLabel(t);
       let when: Date | null = t.available_from ? dayStart(t.available_from) : null;
       let note = t.available_from ? `${tName} is free from ${dayStart(t.available_from).toDateString()}` : `${tName} has no availability date on file`;
       const cap = t.max_concurrent_batches ?? defaults.max_concurrent_batches ?? 1;
@@ -3203,7 +3203,7 @@ export async function transitionTrainer(
   const t = await Trainer.findById(trainerId);
   if (!t) throw new HttpError(404, "Trainer not found");
   // QA-1745 (REQ-389a): same separator as every other person mention in this file.
-  const tName = personLabel({ name: t.name, phone: t.phone, sidh_candidate_id: t.govt_candidate_id });
+  const tName = trainerLabel(t);
   const from = t.pipeline_status ?? "Fresh Lead";
   if (from === target) throw new HttpError(409, `${tName} is already at "${target}".`);
   // Computed once, before the bypass branch, so the bypass cannot skip the check the way it skips
@@ -3389,7 +3389,7 @@ export async function correctTrainerDates(
   const t = await Trainer.findById(trainerId);
   if (!t) throw new HttpError(404, "Trainer not found");
   // QA-1745 (REQ-389a): same separator as every other person mention in this file.
-  const tName = personLabel({ name: t.name, phone: t.phone, sidh_candidate_id: t.govt_candidate_id });
+  const tName = trainerLabel(t);
 
   // ALLOW-list, never a refuse-list. QA-660 (-200) was exactly this shape one door over: a guard
   // that listed the shapes to REJECT let 0 walk through into new Date(0) and stored 1 Jan 1970.
@@ -3896,13 +3896,13 @@ export async function trainerTiesFor(locIds: unknown[], progIds?: unknown[]) {
   if (progIds) { nomMatch.nominated_for_program = { $in: progIds }; batchMatch.program = { $in: progIds }; }
 
   const [nominatedRows, batches] = await Promise.all([
-    Trainer.find(nomMatch).select("_id name phone govt_candidate_id pipeline_status nominated_for_location nominated_for_program").lean<any[]>(), // QA-1749: REQ-389a separator
+    Trainer.find(nomMatch).select("_id name phone govt_candidate_id tr_id pipeline_status nominated_for_location nominated_for_program").lean<any[]>(), // QA-1749: REQ-389a separator
     Batch.find(batchMatch).select("location program trainer").lean<any[]>(),
   ]);
   // The batch only carries the trainer's id; its pipeline_status decides which counter it lands in.
   const batchTrainerIds = [...new Set(batches.map((b) => String(b.trainer)))];
   const batchTrainers = batchTrainerIds.length
-    ? await Trainer.find({ _id: { $in: batchTrainerIds }, active: true }).select("_id name phone govt_candidate_id pipeline_status").lean<any[]>() // QA-1749
+    ? await Trainer.find({ _id: { $in: batchTrainerIds }, active: true }).select("_id name phone govt_candidate_id tr_id pipeline_status").lean<any[]>() // QA-1749
     : [];
   const statusById = new Map(batchTrainers.map((t) => [String(t._id), String(t.pipeline_status ?? "")]));
   const nameById = new Map<string, string>([...nominatedRows, ...batchTrainers].map((t: any) => [String(t._id), String(t.name ?? "")]));
@@ -3910,7 +3910,7 @@ export async function trainerTiesFor(locIds: unknown[], progIds?: unknown[]) {
   // array as a numbered trainer list an operator acts on - a bare name there cannot separate two
   // people. `name` is kept for sorting and for any consumer that wants the raw value.
   const labelById = new Map<string, string>([...nominatedRows, ...batchTrainers].map((t: any) =>
-    [String(t._id), personLabel({ name: t.name, phone: t.phone, sidh_candidate_id: t.govt_candidate_id })]));
+    [String(t._id), trainerLabel(t)]));
 
   // Keyed per (centre x job role) then per TRAINER, so a trainer who is both nominated here and
   // running a batch here counts ONCE. A union that double-counted would replace one wrong number
@@ -4109,7 +4109,7 @@ export async function planTrackerRows(scope: Record<string, unknown> = {}) {
       // QA-1754 (REQ-389a): `label` rides beside the raw name. The cycle-2 manifest deferred this
       // to QA-1746 on the claim that its consumers were the plan pages; they are not - they are
       // batches/page.tsx's Back-dated Planning column and plan-tracker/export. Fixed in place.
-      trainer: t ? { _id: String(t._id), name: t.name, label: personLabel({ name: t.name, phone: t.phone, sidh_candidate_id: t.govt_candidate_id }), tr_id: t.tr_id ?? null } : null, // 4
+      trainer: t ? { _id: String(t._id), name: t.name, label: trainerLabel(t), tr_id: t.tr_id ?? null } : null, // 4
       sidh_profile_verified_on: t?.sidh_profile_verified_on ?? null, // 5
       eligibility_checked_on: t?.eligibility_checked_on ?? null,     // 6
       ready_for_tot: need ? (ms(b, "trainer_ready_for_tot")?.done_on ?? ms(b, "trainer_ready_for_tot")?.due_date ?? null) : "Not needed", // 7
