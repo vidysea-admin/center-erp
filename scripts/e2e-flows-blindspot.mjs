@@ -50,6 +50,17 @@ const admin = await login("admin@vidysea.com", process.env.ADMIN_PASSWORD || "ad
 const stamp = Date.now().toString().slice(-6);
 const phone = () => "7" + Date.now().toString().slice(-8) + Math.floor(Math.random() * 9); // QA-141: 10 digits
 
+// QA-1765 (checker, on qa-1760 PASS): extracting a sentence with `blob.split(sep)[0]` is fail-OPEN
+// — when `sep` is absent String.split returns the WHOLE blob, so the assertion silently widens to
+// every neighbouring sentence and can pass on somebody else's code. The checker measured it: make
+// the fixture `pipeline_status:"Certified"` (so the sentence never appears) AND revert the select
+// the pin names, and the wall goes 522/0 — the pin green against its own mutant.
+//
+// This extractor is fail-SAFE: no match returns "", so a missing sentence FAILS the pin instead of
+// widening it. Every sentence-level assertion in this file goes through it.
+const sentenceMatching = (blob, re) => (String(blob ?? "").match(re) ?? [""])[0];
+const PIPELINE_SENTENCE = /[^.·]*is still "[^"]*"[^.·]*not yet Certified[^.·]*/;
+
 // ---------------------------------------------------------------- fixtures
 const loc = (await req(admin, "POST", "/api/locations", {
   code: `TEST-FL${stamp}`, name: `TEST Flows Centre ${stamp}`, city: "Test", state: "UP",
@@ -866,7 +877,11 @@ console.log("\n--- -155 (QA-414 S1 / 415 / 424 / 425 / 426): the portal ID lands
     // string contained `Name (phone)` and passed even with this site reverted, because the
     // trainer-availability note in the same blob (another site this unit fixed) supplied it.
     // A pin that survives a revert of the line it names is pinning something else.
-    const pipelineSentence = warnText.split(" — not yet Certified")[0] ?? "";
+    // QA-1765: fail-SAFE extraction. This site was NOT named by QA-1765 and carries the identical
+    // defect; fixing only the named instance is the mistake qa-1745 was failed for twice.
+    const pipelineSentence = sentenceMatching(warnText, PIPELINE_SENTENCE);
+    ok("QA-1765: the pipeline sentence is actually PRESENT for this Fresh Lead trainer - the property that makes the pin below bite, now asserted instead of assumed",
+      pipelineSentence.length > 0, warnText);
     ok("QA-1745: ...and THAT sentence names the trainer with its separator, not bare",
       pipelineSentence.includes(`FL1745 TWIN ${stamp} (${tr2.phone})`), pipelineSentence);
   }
@@ -981,7 +996,9 @@ console.log("\n--- -155 (QA-414 S1 / 415 / 424 / 425 / 426): the portal ID lands
 
       // (1) rules.ts:544 - trainerBookingWarnings' own select. Its sentence, not the joined blob:
       // asserting blob-wide is how two earlier pins in this file passed against a mutant.
-      const pipeSentence1760 = w1760.split(" — not yet Certified")[0] ?? "";
+      const pipeSentence1760 = sentenceMatching(w1760, PIPELINE_SENTENCE);
+      ok("QA-1765: the pipeline sentence is PRESENT for this trainer - asserted, not assumed from the model default",
+        pipeSentence1760.length > 0, w1760);
       ok("QA-1760: the pipeline booking warning's OWN select carries tr_id - its sentence shows the TR ID",
         pipeSentence1760.includes(expectLabel), pipeSentence1760 || w1760);
 
