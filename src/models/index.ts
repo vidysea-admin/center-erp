@@ -779,6 +779,18 @@ const CandidateSchema = new Schema({
   // there: a real APAAR begins with 1, which aadhaarError refuses outright).
   apaar_id: { type: String, default: null },
   lifecycle_status: { type: String, enum: LIFECYCLE_STATUS, required: true, default: "Unassigned" },
+  // QA-1792 (recorded client call 2026-09-02, item 3; Umesh's gate answer in qa/feedback-inbox.md
+  // 2026-09-02 ~13:35): "delete ke badle ARCHIVE kar dena hai ... with proper reason". Archiving is
+  // a SEPARATE axis from lifecycle_status and from the batch-level drop - Umesh chose "Archive is a
+  // separate state; REQ-417-421 stands", so a candidate DROPPED from a batch is still a visible,
+  // ordinary candidate, and only a candidate the team explicitly archives carries these fields.
+  //
+  // The reason these exist at all: DELETE on a candidate with no batch history used to run
+  // `c.deleteOne()` and take their documents with it. The record was gone. The client's team uses
+  // Delete routinely to clear unwanted leads, so that was a live, irreversible data-loss path.
+  archived_at: { type: Date, default: null },
+  archive_reason: { type: String, default: null },
+  archived_by: oid("User"),
   // CEO 14/08 [15:21]: "I hope we are also capturing when a candidate is enrolled" — stamped
   // once, the first time enrollment completes (Rule 21); never cleared on a later drop, so a
   // training dropout stays distinguishable from an inquiry that never enrolled.

@@ -1817,6 +1817,48 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
     ok("QA-904: a batch carrying recorded work is still refused - it is Cancelled, never deleted",
       delB.status === 409, `status=${delB.status} ${JSON.stringify(delB.data).slice(0, 140)}`);
   }
+
+  // QA-1792 (recorded client call 2026-09-02 item 3; Umesh's gate answer 2026-09-02 ~13:35):
+  // "delete ke badle ARCHIVE kar dena hai". Until now this door ran c.deleteOne() for anyone the
+  // QA-904 409 above did NOT catch - i.e. every candidate with no batch history, which is exactly
+  // who the client's team clears with it. The record and its documents were destroyed. These pins
+  // exist because a green suite said nothing about it: the two pre-existing "delete works" pins
+  // assert only status 200, and 200 is what an archive returns too.
+  {
+    const a = await mkJunkCand();
+    const before = (await req(admin, "GET", `/api/candidates/${a._id}`)).data.item;
+    ok("QA-1792 precondition: a fresh candidate with NO batch history exists and is not archived",
+      !!before && !before.archived_at, JSON.stringify({ id: a._id, archived_at: before?.archived_at ?? null }));
+
+    const del = await req(ops, "DELETE", `/api/candidates/${a._id}`, { reason: "QA-1792 duplicate lead" }, 200);
+    ok("QA-1792: the door still answers 200 - the two pre-existing delete pins are unchanged",
+      del.status === 200, `status=${del.status}`);
+
+    // THE POINT OF THE UNIT: the record must still be there afterwards.
+    const after = (await req(admin, "GET", `/api/candidates/${a._id}`, undefined, 200)).data.item;
+    ok("QA-1792: the candidate record SURVIVES - this door no longer destroys anything",
+      !!after && String(after._id) === String(a._id), JSON.stringify({ found: !!after }));
+    ok("QA-1792: ...and is stamped archived, with the reason the caller gave",
+      !!after?.archived_at && after?.archive_reason === "QA-1792 duplicate lead",
+      JSON.stringify({ archived_at: after?.archived_at ?? null, reason: after?.archive_reason ?? null }));
+
+    // REQ-417-421 stands (Umesh: "Archive is a separate state"): archiving must NOT touch the
+    // lifecycle axis, and must not pretend the person was dropped from anything.
+    ok("QA-1792: archiving does not disturb lifecycle_status - it is a separate axis",
+      after?.lifecycle_status === before?.lifecycle_status,
+      JSON.stringify({ before: before?.lifecycle_status, after: after?.lifecycle_status }));
+
+    const auditRows = (await req(admin, "GET", `/api/audit/Candidate/${a._id}`)).data.items ?? [];
+    const arch = auditRows.find((x) => x.field === "archived_at");
+    // Both halves matter, and the second was added because the first PASSED against a mutant:
+    // reverting the door to `deleteOne()` while leaving this audit call in place wrote "archived"
+    // for a record that no longer existed. An audit row saying archived is not evidence of an
+    // archive if a "deleted (...)" row sits beside it - that combination is a lying audit trail.
+    ok("QA-1792: the archive is audited, naming the reason rather than the word 'deleted'",
+      !!arch && /archived/i.test(String(arch.new_value ?? "")) && /duplicate lead/.test(String(arch.new_value ?? ""))
+      && !auditRows.some((x) => /^deleted \(/.test(String(x.new_value ?? ""))),
+      JSON.stringify({ arch: arch ?? null, deletedRows: auditRows.filter((x) => /^deleted \(/.test(String(x.new_value ?? ""))).length }));
+  }
   {
     const b2 = (await req(admin, "POST", "/api/batches", { location: loc9._id, program: prog9._id, planned_start: "2027-07-01", target_size: 5 })).data.item;
     const delB2 = await req(ops, "DELETE", `/api/batches/${b2._id}`);

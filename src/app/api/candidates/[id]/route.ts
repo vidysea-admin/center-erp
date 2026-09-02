@@ -207,7 +207,7 @@ export const { GET, PATCH } = itemRoutes({
 // there was no verb to remove them — the trainer side got one in QA-130, candidates never
 // did. Same shape: Admin-only, refuses anyone with batch history (a real person is Dropped,
 // not erased), documents and public links cascade, the audit row names what went.
-export const DELETE = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
+export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   await dbConnect();
   const user = await requireUser();
   requireEdit(user);
@@ -247,12 +247,32 @@ export const DELETE = apiHandler(async (_req: NextRequest, ctx: { params: Promis
   if (await BatchMember.exists({ candidate: id })) {
     throw new HttpError(409, `${c.name} has batch history — drop them from the batch instead of deleting the record.`);
   }
-  const docs = await CandidateDocument.deleteMany({ candidate: id });
-  await c.deleteOne();
+  // QA-1792: THIS DOOR NO LONGER DESTROYS ANYTHING.
+  //
+  // It used to run `CandidateDocument.deleteMany` + `c.deleteOne()`. The 409 above is the only
+  // thing that ever stood between a candidate and permanent erasure, and it only fires for people
+  // who already have batch history - so a fresh lead, which is exactly who the client's team
+  // clears with this button ("galti se ye deleted wale chale ja rahe hain"), was destroyed along
+  // with their documents. The 2026-09-02 client call walked through this door and the record only
+  // survived because that candidate happened to have history.
+  //
+  // Recorded client call, item 3: "delete ke badle ARCHIVE kar dena hai ... with proper reason,
+  // aur us student ka status archive ho jayega". Umesh's gate answer (qa/feedback-inbox.md,
+  // 2026-09-02 ~13:35) settled that Archive is a SEPARATE state and REQ-417-421 stands, so this
+  // stamps the archive fields and changes nothing about who is visible where - that is the next
+  // unit's job, and doing it here would hide people the 25-Aug decision deliberately kept visible.
+  //
+  // The 409 is deliberately LEFT IN PLACE. Three pins encode it as a decision, not an accident
+  // (QA-904: "a real person is Dropped, not erased"), and archiving somebody who is on a roster is
+  // a different question from archiving a lead nobody ever enrolled. Widening this door to
+  // roster-holding candidates is a separate decision and is NOT taken here.
+  const reason = String(((await req.json().catch(() => ({}))) as any)?.reason ?? "").trim();
+  c.set({ archived_at: new Date(), archive_reason: reason || null, archived_by: user.id });
+  await c.save();
   await audit({
-    entity: "Candidate", entityId: c._id,
-    newValue: `deleted (${String(c.name).replace(/\s+/g, " ").slice(0, 60)}, ${String(c.phone).slice(0, 30)}${docs.deletedCount ? `, ${docs.deletedCount} document${docs.deletedCount === 1 ? "" : "s"}` : ""})`,
+    entity: "Candidate", entityId: c._id, field: "archived_at",
+    newValue: `archived${reason ? ` — ${reason.slice(0, 120)}` : " (no reason given)"}`,
     actor: user.id,
   });
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, archived: true, archived_at: c.archived_at, reason: reason || null });
 });
