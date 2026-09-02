@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-284";
+export const RELEASE = "2026.08.14-285";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -158,6 +158,27 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "about how a candidate is dropped from a batch has changed.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-285 finishes what -284 started, on the one screen where naming a person decides money. On a "  +
+  "batch's Attendance list a student's phone number now always sits under their name, with their "  +
+  "portal Candidate ID beside it. Before, the ID replaced the phone the moment a student had one - "  +
+  "so the row showed that ID twice and the phone nowhere, and the phone is the only thing that "  +
+  "separates two students of the same name. On a live batch with two students both called Anil "  +
+  "Kumar, nobody could say which portal ID belonged to which man, and a portal ID is what a "  +
+  "certificate is later issued against. The same is now true in the box that asks which candidate "  +
+  "an unmatched government-attendance row belongs to: its suggestion names the ID and the phone, "  +
+  "not just the name. "  +
+  "The batch Overview also stops reporting a qualified count as if it were the whole story. When "  +
+  "government attendance rows have been imported for that batch but could not be attached to "  +
+  "anyone on its roster, the Overview now says so beside the count and links straight to the "  +
+  "import to resolve them - because those students' hours are real and simply have nowhere to "  +
+  "land. A centre reported 13 qualified where the government portal showed 16; the arithmetic was "  +
+  "never wrong - three rows were unattached, and the only screen saying so was one the centre "  +
+  "never opened. That count describes the batch being viewed, and is labelled as such. "  +
+  "One more correction on the same screen: the line reporting how many students have portal "  +
+  "attendance was counting students who had already left the batch in its total, while the "  +
+  "Attendance tab counted only current ones - the same sentence giving two different answers on "  +
+  "two tabs. It counts current students in both places now.";
+const RELEASE_NOTE_ARCHIVE_284 =
   "-284 is about how this product names a person. Wherever the system showed a name - a refusal "  +
   "when something cannot be saved, a warning when a trainer is double-booked, a list of students "  +
   "still waiting on a result, the trainer column on the planning tracker, the hiring lists on a "  +
@@ -1227,6 +1248,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -283: ARCHIVE_282 wired in here in the SAME bump that declared it, same discipline.
   // -284: ARCHIVE_283 wired in here in the SAME bump that declared it, same discipline -
   // QA-265/-247/-256 record what happens when a bump declares an archive and forgets this line.
+  // -285: ARCHIVE_284 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_284 + " " +
   RELEASE_NOTE_ARCHIVE_283 + " " +
   RELEASE_NOTE_ARCHIVE_282 + " " +
   RELEASE_NOTE_ARCHIVE_281 + " " +
