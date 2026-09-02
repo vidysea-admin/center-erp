@@ -4589,11 +4589,22 @@ await req("POST", `/api/batches/${planBatch._id}/transition`, { target: "Cancell
 // ---- -84 (QA-146 part 2): candidates get the QA-130 delete verb — junk rows can leave ----
 {
   const junk = (await req("POST", "/api/candidates", { name: "Salutation", phone: "9800" + stamp.slice(-6), location: loc._id, program: prog._id }, 201)).data.item;
-  await req("DELETE", `/api/candidates/${junk._id}`, undefined, 200);
-  await req("GET", `/api/candidates/${junk._id}`, undefined, 404);
-  ok("-84: an Admin deletes a junk candidate row and it is gone", true);
+  // QA-1803 (checker, on qa-1792 cycle 2): this block encoded "delete means gone" and went RED the
+  // moment the door stopped destroying. REQ-484..489 changed the contract, so the assertions are
+  // updated to the NEW truth rather than the numbers being flipped to make them pass: the junk row
+  // is ARCHIVED, still readable, and audited as archived.
+  //
+  // The old third line was `ok("...it is gone", true)` - a hardcoded pass asserting nothing at all.
+  await req("DELETE", `/api/candidates/${junk._id}`, { reason: "-84 junk row" }, 200);
+  const junkAfter = (await req("GET", `/api/candidates/${junk._id}`, undefined, 200)).data.item;
+  ok("-84 (REQ-484): an Admin clears a junk candidate row and it is ARCHIVED, not destroyed",
+    !!junkAfter?.archived_at && junkAfter.archive_reason === "-84 junk row",
+    JSON.stringify({ archived_at: junkAfter?.archived_at ?? null, reason: junkAfter?.archive_reason ?? null }));
   const hist = ((await req("GET", `/api/audit/Candidate/${junk._id}`)).data.items ?? []);
-  ok("-84: the deletion is audited with what went", hist.some((a) => /deleted \(Salutation/.test(String(a.new_value))), JSON.stringify(hist.map((a) => a.new_value)));
+  ok("-84: the archive is audited with what happened, and NOTHING claims a deletion",
+    hist.some((a) => /^archived/.test(String(a.new_value)))
+    && !hist.some((a) => /^deleted \(/.test(String(a.new_value))),
+    JSON.stringify(hist.map((a) => a.new_value)));
   const rosterCand = (await req("GET", `/api/batches/${batch._id}/members`)).data.items?.[0]?.candidate;
   if (rosterCand?._id) {
     const refused = await req("DELETE", `/api/candidates/${rosterCand._id}`, undefined, 409);

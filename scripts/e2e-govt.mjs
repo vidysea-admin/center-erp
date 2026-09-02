@@ -741,10 +741,15 @@ ok("all 7 rows persisted", detail.data.rows?.length === 7, `got ${detail.data.ro
         JSON.stringify({ before: (att.data.members ?? []).length, after: backTo.length }));
       // -156 (QA-436): "back to its original size" is a weaker claim than it reads as - one row
       // added and another dropped satisfies it. Assert what was actually created is actually gone.
+      // QA-1803: the ROSTER ROW is still gone - that is what this pin is about and it is unchanged.
+      // The CANDIDATE is no longer destroyed (REQ-484), so asserting 404 on it asserted the old
+      // contract. Assert what is now true and still meaningful: the member row is gone AND the
+      // candidate is archived rather than merely left lying around active.
       const goneCand = await req(admin, "GET", `/api/candidates/${ncCand._id}`);
       ok("-156 (QA-436): ...and each thing the fixture created is gone by name, not merely by count",
-        !backTo.some((m) => String(m.member_id) === String(ncMem?._id)) && goneCand.status === 404,
-        JSON.stringify({ member_still_there: backTo.some((m) => String(m.member_id) === String(ncMem?._id)), candidate_get: goneCand.status }));
+        !backTo.some((m) => String(m.member_id) === String(ncMem?._id))
+        && goneCand.status === 200 && !!goneCand.data?.item?.archived_at,
+        JSON.stringify({ member_still_there: backTo.some((m) => String(m.member_id) === String(ncMem?._id)), candidate_get: goneCand.status, archived_at: goneCand.data?.item?.archived_at ?? null }));
     }
 
     // QA-293: the same two students on the ROSTER, where the screen rendered "~0 / 60 hrs (est.)"
