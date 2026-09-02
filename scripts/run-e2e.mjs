@@ -38,6 +38,10 @@ const SUITES = [
   // there: the projection arm never ran and the estimate-exclusion guard could be deleted with
   // every pin still green. Promoted from the checker probe that found both (QA-1787, QA-1791).
   "e2e-dropout.mjs",
+  // The unmatched-row caveat's SCOPE, on a fixture of TWO batches at ONE centre. Every suite above
+  // has a single batch per centre, where "this batch" and "this centre" are the same number and the
+  // whole QA-1772/QA-1776 family is invisible. Promoted from the checker probe (QA-1777).
+  "e2e-caveat-scope.mjs",
   "e2e-trainer-pipeline.mjs",
   "e2e-rpl-blindspot.mjs",
   "e2e-flows-blindspot.mjs",

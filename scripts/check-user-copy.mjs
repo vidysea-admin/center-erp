@@ -4276,6 +4276,33 @@ for (const file of walk(root)) {
       + " this is the screen the client actually reads, and it said only the number.");
   }
 
+  // QA-1776: the cost of the QA-1772 fix above, which nothing paid until now. Scoping the count to
+  // this batch is right, and it means a CENTRE-filed import's unmatched rows (batch: null) land on
+  // no batch caveat at all - measured b1 0, b2 0 while that import's own screen read 2. That is the
+  // QA-1763 client symptom returning by another door. So a second, SEPARATELY LABELLED count exists,
+  // and three things must hold together or it is not honest: it must come from the centre-orphan
+  // scope (batchId null), it must drop names already explained on a member's own line, and the two
+  // labels must actually say which question each answers (REQ-418). QA-1777: the label is half the
+  // remedy and nothing asserted it, so the disclosure could be deleted silently.
+  const centreScoped = rulesSrc.includes("unresolvedPortalRowsByName({ batchId: null, locationId: batch.location })")
+    && rulesSrc.includes("[...unresolvedCentreByName.entries()]")
+    && rulesSrc.includes("!sameNameCount.has(nk)");
+  const centreExposed = attRouteSrc.includes("unresolved_portal_rows_centre: unresolvedCentreRows");
+  const labelsDistinct = pageSrc.includes("on this batch not matched to a student")
+    && pageSrc.includes("at this centre, filed under no batch")
+    && pageSrc.includes("att.unresolved_portal_rows_centre ?? 0) > 0");
+  if (routeRead && centreScoped && centreExposed && labelsDistinct) passed++;
+  else {
+    failed++;
+    pushStructural("batch Overview: portal rows filed against the CENTRE under no batch are counted by nobody, or are counted without saying so"
+      + " (rules derives the centre-orphan scope and excludes roster names=" + centreScoped
+      + ", route returns unresolved_portal_rows_centre=" + centreExposed
+      + ", the two counts are labelled distinctly on the screen=" + labelsDistinct + ")"
+      + " - QA-1776. Scoping the batch count to its own batch was correct and made these rows invisible;"
+      + " an unmatched row that belongs to nobody is exactly the one that goes missing, and it is the"
+      + " case that produced the client escalation in the first place.");
+  }
+
   // QA-1767, found while checking QA-1763: the Overview's portal fraction counted DEPARTED members
   // in its denominator while the Attendance tab's twin of the same sentence counted only active
   // ones. Two populations, one sentence - and the whole point of dropping people from a batch is to

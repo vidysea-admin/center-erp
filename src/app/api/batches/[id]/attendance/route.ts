@@ -20,7 +20,7 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   // It could not before: the eight inputs behind a verdict were assembled inline here, in the route,
   // so writing a guard meant assembling them a second time somewhere else. The output of this
   // endpoint is unchanged; it reads the shared derivation instead of owning it.
-  const { batch, days, rows, requiredHours, minPct, minPctSource, hoursPerDay, portalWorkingDays, finished, unresolvedPortalRows } =
+  const { batch, days, rows, requiredHours, minPct, minPctSource, hoursPerDay, portalWorkingDays, finished, unresolvedPortalRows, unresolvedCentreRows } =
     await batchAttendanceRows(id);
 
   return NextResponse.json({
@@ -57,6 +57,11 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     // sat in no member row. A client compared the uncaveated 13 against SIDH's 16 and filed it as a
     // defect; 13 + 3 = 16 and nothing was ever wrong but the sentence.
     unresolved_portal_rows: unresolvedPortalRows,
+    // QA-1776: the other half of the same honesty. The line above counts rows filed against THIS
+    // batch; this one counts rows filed against the CENTRE under no batch at all, matching nobody on
+    // this roster. They are disjoint (batch: id versus batch: null) and they are two numbers rather
+    // than one sum because they answer two questions, and REQ-418 is about exactly that.
+    unresolved_portal_rows_centre: unresolvedCentreRows,
     // A-04 / A-05 (24-Aug issues sheet). The buckets below partition the ACTIVE roster, because
     // every one of them filters `!r.left_on` - and that is deliberate and stays. What was missing is
     // the other half of the arithmetic: the screen's own chip counts the WHOLE roster, so on a batch

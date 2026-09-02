@@ -3858,6 +3858,16 @@ export async function batchAttendanceRows(batchId: string) {
   // must keep its location arm - that is how a member with no hours learns their row arrived on a
   // centre-wide import - but a COUNT printed on one batch's Overview may only describe that batch.
   const unresolvedHereByName = await unresolvedPortalRowsByName({ batchId });
+  // QA-1776: and a THIRD scope, because the fix above has a cost and no screen was paying it. Rows
+  // from an export filed against the CENTRE land `batch: null` (api/govt-attendance/route.ts:283 -
+  // `batch: r.batch ?? batchId`, and an unmatched row has no candidate, so no r.batch and no
+  // fallback). The batch-only count cannot see them, which is right; the result was that such rows
+  // appeared on NO batch's caveat at all - measured b1 0, b2 0 while that import's own screen read
+  // not_enrolled_count 2. That is exactly the Ashvini Vijay Chand Yadav / CAN_41052988 case that
+  // produced QA-1763 in the first place, returning by another door.
+  const unresolvedCentreByName = batch.location
+    ? await unresolvedPortalRowsByName({ batchId: null, locationId: batch.location })
+    : new Map<string, { count: number }>();
   const sameNameCount = new Map<string, number>();
   for (const m of members) {
     if (m.left_on) continue;
@@ -3939,7 +3949,17 @@ export async function batchAttendanceRows(batchId: string) {
   // that was unproven and, on a multi-import batch, false.
   const unresolvedPortalRows = [...unresolvedHereByName.values()].reduce((a, v) => a + v.count, 0);
 
-  return { batch, days, rows, requiredHours, minPct, minPctSource, hoursPerDay, portalWorkingDays, finished, govtRows, unresolvedPortalRows };
+  // QA-1776, and it answers a DIFFERENT question from the line above - which is the whole reason it
+  // is a second number and not added into the first (REQ-418). This one counts rows filed against
+  // the CENTRE under no batch, and it deliberately drops any name that is already on this batch's
+  // roster: such a row is not silent, it is already shown on that member's own line by the
+  // location-scoped `awaitingByName` map above, and counting it twice would tell one story twice.
+  // What is left is the case that had no surface at all - a centre row matching nobody here.
+  const unresolvedCentreRows = [...unresolvedCentreByName.entries()]
+    .filter(([nk]) => !sameNameCount.has(nk))
+    .reduce((a, [, v]) => a + v.count, 0);
+
+  return { batch, days, rows, requiredHours, minPct, minPctSource, hoursPerDay, portalWorkingDays, finished, govtRows, unresolvedPortalRows, unresolvedCentreRows };
 
 }
 

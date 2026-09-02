@@ -547,6 +547,15 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
               · {att.unresolved_portal_rows} portal row{att.unresolved_portal_rows === 1 ? "" : "s"} on this batch not matched to a student — resolve
             </a>
           )}
+          {/* QA-1776: a SEPARATE chip, worded so it can never be read as this batch's own. An export
+              filed against the centre lands its unmatched rows under no batch, so the chip above
+              cannot see them and used to say nothing at all - the QA-1763 symptom by another door. */}
+          {att && (att.unresolved_portal_rows_centre ?? 0) > 0 && (
+            <a href="/govt-attendance" className="rounded-full bg-amber-50 px-2 py-0.5 font-medium text-amber-800 underline-offset-2 hover:underline"
+               title="Portal rows imported against this CENTRE rather than any batch, carrying hours but matching nobody on this batch's roster. They are not counted in this batch's figures - they are shown here because a row belonging to nobody is the thing that goes missing. Resolve them on the Government Attendance screen.">
+              · {att.unresolved_portal_rows_centre} more at this centre, filed under no batch — resolve
+            </a>
+          )}
         </div>
       )}
       {/* QA-150: the header counts the checks that gate Mark Ready and nothing else; the
@@ -575,6 +584,13 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
               {att && att.unresolved_portal_rows > 0 && (
                 <div className="text-[11px] font-medium text-amber-700" title="Portal rows imported against THIS batch that carry hours but are attached to nobody on its roster. Counted across every import for this batch, so it is not necessarily the figure any single import screen shows.">
                   +{att.unresolved_portal_rows} unmatched on this batch
+                </div>
+              )}
+              {/* QA-1776: the tile carries the centre-level caveat too, and separately - it is not a
+                  subtotal of the line above and must never read as one. */}
+              {att && (att.unresolved_portal_rows_centre ?? 0) > 0 && (
+                <div className="text-[11px] font-medium text-amber-600" title="Portal rows imported against this centre under no batch, matching nobody on this batch's roster. Not part of this batch's figures.">
+                  +{att.unresolved_portal_rows_centre} unmatched at this centre
                 </div>
               )}
             </div>

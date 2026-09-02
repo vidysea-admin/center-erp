@@ -368,15 +368,35 @@ export const nameKey = (s: string | undefined) =>
  * ambiguous row lands with batch null, and a `{ batch: batchId }` filter would quietly match
  * nothing while looking correct. That is the QA-302/QA-347 family and it is not worth re-joining.
  *
- * So the scope is the same pair matchGovtRows itself takes: this batch's rows, plus the centre's
- * rows that were never filed under any batch. A same-name student in a sibling batch at one centre
- * can pull an unresolved row into view - and that is honest, because such a row genuinely might be
- * either person's, which is what "waiting on a match" says.
+ * SO THIS HELPER SERVES THREE SCOPES, and the caller picks one deliberately. QA-1778: until now
+ * this comment described only the first, while the `where` below has carried a second branch since
+ * before it had any caller - and the branch nobody documented is now the one printing a number on a
+ * client-facing screen. All three, said out loud:
+ *
+ *   1. `{ batchId, locationId }` - this batch's rows PLUS the centre's rows never filed under any
+ *      batch. The same pair matchGovtRows itself takes. A same-name student in a sibling batch at
+ *      one centre can pull an unresolved row into view, and that is honest, because such a row
+ *      genuinely might be either person's, which is what "waiting on a match" says. This is the
+ *      per-MEMBER arm: it explains to one student why their hours are missing.
+ *   2. `{ batchId }` alone - this batch's rows only. QA-1772: a COUNT printed on one batch's
+ *      Overview may only describe that batch, or a centre-wide import puts the same number on
+ *      every batch at the centre and each of them is wrong about the others.
+ *   3. `{ batchId: null, locationId }` - the centre's ORPHAN rows only: filed against the centre,
+ *      under no batch at all. QA-1776: scope 2 is correct and cannot see these, so after the
+ *      QA-1772 fix a centre-wide import's unmatched rows appeared on NO batch caveat - the client
+ *      symptom (QA-1763) returning by another door. This scope is how a batch says "there are rows
+ *      at this centre that belong to nobody" without claiming they are its own.
+ *
+ * Scopes 2 and 3 are disjoint by construction (`batch: batchId` versus `batch: null`), so a caller
+ * may show both counts side by side without double-counting a row.
  */
 export async function unresolvedPortalRowsByName(scope: { batchId: unknown; locationId?: unknown }): Promise<Map<string, { count: number; hours_minutes: number | null; days_present: number | null; refs: { rowId: string; importId: string }[] }>> {
-  const where: Record<string, unknown> = scope.locationId
-    ? { $or: [{ batch: scope.batchId }, { location: scope.locationId, batch: null }] }
-    : { batch: scope.batchId };
+  const where: Record<string, unknown> =
+    scope.batchId == null && scope.locationId
+      ? { location: scope.locationId, batch: null }            // scope 3 - the centre's orphans alone
+      : scope.locationId
+        ? { $or: [{ batch: scope.batchId }, { location: scope.locationId, batch: null }] }   // scope 1
+        : { batch: scope.batchId };                             // scope 2 - this batch alone
   const rows = await GovtAttendanceRow.find({ ...where, match_status: { $ne: "Matched" } })
     .select("name candidate_type designation total_hours_minutes total_days_present import createdAt")
     .sort({ createdAt: -1 })
