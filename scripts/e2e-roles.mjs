@@ -1804,13 +1804,33 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
     const c = await mkJunkCand();
     const b = (await req(admin, "POST", "/api/batches", { location: loc9._id, program: prog9._id, planned_start: "2027-06-01", target_size: 5 })).data.item;
     await req(admin, "POST", `/api/batches/${b._id}/members`, { candidate: c._id });
-    const del = await req(ops, "DELETE", `/api/candidates/${c._id}`);
-    ok("QA-904: a candidate WITH batch history is still refused - a real person is Dropped, not erased",
-      del.status === 409, `status=${del.status}`);
-    ok("QA-904: ...and the refusal says to drop them instead",
-      /drop/i.test(String(del.data?.error ?? "")), String(del.data?.error ?? "").slice(0, 120));
 
-    // and the batch that now carries a member cannot be deleted either, by anyone
+    // QA-1800 (Umesh, 2026-09-02 ~17:05 IST, qa/feedback-inbox.md: "yes with confirmation"). This
+    // used to be an outright refusal (the pin below was worded "is still refused"). Umesh widened
+    // it: a candidate WITH batch history CAN be archived now, behind an explicit confirmation.
+    // Erasure stays impossible regardless - only ARCHIVE changed, and only when asked twice.
+    const del = await req(ops, "DELETE", `/api/candidates/${c._id}`);
+    ok("QA-1800: a candidate WITH batch history is refused WITHOUT confirmation - the gate, not a bypass",
+      del.status === 409, `status=${del.status}`);
+    ok("QA-1800: ...and the refusal names batch history, not just 'forbidden'",
+      /batch history/i.test(String(del.data?.error ?? "")), String(del.data?.error ?? "").slice(0, 120));
+
+    const del2 = await req(ops, "DELETE", `/api/candidates/${c._id}`, { reason: "QA-1800 confirmed", confirm_batch_history: true }, 200);
+    ok("QA-1800: ...and WITH confirmation the same request now succeeds",
+      del2.status === 200, `status=${del2.status}`);
+
+    const after = (await req(admin, "GET", `/api/candidates/${c._id}`, undefined, 200)).data.item;
+    ok("QA-1800: the candidate record still SURVIVES - confirmation unlocks archive, never erasure",
+      !!after && !!after.archived_at && after.archive_reason === "QA-1800 confirmed",
+      JSON.stringify({ found: !!after, archived_at: after?.archived_at ?? null, reason: after?.archive_reason ?? null }));
+
+    const auditRows2 = (await req(admin, "GET", `/api/audit/Candidate/${c._id}`)).data.items ?? [];
+    const arch2 = auditRows2.find((x) => x.field === "archived_at");
+    ok("QA-1800: the audit line names the batch history that was confirmed",
+      !!arch2 && /had batch history, confirmed/i.test(String(arch2.new_value ?? "")),
+      String(arch2?.new_value ?? ""));
+
+    // and the batch that now carries a member still cannot be deleted, by anyone - unchanged
     await req(admin, "PUT", "/api/permissions", { role: "Operations", permissions: [...opsBase.filter((k) => !String(k).endsWith(".delete")), "candidates.delete", "batches.delete"] }, 200);
     await new Promise((r) => setTimeout(r, 5500));
     const delB = await req(ops, "DELETE", `/api/batches/${b._id}`);

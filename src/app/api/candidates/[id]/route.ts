@@ -244,8 +244,17 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
       throw new HttpError(403, "Out of scope");
     }
   }
-  if (await BatchMember.exists({ candidate: id })) {
-    throw new HttpError(409, `${c.name} has batch history — drop them from the batch instead of deleting the record.`);
+  const body = ((await req.json().catch(() => ({}))) as any) ?? {};
+  const hasHistory = await BatchMember.exists({ candidate: id });
+  if (hasHistory && !body.confirm_batch_history) {
+    // QA-1800 (Umesh, 2026-09-02 ~17:05 IST, qa/feedback-inbox.md: "yes with confirmation"):
+    // a candidate WITH batch history CAN now be archived - this used to be an outright refusal
+    // (QA-904: "a real person is Dropped, not erased"), and that refusal was correct for ERASURE,
+    // which stays impossible below regardless of this flag. It was never a decision about ARCHIVE,
+    // which did not exist yet when QA-904 was written. So this is now a CONFIRMATION GATE, not a
+    // refusal: the caller must say `confirm_batch_history: true` to proceed, and the audit line
+    // below records that the operator was told.
+    throw new HttpError(409, `${c.name} has batch history — confirm to archive anyway (their batch record stays; only the candidate is archived).`);
   }
   // QA-1792: THIS DOOR NO LONGER DESTROYS ANYTHING.
   //
@@ -262,16 +271,15 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
   // stamps the archive fields and changes nothing about who is visible where - that is the next
   // unit's job, and doing it here would hide people the 25-Aug decision deliberately kept visible.
   //
-  // The 409 is deliberately LEFT IN PLACE. Three pins encode it as a decision, not an accident
-  // (QA-904: "a real person is Dropped, not erased"), and archiving somebody who is on a roster is
-  // a different question from archiving a lead nobody ever enrolled. Widening this door to
-  // roster-holding candidates is a separate decision and is NOT taken here.
-  const reason = String(((await req.json().catch(() => ({}))) as any)?.reason ?? "").trim();
+  // QA-1800: the 409 above is now a CONFIRMATION GATE, not the final refusal it used to be -
+  // Umesh widened this door on 2026-09-02. Erasure is still impossible either way; only the
+  // question "can this person be archived at all" changed, and it is answered above.
+  const reason = String(body.reason ?? "").trim();
   c.set({ archived_at: new Date(), archive_reason: reason || null, archived_by: user.id });
   await c.save();
   await audit({
     entity: "Candidate", entityId: c._id, field: "archived_at",
-    newValue: `archived${reason ? ` — ${reason.slice(0, 120)}` : " (no reason given)"}`,
+    newValue: `archived${reason ? ` — ${reason.slice(0, 120)}` : " (no reason given)"}${hasHistory ? " (had batch history, confirmed)" : ""}`,
     actor: user.id,
   });
   return NextResponse.json({ ok: true, archived: true, archived_at: c.archived_at, reason: reason || null });

@@ -375,13 +375,29 @@ export function CandidateEditDrawer({
             // documents, and it now collects the reason the requirement asks for.
             const reason = window.prompt(`Archive "${form.name}" (${form.phone})?
 
-The record and their documents are KEPT — they move out of active use, and a candidate with batch history should be dropped from the batch instead.
+The record and their documents are KEPT — they move out of active use.
 
 Reason:`);
             if (reason === null) return;
-            try { await api(`/api/candidates/${candidateId}`, { method: "DELETE", json: { reason } }); onSaved(); onClose(); }
-            catch (e: any) {
+            try {
+              await api(`/api/candidates/${candidateId}`, { method: "DELETE", json: { reason } });
+              onSaved(); onClose();
+            } catch (e: any) {
+              // Opened from a batch's own roster: hand off to the Drop dialog there, unchanged -
+              // that flow already knows the specific batch and is the more useful next step.
               if (onBlockedByBatchHistory && /batch history/i.test(e.message)) { onClose(); onBlockedByBatchHistory(); return; }
+              // QA-1800 (Umesh: "yes with confirmation"): opened standalone (no batch context to
+              // hand off to) - ask a second time and retry with the acknowledgement.
+              if (String(e.message || "").includes("confirm to archive anyway")) {
+                if (!window.confirm(`${e.message}
+
+Archive anyway?`)) return;
+                try {
+                  await api(`/api/candidates/${candidateId}`, { method: "DELETE", json: { reason, confirm_batch_history: true } });
+                  onSaved(); onClose();
+                } catch (e2: any) { setError(e2.message); }
+                return;
+              }
               setError(e.message);
             }
           }}>Delete</Btn>

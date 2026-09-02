@@ -670,12 +670,30 @@ function CandidatesInner() {
                     // archive read "no reason given".
                     const reason = window.prompt(`Archive "${r.name}" (${r.phone})?
 
-The record and their documents are KEPT — they move out of active use, and a candidate with batch history should be dropped from the batch instead.
+The record and their documents are KEPT — they move out of active use.
 
 Reason:`);
                     if (reason === null) return;
-                    try { await api(`/api/candidates/${r._id}`, { method: "DELETE", json: { reason } }); load(); }
-                    catch (e: any) { setError(e.message); }
+                    // QA-1800 (Umesh: "yes with confirmation"): a candidate WITH batch history can
+                    // now be archived too - the server answers 409 naming that history instead of
+                    // refusing outright, and this asks a SECOND time before retrying with the
+                    // acknowledgement, so the operator sees what they are agreeing to.
+                    try {
+                      await api(`/api/candidates/${r._id}`, { method: "DELETE", json: { reason } });
+                      load();
+                    } catch (e: any) {
+                      if (String(e.message || "").includes("confirm to archive anyway")) {
+                        if (!window.confirm(`${e.message}
+
+Archive anyway?`)) return;
+                        try {
+                          await api(`/api/candidates/${r._id}`, { method: "DELETE", json: { reason, confirm_batch_history: true } });
+                          load();
+                        } catch (e2: any) { setError(e2.message); }
+                      } else {
+                        setError(e.message);
+                      }
+                    }
                   }}>Delete</Btn>
                 )}
               </span>
