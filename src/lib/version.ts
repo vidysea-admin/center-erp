@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-282";
+export const RELEASE = "2026.08.14-283";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -149,6 +149,15 @@ const RELEASE_NOTE_ARCHIVE_270 =
   "and no other tab or screen is touched.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-283 is mostly checking, not building. The drop-from-batch dialog that -282 added to the "  +
+  "Enrollment tab was a hand-copy of the one already on the Candidates tab; both now share a "  +
+  "single piece of code, so a future fix to that dialog lands on both screens at once instead of "  +
+  "needing to be made twice. Alongside that, the list of drop reasons offered in the dialog now "  +
+  "refreshes every time it is opened, on both tabs - a reason an admin has just renamed, disabled "  +
+  "or added now appears immediately, rather than only after the page is reloaded. Nothing else "  +
+  "about how a candidate is dropped from a batch has changed.";
+
+const RELEASE_NOTE_ARCHIVE_282 =
   "-282 fixes a Delete button on the Batch Enrollment tab that looked like it did nothing. Every "  +
   "candidate reachable from that tab already has a history on this batch, and deleting a candidate "  +
   "with batch history has always been refused, correctly, to protect their attendance and results. "  +
@@ -1198,6 +1207,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -280: ARCHIVE_279 wired in here in the SAME bump that declared it, same discipline.
   // -281: ARCHIVE_280 wired in here in the SAME bump that declared it, same discipline.
   // -282: ARCHIVE_281 wired in here in the SAME bump that declared it, same discipline.
+  // -283: ARCHIVE_282 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_282 + " " +
   RELEASE_NOTE_ARCHIVE_281 + " " +
   RELEASE_NOTE_ARCHIVE_280 + " " +
   RELEASE_NOTE_ARCHIVE_279 + " " +
