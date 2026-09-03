@@ -161,6 +161,61 @@ for (const r of results) {
   if (lies) await page.screenshot({ path: `D:/erp/evidence-24-08/qa-573/${s}${r.qs.replace(/[^a-z0-9]/gi, "-")}.png` }).catch(() => {});
 }
 
+// ================= QA-1817: archiving stops being invisible =================
+// Umesh tested the shipped Archive feature live and reported it looked like nothing happened
+// ("naa hi users archive ho rhe hai"). Root cause: an archived row fell back into whichever of
+// Fresh/Enrolled it already belonged to and rendered identically - no badge, no exclusion, and the
+// row action still read "Delete" even though QA-1792/QA-1800 made it archive, not erase. Prove the
+// real fix from the real browser, on this suite's own fixture candidate, not just via the API.
+await page.goto(`${BASE}/candidates`, { waitUntil: "domcontentloaded" });
+await settled();
+// QA-1245's own lesson, applied to this pin: seed-sample puts 180 Fresh rows ahead of this suite's
+// own fixture, the table pages at 25, and default sort is alphabetical - this suite's own candidate
+// is not guaranteed to be ON that first page. Use the table's own search box (DataTable, ui.tsx:594,
+// "Search all columns...") to surface it, rather than trusting page 1 to contain it - a locator that
+// silently finds nothing must not be allowed to make every assertion below vacuously true.
+const searchBox = page.locator('input[placeholder="Search all columns…"]').first();
+await searchBox.fill(fresh[0].name);
+await page.waitForTimeout(400);
+const preFreshCount = await page.evaluate(() => {
+  const m = document.body.innerText.match(/Fresh Candidates \((\d+)\)/);
+  return m ? Number(m[1]) : null;
+});
+const archiveBtn = page.locator(`table tbody tr:has-text("${fresh[0].name}") button:has-text("Archive")`).first();
+const archiveBtnVisible = (await archiveBtn.count()) > 0;
+ok("[QA-1817] the row action now reads Archive, not the stale Delete label", archiveBtnVisible, `found=${archiveBtnVisible}`);
+if (archiveBtnVisible) {
+  page.once("dialog", (d) => d.accept("QA-1817 rendered-suite archive"));
+  await archiveBtn.click();
+  await page.waitForTimeout(1500);
+} else {
+  await page.screenshot({ path: `D:/erp/evidence-24-08/qa-1817/${s}-search-not-found.png` }).catch(() => {});
+}
+await page.reload({ waitUntil: "domcontentloaded" });
+await settled();
+await page.locator('input[placeholder="Search all columns…"]').first().fill(fresh[0].name);
+await page.waitForTimeout(400);
+const postFreshCount = await page.evaluate(() => {
+  const m = document.body.innerText.match(/Fresh Candidates \((\d+)\)/);
+  return m ? Number(m[1]) : null;
+});
+const stillInFresh = await page.locator(`table tbody tr:has-text("${fresh[0].name}")`).count();
+ok("[QA-1817] the archived candidate is no longer a row under Fresh (used to stay, indistinguishable from a no-op)",
+  stillInFresh === 0, `stillInFresh=${stillInFresh} preFreshTotal=${preFreshCount} postFreshTotal=${postFreshCount}`);
+const archivedTabBtn = page.locator('button:has-text("Archived Candidates")').first();
+ok("[QA-1817] the Archived tab exists at all", (await archivedTabBtn.count()) > 0, "");
+await archivedTabBtn.click();
+await page.waitForTimeout(500);
+await page.locator('input[placeholder="Search all columns…"]').first().fill(fresh[0].name);
+await page.waitForTimeout(400);
+const archivedRowVisible = await page.locator(`table tbody tr:has-text("${fresh[0].name}")`).count();
+ok("[QA-1817] the archived candidate is actually visible under its own Archived tab, not just uncounted elsewhere",
+  archivedRowVisible > 0, `rows=${archivedRowVisible}`);
+const archivedRowReason = archivedRowVisible > 0
+  ? await page.locator(`table tbody tr:has-text("${fresh[0].name}")`).first().innerText() : "";
+ok("[QA-1817] the archived row shows the reason typed into the confirm dialog, not just a bare status",
+  /QA-1817 rendered-suite archive/.test(archivedRowReason), archivedRowReason.slice(0, 200));
+
 // ================= QA-573's LITERAL ASK, on /reports =================
 // "open a <details>, close it, and read what is visible". REQ-367b: the warnings stay OUTSIDE the
 // disclosure card and stay visible in BOTH states.

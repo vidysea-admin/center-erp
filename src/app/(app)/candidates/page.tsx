@@ -88,7 +88,7 @@ function CandidatesInner() {
     (initialBucket === "Fresh" ? FRESH_TAGS : JOURNEY_TAGS).includes(presetTag)
       ? presetTag
       : (sp.get("program") === "null" ? "No programme" : ""));
-  const [bucket, setBucket] = useState<"Fresh" | "Enrolled">(initialBucket);
+  const [bucket, setBucket] = useState<"Fresh" | "Enrolled" | "Archived">(initialBucket);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [shareLink, setShareLink] = useState("");
@@ -159,12 +159,16 @@ function CandidatesInner() {
   // there: CEO 14/08 [28:12] dropout vs Fresh, QA-069 result-outranks-lifecycle, [29:36]
   // Fresh's own journey, 15/08 fee-stage removal.
   const isFresh = (r: any) => isFreshCandidate(r);
-  const freshItems = items.filter(isFresh);
-  const enrolledItems = items.filter((r: any) => !isFresh(r));
-  const bucketItems = bucket === "Fresh" ? freshItems : enrolledItems;
+  // QA-1817: archived rows used to fall into whichever of these two buckets they'd normally land
+  // in and render identically to an active row (no badge, no exclusion) — so archiving a candidate
+  // looked like the button did nothing. They now get their own bucket and leave both of these.
+  const freshItems = items.filter((r: any) => isFresh(r) && !r.archived_at);
+  const enrolledItems = items.filter((r: any) => !isFresh(r) && !r.archived_at);
+  const archivedItems = items.filter((r: any) => !!r.archived_at);
+  const bucketItems = bucket === "Fresh" ? freshItems : bucket === "Enrolled" ? enrolledItems : archivedItems;
   const journeyOf = (r: any): string => sharedJourneyOf({ ...r, active_batch_status: r.active_batch?.status });
   const freshJourneyOf = (r: any): string => sharedFreshJourneyOf(r);
-  const LIFECYCLE_TAGS = bucket === "Fresh" ? FRESH_TAGS : JOURNEY_TAGS;
+  const LIFECYCLE_TAGS = bucket === "Fresh" ? FRESH_TAGS : bucket === "Enrolled" ? JOURNEY_TAGS : [];
   // 2026-08-13 (Umesh): a candidate in a batch HAS that batch's programme — "No programme"
   // only when neither the row nor an active membership carries one.
   const progOf = (r: any) => r.program ?? r.active_batch?.program ?? null;
@@ -472,9 +476,9 @@ function CandidatesInner() {
           onDismiss={() => { setShareLink(""); setRegShared(null); }} />
       )}
       {/* CEO: Fresh = inquiry se batch-assign tak; Enrolled = batch se billing tak. */}
-      <Tabs tabs={[`Fresh Candidates (${freshItems.length})`, `Enrolled Candidates (${enrolledItems.length})`]}
-        active={bucket === "Fresh" ? `Fresh Candidates (${freshItems.length})` : `Enrolled Candidates (${enrolledItems.length})`}
-        onChange={(t) => { setBucket(t.startsWith("Fresh") ? "Fresh" : "Enrolled"); setTag(""); }} />
+      <Tabs tabs={[`Fresh Candidates (${freshItems.length})`, `Enrolled Candidates (${enrolledItems.length})`, `Archived Candidates (${archivedItems.length})`]}
+        active={bucket === "Fresh" ? `Fresh Candidates (${freshItems.length})` : bucket === "Enrolled" ? `Enrolled Candidates (${enrolledItems.length})` : `Archived Candidates (${archivedItems.length})`}
+        onChange={(t) => { setBucket(t.startsWith("Fresh") ? "Fresh" : t.startsWith("Enrolled") ? "Enrolled" : "Archived"); setTag(""); }} />
       <FilterPills active={tag} onChange={(v) => setTag(v === tag ? "" : v)}
         options={[
           { value: "", label: "All", count: bucketItems.length },
@@ -527,7 +531,10 @@ function CandidatesInner() {
                 title={isFutureInterest(r) ? "Interested in the Upcoming batch — change that on their record before adding them to this one." : undefined}
                 disabled={isFutureInterest(r) || (r.lifecycle_status !== "Unassigned" && r.lifecycle_status !== "Dropped")} />
             ) },
-          { key: "name", label: "Name", sortable: true, sortValue: (r: any) => r.name, render: (r: any) => <NameCell name={r.name} sub={r.gender} /> },
+          // QA-1817: the archived reason lives here, not in the row-action cell below — that cell is
+          // pinned by QA-1010 to carry exactly one visibility decision (the delete right), and a
+          // reason label is display, not a gate.
+          { key: "name", label: "Name", sortable: true, sortValue: (r: any) => r.name, render: (r: any) => <NameCell name={r.name} sub={r.archived_at ? `Archived: ${r.archive_reason || "no reason given"}` : r.gender} /> },
           { key: "phone", label: "Phone" },
           {
             // R-H (CEO [11:29]): "If I click on location, I should be able to see the
@@ -661,7 +668,10 @@ function CandidatesInner() {
             key: "_edit", label: "", render: (r: any) => (
               <span onClick={(e) => e.stopPropagation()} className="flex items-center gap-1">
                 <Btn small kind="ghost" onClick={() => openEdit(r)}>Edit</Btn>
-                {canDeleteCandidate && (
+                {/* QA-1817: an already-archived row has nothing left to archive, and the label now
+                    says what the button does — it used to still read "Delete" after QA-1792/QA-1800
+                    made the action archive, not erase. */}
+                {canDeleteCandidate && !r.archived_at && (
                   <Btn small kind="ghost" onClick={async () => {
                     // QA-1795/QA-1798: this used to promise permanent deletion "and their documents
                     // go too" - untrue since QA-1792, so the button was lying about what it does. It
@@ -694,7 +704,7 @@ Archive anyway?`)) return;
                         setError(e.message);
                       }
                     }
-                  }}>Delete</Btn>
+                  }}>Archive</Btn>
                 )}
               </span>
             ),

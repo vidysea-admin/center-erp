@@ -2752,7 +2752,11 @@ for (const file of walk(root)) {
     // (0 of 17), RED on the decoy mutation (4 of 17).
     // ===========================================================================================
     const urlAt = cscan.indexOf("lifecycle_status");
-    const bucketAt = cscan.search(/useState<\s*"Fresh"\s*\|\s*"Enrolled"\s*>/);
+    // QA-1817: the bucket state widened to a third value ("Archived", for the newly-visible
+    // archived-candidates tab) - this is a boundary marker for the region below, not the guard
+    // itself, so it only needs to still find the SAME useState declaration; the trailing union
+    // member is optional and unconstrained rather than re-pinned to an exact list of two.
+    const bucketAt = cscan.search(/useState<\s*"Fresh"\s*\|\s*"Enrolled"(\s*\|\s*"[A-Za-z]+")?\s*>/);
     const region = urlAt >= 0 && bucketAt > urlAt ? cscan.slice(urlAt, bucketAt) : "";
     const readsUrl = urlAt >= 0;
     // QA-1183: the union of both lists is NOT the right set — only the RESOLVED bucket's pills are
@@ -3790,18 +3794,28 @@ for (const file of walk(root)) {
     }
     const cellScan = blankStrings(editMember);
 
+    // QA-1817: archiving a candidate that is already archived has nothing left to do, so the row
+    // now hides the Archive button (and shows the recorded reason instead) once `r.archived_at` is
+    // set. That is a STATUS check, not an identity/role decision - the exact thing this pin exists
+    // to catch is a DISGUISED permission gate, and `!r.archived_at` decides none of "who can see
+    // this", only "is there anything left to archive on this particular row". It is named here
+    // explicitly and only this one literal spelling is discounted, so a role check still cannot
+    // hide behind it. Trainers has no `archived_at` field, so this is a no-op there.
+    const cellScanForGating = cellScan.split("!r.archived_at &&").join("").split("!!r.archived_at &&").join("");
+
     // QA-1061 - "gate on the DECISION, not the token". Cycle 2 asked whether the string
     // `role === "Admin"` appeared. A checker wrote `!["Admin"].includes(role) ? null : (...)` - an
     // idiom that sits two columns above this cell in the same file - and restored the exact QA-904
     // defect, for the exact users the fix was for, with the wall green. Any spelling of any new gate
     // is a new decision about who sees these verbs, so the RULE is: this cell may contain exactly
-    // ONE conditional, and it must be the delete flag. A ternary here is a gate whatever it says.
-    const ands = [...cellScan.matchAll(/&&/g)].length;
+    // ONE conditional beyond the named QA-1817 status check above, and it must be the delete flag.
+    // A ternary here is a gate whatever it says.
+    const ands = [...cellScanForGating.matchAll(/&&/g)].length;
     // QA-1081: the lookahead alone skipped the FIRST `?` of `??` and then matched the SECOND, so any
     // nullish default written in this cell read as a second permission gate and turned the wall RED
     // on an ordinary edit. A pin that false-REDs is not "safely strict" - it trains people to route
     // around it, which is how a real finding gets ignored later. The lookbehind pairs with it.
-    const ternaries = [...cellScan.matchAll(/(?<!\?)\?(?![.?])/g)].length;
+    const ternaries = [...cellScanForGating.matchAll(/(?<!\?)\?(?![.?])/g)].length;
     const guardIsFlag = new RegExp("\\{\\s*" + flag + "\\s*&&").test(editMember);
 
     // M13: Edit stayed visible, enabled and unhidden while openEdit was emptied - and onRowClick
@@ -3839,7 +3853,11 @@ for (const file of walk(root)) {
       sane: memberCount >= 5,
       edit: /onClick=\{\(\) => openEdit\(r\)\}>\s*Edit\s*</.test(editMember),
       openEditReal: firstSet < Infinity && firstReturn > firstSet && !/canRight\(/.test(openBody),
-      del: guardIsFlag && /\}>\s*Delete\s*</.test(editMember),
+      // QA-1817: candidates' Delete became Archive (QA-1792/QA-1800 - it stopped erasing the
+      // record) and the button label finally caught up to that; trainers' Delete still erases, so
+      // its label is unchanged. Either literal is accepted here - "Delete" for a door that still
+      // means it, "Archive" for the one that no longer does.
+      del: guardIsFlag && /\}>\s*(Delete|Archive)\s*</.test(editMember),
       oneGate: ands === 1 && ternaries === 0,
       permWired: new RegExp("const\\s+" + flag + "\\s*=[\\s\\S]{0,120}?" + permKey.replace(".", "\\.")).test(raw),
       flagClean: new RegExp("^rightsLoaded && canRight\\(\"" + permKey.replace(".", "\\.") + "\", \"edit\"\\)$").test(init.trim()),
