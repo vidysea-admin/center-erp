@@ -1603,7 +1603,13 @@ function EnrolCard({ m, onUpdate, selected, onSelect, canEdit = true, canEditCan
     <div className={`space-y-3 rounded-xl border bg-white p-4 ${selected ? "ring-2 ring-blue-200" : ""}`}>
       <div className="flex items-center justify-between gap-2">
         <label className="flex min-w-0 items-start gap-2">
-          {canEdit && m.enrollment_status !== "Completed" && <input type="checkbox" className="mt-1" checked={!!selected} onChange={() => onSelect(m._id)} />}
+          {/* QA-1824 (Umesh, live repro): this used to be gated on `m.enrollment_status !==
+              "Completed"`, so a fully-Completed candidate's checkbox only appeared after
+              toggling one of their own steps off (dropping the count below 4) — it isn't
+              lazy state, it's this condition. Selection is independent of status now; a
+              Completed candidate is selectable too (the bulk route already no-ops safely on
+              anyone already done for the targeted step — bulk-enroll/route.ts's `skipped`). */}
+          {canEdit && <input type="checkbox" className="mt-1" checked={!!selected} onChange={() => onSelect(m._id)} />}
           <div className="min-w-0">
             <div className="truncate font-semibold" title={who}>{who}</div>
             <div className="text-sm text-gray-500">{m.candidate?.phone}{m.candidate?.email && m.candidate?.name ? ` · ${m.candidate.email}` : ""}</div>
@@ -1689,7 +1695,17 @@ function Enrollment({ batchId, batch, error, setError }: any) {
     try {
       const res = await api(`/api/members/${m._id}`, { method: "PATCH", json: patch });
       setMembers((ms) => ms.map((x) => (x._id === m._id ? { ...x, ...res.item } : x)));
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) {
+      // Rule 55 (QA-1824): a later step was requested while an earlier one is still open —
+      // updateEnrollment names exactly which and refuses. Its "Rule 55:" prefix is stripped by
+      // plain() (src/lib/user-copy.ts) before this ever reaches the client — same as every other
+      // rule-coded refusal in this codebase — so detection here matches on `confirm_backfill`,
+      // the one phrase in the message that's unique to this refusal and survives the strip.
+      if (typeof e.message === "string" && e.message.includes("confirm_backfill") && confirm(`${e.message.replace(/\s*Resubmit with confirm_backfill.*$/, "")}\n\nMark them done now too?`)) {
+        return update(m, { ...patch, confirm_backfill: true });
+      }
+      setError(e.message);
+    }
   }
   const toggleSel = (id: string) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
@@ -1713,15 +1729,29 @@ function Enrollment({ batchId, batch, error, setError }: any) {
   // Bulk actions act on what is actually visible, not the whole batch — searching for one
   // candidate and clicking "Select all pending" must not silently reach the ones off-screen.
   const pending = shown.filter((m) => m.enrollment_status !== "Completed");
+  const ENROL_STEP_ORDER = ["reg_done", "kyc_done", "enroll_done", "accept_done"] as const;
   async function bulk(step: string) {
     if (bulkBusy) return;
     const targets = selected.size ? [...selected] : pending.map((m) => m._id);
     if (!targets.length) return;
     const what = step === "all" ? "complete enrollment (all four steps)" : `mark ${step === "reg_done" ? "Registration" : step === "kyc_done" ? "e-KYC" : step === "enroll_done" ? "Enrollment" : "Batch Accept"}`;
-    if (!confirm(`${what} for ${targets.length} candidate${targets.length > 1 ? "s" : ""}?`)) return;
+    // Rule 55 (QA-1824): same step-order gate the single-card toggle hits (see `update` above),
+    // precomputed here so a selection spanning several gapped candidates costs ONE confirm, not
+    // N. The server (bulk-enroll → per-member updateEnrollment) still enforces this
+    // independently — this is purely to avoid a dialog storm for a mixed selection.
+    let needsBackfill = false;
+    const highestIdx = (ENROL_STEP_ORDER as readonly string[]).indexOf(step);
+    if (highestIdx > 0) {
+      const targetSet = new Set(targets);
+      needsBackfill = members.some((m) => targetSet.has(m._id) && ENROL_STEP_ORDER.slice(0, highestIdx).some((s) => !m[s]));
+    }
+    const confirmMsg = needsBackfill
+      ? `${what} for ${targets.length} candidate${targets.length > 1 ? "s" : ""}? Some of them are missing an earlier step (Registration/e-KYC/Enrollment) — those will be marked done too.`
+      : `${what} for ${targets.length} candidate${targets.length > 1 ? "s" : ""}?`;
+    if (!confirm(confirmMsg)) return;
     setBulkBusy(true); setBulkMsg("");
     try {
-      const r = await api(`/api/batches/${batchId}/members/bulk-enroll`, { method: "POST", json: { step, member_ids: targets } });
+      const r = await api(`/api/batches/${batchId}/members/bulk-enroll`, { method: "POST", json: { step, member_ids: targets, ...(needsBackfill ? { confirm_backfill: true } : {}) } });
       setBulkMsg(`${r.updated} updated${r.skipped ? `, ${r.skipped} already done` : ""}${r.failed?.length ? `, ${r.failed.length} failed` : ""}`);
       setSelected(new Set());
       await load();
@@ -2045,10 +2075,41 @@ function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
   const [grid, setGrid] = useState<null | { from: string; to: string; trainer_present: boolean; absent: Record<string, Set<string>> }>(null);
   const [gridBusy, setGridBusy] = useState(false);
   const [gridResult, setGridResult] = useState<any[] | null>(null);
-  // QA-1822 (Umesh, live): "isko ek saath aise mat dikhaiye... collapsible bana dena" — the
-  // per-candidate list took too much vertical space when the batch had a large flagged count.
-  // Collapsed by default; the count/reason summary above it is always visible.
-  const [dropoutExpanded, setDropoutExpanded] = useState(false);
+  // QA-1823 (Umesh, live, follow-up to QA-1822): the collapsible text-dump list was still
+  // unusable at real scale ("36 candidates... manually dhekna-dhundna-match karna padega") —
+  // no action was possible from the banner itself. It's gone; clicking a stat now filters the
+  // table below to exactly those candidates and checks them, and drop is done right here.
+  const [dropoutFilter, setDropoutFilter] = useState<"stopped" | "short" | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const toggleSelected = (id: string) => setSelected((s) => {
+    const n = new Set(s);
+    n.has(id) ? n.delete(id) : n.add(id);
+    return n;
+  });
+  const { dropTarget, setDropTarget, dropForm, setDropForm, dropReasons } = useDropMember(() => { setSelected(new Set()); load(); }, (m: string) => setError(m));
+  const [dropBusy, setDropBusy] = useState(false);
+  const [dropResult, setDropResult] = useState<string[] | null>(null);
+  async function dropSelected() {
+    setDropBusy(true);
+    setDropResult(null);
+    const failedIds = new Set<string>();
+    const failedLines: string[] = [];
+    for (const id of selected) {
+      try {
+        await api(`/api/members/${id}/drop`, { method: "POST", json: dropForm });
+      } catch (e: any) {
+        failedIds.add(id);
+        const m: any = activeMembers.find((x: any) => x.member_id === id);
+        failedLines.push(`${m?.name ?? id}: ${e.message}`);
+      }
+    }
+    setDropBusy(false);
+    setDropTarget(null);
+    setDropForm({});
+    setSelected(failedIds);
+    setDropResult(failedLines.length ? failedLines : null);
+    await load();
+  }
   const operating: number[] = batch?.program?.operating_days ?? [1, 2, 3, 4, 5, 6];
   const loggedDays = new Set<string>((data?.days ?? []).map((d: string) => String(d).slice(0, 10)));
   // -102, Manish 17/08 ([00:55] "mark attendance bulk wala… ye kaise kaam kar raha hai nahi
@@ -2166,68 +2227,54 @@ function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
   // on its own. The heading is what an ops person scans before clicking through to a drop.
   const nStopped = dropoutSuggestions.filter((m: any) => m.dropout_signal.stopped_coming).length;
   const nShort = dropoutSuggestions.filter((m: any) => m.dropout_signal.cannot_reach_bar).length;
+  // QA-1823: clicking a stat below filters the table to exactly that subset and checks every row
+  // in it, so the action (bulk-drop, right below) reads off the same table the reader is looking
+  // at instead of a separate text list they'd have to re-find each candidate from.
+  const dropoutFilterMatchFor = (which: "stopped" | "short") => (m: any) =>
+    which === "stopped" ? !!m.dropout_signal?.stopped_coming : !!m.dropout_signal?.cannot_reach_bar;
+  const applyDropoutFilter = (which: "stopped" | "short") => {
+    if (dropoutFilter === which) { setDropoutFilter(null); setSelected(new Set()); return; }
+    setDropoutFilter(which);
+    setSelected(new Set(dropoutSuggestions.filter(dropoutFilterMatchFor(which)).map((m: any) => m.member_id)));
+  };
+  const tableRows = dropoutFilter ? activeMembers.filter(dropoutFilterMatchFor(dropoutFilter)) : activeMembers;
   return (
     <div className="space-y-3">
       {dropoutSuggestions.length > 0 && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
-          <button
-            type="button"
-            className="mb-2 flex w-full items-start justify-between gap-2 text-left"
-            onClick={() => setDropoutExpanded((v) => !v)}
-            aria-expanded={dropoutExpanded}
-          >
-            <div>
-              <div className="font-semibold">
-                {dropoutSuggestions.length} candidate{dropoutSuggestions.length === 1 ? "" : "s"} to review before this batch closes
-              </div>
-              <div className="text-amber-800">
-                {nStopped > 0 && <>{nStopped}{"\u00a0"}whose attendance has not moved since an earlier import</>}
-                {nStopped > 0 && nShort > 0 && <>{"\u2003\u00b7\u2003"}</>}
-                {nShort > 0 && <>{nShort} whose hours can no longer reach the bar{nStopped > 0 ? "" : ""}</>}
-                {nStopped > 0 && nShort > 0 && <> {"("}some may be both{")"}</>}
-              </div>
-            </div>
-            <span className="mt-0.5 shrink-0 font-medium text-amber-700 underline underline-offset-2">
-              {dropoutExpanded ? "Hide details \u25b4" : "Show details \u25be"}
-            </span>
-          </button>
-          {dropoutExpanded && (
-          <ul className="space-y-1.5">
-            {dropoutSuggestions.map((m: any) => {
-              const d = m.dropout_signal;
-              const why: string[] = [];
-              // Stated as an observation, never a verdict: the screen must not claim to know that
-              // somebody left, only what the portal file stopped showing.
-              if (d.stopped_coming) {
-                why.push(
-                  d.days_present === d.days_present_prev
-                    ? "still " + d.days_present + " day" + (d.days_present === 1 ? "" : "s") + " attended, unchanged since the previous import"
-                    : "days attended went from " + d.days_present_prev + " to " + d.days_present + " between imports",
-                );
-              }
-              if (d.cannot_reach_bar) {
-                why.push(
-                  d.remaining_days === 0
-                    ? "no scheduled days left, at " + (m.attended_hours ?? 0) + " of " + data.required_hours + " hours"
-                    : "even attending every one of the " + d.remaining_days + " day" + (d.remaining_days === 1 ? "" : "s") + " left reaches about " + d.projected_hours + " of " + data.required_hours + " hours",
-                );
-              }
-              return (
-                <li key={m.member_id} className="flex flex-wrap items-baseline gap-x-2">
-                  <span className="font-medium">{m.name}</span>
-                  {m.phone && <span className="text-amber-700">{m.phone}</span>}
-                  <span className="text-amber-800">{"\u2014"} {why.join("; ")}</span>
-                </li>
-              );
-            })}
-          </ul>
+          <div className="font-semibold">
+            {dropoutSuggestions.length} candidate{dropoutSuggestions.length === 1 ? "" : "s"} to review before this batch closes
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-x-1 gap-y-1 text-amber-800">
+            {nStopped > 0 && (
+              <button type="button"
+                className={`rounded-full px-2 py-0.5 underline-offset-2 hover:underline ${dropoutFilter === "stopped" ? "bg-amber-200 font-semibold" : ""}`}
+                onClick={() => applyDropoutFilter("stopped")}>
+                {nStopped}{"\u00a0"}whose attendance has not moved since an earlier import
+              </button>
+            )}
+            {nStopped > 0 && nShort > 0 && <span>{"\u2003\u00b7\u2003"}</span>}
+            {nShort > 0 && (
+              <button type="button"
+                className={`rounded-full px-2 py-0.5 underline-offset-2 hover:underline ${dropoutFilter === "short" ? "bg-amber-200 font-semibold" : ""}`}
+                onClick={() => applyDropoutFilter("short")}>
+                {nShort} whose hours can no longer reach the bar
+              </button>
+            )}
+            {nStopped > 0 && nShort > 0 && <span>{"("}some may be both{")"}</span>}
+          </div>
+          {dropoutFilter && (
+            <p className="mt-1 text-amber-700">
+              Showing {tableRows.length} of {activeMembers.length} below, selected.{" "}
+              <button type="button" className="underline underline-offset-2" onClick={() => { setDropoutFilter(null); setSelected(new Set()); }}>Clear filter</button>
+            </p>
           )}
           <p className="mt-2 border-t border-amber-200 pt-2 text-amber-800">
             Nobody is dropped automatically. This is read from the government attendance file, which
             gives a running total per person and never says which days were missed{"\u2014"}so it is
-            what the file stopped showing, not a record of absence. Drop them from the Candidates tab,
-            where a date and a reason are recorded.
-            {onGo && <> <button type="button" className="underline underline-offset-2" onClick={() => onGo("Candidates")}>Open Candidates</button></>}
+            what the file stopped showing, not a record of absence. Select candidates in the table
+            below and drop them right here, where a date and a reason are recorded.
+            {onGo && <> Or, <button type="button" className="underline underline-offset-2" onClick={() => onGo("Candidates")}>open the Candidates tab</button>.</>}
           </p>
         </div>
       )}
@@ -2363,10 +2410,44 @@ function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
           )}
         </div>
       )}
-      <DataTable rows={activeMembers}
+      {/* QA-1823: select/deselect what's currently visible below (respects an active dropout
+          filter), and act on the selection right here — the friction being fixed is "look at
+          one screen, act on another." */}
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        {tableRows.length > 0 && (
+          <>
+            <button type="button" className="text-blue-700 hover:underline" onClick={() => setSelected(new Set(tableRows.map((m: any) => m.member_id)))}>Select all visible</button>
+            <span className="text-gray-300">·</span>
+            <button type="button" className="text-blue-700 hover:underline" onClick={() => setSelected(new Set())}>Clear selection</button>
+          </>
+        )}
+        {selected.size > 0 && (
+          <span className="ml-auto flex flex-wrap items-center gap-2 rounded-lg bg-gray-50 px-2 py-1">
+            <span className="font-medium">{selected.size} selected</span>
+            <Btn small kind="danger"
+              onClick={() => setDropTarget({ candidate: { name: `${selected.size} selected candidate${selected.size === 1 ? "" : "s"}` } })}>
+              Drop selected
+            </Btn>
+          </span>
+        )}
+      </div>
+      {dropResult && (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-800">
+          {dropResult.length} could not be dropped:
+          <ul className="mt-1 list-disc pl-4">{dropResult.map((line, i) => <li key={i}>{line}</li>)}</ul>
+        </div>
+      )}
+      <DataTable rows={tableRows}
         cardTitle={(r: any) => r.name}
         defaultSort={{ key: "name", dir: "asc" }}
+        isSelected={(r: any) => selected.has(r.member_id)}
         columns={[
+          {
+            key: "_sel", label: "", mobile: false,
+            render: (r: any) => (
+              <input type="checkbox" checked={selected.has(r.member_id)} onChange={() => toggleSelected(r.member_id)} onClick={(e) => e.stopPropagation()} />
+            ),
+          },
           // -161 (QA-430, open since 2026-08-20 and the line REQ-389 was written FROM): a candidate
           // with no portal ID got nothing beneath their name, so two students of one name rendered
           // identically on the one screen that shows hours per person. The separator falls back the
@@ -2491,6 +2572,13 @@ function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
       <GovtRowResolveDrawer importId={openResolve?.importId ?? null} rowId={openResolve?.rowId ?? null} canEdit={canResolveGovt}
         onClose={() => setOpenResolve(null)}
         onResolved={() => { setOpenResolve(null); load(); }} />
+      {/* QA-1823: reuses the same drop dialog Roster/Enrollment already use — date + reason,
+          one shared drop-reasons list. `dropTarget` here is a fabricated display-only stand-in
+          (title only); the real submission is `dropSelected`, which loops the same single-member
+          drop API across every selected member_id so a failure is attributable to one candidate. */}
+      <DropMemberDrawer dropTarget={dropTarget} setDropTarget={dropBusy ? () => {} : setDropTarget}
+        dropForm={dropForm} setDropForm={setDropForm} dropReasons={dropReasons}
+        drop={dropBusy ? () => {} : dropSelected} error={error} />
     </div>
   );
 }

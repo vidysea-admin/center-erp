@@ -821,17 +821,51 @@ export async function addMemberChecked(batchId: string, candidateId: string, joi
 }
 
 // Rules 22–24: enrollment step update
+const ENROLLMENT_STEP_ORDER = ["reg_done", "kyc_done", "enroll_done", "accept_done"] as const;
+const ENROLLMENT_STEP_LABEL: Record<(typeof ENROLLMENT_STEP_ORDER)[number], string> = {
+  reg_done: "Registration", kyc_done: "e-KYC", enroll_done: "Enrollment", accept_done: "Batch Accept",
+};
+
 export async function updateEnrollment(memberId: string, patch: {
   reg_done?: boolean; kyc_done?: boolean; enroll_done?: boolean; accept_done?: boolean;
   failed?: boolean; issue?: string | null; issue_note?: string | null;
   source?: "Manual" | "Automation";
+  // Rule 55 (QA-1824): set true to acknowledge and auto-fill a step-order gap (see below) in
+  // the same request. Never persisted — a one-shot instruction, not roster state.
+  confirm_backfill?: boolean;
 }) {
   const m = await BatchMember.findById(memberId);
   if (!m) throw new HttpError(404, "Batch member not found");
   if (m.left_on) throw new HttpError(409, "Member has left this batch");
 
   const now = new Date();
-  for (const step of ["reg_done", "kyc_done", "enroll_done", "accept_done"] as const) {
+  // Rule 55 (QA-1824, Umesh live: "flow aisa hai ki pehle enroll hota hai, uske baad batch
+  // accept... agar direct batch accept karega aur enrolled abhi tick nahi hai, ek confirmation
+  // le, aur ok karne pe enrolled bhi ho jaaye aur batch accept bhi"). The four steps have an
+  // implied trail order; setting a later one true while an earlier one is (and stays, after this
+  // same patch) false is rejected once, naming what's missing, unless the caller already
+  // confirmed — then every missing earlier step is backfilled true alongside the one requested.
+  // Turning a step OFF is never gated (out of scope per the same conversation).
+  {
+    let highestOn = -1;
+    ENROLLMENT_STEP_ORDER.forEach((step, i) => { if (patch[step] === true) highestOn = i; });
+    if (highestOn > 0) {
+      const effective = (step: (typeof ENROLLMENT_STEP_ORDER)[number]) =>
+        patch[step] !== undefined ? patch[step] : m[step];
+      const missing = ENROLLMENT_STEP_ORDER.slice(0, highestOn).filter((step) => !effective(step));
+      if (missing.length) {
+        if (!patch.confirm_backfill) {
+          throw new HttpError(
+            409,
+            `Rule 55: ${missing.map((s) => ENROLLMENT_STEP_LABEL[s]).join(", ")} ${missing.length === 1 ? "is" : "are"} not marked done yet for ${ENROLLMENT_STEP_LABEL[ENROLLMENT_STEP_ORDER[highestOn]]}. Resubmit with confirm_backfill to mark ${missing.length === 1 ? "it" : "them"} done too.`,
+          );
+        }
+        for (const step of missing) (patch as Record<string, boolean>)[step] = true;
+      }
+    }
+  }
+
+  for (const step of ENROLLMENT_STEP_ORDER) {
     if (patch[step] !== undefined && patch[step] !== m[step]) {
       m[step] = patch[step]!;
       (m as any)[step + "_at"] = patch[step] ? now : null;

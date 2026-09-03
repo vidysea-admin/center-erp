@@ -76,6 +76,63 @@ ok("[worst] double-assignment refused", dupAdd.status >= 400, `got ${dupAdd.stat
     !!notReady && /room not assigned/.test(notReady.label) && !/Not ready: room assigned/.test(notReady.label), notReady?.label);
   await req(admin, "POST", `/api/batches/${noRoomBatch._id}/transition`, { target: "Cancelled", reason: "QA-147 pin cleanup" }, 200);
 }
+// ---- Rule 55 (QA-1824, Umesh live): step-order gate — a later step refused while an earlier
+// one is still open, unless the caller confirms a backfill. Own batch (target_size 50, well
+// clear of Rule 48) so this doesn't disturb the 80%-boundary math right below, which depends on
+// the exact active-Completed count on `batch`. ----
+{
+  const r55batch = (await req(admin, "POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, room: room._id, planned_start: today(), target_size: 50 }, 201)).data.item;
+  const r55c1 = (await req(admin, "POST", "/api/candidates", { name: "TEST-EE R55C1 " + s, phone: phone("91"), location: loc._id, program: prog._id }, 201)).data.item;
+  const r55c2 = (await req(admin, "POST", "/api/candidates", { name: "TEST-EE R55C2 " + s, phone: phone("92"), location: loc._id, program: prog._id }, 201)).data.item;
+  const mm1 = (await req(admin, "POST", `/api/batches/${r55batch._id}/members`, { candidate: r55c1._id }, 201)).data.item;
+  const mm2 = (await req(admin, "POST", `/api/batches/${r55batch._id}/members`, { candidate: r55c2._id }, 201)).data.item;
+
+  // [worst] Batch Accept directly, nothing else done yet.
+  const gap = await req(admin, "PATCH", `/api/members/${mm1._id}`, { accept_done: true });
+  ok("QA-1824 [worst] Rule 55: Batch Accept refused while Registration/e-KYC/Enrollment are all open", gap.status === 409, `got ${gap.status}: ${JSON.stringify(gap.data).slice(0, 160)}`);
+  ok("QA-1824 [worst] the refusal names all three missing steps, no rule code on screen",
+    ["Registration", "e-KYC", "Enrollment"].every((w) => (gap.data?.error ?? "").includes(w)) && !/Rule\s*55/i.test(gap.data?.error ?? ""),
+    gap.data?.error);
+  const afterGap = (await req(admin, "GET", `/api/batches/${r55batch._id}/members`, undefined, 200)).data.items ?? [];
+  const mm1row = afterGap.find((m) => String(m._id) === String(mm1._id));
+  ok("QA-1824 [worst] accept_done was NOT persisted by the refused request", mm1row?.accept_done !== true, JSON.stringify(mm1row?.accept_done));
+
+  // [best] the same request, confirmed — every missing step backfills alongside the one asked for.
+  const backfilled = await req(admin, "PATCH", `/api/members/${mm1._id}`, { accept_done: true, confirm_backfill: true }, 200);
+  const it = backfilled.data.item;
+  ok("QA-1824 [best] confirm_backfill sets every earlier step true alongside the requested one",
+    it.reg_done === true && it.kyc_done === true && it.enroll_done === true && it.accept_done === true,
+    JSON.stringify({ reg: it.reg_done, kyc: it.kyc_done, enroll: it.enroll_done, accept: it.accept_done }));
+  ok("QA-1824 [best] each backfilled step carries its own _at timestamp", !!it.reg_done_at && !!it.kyc_done_at && !!it.enroll_done_at && !!it.accept_done_at,
+    JSON.stringify({ reg: it.reg_done_at, kyc: it.kyc_done_at, enroll: it.enroll_done_at, accept: it.accept_done_at }));
+  ok("QA-1824 [best] enrollment_status derives Completed from the backfill", it.enrollment_status === "Completed", it.enrollment_status);
+
+  // [best] turning a step OFF is never gated — regression control, same member, same request shape.
+  const turnOff = await req(admin, "PATCH", `/api/members/${mm1._id}`, { reg_done: false }, 200);
+  ok("QA-1824 [best] turning a step OFF succeeds with no confirmation required (Rule 55 only gates ON-transitions)", turnOff.data.item.reg_done === false, JSON.stringify(turnOff.data.item.reg_done));
+
+  // [worst] a MIDDLE step (Enrollment) directly, with only Registration done — e-KYC still open.
+  await req(admin, "PATCH", `/api/members/${mm2._id}`, { reg_done: true }, 200);
+  const midGap = await req(admin, "PATCH", `/api/members/${mm2._id}`, { enroll_done: true });
+  ok("QA-1824 [worst] Rule 55 also gates a MIDDLE step, not only Batch Accept", midGap.status === 409, `got ${midGap.status}`);
+  ok("QA-1824 [worst] the middle-step message names only e-KYC as missing (Registration already done)",
+    (midGap.data?.error ?? "").includes("e-KYC") && !(midGap.data?.error ?? "").includes("Registration"), midGap.data?.error);
+
+  // [best] a single PATCH that sets the gap-closing step in the SAME request needs no confirm.
+  const samePatch = await req(admin, "PATCH", `/api/members/${mm2._id}`, { kyc_done: true, enroll_done: true }, 200);
+  ok("QA-1824 [best] setting the gap-closing step in the same request needs no confirm_backfill",
+    samePatch.data.item.kyc_done === true && samePatch.data.item.enroll_done === true, JSON.stringify(samePatch.data.item));
+
+  // [avg] the bulk 'accept_done' path hits the same per-member gate (mm2 still lacks accept_done).
+  const bulkGap = await req(admin, "POST", `/api/batches/${r55batch._id}/members/bulk-enroll`, { step: "accept_done", member_ids: [mm2._id] }, 200);
+  ok("QA-1824 [worst] bulk-enroll surfaces the same per-member gate as a failure, not a silent skip",
+    bulkGap.data.failed?.length === 1 && bulkGap.data.updated === 0, JSON.stringify(bulkGap.data));
+  const bulkBackfilled = await req(admin, "POST", `/api/batches/${r55batch._id}/members/bulk-enroll`, { step: "accept_done", member_ids: [mm2._id], confirm_backfill: true }, 200);
+  ok("QA-1824 [best] bulk-enroll with confirm_backfill succeeds through the same gate",
+    bulkBackfilled.data.updated === 1, JSON.stringify(bulkBackfilled.data));
+
+  await req(admin, "POST", `/api/batches/${r55batch._id}/transition`, { target: "Cancelled", reason: "QA-1824 pin cleanup" });
+}
 // ---- the 80% boundary (Rule 16) ---- (cands[1..2] already Completed via bulk above)
 // 3 of 5 = 60% — below the gate.
 await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Ready" }, 409);

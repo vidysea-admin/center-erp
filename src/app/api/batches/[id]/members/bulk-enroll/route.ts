@@ -37,9 +37,13 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   const ids: string[] | null = Array.isArray(body.member_ids) && body.member_ids.length ? body.member_ids.map(String) : null;
   const filter: Record<string, unknown> = { batch: id, left_on: null, ...(ids ? { _id: { $in: ids } } : {}) };
   const members = await BatchMember.find(filter).select("_id reg_done kyc_done enroll_done accept_done enrollment_status").lean<any[]>();
+  // Rule 55 (QA-1824): a single step marked for the whole selection still goes through
+  // updateEnrollment's step-order gate per member. The caller (the Enrollment tab's bulk button)
+  // is expected to have already computed the gap client-side and asked ONE confirm covering the
+  // whole selection before sending confirm_backfill — this route just forwards the flag.
   const patch: Record<string, boolean> = step === "all"
     ? { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }
-    : { [step]: true };
+    : { [step]: true, ...(body.confirm_backfill ? { confirm_backfill: true } : {}) };
   let updated = 0, skipped = 0;
   const failed: string[] = [];
   for (const m of members) {
