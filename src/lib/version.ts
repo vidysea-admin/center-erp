@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-289";
+export const RELEASE = "2026.08.14-290";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -158,6 +158,14 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "about how a candidate is dropped from a batch has changed.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-290: two independent fixes ship together. First, the batch Enrollment tab gains a 4th " +
+  "manual marking step - Enrollment - between e-KYC and Batch Accept, matching the real " +
+  "workflow (Registration, then e-KYC, then the candidate enrolling into the batch on the " +
+  "govt portal, then Batch Accept once govt/ABPL OTP approval comes through). A candidate's " +
+  "enrollment now only reads Completed once all four steps are ticked. Second, the 'days " +
+  "left' figure on a batch now genuinely counts down against the batch's real calendar " +
+  "window, instead of a portal attendance-day counter that did not track actual dates.";
+const RELEASE_NOTE_ARCHIVE_289 =
   "-289: the Candidates screen's checkbox selection now does more than feed Assign to Batch. " +
   "Ticking rows offers Archive Selected too, so clearing out unwanted leads no longer means " +
   "pressing Archive one row at a time - and for the first time, an archived candidate can be " +
@@ -1297,6 +1305,9 @@ const RELEASE_NOTE_ARCHIVE =
   // -287: ARCHIVE_286 wired in here in the SAME bump that declared it, same discipline.
   // -288: ARCHIVE_287 wired in here in the SAME bump that declared it, same discipline.
   // -289: ARCHIVE_288 wired in here in the SAME bump that declared it, same discipline.
+  // -290: ARCHIVE_289 wired in here in the SAME bump that declared it, same discipline -
+  // QA-265/-247/-256 record what happens when a bump declares an archive and forgets this line.
+  RELEASE_NOTE_ARCHIVE_289 + " " +
   RELEASE_NOTE_ARCHIVE_288 + " " +
   RELEASE_NOTE_ARCHIVE_287 + " " +
   RELEASE_NOTE_ARCHIVE_286 + " " +
