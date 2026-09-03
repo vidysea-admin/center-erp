@@ -52,7 +52,7 @@ export const GET = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   const defaults = await getDefaults();
   const batchIds = [...new Set([imp.batch?._id, ...rows.map((r) => r.batch?._id ?? r.batch)].filter(Boolean).map(String))];
   const batches = batchIds.length
-    ? await Batch.find({ _id: { $in: batchIds } }).populate("program", "hours duration_days scheme").select("program status").lean<any[]>()
+    ? await Batch.find({ _id: { $in: batchIds } }).populate("program", "hours duration_days scheme").select("program status planned_end actual_end").lean<any[]>()
     : [];
   const batchById = new Map(batches.map((b) => [String(b._id), b]));
   const bars = new Map<string, { required_hours: number; min_pct: number; source: string }>();

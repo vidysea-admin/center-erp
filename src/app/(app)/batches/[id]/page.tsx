@@ -2042,6 +2042,10 @@ function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
   const [grid, setGrid] = useState<null | { from: string; to: string; trainer_present: boolean; absent: Record<string, Set<string>> }>(null);
   const [gridBusy, setGridBusy] = useState(false);
   const [gridResult, setGridResult] = useState<any[] | null>(null);
+  // QA-1822 (Umesh, live): "isko ek saath aise mat dikhaiye... collapsible bana dena" — the
+  // per-candidate list took too much vertical space when the batch had a large flagged count.
+  // Collapsed by default; the count/reason summary above it is always visible.
+  const [dropoutExpanded, setDropoutExpanded] = useState(false);
   const operating: number[] = batch?.program?.operating_days ?? [1, 2, 3, 4, 5, 6];
   const loggedDays = new Set<string>((data?.days ?? []).map((d: string) => String(d).slice(0, 10)));
   // -102, Manish 17/08 ([00:55] "mark attendance bulk wala… ye kaise kaam kar raha hai nahi
@@ -2163,17 +2167,28 @@ function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
     <div className="space-y-3">
       {dropoutSuggestions.length > 0 && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
-          <div className="mb-2">
-            <div className="font-semibold">
-              {dropoutSuggestions.length} candidate{dropoutSuggestions.length === 1 ? "" : "s"} to review before this batch closes
+          <button
+            type="button"
+            className="mb-2 flex w-full items-start justify-between gap-2 text-left"
+            onClick={() => setDropoutExpanded((v) => !v)}
+            aria-expanded={dropoutExpanded}
+          >
+            <div>
+              <div className="font-semibold">
+                {dropoutSuggestions.length} candidate{dropoutSuggestions.length === 1 ? "" : "s"} to review before this batch closes
+              </div>
+              <div className="text-amber-800">
+                {nStopped > 0 && <>{nStopped}{"\u00a0"}whose attendance has not moved since an earlier import</>}
+                {nStopped > 0 && nShort > 0 && <>{"\u2003\u00b7\u2003"}</>}
+                {nShort > 0 && <>{nShort} whose hours can no longer reach the bar{nStopped > 0 ? "" : ""}</>}
+                {nStopped > 0 && nShort > 0 && <> {"("}some may be both{")"}</>}
+              </div>
             </div>
-            <div className="text-amber-800">
-              {nStopped > 0 && <>{nStopped}{"\u00a0"}whose attendance has not moved since an earlier import</>}
-              {nStopped > 0 && nShort > 0 && <>{"\u2003\u00b7\u2003"}</>}
-              {nShort > 0 && <>{nShort} whose hours can no longer reach the bar{nStopped > 0 ? "" : ""}</>}
-              {nStopped > 0 && nShort > 0 && <> {"("}some may be both{")"}</>}
-            </div>
-          </div>
+            <span className="mt-0.5 shrink-0 font-medium text-amber-700 underline underline-offset-2">
+              {dropoutExpanded ? "Hide details \u25b4" : "Show details \u25be"}
+            </span>
+          </button>
+          {dropoutExpanded && (
           <ul className="space-y-1.5">
             {dropoutSuggestions.map((m: any) => {
               const d = m.dropout_signal;
@@ -2203,6 +2218,7 @@ function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
               );
             })}
           </ul>
+          )}
           <p className="mt-2 border-t border-amber-200 pt-2 text-amber-800">
             Nobody is dropped automatically. This is read from the government attendance file, which
             gives a running total per person and never says which days were missed{"\u2014"}so it is

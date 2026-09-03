@@ -3761,7 +3761,7 @@ export function dropoutSignalFor(x: {
   latest?: { total_days_present?: number | null } | null;
   prev?: { total_days_present?: number | null } | null;
   attendedHours: number | null; requiredHours: number;
-  hoursPerDay: number | null; programDays: number | null; portalWorkingDays: number | null;
+  hoursPerDay: number | null; today: Date; batchEnd: Date | null;
 }): null | {
   stopped_coming: boolean; cannot_reach_bar: boolean;
   days_present: number | null; days_present_prev: number | null;
@@ -3781,8 +3781,16 @@ export function dropoutSignalFor(x: {
   // screen proposing to remove somebody from a batch.
   const stopped = days != null && prevDays != null && days <= prevDays;
 
-  const remaining = x.programDays != null && x.portalWorkingDays != null
-    ? Math.max(0, x.programDays - x.portalWorkingDays)
+  // QA-1822: this used to be `program.duration_days - portalWorkingDays` - the PORTAL's
+  // self-reported cumulative working-day counter subtracted from the programme's configured
+  // length, which never once touched a real date. The portal counter can reach the programme's
+  // duration while the batch's own calendar (`batchEnd`) still has days to run, and that read
+  // as "no scheduled days left" on a batch that visibly had six days left before it closed. The
+  // trainer's own arithmetic that this signal exists to model - "ab to do-teen din hi batch
+  // chalenge" - is about REAL days left, so this is the calendar itself: whole days between
+  // today and the batch's effective end (`actual_end ?? planned_end`), never negative.
+  const remaining = x.batchEnd != null
+    ? Math.max(0, Math.ceil((x.batchEnd.getTime() - x.today.getTime()) / 86_400_000))
     : null;
   const projected = x.attendedHours != null && remaining != null && x.hoursPerDay != null
     ? x.attendedHours + remaining * x.hoursPerDay
@@ -3877,6 +3885,11 @@ export async function batchAttendanceRows(batchId: string) {
 
   const portalWorkingDays = Math.max(0, ...govtRows.map((r) => Number(r.total_working_days ?? 0)));
   const finished = courseIsFinished(batch, portalWorkingDays);
+  // QA-1822: the batch's real effective end, for the dropout signal's calendar arithmetic below -
+  // same "actual once it exists, else planned" shape `courseIsFinished`'s status check and the
+  // (module-private) `batchRange()` already use, not a new date policy.
+  const batchEnd = batch.actual_end ?? batch.planned_end ?? null;
+  const today = istToday();
 
   const days = logs.map((l) => l.log_date);
   const rows = members.map((m) => {
@@ -3927,8 +3940,8 @@ export async function batchAttendanceRows(batchId: string) {
         attendedHours: h.attended_hours,
         requiredHours,
         hoursPerDay,
-        programDays: batch.program?.duration_days ?? null,
-        portalWorkingDays,
+        today,
+        batchEnd: batchEnd ? dayKey(batchEnd) : null,
       }),
     };
   });
@@ -3990,6 +4003,11 @@ export async function eligibilityByMember(batchId: string): Promise<Map<string, 
 
 export function courseIsFinished(batch: any, portalWorkingDays: number | null | undefined): boolean {
   if (["Closing", "Completed", "Closed", "Cancelled"].includes(String(batch?.status))) return true;
+  // QA-1822: the batch's own calendar, ORed in alongside the status short-circuit above and the
+  // portal-days check below - a third real signal, same pattern as the first. A batch whose
+  // planned/actual end has genuinely passed is over even if the portal export hasn't caught up.
+  const end = batch?.actual_end ?? batch?.planned_end ?? null;
+  if (end && istToday().getTime() > dayKey(end).getTime()) return true;
   const days = Number(batch?.program?.duration_days ?? 0);
   return !!days && Number(portalWorkingDays ?? 0) >= days;
 }

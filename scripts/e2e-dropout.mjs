@@ -216,5 +216,38 @@ ok("[P8] a member who has already LEFT is never suggested",
   !!dp?.left_on && dp.dropout_signal === null,
   JSON.stringify({ left_on: dp?.left_on, sig: dp?.dropout_signal }));
 
+// ---------------------------------------------------------------- QA-1822: calendar days, not portal-vs-duration
+// The live bug: "no scheduled days left, at 35 of 60 hours" on a batch whose real close date was
+// still ~6 calendar days out. Root cause was `remaining = programDays - portalWorkingDays` - a
+// PORTAL counter compared to the programme's configured length, never a real date. Prove the
+// converse holds now: even when the portal's own working-days figure has raced far past the
+// programme's duration_days, a batch whose calendar (planned_start = today, so planned_end is
+// duration_days + buffer_days OUT) must NOT report zero days left, and course_finished must not
+// flip true either - the calendar hasn't run out just because a government export counter has.
+const f5 = csv([
+  [`${NAME} Frozen`,   `CAN_${S}0001`, 99999, 1, "04:00:00"],   // portal claims far more working
+                                                                    // days than any programme runs
+  [`${NAME} Mover`,    `CAN_${S}0002`, 99999, 6, "24:00:00"],
+  [`${NAME} Departed`, `CAN_${S}0003`, 99999, 1, "04:00:00"],
+  [`${NAME} Passer`,   `CAN_${S}0004`, 99999, 8, "64:00:00"],
+]);
+const up5 = await upload(admin, { file: new File([Buffer.from(f5)], "probe-5-overrun.csv", { type: "text/csv" }), batch: batch._id, confirm: "1", period_label: `probe5 ${S}` });
+ok("import 5 (portal working-days far past programme duration) committed", up5.status === 200 || up5.status === 201, JSON.stringify(up5.data).slice(0, 300));
+
+const d5 = await get();
+const fr5 = sigOf(d5, "Frozen");
+console.log("AFTER IMPORT 5 (portal overrun):", JSON.stringify({ sig: fr5?.dropout_signal, course_finished: d5.course_finished }));
+
+// This batch's planned_start was TODAY (line ~88), so its planned_end is duration_days +
+// buffer_days calendar days out - genuinely many days away, whatever the programme happens to be.
+ok("[QA-1822a] a portal working-days figure far past the programme's duration_days does NOT collapse remaining_days to 0",
+  fr5?.dropout_signal?.cannot_reach_bar === true && Number(fr5.dropout_signal.remaining_days) > 1,
+  JSON.stringify(fr5?.dropout_signal));
+ok("[QA-1822b] ...and the projection still uses that real remaining_days, not a phantom zero",
+  fr5?.dropout_signal && fr5.dropout_signal.projected_hours === Math.round((fr5.attended_hours ?? 0) + fr5.dropout_signal.remaining_days * 4),
+  JSON.stringify({ attended: fr5?.attended_hours, sig: fr5?.dropout_signal }));
+ok("[QA-1822c] course_finished stays false while the batch's real calendar end is still days away, even though the portal counter overran duration_days",
+  d5.course_finished === false, JSON.stringify({ course_finished: d5.course_finished }));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
