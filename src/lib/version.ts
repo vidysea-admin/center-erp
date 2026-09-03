@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-287";
+export const RELEASE = "2026.08.14-288";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -158,6 +158,14 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "about how a candidate is dropped from a batch has changed.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-288: archived candidates finally get their own place on the Candidates screen, closing what " +
+  "-287 left open. A client who archived someone got no sign the button had done anything - the " +
+  "row stayed exactly where it was, in the exact same tab, with the same 'Delete' label the " +
+  "button had been quietly lying about since it stopped erasing records. It genuinely was " +
+  "archiving; the screen just never said so. Fresh and Enrolled now leave a row the moment it is " +
+  "archived, a new Archived tab holds it with the reason that was typed in, and the button reads " +
+  "Archive - because that is what it has done for two releases now.";
+const RELEASE_NOTE_ARCHIVE_287 =
   "-287: a Delete button that permanently destroyed a candidate record and their uploaded " +
   "documents is now Archive. The client asked for this directly: leads cleared by mistake were " +
   "landing in the same door as junk rows, and once pressed there was no way back - the record, " +
@@ -1278,6 +1286,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -286: ARCHIVE_285 wired in here in the SAME bump that declared it, same discipline -
   // QA-265/-247/-256 record what happens when a bump declares an archive and forgets this line.
   // -287: ARCHIVE_286 wired in here in the SAME bump that declared it, same discipline.
+  // -288: ARCHIVE_287 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_287 + " " +
   RELEASE_NOTE_ARCHIVE_286 + " " +
   RELEASE_NOTE_ARCHIVE_285 + " " +
   RELEASE_NOTE_ARCHIVE_284 + " " +
