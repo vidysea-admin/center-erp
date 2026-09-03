@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-288";
+export const RELEASE = "2026.08.14-289";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -158,6 +158,15 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "about how a candidate is dropped from a batch has changed.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-289: the Candidates screen's checkbox selection now does more than feed Assign to Batch. " +
+  "Ticking rows offers Archive Selected too, so clearing out unwanted leads no longer means " +
+  "pressing Archive one row at a time - and for the first time, an archived candidate can be " +
+  "brought back: a Restore button on their row, or Restore Selected in bulk from the Archived " +
+  "tab. Scrolling the table sideways used to lose track of which candidate a row even belonged " +
+  "to; the checkbox and Name columns now stay pinned in place while the rest scrolls under " +
+  "them. And a checked row now shows it - a light highlight runs across the whole row, frozen " +
+  "columns included, instead of only the small counter above the table changing.";
+const RELEASE_NOTE_ARCHIVE_288 =
   "-288: archived candidates finally get their own place on the Candidates screen, closing what " +
   "-287 left open. A client who archived someone got no sign the button had done anything - the " +
   "row stayed exactly where it was, in the exact same tab, with the same 'Delete' label the " +
@@ -1287,6 +1296,8 @@ const RELEASE_NOTE_ARCHIVE =
   // QA-265/-247/-256 record what happens when a bump declares an archive and forgets this line.
   // -287: ARCHIVE_286 wired in here in the SAME bump that declared it, same discipline.
   // -288: ARCHIVE_287 wired in here in the SAME bump that declared it, same discipline.
+  // -289: ARCHIVE_288 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_288 + " " +
   RELEASE_NOTE_ARCHIVE_287 + " " +
   RELEASE_NOTE_ARCHIVE_286 + " " +
   RELEASE_NOTE_ARCHIVE_285 + " " +
