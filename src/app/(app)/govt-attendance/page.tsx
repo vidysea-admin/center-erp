@@ -423,7 +423,22 @@ function Inner() {
                 the portal Candidate ID on the right candidate first so the next import matches by ID instead of guessing.
                 <ul className="mt-2 max-h-40 list-disc overflow-auto pl-5">
                   {upload.ambiguous_detail.rows.map((r: any, i: number) => (
-                    <li key={i}>{r.name}{r.sl_no != null ? ` (row ${r.sl_no})` : ""}</li>
+                    <li key={i}>
+                      {r.name}{r.sl_no != null ? ` (row ${r.sl_no})` : ""}
+                      {/* QA-431 (Umesh: "phone number user se confirm bhi kar lenge") - the
+                          colliding CANDIDATES with their phones, so the operator can confirm with
+                          the right person before picking, on this same preview. */}
+                      {!!r.candidates?.length && (
+                        <span className="text-amber-700">
+                          {" — "}
+                          {r.candidates.map((c: any, j: number) => (
+                            <span key={j}>
+                              {j > 0 ? ", " : ""}{c.name}{c.phone ? ` (${c.phone})` : ""}
+                            </span>
+                          ))}
+                        </span>
+                      )}
+                    </li>
                   ))}
                 </ul>
                 {upload.ambiguous_detail.count > upload.ambiguous_detail.rows.length && (

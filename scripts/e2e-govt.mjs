@@ -208,6 +208,20 @@ ok("the candidate the ERP has never seen is Unmatched", pre.data.unmatched_count
 ok("QA-416: ambiguous_detail carries the same count as ambiguous_count", pre.data.ambiguous_detail?.count === 2, JSON.stringify(pre.data.ambiguous_detail));
 ok("QA-416: ambiguous_detail names both Twin rows by name", (pre.data.ambiguous_detail?.rows ?? []).filter((r) => r.name === `${NAME} Twin`).length === 2, JSON.stringify(pre.data.ambiguous_detail?.rows));
 
+// QA-431 (Umesh: "phone number user se confirm bhi kar lenge"): each Ambiguous row's collision
+// preview names the COLLIDING CANDIDATES with their phones, not just the imported row's own
+// name — the operator confirms with the right person before picking, on this same preview.
+{
+  const twinAmbiguousRow = (pre.data.ambiguous_detail?.rows ?? []).find((r) => r.name === `${NAME} Twin`);
+  ok("QA-431: the Ambiguous row carries a candidates[] list, not just its own name/sl_no",
+    Array.isArray(twinAmbiguousRow?.candidates) && twinAmbiguousRow.candidates.length === 2,
+    JSON.stringify(twinAmbiguousRow));
+  const twinPhones = members.filter((m) => m.name === `${NAME} Twin`).map((m) => m.candidate.phone).sort();
+  const gotPhones = (twinAmbiguousRow?.candidates ?? []).map((c) => c.phone).sort();
+  ok("QA-431: the two colliding Twin candidates' real phones are both present",
+    JSON.stringify(gotPhones) === JSON.stringify(twinPhones), JSON.stringify({ gotPhones, twinPhones }));
+}
+
 const byName = Object.fromEntries((pre.data.preview ?? []).map((r) => [r.name, r]));
 ok("Alpha matched on the portal ID, not the name", byName[`${NAME} Alpha`]?.match_by === "Portal ID", byName[`${NAME} Alpha`]?.match_by);
 ok("Charlie fell back to a name match", byName[`${NAME} Charlie`]?.match_by === "Name", byName[`${NAME} Charlie`]?.match_by);

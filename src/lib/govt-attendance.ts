@@ -470,6 +470,11 @@ export type MatchedRow = Partial<GovtRow> & {
   // commit path writes it onto the candidate, so the certificate matcher (which joins on exactly
   // that field) stops coming up empty. Never set on an Ambiguous row.
   stamp_candidate_id?: string;
+  // QA-431 (Umesh: "phone number user se confirm bhi kar lenge"): set only on an Ambiguous row —
+  // the candidates whose name/portal-ID collided, so the operator can tell them apart on the
+  // preview by calling the right one, before opening GovtRowResolveDrawer to pick. Never an
+  // automatic join key (the export carries no phone column) — read-only, for the human.
+  ambiguous_candidates?: { name?: string; phone?: string }[];
 };
 
 /**
@@ -507,7 +512,7 @@ export async function matchGovtRows(
   if (scope.batchId) {
     members = await BatchMember.find(memberFilter).populate("candidate", "name phone sidh_candidate_id").lean<any[]>();
   } else if (scope.locationId) {
-    const cands = await Candidate.find({ location: scope.locationId }).select("_id name sidh_candidate_id").lean<any[]>();
+    const cands = await Candidate.find({ location: scope.locationId }).select("_id name phone sidh_candidate_id").lean<any[]>();
     const ids = cands.map((c) => c._id);
     const mem = await BatchMember.find({ candidate: { $in: ids } }).select("_id batch candidate").lean<any[]>();
     const byCand = new Map(mem.map((m) => [String(m.candidate), m]));
@@ -659,7 +664,10 @@ export async function matchGovtRows(
       // by search — while the control that actually resolves this row is the row itself.
       const which = rawGid ? `portal ID ${rawGid}` : `row ${r.sl_no ?? "?"}`;
       out.push({ ...r, match_status: "Ambiguous", match_by: by,
-        match_note: `${which}: ${hits.length} candidates share this ${by.toLowerCase()} — click this row to pick the right one.` });
+        match_note: `${which}: ${hits.length} candidates share this ${by.toLowerCase()} — click this row to pick the right one.`,
+        // QA-431: named WITH phone, so the operator can confirm with the person directly instead
+        // of guessing between two same-name rows.
+        ambiguous_candidates: hits.map((h) => ({ name: h.candidate?.name, phone: h.candidate?.phone })) });
     } else {
       out.push({
         ...r, match_status: "Unmatched", match_by: "",

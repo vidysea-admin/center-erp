@@ -240,10 +240,14 @@ export const POST = apiHandler(async (req: NextRequest) => {
       // checkbox to be consenting TO; the row already exists to be resolved after import, on this
       // same screen's own row-level "why?" button (GovtRowResolveDrawer). This is visibility, not a
       // new hold - filed as a disclosed, narrower fix.
+      // QA-431 (Umesh: "phone number user se confirm bhi kar lenge"): `candidates` names the
+      // actual colliding candidates with their phones, distinct from `name`/`sl_no` (the
+      // IMPORTED row's own identity) — the operator reads phone to tell them apart, never as an
+      // automatic join key (the export carries no phone column at all).
       ...(counts.ambiguous_count > 0 ? { ambiguous_detail: {
         count: counts.ambiguous_count,
         rows: matched.filter((r) => r.match_status === "Ambiguous").slice(0, 50).map((r) => ({
-          name: r.name, sl_no: r.sl_no ?? null,
+          name: r.name, sl_no: r.sl_no ?? null, candidates: r.ambiguous_candidates ?? [],
         })),
       } } : {}),
     });
