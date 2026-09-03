@@ -3794,14 +3794,14 @@ for (const file of walk(root)) {
     }
     const cellScan = blankStrings(editMember);
 
-    // QA-1817: archiving a candidate that is already archived has nothing left to do, so the row
-    // now hides the Archive button (and shows the recorded reason instead) once `r.archived_at` is
-    // set. That is a STATUS check, not an identity/role decision - the exact thing this pin exists
-    // to catch is a DISGUISED permission gate, and `!r.archived_at` decides none of "who can see
-    // this", only "is there anything left to archive on this particular row". It is named here
-    // explicitly and only this one literal spelling is discounted, so a role check still cannot
-    // hide behind it. Trainers has no `archived_at` field, so this is a no-op there.
-    const cellScanForGating = cellScan.split("!r.archived_at &&").join("").split("!!r.archived_at &&").join("");
+    // QA-1817 / candidates-bulk-archive-restore-ux: which VERB this cell offers - Archive or
+    // Restore - is a STATUS choice (`r.archived_at ? Restore : Archive`), not an identity/role
+    // decision - the exact thing this pin exists to catch is a DISGUISED permission gate, and
+    // `archived_at` decides none of "who can see this", only "which of the two actions applies
+    // to this particular row". Named here explicitly and only this one literal spelling
+    // (`r.archived_at ?`, however it's negated) is discounted, so a role check still cannot hide
+    // behind it. Trainers has no `archived_at` field, so this is a no-op there.
+    const cellScanForGating = cellScan.split("r.archived_at ?").join("");
 
     // QA-1061 - "gate on the DECISION, not the token". Cycle 2 asked whether the string
     // `role === "Admin"` appeared. A checker wrote `!["Admin"].includes(role) ? null : (...)` - an

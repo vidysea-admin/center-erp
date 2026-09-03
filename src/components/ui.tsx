@@ -276,7 +276,7 @@ export function FilterPills({ options, active, onChange }: {
 // whole point of a total is that it covers what you are looking at, and "Showing 1–25 of 57" means
 // the page is a window, not the answer. Filter or switch tab and it recomputes, because `view` is
 // what the table itself is filtering by.
-export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClick, empty, cardTitle, pageSize = 25, defaultSort, searchable, initialSearch, resizable = true, loading, storageKey, totals, freeze, pickerMode }: {
+export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClick, empty, cardTitle, pageSize = 25, defaultSort, searchable, initialSearch, resizable = true, loading, storageKey, totals, freeze, pickerMode, isSelected }: {
   columns: {
     // QA-763: `render` now also gets WHERE the row sits in the list the reader is actually
     // looking at. A column that draws a repeated value as a ditto mark ("〃") has to decide that
@@ -346,6 +346,10 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
   // -141 (QA-294): given the FILTERED rows, not the page. Returns whatever the caller wants to
   // sum — it is a strip, not a schema, because which columns are numeric is the page's business.
   totals?: (rows: T[]) => ReactNode;
+  // candidates-bulk-archive-restore-ux: a light row tint for rows the caller considers
+  // "selected" (its own checkbox/Set — DataTable has no selection concept of its own). Optional
+  // and additive; every caller that doesn't pass it renders exactly as before.
+  isSelected?: (row: T) => boolean;
 }) {
   type Col = (typeof columns)[0];
   const [page, setPage] = useState(1);
@@ -566,9 +570,14 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
   // A frozen cell must paint an OPAQUE background or the scrolling columns show through it, and it
   // must sit above them in z-order. The header is already sticky vertically; a frozen header cell
   // is sticky in both directions at once, which is why its z is the highest of the three.
-  const frozenCell = (i: number, kind: "head" | "body" | "foot") =>
+  // candidates-bulk-archive-restore-ux: `selected` only matters for the "body" kind — a frozen
+  // body cell paints its own opaque background, so a selected row's tint would stop dead at the
+  // frozen column's edge (the same split-row bug the group-hover comment above already
+  // describes) unless the frozen cell matches it.
+  const frozenCell = (i: number, kind: "head" | "body" | "foot", selected?: boolean) =>
     i >= freezeN ? {} : {
-      className: "sticky " + (kind === "head" ? "z-[7] bg-gray-50" : kind === "foot" ? "z-[3] bg-gray-50" : "z-[2] bg-white group-hover:bg-blue-50/40")
+      className: "sticky " + (kind === "head" ? "z-[7] bg-gray-50" : kind === "foot" ? "z-[3] bg-gray-50"
+        : selected ? "z-[2] bg-blue-50 group-hover:bg-blue-50/60" : "z-[2] bg-white group-hover:bg-blue-50/40")
         + (i === freezeN - 1 ? " border-r border-gray-200" : ""),
       style: { left: frozenLeft[i] },
     };
@@ -872,11 +881,12 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
                 // `group` so a frozen cell can follow the row's hover. A frozen cell paints its own
                 // opaque background, so without this the row highlights and the frozen columns stay
                 // white — the row visibly splits in two as the pointer crosses it.
-                <tr key={r._id ?? i} onClick={() => onRowClick?.(r)} className={"group " + (onRowClick ? "cursor-pointer transition-colors hover:bg-blue-50/40" : "")}>
+                <tr key={r._id ?? i} onClick={() => onRowClick?.(r)}
+                  className={"group " + (isSelected?.(r) ? "bg-blue-50 " : "") + (onRowClick ? "cursor-pointer transition-colors hover:bg-blue-50/40" : "")}>
                   {/* align-top: a tall cell (multi-line old→new diff) reads row-wise only if
                       its siblings start at the same line, not floating mid-air. */}
                   {visCols.map((c, ci) => {
-                    const f = frozenCell(ci, "body");
+                    const f = frozenCell(ci, "body", isSelected?.(r));
                     return <td key={c.key} style={f.style} className={"break-words px-3.5 py-3 align-top " + (f.className ?? "")}>{cell(c, r, i)}</td>;
                   })}
                 </tr>

@@ -511,7 +511,45 @@ function CandidatesInner() {
       {selected.size > 0 && (
         <div className="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm">
           <span className="font-medium">{selected.size} selected</span>
-          <Btn small onClick={() => setDrawer("assign")}>Assign to Batch</Btn>
+          {bucket === "Archived" ? (
+            // candidates-bulk-archive-restore-ux: an already-archived selection has nothing to
+            // Assign - QA-1801 already excludes them from that action - so this bar offers
+            // Restore here instead, never Assign.
+            canDeleteCandidate && (
+              <Btn small onClick={async () => {
+                const ids = [...selected];
+                const res = await api("/api/candidates/bulk-unarchive", { method: "POST", json: { candidate_ids: ids } });
+                const failed = (res.results as any[]).filter((r) => !r.ok);
+                setSelected(new Set());
+                load();
+                if (failed.length) setError(`${res.restored} restored, ${failed.length} failed: ${failed[0].error}`);
+              }}>Restore Selected</Btn>
+            )
+          ) : (
+            <>
+              <Btn small onClick={() => setDrawer("assign")}>Assign to Batch</Btn>
+              {canDeleteCandidate && (
+                <Btn small kind="ghost" onClick={async () => {
+                  const ids = [...selected];
+                  const reason = window.prompt(`Archive ${ids.length} selected candidate(s)?\n\nThe records and their documents are KEPT — they move out of active use.\n\nReason:`);
+                  if (reason === null) return;
+                  let res = await api("/api/candidates/bulk-archive", { method: "POST", json: { candidate_ids: ids, reason } });
+                  let failed = (res.results as any[]).filter((r) => !r.ok);
+                  const needsConfirm = failed.filter((r) => String(r.error || "").includes("confirm to archive anyway"));
+                  if (needsConfirm.length && window.confirm(`${needsConfirm.length} of them have batch history - archive anyway?\n\n(their batch record stays; only the candidate is archived)`)) {
+                    const retryIds = needsConfirm.map((r) => r.candidate);
+                    const res2 = await api("/api/candidates/bulk-archive", { method: "POST", json: { candidate_ids: retryIds, reason, confirm_batch_history: true } });
+                    const stillFailed = (res2.results as any[]).filter((r) => !r.ok);
+                    res = { ...res, archived: res.archived + res2.archived };
+                    failed = failed.filter((r) => !needsConfirm.includes(r)).concat(stillFailed);
+                  }
+                  setSelected(new Set());
+                  load();
+                  if (failed.length) setError(`${res.archived} archived, ${failed.length} failed: ${failed[0].error}`);
+                }}>Archive Selected</Btn>
+              )}
+            </>
+          )}
           <Btn small kind="ghost" onClick={() => setSelected(new Set())}>Clear</Btn>
         </div>
       )}
@@ -521,6 +559,8 @@ function CandidatesInner() {
         loading={loading}
         defaultSort={{ key: "name", dir: "asc" }}
         initialSearch={sp.get("q") ?? ""}
+        freeze={2}
+        isSelected={(r: any) => selected.has(r._id)}
         columns={[
           { key: "_sel", label: "", mobile: false, render: (r: any) => (
               // QA-945 (Umesh): "select krne mai aana chaiye ki phle status update kro". The server
@@ -665,13 +705,30 @@ function CandidatesInner() {
             // the only sense that matters to the person using it.
             // The Trainers directory already does this correctly (trainers/page.tsx) - same shape,
             // copied rather than reinvented, so the two lists behave alike.
-            key: "_edit", label: "", render: (r: any) => (
+            // candidates-bulk-archive-restore-ux: `freeze` forces table-layout:fixed on the WHOLE
+            // table (ui.tsx:576-586, needed so sticky offsets are computable), which means every
+            // unlabeled action column's floor (48px, ui.tsx colFloor) is now the column's REAL
+            // width, not just a minimum a browser in auto-layout would have grown past. Without
+            // this the Edit+Archive buttons here overflowed into the next column's cell and
+            // physically intercepted its clicks - found by the rendered-suite crashing on exactly
+            // that.
+            key: "_edit", label: "", minWidth: 180, render: (r: any) => (
               <span onClick={(e) => e.stopPropagation()} className="flex items-center gap-1">
                 <Btn small kind="ghost" onClick={() => openEdit(r)}>Edit</Btn>
-                {/* QA-1817: an already-archived row has nothing left to archive, and the label now
-                    says what the button does — it used to still read "Delete" after QA-1792/QA-1800
-                    made the action archive, not erase. */}
-                {canDeleteCandidate && !r.archived_at && (
+                {/* QA-1817/candidates-bulk-archive-restore-ux: exactly ONE conditional here still -
+                    the delete right (QA-1010) - and which VERB it offers is a status choice made
+                    inside it, not a second gate: an already-archived row has nothing left to
+                    archive, so it offers Restore instead. The label always says what the button
+                    does — it used to still read "Delete" after QA-1792/QA-1800 made the action
+                    archive, not erase. */}
+                {canDeleteCandidate && (r.archived_at ? (
+                  <Btn small kind="ghost" onClick={async () => {
+                    try {
+                      await api(`/api/candidates/${r._id}/unarchive`, { method: "POST" });
+                      load();
+                    } catch (e: any) { setError(e.message); }
+                  }}>Restore</Btn>
+                ) : (
                   <Btn small kind="ghost" onClick={async () => {
                     // QA-1795/QA-1798: this used to promise permanent deletion "and their documents
                     // go too" - untrue since QA-1792, so the button was lying about what it does. It
@@ -705,13 +762,15 @@ Archive anyway?`)) return;
                       }
                     }
                   }}>Archive</Btn>
-                )}
+                ))}
               </span>
             ),
           },
           {
             // QA-021 (-68): Dropout is reachable from ANY stage now, not only a batch roster.
-            key: "_drop", label: "", render: (r: any) => (
+            // candidates-bulk-archive-restore-ux: same fixed-layout floor issue as _edit above -
+            // this column can carry "Drop..." plus the future-interest conversion button.
+            key: "_drop", label: "", minWidth: 160, render: (r: any) => (
               <span onClick={(e) => e.stopPropagation()}>
                 {r.lifecycle_status === "Dropped"
                   ? <Btn small kind="ghost" onClick={async () => {

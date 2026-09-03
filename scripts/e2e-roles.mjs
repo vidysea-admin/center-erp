@@ -1838,6 +1838,66 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
       delB.status === 409, `status=${delB.status} ${JSON.stringify(delB.data).slice(0, 140)}`);
   }
 
+  // candidates-bulk-archive-restore-ux: no un-archive capability existed anywhere before this -
+  // grep for "archived_at: null" across src/ found exactly one hit, a bulk-assign EXCLUSION
+  // filter, never a write. These pins are the first proof the new door actually clears the field
+  // (not just returns 200) and that the field really comes back on a re-fetch.
+  {
+    const a = await mkJunkCand();
+    const arch = await req(ops, "DELETE", `/api/candidates/${a._id}`, { reason: "restore-test" }, 200);
+    ok("candidates-bulk-archive-restore-ux precondition: the candidate archived cleanly first",
+      arch.status === 200 && arch.data?.archived === true, `status=${arch.status}`);
+
+    const notArchivedYet = await mkJunkCand();
+    const badUnarchive = await req(ops, "POST", `/api/candidates/${notArchivedYet._id}/unarchive`);
+    ok("candidates-bulk-archive-restore-ux: unarchiving a candidate that isn't archived is refused, not silently accepted",
+      badUnarchive.status === 400, `status=${badUnarchive.status} ${JSON.stringify(badUnarchive.data).slice(0, 140)}`);
+
+    const restore = await req(ops, "POST", `/api/candidates/${a._id}/unarchive`, undefined, 200);
+    ok("candidates-bulk-archive-restore-ux: unarchive succeeds on a genuinely archived candidate",
+      restore.status === 200 && restore.data?.archived === false, `status=${restore.status}`);
+
+    const after = (await req(admin, "GET", `/api/candidates/${a._id}`)).data.item;
+    ok("candidates-bulk-archive-restore-ux: all three archive fields are actually cleared, not just archived_at",
+      after && after.archived_at === null && after.archive_reason === null && !after.archived_by,
+      JSON.stringify({ archived_at: after?.archived_at, archive_reason: after?.archive_reason, archived_by: after?.archived_by }));
+
+    const auditRows = (await req(admin, "GET", `/api/audit/Candidate/${a._id}`)).data.items ?? [];
+    const restoreRow = auditRows.find((x) => x.field === "archived_at" && x.new_value === "restored");
+    ok("candidates-bulk-archive-restore-ux: the restore is audited by name, not silent",
+      !!restoreRow, JSON.stringify(auditRows.map((x) => x.new_value)));
+  }
+
+  // Bulk archive/restore - same per-candidate try/catch shape as the existing bulk-assign route,
+  // proven here the same way QA-273/274/275 were: a MIXED batch, so one bad id cannot silently
+  // swallow (or silently abort) the good ones.
+  {
+    const b1 = await mkJunkCand();
+    const b2 = await mkJunkCand();
+    const bogusId = "6a0000000000000000000000";
+    const bulkArch = await req(ops, "POST", "/api/candidates/bulk-archive", { candidate_ids: [b1._id, b2._id, bogusId], reason: "bulk-test" }, 200);
+    const results = bulkArch.data?.results ?? [];
+    ok("candidates-bulk-archive-restore-ux: bulk-archive reports one result per id, in order",
+      results.length === 3, JSON.stringify(results.map((r) => r.candidate)));
+    ok("candidates-bulk-archive-restore-ux: the two real candidates archived ok",
+      results[0]?.ok === true && results[1]?.ok === true, JSON.stringify(results.slice(0, 2)));
+    ok("candidates-bulk-archive-restore-ux: the bogus id failed WITHOUT aborting the other two - a partial failure is not a total one",
+      results[2]?.ok === false && /not found/i.test(String(results[2]?.error ?? "")), JSON.stringify(results[2]));
+    ok("candidates-bulk-archive-restore-ux: the response's own count matches the actually-ok rows",
+      bulkArch.data?.archived === 2, `archived=${bulkArch.data?.archived}`);
+
+    const b1After = (await req(admin, "GET", `/api/candidates/${b1._id}`)).data.item;
+    ok("candidates-bulk-archive-restore-ux: bulk-archive really set the reason on each row, not just status 200",
+      b1After?.archived_at && b1After?.archive_reason === "bulk-test", JSON.stringify({ archived_at: b1After?.archived_at, reason: b1After?.archive_reason }));
+
+    const bulkUnarch = await req(ops, "POST", "/api/candidates/bulk-unarchive", { candidate_ids: [b1._id, b2._id] }, 200);
+    ok("candidates-bulk-archive-restore-ux: bulk-unarchive restores both in one call",
+      bulkUnarch.data?.restored === 2, `restored=${bulkUnarch.data?.restored}`);
+    const b1Restored = (await req(admin, "GET", `/api/candidates/${b1._id}`)).data.item;
+    ok("candidates-bulk-archive-restore-ux: bulk-restored candidate is genuinely un-archived on re-fetch",
+      b1Restored?.archived_at === null, JSON.stringify({ archived_at: b1Restored?.archived_at }));
+  }
+
   // QA-1792 (recorded client call 2026-09-02 item 3; Umesh's gate answer 2026-09-02 ~13:35):
   // "delete ke badle ARCHIVE kar dena hai". Until now this door ran c.deleteOne() for anyone the
   // QA-904 409 above did NOT catch - i.e. every candidate with no batch history, which is exactly

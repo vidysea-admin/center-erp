@@ -224,6 +224,167 @@ const archivedRowReason = archivedRowVisible > 0
 ok("[QA-1817] the archived row shows the reason typed into the confirm dialog, not just a bare status",
   /QA-1817 rendered-suite archive/.test(archivedRowReason), archivedRowReason.slice(0, 200));
 
+// ================= candidates-bulk-archive-restore-ux =================
+// Umesh's next-round feedback after testing -288 himself: bulk archive/restore, frozen columns
+// (lose track of WHICH candidate while scrolling sideways), and a highlight on selected rows.
+
+// -- Restore (single row) --
+if (archivedRowVisible > 0) {
+  const restoreBtn = page.locator(`table tbody tr:has-text("${fresh[0].name}") button:has-text("Restore")`).first();
+  const restoreBtnVisible = (await restoreBtn.count()) > 0;
+  ok("[bulk-archive-restore-ux] the archived row offers Restore, not a dead end",
+    restoreBtnVisible, `found=${restoreBtnVisible}`);
+  if (restoreBtnVisible) {
+    await restoreBtn.click();
+    await page.waitForTimeout(1000);
+    // `bucket` is plain React state, not a URL param - a reload always lands back on the
+    // page's default tab (Fresh), never wherever the user last clicked. So the Archived-tab
+    // absence has to be checked by explicitly RETURNING to that tab, not assumed from a reload.
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await settled();
+    const archivedTabAgain = page.locator('button:has-text("Archived Candidates")').first();
+    await archivedTabAgain.click();
+    await page.waitForTimeout(500);
+    await findRow(fresh[0].name);
+    const backInFresh = await page.locator(`table tbody tr:has-text("${fresh[0].name}")`).count();
+    ok("[bulk-archive-restore-ux] restoring moves the candidate back OFF the Archived tab",
+      backInFresh === 0, `stillOnArchivedTab=${backInFresh}`);
+    // switch to Fresh and confirm it actually reappears there, not just vanished from Archived
+    const freshTabBtn = page.locator('button:has-text("Fresh Candidates")').first();
+    await freshTabBtn.click();
+    await page.waitForTimeout(500);
+    await findRow(fresh[0].name);
+    const backInFreshTab = await page.locator(`table tbody tr:has-text("${fresh[0].name}")`).count();
+    ok("[bulk-archive-restore-ux] ...and it is genuinely back in Fresh, not merely gone from Archived",
+      backInFreshTab > 0, `rows=${backInFreshTab}`);
+  }
+}
+
+// -- Frozen columns: the Name cell's on-screen X position must not move when the body scrolls --
+await page.goto(`${BASE}/candidates`, { waitUntil: "domcontentloaded" });
+await settled();
+const nameCellBefore = await page.evaluate(() => {
+  const cell = document.querySelector("table tbody tr td:nth-child(2)");
+  return cell ? cell.getBoundingClientRect().left : null;
+});
+const scrolled = await page.evaluate(() => {
+  const scroller = [...document.querySelectorAll("div")].find((d) => d.scrollWidth > d.clientWidth + 20 && d.querySelector("table"));
+  if (!scroller) return false;
+  scroller.scrollLeft = 400;
+  return scroller.scrollLeft > 0;
+});
+const nameCellAfter = await page.evaluate(() => {
+  const cell = document.querySelector("table tbody tr td:nth-child(2)");
+  return cell ? cell.getBoundingClientRect().left : null;
+});
+ok("[bulk-archive-restore-ux] [precondition] the table body actually scrolled sideways (else the freeze assertion below is vacuous)",
+  scrolled === true, `scrolled=${scrolled}`);
+ok("[bulk-archive-restore-ux] the Name column stays frozen in place while the table scrolls sideways",
+  scrolled === true && nameCellBefore !== null && nameCellAfter === nameCellBefore,
+  `before=${nameCellBefore} after=${nameCellAfter}`);
+
+// -- Selected-row highlight: check a row, read its own AND its frozen cell's background --
+await page.evaluate(() => { const s = [...document.querySelectorAll("div")].find((d) => d.scrollWidth > d.clientWidth + 20 && d.querySelector("table")); if (s) s.scrollLeft = 0; });
+const rowCheckbox = page.locator('table tbody tr').first().locator('input[type="checkbox"]').first();
+const rowBgBefore = await page.evaluate(() => {
+  const row = document.querySelector("table tbody tr");
+  return row ? getComputedStyle(row).backgroundColor : null;
+});
+await rowCheckbox.click();
+await page.waitForTimeout(300);
+const rowBgAfter = await page.evaluate(() => {
+  const row = document.querySelector("table tbody tr");
+  const cells = row ? [...row.querySelectorAll("td")] : [];
+  // cell[1] = Name, the frozen column - must match the row's own tint, not stay white, or the
+  // row visibly splits in two at the frozen boundary (the exact bug the ui.tsx hover comment
+  // already names for the hover case).
+  return {
+    row: row ? getComputedStyle(row).backgroundColor : null,
+    frozenNameCell: cells[1] ? getComputedStyle(cells[1]).backgroundColor : null,
+  };
+});
+const isWhite = (c) => c === "rgb(255, 255, 255)" || c === "rgba(0, 0, 0, 0)";
+ok("[bulk-archive-restore-ux] checking a row's box gives it a visible tint (not still plain white)",
+  rowBgAfter.row !== null && rowBgAfter.row !== rowBgBefore && !isWhite(rowBgAfter.row),
+  `before=${rowBgBefore} after=${JSON.stringify(rowBgAfter)}`);
+// getComputedStyle can hand back the browser's native color space (this Chromium prints
+// "lab(96.492 -1.146 -5.115)" for Tailwind's bg-blue-50, not "rgb(...)") - and a canvas's
+// fillStyle READBACK preserves that same notation rather than normalizing it, so parsing the
+// STRING is a dead end either way. Actually drawing one pixel and reading it with getImageData
+// is not a string format at all - it is the browser's own rasteriser, which must resolve any
+// input notation down to concrete sRGB bytes to put a pixel on screen.
+const toRgbChannels = async (color) => page.evaluate((c) => {
+  const canvas = document.createElement("canvas");
+  canvas.width = 1; canvas.height = 1;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = c;
+  ctx.fillRect(0, 0, 1, 1);
+  const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+  return [r, g, b];
+}, color);
+const rowRgb = rowBgAfter.row ? await toRgbChannels(rowBgAfter.row) : null;
+ok("[bulk-archive-restore-ux] ...and the tint is LIGHT, not \"very dark\" (Umesh's own words) - each RGB channel stays bright",
+  !!rowRgb && rowRgb.every((v) => v > 180),
+  `row=${rowBgAfter.row} rgb=${JSON.stringify(rowRgb)}`);
+ok("[bulk-archive-restore-ux] the frozen Name column matches the row's tint - it does not stay white while the rest of the row highlights",
+  rowBgAfter.frozenNameCell !== null && !isWhite(rowBgAfter.frozenNameCell),
+  `frozenNameCell=${rowBgAfter.frozenNameCell}`);
+await rowCheckbox.click(); // untick, leave the fixture in its normal state
+
+// -- Bulk archive/restore via the real bulk bar, on a second fixture candidate --
+await page.locator('input[placeholder="Search all columns…"]').first().fill(fresh[1].name);
+await page.waitForTimeout(400);
+const bulkRow = page.locator(`table tbody tr:has-text("${fresh[1].name}")`).first();
+const bulkRowVisible = (await bulkRow.count()) > 0;
+if (bulkRowVisible) {
+  await bulkRow.locator('input[type="checkbox"]').first().click();
+  await page.waitForTimeout(300);
+  const barVisible = await page.locator('text=/1 selected/').count();
+  ok("[bulk-archive-restore-ux] the bulk-action bar appears with the right count once a row is checked",
+    barVisible > 0, `barVisible=${barVisible}`);
+  const archiveSelectedBtn = page.locator('button:has-text("Archive Selected")').first();
+  ok("[bulk-archive-restore-ux] Archive Selected is offered on the bulk bar", (await archiveSelectedBtn.count()) > 0, "");
+  if (await archiveSelectedBtn.count()) {
+    page.once("dialog", (d) => d.accept("QA bulk-archive-restore-ux rendered-suite bulk archive"));
+    await archiveSelectedBtn.click();
+    await page.waitForTimeout(1500);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await settled();
+    const archivedTab2 = page.locator('button:has-text("Archived Candidates")').first();
+    await archivedTab2.click();
+    await page.waitForTimeout(500);
+    await findRow(fresh[1].name);
+    const bulkArchivedVisible = await page.locator(`table tbody tr:has-text("${fresh[1].name}")`).count();
+    ok("[bulk-archive-restore-ux] Archive Selected genuinely archived the checked candidate",
+      bulkArchivedVisible > 0, `rows=${bulkArchivedVisible}`);
+    if (bulkArchivedVisible > 0) {
+      // `bulkRow` was resolved on the pre-archive/pre-reload page; clicking it again here (on
+      // the Archived tab, post-reload) toggled the SAME checkbox back off a moment after this
+      // fresh `row2` click checked it, leaving nothing selected. `row2` alone is the row that
+      // matters now.
+      const row2 = page.locator(`table tbody tr:has-text("${fresh[1].name}")`).first();
+      await row2.locator('input[type="checkbox"]').first().click();
+      await page.waitForTimeout(300);
+      const restoreSelectedBtn = page.locator('button:has-text("Restore Selected")').first();
+      ok("[bulk-archive-restore-ux] the Archived tab's bulk bar offers Restore, never Assign to Batch",
+        (await restoreSelectedBtn.count()) > 0 && (await page.locator('button:has-text("Assign to Batch")').count()) === 0,
+        `restoreBtn=${await restoreSelectedBtn.count()} assignBtn=${await page.locator('button:has-text("Assign to Batch")').count()}`);
+      if (await restoreSelectedBtn.count()) {
+        await restoreSelectedBtn.click();
+        await page.waitForTimeout(1500);
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await settled();
+        await archivedTab2.click().catch(() => {});
+        await page.waitForTimeout(500);
+        await findRow(fresh[1].name);
+        const stillArchived = await page.locator(`table tbody tr:has-text("${fresh[1].name}")`).count();
+        ok("[bulk-archive-restore-ux] Restore Selected genuinely un-archived the candidate",
+          stillArchived === 0, `stillOnArchivedTab=${stillArchived}`);
+      }
+    }
+  }
+}
+
 // ================= QA-573's LITERAL ASK, on /reports =================
 // "open a <details>, close it, and read what is visible". REQ-367b: the warnings stay OUTSIDE the
 // disclosure card and stay visible in BOTH states.

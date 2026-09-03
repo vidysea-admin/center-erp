@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { itemRoutes } from "@/lib/crud";
-import { BatchMember, Candidate, CandidateDocument } from "@/models";
+import { Candidate } from "@/models";
 import { candidateEligibility } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { HttpError, apiHandler, isScoped, requireEdit, requireUser } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { dbConnect } from "@/lib/db";
-import { audit } from "@/lib/audit";
 import { aadhaarError, canonicalAadhaar, apaarError, canonicalApaar, sameGovtNumber, emailError, canonicalPhone, phoneError } from "@/lib/validate";
 import { looksLikeCan, normalizeCan } from "@/lib/govt-attendance";
+import { archiveCandidate } from "@/lib/candidate-archive";
 
 // QA-447: same prefilter portal-id-health/route.ts uses for the identical reason.
 const CAN_SHAPE = /CAN/i;
@@ -245,42 +245,12 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
     }
   }
   const body = ((await req.json().catch(() => ({}))) as any) ?? {};
-  const hasHistory = await BatchMember.exists({ candidate: id });
-  if (hasHistory && !body.confirm_batch_history) {
-    // QA-1800 (Umesh, 2026-09-02 ~17:05 IST, qa/feedback-inbox.md: "yes with confirmation"):
-    // a candidate WITH batch history CAN now be archived - this used to be an outright refusal
-    // (QA-904: "a real person is Dropped, not erased"), and that refusal was correct for ERASURE,
-    // which stays impossible below regardless of this flag. It was never a decision about ARCHIVE,
-    // which did not exist yet when QA-904 was written. So this is now a CONFIRMATION GATE, not a
-    // refusal: the caller must say `confirm_batch_history: true` to proceed, and the audit line
-    // below records that the operator was told.
-    throw new HttpError(409, `${c.name} has batch history — confirm to archive anyway (their batch record stays; only the candidate is archived).`);
-  }
-  // QA-1792: THIS DOOR NO LONGER DESTROYS ANYTHING.
-  //
-  // It used to run `CandidateDocument.deleteMany` + `c.deleteOne()`. The 409 above is the only
-  // thing that ever stood between a candidate and permanent erasure, and it only fires for people
-  // who already have batch history - so a fresh lead, which is exactly who the client's team
-  // clears with this button ("galti se ye deleted wale chale ja rahe hain"), was destroyed along
-  // with their documents. The 2026-09-02 client call walked through this door and the record only
-  // survived because that candidate happened to have history.
-  //
-  // Recorded client call, item 3: "delete ke badle ARCHIVE kar dena hai ... with proper reason,
-  // aur us student ka status archive ho jayega". Umesh's gate answer (qa/feedback-inbox.md,
-  // 2026-09-02 ~13:35) settled that Archive is a SEPARATE state and REQ-417-421 stands, so this
-  // stamps the archive fields and changes nothing about who is visible where - that is the next
-  // unit's job, and doing it here would hide people the 25-Aug decision deliberately kept visible.
-  //
-  // QA-1800: the 409 above is now a CONFIRMATION GATE, not the final refusal it used to be -
-  // Umesh widened this door on 2026-09-02. Erasure is still impossible either way; only the
-  // question "can this person be archived at all" changed, and it is answered above.
-  const reason = String(body.reason ?? "").trim();
-  c.set({ archived_at: new Date(), archive_reason: reason || null, archived_by: user.id });
-  await c.save();
-  await audit({
-    entity: "Candidate", entityId: c._id, field: "archived_at",
-    newValue: `archived${reason ? ` — ${reason.slice(0, 120)}` : " (no reason given)"}${hasHistory ? " (had batch history, confirmed)" : ""}`,
-    actor: user.id,
+  // QA-1792: THIS DOOR NO LONGER DESTROYS ANYTHING (it used to run `CandidateDocument.deleteMany`
+  // + `c.deleteOne()`). QA-1800 widened it into a confirmation gate rather than an outright refusal
+  // for a candidate with batch history. Logic lives in candidate-archive.ts now (candidates-bulk-
+  // archive-restore-ux unit) so the bulk doors call the exact same code, never a second copy.
+  const { archived_at, reason } = await archiveCandidate(c, user, {
+    reason: body.reason, confirmBatchHistory: !!body.confirm_batch_history,
   });
-  return NextResponse.json({ ok: true, archived: true, archived_at: c.archived_at, reason: reason || null });
+  return NextResponse.json({ ok: true, archived: true, archived_at, reason });
 });
