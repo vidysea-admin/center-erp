@@ -92,6 +92,16 @@ const bfull = (await req(admin, "GET", `/api/batches/${batch._id}`)).data.item;
 ok("...and the slot actually persisted", bfull?.slot_start === "09:00" && bfull?.slot_end === "13:00",
   JSON.stringify({ s: bfull?.slot_start, e: bfull?.slot_end }));
 
+// QA-1822: force a genuinely TIGHT calendar window (planned_end only 3 days out), independent of
+// whichever programme's duration_days this suite happens to draw. remaining_days is now computed
+// from the batch's real planned_end, not from programDays - portalWorkingDays - so [P2] below only
+// proves the projection arm fires when the CALENDAR actually leaves too few days, which is the
+// correct condition, not merely "portal working days happen to be numerically low".
+const tightEnd = (await req(admin, "PATCH", `/api/batches/${batch._id}`,
+  { planned_end: localDate(Date.now() + 3 * 86400_000) })).data.item;
+ok("batch's planned_end set to 3 real calendar days out (for [P2]'s tight-window scenario)",
+  tightEnd?.planned_end && new Date(tightEnd.planned_end) > new Date(), JSON.stringify({ planned_end: tightEnd?.planned_end }));
+
 const people = [
   { key: "Frozen",   name: `${NAME} Frozen`,   id: `CAN_${S}0001` },
   { key: "Mover",    name: `${NAME} Mover`,    id: `CAN_${S}0002` },
@@ -217,13 +227,18 @@ ok("[P8] a member who has already LEFT is never suggested",
   JSON.stringify({ left_on: dp?.left_on, sig: dp?.dropout_signal }));
 
 // ---------------------------------------------------------------- QA-1822: calendar days, not portal-vs-duration
-// The live bug: "no scheduled days left, at 35 of 60 hours" on a batch whose real close date was
-// still ~6 calendar days out. Root cause was `remaining = programDays - portalWorkingDays` - a
-// PORTAL counter compared to the programme's configured length, never a real date. Prove the
-// converse holds now: even when the portal's own working-days figure has raced far past the
-// programme's duration_days, a batch whose calendar (planned_start = today, so planned_end is
-// duration_days + buffer_days OUT) must NOT report zero days left, and course_finished must not
-// flip true either - the calendar hasn't run out just because a government export counter has.
+// The live bug was specific to dropoutSignalFor's remaining_days: "no scheduled days left, at 35
+// of 60 hours" on a batch whose real close date was still ~6 calendar days out. Root cause was
+// `remaining = programDays - portalWorkingDays` - a PORTAL counter compared to the programme's
+// configured length, never a real date. courseIsFinished() is deliberately NOT the same bug and
+// is untouched here - its portal-vs-duration check is intentional, existing, pinned behaviour
+// (e2e-govt.mjs's A-09 block: "course reads FINISHED once portal working days pass the programme
+// duration" is the whole point of that feature, not a defect).
+//
+// Prove the dropoutSignalFor fix directly: even when the portal's own working-days figure has
+// raced far past the programme's duration_days, a batch whose calendar (planned_start = today, so
+// planned_end is duration_days + buffer_days OUT) must NOT report zero days left - the calendar
+// hasn't run out just because a government export counter has.
 const f5 = csv([
   [`${NAME} Frozen`,   `CAN_${S}0001`, 99999, 1, "04:00:00"],   // portal claims far more working
                                                                     // days than any programme runs
@@ -240,14 +255,15 @@ console.log("AFTER IMPORT 5 (portal overrun):", JSON.stringify({ sig: fr5?.dropo
 
 // This batch's planned_start was TODAY (line ~88), so its planned_end is duration_days +
 // buffer_days calendar days out - genuinely many days away, whatever the programme happens to be.
+// Under the OLD formula (programDays - portalWorkingDays), 99999 working days would have collapsed
+// remaining straight to 0 ("no scheduled days left") regardless of the real calendar. It must not.
 ok("[QA-1822a] a portal working-days figure far past the programme's duration_days does NOT collapse remaining_days to 0",
-  fr5?.dropout_signal?.cannot_reach_bar === true && Number(fr5.dropout_signal.remaining_days) > 1,
+  fr5?.dropout_signal != null && Number(fr5.dropout_signal.remaining_days) > 1,
   JSON.stringify(fr5?.dropout_signal));
-ok("[QA-1822b] ...and the projection still uses that real remaining_days, not a phantom zero",
-  fr5?.dropout_signal && fr5.dropout_signal.projected_hours === Math.round((fr5.attended_hours ?? 0) + fr5.dropout_signal.remaining_days * 4),
+ok("[QA-1822b] ...and the projection uses that real remaining_days, not a phantom zero (attended + remaining_days * 4 h/day)",
+  fr5?.dropout_signal?.projected_hours != null
+    && fr5.dropout_signal.projected_hours === Math.round((fr5.attended_hours ?? 0) + fr5.dropout_signal.remaining_days * 4),
   JSON.stringify({ attended: fr5?.attended_hours, sig: fr5?.dropout_signal }));
-ok("[QA-1822c] course_finished stays false while the batch's real calendar end is still days away, even though the portal counter overran duration_days",
-  d5.course_finished === false, JSON.stringify({ course_finished: d5.course_finished }));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

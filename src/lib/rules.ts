@@ -4003,11 +4003,6 @@ export async function eligibilityByMember(batchId: string): Promise<Map<string, 
 
 export function courseIsFinished(batch: any, portalWorkingDays: number | null | undefined): boolean {
   if (["Closing", "Completed", "Closed", "Cancelled"].includes(String(batch?.status))) return true;
-  // QA-1822: the batch's own calendar, ORed in alongside the status short-circuit above and the
-  // portal-days check below - a third real signal, same pattern as the first. A batch whose
-  // planned/actual end has genuinely passed is over even if the portal export hasn't caught up.
-  const end = batch?.actual_end ?? batch?.planned_end ?? null;
-  if (end && istToday().getTime() > dayKey(end).getTime()) return true;
   const days = Number(batch?.program?.duration_days ?? 0);
   return !!days && Number(portalWorkingDays ?? 0) >= days;
 }
