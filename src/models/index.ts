@@ -900,6 +900,12 @@ const BatchMemberSchema = new Schema({
   enrollment_status: { type: String, enum: ENROLLMENT_STATUS, required: true, default: "Not Started" },
   reg_done: { type: Boolean, default: false }, reg_done_at: Date,
   kyc_done: { type: Boolean, default: false }, kyc_done_at: Date,
+  // 2026-09-03 (Umesh, voice note): 4th manual step between e-KYC and Batch Accept — the
+  // student enrolls into the batch on the govt portal, distinct from KYC and from the
+  // Skill-India/ABPL-OTP-driven Batch Accept that follows it. Backfilled true wherever
+  // accept_done is true on existing rows (scripts/backfill-enroll-done.mjs) — reaching
+  // Batch Accept under the old 3-step model implies this step already happened.
+  enroll_done: { type: Boolean, default: false }, enroll_done_at: Date,
   accept_done: { type: Boolean, default: false }, accept_done_at: Date,
   issue: { type: String, enum: [...ENROLLMENT_ISSUE, null], default: null },
   issue_note: String,

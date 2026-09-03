@@ -154,7 +154,7 @@ ok("Trainer's permission set is byte-restored", JSON.stringify([...trainerSetAft
 const cand = (await req(admin, "POST", "/api/candidates", { name: "Doc Candidate " + stamp, phone: "7" + Date.now().toString().slice(-9), location: loc._id, program: prog._id }, 201)).data.item;
 await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: cand._id }, 201);
 const fixtureMembers = (await req(admin, "GET", `/api/batches/${batch._id}/members`)).data.items;
-await req(admin, "PATCH", `/api/members/${fixtureMembers[0]._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+await req(admin, "PATCH", `/api/members/${fixtureMembers[0]._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
 await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Ready" }, 200);
 await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Active" }, 200);
 

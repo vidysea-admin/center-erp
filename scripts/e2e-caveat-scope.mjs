@@ -80,7 +80,7 @@ async function mkBatch(tag, memberNames) {
       location: loc._id, program: program._id,
     })).data.item;
     const m = (await req(admin, "POST", `/api/batches/${bb._id}/members`, { candidate: c._id, joined_on: localDate(Date.now() - 20 * 86400_000) })).data.item;
-    await req(admin, "PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, accept_done: true });
+    await req(admin, "PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true });
     cands.push(c);
   }
   await req(admin, "POST", `/api/batches/${bb._id}/transition`, { target: "Ready" });

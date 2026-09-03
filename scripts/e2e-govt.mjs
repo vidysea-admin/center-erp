@@ -145,7 +145,7 @@ ok("portal Candidate ID persists on the candidate", members[0].candidate?.sidh_c
 
 // Enrol everyone so the batch clears the readiness gate, then take it Planning → Ready → Active.
 for (const m of members) {
-  await req(admin, "PATCH", `/api/members/${m.member._id}`, { reg_done: true, kyc_done: true, accept_done: true });
+  await req(admin, "PATCH", `/api/members/${m.member._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true });
 }
 await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Ready" });
 const active = await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Active" });
@@ -1036,7 +1036,7 @@ ok("the first import is still intact", (await req(admin, "GET", `/api/govt-atten
     // "not eligible". The first draft of this block skipped these three steps and the fixture pin
     // caught it - state came back `not_enrolled` and the whole point of the block would have been
     // untested while looking green. Rule 24 derives Completed from the three steps.
-    await req(admin, "PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+    await req(admin, "PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
     eCands.push({ c, m });
   }
 
@@ -1389,7 +1389,7 @@ ok("the first import is still intact", (await req(admin, "GET", `/api/govt-atten
   const soloMem = (await req(admin, "POST", `/api/batches/${soloBatch._id}/members`, {
     candidate: onRoster._id, joined_on: localDate(Date.now() - 20 * 86400_000),
   }, 201)).data.item;
-  await req(admin, "PATCH", `/api/members/${soloMem._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+  await req(admin, "PATCH", `/api/members/${soloMem._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
 
   // hours cell (Total Hours Spent) and Average Per Day deliberately EMPTY - the shape a portal
   // export takes when the column is present and unfilled, which is not the same as junk-hours.csv
@@ -1688,7 +1688,7 @@ const batch2 = mk2.data.item;
 // that certifies carries portal IDs in the real world; the fixture says so too.
 const c2 = (await req(admin, "POST", "/api/candidates", { name: `${NAME} Lockcase`, phone: `9${STAMP.slice(1)}2004`, location: loc._id, program: program._id, sidh_candidate_id: `CAN_${STAMP}2004` })).data.item;
 const m2 = (await req(admin, "POST", `/api/batches/${batch2._id}/members`, { candidate: c2._id })).data.item;
-await req(admin, "PATCH", `/api/members/${m2._id}`, { reg_done: true, kyc_done: true, accept_done: true });
+await req(admin, "PATCH", `/api/members/${m2._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true });
 await req(admin, "POST", `/api/batches/${batch2._id}/transition`, { target: "Ready" });
 await req(admin, "POST", `/api/batches/${batch2._id}/transition`, { target: "Active" });
 await req(admin, "PUT", `/api/batches/${batch2._id}/results`, { rows: [{ member: m2._id, result: "Pass" }] });
@@ -1897,7 +1897,7 @@ ok("removal is real", (await req(admin, "GET", `/api/sync-sources/${srcId}`)).st
       planned_start: localDate(), target_size: 1,
     }, 201)).data.item;
     const unrMem = (await req(admin, "POST", `/api/batches/${unrBatch._id}/members`, { candidate: unrCand._id }, 201)).data.item;
-    await req(admin, "PATCH", `/api/members/${unrMem._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+    await req(admin, "PATCH", `/api/members/${unrMem._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
 
     const planU2 = (await req(admin, "GET", "/api/candidates/portal-id-health", undefined, 200)).data;
     ok("QA-725: ...and once enrolled, they do NOT fall into 'enrolled_no_can' — that bucket means nothing was ever typed",
@@ -1961,7 +1961,7 @@ ok("removal is real", (await req(admin, "GET", `/api/sync-sources/${srcId}`)).st
   {
     const noCanCand = (await req(admin, "POST", "/api/candidates", { name: `${NAME} NoCan`, phone: `9${STAMP.slice(1)}1903`, location: loc._id, program: program._id }, 201)).data.item;
     const noCanMem = (await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: noCanCand._id }, 201)).data.item;
-    await req(admin, "PATCH", `/api/members/${noCanMem._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+    await req(admin, "PATCH", `/api/members/${noCanMem._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
     const gate = await req(admin, "PUT", `/api/batches/${batch._id}/closure`, { certification_status: "Completed" });
     ok("-155: certification cannot complete while an enrolled student has no portal Candidate ID",
       gate.status === 409 && /portal Candidate ID/i.test(String(gate.data.error ?? "")) && /Portal ID health/i.test(String(gate.data.error ?? "")) && String(gate.data.error ?? "").includes(`${NAME} NoCan`),
@@ -2452,7 +2452,7 @@ ok("SSRF guard does not block the real client workbook", stillOk.data.ok === tru
   // would pass on an empty list and prove nothing, which is how the first -207 run reported roster 0.
   const mm1 = (await req(admin, "POST", `/api/batches/${nb._id}/members`, { candidate: c1._id })).data.item;
   const mm2 = (await req(admin, "POST", `/api/batches/${nb._id}/members`, { candidate: c2._id })).data.item;
-  for (const mm of [mm1, mm2]) await req(admin, "PATCH", `/api/members/${mm._id}`, { reg_done: true, kyc_done: true, accept_done: true });
+  for (const mm of [mm1, mm2]) await req(admin, "PATCH", `/api/members/${mm._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true });
 
   const p0 = (await req(admin, "GET", `/api/batches/${nb._id}/link-portal-ids`)).data;
   ok("-205: the payload NAMES the students with no portal ID — a count alone is not actionable",
@@ -2584,7 +2584,7 @@ ok("SSRF guard does not block the real client workbook", stillOk.data.ok === tru
     }, 201)).data.item;   // these routes wrap in `item` - reading `.data` gave an undefined _id and
                           // the whole block passed its ids as "undefined" to the API
     const mRef = (await req(admin, "POST", `/api/batches/${rb._id}/members`, { candidate: cRef._id }, 201)).data.item;
-    await req(admin, "PATCH", `/api/members/${mRef._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+    await req(admin, "PATCH", `/api/members/${mRef._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
 
     const blocked = (await req(admin, "GET", `/api/batches/${rb._id}/link-portal-ids`)).data;
     const row = (blocked.missing ?? []).find((m) => m.name === `${NAME} Misfiled One`);
@@ -2672,7 +2672,7 @@ ok("SSRF guard does not block the real client workbook", stillOk.data.ok === tru
   // is checked against the OTHER screen's list, because QA-704 was exactly the two disagreeing.
   const c3 = (await req(admin, "POST", "/api/candidates", { name: `${NAME} NoId Three`, phone: "9558" + STAMP, location: loc._id, program: program._id })).data.item;
   const m3 = (await req(admin, "POST", `/api/batches/${nb._id}/members`, { candidate: c3._id })).data.item;
-  await req(admin, "PATCH", `/api/members/${m3._id}`, { reg_done: true, kyc_done: true, accept_done: true });
+  await req(admin, "PATCH", `/api/members/${m3._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true });
   const cp = (await req(admin, "GET", `/api/batches/${nb._id}/complete`)).data;
   const p2 = (await req(admin, "GET", `/api/batches/${nb._id}/link-portal-ids`)).data;
   ok("-207 (QA-702): the completion payload NAMES the students with no portal ID, not merely an array",

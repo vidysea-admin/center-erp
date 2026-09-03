@@ -9,12 +9,12 @@ import { audit } from "@/lib/audit";
 // QA-147 (Manish, 15/08 recording): "45 bachhe × Registration/e-KYC/Batch Accept = 135
 // clicks, har click ke baad page upar bhagta hai — trainer bhaag jayega." One batch's
 // enrollment was ~15 minutes of clicking; the RPL cohort (8–10k students) ~45–55 hours.
-// This verb marks ONE step (or all three) for many members in one request, through the
+// This verb marks ONE step (or all four) for many members in one request, through the
 // SAME updateEnrollment path the per-card toggle uses (Rules 22–24 hold per member), and
 // writes one audit row that names the count.
-// Body: { step: "reg_done" | "kyc_done" | "accept_done" | "all", member_ids?: string[] }
+// Body: { step: "reg_done" | "kyc_done" | "enroll_done" | "accept_done" | "all", member_ids?: string[] }
 // member_ids absent → every active (not left, not Completed-for-that-step) member.
-const STEPS = ["reg_done", "kyc_done", "accept_done"] as const;
+const STEPS = ["reg_done", "kyc_done", "enroll_done", "accept_done"] as const;
 
 export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   await dbConnect();
@@ -36,9 +36,9 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   }
   const ids: string[] | null = Array.isArray(body.member_ids) && body.member_ids.length ? body.member_ids.map(String) : null;
   const filter: Record<string, unknown> = { batch: id, left_on: null, ...(ids ? { _id: { $in: ids } } : {}) };
-  const members = await BatchMember.find(filter).select("_id reg_done kyc_done accept_done enrollment_status").lean<any[]>();
+  const members = await BatchMember.find(filter).select("_id reg_done kyc_done enroll_done accept_done enrollment_status").lean<any[]>();
   const patch: Record<string, boolean> = step === "all"
-    ? { reg_done: true, kyc_done: true, accept_done: true }
+    ? { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }
     : { [step]: true };
   let updated = 0, skipped = 0;
   const failed: string[] = [];

@@ -8,7 +8,7 @@ import { audit } from "@/lib/audit";
 import { ROSTER_CANDIDATE_FIELDS } from "@/app/api/batches/[id]/members/route";
 
 // PATCH enrollment worklist update (Rules 22–24).
-// Body: { reg_done?, kyc_done?, accept_done?, failed?, issue?, issue_note?, source? }
+// Body: { reg_done?, kyc_done?, enroll_done?, accept_done?, failed?, issue?, issue_note?, source? }
 export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   await dbConnect();
   const user = await requireUser();
@@ -35,7 +35,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   await m.populate("candidate", ROSTER_CANDIDATE_FIELDS);
   await audit({
     entity: "BatchMember", entityId: m._id, field: "enrollment",
-    newValue: { status: m.enrollment_status, reg: m.reg_done, kyc: m.kyc_done, accept: m.accept_done, issue: m.issue },
+    newValue: { status: m.enrollment_status, reg: m.reg_done, kyc: m.kyc_done, enroll: m.enroll_done, accept: m.accept_done, issue: m.issue },
     actor: user.id,
     actorType: "USER",
   });

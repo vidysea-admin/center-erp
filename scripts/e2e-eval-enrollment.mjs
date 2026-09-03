@@ -40,13 +40,13 @@ ok("[best] worklist shows the member with enrollment Pending", work0.length === 
 await req(admin, "PATCH", `/api/batches/${batch._id}`, { program: prog2._id }, 409);
 await req(admin, "PATCH", `/api/batches/${batch._id}`, { location: loc2._id }, 409);
 
-// [best] the 3 enrollment steps tick individually; all three = Completed.
+// [best] the 4 enrollment steps tick individually; all four = Completed.
 await req(admin, "PATCH", `/api/members/${m0._id}`, { reg_done: true }, 200);
 let w = (await req(admin, "GET", `/api/batches/${batch._id}/members`, undefined, 200)).data.items[0];
 ok("[best] one step done ≠ Completed", w.enrollment_status !== "Completed", w.enrollment_status);
-await req(admin, "PATCH", `/api/members/${m0._id}`, { kyc_done: true, accept_done: true }, 200);
+await req(admin, "PATCH", `/api/members/${m0._id}`, { kyc_done: true, enroll_done: true, accept_done: true }, 200);
 w = (await req(admin, "GET", `/api/batches/${batch._id}/members`, undefined, 200)).data.items[0];
-ok("[best] all three steps → enrollment Completed", w.enrollment_status === "Completed", w.enrollment_status);
+ok("[best] all four steps → enrollment Completed", w.enrollment_status === "Completed", w.enrollment_status);
 
 // [worst] the same candidate cannot be added to the batch twice.
 const dupAdd = await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: cands[0]._id });
@@ -80,7 +80,7 @@ ok("[worst] double-assignment refused", dupAdd.status >= 400, `got ${dupAdd.stat
 // 3 of 5 = 60% — below the gate.
 await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Ready" }, 409);
 const m3 = (await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: cands[3]._id }, 201)).data.item;
-await req(admin, "PATCH", `/api/members/${m3._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+await req(admin, "PATCH", `/api/members/${m3._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
 // 4 of 5 = exactly 80% — the boundary itself must pass.
 const ready = await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Ready" });
 ok("[avg] exactly 80% roster passes the Ready gate (boundary, not off-by-one)", ready.status === 200, `got ${ready.status}: ${JSON.stringify(ready.data).slice(0, 120)}`);

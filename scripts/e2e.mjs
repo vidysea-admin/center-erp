@@ -101,7 +101,7 @@ const members = (await req("GET", `/api/batches/${batch._id}/members`)).data.ite
 await req("PATCH", `/api/members/${members[0]._id}`, { failed: true }, 400);
 // complete all three steps for everyone (Rule 24 derivation)
 for (const m of members) {
-  const r = await req("PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+  const r = await req("PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
   ok("Rule 24: derived Completed", r.data.item.enrollment_status === "Completed");
 }
 // candidate lifecycle → Enrolled (Rule 21)
@@ -266,7 +266,7 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   const bdBatch = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: bdTrainer._id, room: bdRoom._id, planned_start: bdStart, target_size: 1 }, 201)).data.item;
   const bdCand = (await req("POST", "/api/candidates", { name: "Backdate Cand " + stamp, phone: "5400" + stamp, location: loc._id, program: prog._id }, 201)).data.item;
   const bdMem = (await req("POST", `/api/batches/${bdBatch._id}/members`, { candidate: bdCand._id }, 201)).data.item; // joined_on = today
-  await req("PATCH", `/api/members/${bdMem._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+  await req("PATCH", `/api/members/${bdMem._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
   await req("POST", `/api/batches/${bdBatch._id}/transition`, { target: "Ready" }, 200);
   const bdFuture = await req("POST", `/api/batches/${bdBatch._id}/transition`, { target: "Active", actual_start: dayN(1) }, 400);
   ok("-81: a batch cannot start in the future", /future/i.test(bdFuture.data?.error ?? ""), bdFuture.data?.error);
@@ -324,7 +324,7 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   for (let i = 0; i < 3; i++) {
     const c = (await req("POST", "/api/candidates", { name: `RosterGrow Cand ${i} ${stamp}`, phone: `56${i}0${stamp}`.slice(0, 10), location: loc._id, program: prog._id }, 201)).data.item;
     const m = (await req("POST", `/api/batches/${q55B._id}/members`, { candidate: c._id }, 201)).data.item;
-    await req("PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+    await req("PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
     q55Mem.push(String(m._id));
   }
   await req("POST", `/api/batches/${q55B._id}/transition`, { target: "Ready" }, 200);
@@ -479,7 +479,7 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   ok("-109: …and it is NOT called 'not eligible' — that word is a verdict",
     !/not eligible/i.test(String(notEnrolled.verdict?.label)), String(notEnrolled.verdict?.label));
 
-  await req("PATCH", `/api/members/${em._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+  await req("PATCH", `/api/members/${em._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
   await req("POST", `/api/batches/${eb._id}/transition`, { target: "Ready" }, 200);
   await req("POST", `/api/batches/${eb._id}/transition`, { target: "Active" }, 200);
 
@@ -556,7 +556,7 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   for (let i = 0; i < 2; i++) cc2.push((await req("POST", "/api/candidates", { name: `Cert Map ${i} ${stamp}`, phone: `840${stamp}${i}`, location: loc._id, program: prog._id }, 201)).data.item);
   const cm = [];
   for (const c of cc2) cm.push((await req("POST", `/api/batches/${cb._id}/members`, { candidate: c._id }, 201)).data.item);
-  for (const m of cm) await req("PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+  for (const m of cm) await req("PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
   await req("POST", `/api/batches/${cb._id}/transition`, { target: "Ready" }, 200);
   await req("POST", `/api/batches/${cb._id}/transition`, { target: "Active" }, 200);
   const pdf2 = new Uint8Array([0x25, 0x50, 0x44, 0x46]);
@@ -698,7 +698,7 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
         ...(noCan ? {} : { sidh_candidate_id: `CAN_${stamp}${tag}${i}` }),   // DIGITS after CAN: normalizeCan is /CAN[s_-]*(d+)/i, so a letter here reads as NO id at all
       }, 201)).data.item;
       const m = (await req("POST", `/api/batches/${b._id}/members`, { candidate: c._id }, 201)).data.item;
-      await req("PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+      await req("PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
       mems.push(m); cands.push(c);
     }
     await req("POST", `/api/batches/${b._id}/transition`, { target: "Ready" }, 200);
@@ -1657,7 +1657,7 @@ const cand4 = (await req("POST", "/api/candidates", { name: "Cand4 " + stamp, ph
 const mem4 = (await req("POST", `/api/batches/${batch2._id}/members`, { candidate: cand4._id }, 201)).data.item;
 // Complete the enrollment first — the CEO's Dropout is "enrolled but did not complete the
 // training", so the fixture must actually enroll before leaving (also stamps enrolled_at).
-await req("PATCH", `/api/members/${mem4._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+await req("PATCH", `/api/members/${mem4._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
 // -250: mint the student's attendance link BEFORE the drop, so the pin below can read the SAME
 // token afterwards. This is the whole point - minting already filters { batch, left_on: null }, so
 // a link minted AFTER a drop was never the bug. The bug is the link the student already has.
@@ -1715,11 +1715,11 @@ ok("R-J: per-position numbering keeps the centre × course prefix",
   ok("QA-032: assignment stamps the middle of the journey (Assigned)",
     (await req("GET", `/api/candidates/${cand5._id}`)).data.item.lifecycle_status === "Assigned");
   await req("PUT", "/api/defaults", { fee_required_for_enrollment: true }, 200);
-  const blocked = await req("PATCH", `/api/members/${mem5._id}`, { reg_done: true, kyc_done: true, accept_done: true });
+  const blocked = await req("PATCH", `/api/members/${mem5._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true });
   ok("Rule 54: toggle ON — enrollment refuses without a fee on record",
     blocked.status === 409 && /no fee payment on record/.test(blocked.data?.error ?? ""), `got ${blocked.status} ${blocked.data?.error ?? ""}`);
   await req("PATCH", `/api/candidates/${cand5._id}`, { fee_amount: 500, fee_paid_on: today, fee_reference: "UPI-" + stamp }, 200);
-  const okNow = await req("PATCH", `/api/members/${mem5._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+  const okNow = await req("PATCH", `/api/members/${mem5._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
   ok("Rule 54: fee recorded → enrollment completes", okNow.data.item.enrollment_status === "Completed", okNow.data.item.enrollment_status);
   const cand5b = (await req("GET", `/api/candidates/${cand5._id}`)).data.item;
   ok("R-J: the fee travels on the candidate", cand5b.fee_amount === 500 && !!cand5b.fee_paid_on && cand5b.fee_reference === "UPI-" + stamp,
@@ -1756,7 +1756,7 @@ ok("F-A3 fixture: certification stamps tot_done_on", !!totCert.data.item.tot_don
 const totBatch = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: totTr._id, room: room._id, planned_start: today, target_size: 1 }, 201)).data.item;
 const totCand = (await req("POST", "/api/candidates", { name: "TOT Cand " + stamp, phone: "5500" + stamp, location: loc._id, program: prog._id }, 201)).data.item;
 const totMem = (await req("POST", `/api/batches/${totBatch._id}/members`, { candidate: totCand._id }, 201)).data.item;
-await req("PATCH", `/api/members/${totMem._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+await req("PATCH", `/api/members/${totMem._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
 const totRead = (await req("GET", `/api/batches/${totBatch._id}`)).data.readiness;
 ok("QA-150: readiness.checks is exactly the four operational checks (what the checklist renders)",
   JSON.stringify(Object.keys(totRead.checks)) === JSON.stringify(["location_approved", "room_assigned", "trainer_ready", "roster_80pct"]), JSON.stringify(Object.keys(totRead.checks)));
@@ -1781,8 +1781,8 @@ for (let i = 0; i < 2; i++) {
 }
 const capMembers = [];
 for (const c of capCands) capMembers.push((await req("POST", `/api/batches/${capBatch._id}/members`, { candidate: c._id }, 201)).data.item);
-await req("PATCH", `/api/members/${capMembers[0]._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
-await req("PATCH", `/api/members/${capMembers[1]._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 409); // Rule 48
+await req("PATCH", `/api/members/${capMembers[0]._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
+await req("PATCH", `/api/members/${capMembers[1]._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 409); // Rule 48
 
 // ---- Rule 7: duplicate candidate detection is advisory, never a block ----
 const dupPhone = "9" + stamp + "111";
@@ -1857,7 +1857,7 @@ for (let i = 0; i < 3; i++) {
 }
 const b4Members = [];
 for (const c of b4Cands) b4Members.push((await req("POST", `/api/batches/${b4._id}/members`, { candidate: c._id }, 201)).data.item);
-for (const m of b4Members) await req("PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+for (const m of b4Members) await req("PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
 await req("POST", `/api/batches/${b4._id}/transition`, { target: "Ready" }, 200);
 await req("POST", `/api/batches/${b4._id}/transition`, { target: "Active" }, 200);
 
@@ -2041,7 +2041,7 @@ await req("POST", `/api/batches/${b4._id}/transition`, { target: "Completed" }, 
   const rb = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, room: room._id, planned_start: today, target_size: 1 }, 201)).data.item;
   const rc = (await req("POST", "/api/candidates", { name: `Unmark Me ${stamp}`, phone: `85000${stamp.slice(0, 5)}`, location: loc._id, program: prog._id }, 201)).data.item;
   const rm2 = (await req("POST", `/api/batches/${rb._id}/members`, { candidate: rc._id }, 201)).data.item;
-  await req("PATCH", `/api/members/${rm2._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+  await req("PATCH", `/api/members/${rm2._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
   await req("POST", `/api/batches/${rb._id}/transition`, { target: "Ready" }, 200);
   await req("POST", `/api/batches/${rb._id}/transition`, { target: "Active" }, 200);
   ok("-103 fixture: a batch with no results at all reads as legacy (batch-level figures)",
@@ -2123,7 +2123,7 @@ const c5a = (await req("POST", "/api/candidates", { name: `LateCert A ${stamp}`,
 const c5b = (await req("POST", "/api/candidates", { name: `LateCert B ${stamp}`, phone: `677${stamp}8`, location: loc._id, program: prog._id, sidh_candidate_id: `CAN89${stamp.slice(-4)}` }, 201)).data.item;
 const m5 = [];
 for (const c of [c5a, c5b]) m5.push((await req("POST", `/api/batches/${b5._id}/members`, { candidate: c._id }, 201)).data.item);
-for (const m of m5) await req("PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+for (const m of m5) await req("PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
 await req("POST", `/api/batches/${b5._id}/transition`, { target: "Ready" }, 200);
 await req("POST", `/api/batches/${b5._id}/transition`, { target: "Active" }, 200);
 await req("PUT", `/api/batches/${b5._id}/results`, { rows: [
@@ -2160,7 +2160,7 @@ const c6a = (await req("POST", "/api/candidates", { name: `LateRes A ${stamp}`, 
 const c6b = (await req("POST", "/api/candidates", { name: `LateRes B ${stamp}`, phone: `688${stamp}2`, location: loc._id, program: prog._id, sidh_candidate_id: `CAN98${stamp.slice(-4)}` }, 201)).data.item;
 const m6 = [];
 for (const c of [c6a, c6b]) m6.push((await req("POST", `/api/batches/${b6._id}/members`, { candidate: c._id }, 201)).data.item);
-for (const m of m6) await req("PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+for (const m of m6) await req("PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
 await req("POST", `/api/batches/${b6._id}/transition`, { target: "Ready" }, 200);
 await req("POST", `/api/batches/${b6._id}/transition`, { target: "Active" }, 200);
 await req("PUT", `/api/batches/${b6._id}/closure`, { assessment_status: "Completed", assessment_date: today, appeared: 2, passed: 1 }, 200); // batch-level, no rows
@@ -2399,7 +2399,7 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
   const ab = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, room: aRoom._id, planned_start: today, target_size: 1 }, 201)).data.item;
   const ac = (await req("POST", "/api/candidates", { name: `Active Plan One ${stamp}`, phone: `833${stamp}0`, location: loc._id, program: prog._id }, 201)).data.item;
   const am = (await req("POST", `/api/batches/${ab._id}/members`, { candidate: ac._id }, 201)).data.item;
-  await req("PATCH", `/api/members/${am._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+  await req("PATCH", `/api/members/${am._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
   await req("POST", `/api/batches/${ab._id}/transition`, { target: "Ready" }, 200);
   await req("POST", `/api/batches/${ab._id}/transition`, { target: "Active" }, 200);
   const activeNow = (await req("GET", `/api/batches/${ab._id}`)).data.item;
@@ -2462,7 +2462,7 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
   const readyB = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: rTrainer._id, room: rRoom._id, planned_start: today, target_size: 1 }, 201)).data.item;
   const readyC = (await req("POST", "/api/candidates", { name: `Ready Plan One ${stamp}`, phone: `834${stamp}0`, location: loc._id, program: prog._id }, 201)).data.item;
   const readyM = (await req("POST", `/api/batches/${readyB._id}/members`, { candidate: readyC._id }, 201)).data.item;
-  await req("PATCH", `/api/members/${readyM._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+  await req("PATCH", `/api/members/${readyM._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
   await req("POST", `/api/batches/${readyB._id}/transition`, { target: "Ready" }, 200);
   const readyPlan = await req("PATCH", `/api/batches/${readyB._id}/milestones`, { create: true });
   ok("QA-607: Ready is deliberately still refused — it is inside the milestone_overdue alert query, Active is not",
@@ -4639,7 +4639,7 @@ const assignRes = (await req("POST", "/api/candidates/assign", { batch: eligBatc
 ok("assign ineligible candidate warns", assignRes.assigned === 1 && assignRes.warnings?.length === 1, JSON.stringify(assignRes.warnings));
 const eligMembers = (await req("GET", `/api/batches/${eligBatch._id}/members`)).data.items;
 const oldMember = eligMembers.find((m) => String(m.candidate?._id ?? m.candidate) === String(oldCand._id));
-await req("PATCH", `/api/members/${oldMember._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 409); // hard gate
+await req("PATCH", `/api/members/${oldMember._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 409); // hard gate
 ok("enrollment completion blocked for ineligible candidate", true);
 await req("POST", `/api/batches/${eligBatch._id}/transition`, { target: "Cancelled", reason: "eligibility test cleanup" }, 200);
 

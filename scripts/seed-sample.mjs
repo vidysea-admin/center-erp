@@ -194,7 +194,7 @@ async function makeBatch(lc, pc, trainerName, roomIdx, planStartOffset, memberCo
     throw new Error(`Fixture ${b.code ?? lc}: only ${memberIds.length} of ${pool.length} candidates joined. First refusal: ${refused[0] ?? "none — the candidate pool itself was short"}`);
   }
   for (const mid of memberIds.slice(0, enrollCount)) {
-    await req("PATCH", `/api/members/${mid}`, { reg_done: true, kyc_done: true, accept_done: true });
+    await req("PATCH", `/api/members/${mid}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true });
   }
   return { batch: b, memberIds };
 }

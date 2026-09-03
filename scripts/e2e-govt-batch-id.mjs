@@ -201,7 +201,7 @@ const cmMem = (await req(admin, "POST", `/api/batches/${cmB._id}/members`, { can
 // Being ON the roster is not being enrolled - Rule 17's threshold counts finished enrolments, and
 // without this the walk stops at Ready. Found by this suite's own fixture assertion below, which is
 // the only reason the id pin under it is not still reading green on a batch that never closed.
-await req(admin, "PATCH", `/api/members/${cmMem._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+await req(admin, "PATCH", `/api/members/${cmMem._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
 await req(admin, "POST", `/api/batches/${cmB._id}/transition`, { target: "Ready" }, 200);
 await req(admin, "POST", `/api/batches/${cmB._id}/transition`, { target: "Active" }, 200);
 await req(admin, "PUT", `/api/batches/${cmB._id}/results`, { rows: [{ member: String(cmMem._id), result: "Pass", score: 70, max_score: 100, assessed_on: today() }] }, 200);

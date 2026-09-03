@@ -822,7 +822,7 @@ export async function addMemberChecked(batchId: string, candidateId: string, joi
 
 // Rules 22–24: enrollment step update
 export async function updateEnrollment(memberId: string, patch: {
-  reg_done?: boolean; kyc_done?: boolean; accept_done?: boolean;
+  reg_done?: boolean; kyc_done?: boolean; enroll_done?: boolean; accept_done?: boolean;
   failed?: boolean; issue?: string | null; issue_note?: string | null;
   source?: "Manual" | "Automation";
 }) {
@@ -831,7 +831,7 @@ export async function updateEnrollment(memberId: string, patch: {
   if (m.left_on) throw new HttpError(409, "Member has left this batch");
 
   const now = new Date();
-  for (const step of ["reg_done", "kyc_done", "accept_done"] as const) {
+  for (const step of ["reg_done", "kyc_done", "enroll_done", "accept_done"] as const) {
     if (patch[step] !== undefined && patch[step] !== m[step]) {
       m[step] = patch[step]!;
       (m as any)[step + "_at"] = patch[step] ? now : null;
@@ -849,8 +849,8 @@ export async function updateEnrollment(memberId: string, patch: {
     if (patch.failed === false) { m.issue = null; m.issue_note = undefined; }
     // Rule 24: derive from booleans (unless still explicitly Failed and not cleared)
     if (m.enrollment_status !== "Failed" || patch.failed === false) {
-      const done = [m.reg_done, m.kyc_done, m.accept_done].filter(Boolean).length;
-      m.enrollment_status = done === 0 ? "Not Started" : done === 3 ? "Completed" : "In Progress";
+      const done = [m.reg_done, m.kyc_done, m.enroll_done, m.accept_done].filter(Boolean).length;
+      m.enrollment_status = done === 0 ? "Not Started" : done === 4 ? "Completed" : "In Progress";
     }
     if (patch.issue !== undefined) m.issue = patch.issue as any;
     if (patch.issue_note !== undefined) m.issue_note = patch.issue_note ?? undefined;

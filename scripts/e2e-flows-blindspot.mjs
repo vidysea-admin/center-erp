@@ -170,7 +170,7 @@ console.log("\n--- FL4: per-candidate attendance is counted from the logs, not t
   for (const nm of ["Att A", "Att B"]) {
     const c = (await req(admin, "POST", "/api/candidates", { name: `FL ${nm} ${stamp}`, phone: phone(), location: loc._id, program: prog._id }, 201)).data.item;
     const m = (await req(admin, "POST", `/api/batches/${b._id}/members`, { candidate: c._id }, 201)).data.item;
-    await req(admin, "PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+    await req(admin, "PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
     members.push(m);
   }
   await req(admin, "POST", `/api/batches/${b._id}/transition`, { target: "Ready" }, 200);
@@ -804,7 +804,7 @@ console.log("\n--- -155 (QA-414 S1 / 415 / 424 / 425 / 426): the portal ID lands
     const m491pass = (await req(admin, "POST", `/api/batches/${b491._id}/members`, { candidate: c491pass._id }, 201)).data.item;
     const m491p1 = (await req(admin, "POST", `/api/batches/${b491._id}/members`, { candidate: c491p1._id }, 201)).data.item;
     const m491p2 = (await req(admin, "POST", `/api/batches/${b491._id}/members`, { candidate: c491p2._id }, 201)).data.item;
-    for (const m of [m491pass, m491p1, m491p2]) await req(admin, "PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+    for (const m of [m491pass, m491p1, m491p2]) await req(admin, "PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
 
     // One Pass row exists (switches the batch into per-candidate mode, batchUsesPerCandidateResults);
     // the other two members deliberately have NO CandidateResult row at all - exactly the case
@@ -927,7 +927,7 @@ console.log("\n--- -155 (QA-414 S1 / 415 / 424 / 425 / 426): the portal ID lands
     const b1749 = created.item;
     const mA = (await req(admin, "POST", `/api/batches/${b1749._id}/members`, { candidate: cA._id }, 201)).data.item;
     const mB = (await req(admin, "POST", `/api/batches/${b1749._id}/members`, { candidate: cB._id }, 201)).data.item;
-    for (const m of [mA, mB]) await req(admin, "PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+    for (const m of [mA, mB]) await req(admin, "PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
     await req(admin, "POST", `/api/batches/${b1749._id}/transition`, { target: "Ready" }, 200);
     await req(admin, "POST", `/api/batches/${b1749._id}/transition`, { target: "Active" }, 200);
 
@@ -1330,7 +1330,7 @@ console.log("\n--- FL14 (-226): a batch that ALREADY RAN can be recorded, and th
     const early = await mkCand("Early");
     const earlyM = (await req(admin, "POST", `/api/batches/${normal._id}/members`,
       { candidate: early._id, joined_on: day(-10) }, 201)).data.item;
-    await req(admin, "PATCH", `/api/members/${earlyM._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+    await req(admin, "PATCH", `/api/members/${earlyM._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
     await req(admin, "POST", `/api/batches/${normal._id}/transition`, { target: "Ready" }, 200);
     // The ordinary path: no backdate_override, so NO `backdated_start` audit row is written.
     await req(admin, "POST", `/api/batches/${normal._id}/transition`, { target: "Active", actual_start: day(-10) }, 200);
@@ -1793,7 +1793,7 @@ console.log("\n--- FL19 (-235): a cancelled batch can be RESTORED, and a typed j
   const readyCand = await mkCand("ReadyOne");
   const readyM = (await req(admin, "POST", `/api/batches/${readyB._id}/members`,
     { candidate: readyCand._id, joined_on: istDay(-30) }, 201)).data.item;
-  await req(admin, "PATCH", `/api/members/${readyM._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+  await req(admin, "PATCH", `/api/members/${readyM._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
   await req(admin, "POST", `/api/batches/${readyB._id}/transition`, { target: "Cancelled", reason: "FL19 ready fixture" }, 200);
 
   const backToReady = await req(admin, "POST", `/api/batches/${readyB._id}/transition`,

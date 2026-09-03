@@ -1625,6 +1625,7 @@ function EnrolCard({ m, onUpdate, selected, onSelect, canEdit = true, canEditCan
       <div className="flex flex-wrap gap-2">
         <EnrolStepToggle m={m} field="reg_done" label="Registration" onUpdate={onUpdate} canEdit={canEdit} />
         <EnrolStepToggle m={m} field="kyc_done" label="e-KYC" onUpdate={onUpdate} canEdit={canEdit} />
+        <EnrolStepToggle m={m} field="enroll_done" label="Enrollment" onUpdate={onUpdate} canEdit={canEdit} />
         <EnrolStepToggle m={m} field="accept_done" label="Batch Accept" onUpdate={onUpdate} canEdit={canEdit} />
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -1716,7 +1717,7 @@ function Enrollment({ batchId, batch, error, setError }: any) {
     if (bulkBusy) return;
     const targets = selected.size ? [...selected] : pending.map((m) => m._id);
     if (!targets.length) return;
-    const what = step === "all" ? "complete enrollment (all three steps)" : `mark ${step === "reg_done" ? "Registration" : step === "kyc_done" ? "e-KYC" : "Batch Accept"}`;
+    const what = step === "all" ? "complete enrollment (all four steps)" : `mark ${step === "reg_done" ? "Registration" : step === "kyc_done" ? "e-KYC" : step === "enroll_done" ? "Enrollment" : "Batch Accept"}`;
     if (!confirm(`${what} for ${targets.length} candidate${targets.length > 1 ? "s" : ""}?`)) return;
     setBulkBusy(true); setBulkMsg("");
     try {
@@ -1740,6 +1741,7 @@ function Enrollment({ batchId, batch, error, setError }: any) {
         <span className="text-gray-300">·</span>
         <span>Registration: {members.filter((m) => m.reg_done).length}/{members.length}</span>
         <span>e-KYC: {members.filter((m) => m.kyc_done).length}/{members.length}</span>
+        <span>Enrollment: {members.filter((m) => m.enroll_done).length}/{members.length}</span>
         <span>Batch Accept: {members.filter((m) => m.accept_done).length}/{members.length}</span>
         {bulkMsg && <span className="text-green-700">✓ {bulkMsg}</span>}
       </div>
@@ -1778,6 +1780,7 @@ function Enrollment({ batchId, batch, error, setError }: any) {
           <span className="font-medium text-blue-900">Bulk ({scope}):</span>
           <Btn small kind="ghost" disabled={bulkBusy} onClick={() => bulk("reg_done")}>Mark Registration</Btn>
           <Btn small kind="ghost" disabled={bulkBusy} onClick={() => bulk("kyc_done")}>Mark e-KYC</Btn>
+          <Btn small kind="ghost" disabled={bulkBusy} onClick={() => bulk("enroll_done")}>Mark Enrollment</Btn>
           <Btn small kind="ghost" disabled={bulkBusy} onClick={() => bulk("accept_done")}>Mark Batch Accept</Btn>
           <Btn small disabled={bulkBusy} onClick={() => bulk("all")}>{bulkBusy ? "Working…" : "Complete enrollment"}</Btn>
           <button className="ml-auto text-blue-700 underline" onClick={() => setSelected(selected.size === pending.length ? new Set() : new Set(pending.map((m) => m._id)))}>

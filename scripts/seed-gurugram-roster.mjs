@@ -109,7 +109,7 @@ async function enrol(batch, cand, start) {
     await db.collection("batchmembers").insertOne({
       batch: batch._id, candidate: cand._id, joined_on: start, left_on: null,
       enrollment_status: "Completed",
-      reg_done: true, reg_done_at: start, kyc_done: true, kyc_done_at: start, accept_done: true, accept_done_at: start,
+      reg_done: true, reg_done_at: start, kyc_done: true, kyc_done_at: start, enroll_done: true, enroll_done_at: start, accept_done: true, accept_done_at: start,
       issue: null, source: "Manual", createdAt: now, updatedAt: now,
     });
     await db.collection("candidates").updateOne({ _id: cand._id }, { $set: { lifecycle_status: "Enrolled", sidh_status: "Registered", updatedAt: now } });

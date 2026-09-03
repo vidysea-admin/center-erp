@@ -23,7 +23,7 @@ const treq = (await req(admin, "POST", "/api/trainer-requests", { location: loc.
 const batch = (await req(admin, "POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, room: room._id, planned_start: today(), target_size: 1 }, 201)).data.item;
 const cand = (await req(admin, "POST", "/api/candidates", { name: "TEST-EH Cand " + s, phone: phone("8"), location: loc._id, program: prog._id }, 201)).data.item;
 const mem = (await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: cand._id }, 201)).data.item;
-await req(admin, "PATCH", `/api/members/${mem._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+await req(admin, "PATCH", `/api/members/${mem._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
 await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Ready" }, 200);
 await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Active" }, 200);
 
@@ -137,7 +137,7 @@ ok("[worst] …attendance pct is null (not NaN/0) when nothing has been logged",
   const batch2 = (await req(admin, "POST", "/api/batches", { location: loc._id, program: prog._id, trainer: mate._id, room: room2._id, planned_start: today(), target_size: 1 }, 201)).data.item;
   const cand2 = (await req(admin, "POST", "/api/candidates", { name: "TEST-EH Cand2 " + s, phone: phone("8"), location: loc._id, program: prog._id }, 201)).data.item;
   const mem2 = (await req(admin, "POST", `/api/batches/${batch2._id}/members`, { candidate: cand2._id }, 201)).data.item;
-  await req(admin, "PATCH", `/api/members/${mem2._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+  await req(admin, "PATCH", `/api/members/${mem2._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
   await req(admin, "POST", `/api/batches/${batch2._id}/transition`, { target: "Ready" });
   const act2 = await req(admin, "POST", `/api/batches/${batch2._id}/transition`, { target: "Active" });
   ok("-153 fixture: a second Active batch runs at the same centre with a different trainer",

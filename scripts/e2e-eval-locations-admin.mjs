@@ -490,7 +490,7 @@ ok("[best] each row names its blockers + next action + trainer/candidate counts"
   const fMem = (await req(admin, "POST", `/api/batches/${fBatch._id}/members`, { candidate: fCand._id }, 201)).data.item;
   ok("QA-1307 [precondition] and that candidate is on the roster, so the 80% gate can pass",
     !!fMem?._id, JSON.stringify({ got: fMem?._id ?? null }));
-  await req(admin, "PATCH", `/api/members/${fMem._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+  await req(admin, "PATCH", `/api/members/${fMem._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
   await req(admin, "POST", `/api/batches/${fBatch._id}/transition`, { target: "Ready" }, 200);
   await req(admin, "POST", `/api/batches/${fBatch._id}/transition`, { target: "Active", actual_start: today() }, 200);
   // The ladder does NOT go Active -> Closing here, and the read-back assertion below is what proved

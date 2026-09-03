@@ -72,7 +72,7 @@ const today = `${_n.getFullYear()}-${String(_n.getMonth() + 1).padStart(2, "0")}
 const batch = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, room: room._id, planned_start: today, target_size: 1 }, 201)).data.item;
 const cand = (await req("POST", "/api/candidates", { name: "SyncCand", phone: "8" + Date.now().toString().slice(-9), location: loc._id, program: prog._id }, 201)).data.item;
 const mem = (await req("POST", `/api/batches/${batch._id}/members`, { candidate: cand._id }, 201)).data.item;
-await req("PATCH", `/api/members/${mem._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+await req("PATCH", `/api/members/${mem._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
 await req("POST", `/api/batches/${batch._id}/transition`, { target: "Ready" }, 200);
 await req("POST", `/api/batches/${batch._id}/transition`, { target: "Active" }, 200);
 
@@ -547,7 +547,7 @@ ok("REAL client workbook fetched server-side, every tab snapshotted", realRun.st
   const b3 = (await req("POST", "/api/batches", { location: l2._id, program: p2._id, trainer: tr3._id, room: pr3._id, planned_start: td, target_size: 1 }, 201)).data.item;
   const c3 = (await req("POST", "/api/candidates", { name: "AudCand " + s2, phone: "6" + Date.now().toString().slice(-9), location: l2._id, program: p2._id }, 201)).data.item;
   const m3 = (await req("POST", `/api/batches/${b3._id}/members`, { candidate: c3._id }, 201)).data.item;
-  await req("PATCH", `/api/members/${m3._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+  await req("PATCH", `/api/members/${m3._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
   await req("POST", `/api/batches/${b3._id}/transition`, { target: "Ready" }, 200);
   await req("POST", `/api/batches/${b3._id}/transition`, { target: "Active" }, 200);
 

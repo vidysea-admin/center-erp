@@ -60,7 +60,7 @@ for (let i = 0; i < 3; i++) {
 const batch = (await req(admin, "POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, room: room._id, planned_start: today(), target_size: 1 }, 201)).data.item;  // target_size 1: the Ready gate needs 80% of the roster filled (roster_80pct), and this fixture puts exactly ONE candidate on the batch. At 5 it refused with 409 and the Enrolled arm never existed - which is the same hole QA-1245 named, arriving a second way.
 const enrolledCand = (await req(admin, "POST", "/api/candidates", { name: `TEST-RC Enrolled ${s}`, phone: phone("88"), location: loc._id, program: prog._id }, 201)).data.item;
 const mem = (await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: enrolledCand._id }, 201)).data.item;
-await req(admin, "PATCH", `/api/members/${mem._id}`, { reg_done: true, kyc_done: true, accept_done: true }, 200);
+await req(admin, "PATCH", `/api/members/${mem._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
 await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Ready" }, 200);
 await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Active" }, 200);
 
