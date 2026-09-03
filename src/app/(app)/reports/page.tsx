@@ -34,20 +34,25 @@ function ReportsInner() {
   // rules.ts) when an inline Batch ID edit collides with another batch — same words, same door,
   // just surfaced on this screen instead of the batch page.
   const [batchIdWarn, setBatchIdWarn] = useState("");
+  // QA-532 (REQ-365e second half; Karunn sir 16:53: "aur ek ULTA - ki main program ki dekhna
+  // chahun, ki khaali Solar Panel... ACROSS ALL LOCATIONS target itna tha"). The location-first
+  // table is the default; this flips which axis is the row and which is the column, reading the
+  // exact same underlying figures the other way round — not a second report.
+  const [orientation, setOrientation] = useState<"location" | "program">("location");
 
   // QA-1074 — the fetch is NAMED because Refresh needs it too. Umesh read "Passed 26" off this
   // screen and reported it as an under-count; it was measured that 53 Pass results exist and the
   // report drops none of them — 27 of them were entered AFTER the tab he was looking at had
   // loaded. The page fetched once on mount and never said when. A screen that cannot be refreshed
   // and does not date itself is a screen that will be quoted as today's truth tomorrow.
-  const load = useCallback(() => {
+  const load = useCallback((o: "location" | "program") => {
     setBusy(true);
-    return api("/api/reports/rollup")
+    return api(`/api/reports/rollup${o === "program" ? "?orientation=program" : ""}`)
       .then((d) => setData(d))
       .catch((e) => setError(String(e?.message ?? e)))
       .finally(() => { setLoading(false); setBusy(false); });
   }, []);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load(orientation); }, [load, orientation]);
 
   const roles: string[] = data?.roles ?? [];
   const s = data?.sources;
@@ -104,8 +109,11 @@ function ReportsInner() {
       // a place where batches run, not an institution in the abstract. filterable:true so the funnel
       // is always offered rather than appearing only while there are 25 or fewer distinct centres -
       // this list grows, and a filter that vanishes as the data grows is a filter you cannot rely on.
-      key: "name", label: "Batch Location", minWidth: 260, sortable: true, filterable: true,
-      total: (rs: any[]) => <span className="whitespace-nowrap">All centres <span className="font-normal text-gray-400">({rs.length})</span></span>,
+      // QA-532: `r.location` carries a programme's identity when flipped (rules.ts reuses the same
+      // field rather than a parallel type) - the label follows so the header still names what the
+      // row actually is.
+      key: "name", label: orientation === "program" ? "Programme" : "Batch Location", minWidth: 260, sortable: true, filterable: true,
+      total: (rs: any[]) => <span className="whitespace-nowrap">{orientation === "program" ? "All programmes" : "All centres"} <span className="font-normal text-gray-400">({rs.length})</span></span>,
       sortValue: (r: any) => r.location.name,
       filterText: (r: any) => r.location.name,
       render: (r: any) => (
@@ -248,7 +256,7 @@ function ReportsInner() {
       // The second arm is unreachable since -256 (a batch-scoped drill carries batch rows only) and
       // is kept as a fallback that SAYS what it means rather than printing a dot nobody can read.
       render: (r: any) => r.batch
-        ? <BatchIdCell row={r} onSaved={(w?: string) => { setBatchIdWarn(w ?? ""); void load(); }} />
+        ? <BatchIdCell row={r} onSaved={(w?: string) => { setBatchIdWarn(w ?? ""); void load(orientation); }} />
         : <span className="text-[11px] text-gray-400">no batch</span>,
     }] : []),
     { key: "role", label: "Job role", minWidth: 190, sortable: true, filterable: true, sortValue: (r: any) => r.role, filterText: (r: any) => r.role, render: (r: any) => <span>{r.role}</span> },
@@ -317,9 +325,25 @@ function ReportsInner() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">Reports</h1>
-          <p className="text-sm text-gray-500">Every centre, every job role — target, approval, and how far each one has actually got.</p>
+          <p className="text-sm text-gray-500">
+            {orientation === "program"
+              ? "Every job role, every centre — pick one programme and read its target across every location."
+              : "Every centre, every job role — target, approval, and how far each one has actually got."}
+          </p>
         </div>
         <span className="flex items-center gap-2">
+          {/* QA-532: "aur ek ULTA" — the same figures, read the other way round. Two buttons rather
+              than a dropdown: this is a binary flip (which axis is the row), not a picker among
+              many options, and a toggle answers "which one am I looking at right now" without a
+              click to find out. */}
+          <span className="flex overflow-hidden rounded-lg border border-gray-300 text-xs">
+            <button type="button" disabled={busy}
+              className={`px-2.5 py-1.5 font-medium ${orientation === "location" ? "bg-blue-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}
+              onClick={() => setOrientation("location")}>By Location</button>
+            <button type="button" disabled={busy}
+              className={`border-l border-gray-300 px-2.5 py-1.5 font-medium ${orientation === "program" ? "bg-blue-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}
+              onClick={() => setOrientation("program")}>By Programme</button>
+          </span>
           {/* QA-1074 — WHEN this was counted, beside the figures it counted. Not decoration: the
               "Passed is under-counting" report that started this work was a tab that had been open
               since before 27 results were entered, and nothing on the screen could have told
@@ -330,7 +354,7 @@ function ReportsInner() {
               Measured {fmtDT(data.measured_at)}
             </span>
           )}
-          <Btn kind="ghost" small disabled={busy} onClick={() => void load()}>{busy ? "Refreshing…" : "Refresh"}</Btn>
+          <Btn kind="ghost" small disabled={busy} onClick={() => void load(orientation)}>{busy ? "Refreshing…" : "Refresh"}</Btn>
           <Btn kind="ghost" onClick={() => { window.location.href = `${BASE_PATH}/api/reports/rollup/export`; }}>Download Excel</Btn>
         </span>
       </div>

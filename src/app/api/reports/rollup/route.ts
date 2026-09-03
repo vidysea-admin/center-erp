@@ -10,7 +10,7 @@ import { reportRollup } from "@/lib/rules";
 // A thin door on purpose: every figure, every rule about summing rather than assigning, and every
 // source label lives in `reportRollup` (lib/rules.ts), so the screen and the Excel export cannot
 // drift into two different answers to the same question.
-export const GET = apiHandler(async (_req: NextRequest) => {
+export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
   // Rule 38, the same filter every other screen uses. Karunn sir sees every row, a centre login
@@ -24,5 +24,9 @@ export const GET = apiHandler(async (_req: NextRequest) => {
   // product refuses with a 403 two clicks away. `hasPermission` rather than `requireView`: a user
   // without the right still gets their report, just without that block.
   const sheetSource = await hasPermission(user, "sheet.approve");
-  return NextResponse.json(await reportRollup(locationFilter(user), { sheetSource }));
+  // QA-532 (REQ-365e second half): "aur ek ULTA - main program ki dekhna chahun". Any value other
+  // than the literal "program" reads as the default location orientation - an invalid or missing
+  // query param never 500s a report the CEO opens.
+  const orientation = req.nextUrl.searchParams.get("orientation") === "program" ? "program" : "location";
+  return NextResponse.json(await reportRollup(locationFilter(user), { sheetSource, orientation }));
 });

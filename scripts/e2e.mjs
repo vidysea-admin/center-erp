@@ -3781,6 +3781,71 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
 }
 
 
+// ---- QA-532 (REQ-365e second half): the report reads the other way round ----
+// Karunn sir, 20-Aug 16:53/17:00: "aur ek ULTA - ki main program ki dekhna chahun, ki khaali
+// Solar Panel... Solar Panel Installation ke liye ACROSS ALL LOCATIONS target itna tha." The
+// location-first table (QA-398, pinned above) groups by centre then job role; this fixture proves
+// the SAME underlying figures, read by job role then centre, transpose correctly rather than
+// merely toggling a UI label.
+{
+  const ORLoc1 = (await req("POST", "/api/locations", { code: "OR1" + stamp, name: "TEST-Orient1 " + stamp, approval_status: "Approved", city: "Kanpur" }, 201)).data.item;
+  const ORLoc2 = (await req("POST", "/api/locations", { code: "OR2" + stamp, name: "TEST-Orient2 " + stamp, approval_status: "Approved", city: "Lucknow" }, 201)).data.item;
+  // ONE job-role name at BOTH centres, on purpose - the whole point of "flip" is that a single
+  // programme name becomes the ROW and each centre it appears at becomes a CELL under that row.
+  const ORRole = "Orient Role " + stamp;
+  const orProg1 = (await req("POST", "/api/programs", { code: "ORP1" + stamp, name: ORRole, scheme: "RPL-AVPL", trainer_skill: "ORSkill1" + stamp }, 201)).data.item;
+  const orProg2 = (await req("POST", "/api/programs", { code: "ORP2" + stamp, name: ORRole, scheme: "PMKVY-BECIL", trainer_skill: "ORSkill2" + stamp }, 201)).data.item;
+  ok("QA-532 fixture guard: both locations and both same-named programmes exist before anything is asserted",
+    !!ORLoc1?._id && !!ORLoc2?._id && !!orProg1?._id && !!orProg2?._id,
+    JSON.stringify({ l1: ORLoc1?._id ?? null, l2: ORLoc2?._id ?? null, p1: orProg1?._id ?? null, p2: orProg2?._id ?? null }));
+  if (ORLoc1?._id && ORLoc2?._id && orProg1?._id && orProg2?._id) {
+    await req("PUT", `/api/locations/${ORLoc1._id}/targets`, { program: orProg1._id, approved_target: 200, tc_status: "Approved" }, 200);
+    await req("PUT", `/api/locations/${ORLoc2._id}/targets`, { program: orProg2._id, approved_target: 300, tc_status: "Approved" }, 200);
+
+    // ---- default (unflipped): unchanged, exactly as QA-398 already pins - two SEPARATE rows,
+    // one per centre, each with one cell under the shared role name. ----
+    const repLoc = (await req("GET", "/api/reports/rollup", undefined, 200)).data;
+    const rowL1 = (repLoc.rows ?? []).find((r) => String(r.location._id) === String(ORLoc1._id));
+    const rowL2 = (repLoc.rows ?? []).find((r) => String(r.location._id) === String(ORLoc2._id));
+    ok("QA-532: default orientation is unchanged by this unit - still one row per CENTRE",
+      rowL1?.cells?.[ORRole]?.target === 200 && rowL2?.cells?.[ORRole]?.target === 300,
+      JSON.stringify({ l1: rowL1?.cells?.[ORRole]?.target, l2: rowL2?.cells?.[ORRole]?.target }));
+
+    // ---- flipped: ?orientation=program - ONE row (the shared role name), TWO cells (one per
+    // centre it runs at), and the two centres' targets land on DIFFERENT cells rather than
+    // colliding into one. This is the assertion REQ-388 needs: it proves the SUM-not-assign
+    // discipline QA-398 already established for the location axis holds on the program axis too. ----
+    const repProg = (await req("GET", "/api/reports/rollup?orientation=program", undefined, 200)).data;
+    const progRows = (repProg.rows ?? []).filter((r) => r.location.name === ORRole);
+    ok("QA-532: flipped orientation collapses the two same-named programmes into ONE row",
+      progRows.length === 1, JSON.stringify({ count: progRows.length, names: (repProg.rows ?? []).map((r) => r.location.name) }));
+    const progRow = progRows[0];
+    ok("QA-532: ...and the row's cells are keyed by CENTRE name, one per location, not merged into one number",
+      progRow?.cells?.[ORLoc1.name]?.target === 200 && progRow?.cells?.[ORLoc2.name]?.target === 300,
+      JSON.stringify({ cells: progRow?.cells ?? null, expectA: ORLoc1.name, expectB: ORLoc2.name }));
+    ok("QA-532: the row's own total sums both centres, same SUM-not-assign discipline as the location axis",
+      progRow?.total?.target === 500, JSON.stringify({ total: progRow?.total ?? null }));
+    ok("QA-532: an invalid/absent orientation value is never a 500 - it silently reads as the default",
+      (await req("GET", "/api/reports/rollup?orientation=bogus", undefined, 200)).status === 200);
+
+    // ---- the drill-down panel is UNAFFECTED by orientation - it stays keyed on the real centre,
+    // never on the flipped row's identity, or a panel opened from the flipped table would show the
+    // programme's own id where a centre id belongs. ----
+    const mineDetail = (repProg.detail ?? []).filter((d) => d.role === ORRole);
+    ok("QA-532: detail (the drill panel) stays centre-identified even when the main table is flipped",
+      mineDetail.length === 2
+      && mineDetail.some((d) => String(d.location._id) === String(ORLoc1._id) && d.location.name === ORLoc1.name)
+      && mineDetail.some((d) => String(d.location._id) === String(ORLoc2._id) && d.location.name === ORLoc2.name),
+      JSON.stringify(mineDetail.map((d) => ({ locId: d.location._id, locName: d.location.name }))));
+
+    // ---- the Excel export never flips - REQ-365e is a screen-reading ask, and the export has no
+    // orientation param to even receive one. ----
+    const xlOrient = await fetch(BASE + "/api/reports/rollup/export?orientation=program", { headers: { cookie } });
+    ok("QA-532: the Excel export ignores any orientation query param and stays 200 (location-shaped, per REQ-365e's own scope)",
+      xlOrient.status === 200, `got ${xlOrient.status}`);
+  }
+}
+
 // ---- QA-152 part 2 (-82): the plan as an editable, shareable, exportable artifact ----
 {
   const edited = (await req("PATCH", `/api/batches/${planBatch._id}/milestones`, { edit: { key: "tot_done", due_date: "2027-03-20", notes: "TOT at Gurugram HO", owner_label: "Divya" } }, 200)).data.item;

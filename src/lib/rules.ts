@@ -4535,7 +4535,18 @@ async function reportSyncGap(scope: Record<string, unknown> = {}, showSource = f
 
 // `opts.sheetSource` — QA-1104. Defaults to FALSE, so a caller that says nothing gets the safe
 // answer: the Excel export takes this path and never carried the source fields anyway.
-export async function reportRollup(scope: Record<string, unknown> = {}, opts: { sheetSource?: boolean } = {}) {
+export async function reportRollup(scope: Record<string, unknown> = {}, opts: { sheetSource?: boolean; orientation?: "location" | "program" } = {}) {
+  // QA-532 (REQ-365e second half; Karunn sir, 20-Aug 16:53/17:00): "aur ek ULTA - ki main program
+  // ki dekhna chahun, ki khaali Solar Panel... Solar Panel Installation ke liye ACROSS ALL
+  // LOCATIONS target itna tha." The location-first table below already groups the exact same
+  // per-(location, program) figures by location then job role; `flipped` groups the SAME figures
+  // by job role then location instead — a transposition, not a second aggregation. `ReportRow`'s
+  // `location` field is reused to carry the row's identity either way (a location normally, a
+  // programme when flipped) rather than inventing a parallel type the UI would have to branch on;
+  // both shapes are `{_id,name,code}`. Everything below this point (candBy/passBy/detail/grand/
+  // breaks) is computed exactly once regardless of orientation - only which map two variables key
+  // into changes.
+  const flipped = opts.orientation === "program";
   // find() + populate, not an aggregation over the scope filter: authz.ts builds `$in` from
   // `.map(String)`, mongoose casts strings to ObjectId inside find() but NOT inside a pipeline,
   // and four live defects came from exactly that (QA-302, QA-347, QA-350, QA-395). The
@@ -4680,16 +4691,28 @@ export async function reportRollup(scope: Record<string, unknown> = {}, opts: { 
   for (const t of targets) {
     if (!t.location?._id || !t.program?._id) continue;
     const role = String(t.program.name ?? "").trim() || String(t.program.code ?? "");
-    roles.add(role);
-    const lid = String(t.location._id);
+    // QA-532: normally the ROW is the location (keyed on its real _id) and the CELL key is the
+    // job-role NAME - two different programme documents that happen to share a name already
+    // SUM into that one cell (QA-398's own "sum not assign" fixture). Flipped, the axes trade:
+    // the ROW must key on that SAME role name, for the SAME reason - two programme _ids sharing
+    // one name are the client's one job role, and grouping by the raw _id instead would split
+    // them back into two rows, silently un-doing the sum-not-assign discipline on the other axis.
+    // (Caught by this unit's own fixture: two same-named, differently-_id'd programmes at two
+    // centres first came back as two rows before this fix, not one.)
+    const groupKey = flipped ? role : String(t.location._id);
+    const groupName = flipped ? role : t.location.name;
+    const groupCode = flipped ? undefined : t.location.code;
+    const cellKey = flipped ? String(t.location.name ?? "").trim() : role;
+    roles.add(cellKey);
+    const lid = groupKey;
     if (!byLoc.has(lid)) {
       byLoc.set(lid, {
-        location: { _id: lid, name: t.location.name, code: t.location.code },
+        location: { _id: lid, name: groupName, code: groupCode },
         cells: {}, total: emptyCell(), breaks: [], verdict: "",
       });
     }
     const row = byLoc.get(lid)!;
-    if (!row.cells[role]) row.cells[role] = emptyCell();
+    if (!row.cells[cellKey]) row.cells[cellKey] = emptyCell();
 
     const c = candBy.get(key(t.location._id, t.program._id));
     const p = passBy.get(key(t.location._id, t.program._id));
@@ -4717,7 +4740,7 @@ export async function reportRollup(scope: Record<string, unknown> = {}, opts: { 
       certified: p?.certified ?? 0,
     };
     // SUM. Never assign. See the note above this function.
-    addInto(row.cells[role], one);
+    addInto(row.cells[cellKey], one);
     addInto(row.total, one);
     addInto(grand, one);
     // QA-1074: the same figures, un-summed, so a tile can be opened. `...one` rather than a second
@@ -4732,8 +4755,11 @@ export async function reportRollup(scope: Record<string, unknown> = {}, opts: { 
     // double-counting anything — this is why one array with a `batch: null | {...}` discriminator
     // was chosen over two parallel arrays: the invariant falls out of the shape rather than needing
     // to be maintained by hand across two places.
+    // QA-532: `detail` (the drill-down panel) stays location-keyed regardless of orientation - it
+    // is never `lid`, which is the ROW group id (a programme id when flipped) - `t.location._id`
+    // is the real centre this LocationTarget row is actually about, always.
     detail.push({
-      location: { _id: lid, name: t.location.name },
+      location: { _id: String(t.location._id), name: t.location.name },
       role, program_code: String(t.program.code ?? ""),
       target: one.target, approved: one.approved, not_approved: one.not_approved, unknown: one.unknown,
       mobilised: 0, in_training: 0, certified: 0,
@@ -4749,7 +4775,7 @@ export async function reportRollup(scope: Record<string, unknown> = {}, opts: { 
     for (const b of batchesHere) {
       const cb = candBatchBy.get(`${key(t.location._id, t.program._id)}|${String(b._id)}`);
       detail.push({
-        location: { _id: lid, name: t.location.name },
+        location: { _id: String(t.location._id), name: t.location.name },
         role, program_code: String(t.program.code ?? ""),
         target: 0, approved: 0, not_approved: 0, unknown: 0,
         mobilised: cb?.mobilised ?? 0,
