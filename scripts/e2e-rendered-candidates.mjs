@@ -174,9 +174,19 @@ await settled();
 // is not guaranteed to be ON that first page. Use the table's own search box (DataTable, ui.tsx:594,
 // "Search all columns...") to surface it, rather than trusting page 1 to contain it - a locator that
 // silently finds nothing must not be allowed to make every assertion below vacuously true.
-const searchBox = page.locator('input[placeholder="Search all columns…"]').first();
-await searchBox.fill(fresh[0].name);
-await page.waitForTimeout(400);
+//
+// QA-1817 cycle 2 (checker FAIL, cycle 1): the search box is itself conditional - DataTable only
+// renders it above 10 rows (ui.tsx:588, `searchable ?? rows.length > 10`), which candidates/page.tsx
+// never overrides. The Fresh/Enrolled tabs clear that bar easily; a freshly-archived Archived tab
+// does not - it has exactly 1 row, the box never renders, and `.fill()` on a locator matching zero
+// elements timed out and crashed the whole suite. Fixed by using the box ONLY when it is present;
+// with 10 or fewer rows every row is already on the page, so no search is needed to find one.
+async function findRow(name) {
+  const box = page.locator('input[placeholder="Search all columns…"]').first();
+  if (await box.count()) { await box.fill(name); await page.waitForTimeout(400); }
+  return page.locator(`table tbody tr:has-text("${name}")`);
+}
+await findRow(fresh[0].name);
 const preFreshCount = await page.evaluate(() => {
   const m = document.body.innerText.match(/Fresh Candidates \((\d+)\)/);
   return m ? Number(m[1]) : null;
@@ -193,8 +203,7 @@ if (archiveBtnVisible) {
 }
 await page.reload({ waitUntil: "domcontentloaded" });
 await settled();
-await page.locator('input[placeholder="Search all columns…"]').first().fill(fresh[0].name);
-await page.waitForTimeout(400);
+await findRow(fresh[0].name);
 const postFreshCount = await page.evaluate(() => {
   const m = document.body.innerText.match(/Fresh Candidates \((\d+)\)/);
   return m ? Number(m[1]) : null;
@@ -206,8 +215,7 @@ const archivedTabBtn = page.locator('button:has-text("Archived Candidates")').fi
 ok("[QA-1817] the Archived tab exists at all", (await archivedTabBtn.count()) > 0, "");
 await archivedTabBtn.click();
 await page.waitForTimeout(500);
-await page.locator('input[placeholder="Search all columns…"]').first().fill(fresh[0].name);
-await page.waitForTimeout(400);
+await findRow(fresh[0].name);
 const archivedRowVisible = await page.locator(`table tbody tr:has-text("${fresh[0].name}")`).count();
 ok("[QA-1817] the archived candidate is actually visible under its own Archived tab, not just uncounted elsewhere",
   archivedRowVisible > 0, `rows=${archivedRowVisible}`);
