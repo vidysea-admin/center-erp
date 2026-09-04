@@ -2426,7 +2426,7 @@ function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
           </>
         )}
         {selectedIds.size > 0 && (
-          <span className="ml-auto flex flex-wrap items-center gap-2 rounded-lg bg-gray-50 px-2 py-1">
+          <span className="flex flex-wrap items-center gap-2 rounded-lg bg-gray-50 px-2 py-1">
             <span className="font-medium">{selectedIds.size} selected</span>
             <Btn small kind="danger"
               onClick={() => setDropTarget({ candidate: { name: `${selectedIds.size} selected candidate${selectedIds.size === 1 ? "" : "s"}` } })}>
@@ -2447,7 +2447,7 @@ function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
         isSelected={(r: any) => selectedIds.has(r.member_id)}
         columns={[
           {
-            key: "_sel", label: "", mobile: false,
+            key: "_sel", label: "",
             render: (r: any) => (
               <input type="checkbox" checked={selectedIds.has(r.member_id)} onChange={() => toggleSelected(r.member_id)} onClick={(e) => e.stopPropagation()} />
             ),
