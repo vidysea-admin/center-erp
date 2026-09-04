@@ -2080,13 +2080,17 @@ function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
   // no action was possible from the banner itself. It's gone; clicking a stat now filters the
   // table below to exactly those candidates and checks them, and drop is done right here.
   const [dropoutFilter, setDropoutFilter] = useState<"stopped" | "short" | null>(null);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const toggleSelected = (id: string) => setSelected((s) => {
+  // QA-1823 follow-up (check-user-copy.mjs's file-wide surface scan): named `selectedIds`, not
+  // `selected` — the Enrollment component further down this same file already owns a `selected`/
+  // `setSelected` pair, and the scan is per-file, not per-scope, so two same-named useState
+  // declarations collapse into one duplicated finding.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const toggleSelected = (id: string) => setSelectedIds((s) => {
     const n = new Set(s);
     n.has(id) ? n.delete(id) : n.add(id);
     return n;
   });
-  const { dropTarget, setDropTarget, dropForm, setDropForm, dropReasons } = useDropMember(() => { setSelected(new Set()); load(); }, (m: string) => setError(m));
+  const { dropTarget, setDropTarget, dropForm, setDropForm, dropReasons } = useDropMember(() => { setSelectedIds(new Set()); load(); }, (m: string) => setError(m));
   const [dropBusy, setDropBusy] = useState(false);
   const [dropResult, setDropResult] = useState<string[] | null>(null);
   async function dropSelected() {
@@ -2094,7 +2098,7 @@ function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
     setDropResult(null);
     const failedIds = new Set<string>();
     const failedLines: string[] = [];
-    for (const id of selected) {
+    for (const id of selectedIds) {
       try {
         await api(`/api/members/${id}/drop`, { method: "POST", json: dropForm });
       } catch (e: any) {
@@ -2106,7 +2110,7 @@ function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
     setDropBusy(false);
     setDropTarget(null);
     setDropForm({});
-    setSelected(failedIds);
+    setSelectedIds(failedIds);
     setDropResult(failedLines.length ? failedLines : null);
     await load();
   }
@@ -2233,9 +2237,9 @@ function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
   const dropoutFilterMatchFor = (which: "stopped" | "short") => (m: any) =>
     which === "stopped" ? !!m.dropout_signal?.stopped_coming : !!m.dropout_signal?.cannot_reach_bar;
   const applyDropoutFilter = (which: "stopped" | "short") => {
-    if (dropoutFilter === which) { setDropoutFilter(null); setSelected(new Set()); return; }
+    if (dropoutFilter === which) { setDropoutFilter(null); setSelectedIds(new Set()); return; }
     setDropoutFilter(which);
-    setSelected(new Set(dropoutSuggestions.filter(dropoutFilterMatchFor(which)).map((m: any) => m.member_id)));
+    setSelectedIds(new Set(dropoutSuggestions.filter(dropoutFilterMatchFor(which)).map((m: any) => m.member_id)));
   };
   const tableRows = dropoutFilter ? activeMembers.filter(dropoutFilterMatchFor(dropoutFilter)) : activeMembers;
   return (
@@ -2265,8 +2269,8 @@ function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
           </div>
           {dropoutFilter && (
             <p className="mt-1 text-amber-700">
-              Showing {tableRows.length} of {activeMembers.length} below, selected.{" "}
-              <button type="button" className="underline underline-offset-2" onClick={() => { setDropoutFilter(null); setSelected(new Set()); }}>Clear filter</button>
+              Showing {tableRows.length} of {activeMembers.length} below, checked.{" "}
+              <button type="button" className="underline underline-offset-2" onClick={() => { setDropoutFilter(null); setSelectedIds(new Set()); }}>Clear filter</button>
             </p>
           )}
           <p className="mt-2 border-t border-amber-200 pt-2 text-amber-800">
@@ -2416,16 +2420,16 @@ function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
       <div className="flex flex-wrap items-center gap-2 text-xs">
         {tableRows.length > 0 && (
           <>
-            <button type="button" className="text-blue-700 hover:underline" onClick={() => setSelected(new Set(tableRows.map((m: any) => m.member_id)))}>Select all visible</button>
+            <button type="button" className="text-blue-700 hover:underline" onClick={() => setSelectedIds(new Set(tableRows.map((m: any) => m.member_id)))}>Select all visible</button>
             <span className="text-gray-300">·</span>
-            <button type="button" className="text-blue-700 hover:underline" onClick={() => setSelected(new Set())}>Clear selection</button>
+            <button type="button" className="text-blue-700 hover:underline" onClick={() => setSelectedIds(new Set())}>Clear selection</button>
           </>
         )}
-        {selected.size > 0 && (
+        {selectedIds.size > 0 && (
           <span className="ml-auto flex flex-wrap items-center gap-2 rounded-lg bg-gray-50 px-2 py-1">
-            <span className="font-medium">{selected.size} selected</span>
+            <span className="font-medium">{selectedIds.size} selected</span>
             <Btn small kind="danger"
-              onClick={() => setDropTarget({ candidate: { name: `${selected.size} selected candidate${selected.size === 1 ? "" : "s"}` } })}>
+              onClick={() => setDropTarget({ candidate: { name: `${selectedIds.size} selected candidate${selectedIds.size === 1 ? "" : "s"}` } })}>
               Drop selected
             </Btn>
           </span>
@@ -2440,12 +2444,12 @@ function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
       <DataTable rows={tableRows}
         cardTitle={(r: any) => r.name}
         defaultSort={{ key: "name", dir: "asc" }}
-        isSelected={(r: any) => selected.has(r.member_id)}
+        isSelected={(r: any) => selectedIds.has(r.member_id)}
         columns={[
           {
             key: "_sel", label: "", mobile: false,
             render: (r: any) => (
-              <input type="checkbox" checked={selected.has(r.member_id)} onChange={() => toggleSelected(r.member_id)} onClick={(e) => e.stopPropagation()} />
+              <input type="checkbox" checked={selectedIds.has(r.member_id)} onChange={() => toggleSelected(r.member_id)} onClick={(e) => e.stopPropagation()} />
             ),
           },
           // -161 (QA-430, open since 2026-08-20 and the line REQ-389 was written FROM): a candidate

@@ -855,10 +855,8 @@ export async function updateEnrollment(memberId: string, patch: {
       const missing = ENROLLMENT_STEP_ORDER.slice(0, highestOn).filter((step) => !effective(step));
       if (missing.length) {
         if (!patch.confirm_backfill) {
-          throw new HttpError(
-            409,
-            `Rule 55: ${missing.map((s) => ENROLLMENT_STEP_LABEL[s]).join(", ")} ${missing.length === 1 ? "is" : "are"} not marked done yet for ${ENROLLMENT_STEP_LABEL[ENROLLMENT_STEP_ORDER[highestOn]]}. Resubmit with confirm_backfill to mark ${missing.length === 1 ? "it" : "them"} done too.`,
-          );
+          throw new HttpError(409,
+            `Rule 55: ${missing.map((s) => ENROLLMENT_STEP_LABEL[s]).join(", ")} ${missing.length === 1 ? "is" : "are"} not marked done yet for ${ENROLLMENT_STEP_LABEL[ENROLLMENT_STEP_ORDER[highestOn]]}. Resubmit with confirm_backfill to mark ${missing.length === 1 ? "it" : "them"} done too.`);
         }
         for (const step of missing) (patch as Record<string, boolean>)[step] = true;
       }

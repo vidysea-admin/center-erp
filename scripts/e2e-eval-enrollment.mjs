@@ -81,7 +81,9 @@ ok("[worst] double-assignment refused", dupAdd.status >= 400, `got ${dupAdd.stat
 // clear of Rule 48) so this doesn't disturb the 80%-boundary math right below, which depends on
 // the exact active-Completed count on `batch`. ----
 {
-  const r55batch = (await req(admin, "POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, room: room._id, planned_start: today(), target_size: 50 }, 201)).data.item;
+  const r55room = (await req(admin, "POST", `/api/locations/${loc._id}/rooms`, { name: "R55-CR", type: "Classroom" }, 201)).data.item;
+  const r55trainer = (await req(admin, "POST", "/api/trainers", { name: "TEST-R55 Trainer " + s, phone: phone("93"), skills: ["EESkill" + s] }, 201)).data.item;
+  const r55batch = (await req(admin, "POST", "/api/batches", { location: loc._id, program: prog._id, trainer: r55trainer._id, room: r55room._id, planned_start: today(), target_size: 50 }, 201)).data.item;
   const r55c1 = (await req(admin, "POST", "/api/candidates", { name: "TEST-EE R55C1 " + s, phone: phone("91"), location: loc._id, program: prog._id }, 201)).data.item;
   const r55c2 = (await req(admin, "POST", "/api/candidates", { name: "TEST-EE R55C2 " + s, phone: phone("92"), location: loc._id, program: prog._id }, 201)).data.item;
   const mm1 = (await req(admin, "POST", `/api/batches/${r55batch._id}/members`, { candidate: r55c1._id }, 201)).data.item;
@@ -115,19 +117,28 @@ ok("[worst] double-assignment refused", dupAdd.status >= 400, `got ${dupAdd.stat
   await req(admin, "PATCH", `/api/members/${mm2._id}`, { reg_done: true }, 200);
   const midGap = await req(admin, "PATCH", `/api/members/${mm2._id}`, { enroll_done: true });
   ok("QA-1824 [worst] Rule 55 also gates a MIDDLE step, not only Batch Accept", midGap.status === 409, `got ${midGap.status}`);
+  // plain() (src/lib/user-copy.ts) sentence-cases the first character of a message that reaches
+  // the screen — "e-KYC" leading the sentence reads "E-KYC", same as it would for any other
+  // rule-coded refusal in this codebase. Case-insensitive match, so this pin tracks the rule's
+  // actual behaviour rather than a coincidence of capitalization.
+  const midMsg = (midGap.data?.error ?? "").toLowerCase();
   ok("QA-1824 [worst] the middle-step message names only e-KYC as missing (Registration already done)",
-    (midGap.data?.error ?? "").includes("e-KYC") && !(midGap.data?.error ?? "").includes("Registration"), midGap.data?.error);
+    midMsg.includes("e-kyc") && !midMsg.includes("registration"), midGap.data?.error);
 
   // [best] a single PATCH that sets the gap-closing step in the SAME request needs no confirm.
   const samePatch = await req(admin, "PATCH", `/api/members/${mm2._id}`, { kyc_done: true, enroll_done: true }, 200);
   ok("QA-1824 [best] setting the gap-closing step in the same request needs no confirm_backfill",
     samePatch.data.item.kyc_done === true && samePatch.data.item.enroll_done === true, JSON.stringify(samePatch.data.item));
 
-  // [avg] the bulk 'accept_done' path hits the same per-member gate (mm2 still lacks accept_done).
-  const bulkGap = await req(admin, "POST", `/api/batches/${r55batch._id}/members/bulk-enroll`, { step: "accept_done", member_ids: [mm2._id] }, 200);
+  // [avg] the bulk 'accept_done' path hits the same per-member gate — a THIRD, still-fresh member
+  // (mm2 is deliberately not reused: the "same request" pin just above already closed all of its
+  // earlier steps, so it would carry no gap left to hit).
+  const r55c3 = (await req(admin, "POST", "/api/candidates", { name: "TEST-EE R55C3 " + s, phone: phone("94"), location: loc._id, program: prog._id }, 201)).data.item;
+  const mm3 = (await req(admin, "POST", `/api/batches/${r55batch._id}/members`, { candidate: r55c3._id }, 201)).data.item;
+  const bulkGap = await req(admin, "POST", `/api/batches/${r55batch._id}/members/bulk-enroll`, { step: "accept_done", member_ids: [mm3._id] }, 200);
   ok("QA-1824 [worst] bulk-enroll surfaces the same per-member gate as a failure, not a silent skip",
     bulkGap.data.failed?.length === 1 && bulkGap.data.updated === 0, JSON.stringify(bulkGap.data));
-  const bulkBackfilled = await req(admin, "POST", `/api/batches/${r55batch._id}/members/bulk-enroll`, { step: "accept_done", member_ids: [mm2._id], confirm_backfill: true }, 200);
+  const bulkBackfilled = await req(admin, "POST", `/api/batches/${r55batch._id}/members/bulk-enroll`, { step: "accept_done", member_ids: [mm3._id], confirm_backfill: true }, 200);
   ok("QA-1824 [best] bulk-enroll with confirm_backfill succeeds through the same gate",
     bulkBackfilled.data.updated === 1, JSON.stringify(bulkBackfilled.data));
 
