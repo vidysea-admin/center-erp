@@ -3020,7 +3020,16 @@ for (const file of walk(root)) {
   const rel = "app/(app)/batches/[id]/page.tsx";
   const src = stripComments(fs.readFileSync(path.join(root, rel), "utf-8"));
   const tab = fnBody(src, "AttendanceTab");
-  const tableFiltered = /rows=\{activeMembers\}/.test(tab) && !/rows=\{data\.members\}/.test(tab);
+  // QA-1823: the table's `rows` prop is no longer always the literal `activeMembers` name — a
+  // dropout-stat click narrows it to a subset, held in a locally-named variable (`tableRows`).
+  // Same guarantee, traced structurally instead of by exact identifier: whatever the rows-prop
+  // variable is called, its OWN definition must derive from `activeMembers` and never read
+  // `data.members` directly — so a re-widening back to the raw payload still fails this the same
+  // way it always has.
+  const rowsPropVar = tab.match(/<DataTable rows=\{(\w+)\}/)?.[1];
+  const rowsPropDef = rowsPropVar ? (new RegExp(`\\bconst ${rowsPropVar}\\b[^;]*;`).exec(tab)?.[0] ?? "") : "";
+  const tableFiltered = !!rowsPropVar && rowsPropVar !== "data"
+    && (rowsPropVar === "activeMembers" || (/\bactiveMembers\b/.test(rowsPropDef) && !/data\.members/.test(rowsPropDef)));
   const noDropoutChip = !/<Chip value="Dropout"/.test(tab);
   const denomFiltered = !/\/\{data\.members\.length\}/.test(tab);
   const sharedPredicate = /activeOnly\(/.test(tab)
