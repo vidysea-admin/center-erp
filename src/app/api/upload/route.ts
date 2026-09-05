@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import crypto from "crypto";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readFormData } from "@/lib/authz";
 import { BASE_PATH } from "@/lib/base-path";
 import { dbConnect } from "@/lib/db";
 import { StoredFile } from "@/models";
@@ -25,12 +25,13 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // experimental.proxyClientMaxBodySize (10 MB default) and truncates the rest, so
   // formData() failed. /api/upload is now excluded from the proxy matcher — the body streams
   // whole. If parsing still fails, name it; the operator's move is a smaller file, not a retry.
-  let form: FormData;
-  try {
-    form = await req.formData();
-  } catch {
-    throw new HttpError(413, "The upload could not be read on the server (body too large for the layer in front of the app). Compress the video or split the upload, and tell Admin the file size.");
-  }
+  // 413 and this wording are deliberate and unchanged — the message and status are parameters of
+  // `readFormData` precisely so this door keeps saying what it has always said.
+  const form = await readFormData(
+    req,
+    "The upload could not be read on the server (body too large for the layer in front of the app). Compress the video or split the upload, and tell Admin the file size.",
+    413,
+  );
   const file = form.get("file") as File | null;
   if (!file) throw new HttpError(400, "file required");
   // 15/08 (Umesh): NO app-side size cap on uploads — "koi bhi cap nahi, space bahut hai".

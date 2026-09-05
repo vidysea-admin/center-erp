@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError, readFormData } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, Location, Program } from "@/models";
 import { audit } from "@/lib/audit";
@@ -21,9 +21,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const user = await requireUser();
   requireEdit(user);
   await requirePerm(user, "batches.manage");
-  let form: FormData;
-  try { form = await req.formData(); }
-  catch { throw new HttpError(400, "multipart form-data body required — attach the sheet as 'file'"); }
+  const form = await readFormData(req, "multipart form-data body required — attach the sheet as 'file'");
   const file = form.get("file") as File | null;
   if (!file) throw new HttpError(400, "file is required");
   const confirm = form.get("confirm") === "1";

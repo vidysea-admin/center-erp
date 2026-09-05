@@ -3286,8 +3286,18 @@ for (const file of walk(root)) {
   const bodyReaders = [...walk(path.join(root))]
     .filter((f) => /\.tsx?$/.test(f) && !f.replace(/\\/g, "/").endsWith("lib/authz.ts"));
   for (const f of bodyReaders) {
-    if (/await (?:req|request)\.json\(\)/.test(stripComments(fs.readFileSync(f, "utf-8")))) {
-      bad.push(`${path.relative(root, f).replace(/\\/g, "/")}: reads a request body with .json() directly, so an unparseable body reaches apiHandler as a bare SyntaxError and answers 500. Use readJson(req) — the read site is the only place that knows the string came off the wire (QA-1878 / QA-1880 / QA-1882).`);
+    const body = stripComments(fs.readFileSync(f, "utf-8"));
+    const rel = path.relative(root, f).replace(/\\/g, "/");
+    if (/await (?:req|request)\.json\(\)/.test(body)) {
+      bad.push(`${rel}: reads a request body with .json() directly, so an unparseable body reaches apiHandler as a bare SyntaxError and answers 500. Use readJson(req) — the read site is the only place that knows the string came off the wire (QA-1878 / QA-1880 / QA-1882).`);
+    }
+    // QA-1887 (checker, cycle 3): the same defect on the OTHER kind of body. Three import doors read
+    // multipart with a bare `formData()` and answered 500 to a malformed upload — QA-1878's exact
+    // wording and argument, surviving because the fix and its pin were both written about `.json()`.
+    // FIFTH instance in this unit of a rule binding more places than the evidence for it covers, so
+    // the pin covers both readers rather than the one that happened to be found first.
+    if (/await (?:req|request)\.formData\(\)/.test(body)) {
+      bad.push(`${rel}: reads a multipart body with .formData() directly, so a malformed upload answers 500 "something went wrong on our side". Use readFormData(req, message[, status]) — the message and status are parameters precisely so each door keeps its own (QA-1887).`);
     }
   }
 

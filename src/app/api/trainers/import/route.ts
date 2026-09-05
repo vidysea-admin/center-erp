@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError, isScoped } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, isScoped, readFormData } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { JobRole, Location, Program, Trainer, TRAINER_PIPELINE } from "@/models";
 import { audit } from "@/lib/audit";
@@ -65,7 +65,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const user = await requireUser();
   requireEdit(user);
   await requirePerm(user, "trainers.manage");
-  const form = await req.formData();
+  const form = await readFormData(req, "multipart form-data body required — attach the sheet as 'file'");
   const file = form.get("file") as File | null;
   const confirm = form.get("confirm") === "1";
   const mappingRaw = form.get("mapping");

@@ -29,6 +29,32 @@ export async function readJson(req: { json: () => Promise<unknown> }): Promise<a
   }
 }
 
+// QA-1887 (checker on qa-1877-1879, cycle 3): the SAME defect, on the other kind of body.
+// `/api/candidates/import`, `/api/trainers/import` and `/api/govt-attendance` read multipart with a
+// bare `req.formData()`, so a malformed upload answered "Something went wrong on our side" — the
+// exact wording, the exact argument and the exact wrong bucket that QA-1878 was about, surviving on
+// `formData()` because the fix and its pin were both written about `.json()`. Two of the five
+// readers already guarded theirs; three did not. **Fifth instance in one unit of a rule binding more
+// places than the evidence for it covers.**
+//
+// The message is a PARAMETER because these doors do not all mean the same thing: `/api/upload`
+// answers 413 (the body was truncated by the layer in front of the app, so the operator's move is a
+// smaller file, not a retry) and the import doors answer 400 naming the field they expect. Putting
+// every read here anyway is what lets the wall assert "no raw `formData()` anywhere" exactly,
+// instead of guessing at try/catch proximity — a heuristic this file has already deleted once for
+// firing on correct code.
+export async function readFormData(
+  req: { formData: () => Promise<FormData> },
+  message = "A multipart form-data body is required.",
+  status = 400,
+): Promise<FormData> {
+  try {
+    return await req.formData();
+  } catch {
+    throw new HttpError(status, message);
+  }
+}
+
 // 2026-08-12 audit (auth S1-4): role, location_scope, can_edit, deactivation and rejection were
 // frozen into the JWT at sign-in and the session lasts 30 days, so none of them reached a live
 // session — an Admin could demote, rescope, deactivate or reject an account and that person kept

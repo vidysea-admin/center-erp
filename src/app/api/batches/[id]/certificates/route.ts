@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import crypto from "crypto";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson, readFormData } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { BASE_PATH } from "@/lib/base-path";
 import { Batch, BatchMember, CandidateResult, Closure, StoredFile } from "@/models";
@@ -84,9 +84,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   }
 
   // ---------------------------------------------------------------- step 1: preview
-  let form: FormData;
-  try { form = await req.formData(); }
-  catch { throw new HttpError(400, "multipart form-data body required — attach one or more files[]"); }
+  const form = await readFormData(req, "multipart form-data body required — attach one or more files[]");
   const files = form.getAll("files").filter((f): f is File => f instanceof File);
   if (!files.length) throw new HttpError(400, "files[] is required (multipart, one or more)");
 

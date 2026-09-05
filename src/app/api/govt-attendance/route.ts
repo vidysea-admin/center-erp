@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, isScoped, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, isScoped, HttpError, readFormData } from "@/lib/authz";
 import { requirePerm, requireView } from "@/lib/permissions";
 import { BatchMember, Candidate, GovtAttendanceImport, GovtAttendanceRow, Notification } from "@/models";
 import { activateFromEvidence } from "@/lib/rules";
@@ -59,7 +59,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   requireEdit(user);
   await requirePerm(user, "attendance.govt");
 
-  const form = await req.formData();
+  const form = await readFormData(req, "multipart form-data body required — attach the portal export as 'file'");
   const file = form.get("file") as File | null;
   if (!file) throw new HttpError(400, "file is required");
   const batchId = String(form.get("batch") || "") || null;

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError, readFormData } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Candidate, EDUCATION_LEVEL, Location, Program, SIDH_STATUS } from "@/models";
 import { parseSheetDate } from "@/lib/rules";
@@ -49,7 +49,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const user = await requireUser();
   requireEdit(user);
   await requirePerm(user, "candidates.manage"); // togglable (2026-08-11)
-  const form = await req.formData();
+  const form = await readFormData(req, "multipart form-data body required — attach the sheet as 'file'");
   const file = form.get("file") as File | null;
   const location = String(form.get("location") || "");
   const program = String(form.get("program") || "");
