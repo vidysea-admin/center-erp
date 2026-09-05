@@ -86,7 +86,7 @@ StoredFile, ApprovalRule, ApprovalRequest, AuditLog, Scheme, JobRole, CandidateD
 | File | What it is |
 |---|---|
 | `authz.ts` | `HttpError` · `requireUser` · `requireRole` · `requireEdit` · `locationFilter` · **`apiHandler`** — the server error chokepoint (HttpError→`plain()`, E11000→409, Cast→404, Validation→400) |
-| `permissions.ts` | `PERMISSIONS` (**22 keys** — QA-904 added `candidates.delete` / `trainers.delete` / `batches.delete`; QA-1825 added `finance.view` / `finance.approve`) · `DEFAULT_ROLE_PERMISSIONS` · `hasPermission` · `requireView` · `requirePerm` · **`requireFinance`** · **`NO_ADMIN_BYPASS`**. Deny wins; Admin bypasses **every key except `NO_ADMIN_BYPASS`** (§3.2d) |
+| `permissions.ts` | `PERMISSIONS` (**21 keys** — QA-904 added `candidates.delete` / `trainers.delete` / `batches.delete`; QA-1825 added `finance.view` / `finance.approve`; QA-1838 **retired `invoices.manage`**, which gated nothing once the invoice book moved to `finance.view`) · `DEFAULT_ROLE_PERMISSIONS` · `hasPermission` · `requireView` · `requirePerm` · **`requireFinance`** (the door rule) · **`NO_ADMIN_BYPASS`** (the key rule) · **`INVOICE_MONEY_FIELDS` + `maskInvoiceMoney` / `maskInvoiceMoneyList` / `maskMoneyInAuditRow`** (the field rule). Deny wins; Admin bypasses **every key except `NO_ADMIN_BYPASS`** (§3.2d) |
 | `crud.ts` | `collectionRoutes` / `itemRoutes` / `pick` — the REST factory. **`CrudConfig.fields` IS the write whitelist** |
 | `validate.ts` | **`canonicalPhone` · `phoneError` · `emailError` · `canonicalAadhaar` · `aadhaarError`** — THE write-time canon for phone/email/Aadhaar. Client-safe (imports nothing — §3.0) |
 | `duplicates.ts` | `normalizePhone` (deliberately LOOSE compare key — a different job) · `findDuplicateCandidates` (Rule 7, advisory) |
@@ -590,9 +590,39 @@ act (`closure.manage`), not a money act, and stays outside the gate.
 
 **Readers to keep in step:** the four routes above, plus the UI gates in `(app)/costs/page.tsx`
 (`postOnly` now asks `finance.view`, not `role === "Operations"`) and `(app)/batches/[id]/page.tsx`
-(the Costs TAB and the Closure tab's invoice controls). `check-user-copy.mjs` pins both shapes: no
-money route may gate on a role name or lack `requireFinance`, and no Admin short-circuit may skip
-`NO_ADMIN_BYPASS`.
+(the Costs TAB and the Closure tab's invoice controls).
+
+### There are TWO rules here, and cycle 1 shipped only one - QA-1834 / QA-1835 / QA-1836
+
+`requireFinance` is a **door** rule: refuse the request. Cycle 1 applied it to the four endpoints
+whose entire purpose is money and declared the CEO's sentence enforced. A checker then created an
+Admin with no finance grant and read `amount=128500` off **three other endpoints**:
+`batches/[id]/closure` (Rule 38 scope only), `/api/home` Queue 6 (a bare `["Admin","Operations"]`
+role check, on the first screen after login), and `audit/[entity]/[id]` (the invoice PATCH audits the
+whole patch, and `"invoice"` is in neither `AUDIT_MASK_FIELDS` nor `AUDIT_SECRET_FIELDS`).
+
+A door rule is the wrong instrument for those three, because **they legitimately serve non-finance
+callers**: Operations needs the closure screen, everyone needs Home, and a 403 would break the very
+closure flow the ruling protects. Umesh, asked directly, ruled ***"sirf paisa chhupao, status sabko
+rehne do"*** - which is not a door rule at all but a **field** rule. Hence:
+
+- **`INVOICE_MONEY_FIELDS`** (`permissions.ts`) - `amount`, `invoice_no`, `raised_on`, `paid_on`. The
+  single statement of what counts as money, exactly as `NO_ADMIN_BYPASS` is for keys. `status` and
+  everything derived from it (`settlementStage`, the batch-list column, the Closure heading) is
+  deliberately **not** in it.
+- A masked field is **omitted, never zeroed** - a client rendering `amount ?? 0` would print a
+  confident 0, which is worse than nothing because it looks like an answer.
+- **The audit trail is masked on READ, never on write.** Write-time masking would destroy the number
+  permanently for the three people who are supposed to see it, and a log that has forgotten the
+  amount cannot answer "kaunsa admin, kya kiya" - the whole point of the named-approver history.
+
+**`check-user-copy.mjs` pins all of it, and its own shape is the lesson of this unit.** The cycle-1
+money pin listed four route paths by hand, so a fifth door could not trip it - and three did, behind
+a green wall. It now **derives** the population: every `route.ts` under `src/app/api` naming
+`Invoice` or `CostEntry` must call `requireFinance`, or mask, or sit in a commented `EXEMPT` list
+with a written reason. Known limit, stated in the pin rather than papered over: a route that obtains
+money indirectly through `lib/` is not caught (`rules.ts` and `alerts.ts` are the two lib readers;
+both emit a status or a label, never a figure).
 
 ### 3.2c A comment does not enforce the rule it states — and the author is the least protected
 

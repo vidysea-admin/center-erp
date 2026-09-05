@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit } from "@/lib/authz";
-import { requirePerm } from "@/lib/permissions";
+import { requirePerm, hasPermission, maskInvoiceMoney, FINANCE_VIEW } from "@/lib/permissions";
 import { CandidateResult, Closure, Invoice } from "@/models";
 import { assertBatchInScope, enrolledWithoutCan, summarizeBatchResults, upsertClosureChecked } from "@/lib/rules";
 import { audit } from "@/lib/audit";
@@ -16,9 +16,16 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     Invoice.findOne({ batch: id }).lean(),
     CandidateResult.find({ batch: id }).lean<any[]>(),
   ]);
+  // QA-1834 (checker cycle 1, confirmed with live data): this returned the whole Invoice document —
+  // amount, invoice_no, raised_on, paid_on — behind Rule 38 scope alone, while the SAME release
+  // gated the client that renders those fields. The UI hid what the route still shipped, which made
+  // it harder to notice rather than safer. A `requireFinance` here would be wrong: Operations needs
+  // this screen, and refusing the whole payload would break the closure flow Umesh's ruling protects.
+  // So the FIELD rule applies — money out, `status` stays (*"sirf paisa chhupao, status sabko rehne do"*).
+  const canSeeMoney = await hasPermission(user, FINANCE_VIEW);
   // legacy === no per-candidate rows → the batch keeps its stored batch-level figures (Rule 41)
   return NextResponse.json({
-    closure, invoice,
+    closure, invoice: maskInvoiceMoney(invoice, canSeeMoney),
     legacy: rows.length === 0,
     results_summary: await summarizeBatchResults(id, rows),
     // -156 (QA-445): a derivation that quietly does not happen is Manish's "mark complete karne se

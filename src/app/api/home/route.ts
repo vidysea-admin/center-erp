@@ -6,6 +6,7 @@ import { Types } from "mongoose";
 import { ACTIVE_BATCH_STATUSES, addDays, dayStart, istToday, missingLogQueue, trainerForLogin } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { maskSheetChange } from "@/lib/sync";
+import { hasPermission, maskInvoiceMoneyList, FINANCE_VIEW } from "@/lib/permissions";
 
 // Home Action Center: the three real conditions by name (§5) + operational queues.
 export const GET = apiHandler(async () => {
@@ -372,11 +373,24 @@ export const GET = apiHandler(async () => {
     f?.source_change ? { ...f, source_change: maskSheetChange(f.source_change, false) } : f);
 
   // Queue 6: invoices pending
-  const invoices = ["Admin", "Operations"].includes(user.role)
-    ? await Invoice.find({ status: { $in: ["Ready", "Raised"] } })
-        .populate({ path: "batch", select: "code location", populate: { path: "location", select: "name code" } })
-        .limit(10).lean()
-    : [];
+  // QA-1834 (checker cycle 1, confirmed with live data): this gated on a bare
+  // `["Admin","Operations"].includes(user.role)` — no permission call at all — and returned full
+  // Invoice documents including `amount`. On the HOME screen, so an ungranted Admin saw the money
+  // the moment they signed in, three lines after the same login was correctly refused at
+  // /api/costs. The role check is the exact shape QA-1825 set out to delete.
+  //
+  // Not a `requireFinance`: Home serves every role, and refusing it would 403 the whole dashboard.
+  // The queue stays — knowing WHICH batches are awaiting an invoice is legitimate closure work —
+  // and only the money leaves (*"sirf paisa chhupao, status sabko rehne do"*, Umesh 2026-09-05).
+  const canSeeInvoiceMoney = await hasPermission(user, FINANCE_VIEW);
+  const invoices = maskInvoiceMoneyList(
+    ["Admin", "Operations"].includes(user.role)
+      ? await Invoice.find({ status: { $in: ["Ready", "Raised"] } })
+          .populate({ path: "batch", select: "code location", populate: { path: "location", select: "name code" } })
+          .limit(10).lean()
+      : [],
+    canSeeInvoiceMoney,
+  );
 
   // Queue 7: signups waiting on an Admin (2026-08-12). These were only visible if you
   // happened to open Admin → Users, so the person who has to act never saw them. Full

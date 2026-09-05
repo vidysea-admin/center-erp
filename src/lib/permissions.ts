@@ -44,7 +44,13 @@ export const PERMISSIONS: { key: string; label: string; group: string }[] = [
   { key: "closure.manage", label: "Assessment, certification & closure", group: "Batches" },
   { key: "attendance.govt", label: "Import & reconcile government portal attendance", group: "Batches" },
   { key: "costs.manage", label: "Enter costs", group: "Finance" },
-  { key: "invoices.manage", label: "Manage invoices", group: "Finance" },
+  // QA-1838 (checker, cycle 1): `invoices.manage` was REMOVED here. After QA-1825 moved the invoice
+  // book to `finance.view` and the invoice write door to `finance.approve`, no route in `src/` read
+  // it any more — it survived only as a checkbox in the Admin matrix that changed nothing whichever
+  // way it was ticked. A right that gates nothing is worse than a missing one: it tells an Admin
+  // they have granted or revoked something, and they have not. Stored `RolePermission` rows may
+  // still carry the string; that is harmless — `PUT /api/permissions` filters unknown keys against
+  // this catalog (api/permissions/route.ts:37,40), so the next matrix write drops it on its own.
   // QA-1825 (CEO, 2026-09-05): "cost ki approval keval aur keval Manish ji aur mere paas hogi aur
   // visibility keval aur keval Manish ji aur mere paas hogi... kisi ke bhi paas nahi hogi CHAAHE
   // SUPER ADMIN HO, SUPER ADMIN KA KAAKA HO." Umesh's ruling on how to express that: only Karunn,
@@ -106,7 +112,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   Operations: [
     "locations.manage", "trainers.manage",
     "candidates.manage", "candidates.assign", "batches.manage", "batches.daily_log",
-    "closure.manage", "attendance.govt", "costs.manage", "invoices.manage", "feedback.links",
+    "closure.manage", "attendance.govt", "costs.manage", "feedback.links", // QA-1838: invoices.manage retired
     // 2026-08-24: all three deletes. Operations already carries every corresponding .manage right,
     // and clearing junk rows out of the pool is their job.
     "candidates.delete", "trainers.delete", "batches.delete",
@@ -261,6 +267,63 @@ export async function requirePerm(user: SessionUser, perm: string): Promise<void
 export async function requireFinance(user: SessionUser, level: "view" | "approve"): Promise<void> {
   await requireView(user, FINANCE_VIEW);
   if (level === "approve") await requirePerm(user, FINANCE_APPROVE);
+}
+
+// ---- QA-1834 / QA-1835 / QA-1836 (cycle 2): the FIELD rule, beside the KEY rule ----
+//
+// `requireFinance` above is a DOOR rule: refuse the request. It is right for the four endpoints
+// whose entire purpose is money. It is wrong for `/api/home`, `/api/batches/[id]/closure` and the
+// audit trail, because those legitimately serve non-finance callers — Operations needs the closure
+// screen, everybody needs Home — and a 403 there would break the very closure flow Umesh's ruling
+// set out to protect.
+//
+// Umesh, 2026-09-05, asked directly whether the CEO restricted the money or the invoice's existence:
+// **"Sirf paisa chhupao, status sabko rehne do."** That is not a door rule at all. It is a FIELD
+// rule, and it wants a field-level instrument. So: one list of what counts as money, and appliers
+// that use it. The list is the thing that must never be copied — the same property NO_ADMIN_BYPASS
+// gives the key rule, on the axis the CEO's sentence actually runs along.
+//
+// `status` is deliberately absent, and so is everything derived from it (`settlementStage()`, the
+// batch list's settlement-stage column, the Closure tab's "Invoice — <status>" heading).
+export const INVOICE_MONEY_FIELDS = ["amount", "invoice_no", "raised_on", "paid_on"] as const;
+
+// A masked field is OMITTED, never zeroed. A quieter control than a 403 needs to be unmistakable:
+// a client that renders `amount ?? 0` would otherwise print a confident ₹0, which is worse than
+// showing nothing because it looks like an answer.
+function stripMoneyKeys<T extends Record<string, unknown>>(obj: T): T {
+  const out: Record<string, unknown> = { ...obj };
+  for (const f of INVOICE_MONEY_FIELDS) delete out[f];
+  return out as T;
+}
+
+// One Invoice-shaped document (or null/undefined) on its way out of a route.
+export function maskInvoiceMoney<T>(doc: T, canSeeMoney: boolean): T {
+  if (canSeeMoney || doc == null || typeof doc !== "object") return doc;
+  return stripMoneyKeys(doc as Record<string, unknown>) as T;
+}
+
+// A list of them (e.g. /api/home's invoices-pending queue).
+export function maskInvoiceMoneyList<T>(docs: T[], canSeeMoney: boolean): T[] {
+  return canSeeMoney ? docs : docs.map((d) => maskInvoiceMoney(d, false));
+}
+
+// QA-1835: the audit trail is masked on the way OUT, never on the way in. Write-time masking would
+// destroy the number permanently for the three people who are supposed to see it, and an audit log
+// that has forgotten the amount cannot answer *"kaunsa admin, kya kiya"* — which is the whole
+// purpose of the named-approver history (QA-1827). Store raw, mask on read.
+//
+// Two shapes reach here: `field: "invoice"` with the whole patch object as the value (written by
+// api/batches/[id]/invoice), and `field: "amount"` with a scalar (written by auditDiff on a cost
+// PATCH). Both are covered.
+export function maskMoneyInAuditRow<T extends Record<string, any>>(row: T, canSeeMoney: boolean): T {
+  if (canSeeMoney) return row;
+  const MONEY = new Set<string>(INVOICE_MONEY_FIELDS as readonly string[]);
+  const scrub = (v: unknown, field: string): unknown => {
+    if (MONEY.has(field)) return undefined;                       // the field ITSELF is money
+    if (v && typeof v === "object" && !Array.isArray(v)) return stripMoneyKeys(v as Record<string, unknown>);
+    return v;
+  };
+  return { ...row, old_value: scrub(row.old_value, row.field), new_value: scrub(row.new_value, row.field) };
 }
 
 // QA-617 (-194): "may this user share a plan link?" — asked in two places that disagreed in BOTH

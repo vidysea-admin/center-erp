@@ -3014,18 +3014,68 @@ for (const file of walk(root)) {
 // hands finance back to every Admin, and it is the same "second copy did not get the fix" fault
 // ARCHITECTURE.md section 3 catalogues, with the client half already pinned above.
 {
-  const doors = [
-    "app/api/costs/route.ts",
-    "app/api/costs/[id]/route.ts",
-    "app/api/invoices/route.ts",
-    "app/api/batches/[id]/invoice/route.ts",
-  ];
+  // QA-1836 (checker, cycle 1): the cycle-1 version of this pin listed FOUR route paths by hand and
+  // asserted `requireFinance` in each. That is a good test of four files and a poor test of the
+  // rule — **a fifth door could not trip it**, and three did exactly that (QA-1834 ×2, QA-1835) while
+  // this wall stayed green at 342/1. The mutation testing was real but only ever proved the pin
+  // catches regressions in what it already looks at; it said nothing about coverage.
+  //
+  // So the list is DERIVED, not typed: every route file under src/app/api that names `Invoice` or
+  // `CostEntry` is a door, and each must do one of three things — refuse the request
+  // (`requireFinance`), mask the money out of its payload (the `lib/permissions.ts` field rule), or
+  // appear in EXEMPT below WITH a written reason. Adding a route that reads money now fails closed,
+  // and an exemption has to be argued in a diff rather than achieved by silence.
+  const EXEMPT = {
+    // Umesh, 2026-09-05: *"sirf paisa chhupao, status sabko rehne do."* These two ship
+    // `Invoice.status` (via settlementStage) and no rupee figure, which the ruling permits.
+    "app/api/batches/route.ts": "status only, no money field — Umesh's field ruling 2026-09-05",
+    "app/api/batches/[id]/route.ts": "status only, no money field — Umesh's field ruling 2026-09-05",
+    // Write path: it CREATES a CostEntry on approval replay, it never renders one back. Posting a
+    // cost is `costs.manage` by this unit's own split (the form is open, the book is not).
+    "app/api/approvals/[id]/route.ts": "writes a CostEntry on approval replay; reads none back",
+  };
+  // KNOWN LIMIT, stated rather than papered over: this population is "route files that NAME the
+  // model", so a route that obtains money indirectly through `lib/` would not appear. The two lib
+  // readers are `lib/rules.ts` (settlementStage — status, no figure) and `lib/alerts.ts`
+  // (invoice_not_raised — batch code and location, no figure); both were read by hand on 2026-09-05
+  // and neither emits a rupee value. `api/trainers/[id]/transition` is likewise absent because it
+  // mentions CostEntry only in prose — its eligibility-fee write happens inside rules.ts. If it ever
+  // touches the model directly it joins the population and must gate, mask, or argue an exemption.
+  const MASKERS = /maskInvoiceMoney\(|maskInvoiceMoneyList\(|maskMoneyInAuditRow\(/;
+  const doors = [...walk(path.join(root, "app/api"))]
+    .filter((f) => path.basename(f) === "route.ts")
+    .filter((f) => /\b(Invoice|CostEntry)\b/.test(stripComments(fs.readFileSync(f, "utf-8"))))
+    .map((f) => path.relative(root, f).split(path.sep).join("/"))
+    .sort();
   const bad = [];
+  // A population pin that finds nothing has silently stopped pinning. Four gated + four exempt was
+  // the count when this was written; refuse to pass if the walk suddenly returns a handful.
+  if (doors.length < 8) bad.push("only " + doors.length + " Invoice/CostEntry route(s) found — the walk is broken, not the codebase");
   for (const rel of doors) {
+    if (rel in EXEMPT) continue;
     const raw = stripComments(fs.readFileSync(path.join(root, rel), "utf-8")).replace(/'/g, '"').replace(/\s+/g, " ");
-    if (!/requireFinance\(/.test(raw)) bad.push(rel + " has no requireFinance() gate");
-    const role = /user\.role ?=== ?"(Operations|Admin|Location|Trainer|Enrollment)"/.exec(raw);
-    if (role) bad.push(rel + " gates on the hardcoded role " + role[1]);
+    const gated = /requireFinance\(/.test(raw);
+    if (!gated && !MASKERS.test(raw)) {
+      bad.push(rel + " reads Invoice/CostEntry but neither calls requireFinance() nor masks the money out");
+    }
+    // The role-hardcode check applies only to the DOOR-rule routes. On those, `requireFinance` IS
+    // the control and a role name beside it is the QA-1825 defect returning. On a masked route the
+    // mask is the control, and the route may legitimately branch on role for unrelated reasons —
+    // `/api/home` reads `user.role === "Trainer"` to pick a trainer's own batches, which has nothing
+    // to do with money. Flagging that would be a false positive, and a pin that cries wolf gets
+    // disarmed by the next person who has to ship.
+    if (gated) {
+      const role = /user\.role ?=== ?"(Operations|Admin|Location|Trainer|Enrollment)"/.exec(raw);
+      if (role) bad.push(rel + " gates on the hardcoded role " + role[1] + " beside requireFinance()");
+    }
+  }
+  // The field list itself must have exactly one statement, the way NO_ADMIN_BYPASS does for keys.
+  const permsForFields = stripComments(fs.readFileSync(path.join(root, "lib/permissions.ts"), "utf-8"));
+  if (!/INVOICE_MONEY_FIELDS *= *\[/.test(permsForFields)) bad.push("lib/permissions.ts: INVOICE_MONEY_FIELDS is gone — the field rule has no single statement");
+  for (const f of ["amount", "invoice_no", "raised_on", "paid_on"]) {
+    if (!new RegExp('INVOICE_MONEY_FIELDS[^\\]]*"' + f + '"').test(permsForFields.replace(/\s+/g, " "))) {
+      bad.push("lib/permissions.ts: INVOICE_MONEY_FIELDS no longer lists " + f);
+    }
   }
   const permsSrc = stripComments(fs.readFileSync(path.join(root, "lib/permissions.ts"), "utf-8")).replace(/\s+/g, " ");
   // Every Admin short-circuit must name the exempt set close enough to be governing it. Written as
@@ -3038,10 +3088,12 @@ for (const file of walk(root)) {
   if (bad.length === 0) passed++;
   else {
     failed++;
-    pushStructural("QA-1825 finance doors: " + bad.join(" · ")
+    pushStructural("QA-1825/QA-1836 finance doors (" + doors.length + " Invoice/CostEntry routes found): " + bad.join(" · ")
       + " - the CEO narrowed cost visibility and approval to three named people and explicitly"
-      + " excluded super-admin; a role name on a money route, or an Admin short-circuit that does"
-      + " not read NO_ADMIN_BYPASS, hands the ledger back to everyone it was taken from.");
+      + " excluded super-admin; a role name on a money route, an Admin short-circuit that does not"
+      + " read NO_ADMIN_BYPASS, or a route that reads money without gating or masking it, hands the"
+      + " ledger back to everyone it was taken from. Three such routes shipped past the cycle-1"
+      + " version of this pin because it named four files instead of asking which routes read money.");
   }
 }
 

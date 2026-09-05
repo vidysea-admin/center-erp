@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, isScoped, assertLocationInScope, HttpError } from "@/lib/authz";
 import { AuditLog, Batch, BatchMember, Candidate, CandidateResult, DailyLog, Location, Closure, Invoice, Room, Trainer, TrainerRequest } from "@/models";
+import { hasPermission, maskMoneyInAuditRow, FINANCE_VIEW } from "@/lib/permissions";
 
 // Which field on each entity carries the location it belongs to. An entity that is not
 // location-bound (Program, User, Defaults…) is deliberately absent and fails closed for
@@ -67,5 +68,17 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   }
 
   const items = await AuditLog.find({ entity, entity_id: id }).sort({ created_at: -1 }).limit(200).populate("actor", "name").lean();
-  return NextResponse.json({ items });
+  // QA-1835 (checker cycle 1, confirmed with live data): the trail was a third door onto the money.
+  // `api/batches/[id]/invoice` audits the whole patch (`field: "invoice"`, `newValue: patch`), and
+  // `lib/audit.ts`'s maskSensitive only masks fields named in AUDIT_MASK_FIELDS / AUDIT_SECRET_FIELDS
+  // — "invoice" is in neither — so `amount` was stored raw and served behind Rule 38 scope alone.
+  // A SCOPED caller was confined to their own centre's figures; an UNSCOPED one (Operations with no
+  // scope, or any Admin who is not one of the three) skipped the scope block entirely.
+  //
+  // Masked on the way OUT, never on the way in: write-time masking would destroy the number
+  // permanently for the three people who ARE supposed to see it, and an audit log that has
+  // forgotten the amount cannot answer "kaunsa admin, kya kiya" — which is the whole purpose of the
+  // named-approver history (QA-1827). The row stays whole on disk; who reads it decides what they see.
+  const canSeeMoney = await hasPermission(user, FINANCE_VIEW);
+  return NextResponse.json({ items: items.map((r: any) => maskMoneyInAuditRow(r, canSeeMoney)) });
 });

@@ -423,7 +423,7 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   // QA-1825: reading the ledger and the invoice book moved off costs.manage/invoices.manage onto
   // finance.view, so the grant that opens those two screens is finance.view — the assertions below
   // (grant opens the READ, revoke closes it again) are unchanged in what they pin.
-  const ALL = ["costs.manage", "invoices.manage", "finance.view", "sheet.sources", "feedback.links"];
+  const ALL = ["costs.manage", "finance.view", "sheet.sources", "feedback.links"]; // QA-1838: invoices.manage retired — it gated nothing
   await req(admin, "PATCH", `/api/users/${target._id}`, { extra_permissions: ALL });
   for (const [path, label] of [["/api/costs", "costs"], ["/api/invoices", "invoices"], ["/api/sync-sources", "sync sources"], ["/api/public-tokens", "public links"]]) {
     ok(`granting the right opens ${label} for reading too`, (await req(enroll, "GET", path)).status === 200, `${path}`);
@@ -1027,7 +1027,15 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
     // by the role name. Operations' own rights are unchanged, which is what this pins.
     ok("QA-153: Operations carries costs.manage + attendance.govt (their doors stay; the Costs page is post-only without finance.view)",
       meOps.status === 200 && meOps.data.levels?.["costs.manage"] === "edit" && meOps.data.levels?.["attendance.govt"] === "edit", JSON.stringify(meOps.data.levels));
-    ok("QA-025: no invoices right at any level → still 403", (await req(viewer, "GET", "/api/invoices")).status === 403);
+    // QA-1825: this used to read "no invoices right at any level → still 403", which asserted that
+    // `invoices.manage` gates the invoice book. It does not any more — the book is finance.view,
+    // and this viewer was deliberately granted finance.view:view above, so the OLD assertion now
+    // pins a premise the product no longer holds. The lattice point it existed for is unchanged
+    // and is asserted directly instead: a :view holder READS but cannot MOVE an invoice, because
+    // moving one is finance.approve. (`viewer` holds neither invoices.manage nor finance.approve.)
+    ok("QA-025/QA-1825: a finance.view:view holder READS the invoice book", (await req(viewer, "GET", "/api/invoices")).status === 200);
+    ok("QA-025/QA-1825: ...but cannot MOVE an invoice — that is finance.approve, which they do not hold",
+      (await req(viewer, "PATCH", "/api/batches/000000000000000000000000/invoice", { status: "Raised" })).status === 403);
   }
   ok("QA-025/R-E: Operations still refused the ledger READ (edit-without-view stays code)",
     (await req(ops, "GET", "/api/costs")).status === 403);
@@ -2526,6 +2534,64 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
   // Positive control: the seeded admin IS one of the three, and sees everything.
   ok("QA-1825: the granted admin reads the ledger", (await req(admin, "GET", "/api/costs")).status === 200);
   ok("QA-1825: the granted admin reads the invoice book", (await req(admin, "GET", "/api/invoices")).status === 200);
+
+  // ---- QA-1834 / QA-1835 (checker cycle 1): the three SIDE doors onto the same figures ----
+  // Cycle 1 shut /api/costs and /api/invoices and claimed the CEO's sentence was enforced. It was
+  // not: the batch closure endpoint, the Home screen's own invoice queue, and the audit trail all
+  // still shipped `amount` to the very logins that had just been refused. Structural pins cannot
+  // see this - only asking the running server can - so these assert BEHAVIOUR, both directions.
+  //
+  // Umesh's field ruling of 2026-09-05 is what makes this a masking test and not a 403 test:
+  // *"sirf paisa chhupao, status sabko rehne do"* - so `status` MUST survive, and a test that
+  // demanded a 403 here would be pinning the opposite of what he decided.
+  const MONEY = ["amount", "invoice_no", "raised_on", "paid_on"];
+  const invBook = await req(admin, "GET", "/api/invoices");
+  const seededInv = (invBook.data.items ?? []).find((i) => i.amount != null);
+  ok("QA-1834 fixture: seed-sample's raised invoice (INV-2026-0456) is present with an amount",
+    !!seededInv, JSON.stringify((invBook.data.items ?? []).map((i) => i.invoice_no ?? null)));
+
+  if (seededInv) {
+    const bId = seededInv.batch?._id ?? seededInv.batch;
+    const noMoney = (obj) => obj && typeof obj === "object" && MONEY.every((f) => obj[f] === undefined);
+
+    for (const [who, label] of [[plainAdmin, "an Admin without finance.view"], [ops, "Operations"]]) {
+      if (!who) continue;
+
+      const cl = await req(who, "GET", `/api/batches/${bId}/closure`);
+      ok(`QA-1834: the closure endpoint still ANSWERS ${label} (a 403 would break the closure flow Umesh protected)`,
+        cl.status === 200, `got ${cl.status}`);
+      ok(`QA-1834: ...but carries no money for ${label}`, noMoney(cl.data.invoice),
+        JSON.stringify(cl.data.invoice ?? null));
+      ok(`QA-1834: ...while Invoice.status SURVIVES for ${label} — "status sabko rehne do"`,
+        cl.data.invoice?.status === "Raised", JSON.stringify(cl.data.invoice?.status ?? null));
+
+      const hm = await req(who, "GET", "/api/home");
+      const q = hm.data.queues?.invoices_pending ?? [];
+      ok(`QA-1834: the Home invoices queue carries no money for ${label} (this is the FIRST screen after login)`,
+        q.every(noMoney), JSON.stringify(q));
+
+      const au = await req(who, "GET", `/api/audit/Invoice/${seededInv._id}`);
+      ok(`QA-1835: the audit trail leaks no amount to ${label}`,
+        au.status !== 200 || !/"amount"|"invoice_no"/.test(JSON.stringify(au.data.items ?? [])),
+        `status ${au.status} · ${JSON.stringify(au.data.items ?? []).slice(0, 200)}`);
+    }
+
+    // The other half, and the half that makes masking dangerous if it is wrong: the three named
+    // people must still see the real numbers. A mask that hides money from EVERYONE would pass
+    // every assertion above and destroy the feature.
+    const clA = await req(admin, "GET", `/api/batches/${bId}/closure`);
+    ok("QA-1834: the granted admin still sees the invoice amount on the closure endpoint",
+      clA.data.invoice?.amount === seededInv.amount, JSON.stringify(clA.data.invoice ?? null));
+    const auA = await req(admin, "GET", `/api/audit/Invoice/${seededInv._id}`);
+    ok("QA-1835: the granted admin still reads the amount in the audit trail — the row is masked on READ, not destroyed on write",
+      /"amount"/.test(JSON.stringify(auA.data.items ?? [])), JSON.stringify(auA.data.items ?? []).slice(0, 200));
+  }
+
+  // QA-1838: a right that gates nothing must not sit in the matrix pretending to.
+  const cat = await req(admin, "GET", "/api/permissions");
+  ok("QA-1838: invoices.manage is gone from the permission catalog (it gated nothing after QA-1825)",
+    !(cat.data.catalog ?? []).some((p) => p.key === "invoices.manage"),
+    JSON.stringify((cat.data.catalog ?? []).filter((p) => p.group === "Finance").map((p) => p.key)));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
