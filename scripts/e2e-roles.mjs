@@ -3026,6 +3026,15 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
           ok(`QA-1867: ...and NOT ONE of the thirteen notations reaches ${label}`,
             r.status === 200 && !anyEv(JSON.stringify(r.data ?? {})),
             `status ${r.status} · ${JSON.stringify(r.data ?? {}).slice(0, 300)}`);
+          // QA-1874, the half nothing else can see. Bounding the fraction to three digits stops the
+          // WHOLE figure, but on its own it lets the first three digits park AS a fraction and hands
+          // back `…:00.424—`. The row above cannot notice that — it hunts the complete figure — and
+          // a mutant that removed the `(?!\d)` passed the entire suite while disclosing half of it.
+          // `.NNN—` is exactly the shape of a fraction that parked and had its tail eaten: a real
+          // millisecond timestamp is followed by `Z`, an offset, or nothing.
+          ok(`QA-1874: ...and no fraction is HALF-disclosed to ${label} — no ".NNN—" tail`,
+            r.status === 200 && !/\.\d{3}—/.test(JSON.stringify(r.data ?? {})),
+            `status ${r.status} · ${(JSON.stringify(r.data ?? {}).match(/.{0,30}\.\d{3}—.{0,20}/) ?? [""])[0]}`);
         }
 
         // Per QA-1866: each persona is asserted for the status it actually gets, so neither arm can
