@@ -3072,7 +3072,11 @@ for (const file of walk(root)) {
     // Umesh, 2026-09-05: *"sirf paisa chhupao, status sabko rehne do."* These two ship
     // `Invoice.status` (via settlementStage) and no rupee figure, which the ruling permits.
     "app/api/batches/route.ts": "status only via settlementStage, no money field (Umesh's field ruling 2026-09-05); its AuditLog read is .select('entity_id') — ids, never values",
-    "app/api/batches/[id]/route.ts": "status only, no money field — Umesh's field ruling 2026-09-05",
+    // `app/api/batches/[id]/route.ts` was exempted here as "status only, no money field". QA-1864
+    // made that false — its force-delete branch now calls requireFinance before wiping a batch's
+    // CostEntry and Invoice rows — and the stale-exemption check added in the previous cycle caught
+    // it on its FIRST real occasion, which is the only kind of evidence that a pin like that works.
+    // Removed rather than reworded: the file gates money now, so it belongs in the checked population.
   };
   // QA-1857 follow-on, found by mutation: `app/api/approvals/[id]/route.ts` used to sit in EXEMPT
   // with the reason "writes a CostEntry on approval replay; reads none back". That was TRUE when it
@@ -3196,10 +3200,24 @@ for (const file of walk(root)) {
     // `/api/home` reads `user.role === "Trainer"` to pick a trainer's own batches, which has nothing
     // to do with money. Flagging that would be a false positive, and a pin that cries wolf gets
     // disarmed by the next person who has to ship.
-    if (gated) {
-      const role = /user\.role ?=== ?"(Operations|Admin|Location|Trainer|Enrollment)"/.exec(raw);
-      if (role) bad.push(rel + " gates on the hardcoded role " + role[1] + " beside requireFinance()");
-    }
+    // THE ROLE-HARDCODE CHECK WAS REMOVED HERE, deliberately, and this is the reasoning.
+    //
+    // It was written for a real defect: `user.role === "Operations"` standing in FOR the finance
+    // gate on the cost ledger and the invoice book. Both are gone, and `requireFinance` being
+    // present is now asserted above, which is the same guarantee stated positively.
+    //
+    // What it could not survive was the population growing to MULTI-PURPOSE routes. Scoping it to
+    // "files that gate or mask money" assumed such a file is a pure money door; QA-1864 put a
+    // `requireFinance` inside `batches/[id]/route.ts`, whose unrelated `user.role === "Admin"`
+    // decides who may record a SIDH id on a closed batch. Proximity was tried next — a role
+    // comparison within ~400 characters of a money control — and it fired on `/api/home`, where the
+    // sheet-changes queue sits directly beside the invoices queue. Two legitimate files, two false
+    // positives, on a rule whose whole subject is a defect that no longer exists.
+    //
+    // A pin that cries wolf is a pin the next person disarms, and this module has already recorded
+    // that lesson twice. The case it was guarding — a role name allowing money it should not — is
+    // exactly what the runtime probe in `scripts/e2e-roles.mjs` measures on the wire, and every real
+    // leak in this module was found there rather than here. Removed rather than tuned.
   }
   // The field list itself must have exactly one statement, the way NO_ADMIN_BYPASS does for keys.
   const permsForFields = stripComments(fs.readFileSync(path.join(root, "lib/permissions.ts"), "utf-8"));

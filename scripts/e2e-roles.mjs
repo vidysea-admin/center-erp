@@ -2833,8 +2833,109 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       } else ok("QA-1827: the named-list request is findable", false, "not found");
     }
 
+    // ---- QA-1863: the figure the SUBMITTER typed, in a field nobody thought of as money ----
+    // Every masker in this unit works on KNOWN money keys — `amount`, `invoice_no` — and the
+    // redactor works on the summary the server itself composes. `note` is none of those: it is free
+    // text the poster wrote, it travels inside `payload` on the parked request and inside the audit
+    // row, and a person recording a payment writes the figure into it as a matter of course
+    // ("advance of 424242 paid to the vendor"). Six cycles masked the field the SERVER fills and
+    // never the field the USER fills.
+    {
+      const q1863 = 424242;
+      const notations = [String(q1863), q1863.toLocaleString("en-IN"), q1863.toLocaleString("en-US")];
+      const typed = `QA-1863 probe — advance of ${q1863} paid, receipt ${q1863.toLocaleString("en-IN")}`;
+      const p = (catP && jprP)
+        ? await req(ops, "POST", "/api/costs", { entry_date: "2026-09-05", location: jprP._id, category: catP._id, amount: q1863, note: typed })
+        : { status: 0 };
+      ok("QA-1863 fixture: a cost whose NOTE carries the figure parks", p.status === 202, `got ${p.status}`);
+      const carriesFigure = (blob) => notations.some((s) =>
+        new RegExp(`(?<![\\w])${s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w])`).test(blob));
+      // Positive control FIRST: if the figure never reached the wire at all, the two refusals below
+      // would pass on an empty payload — the vacuous-pass shape that cost this unit a whole cycle.
+      const grantedQ = await req(admin, "GET", "/api/approvals?status=all");
+      ok("QA-1863 control: the grant-holder DOES get the typed figure — so there is something to leak",
+        carriesFigure(JSON.stringify(grantedQ.data ?? {})), `status ${grantedQ.status}`);
+      for (const [who, label] of [[leakAdmin, "an Admin without finance.view"], [ops, "Operations"]]) {
+        if (!who) continue;
+        const r = await req(who, "GET", "/api/approvals?status=all");
+        ok(`QA-1863: the free-text note on a parked cost carries no figure to ${label}`,
+          r.status !== 200 || !carriesFigure(JSON.stringify(r.data ?? {})), `status ${r.status}`);
+      }
+      const trail = await req(leakAdmin ?? admin, "GET", `/api/audit/by-user/${opsUserId}?limit=200`);
+      ok("QA-1863: ...nor through the audit trail, where the same note is stored raw and masked on read",
+        trail.status !== 200 || !carriesFigure(JSON.stringify(trail.data ?? {})), `status ${trail.status}`);
+    }
+
     // Put the switch back so the rest of the wall sees the shipped default (rule OFF, nobody named).
     await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin", approver_users: [] });
+
+    // ---- QA-1864: who may ERASE money, which is the more permanent act of the two ----
+    // Found by the Unit-2 checker's live probe, not by any pin. `DELETE /api/batches/:id` with
+    // recorded work runs `CostEntry.deleteMany` + `Invoice.deleteMany` behind
+    // `batches.delete_with_data` — a key that is NOT in NO_ADMIN_BYPASS. So the same ungranted Admin
+    // this unit spent six cycles keeping AWAY from the ledger could destroy it, and was handed a
+    // count of what they had destroyed. Six cycles asked who may READ money; nobody asked who may
+    // erase it.
+    {
+      const s64 = "Q64" + Date.now().toString().slice(-6);
+      const loc64 = (await req(admin, "POST", "/api/locations", { code: "L" + s64, name: "Erase Loc " + s64, approval_status: "Approved" })).data?.item;
+      const prog64 = (await req(admin, "POST", "/api/programs", { code: "P" + s64, name: "Erase Prog " + s64, trainer_skill: "sk" + s64, duration_days: 15, buffer_days: 5, default_batch_size: 30, completion_deadline_days: 90 })).data?.item;
+      const bat64 = loc64 && prog64
+        ? (await req(admin, "POST", "/api/batches", { location: loc64._id, program: prog64._id, planned_start: "2027-06-01" })).data?.item
+        : null;
+      // The rule is OFF again, so this writes the ledger directly rather than parking.
+      const cost64 = (bat64 && catP)
+        ? await req(admin, "POST", "/api/costs", { entry_date: "2026-09-05", location: loc64._id, batch: bat64._id, category: catP._id, amount: 424242, note: "QA-1864 erase probe" })
+        : { status: 0 };
+      ok("QA-1864 fixture: a batch carrying one real cost row exists",
+        !!bat64 && cost64.status === 201, `batch=${!!bat64} cost=${cost64.status}`);
+
+      if (bat64 && cost64.status === 201) {
+        // Give the ungranted Admin the force-delete right and NOTHING else, so the only thing left
+        // standing between them and the ledger is the finance gate this row adds.
+        await req(admin, "PATCH", `/api/users/${mkLeak.data.item?._id}`, { extra_permissions: ["batches.delete_with_data"] });
+        const armed = await login(emLeak, pw1825);
+        const del = armed
+          ? await req(armed, "DELETE", `/api/batches/${bat64._id}`, { reason: "QA-1864 probe: erasing a batch that carries money" })
+          : { status: 0 };
+        ok("QA-1864: an Admin with batches.delete_with_data but WITHOUT finance.approve cannot force-delete a batch carrying costs",
+          del.status === 403, `got ${del.status} · ${JSON.stringify(del.data ?? {}).slice(0, 160)}`);
+        const survived = (await req(admin, "GET", `/api/costs?batch=${bat64._id}`)).data?.items ?? [];
+        ok("QA-1864: ...and the cost row is genuinely still there — refused, not deleted-then-reported",
+          survived.length === 1, `rows=${survived.length}`);
+
+        // The refusal must be about MONEY, not about the verb: the same actor, same right, on a
+        // batch with no money rows, must still be able to force-delete. Otherwise this row quietly
+        // took away a right Umesh deliberately widened in QA-904.
+        const bat64b = (await req(admin, "POST", "/api/batches", { location: loc64._id, program: prog64._id, planned_start: "2027-07-01" })).data?.item;
+        if (bat64b && armed) {
+          // A BatchMember is recorded work with no money on it — enough to send the delete down the
+          // force branch, which is the branch this row gates.
+          const cand64 = (await req(admin, "POST", "/api/candidates", {
+            name: "Erase Cand " + s64, phone: "9" + String(Math.floor(Math.random() * 1e9)).padStart(9, "0"),
+            location: loc64._id, program: prog64._id,
+          })).data?.item;
+          const mem64 = cand64
+            ? await req(admin, "POST", `/api/batches/${bat64b._id}/members`, { candidate: cand64._id })
+            : { status: 0 };
+          ok("QA-1864 control fixture: a batch carrying non-money recorded work exists",
+            mem64.status === 201, `got ${mem64.status}`);
+          const delB = await req(armed, "DELETE", `/api/batches/${bat64b._id}`, { reason: "QA-1864 probe: no money on this one" });
+          ok("QA-1864 control: the same actor CAN still force-delete a batch whose recorded work carries no money",
+            delB.status !== 403, `got ${delB.status} · ${JSON.stringify(delB.data ?? {}).slice(0, 160)}`);
+        }
+
+        // Positive control on the gate itself: with finance.approve granted, the erase goes through.
+        await req(admin, "PATCH", `/api/users/${mkLeak.data.item?._id}`, { extra_permissions: ["batches.delete_with_data", "finance.approve"] });
+        const granted = await login(emLeak, pw1825);
+        const del2 = granted
+          ? await req(granted, "DELETE", `/api/batches/${bat64._id}`, { reason: "QA-1864 probe: granted" })
+          : { status: 0 };
+        ok("QA-1864 control: WITH finance.approve the same force-delete succeeds — the gate narrows, it does not block",
+          del2.status === 200, `got ${del2.status} · ${JSON.stringify(del2.data ?? {}).slice(0, 160)}`);
+        await req(admin, "PATCH", `/api/users/${mkLeak.data.item?._id}`, { extra_permissions: [] });
+      }
+    }
   }
 
   // QA-1838: a right that gates nothing must not sit in the matrix pretending to.

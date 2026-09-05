@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
-import { requirePerm } from "@/lib/permissions";
+import { requirePerm, requireFinance } from "@/lib/permissions";
 import { Batch, BatchMember, CandidateResult, Closure, CostEntry, DailyLog, GovtAttendanceRow, Invoice, Program, Trainer } from "@/models";
 import { assertBatchInScope, mergePlan, earliestPossibleStart, earliestStartNote, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, batchReadiness, govtBatchIdConflict, planBatchBackward, settlementStage, trainerBookingWarnings } from "@/lib/rules";
 import { canonicalGovtBatchId } from "@/lib/validate";
@@ -86,6 +86,18 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
     let reason = "";
     try { const body = await req.json(); reason = String(body?.reason ?? "").trim().slice(0, 500); } catch { /* no body */ }
     if (!reason) throw new HttpError(400, "Say why this batch is being force-deleted with recorded work still on it — it is recorded against every row this removes.");
+    // QA-1864 (checker on qa-1826/1827, found by live probe): this branch runs `CostEntry.deleteMany`
+    // and `Invoice.deleteMany` behind `batches.delete_with_data` — a key that is NOT in
+    // NO_ADMIN_BYPASS, so an Admin with `finance.view: null` erased ₹42,500 of ledger and got a
+    // count of what they had destroyed. Six cycles of this module asked who may READ money and
+    // nobody asked who may ERASE it, which is the more permanent act of the two.
+    //
+    // Gated only when the batch actually carries money rows: deleting a mistaken batch that has
+    // members and logs but no costs stays exactly as it was, so this narrows nothing that was not
+    // financial to begin with.
+    if (carried.costs > 0 || carried.invoices > 0) {
+      await requireFinance(user, "approve");
+    }
     await Promise.all([
       BatchMember.deleteMany({ batch: id }),
       CandidateResult.deleteMany({ batch: id }),

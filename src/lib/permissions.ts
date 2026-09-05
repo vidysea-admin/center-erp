@@ -302,6 +302,14 @@ export const INVOICE_MONEY_FIELDS = ["amount", "invoice_no", "raised_on", "paid_
 function stripMoneyKeys<T extends Record<string, unknown>>(obj: T): T {
   const out: Record<string, unknown> = { ...obj };
   for (const f of INVOICE_MONEY_FIELDS) delete out[f];
+  // QA-1863 (checker on qa-1826/1827): stripping the money KEYS left the free-text ones alone, so
+  // `payload.note` shipped raw beside a summary that had been correctly redacted — the figure
+  // removed from the sentence the product writes and left in the sentence the user typed, in the
+  // same object. Every free-text field in the payload is redacted with the payload's own values,
+  // which is the same rule the summary already gets.
+  for (const k of ["note", "reason", "issue_note", "decision_note", "status_reason"]) {
+    if (typeof out[k] === "string") out[k] = redactMoneyInText(out[k] as string, obj);
+  }
   return out as T;
 }
 
