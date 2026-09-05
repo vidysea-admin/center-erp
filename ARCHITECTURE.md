@@ -616,13 +616,28 @@ rehne do"*** - which is not a door rule at all but a **field** rule. Hence:
   permanently for the three people who are supposed to see it, and a log that has forgotten the
   amount cannot answer "kaunsa admin, kya kiya" - the whole point of the named-approver history.
 
-**`check-user-copy.mjs` pins all of it, and its own shape is the lesson of this unit.** The cycle-1
-money pin listed four route paths by hand, so a fifth door could not trip it - and three did, behind
-a green wall. It now **derives** the population: every `route.ts` under `src/app/api` naming
-`Invoice` or `CostEntry` must call `requireFinance`, or mask, or sit in a commented `EXEMPT` list
-with a written reason. Known limit, stated in the pin rather than papered over: a route that obtains
-money indirectly through `lib/` is not caught (`rules.ts` and `alerts.ts` are the two lib readers;
-both emit a status or a label, never a figure).
+**`check-user-copy.mjs` pins all of it, and its own shape is the lesson of this unit — it took three
+cycles to get right, and each miss is worth remembering because they are different mistakes.**
+
+- **Cycle 1** listed four route paths by hand. A fifth door could not trip it, and three did, behind
+  a green wall.
+- **Cycle 2** derived the population instead — but from *"names `Invoice` or `CostEntry`"*, which
+  missed **`audit/by-user/[id]`** (it names `AuditLog`). Its sibling `audit/[entity]/[id]` had only
+  entered the population **by accident**, importing `Invoice` for an unrelated scope map. Money
+  reaches a reader through the **trail** as readily as through the document, so `AuditLog` is part
+  of the population now, not a special case. The third `AuditLog` reader, `batches/route.ts`, does
+  `.select("entity_id")` — ids, never values — and that is written into its exemption.
+- **Cycle 2's pin could also be satisfied by a constant:** it asserted a masker was *called*, not
+  that it was called with a real decision, so `maskInvoiceMoneyList(docs, true)` restored the
+  `/api/home` leak with the wall still green. The flag is now read by **balancing parentheses** —
+  a regex cannot reach it, because that call wraps a ternary containing
+  `Invoice.find(...).populate(...)`, so `[^)]*` stops at the first inner paren.
+
+So: every `route.ts` under `src/app/api` naming `Invoice`, `CostEntry` **or `AuditLog`** must call
+`requireFinance`, **or** mask with a flag that came from `hasPermission(user, FINANCE_VIEW)`, **or**
+sit in a commented `EXEMPT` map with a written reason. **Known limit, stated in the pin rather than
+papered over:** a route obtaining money indirectly through `lib/` is not caught (`rules.ts` and
+`alerts.ts` are the two lib readers; both emit a status or a label, never a figure).
 
 ### 3.2c A comment does not enforce the rule it states — and the author is the least protected
 
