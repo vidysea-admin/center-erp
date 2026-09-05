@@ -2873,6 +2873,39 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       ok("QA-1863: ...nor through the audit trail, where the same note is stored raw and masked on read",
         trail.status !== 200 || !carriesFigure(JSON.stringify(trail.data ?? {})), `status ${trail.status}`);
 
+      // ---- QA-1865, first half: a field name NOBODY listed, because the payload is the body ----
+      // The checker's row is exact about why the five-name list could not hold: `payload` is the
+      // UNFILTERED request body, so the set of free-text keys that can reach here is whatever a
+      // caller sends, not whatever the models declare. `remark` and `justification` are not fields
+      // in this codebase at all — that is the point. They must be redacted anyway.
+      //
+      // This one is pinned on the RESPONSE path (`/api/approvals`), not the audit path, on purpose:
+      // the audit path has a second, blunter net under it (redactFiguresInText on money entities),
+      // so an assertion there would pass even with the old allowlist restored and would prove
+      // nothing about the change it claims to cover.
+      {
+        const q = 313131;
+        const notes = [String(q), q.toLocaleString("en-IN"), q.toLocaleString("en-US")];
+        const carries = (blob) => notes.some((s) =>
+          new RegExp(`(?<![\\w])${s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w])`).test(blob));
+        const p2 = (catP && jprP)
+          ? await req(ops, "POST", "/api/costs", {
+              entry_date: "2026-09-05", location: jprP._id, category: catP._id, amount: q,
+              remark: `QA-1865 remark — ${q} advanced`,
+              justification: `QA-1865 justification — ${q.toLocaleString("en-IN")} approved verbally`,
+            })
+          : { status: 0 };
+        ok("QA-1865 fixture: a cost carrying free-text keys this codebase never declared parks", p2.status === 202, `got ${p2.status}`);
+        const gq = await req(admin, "GET", "/api/approvals?status=all");
+        ok("QA-1865 control: the grant-holder DOES see those undeclared fields' figures",
+          carries(JSON.stringify(gq.data ?? {})), `status ${gq.status}`);
+        const lq = leakAdmin ? await req(leakAdmin, "GET", "/api/approvals?status=all") : { status: 0 };
+        ok("QA-1865: an Admin without finance.view still READS the queue (200) — the masking path is exercised",
+          lq.status === 200, `got ${lq.status}`);
+        ok("QA-1865: ...and free-text keys nobody listed (remark, justification) carry them no figure",
+          lq.status === 200 && !carries(JSON.stringify(lq.data ?? {})), `status ${lq.status}`);
+      }
+
       // ---- QA-1865: the SAME field, reached by a different route, was still raw ----
       // Found by senior review of the QA-1863 fix, not by these assertions — which is the point.
       // The five rows above walk the CREATE-via-approval path, where the note travels inside a
