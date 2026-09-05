@@ -651,12 +651,31 @@ asserted here and was FALSE when written — `rules.ts` held its own copy).
 running server and grepping the wire. Not one was found by a structural pin.** Four cycles each
 bolted another noun onto the population after a leak, and each was blind to the next.
 
-So `scripts/e2e-roles.mjs` carries a **runtime money-leak probe**: a list of GET endpoints, walked
-as a genuine ungranted Admin and as Operations, failing if `"amount":`, `"invoice_no":` or a `₹`
-figure comes back. It is deliberately dumb and wide — it does not know which endpoints are supposed
-to carry money, only who must not receive it — and it has a positive control asserting the same walk
-*does* return money to a grant-holder, so it can actually fail. **Adding an endpoint to it is one
-line. If a sixth door appears, widen the probe, not the regex.**
+So `scripts/e2e-roles.mjs` carries a **runtime money-leak probe**: a list of endpoints, walked as a
+genuine ungranted Admin and as Operations, failing if `"amount":`, `"invoice_no":` or a `₹` figure
+comes back. It is deliberately dumb and wide — it does not know which endpoints are supposed to carry
+money, only who must not receive it — and it has a positive control asserting the same walk *does*
+return money to a grant-holder, so it can actually fail. **Adding an endpoint to it is one line. If
+another door appears, widen the probe, not the regex.**
+
+**The probe has its own completeness problem, and pretending otherwise would repeat the mistake it
+was built to end.** The eighth door (`ApprovalRequest`'s audit row, QA-1850) was missed by the probe
+even though its regex would have matched the payload — because the **endpoint list** walked the
+seeded admin's trail while the leak sat on the *initiator's* trail and on an entity URL neither
+entry named. As the cycle-4 checker put it: *completeness moved from "which model names" to "which
+URLs" rather than disappearing.* Two things follow, and both are cheap:
+
+- **A probe entry is not one URL, it is a shape.** When a route takes an id, walk it for every actor
+  that can appear in it — the initiator as well as the approver, the entity as well as the person.
+- **A green probe still needs its fixture asserted.** It has passed vacuously twice: once on an
+  empty approvals queue (`cost.post` ships disabled, so nothing had parked), once because the mutant
+  hit a branch the test never exercised. It now parks a real cost, asserts a grant-holder can see the
+  figure, and exercises both decide verbs.
+
+**Four instrument failures came out of this unit and they are all the same shape — a green line that
+means nothing** (a `perl` mutation that silently matched nothing; a vacuous probe; a mutant and a
+test that never met; an assertion that pinned page volume rather than the rule). In this codebase,
+that is the first thing to check about a passing test, not the last.
 
 Known limit of the pin, stated rather than papered over: a route obtaining money indirectly through
 `lib/` is not caught (`rules.ts` and `alerts.ts` are the lib readers; both emit a status or a label,

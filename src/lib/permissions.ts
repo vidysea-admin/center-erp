@@ -329,7 +329,20 @@ export function maskMoneyInAuditRow<T extends Record<string, any>>(row: T, canSe
   const MONEY = new Set<string>(INVOICE_MONEY_FIELDS as readonly string[]);
   const scrub = (v: unknown, field: string): unknown => {
     if (MONEY.has(field)) return undefined;                       // the field ITSELF is money
-    if (v && typeof v === "object" && !Array.isArray(v)) return stripMoneyKeys(v as Record<string, unknown>);
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      // QA-1850 (checker, cycle 4): the EIGHTH door. `requireApproval` computed a redacted summary
+      // for the notification and the mail and then audited the RAW one seven lines below — three
+      // consumers of the same string fixed and the fourth missed. The row is still stored raw
+      // (store-raw/mask-on-read is the whole reason the trail can answer "kaunsa admin, kya kiya"),
+      // so the redaction happens here, using the payload that travels beside the summary.
+      const obj = stripMoneyKeys(v as Record<string, unknown>);
+      const src = v as Record<string, unknown>;
+      if (typeof src.summary === "string") obj.summary = redactMoneyInText(src.summary, src.payload);
+      return obj;
+    }
+    // A bare STRING value on an ApprovalRequest row is a summary sentence, and sentences carry
+    // figures — which is exactly how this door stayed open past three cycles of key-stripping.
+    if (typeof v === "string" && row.entity === "ApprovalRequest") return redactMoneyInText(v);
     return v;
   };
   return { ...row, old_value: scrub(row.old_value, row.field), new_value: scrub(row.new_value, row.field) };
@@ -358,10 +371,18 @@ export function redactMoneyInText(text: string, payload?: unknown): string {
   if (payload && typeof payload === "object" && !Array.isArray(payload)) {
     for (const f of INVOICE_MONEY_FIELDS) {
       const v = (payload as Record<string, unknown>)[f];
-      if (v == null || v === "") continue;
-      const s = String(v);
-      if (s.length < 2) continue; // never blank-substitute a single character
-      out = out.split(s).join("—");
+      // QA-1851 (checker, cycle 4): substituting EVERY money value into the prose shredded it. An
+      // `amount` of 20 turned an approver's mail subject into "chairs delivered on the —th, —%
+      // advance" — the figure was hidden and so was the sentence. The guard was `length < 2`, which
+      // only ever protected a single digit.
+      //
+      // So: only STRING money values, and only distinctive ones. A numeric `amount` needs no
+      // substitution at all — every amount this codebase writes into a sentence is written as
+      // `₹${amount}` (api/costs/route.ts), which the regex above already took. What the
+      // substitution exists for is the bare `invoice_no` interpolated with no rupee sign
+      // (api/batches/[id]/invoice/route.ts), and an invoice number is long and distinctive.
+      if (typeof v !== "string" || v.trim().length < 4) continue;
+      out = out.split(v).join("—");
     }
   }
   return out;

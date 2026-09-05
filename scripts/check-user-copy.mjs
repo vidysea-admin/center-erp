@@ -3133,7 +3133,11 @@ for (const file of walk(root)) {
           bad.push(rel + " passes `" + last.slice(0, 40) + "` as a money-mask flag — it must be a named flag, not an expression");
           continue;
         }
-        const assignments = [...raw.matchAll(new RegExp("(?:const|let|var) " + last + " ?= ?([^;]+);", "g"))].map((m) => m[1]);
+        // QA-1852 (checker, cycle 4): matching only DECLARATIONS left the whitelist open to
+        // `let flag = await hasPermission(…); flag = true;` — the declaration is impeccable and the
+        // next line undoes it. Every assignment to the name counts, not just the one that created
+        // it. (`\b` and a negative lookahead for `==` so a comparison is not read as an assignment.)
+        const assignments = [...raw.matchAll(new RegExp("(?:(?:const|let|var) )?\\b" + last + " ?= ?(?!=)([^;]+);", "g"))].map((m) => m[1]);
         if (!assignments.length) {
           bad.push(rel + " passes the money-mask flag `" + last + "`, which is never assigned in this file");
         // Senior review of cycles 2-4: this was a SUBSTRING test, so

@@ -68,7 +68,10 @@ export async function requireApproval(
     link: "/admin?tab=Approvals", entity: "ApprovalRequest", entity_id: request._id,
   }).catch(() => {});
 
-  await audit({ entity: "ApprovalRequest", entityId: request._id, field: "created", newValue: ctx.summary, actor: user.id });
+  // QA-1850: the payload rides along so the READ-side mask can redact the sentence properly — a
+  // bare string here can only have its ₹ figures taken, not a bare invoice number. Stored raw on
+  // purpose; `maskMoneyInAuditRow` decides per reader.
+  await audit({ entity: "ApprovalRequest", entityId: request._id, field: "created", newValue: { summary: ctx.summary, payload: ctx.payload }, actor: user.id });
   return { request };
 }
 

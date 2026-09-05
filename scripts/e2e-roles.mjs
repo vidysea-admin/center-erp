@@ -2673,6 +2673,15 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     const qAdmin = await req(admin, "GET", "/api/approvals?status=Pending");
     ok("QA-1843 fixture: the granted admin CAN see that figure in the queue (so the probe below is not vacuous)",
       /987654/.test(JSON.stringify(qAdmin.data.items ?? [])), JSON.stringify((qAdmin.data.items ?? []).map((i) => i.summary)).slice(0, 200));
+    // The trails the probe must ALSO walk belong to the INITIATOR and to the request itself —
+    // not to the seeded admin, which is where the cycle-4 probe was pointed while the leak sat
+    // one URL away.
+    const parkedReq = (qAdmin.data.items ?? []).find((i) => i.action === "cost.post");
+    const parkedReqId = parkedReq?._id;
+    const opsUserId = ((await req(admin, "GET", "/api/users")).data.items ?? [])
+      .find((u) => u.email === "ops@vidysea.com")?._id;
+    ok("QA-1850 fixture: the initiator's user id and the parked request's id both resolve",
+      !!opsUserId && !!parkedReqId, `ops=${opsUserId} req=${parkedReqId}`);
     const doors = [
       ["/api/costs", "the cost ledger"],
       ["/api/invoices", "the invoice book"],
@@ -2688,6 +2697,13 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
         [`/api/audit/Invoice/${seededInv._id}`, "the invoice audit trail"],
       ] : []),
       ...(adminUserId ? [[`/api/audit/by-user/${adminUserId}?limit=200`, "the per-person audit trail"]] : []),
+      // QA-1850 (checker, cycle 4) — and the sharpest thing said about this probe: "completeness
+      // moved from WHICH MODEL NAMES to WHICH URLS rather than disappearing." The regex found the
+      // eighth leak; the endpoint list never asked. It walked the seeded ADMIN's trail, and the
+      // parked cost was written by the INITIATOR (Operations), on an `ApprovalRequest` entity
+      // neither URL named. Both shapes are walked now.
+      ...(opsUserId ? [[`/api/audit/by-user/${opsUserId}?limit=200`, "the INITIATOR's audit trail"]] : []),
+      ...(parkedReqId ? [[`/api/audit/ApprovalRequest/${parkedReqId}`, "the parked request's own audit trail"]] : []),
     ];
     for (const [who, label] of [[leakAdmin, "an Admin without finance.view"], [ops, "Operations"]]) {
       if (!who) continue;

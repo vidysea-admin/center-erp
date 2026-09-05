@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, isScoped, assertLocationInScope, HttpError } from "@/lib/authz";
-import { AuditLog, Batch, BatchMember, Candidate, CandidateResult, DailyLog, Location, Closure, Invoice, Room, Trainer, TrainerRequest } from "@/models";
+import { AuditLog, ApprovalRequest, Batch, BatchMember, Candidate, CandidateResult, DailyLog, Location, Closure, Invoice, Room, Trainer, TrainerRequest } from "@/models";
 import { hasPermission, maskMoneyInAuditRow, FINANCE_VIEW } from "@/lib/permissions";
 
 // Which field on each entity carries the location it belongs to. An entity that is not
@@ -36,6 +36,10 @@ const LOCATION_OF: Record<string, (id: string) => Promise<string | string[] | nu
     const i = await Invoice.findById(id).select("batch").lean<any>();
     return i && (await Batch.findById(i.batch).select("location").lean<any>())?.location;
   },
+  // QA-1850 (checker, cycle 4): `ApprovalRequest` had no resolver, so Rule 38 never applied to its
+  // trail — the `isScoped` block was skipped entirely and any unscoped signed-in user read it. The
+  // model carries its own `location`, so scoping it is a one-liner that was simply never written.
+  ApprovalRequest: async (id) => (await ApprovalRequest.findById(id).select("location").lean<any>())?.location,
   CandidateResult: async (id) => {
     const r = await CandidateResult.findById(id).select("batch").lean<any>();
     return r && (await Batch.findById(r.batch).select("location").lean<any>())?.location;
