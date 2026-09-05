@@ -2954,24 +2954,94 @@ for (const file of walk(root)) {
     if (!m) return null;
     return [...new Set(m[1].split(",").map((s) => s.trim().replace(/^"|"$/g, "")).filter(Boolean))];
   };
+  // QA-1825: the Admin short-circuit stopped being unconditional. `lib/permissions.ts` now exports
+  // NO_ADMIN_BYPASS — the keys an Admin does NOT get for free (finance) — and `routeAllowed` reads
+  // that list, shipped to it by `/api/permissions/me`. A perm on that list IS reachable behind an
+  // Admin-only ceiling, so counting it as dead would be measuring the wrong thing. This WIDENS the
+  // pin rather than relaxing it: the exempt set is resolved from permissions.ts itself (constants
+  // dereferenced), so shrinking that set makes the pin STRICTER again automatically, and a set the
+  // parser cannot read fails outright rather than passing quietly — the same rule the -221 rewrite
+  // put on the rules array.
+  const permsRaw = stripComments(fs.readFileSync(path.join(root, "lib/permissions.ts"), "utf-8"))
+    .replace(/'/g, '"').replace(/\s+/g, " ");
+  const constOf = (name) => (new RegExp("const " + name + " ?= ?\"([^\"]+)\"").exec(permsRaw) ?? [])[1];
+  const declaresExempt = /NO_ADMIN_BYPASS/.test(permsRaw);
+  const setBody = (/NO_ADMIN_BYPASS[^=]*= ?new Set<string>\(\[([^\]]*)\]\)/.exec(permsRaw) ?? [])[1];
+  const exempt = new Set((setBody ?? "").split(",").map((s) => s.trim()).filter(Boolean)
+    .map((t) => (t.startsWith("\"") ? t.replace(/"/g, "") : (constOf(t) ?? t))));
+  // Declared but unparseable, or declared and empty, means this pin is guessing — refuse.
+  const exemptParsed = !declaresExempt || (setBody !== undefined && exempt.size > 0);
+  const permOf = (r) => (/perm: ?"([^"]+)"/.exec(r) ?? [])[1];
   const dead = rules
     .filter((r) => /perm: ?"/.test(r))
+    .filter((r) => !exempt.has(permOf(r)))
     .filter((r) => { const roles = rolesOf(r); return Array.isArray(roles) && roles.length === 1 && roles[0] === "Admin"; })
     .map((r) => (/prefix: ?"([^"]+)"/.exec(r) ?? [])[1]);
   // …and routeAllowed must still short-circuit Admin, or this pin is measuring the wrong thing.
-  const adminShortCircuits = /perms\.role ?=== ?"Admin" ?\) ?return true/.test(src);
+  const adminShortCircuits = /perms\.role ?=== ?"Admin"[^;]{0,200}return true/.test(src);
+  // If permissions.ts declares an exempt set, the client gate must actually CONSULT it, and must
+  // consult the one the server shipped — a local copy of those key strings in this client file is
+  // the second-copy fault the whole payload trick exists to avoid, so the literals must not appear
+  // here at all.
+  const guardReadsExemptList = !declaresExempt
+    || (/perms\.role ?=== ?"Admin" ?&&[^;]{0,200}noAdminBypass[^;]{0,80}return true/.test(src)
+        && ![...exempt].some((k) => src.includes("\"" + k + "\"")));
   // A rule the parser could not read is a rule this pin did not check — that must FAIL, not pass
   // quietly. Silent under-counting is how the second-array mutation walked past the -220 pin.
   const parsedAll = rules.length === prefixCount;
-  if (rules.length >= 5 && parsedAll && adminShortCircuits && dead.length === 0) passed++;
+  if (rules.length >= 5 && parsedAll && adminShortCircuits && exemptParsed && guardReadsExemptList && dead.length === 0) passed++;
   else {
     failed++;
     pushStructural(rel + ": a ROUTE_RULES entry carries a permission only an Admin can reach"
       + " (rules parsed=" + rules.length + "/" + prefixCount + ", Admin short-circuits=" + adminShortCircuits
+      + ", exempt set parsed=" + exemptParsed + " " + JSON.stringify([...exempt])
+      + ", guard reads the shipped list=" + guardReadsExemptList
       + ", unreachable=" + JSON.stringify(dead) + ")"
       + " - routeAllowed returns true for Admin before it reads `perm`, so that permission is dead"
       + " text and every gate written behind that screen is unreachable with it. QA-806 shipped this"
       + " on /sync and QA-813 found it still standing on /sheet-watch one line above the fix.");
+  }
+}
+
+// ---- QA-1825: money doors ask requireFinance(), and the Admin bypass is key-aware ----
+// CEO, 2026-09-05: cost visibility and approval belong to three named people, "chaahe super admin
+// ho, super admin ka kaaka ho". Two shapes carry that, and both have a documented history of
+// coming back: (a) the money routes used to gate on a hardcoded `user.role === "Operations"`
+// because the none<view<edit lattice could not express edit-without-view — splitting the right
+// (costs.manage posts, finance.view reads) is what removed the need, and a role name reappearing
+// on one of these four doors silently re-widens the audience the CEO just narrowed; (b) the three
+// Admin short-circuits in lib/permissions.ts must each consult NO_ADMIN_BYPASS — an unguarded one
+// hands finance back to every Admin, and it is the same "second copy did not get the fix" fault
+// ARCHITECTURE.md section 3 catalogues, with the client half already pinned above.
+{
+  const doors = [
+    "app/api/costs/route.ts",
+    "app/api/costs/[id]/route.ts",
+    "app/api/invoices/route.ts",
+    "app/api/batches/[id]/invoice/route.ts",
+  ];
+  const bad = [];
+  for (const rel of doors) {
+    const raw = stripComments(fs.readFileSync(path.join(root, rel), "utf-8")).replace(/'/g, '"').replace(/\s+/g, " ");
+    if (!/requireFinance\(/.test(raw)) bad.push(rel + " has no requireFinance() gate");
+    const role = /user\.role ?=== ?"(Operations|Admin|Location|Trainer|Enrollment)"/.exec(raw);
+    if (role) bad.push(rel + " gates on the hardcoded role " + role[1]);
+  }
+  const permsSrc = stripComments(fs.readFileSync(path.join(root, "lib/permissions.ts"), "utf-8")).replace(/\s+/g, " ");
+  // Every Admin short-circuit must name the exempt set close enough to be governing it. Written as
+  // "how many did NOT" rather than a count of the guarded ones, so ADDING a fourth unguarded
+  // short-circuit fails instead of quietly moving a total.
+  const shorts = [...permsSrc.matchAll(/user\.role ?=== ?"Admin"/g)];
+  const unguarded = shorts.filter((m) => !/NO_ADMIN_BYPASS/.test(permsSrc.slice(m.index, m.index + 140))).length;
+  if (shorts.length < 3) bad.push("lib/permissions.ts: expected at least 3 Admin short-circuits, found " + shorts.length);
+  if (unguarded > 0) bad.push("lib/permissions.ts: " + unguarded + " Admin short-circuit(s) do not consult NO_ADMIN_BYPASS");
+  if (bad.length === 0) passed++;
+  else {
+    failed++;
+    pushStructural("QA-1825 finance doors: " + bad.join(" · ")
+      + " - the CEO narrowed cost visibility and approval to three named people and explicitly"
+      + " excluded super-admin; a role name on a money route, or an Admin short-circuit that does"
+      + " not read NO_ADMIN_BYPASS, hands the ledger back to everyone it was taken from.");
   }
 }
 

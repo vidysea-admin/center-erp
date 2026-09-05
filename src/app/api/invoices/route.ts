@@ -1,20 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireRole, HttpError } from "@/lib/authz";
-import { requireView } from "@/lib/permissions";
+import { apiHandler, requireUser } from "@/lib/authz";
+import { requireFinance } from "@/lib/permissions";
 import { Invoice } from "@/models";
 
 export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
-  await requireView(user, "invoices.manage"); // QA-025 P2: reading needs view; writes need edit
-  // QA-140 (checker, 15/08) — same R-E principle the costs ledger got (CEO [25:06]):
-  // Operations raises the work that becomes an invoice, but the invoice book — amounts,
-  // status, per-centre — lives with the Admin. This route sat on requirePerm alone and only
-  // read empty because no invoice had been raised yet.
-  if (user.role === "Operations") {
-    throw new HttpError(403, "Operations raises work for invoicing; the invoice book is Admin-only.");
-  }
+  // QA-140 (checker, 15/08) — the R-E principle the costs ledger got (CEO [25:06]): whoever
+  // raises the work that becomes an invoice does not get the invoice book — amounts, status,
+  // per-centre. QA-1825 replaces the `role === "Operations"` hardcode with the same one finance
+  // door the ledger now uses, so the CEO's 2026-09-05 widening ("chaahe super admin ho") applies
+  // here identically instead of having to be remembered twice.
+  await requireFinance(user, "view");
   const status = req.nextUrl.searchParams.get("status");
   const filter: Record<string, unknown> = {};
   if (status) filter.status = status;

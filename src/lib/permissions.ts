@@ -45,6 +45,20 @@ export const PERMISSIONS: { key: string; label: string; group: string }[] = [
   { key: "attendance.govt", label: "Import & reconcile government portal attendance", group: "Batches" },
   { key: "costs.manage", label: "Enter costs", group: "Finance" },
   { key: "invoices.manage", label: "Manage invoices", group: "Finance" },
+  // QA-1825 (CEO, 2026-09-05): "cost ki approval keval aur keval Manish ji aur mere paas hogi aur
+  // visibility keval aur keval Manish ji aur mere paas hogi... kisi ke bhi paas nahi hogi CHAAHE
+  // SUPER ADMIN HO, SUPER ADMIN KA KAAKA HO." Umesh's ruling on how to express that: only Karunn,
+  // Manish and Shubhi hold the Admin role at all. These two keys are the BACKSTOP behind that
+  // ruling — a fourth Admin created by accident, or in a hurry six months from now, still cannot
+  // see money, because they are the only keys the Admin bypass does not open (NO_ADMIN_BYPASS).
+  //
+  // Deliberately SEPARATE from costs.manage: posting a cost stays open to whoever the Admin grants
+  // it to ("cost ki entry apne-apne level ki koi bhi karta hai"), while READING the ledger and
+  // DECIDING money is the narrow right. The none<view<edit lattice cannot express
+  // edit-without-view, which is why the Operations hardcode in api/costs/route.ts exists at all;
+  // splitting the right rather than stretching the lattice is what removes that hardcode's job.
+  { key: "finance.view", label: "See the cost ledger, the invoice book and finance reports", group: "Finance" },
+  { key: "finance.approve", label: "Decide money — approve/reject cost entries, correct or delete a ledger row, move an invoice", group: "Finance" },
   { key: "feedback.links", label: "Generate public registration/feedback links", group: "Public" },
   // 15/08 (Umesh): "bypass all the steps and direct select any status" — for a trainer
   // who already works with us (batch running/complete) and whose papers arrive later.
@@ -61,10 +75,29 @@ export const PERMISSIONS: { key: string; label: string; group: string }[] = [
   { key: "approvals.decide", label: "Decide approval requests", group: "Admin" },
 ];
 
+export const FINANCE_VIEW = "finance.view";
+export const FINANCE_APPROVE = "finance.approve";
+
+// QA-1825: the ONE list of keys the `role === "Admin"` short-circuit does not open. Every gate
+// that short-circuits on Admin reads THIS set rather than restating the exception — there were
+// five such short-circuits (three here, two in components/shell.tsx) and five copies of a rule is
+// how ARCHITECTURE.md section 3 defects are born. The client half cannot import this module
+// (mongoose), so `/api/permissions/me` SHIPS this list in its payload, the same way rules.ts's
+// REPORT_LABELS travels to the report page instead of being retyped there.
+export const NO_ADMIN_BYPASS: ReadonlySet<string> = new Set<string>([FINANCE_VIEW, FINANCE_APPROVE]);
+
 // What each role carries until an Admin toggles otherwise — mirrors today's behaviour, so
 // seeding these changes nothing on day one.
 export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
-  Admin: PERMISSIONS.map((p) => p.key),
+  // QA-1825: everything EXCEPT the finance keys. Two independent reasons this matters rather than
+  // being belt-and-braces: (1) `PUT /api/permissions` refuses to edit the Admin row
+  // (api/permissions/route.ts:36), so if this said "every key" there would be no way to take
+  // finance back off Admin; (2) `getRolePermissions` falls back to THIS list whenever a role has
+  // no stored RolePermission row (permissions.ts, the `??` below), which is exactly what a fresh
+  // install and every test database look like. Production's stored Admin row predates these two
+  // keys and therefore cannot contain them either. The three named people get them through
+  // `User.extra_permissions`, which is per-user and auditable — the "named list" Umesh asked for.
+  Admin: PERMISSIONS.filter((p) => !NO_ADMIN_BYPASS.has(p.key)).map((p) => p.key),
   // QA-083/084/037 (checker round 5): Operations lost the sheet machinery (CEO: "remove
   // sheet sync, all of these things" — the nav went in R-E, the API rights go now) and
   // approvals.decide (the queue handed the same ledger figures back that R-E shut away;
@@ -145,10 +178,12 @@ export function parseLevel(entry: string): { key: string; level: PermLevel } {
 // above view. Admin: always edit on everything (bypass, as today).
 export async function getEffectiveLevels(user: SessionUser): Promise<Map<string, PermLevel>> {
   const levels = new Map<string, PermLevel>();
-  if (user.role === "Admin") {
-    for (const p of PERMISSIONS) levels.set(p.key, "edit");
-    return levels;
-  }
+  // QA-1825: an Admin used to return here with every key at edit and never read their own User
+  // row. Now the ordinary path runs for them too, and the bypass is applied at the BOTTOM of this
+  // function instead — over every key except NO_ADMIN_BYPASS. Applying it last is what keeps
+  // Admin behaviour byte-identical everywhere else: a revoke on a non-finance key is still
+  // meaningless on an Admin, and Rule 39's can_edit cap still does not bite them, because both
+  // run above the re-set. The only thing that changed is which keys the re-set covers.
   const bump = (entry: string) => {
     const { key, level } = parseLevel(entry);
     const cur = levels.get(key);
@@ -165,14 +200,20 @@ export async function getEffectiveLevels(user: SessionUser): Promise<Map<string,
   if (doc && doc.can_edit === false) {
     for (const [k, l] of levels) if (l === "edit") levels.set(k, "view");
   }
+  if (user.role === "Admin") {
+    for (const p of PERMISSIONS) if (!NO_ADMIN_BYPASS.has(p.key)) levels.set(p.key, "edit");
+  }
   return levels;
 }
 
 // level ≥ view. The historical name kept on purpose — its callers are read-side decisions
 // (masking, UI capability checks) and their meaning does not change.
 export async function hasPermission(user: SessionUser, perm: string): Promise<boolean> {
-  if (user.role === "Admin") return true;
-  return (await getEffectiveLevels(user)).has(parseLevel(perm).key);
+  const key = parseLevel(perm).key;
+  // QA-1825: the short-circuit is now key-aware. It still spares an Admin the User lookup on all
+  // 20 pre-existing keys — only a finance question makes them pay for the real computation.
+  if (user.role === "Admin" && !NO_ADMIN_BYPASS.has(key)) return true;
+  return (await getEffectiveLevels(user)).has(key);
 }
 
 // level ≥ view, throwing — the read-side gate (QA-025 P2: finance GETs sit on this).
@@ -191,8 +232,9 @@ export async function requireView(user: SessionUser, perm: string): Promise<void
 // one-rule drift the QA-617 note below records. requirePerm now DECIDES from this function and
 // computes `level` only to word its error, so there is one statement of "edit" and one of "why not".
 export async function hasEditLevel(user: SessionUser, perm: string): Promise<boolean> {
-  if (user.role === "Admin") return true;
-  return (await getEffectiveLevels(user)).get(parseLevel(perm).key) === "edit";
+  const key = parseLevel(perm).key;
+  if (user.role === "Admin" && !NO_ADMIN_BYPASS.has(key)) return true; // QA-1825, as above
+  return (await getEffectiveLevels(user)).get(key) === "edit";
 }
 
 // level = EDIT required, throwing. Every existing caller is a write-ish gate, so their meaning is
@@ -205,6 +247,20 @@ export async function requirePerm(user: SessionUser, perm: string): Promise<void
   throw new HttpError(403, level === "view"
     ? `Your "${label}" right is view-only. Ask an Admin for the edit level.`
     : `You do not have the "${label}" right. Ask an Admin to grant it.`);
+}
+
+// QA-1825: THE finance door. Every money surface asks this one function rather than naming a key
+// itself, so "who may see the book" and "who may decide money" each have exactly one statement —
+// the mistake `canShareLinks` below was written to undo, avoided up front this time.
+//
+//   "view"    — read the ledger, the invoice book, the finance reports.
+//   "approve" — decide a parked cost, correct or delete a ledger row, move an invoice.
+//
+// An approver must also be able to SEE what they are deciding, so "approve" asserts both. Rule 39
+// still applies through requirePerm: a view-only holder of finance.approve cannot write.
+export async function requireFinance(user: SessionUser, level: "view" | "approve"): Promise<void> {
+  await requireView(user, FINANCE_VIEW);
+  if (level === "approve") await requirePerm(user, FINANCE_APPROVE);
 }
 
 // QA-617 (-194): "may this user share a plan link?" — asked in two places that disagreed in BOTH

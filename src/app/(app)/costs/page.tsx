@@ -1,18 +1,24 @@
 "use client";
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { useSession } from "next-auth/react";
 import { api, fmtDate, toInputDate, offerable } from "@/lib/client";
 import { Btn, Chip, DataTable, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
+import { usePerms } from "@/components/shell";
 
 function CostsInner() {
   const sp = useSearchParams();
-  // R-E (CEO 14/08): Operations is POST-only on money — they submit an entry, it goes to
-  // the Admin's approval queue, and once decided it leaves their view. They never see the
-  // ledger ("they shouldn't be able to see what has been posted").
-  const { data: session, status } = useSession();
-  const role = (session?.user as any)?.role;
-  const postOnly = role === "Operations";
+  // R-E (CEO 14/08): whoever posts money is POST-only on it — they submit an entry, it goes to the
+  // approval queue, and once decided it leaves their view. They never see the ledger ("they
+  // shouldn't be able to see what has been posted").
+  //
+  // QA-1825 (CEO, 2026-09-05): this used to read `role === "Operations"`. It now asks the same
+  // question the API asks — do you hold finance.view? — so the screen and `GET /api/costs` cannot
+  // disagree, and an Admin who is not one of the three named people gets the post-only form
+  // instead of a 403 banner over an empty ledger. `loaded` guards the first paint: until the
+  // rights arrive we assume post-only, which is the SAFE assumption (never render a ledger we are
+  // not yet sure this person may see) and matches what the old code did while the session loaded.
+  const { can, loaded: permsLoaded } = usePerms();
+  const postOnly = !permsLoaded || !can("finance.view");
   const [tab, setTab] = useState(sp.get("tab") === "Invoices" ? "Invoices" : "Costs");
   const [costs, setCosts] = useState<any[]>([]);
   const [mine, setMine] = useState<any[]>([]);
@@ -26,9 +32,9 @@ function CostsInner() {
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(true);
 
-  // QA-153 (-83): Operations is post-only on money — the invoice book is Admin's (QA-140),
-  // so this screen must not even ASK for it: the 403 banner that used to sit over a
-  // half-empty form was the product saying "no" and handing over the form anyway.
+  // QA-153 (-83): a post-only user must not even ASK for the ledger or the invoice book — the 403
+  // banner that used to sit over a half-empty form was the product saying "no" and handing over
+  // the form anyway.
   const load = (asPostOnly: boolean) => Promise.all([
     asPostOnly
       ? api("/api/approvals?mine=1").then((d) => setMine((d.items ?? []).filter((i: any) => i.action === "cost.post")))
@@ -38,9 +44,9 @@ function CostsInner() {
     api("/api/locations?limit=2000").then((d) => setLocations(d.items)),
     api("/api/trainers?limit=2000").then((d) => setTrainers(d.items)),
   ]).catch((e) => setError(e.message)).finally(() => setLoading(false));
-  // Wait for the session — the first paint doesn't know the role yet, and firing the
-  // ledger fetch for an Operations user would just banner their own 403 at them.
-  useEffect(() => { if (status !== "loading") load(postOnly); }, [status, postOnly]);
+  // Wait for the RIGHTS, not the session (QA-1825) — the first paint does not know them yet, and
+  // firing the ledger fetch for a post-only user would just banner their own 403 at them.
+  useEffect(() => { if (permsLoaded) load(postOnly); }, [permsLoaded, postOnly]);
 
   async function addCost() {
     try {
@@ -57,7 +63,7 @@ function CostsInner() {
   }
 
   // Sheet-imported cost rows (Batch_Master's cost columns) can carry wrong amounts — row click
-  // loads the entry into the form for correction or removal (costs.manage holders only; the API
+  // loads the entry into the form for correction or removal (finance.approve holders only; the API
   // 403s everyone else).
   function openEdit(r: any) {
     setEditId(r._id);

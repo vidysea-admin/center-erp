@@ -420,7 +420,10 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
 // the screen, not just the save button.
 {
   const target = (await req(admin, "GET", "/api/users")).data.items.find((u) => u.email === "enroll@vidysea.com");
-  const ALL = ["costs.manage", "invoices.manage", "sheet.sources", "feedback.links"];
+  // QA-1825: reading the ledger and the invoice book moved off costs.manage/invoices.manage onto
+  // finance.view, so the grant that opens those two screens is finance.view — the assertions below
+  // (grant opens the READ, revoke closes it again) are unchanged in what they pin.
+  const ALL = ["costs.manage", "invoices.manage", "finance.view", "sheet.sources", "feedback.links"];
   await req(admin, "PATCH", `/api/users/${target._id}`, { extra_permissions: ALL });
   for (const [path, label] of [["/api/costs", "costs"], ["/api/invoices", "invoices"], ["/api/sync-sources", "sync sources"], ["/api/public-tokens", "public links"]]) {
     ok(`granting the right opens ${label} for reading too`, (await req(enroll, "GET", path)).status === 200, `${path}`);
@@ -931,7 +934,10 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   const mkU = await req(admin, "POST", "/api/users", { name: "Q025 Viewer", email: em, password: "Q025pass!xyz", role: "Enrollment", location_scope: [jpr._id], can_edit: true });
   ok("QA-025: fixture user created", mkU.status === 201 || mkU.status === 200, `got ${mkU.status}`);
   const uid = mkU.data.item?._id;
-  const grant = await req(admin, "PATCH", `/api/users/${uid}`, { extra_permissions: ["costs.manage:view"] });
+  // QA-1825: two keys now, because the lattice point this pins spans both — finance.view is what
+  // READS the ledger, costs.manage is what WRITES an entry, and the assertion below is that a
+  // :view grant gives the first and not the second.
+  const grant = await req(admin, "PATCH", `/api/users/${uid}`, { extra_permissions: ["costs.manage:view", "finance.view:view"] });
   ok("QA-025: a :view grant is stored verbatim", grant.status === 200 && (grant.data.item?.extra_permissions ?? []).includes("costs.manage:view"));
   const viewer = await login(em, "Q025pass!xyz");
   ok("QA-025: the viewer signs in", !!viewer);
@@ -1017,7 +1023,9 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
     ok("QA-1469: …and the govt-attendance importer actually OPENS for a SPOC now (200, not 403)",
       (await req(spoc, "GET", "/api/govt-attendance")).status === 200);
     const meOps = await req(ops, "GET", "/api/permissions/me");
-    ok("QA-153: Operations carries costs.manage + attendance.govt (their doors stay; the Costs page is post-only by role)",
+    // QA-1825: the Costs page is post-only for whoever lacks finance.view — it used to be decided
+    // by the role name. Operations' own rights are unchanged, which is what this pins.
+    ok("QA-153: Operations carries costs.manage + attendance.govt (their doors stay; the Costs page is post-only without finance.view)",
       meOps.status === 200 && meOps.data.levels?.["costs.manage"] === "edit" && meOps.data.levels?.["attendance.govt"] === "edit", JSON.stringify(meOps.data.levels));
     ok("QA-025: no invoices right at any level → still 403", (await req(viewer, "GET", "/api/invoices")).status === 403);
   }
@@ -2109,7 +2117,10 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   const mk = await req(admin, "POST", "/api/users", {
     name: "Q1211 Rights", email: em1211, password: pw1211, role: "Enrollment",
     location_scope: [jpr1211._id], can_edit: true,
-    extra_permissions: ["costs.manage:view"],
+    // QA-1825: finance.view is the key that opens the LEDGER now; costs.manage:view stays in the
+    // list because the pins below assert both halves — the grant works, and its :view level
+    // survived the create (so the WRITE is still refused).
+    extra_permissions: ["costs.manage:view", "finance.view:view"],
     revoked_permissions: ["candidates.manage"],
   });
   ok("QA-1211: the create itself succeeds (it always did - that is what made this invisible)",
@@ -2442,6 +2453,79 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       } else ok("QA-1575 (g): a document existed to attempt a delete on", false, "no documents returned");
     }
   }
+}
+
+// ---- QA-1825 (CEO, 2026-09-05): money is not an Admin right ----
+// "Cost ki approval keval aur keval Manish ji aur mere paas hogi aur visibility keval aur keval
+// Manish ji aur mere paas hogi… kisi ke bhi paas nahi hogi CHAAHE SUPER ADMIN HO, SUPER ADMIN KA
+// KAAKA HO." Umesh's ruling: only those three hold the Admin role, and finance.view/finance.approve
+// are the backstop behind it — the only two keys the Admin short-circuit does not open.
+//
+// This block builds the state that was previously INEXPRESSIBLE: a genuine, active, can_edit Admin
+// who has not been granted finance. Every money door must refuse them. The seeded admin
+// (admin@vidysea.com, granted finance by scripts/seed.mjs, standing in for one of the three) is the
+// positive control in the same block — a refusal test that cannot also show an acceptance is only
+// proving the doors are shut, not that they are the RIGHT doors.
+{
+  const s1825 = Date.now().toString().slice(-6);
+  const em1825 = `q1825.admin.${s1825}@vidysea-test.local`;
+  const pw1825 = "Q1825pass!xyz";
+  const mk1825 = await req(admin, "POST", "/api/users", {
+    name: "Q1825 Ungranted Admin", email: em1825, password: pw1825, role: "Admin",
+    location_scope: [], can_edit: true,
+  });
+  ok("QA-1825: an Admin with no finance grant can be created", mk1825.status === 201, `got ${mk1825.status}`);
+  const plainAdmin = await login(em1825, pw1825);
+  ok("QA-1825: that Admin signs in", !!plainAdmin);
+  if (plainAdmin) {
+    // The whole point: role === "Admin", and every money door still says no.
+    const doors = [
+      ["GET", "/api/costs", "the cost ledger"],
+      ["GET", "/api/invoices", "the invoice book"],
+    ];
+    for (const [method, path, label] of doors) {
+      const r = await req(plainAdmin, method, path);
+      ok(`QA-1825: an Admin without finance.view is refused ${label}`, r.status === 403, `${path} got ${r.status}`);
+    }
+    const del = await req(plainAdmin, "DELETE", "/api/costs/000000000000000000000000");
+    ok("QA-1825: ...and cannot delete a ledger row either (finance.approve, not costs.manage)",
+      del.status === 403, `got ${del.status}`);
+
+    // Their OTHER Admin powers are untouched — this is a narrow exception, not a demotion. If this
+    // fails, the change went too far and broke the Admin bypass generally.
+    ok("QA-1825: the same Admin still reads the user list (the bypass is narrow, not removed)",
+      (await req(plainAdmin, "GET", "/api/users")).status === 200);
+    ok("QA-1825: ...and still reads locations",
+      (await req(plainAdmin, "GET", "/api/locations?limit=1")).status === 200);
+
+    // /api/permissions/me must tell the SAME story the routes do, or the shell will render doors
+    // the server refuses — that is the QA-806/QA-813 fault, one screen along.
+    const me1825 = await req(plainAdmin, "GET", "/api/permissions/me");
+    ok("QA-1825: /api/permissions/me withholds finance from an ungranted Admin",
+      me1825.status === 200 && me1825.data.role === "Admin"
+        && !me1825.data.levels?.["finance.view"] && !me1825.data.levels?.["finance.approve"],
+      JSON.stringify({ fv: me1825.data.levels?.["finance.view"] ?? null, fa: me1825.data.levels?.["finance.approve"] ?? null }));
+    ok("QA-1825: ...while still reporting every other right at edit (users.manage, costs.manage)",
+      me1825.data.levels?.["users.manage"] === "edit" && me1825.data.levels?.["costs.manage"] === "edit",
+      JSON.stringify(me1825.data.levels));
+    ok("QA-1825: ...and it SHIPS the exempt list, so the shell never keeps its own copy",
+      Array.isArray(me1825.data.no_admin_bypass)
+        && me1825.data.no_admin_bypass.includes("finance.view")
+        && me1825.data.no_admin_bypass.includes("finance.approve"),
+      JSON.stringify(me1825.data.no_admin_bypass ?? null));
+
+    // Granting it live must actually open the door — a right nobody can switch on is not a right.
+    await req(admin, "PATCH", `/api/users/${mk1825.data.item?._id}`, { extra_permissions: ["finance.view"] });
+    const after = await login(em1825, pw1825);
+    ok("QA-1825: granting finance.view to that Admin opens the ledger",
+      !!after && (await req(after, "GET", "/api/costs")).status === 200);
+    ok("QA-1825: ...but reading is not deciding — the ledger row delete still refuses without finance.approve",
+      !!after && (await req(after, "DELETE", "/api/costs/000000000000000000000000")).status === 403);
+  }
+
+  // Positive control: the seeded admin IS one of the three, and sees everything.
+  ok("QA-1825: the granted admin reads the ledger", (await req(admin, "GET", "/api/costs")).status === 200);
+  ok("QA-1825: the granted admin reads the invoice book", (await req(admin, "GET", "/api/invoices")).status === 200);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

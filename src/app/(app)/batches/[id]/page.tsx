@@ -44,8 +44,11 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
   // (members, results, costs, logs, closure, attendance, invoices) could only be Cancelled —
   // never deleted. Separate, narrower-grantable right from batches.delete above.
   const canForceDeleteBatch = rightsLoadedB && canRightB("batches.delete_with_data", "edit");
-  // R-E (CEO 14/08): Operations is post-only on money — the batch cost ledger is Admin's.
-  const tabs = TABS.filter((t) => t !== "Costs" || role === "Admin");
+  // R-E (CEO 14/08): whoever posts money is post-only on it — the batch cost ledger is narrower.
+  // QA-1825 (CEO, 2026-09-05): this read `role === "Admin"`, which the CEO has now explicitly
+  // ruled out as the test ("chaahe super admin ho"). It asks for the same right `GET /api/costs`
+  // asks for, so the tab exists exactly when the data behind it would load.
+  const tabs = TABS.filter((t) => t !== "Costs" || (rightsLoadedB && canRightB("finance.view")));
   const [tab, setTab] = useState(sp.get("tab") && TABS.includes(sp.get("tab")!) ? sp.get("tab")! : "Overview");
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState("");
@@ -3335,6 +3338,13 @@ function ClosureFileSlot({ label, value, onUpload, disabled }: any) {
 }
 
 function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
+  // QA-1825: the invoice controls below used to render for `["Admin","Operations"]`. Raising and
+  // paying an invoice is now `finance.approve` (api/batches/[id]/invoice/route.ts), so the buttons
+  // follow that right instead — otherwise Operations, and any Admin who is not one of the three
+  // named people, would be handed buttons the server refuses, which is the exact fault QA-038
+  // raised this gate for in the first place.
+  const { can: canRightC, loaded: rightsLoadedC } = usePerms();
+  const canMoveInvoice = rightsLoadedC && canRightC("finance.approve", "edit");
   const [closure, setClosure] = useState<any>(null);
   const [invoice, setInvoice] = useState<any>(null);
   const [form, setForm] = useState<any>({});
@@ -3854,6 +3864,9 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
       {["Admin", "Operations"].includes(role) && (
       <Section title={`Invoice — ${invoice?.status ?? "Not Ready"}`}>
         <div className="space-y-3">
+          {/* "Mark Ready for Invoice" is a CLOSURE act, not a money act — it writes
+              closure.ready_for_invoice through /closure (closure.manage), which is Operations'
+              own job. It deliberately stays outside the finance gate below. */}
           {!closure?.ready_for_invoice && (
             <Btn onClick={() => saveClosure({ ready_for_invoice: true })} disabled={closure?.certification_status !== "Completed"}>
               Mark Ready for Invoice {closure?.certification_status !== "Completed" && "(needs certification)"}
@@ -3864,7 +3877,12 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
               Invoice for <span className="font-semibold">{closure?.billable_passed ?? closure?.passed}</span> billable passed candidate(s){(closure?.dropped_passed ?? 0) > 0 ? ` — ${closure.dropped_passed} dropped-but-passed excluded (2026-08-13 decision)` : ""}.
             </p>
           )}
-          {invoice && (
+          {invoice && !canMoveInvoice && (
+            <p className="text-xs text-gray-500">
+              The invoice itself — amount, number, raised and paid — is handled by Finance.
+            </p>
+          )}
+          {invoice && canMoveInvoice && (
             <div className="grid grid-cols-2 gap-3">
               <Field label="Amount (₹)"><input type="number" className={inputCls} value={invForm.amount ?? ""} onChange={(e) => setInvForm({ ...invForm, amount: +e.target.value })} /></Field>
               <Field label="Invoice no"><input className={inputCls} value={invForm.invoice_no ?? ""} onChange={(e) => setInvForm({ ...invForm, invoice_no: e.target.value })} /></Field>
@@ -3872,7 +3890,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
               <Field label="Paid on"><input type="date" className={inputCls} value={toInputDate(invForm.paid_on)} onChange={(e) => setInvForm({ ...invForm, paid_on: e.target.value })} /></Field>
             </div>
           )}
-          {invoice && (
+          {invoice && canMoveInvoice && (
             <div className="flex gap-2">
               <Btn small onClick={() => saveInvoice({ ...invForm, status: "Raised" })} disabled={invoice.status !== "Ready"}>Mark Raised</Btn>
               <Btn small onClick={() => saveInvoice({ ...invForm, status: "Paid" })} disabled={invoice.status !== "Raised"}>Mark Paid</Btn>

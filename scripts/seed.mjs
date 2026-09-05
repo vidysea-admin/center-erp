@@ -33,6 +33,14 @@ for (const name of ["Got a job", "Family reasons", "Relocated", "Health", "Not i
 }
 
 // Admin user
+//
+// QA-1825 (CEO, 2026-09-05): the finance rights are the ONE pair the Admin role does not carry for
+// free — "visibility keval aur keval Manish ji aur mere paas hogi… chaahe super admin ho". In
+// production Umesh grants them per user to the three named people; this seed's admin stands in for
+// one of those three, so it carries the same per-user grant rather than the product pretending the
+// Admin role implies finance. An Admin WITHOUT the grant is a real and supported state — the roles
+// suite creates one on purpose and asserts every money door refuses it.
+const FINANCE_GRANTS = ["finance.view", "finance.approve"];
 const email = "admin@vidysea.com";
 const existing = await db.collection("users").findOne({ email });
 if (!existing) {
@@ -40,11 +48,15 @@ if (!existing) {
   await db.collection("users").insertOne({
     name: "Admin", email, password_hash, role: "Admin",
     location_scope: [], can_edit: true, active: true,
+    extra_permissions: FINANCE_GRANTS,
     createdAt: new Date(), updatedAt: new Date(),
   });
   console.log("Admin user created: admin@vidysea.com / admin123  (CHANGE THIS PASSWORD)");
 } else {
-  console.log("Admin user already exists");
+  // Idempotent top-up: an existing seed database predates the finance keys, and re-seeding is how
+  // every isolation copy is built. $addToSet so a hand-edited grant list is never trampled.
+  await db.collection("users").updateOne({ email }, { $addToSet: { extra_permissions: { $each: FINANCE_GRANTS } } });
+  console.log("Admin user already exists — finance grants topped up");
 }
 
 console.log("Seed complete on", dbName);

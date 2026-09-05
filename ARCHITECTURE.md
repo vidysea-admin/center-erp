@@ -86,7 +86,7 @@ StoredFile, ApprovalRule, ApprovalRequest, AuditLog, Scheme, JobRole, CandidateD
 | File | What it is |
 |---|---|
 | `authz.ts` | `HttpError` · `requireUser` · `requireRole` · `requireEdit` · `locationFilter` · **`apiHandler`** — the server error chokepoint (HttpError→`plain()`, E11000→409, Cast→404, Validation→400) |
-| `permissions.ts` | `PERMISSIONS` (**20 keys** — QA-904 added `candidates.delete` / `trainers.delete` / `batches.delete`) · `DEFAULT_ROLE_PERMISSIONS` · `hasPermission` · `requireView` · `requirePerm`. Deny wins; Admin bypasses |
+| `permissions.ts` | `PERMISSIONS` (**22 keys** — QA-904 added `candidates.delete` / `trainers.delete` / `batches.delete`; QA-1825 added `finance.view` / `finance.approve`) · `DEFAULT_ROLE_PERMISSIONS` · `hasPermission` · `requireView` · `requirePerm` · **`requireFinance`** · **`NO_ADMIN_BYPASS`**. Deny wins; Admin bypasses **every key except `NO_ADMIN_BYPASS`** (§3.2d) |
 | `crud.ts` | `collectionRoutes` / `itemRoutes` / `pick` — the REST factory. **`CrudConfig.fields` IS the write whitelist** |
 | `validate.ts` | **`canonicalPhone` · `phoneError` · `emailError` · `canonicalAadhaar` · `aadhaarError`** — THE write-time canon for phone/email/Aadhaar. Client-safe (imports nothing — §3.0) |
 | `duplicates.ts` | `normalizePhone` (deliberately LOOSE compare key — a different job) · `findDuplicateCandidates` (Rule 7, advisory) |
@@ -550,6 +550,49 @@ returns a role's STORED `RolePermission` row when one exists and only falls back
 does not — and every role on production already has a stored row. The three new toggles must be ticked
 in the matrix (`PUT /api/permissions`) and read back, or Operations and Location see exactly the missing
 buttons they see today.
+
+### 3.2d Money is the one thing an Admin does not get for free — QA-1825 (2026-09-05)
+
+Karunn, on the finance call: *"cost ki approval keval aur keval Manish ji aur mere paas hogi aur
+visibility keval aur keval Manish ji aur mere paas hogi… kisi ke bhi paas nahi hogi **chaahe super
+admin ho, super admin ka kaaka ho**."* Until this change that sentence was **inexpressible**: the
+Admin role short-circuited to `true` in five places (`permissions.ts` ×3, `components/shell.tsx` ×2),
+`User.revoked_permissions` is documented as *"Meaningless on an Admin"*, and `PUT /api/permissions`
+refuses to edit the Admin row at all.
+
+**Two mechanisms, deliberately layered.** Umesh's primary control is identity — **only Karunn, Manish
+and Shubhi hold the `Admin` role**; every other account is a non-Admin role. The code half is the
+backstop for the day a fourth Admin exists anyway:
+
+- **`NO_ADMIN_BYPASS`** (`permissions.ts`) is the ONE list of keys the Admin short-circuit does not
+  open. Today: `finance.view`, `finance.approve`. All five short-circuits read it; none restates it.
+- The client two cannot import `permissions.ts` (mongoose), so **`GET /api/permissions/me` ships the
+  list as `no_admin_bypass`** and `shell.tsx` reads it from the payload — the same device, for the
+  same reason, as `REPORT_LABELS` travelling to the report page (§1.4).
+- **`DEFAULT_ROLE_PERMISSIONS.Admin` is `PERMISSIONS` MINUS those keys.** Not belt-and-braces: the
+  defaults are what a role with no stored `RolePermission` row falls back to (every fresh install and
+  every test DB), and `PUT /api/permissions` cannot edit the Admin row, so a default of "every key"
+  would leave no way to take finance back off.
+- The three named people receive them through **`User.extra_permissions`** — per-user, auditable, and
+  exactly the "named list" Umesh asked for.
+
+**`requireFinance(user, "view" | "approve")` is THE money door.** Every finance surface asks it rather
+than naming a key: `api/costs` (GET), `api/costs/[id]` (PATCH/DELETE), `api/invoices` (GET),
+`api/batches/[id]/invoice` (PATCH). `"approve"` asserts both — an approver must be able to see what
+they are deciding.
+
+**What did NOT move:** `costs.manage` still governs POSTING a cost, and stays open to whoever the
+Admin grants it to (*"cost ki entry apne-apne level ki koi bhi karta hai"*). Splitting the right is
+what finally removed the `user.role === "Operations"` hardcodes in `api/costs/route.ts` and
+`api/invoices/route.ts` — they existed because *"an ordered none<view<edit lattice cannot express
+edit-without-view"*, and two rights express it directly. `"Mark Ready for Invoice"` is a **closure**
+act (`closure.manage`), not a money act, and stays outside the gate.
+
+**Readers to keep in step:** the four routes above, plus the UI gates in `(app)/costs/page.tsx`
+(`postOnly` now asks `finance.view`, not `role === "Operations"`) and `(app)/batches/[id]/page.tsx`
+(the Costs TAB and the Closure tab's invoice controls). `check-user-copy.mjs` pins both shapes: no
+money route may gate on a role name or lack `requireFinance`, and no Admin short-circuit may skip
+`NO_ADMIN_BYPASS`.
 
 ### 3.2c A comment does not enforce the rule it states — and the author is the least protected
 

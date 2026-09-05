@@ -1,14 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, isScoped, HttpError } from "@/lib/authz";
-import { requirePerm } from "@/lib/permissions";
+import { requireFinance } from "@/lib/permissions";
 import { CostEntry } from "@/models";
 import { assertCostEntryValid } from "@/lib/rules";
 import { audit, auditDiff } from "@/lib/audit";
 
 // Cost entries were write-once (no update/delete route existed) — but sheet-imported costs
-// (Batch_Master's four cost columns) can carry a wrong amount or category, so holders of
-// costs.manage must be able to correct or remove an entry. Rule 38 applies to by-ID writes.
+// (Batch_Master's four cost columns) can carry a wrong amount or category, so an entry must be
+// correctable or removable. Rule 38 applies to by-ID writes.
+//
+// QA-1825: these two verbs moved from `costs.manage` (the POST-a-cost right) to
+// `finance.approve`. Rewriting an amount that is already in the ledger, or deleting the row so
+// "the amount disappears from every total", is deciding money — it is the same act the CEO put
+// behind the two-point check, not the act of submitting an entry for someone else to check.
 
 async function loadInScope(user: Awaited<ReturnType<typeof requireUser>>, id: string) {
   const doc = await CostEntry.findById(id);
@@ -25,7 +30,7 @@ async function loadInScope(user: Awaited<ReturnType<typeof requireUser>>, id: st
 export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   await dbConnect();
   const user = await requireUser();
-  await requirePerm(user, "costs.manage");
+  await requireFinance(user, "approve");
   requireEdit(user);
   const { id } = await ctx.params;
   const doc = await loadInScope(user, id);
@@ -45,7 +50,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
 export const DELETE = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   await dbConnect();
   const user = await requireUser();
-  await requirePerm(user, "costs.manage");
+  await requireFinance(user, "approve");
   requireEdit(user);
   const { id } = await ctx.params;
   const doc = await loadInScope(user, id);

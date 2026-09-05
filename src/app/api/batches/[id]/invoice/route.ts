@@ -1,17 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, requireRole } from "@/lib/authz";
-import { requirePerm } from "@/lib/permissions";
+import { apiHandler, requireUser, requireEdit } from "@/lib/authz";
+import { requireFinance } from "@/lib/permissions";
 import { assertBatchInScope, updateInvoiceChecked } from "@/lib/rules";
 import { requireApproval } from "@/lib/approvals";
 import { Batch } from "@/models";
 import { audit } from "@/lib/audit";
 
-// PATCH invoice (Rule 36). Operations/Admin only (screen spec: Costs → Invoices tab).
+// PATCH invoice (Rule 36). QA-1825: moved from `invoices.manage` to `finance.approve` — moving an
+// invoice through Ready → Raised → Paid IS deciding money, and the CEO put money behind three
+// named people. The `invoice.raise` / `invoice.paid` approval gate below is unchanged and still
+// parks the act for a second person; this only narrows who may reach the door at all.
 export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   await dbConnect();
   const user = await requireUser();
-  await requirePerm(user, "invoices.manage"); // togglable (2026-08-11); default set matches the old Admin/Ops gate
+  await requireFinance(user, "approve");
   requireEdit(user); // Rule 39: can_edit=false is view-only everywhere, including granted rights
   const { id } = await ctx.params;
   // 2026-08-12 audit (auth S1-8): this was the only by-id batch route with no scope assertion,

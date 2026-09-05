@@ -18,12 +18,16 @@ import {
 // right surfaces and a revoked one disappears, without a code change. Nothing here is a
 // security gate (every API still refuses on its own); it is the product keeping its word
 // that a person sees only their work.
-type Perms = { role: string; levels: Record<string, "view" | "edit">; loaded: boolean };
-const PermsContext = createContext<Perms>({ role: "", levels: {}, loaded: false });
+// QA-1825: `no_admin_bypass` is the server's own list of keys the Admin short-circuit does not
+// open (lib/permissions.ts NO_ADMIN_BYPASS), shipped in the /api/permissions/me payload so this
+// client file never keeps a second copy of it. Empty until the fetch lands, which is safe: with an
+// empty list `can()` behaves exactly as it did before this change.
+type Perms = { role: string; levels: Record<string, "view" | "edit">; noAdminBypass: string[]; loaded: boolean };
+const PermsContext = createContext<Perms>({ role: "", levels: {}, noAdminBypass: [], loaded: false });
 export function usePerms() {
   const p = useContext(PermsContext);
   const can = (key: string, level: "view" | "edit" = "view") => {
-    if (p.role === "Admin") return true;
+    if (p.role === "Admin" && !p.noAdminBypass.includes(key)) return true;
     const l = p.levels[key];
     return level === "view" ? l === "view" || l === "edit" : l === "edit";
   };
@@ -74,7 +78,9 @@ const ROUTE_RULES: { prefix: string; roles?: string[]; perm?: string }[] = [
 export function routeAllowed(pathname: string, perms: Perms): boolean {
   const rule = ROUTE_RULES.find((r) => pathname === r.prefix || pathname.startsWith(r.prefix + "/") || pathname.startsWith(r.prefix + "?"));
   if (!rule) return true; // Home, Batches, notifications, programs — everyone's work
-  if (perms.role === "Admin") return true;
+  // QA-1825: an Admin still walks through every door EXCEPT one gated on a no-bypass key. This is
+  // the second of the two client short-circuits; both read the server's list, neither restates it.
+  if (perms.role === "Admin" && !(rule.perm && perms.noAdminBypass.includes(rule.perm))) return true;
   const roleOk = !rule.roles || rule.roles.includes(perms.role);
   if (!roleOk) return false; // the role list is the CEILING (R-I: a Trainer's doors are Home and Batches, full stop)
   if (rule.perm && perms.loaded) {
@@ -278,11 +284,13 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [watchCount, setWatchCount] = useState(0);
   const [alertCount, setAlertCount] = useState(0);
   // QA-153: effective rights, fetched once per session; role-only decisions until they land.
-  const [perms, setPerms] = useState<Perms>({ role: "", levels: {}, loaded: false });
+  const [perms, setPerms] = useState<Perms>({ role: "", levels: {}, noAdminBypass: [], loaded: false });
   useEffect(() => {
     if (!user) return;
     setPerms((p) => ({ ...p, role: user.role }));
-    api("/api/permissions/me").then((d) => setPerms({ role: d.role ?? user.role, levels: d.levels ?? {}, loaded: true })).catch(() => setPerms({ role: user.role, levels: {}, loaded: false }));
+    api("/api/permissions/me")
+      .then((d) => setPerms({ role: d.role ?? user.role, levels: d.levels ?? {}, noAdminBypass: d.no_admin_bypass ?? [], loaded: true }))
+      .catch(() => setPerms({ role: user.role, levels: {}, noAdminBypass: [], loaded: false }));
   }, [user?.id, user?.role]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
