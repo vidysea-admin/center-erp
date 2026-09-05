@@ -682,6 +682,31 @@ Known limit of the pin, stated rather than papered over: a route obtaining money
 never a figure). The probe does not share that blind spot — it reads what actually goes over the
 wire, whatever produced it.
 
+### 3.2e The approval half — QA-1826 / QA-1827 / QA-1844 (2026-09-05)
+
+§3.2d is about who may **see** money. This is the other half of the same CEO sentence — *"कॉस्ट की
+**अप्रूवल** … और **विजिबिलिटी** …"* — and it went untouched through six cycles of the first half.
+
+- **Deciding money needs `finance.approve`.** `POST /api/approvals/[id]` gated on `approvals.decide`
+  alone, so an Admin with `finance.view: null` approved a parked cost — 200, persisted, their name
+  on it. Which actions count is derived from the payload's **effect** (`cost.post`,
+  `invoice.raise`, `invoice.paid` — the replays that write or move money), not a hand-kept list; the
+  rest stay on `approvals.decide` so the queue does not leave the Operations users whose job it is.
+  **The gate runs BEFORE `decideApproval`** — gating after it would refuse the caller *after*
+  persisting their decision. A **Rejected is gated too**: refusing a payment is a money decision.
+- **Everyone parks.** `requireApproval` had `if (user.role === rule.approver_role && user.role ===
+  "Admin") return null;` — which made the self-approval refusal in `decideApproval` **unreachable**
+  for the one role that most needed it: nothing had been parked to refuse. Gone. The
+  ships-switched-off guarantee is untouched — a *disabled* action still returns `null`.
+- **`ApprovalRule.approver_users[]` narrows the role, never widens it.** Empty list ⇒ the role
+  decides exactly as before, so every existing rule is unchanged. `ApprovalRequest` **snapshots**
+  the list at park time: who was entitled to decide a request is a fact about the moment it was
+  raised, and reading it live would let a later rule edit rewrite who *could have* approved
+  something already in the queue — which is the question an audit asks.
+- **`Notification.user_target[]` and `mailUsers()`** exist because an alert could only be addressed
+  to a **role**, so a money approval rang for every Admin. The inbox rule: if `user_target` is set
+  you must be in it; absent or empty, the role decides as before.
+
 ### 3.2c A comment does not enforce the rule it states — and the author is the least protected
 
 **Four times on 2026-08-24, in three different sessions, someone wrote a true sentence beside code
