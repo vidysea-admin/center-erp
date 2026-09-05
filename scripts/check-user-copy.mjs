@@ -3136,8 +3136,13 @@ for (const file of walk(root)) {
         const assignments = [...raw.matchAll(new RegExp("(?:const|let|var) " + last + " ?= ?([^;]+);", "g"))].map((m) => m[1]);
         if (!assignments.length) {
           bad.push(rel + " passes the money-mask flag `" + last + "`, which is never assigned in this file");
-        } else if (!assignments.every((a) => /hasPermission\([^)]*FINANCE_VIEW/.test(a))) {
-          bad.push(rel + " assigns the money-mask flag `" + last + "` from something other than hasPermission(user, FINANCE_VIEW)");
+        // Senior review of cycles 2-4: this was a SUBSTRING test, so
+        // `const flag = true || await hasPermission(user, FINANCE_VIEW);` passed the pin while the
+        // JS short-circuited and never called it. That is the same blacklist-shaped mistake one
+        // level further in: "contains the right words" is not "is the right expression". The RHS
+        // must BE the call, modulo `await` and wrapping parens — nothing else.
+        } else if (!assignments.every((a) => /^\(*\s*await\s+hasPermission\([^;]*FINANCE_VIEW[^;]*\)\s*\)*$/.test(a.trim()))) {
+          bad.push(rel + " assigns the money-mask flag `" + last + "` from something that is not exactly `await hasPermission(user, FINANCE_VIEW)`");
         }
       }
       if (!/hasPermission\([^)]*FINANCE_VIEW/.test(raw)) {

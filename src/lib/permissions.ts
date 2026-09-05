@@ -344,16 +344,38 @@ export function maskMoneyInAuditRow<T extends Record<string, any>>(row: T, canSe
 // Two shapes, therefore two things to strip, and the summary is the one that would have been
 // forgotten: redacting a field but leaving the same number interpolated into a sentence beside it
 // is the mistake this whole unit keeps finding in itself.
+// A money figure inside a SENTENCE, which is where two of them were hiding. Two shapes, and the
+// second was missed the first time round (senior review of cycles 2-4): a rupee amount
+// (`Cost entry ₹128500 …`, built at api/costs/route.ts) and a bare invoice NUMBER interpolated with
+// no ₹ at all (`Mark invoice raised for batch X (INV-2026-0456)`, built at
+// api/batches/[id]/invoice/route.ts). `invoice_no` is one of INVOICE_MONEY_FIELDS by this code's own
+// rule, so a regex that only hunts ₹ leaves half the rule unenforced.
+//
+// The values are taken FROM the payload rather than pattern-guessed, so this cannot be fooled by an
+// invoice number that does not look like one.
+export function redactMoneyInText(text: string, payload?: unknown): string {
+  let out = text.replace(/₹\s?[\d,]+(?:\.\d+)?/g, "₹—");
+  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+    for (const f of INVOICE_MONEY_FIELDS) {
+      const v = (payload as Record<string, unknown>)[f];
+      if (v == null || v === "") continue;
+      const s = String(v);
+      if (s.length < 2) continue; // never blank-substitute a single character
+      out = out.split(s).join("—");
+    }
+  }
+  return out;
+}
+
 export function maskApprovalMoney<T extends Record<string, any>>(request: T, canSeeMoney: boolean): T {
   if (canSeeMoney) return request;
   const out: Record<string, any> = { ...request };
-  if (out.payload && typeof out.payload === "object" && !Array.isArray(out.payload)) {
-    out.payload = stripMoneyKeys(out.payload as Record<string, unknown>);
+  const payload = out.payload;
+  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+    out.payload = stripMoneyKeys(payload as Record<string, unknown>);
   }
-  if (typeof out.summary === "string") {
-    // Any rupee figure, however it was spelled: ₹128500 · ₹1,28,500 · ₹ 128500.50
-    out.summary = out.summary.replace(/₹\s?[\d,]+(?:\.\d+)?/g, "₹—");
-  }
+  // Redact the sentence using the ORIGINAL payload — the stripped one no longer knows the values.
+  if (typeof out.summary === "string") out.summary = redactMoneyInText(out.summary, payload);
   return out as T;
 }
 

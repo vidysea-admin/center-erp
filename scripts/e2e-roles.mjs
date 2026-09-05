@@ -2643,8 +2643,31 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
   // does not know which endpoints are supposed to carry money, it only knows who is not supposed to
   // receive it. Adding an endpoint here costs one line; that is the point.
   {
-    const MONEY_ON_WIRE = /"amount":\s*\d|"invoice_no":\s*"|₹\s?[\d,]/;
+    // `-?\d` and not `\d`: a negative amount is still an amount (senior review of cycles 2-4).
+    const MONEY_ON_WIRE = /"amount":\s*-?\d|"invoice_no":\s*"|₹\s?[\d,]/;
     const bId2 = seededInv ? (seededInv.batch?._id ?? seededInv.batch) : null;
+
+    // ---- PARK A REAL COST, or this probe proves nothing about the approvals queue ----
+    // The first cycle-4 run "proved" the probe by mutating the summary redaction away and watching
+    // the probe still PASS. It passed because the `cost.post` rule ships DISABLED, so nothing had
+    // ever parked and the queue was empty: the probe was asserting that an empty list contains no
+    // money. A vacuous pass is worse than a missing test, because it reads as evidence.
+    //
+    // So the queue gets something to leak, and the fixture asserts it actually landed.
+    const catsP = await req(admin, "GET", "/api/master-lists/cost-categories");
+    const catP = (catsP.data.items ?? [])[0];
+    const jprP = (await req(spoc, "GET", "/api/locations?limit=1")).data.items[0];
+    const ruleOn = await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: true, approver_role: "Admin" });
+    ok("QA-1843 fixture: the cost.post approval rule can be switched on", ruleOn.status === 200, `got ${ruleOn.status}`);
+    const parked = catP && jprP
+      ? await req(ops, "POST", "/api/costs", { entry_date: "2026-09-05", location: jprP._id, category: catP._id, amount: 987654, note: "QA-1843 probe fixture" })
+      : { status: 0, data: {} };
+    ok("QA-1843 fixture: a cost PARKS for approval, so the queue actually carries a figure",
+      parked.status === 202 && parked.data?.queued === true, `got ${parked.status}`);
+    // And prove the fixture is visible to someone: the grant-holder must see ₹987654 in the queue.
+    const qAdmin = await req(admin, "GET", "/api/approvals?status=Pending");
+    ok("QA-1843 fixture: the granted admin CAN see that figure in the queue (so the probe below is not vacuous)",
+      /987654/.test(JSON.stringify(qAdmin.data.items ?? [])), JSON.stringify((qAdmin.data.items ?? []).map((i) => i.summary)).slice(0, 200));
     const doors = [
       ["/api/costs", "the cost ledger"],
       ["/api/invoices", "the invoice book"],
@@ -2681,6 +2704,28 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     }
     ok("QA-1843 probe: the SAME walk does return money to the granted admin — the probe can actually fail",
       moneySeenByGranted > 0, `${moneySeenByGranted} of ${doors.length} endpoints carried a figure`);
+
+    // The DECIDE response is a POST, so the GET walk above cannot reach it — and that is exactly
+    // where the sixth leak was: the queue was masked and the button's own reply handed the figure
+    // back. Deciding consumes the parked request, so this runs last.
+    const pendingNow = (await req(admin, "GET", "/api/approvals?status=Pending")).data.items ?? [];
+    const mine1843 = pendingNow.find((i) => i.action === "cost.post");
+    if (mine1843 && leakAdmin) {
+      const dec = await req(leakAdmin, "POST", `/api/approvals/${mine1843._id}`, { decision: "Rejected", note: "QA-1843 probe" });
+      ok("QA-1843 probe: the DECIDE response carries no money to an Admin without finance.view",
+        dec.status !== 200 || !MONEY_ON_WIRE.test(JSON.stringify(dec.data ?? {})),
+        `status ${dec.status} · ${JSON.stringify(dec.data ?? {}).slice(0, 220)}`);
+    } else ok("QA-1843 probe: a parked request was available to decide", false, `pending=${pendingNow.length}`);
+
+    // The notification the park created is broadcast to a ROLE, not to grant-holders, and is mailed.
+    // It must not carry the figure to anyone, which is why it is redacted unconditionally.
+    const notif = await req(leakAdmin ?? admin, "GET", "/api/notifications");
+    ok("QA-1843 probe: the approval-pending notification carries no figure (it is broadcast to a role, and mailed)",
+      !/987654|₹\s?[\d,]/.test(JSON.stringify(notif.data ?? {})),
+      JSON.stringify(notif.data?.items?.slice?.(0, 2) ?? notif.data ?? {}).slice(0, 220));
+
+    // Put the switch back so the rest of the wall sees the shipped default (rule OFF).
+    await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
   }
 
   // QA-1838: a right that gates nothing must not sit in the matrix pretending to.

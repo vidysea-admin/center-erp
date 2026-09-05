@@ -6,6 +6,7 @@ import { HttpError } from "@/lib/authz";
 import type { SessionUser } from "@/auth";
 import { audit } from "@/lib/audit";
 import { mailUsersByRole } from "@/lib/mailer";
+import { redactMoneyInText } from "@/lib/permissions";
 
 export type ApprovalAction =
   | "location.close" | "location.stop" | "batch.cancel"
@@ -37,10 +38,19 @@ export async function requireApproval(
     approver_role: rule.approver_role,
   });
 
+  // Senior review of QA-1825 cycles 2-4: the queue was masked and then the SAME figure was
+  // broadcast around it. This notification goes to `role_target: [approver_role]` — every user of
+  // that role, not the finance grant-holders — and the mail below goes to the same list. So four
+  // cycles of hiding `₹128500` from the approvals screen were undone by the bell beside it.
+  //
+  // Redacted UNCONDITIONALLY rather than per-reader, because a Notification row has no reader: it
+  // is written once and read by whoever holds the role. Anyone entitled to the figure can open the
+  // request itself, where the mask is per-reader and they will see it.
+  const safeSummary = redactMoneyInText(ctx.summary, ctx.payload);
   await Notification.create({
     type: "approval_pending",
     severity: "warning",
-    message: `Approval needed: ${ctx.summary} (requested by ${user.name})`,
+    message: `Approval needed: ${safeSummary} (requested by ${user.name})`,
     entity: "ApprovalRequest", entity_id: request._id,
     link: "/admin?tab=Approvals",
     role_target: [rule.approver_role],
@@ -50,9 +60,11 @@ export async function requireApproval(
   // someone to open the bell is an approval that waits.
   mailUsersByRole({
     roles: [rule.approver_role], location: ctx.location,
-    subject: `Approval needed: ${ctx.summary}`,
+    subject: `Approval needed: ${safeSummary}`,
     title: "An action is waiting for your approval",
-    lines: [`${ctx.summary}`, `Requested by ${user.name}.`],
+    // Mail leaves the building. A figure in a subject line survives in an inbox, on a phone
+    // lock-screen and in a forward, long after any permission check could reach it.
+    lines: [`${safeSummary}`, `Requested by ${user.name}.`],
     link: "/admin?tab=Approvals", entity: "ApprovalRequest", entity_id: request._id,
   }).catch(() => {});
 

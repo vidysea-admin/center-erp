@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
-import { requirePerm } from "@/lib/permissions";
+import { requirePerm, hasPermission, maskApprovalMoney, FINANCE_VIEW } from "@/lib/permissions";
 import { decideApproval } from "@/lib/approvals";
 import { assertCostEntryValid, transitionBatch, updateInvoiceChecked } from "@/lib/rules";
 import { CostEntry, Location, LocationTarget, Room } from "@/models";
@@ -20,7 +20,12 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   if (!["Approved", "Rejected"].includes(decision)) throw new HttpError(400, "decision must be Approved or Rejected");
 
   const request = await decideApproval(id, user, decision, note);
-  if (decision !== "Approved") return NextResponse.json({ item: request, applied: false });
+  // The REJECT path hands back the same document and was the same leak; masked identically rather
+  // than only fixing the branch the review happened to quote.
+  if (decision !== "Approved") {
+    const seeMoney = await hasPermission(user, FINANCE_VIEW);
+    return NextResponse.json({ item: maskApprovalMoney(request.toObject ? request.toObject() : request, seeMoney), applied: false });
+  }
 
   const p = (request.payload ?? {}) as any;
   switch (request.action) {
@@ -87,5 +92,11 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     default:
       throw new HttpError(400, "Approved request has no replay handler: " + request.action);
   }
-  return NextResponse.json({ item: request, applied: true });
+  // Senior review of cycles 2-4: this handed back the RAW request — full `payload` (amount,
+  // invoice_no) and the original summary — to whoever decided it. The door here is
+  // `approvals.decide`, not `finance.view`, and `decideApproval` admits anyone whose role matches
+  // the rule's `approver_role` (default "Admin"). So the sibling GET was masked in cycle 4 and the
+  // decide response, one file away, handed the same figure over the instant the button was pressed.
+  const canSeeMoney = await hasPermission(user, FINANCE_VIEW);
+  return NextResponse.json({ item: maskApprovalMoney(request.toObject ? request.toObject() : request, canSeeMoney), applied: true });
 });
