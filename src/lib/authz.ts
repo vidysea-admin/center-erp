@@ -127,6 +127,18 @@ export function apiHandler<T extends unknown[]>(fn: (...args: T) => Promise<Resp
       if (e instanceof Error && e.name === "CastError" && (e as unknown as { kind?: string }).kind === "ObjectId") {
         return NextResponse.json({ error: "Not found — that is not a valid id." }, { status: 404 });
       }
+      // QA-1878 (checker on qa-1875-1876): a request body that is not legal JSON answered
+      // "Something went wrong on our side. Please try again." — on EVERY write route, since every
+      // one of them starts with `await req.json()`. Nothing had gone wrong on our side, retrying
+      // could never help, and the row landed in the 5xx bucket for anyone reading error rates, which
+      // is the part that costs more than the message: a 500 says the server is broken.
+      //
+      // Exactly the argument the CastError and ValidationError branches below and above already
+      // make, on the one caller mistake that reaches this handler before any route code runs at all.
+      // The body is NOT echoed, for the same reason those two do not echo the submitted value.
+      if (e instanceof SyntaxError && /JSON/i.test(msg)) {
+        return NextResponse.json({ error: "The request body is not valid JSON." }, { status: 400 });
+      }
       // A ValidationError is the CALLER's mistake, not ours, so it must not be masked as a 500.
       // The S2-15 masking below swept it up with genuine server faults, and the result actively
       // misled: sending an out-of-enum operational_status answered "Something went wrong on our

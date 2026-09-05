@@ -3269,6 +3269,27 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       const stillBudget = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
         .find((i) => String(i._id) === String(head._id))?.budget;
       ok("QA-1875: ...and the refusal left the real budget alone", stillBudget === BUDGET, `budget now ${stillBudget}`);
+
+      // QA-1877 (checker on qa-1875-1876): the guard lives in the SHARED coercion, so it binds
+      // every list that has a numeric extra — not just cost-categories. That is a real behaviour
+      // change on `schemes` (POST total_hours:-5 was 201 before) and it was asserted on ONE of the
+      // lists it touches, which is the same one-surface-of-several shape as QA-1876 one level up.
+      // The change is a tightening toward the rule the EDIT door of the same list already had, so
+      // it stays — but it is now named, and pinned where it actually applies.
+      const negScheme = await req(admin, "POST", "/api/master-lists/schemes", { name: `QA1877 ${s28}`, total_hours: -5 });
+      ok("QA-1877: the non-negative guard binds the SCHEMES create door too — a negative total_hours is refused",
+        negScheme.status === 400, `got ${negScheme.status} · ${JSON.stringify(negScheme.data ?? {}).slice(0, 120)}`);
+      const okScheme = await req(admin, "POST", "/api/master-lists/schemes", { name: `QA1877 ok ${s28}`, total_hours: 120 });
+      ok("QA-1877: ...while a legitimate positive figure still creates (the guard tightened, it did not close the door)",
+        okScheme.status === 201, `got ${okScheme.status}`);
+
+      // QA-1878: an unparseable body is the CALLER's mistake. It used to answer 500 "something went
+      // wrong on our side" on every write route, which is both untrue and the wrong bucket for
+      // anyone reading error rates.
+      const badJson = await fetch(`${BASE}/api/master-lists/cost-categories`, {
+        method: "POST", headers: { "Content-Type": "application/json", cookie: admin }, body: "{not json",
+      });
+      ok("QA-1878: a body that is not valid JSON answers 400, not 500", badJson.status === 400, `got ${badJson.status}`);
       const unchanged = (await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [];
       ok("QA-1828: ...and the real budget is still what it was",
         unchanged.find((i) => String(i._id) === String(head._id))?.budget === BUDGET,
