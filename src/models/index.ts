@@ -92,6 +92,11 @@ export const FOLLOWUP_STATUS = ["Pending", "Done", "Skipped"] as const;
 export const USER_ROLE = ["Admin", "Operations", "Location", "Enrollment", "Trainer"] as const;
 export const USER_APPROVAL = ["Pending", "Approved", "Rejected"] as const;
 export const ACTOR_TYPE = ["USER", "SYSTEM", "AUTOMATION", "EXTERNAL_SYNC"] as const;
+// QA-1828: Manish's workbook carries a "Head Type" column with exactly these two values, and the
+// CEO's cost-per-student arithmetic depends on the split — a direct cost belongs to a batch, an
+// indirect one is apportioned. Named here rather than in the schema so the Admin form and any later
+// report read the same list instead of retyping it.
+export const COST_HEAD_TYPE = ["Direct", "Indirect"] as const;
 
 const oid = (ref: string, required = false) => ({ type: Schema.Types.ObjectId, ref, required });
 
@@ -1692,7 +1697,46 @@ export const StoredFile = models.StoredFile || model("StoredFile", StoredFileSch
 export const ApprovalRule = models.ApprovalRule || model("ApprovalRule", ApprovalRuleSchema);
 export const ApprovalRequest = models.ApprovalRequest || model("ApprovalRequest", ApprovalRequestSchema);
 export const AuditLog = models.AuditLog || model("AuditLog", AuditLogSchema);
-export const CostCategory = models.CostCategory || model("CostCategory", NamedActiveSchema);
+// ---------- CostCategory: Head → Subhead → Description (QA-1828) ----------
+// CEO, 2026-09-05: *"head ho, sub head ho, description ho… pre approve hai ki nahi hai wo daalein."*
+// It shared `NamedActiveSchema` — `{name, active}` and nothing else — so a cost could be filed
+// against "Travel" and nobody could say travel to WHAT, under which head, pre-approved or not.
+// Manish's workbook has a head-level Description column and no subhead level either; the HTML mock's
+// "Add cost head" form is one level. This is the level the field actually works at.
+//
+// `parent` is the whole structure: null/absent = a HEAD, set = a SUBHEAD of that head. One
+// self-reference rather than two collections, so a head and a subhead are the same kind of thing
+// and the Costs picker walks one list. **Two levels only** — the API refuses a subhead of a subhead,
+// because a third level is a taxonomy nobody asked for and a report nobody can read.
+//
+// NAME STAYS GLOBALLY UNIQUE, deliberately. Per-parent uniqueness would let "Travel" exist under two
+// heads, which reads better on a form and worse in every report — and it would need the live unique
+// index on `name` dropped and rebuilt on production, which is a migration this change does not need
+// and has not earned. F-B17's case-insensitive duplicate refusal in the route stays the front door.
+//
+// MIGRATION SAFETY: `src/lib/rules.ts` upserts the category "Trainer eligibility fee" BY NAME when a
+// TOT payment is booked. Every field added here is optional, so that upsert keeps working and the
+// row it creates is simply a head with no description — which is exactly what it is.
+const CostCategorySchema = new Schema({
+  name: { type: String, required: true, unique: true },
+  active: { type: Boolean, default: true },
+  code: String,
+  parent: oid("CostCategory"),
+  description: String,
+  head_type: { type: String, enum: COST_HEAD_TYPE },
+  // MONEY. Both of these are cost information under the CEO's rule ("visibility kisi ke bhi paas
+  // nahi hogi chaahe super admin ho"), and this list is readable by every signed-in role because the
+  // Costs form needs the names. They are stripped on the way out for anyone without finance.view —
+  // see `maskCostCategoryMoney`. Adding a money field to a widely-read list without a mask is how
+  // this module's first nine doors were opened.
+  budget: Number,
+  pre_approved: { type: Boolean, default: false },
+  pre_approved_amount: Number,
+  // Free text on purpose: the CEO's examples are rules, not numbers — *"₹50 per child"*, *"per batch
+  // at 30+ pass-outs"*. A number alone cannot say what it is per.
+  pre_approved_basis: String,
+}, { timestamps: true });
+export const CostCategory = models.CostCategory || model("CostCategory", CostCategorySchema);
 export const DropReason = models.DropReason || model("DropReason", (NamedActiveSchema as any).clone?.() ?? NamedActiveSchema);
 export const FailureReason = models.FailureReason || model("FailureReason", (NamedActiveSchema as any).clone?.() ?? NamedActiveSchema);
 // QA-118/119 (CEO, 15/08): editable masters instead of hardcoded strings. The SCHEME

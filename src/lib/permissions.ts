@@ -436,6 +436,34 @@ export function maskInvoiceMoneyList<T>(docs: T[], canSeeMoney: boolean): T[] {
   return canSeeMoney ? docs : docs.map((d) => maskInvoiceMoney(d, false));
 }
 
+// ---- QA-1828: the cost-category master carries money now, and everyone reads that list ----
+//
+// `budget`, `pre_approved_amount` and the free-text `pre_approved_basis` (whose whole content is a
+// money rule — *"₹50 per child"*) are cost information under the CEO's rule. The list itself has to
+// stay readable by every signed-in role, because the Costs form needs the head and subhead NAMES to
+// let anyone file an expense at all — *"cost ki entry apne-apne level ki koi bhi karta hai."*
+//
+// So this is a FIELD rule, not a door rule, exactly like the invoice one: the structure travels, the
+// money does not. The precedent is already in this file — `schemes` masks `amount_received` the same
+// way — and the reason to write it the moment the fields are added rather than afterwards is that
+// nine money doors in this module were opened by adding a money field to something that was already
+// readable and only noticing later.
+export const COST_CATEGORY_MONEY_FIELDS = ["budget", "pre_approved_amount", "pre_approved_basis"] as const;
+
+export function maskCostCategoryMoney<T>(doc: T, canSeeMoney: boolean): T {
+  if (canSeeMoney || doc == null || typeof doc !== "object") return doc;
+  const out = { ...(doc as Record<string, unknown>) };
+  for (const f of COST_CATEGORY_MONEY_FIELDS) delete out[f];
+  // `pre_approved` itself STAYS. Whether a head needs an approval before it is spent against is a
+  // workflow fact the person filing the expense has to know; the AMOUNT is the part that is not
+  // theirs. Same shape as Umesh's ruling on invoices: *"sirf paisa chhupao, status sabko rehne do."*
+  return out as T;
+}
+
+export function maskCostCategoryMoneyList<T>(docs: T[], canSeeMoney: boolean): T[] {
+  return canSeeMoney ? docs : docs.map((d) => maskCostCategoryMoney(d, false));
+}
+
 // QA-1835: the audit trail is masked on the way OUT, never on the way in. Write-time masking would
 // destroy the number permanently for the three people who are supposed to see it, and an audit log
 // that has forgotten the amount cannot answer *"kaunsa admin, kya kiya"* — which is the whole

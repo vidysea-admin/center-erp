@@ -835,7 +835,9 @@ function MasterLists({ error, setError }: any) {
     <div className="grid gap-4 md:grid-cols-2">
       {Object.entries(lists).map(([list, items]: any) => (
         <Section key={list} title={TITLES[list] ?? list}>
-          {list === "schemes" ? (
+          {list === "cost-categories" ? (
+            <CostHeads items={items} reload={load} setError={setError} />
+          ) : list === "schemes" ? (
             <div className="mb-3 overflow-x-auto">
               <table className="w-full text-sm">
                 <thead><tr className="text-left text-xs text-gray-500">
@@ -852,12 +854,130 @@ function MasterLists({ error, setError }: any) {
               {items.map((i: any) => <li key={i._id} className="rounded-full bg-gray-100 px-3 py-1 text-xs">{i.name}</li>)}
             </ul>
           )}
-          <div className="flex gap-2">
-            <input className={inputCls} placeholder="New entry…" value={names[list] ?? ""} onChange={(e) => setNames({ ...names, [list]: e.target.value })} />
-            <Btn small onClick={() => add(list)} disabled={!names[list]}>Add</Btn>
-          </div>
+          {/* Cost heads carry their own Add form — a bare name box cannot say which head a subhead
+              belongs under, and a subhead created without a parent is a head nobody meant to make. */}
+          {list !== "cost-categories" && (
+            <div className="flex gap-2">
+              <input className={inputCls} placeholder="New entry…" value={names[list] ?? ""} onChange={(e) => setNames({ ...names, [list]: e.target.value })} />
+              <Btn small onClick={() => add(list)} disabled={!names[list]}>Add</Btn>
+            </div>
+          )}
         </Section>
       ))}
+    </div>
+  );
+}
+
+// QA-1828 (CEO, 2026-09-05): *"head ho, sub head ho, description ho… pre approve hai ki nahi hai wo
+// daalein."* Two levels, rendered as what they are — a head with its subheads under it — because a
+// flat chip list is exactly what could not express this and is what the CEO was looking at.
+//
+// The MONEY columns render only for someone holding `finance.view`. That is not cosmetic and it is
+// not the control either: the API strips those fields for everyone else (`maskCostCategoryMoney`),
+// so a reader without the grant receives no budget to render. Hiding the column as well means they
+// are not shown an empty box that looks like a budget of nothing — the same reason a masked field is
+// omitted rather than zeroed.
+function CostHeads({ items, reload, setError }: { items: any[]; reload: () => void; setError: (s: string) => void }) {
+  const { can, loaded } = usePerms();
+  const showMoney = loaded && can("finance.view");
+  const heads = items.filter((i) => !i.parent);
+  const subs = (headId: string) => items.filter((i) => String(i.parent?._id ?? i.parent) === String(headId));
+  const orphans = items.filter((i) => i.parent && !heads.some((h) => String(h._id) === String(i.parent?._id ?? i.parent)));
+  const [f, setF] = useState<any>({ name: "", code: "", parent: "", description: "", head_type: "" });
+
+  async function add() {
+    try {
+      await api("/api/master-lists/cost-categories", { method: "POST", json: { ...f, parent: f.parent || undefined } });
+      setF({ name: "", code: "", parent: "", description: "", head_type: "" });
+      reload();
+    } catch (e: any) { setError(e.message); }
+  }
+  async function save(id: string, patch: any) {
+    try { await api(`/api/master-lists/cost-categories/${id}`, { method: "PATCH", json: patch }); reload(); }
+    catch (e: any) { setError(e.message); }
+  }
+
+  return (
+    <div className="mb-3">
+      {heads.length === 0 && <p className="mb-2 text-xs text-gray-500">No cost heads yet. Add one below — leave “Under head” blank to create a head.</p>}
+      <div className="space-y-3">
+        {heads.map((h) => (
+          <div key={h._id} className="rounded border border-gray-200 p-2">
+            <CostHeadRow c={h} showMoney={showMoney} onSave={save} isHead />
+            <div className="mt-1 space-y-1 border-l-2 border-gray-100 pl-3">
+              {subs(h._id).map((s) => <CostHeadRow key={s._id} c={s} showMoney={showMoney} onSave={save} />)}
+              {subs(h._id).length === 0 && <p className="py-1 text-xs text-gray-400">No subheads.</p>}
+            </div>
+          </div>
+        ))}
+        {/* A subhead whose head was never loaded would otherwise vanish from this screen entirely
+            and look deleted. It is shown rather than hidden. */}
+        {orphans.length > 0 && (
+          <div className="rounded border border-amber-200 bg-amber-50 p-2">
+            <p className="mb-1 text-xs font-medium text-amber-800">Subheads whose head is missing</p>
+            {orphans.map((o) => <CostHeadRow key={o._id} c={o} showMoney={showMoney} onSave={save} />)}
+          </div>
+        )}
+      </div>
+
+      <div className="mt-3 grid gap-2 rounded border border-gray-200 p-2 md:grid-cols-2">
+        <input className={inputCls} placeholder="Name (e.g. Trainer fee)" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />
+        <input className={inputCls} placeholder="Code (optional)" value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} />
+        <select className={inputCls} value={f.parent} onChange={(e) => setF({ ...f, parent: e.target.value })}>
+          <option value="">— New head (top level) —</option>
+          {heads.map((h) => <option key={h._id} value={h._id}>Under: {h.name}</option>)}
+        </select>
+        <select className={inputCls} value={f.head_type} onChange={(e) => setF({ ...f, head_type: e.target.value })}>
+          <option value="">Head type…</option>
+          <option value="Direct">Direct</option>
+          <option value="Indirect">Indirect</option>
+        </select>
+        <input className={`${inputCls} md:col-span-2`} placeholder="Description — what belongs under this head" value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} />
+        <div className="md:col-span-2"><Btn small onClick={add} disabled={!f.name}>Add cost head</Btn></div>
+      </div>
+      <p className="mt-2 text-xs text-gray-500">
+        Two levels only: a head, and subheads under it. Entries are deactivated, never deleted — a head something was once filed against is history.
+      </p>
+    </div>
+  );
+}
+
+function CostHeadRow({ c, showMoney, onSave, isHead }: { c: any; showMoney: boolean; onSave: (id: string, patch: any) => void; isHead?: boolean }) {
+  const [f, setF] = useState<any>({
+    description: c.description ?? "", head_type: c.head_type ?? "",
+    budget: c.budget ?? "", pre_approved: !!c.pre_approved,
+    pre_approved_amount: c.pre_approved_amount ?? "", pre_approved_basis: c.pre_approved_basis ?? "",
+  });
+  const same = (k: string, orig: any) => String(f[k] ?? "") === String(orig ?? "");
+  const dirty = !same("description", c.description) || !same("head_type", c.head_type)
+    || f.pre_approved !== !!c.pre_approved
+    || (showMoney && (!same("budget", c.budget) || !same("pre_approved_amount", c.pre_approved_amount) || !same("pre_approved_basis", c.pre_approved_basis)));
+  const cell = "rounded border border-gray-200 px-2 py-1 text-sm";
+  // Only the fields this reader can actually see are sent. A PATCH built from a form that never
+  // received `budget` would otherwise post an empty string and CLEAR a budget the sender was not
+  // allowed to know existed — masking a field on read while letting a blind write erase it is worse
+  // than not masking it at all.
+  const patch = () => (showMoney ? f : { description: f.description, head_type: f.head_type, pre_approved: f.pre_approved });
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 py-1">
+      <span className={`${isHead ? "font-medium" : ""} min-w-[9rem] text-sm`}>{c.name}{c.code ? <span className="ml-1 text-xs text-gray-400">{c.code}</span> : null}</span>
+      {!c.active && <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[11px] text-gray-500">inactive</span>}
+      <input className={`${cell} min-w-[12rem] flex-1`} placeholder="Description" value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} />
+      {isHead && (
+        <select className={cell} value={f.head_type} onChange={(e) => setF({ ...f, head_type: e.target.value })}>
+          <option value="">type…</option><option value="Direct">Direct</option><option value="Indirect">Indirect</option>
+        </select>
+      )}
+      <label className="flex items-center gap-1 text-xs text-gray-600">
+        <input type="checkbox" checked={f.pre_approved} onChange={(e) => setF({ ...f, pre_approved: e.target.checked })} />
+        pre-approved
+      </label>
+      {showMoney && <input type="number" className={`${cell} w-24`} placeholder="budget" value={f.budget} onChange={(e) => setF({ ...f, budget: e.target.value })} />}
+      {showMoney && f.pre_approved && <input type="number" className={`${cell} w-24`} placeholder="₹ limit" value={f.pre_approved_amount} onChange={(e) => setF({ ...f, pre_approved_amount: e.target.value })} />}
+      {showMoney && f.pre_approved && <input className={`${cell} w-40`} placeholder="basis, e.g. ₹50 per child" value={f.pre_approved_basis} onChange={(e) => setF({ ...f, pre_approved_basis: e.target.value })} />}
+      <Btn small onClick={() => onSave(c._id, { active: !c.active })}>{c.active ? "Deactivate" : "Reactivate"}</Btn>
+      {dirty && <Btn small onClick={() => onSave(c._id, patch())}>Save</Btn>}
     </div>
   );
 }

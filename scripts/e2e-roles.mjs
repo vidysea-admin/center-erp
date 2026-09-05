@@ -2740,6 +2740,13 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       !!opsUserId && !!parkedReqId, `ops=${opsUserId} req=${parkedReqId}`);
     const doors = [
       ["/api/costs", "the cost ledger"],
+      // QA-1828: the cost-category master grew `budget`, `pre_approved_amount` and a
+      // `pre_approved_basis` whose whole content is a money rule — on a list EVERY signed-in role
+      // reads, because the Costs form needs the head names. The structural wall does not see this
+      // file at all (its population is derived from `Invoice|CostEntry|AuditLog|ApprovalRequest` and
+      // this route names none of them), and the wall's own comment says the answer to a new door is
+      // to widen THIS list rather than that regex. Widened.
+      ["/api/master-lists/cost-categories", "the cost-head master"],
       ["/api/invoices", "the invoice book"],
       ["/api/home", "the Home dashboard"],
       ["/api/approvals?status=all", "the approvals queue"],
@@ -3146,6 +3153,99 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
           del2.status === 200, `got ${del2.status} · ${JSON.stringify(del2.data ?? {}).slice(0, 160)}`);
         await req(admin, "PATCH", `/api/users/${mkLeak.data.item?._id}`, { extra_permissions: [] });
       }
+    }
+  }
+
+  // ---- QA-1828: Head → Subhead → Description, and the money that came with it ----
+  // The CEO asked for structure — *"head ho, sub head ho, description ho… pre approve hai ki nahi
+  // hai wo daalein"* — and the structure arrives carrying a budget and a pre-approved limit, on a
+  // list every signed-in role reads because the Costs form needs the head names. That combination
+  // is precisely how the first nine money doors in this module were opened: a money field added to
+  // something already readable, noticed later. So the masking is asserted the same day it ships.
+  //
+  // The generic probe walk above cannot catch this one on its own: MONEY_ON_WIRE hunts `"amount":`,
+  // `"invoice_no":`, a rupee sign and the two fixture figures — a `"budget": 777333` is none of
+  // those. A door added to that list still needs its own assertion with its own figure.
+  {
+    const s28 = Date.now().toString().slice(-6);
+    const BUDGET = 777333, LIMIT = 555111;
+    const mk = (body) => req(admin, "POST", "/api/master-lists/cost-categories", body);
+    const head = (await mk({
+      name: `QA1828 Head ${s28}`, code: `H${s28}`, description: "Everything the centre spends to run a batch",
+      head_type: "Direct", budget: BUDGET, pre_approved: true, pre_approved_amount: LIMIT,
+      pre_approved_basis: `₹${LIMIT} per batch at 30+ pass-outs`,
+    })).data?.item;
+    ok("QA-1828: a cost HEAD is created with description, type, budget and a pre-approval rule",
+      !!head?._id && head.head_type === "Direct", JSON.stringify(head ?? {}).slice(0, 200));
+
+    const sub = head ? (await mk({ name: `QA1828 Sub ${s28}`, parent: head._id, description: "Trainer travel" })).data?.item : null;
+    ok("QA-1828: a SUBHEAD is created under it", !!sub?._id && String(sub.parent) === String(head?._id), JSON.stringify(sub ?? {}).slice(0, 160));
+
+    // Two levels, enforced at the API and not merely in the form.
+    const third = sub ? await mk({ name: `QA1828 Third ${s28}`, parent: sub._id }) : { status: 0 };
+    ok("QA-1828: a subhead of a SUBHEAD is refused — the tree is two levels deep",
+      third.status === 400, `got ${third.status} · ${JSON.stringify(third.data ?? {}).slice(0, 160)}`);
+    const selfParent = head ? await req(admin, "PATCH", `/api/master-lists/cost-categories/${head._id}`, { parent: head._id }) : { status: 0 };
+    ok("QA-1828: a head cannot be made its own parent — that cycle would hang any walk of the tree",
+      selfParent.status === 400, `got ${selfParent.status}`);
+    const demote = head ? await req(admin, "PATCH", `/api/master-lists/cost-categories/${head._id}`, { parent: sub?._id }) : { status: 0 };
+    ok("QA-1828: a head that HAS subheads cannot become one — a third level by the back door",
+      demote.status === 400, `got ${demote.status} · ${JSON.stringify(demote.data ?? {}).slice(0, 160)}`);
+
+    // ---- the money half ----
+    const hasBudget = (blob) => /777333|555111|"budget"\s*:\s*\d|"pre_approved_amount"\s*:\s*\d/.test(blob);
+    const gList = await req(admin, "GET", "/api/master-lists/cost-categories");
+    ok("QA-1828 control: the grant-holder DOES see the budget and the pre-approved limit",
+      gList.status === 200 && hasBudget(JSON.stringify(gList.data ?? {})), `status ${gList.status}`);
+
+    for (const [who, label] of [[leakAdmin, "an Admin without finance.view"], [ops, "Operations"]]) {
+      if (!who) continue;
+      const r = await req(who, "GET", "/api/master-lists/cost-categories");
+      ok(`QA-1828: ${label} still READS the cost-head list (200) — they must be able to file an expense`,
+        r.status === 200, `got ${r.status}`);
+      ok(`QA-1828: ...and it carries them no budget, no limit and no basis`,
+        r.status === 200 && !hasBudget(JSON.stringify(r.data ?? {})),
+        `status ${r.status} · ${JSON.stringify(r.data ?? {}).slice(0, 240)}`);
+      // The STRUCTURE must survive the masking, or the form they need it for stops working. Same
+      // shape as Umesh's invoice ruling: *"sirf paisa chhupao, status sabko rehne do."*
+      const rows = r.data?.items ?? [];
+      const theHead = rows.find((i) => String(i._id) === String(head?._id));
+      ok(`QA-1828: ...while the head, its description, its type and the pre-approved FLAG all survive for ${label}`,
+        !!theHead && theHead.description === "Everything the centre spends to run a batch"
+        && theHead.head_type === "Direct" && theHead.pre_approved === true,
+        JSON.stringify(theHead ?? {}).slice(0, 200));
+      ok(`QA-1828: ...and the subhead still points at its head for ${label}, so the picker can group`,
+        rows.some((i) => String(i._id) === String(sub?._id) && String(i.parent?._id ?? i.parent) === String(head?._id)),
+        JSON.stringify(rows.find((i) => String(i._id) === String(sub?._id)) ?? {}).slice(0, 160));
+    }
+
+    // The PATCH reply is a write-side read of the same row, and this module has already been caught
+    // masking a list and handing the figure back through the button that edited it (QA-1849).
+    if (leakAdmin && head) {
+      const ed = await req(leakAdmin, "PATCH", `/api/master-lists/cost-categories/${head._id}`, { description: "edited by an ungranted Admin" });
+      ok("QA-1828: an ungranted Admin may still edit the description (200) — the door is not closed, the field is",
+        ed.status === 200, `got ${ed.status}`);
+      ok("QA-1828: ...and the PATCH RESPONSE carries them no budget either",
+        ed.status === 200 && !hasBudget(JSON.stringify(ed.data ?? {})), JSON.stringify(ed.data ?? {}).slice(0, 240));
+      const stillThere = (await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [];
+      ok("QA-1828: ...and that blind edit did NOT wipe the budget it could not see",
+        stillThere.find((i) => String(i._id) === String(head._id))?.budget === BUDGET,
+        `budget now ${stillThere.find((i) => String(i._id) === String(head._id))?.budget}`);
+
+      // The WRITE side of the same rule. Masking a field on read and leaving it writable is half a
+      // rule and the worse half: an ungranted Admin could set a budget they may not read, and never
+      // learn what they overwrote. Both doors are checked, because the create door and the edit
+      // door are two different functions and this module has already shipped a guard on one of a
+      // pair (QA-1857).
+      const setBudget = await req(leakAdmin, "PATCH", `/api/master-lists/cost-categories/${head._id}`, { budget: 1 });
+      ok("QA-1828: an ungranted Admin cannot WRITE a budget either — 403, not a silent overwrite",
+        setBudget.status === 403, `got ${setBudget.status}`);
+      const mkBudget = await req(leakAdmin, "POST", "/api/master-lists/cost-categories", { name: `QA1828 sneak ${s28}`, budget: 1 });
+      ok("QA-1828: ...and cannot create a head carrying one either", mkBudget.status === 403, `got ${mkBudget.status}`);
+      const unchanged = (await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [];
+      ok("QA-1828: ...and the real budget is still what it was",
+        unchanged.find((i) => String(i._id) === String(head._id))?.budget === BUDGET,
+        `budget now ${unchanged.find((i) => String(i._id) === String(head._id))?.budget}`);
     }
   }
 
