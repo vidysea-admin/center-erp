@@ -335,8 +335,20 @@ export function maskMoneyInAuditRow<T extends Record<string, any>>(row: T, canSe
       // consumers of the same string fixed and the fourth missed. The row is still stored raw
       // (store-raw/mask-on-read is the whole reason the trail can answer "kaunsa admin, kya kiya"),
       // so the redaction happens here, using the payload that travels beside the summary.
-      const obj = stripMoneyKeys(v as Record<string, unknown>);
       const src = v as Record<string, unknown>;
+      const obj = stripMoneyKeys(src);
+      // QA-1850, second attempt. The first wrapped the audit value as `{summary, payload}` so the
+      // read-side mask could redact the sentence properly — and thereby put `amount` ONE LEVEL
+      // DEEPER than `stripMoneyKeys`, which only ever walked the top. The leak was not closed, it
+      // was moved, and made worse: the raw figure now sat in the trail as a number rather than only
+      // inside a sentence. Caught by the probe on a clean tree, before any checker saw it.
+      //
+      // A nested `payload` is the one shape this codebase actually produces, so it is handled
+      // explicitly rather than by a general deep walk — a deep walk over arbitrary audit values
+      // would strip an `amount` out of records that have nothing to do with invoices.
+      if (obj.payload && typeof obj.payload === "object" && !Array.isArray(obj.payload)) {
+        obj.payload = stripMoneyKeys(obj.payload as Record<string, unknown>);
+      }
       if (typeof src.summary === "string") obj.summary = redactMoneyInText(src.summary, src.payload);
       return obj;
     }
