@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { Model } from "mongoose";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, requireRole, locationFilter, isScoped, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, requireRole, locationFilter, isScoped, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import type { SessionUser } from "@/auth";
 import { audit, auditDiff } from "@/lib/audit";
@@ -155,7 +155,7 @@ export function collectionRoutes(cfg: CrudConfig) {
     await dbConnect();
     const user = await requireUser();
     await checkWrite(user, cfg);
-    const body = await req.json();
+    const body = await readJson(req);
     const data = pick(body, cfg.fields);
     const ignored = ignoredKeys(body, cfg.fields);
     if (cfg.beforeCreate) await cfg.beforeCreate(data, user);
@@ -213,7 +213,7 @@ export function itemRoutes(cfg: CrudConfig) {
       }
     }
     if (cfg.scopeAssert) cfg.scopeAssert(user, existing); // QA-125: multi-field union scope
-    const body = await req.json();
+    const body = await readJson(req);
     const data = pick(body, cfg.fields);
     const ignored = ignoredKeys(body, cfg.fields);
     if (cfg.beforeUpdate) await cfg.beforeUpdate(id, data, existing, user);

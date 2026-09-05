@@ -3290,6 +3290,17 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
         method: "POST", headers: { "Content-Type": "application/json", cookie: admin }, body: "{not json",
       });
       ok("QA-1878: a body that is not valid JSON answers 400, not 500", badJson.status === 400, `got ${badJson.status}`);
+      // QA-1882 (checker, cycle 2 FAIL): the row above walks a HAND-WRITTEN route. `src/lib/crud.ts`
+      // reads the body for thirteen others — every write door of candidates, trainers, locations,
+      // programs, sync-sources and trainer-requests — and it was missed, so those six went 400 → 500
+      // when the chokepoint branch came out. One assertion per READ SITE, not per route file,
+      // because the read site is what the rule is actually about.
+      for (const [path_, what] of [["/api/candidates", "the shared CRUD create door"], ["/api/locations", "a second entity through the same door"]]) {
+        const r = await fetch(`${BASE}${path_}`, {
+          method: "POST", headers: { "Content-Type": "application/json", cookie: admin }, body: "{not json",
+        });
+        ok(`QA-1882: a malformed body on ${what} (${path_}) answers 400, not 500`, r.status === 400, `got ${r.status}`);
+      }
       const unchanged = (await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [];
       ok("QA-1828: ...and the real budget is still what it was",
         unchanged.find((i) => String(i._id) === String(head._id))?.budget === BUDGET,

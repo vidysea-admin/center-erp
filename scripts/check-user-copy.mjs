@@ -3272,9 +3272,22 @@ for (const file of walk(root)) {
   if (!/export async function readJson/.test(authzRaw)) {
     bad.push("lib/authz.ts: readJson() is gone — an unparseable request body goes back to answering 500 'something went wrong on our side' on every write route (QA-1878).");
   }
-  for (const f of [...walk(path.join(root, "app/api"))].filter((f) => path.basename(f) === "route.ts")) {
-    if (/await req\.json\(\)/.test(stripComments(fs.readFileSync(f, "utf-8")))) {
-      bad.push(`${path.relative(root, f).replace(/\\/g, "/")}: reads the body with req.json() directly, so an unparseable body reaches apiHandler as a bare SyntaxError. Use readJson(req) — the read site is the only place that knows the string came off the wire (QA-1878 / QA-1880).`);
+  // QA-1882 (checker, cycle 2 FAIL): THIS CHECK WAS WRITTEN AGAINST A DIRECTORY AND NOT AGAINST THE
+  // PROPERTY, and it therefore certified something false. It walked `app/api/**/route.ts` only —
+  // but `src/lib/crud.ts` reads the body raw and BACKS thirteen route files and every write door of
+  // candidates, trainers, locations, programs, sync-sources and trainer-requests. Removing the
+  // chokepoint branch without converting that read turned an oversight into a REGRESSION: those
+  // routes answered 400 at `8c8353b` and 500 at `8238336`.
+  //
+  // "A rule binds more places than the evidence for it covers" is the sentence this whole unit is
+  // named for, and my own pin was the fourth instance of it. So the population is now every `.ts`
+  // under `src/` except the one file that is allowed to read a body — the property, wherever it
+  // lives, rather than the folder I happened to be thinking about.
+  const bodyReaders = [...walk(path.join(root))]
+    .filter((f) => /\.tsx?$/.test(f) && !f.replace(/\\/g, "/").endsWith("lib/authz.ts"));
+  for (const f of bodyReaders) {
+    if (/await (?:req|request)\.json\(\)/.test(stripComments(fs.readFileSync(f, "utf-8")))) {
+      bad.push(`${path.relative(root, f).replace(/\\/g, "/")}: reads a request body with .json() directly, so an unparseable body reaches apiHandler as a bare SyntaxError and answers 500. Use readJson(req) — the read site is the only place that knows the string came off the wire (QA-1878 / QA-1880 / QA-1882).`);
     }
   }
 
