@@ -2908,11 +2908,24 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       // Rule 52's no-dues attestation is free text about MONEY by definition, and it was not in the
       // five names the first fix listed. Its audit row is an object with no `amount` in it, so the
       // payload-driven redactor has nothing to key on either — both halves of this fix are needed.
-      if (bId2) {
-        const dn = await req(admin, "PUT", `/api/batches/${bId2}/closure`,
+      // Rule 52 makes a CLOSED batch's settlement record final, so the seeded invoice's batch (which
+      // is Closed) 409s — the first version of this fixture used it and asserted masking on a
+      // dues_note that was never written. The non-vacuity control caught that, which is what it is
+      // for. Pick a batch that can still take the attestation.
+      const openBatch = ((await req(admin, "GET", "/api/batches?limit=50")).data.items ?? [])
+        .find((b) => !["Closed", "Cancelled"].includes(b.status));
+      if (openBatch) {
+        const dn = await req(admin, "PUT", `/api/batches/${openBatch._id}/closure`,
           { dues_note: `QA-1865 dues — 656565 cleared, balance ${(656565).toLocaleString("en-IN")}` });
-        ok("QA-1865 fixture: a closure dues_note carrying a bare figure is recorded", dn.status === 200, `got ${dn.status}`);
+        ok("QA-1865 fixture: a closure dues_note carrying a bare figure is recorded",
+          dn.status === 200, `got ${dn.status} on a ${openBatch.status} batch · ${JSON.stringify(dn.data ?? {}).slice(0, 160)}`);
+        // The audit row is written against the CLOSURE's id, not the batch's — the first version
+        // read `/api/audit/Closure/<batchId>` and would have been green on an empty trail.
+        const closureId = dn.data?.item?._id;
+        ok("QA-1865 fixture: the closure's own id resolves, so the trail below is the right one",
+          !!closureId, String(closureId));
         const hasDues = (blob) => /(?<![\w])656565(?![\w])|(?<![\w])6,56,565(?![\w])/.test(blob);
+        const bId2 = closureId;
         const gr = await req(admin, "GET", `/api/audit/Closure/${bId2}`);
         ok("QA-1865 control: the grant-holder DOES see the dues figure — there is something to leak",
           gr.status === 200 && hasDues(JSON.stringify(gr.data ?? {})), `status ${gr.status}`);
