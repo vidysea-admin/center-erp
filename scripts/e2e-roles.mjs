@@ -1276,15 +1276,31 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   // clause was no better: it compared a `/api/users` list length against `n0`, the SPOC's CANDIDATE
   // count, two unrelated numbers that agreed only by luck.
   //
-  // What the row is actually for: an unrecognised query key must be DROPPED, not passed to the
-  // driver — so the answer must be identical to the same request without it. That is measurable,
-  // so it is measured, against the right baseline.
-  const usersBase = await req(spoc, "GET", "/api/users?limit=5");
-  const junk = await req(spoc, "GET", "/api/users?password_hash=x&limit=5");
-  ok("F-000: an unknown filter key is refused, or dropped so the answer is unchanged — never passed to Mongo",
-    junk.status === 400 || junk.status === 403
-      || (junk.status === usersBase.status && (junk.data.items?.length ?? -1) === (usersBase.data.items?.length ?? -2)),
-    `junk ${junk.status}/${junk.data.items?.length} vs base ${usersBase.status}/${usersBase.data.items?.length}`);
+  // What the row is actually for: an unrecognised query key must be DROPPED by the shared query
+  // builder (`src/lib/crud.ts` — `if (!filterable.has(k)) continue;`), not passed to the driver.
+  //
+  // QA-1871 cycle 1 FAIL — and my first rewrite of this row was still wrong, in a way worth
+  // recording because it is the same mistake twice. I made the assertion *capable* of failing and
+  // never checked it was pointed at code that could exhibit the defect. `GET /api/users` is a
+  // hand-written `User.find({})` that reads NO query parameter at all, so junk and base are
+  // identical BY CONSTRUCTION whatever the query builder does — and the SPOC persona is 403 on it,
+  // so the row passed on its first clause before the comparison was ever evaluated. The checker
+  // injected the real defect in one line of crud.ts and this row did not move; the same clause
+  // aimed at `/api/candidates` went 22 -> 0. I had also written in the manifest that no mutant was
+  // possible here without rewriting the query builder. That was simply false, and it was the kind
+  // of false that excuses a test from having to work.
+  //
+  // So: a route crud.ts actually serves, a persona that gets 200, and the 200 asserted rather than
+  // allowed to be stood in for by a refusal.
+  const candBase = await req(spoc, "GET", "/api/candidates?limit=200");
+  const candJunk = await req(spoc, "GET", "/api/candidates?password_hash=x&limit=200");
+  ok("F-000: the persona really READS the filtered route (200 both ways) — a refusal must not stand in for a pass",
+    candBase.status === 200 && candJunk.status === 200, `base ${candBase.status} · junk ${candJunk.status}`);
+  ok("F-000: an unknown filter key is DROPPED, so the answer is identical to the same request without it",
+    candJunk.status === 200 && candBase.status === 200
+      && (candJunk.data.items?.length ?? -1) === (candBase.data.items?.length ?? -2)
+      && (candBase.data.items?.length ?? 0) > 0,
+    `junk n=${candJunk.data.items?.length} vs base n=${candBase.data.items?.length}`);
 
   // …while legitimate filtering must still work in both directions
   const narrowOwn = await req(spoc, "GET", `/api/candidates?location=${own._id}&limit=200`);
@@ -2982,10 +2998,16 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
         // and a figure written entirely as an implausible one. Date-protection had become a way to
         // smuggle money past the net that protects it — the shape was checked and the values were
         // not, so `4242-42-42` was "a date" and month 42 went unremarked.
-        const evilNote = `QA-1867 — ${ev} / ${ev.toLocaleString("en-IN")} / ₹${ev} / Rs.${ev} / ${ev}rs / _${ev}_ / (${ev}) / ref#${ev} / ${ev}-01-02 / 4242-42-42`;
+        // QA-1872 and QA-1873 (checker on qa-1869-1871) add the last two, and QA-1872 is the sharper
+        // of the pair: `42${"2026"}-01-02` completes a PLAUSIBLE date, so the plausibility test
+        // cannot catch it — only the not-preceded-by-a-digit lookbehind can, and until this row
+        // existed that lookbehind was pinned by nothing at all. The fixture's own `424242-01-02` has
+        // year 4242 and was already caught by the other half, which is exactly how a guard ends up
+        // shipping untested beside a test that looks like it covers it.
+        const evilNote = `QA-1867 — ${ev} / ${ev.toLocaleString("en-IN")} / ₹${ev} / Rs.${ev} / ${ev}rs / _${ev}_ / (${ev}) / ref#${ev} / ${ev}-01-02 / 4242-42-42 / 422026-01-02 / 2026-09-05T424242`;
         const ed2 = await req(admin, "PATCH", `/api/costs/${ledgerRow._id}`, { note: evilNote });
-        ok("QA-1867/QA-1870 fixture: a note carrying the figure in TEN notations is recorded", ed2.status === 200, `got ${ed2.status}`);
-        const anyEv = (blob) => /424242|4,24,242|424,242|4242-42-42/.test(blob);
+        ok("QA-1867/QA-1870 fixture: a note carrying the figure in TWELVE notations is recorded", ed2.status === 200, `got ${ed2.status}`);
+        const anyEv = (blob) => /424242|4,24,242|424,242|4242-42-42|422026/.test(blob);
         const gEv = await req(admin, "GET", `/api/audit/CostEntry/${ledgerRow._id}`);
         ok("QA-1867 control: the grant-holder sees them all — there is something to leak",
           gEv.status === 200 && anyEv(JSON.stringify(gEv.data ?? {})), `status ${gEv.status}`);
@@ -2994,7 +3016,7 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
           const r = await req(who, "GET", `/api/audit/CostEntry/${ledgerRow._id}`);
           ok(`QA-1867: ${label} READS that trail (200), so the redaction is genuinely exercised`,
             r.status === 200, `got ${r.status}`);
-          ok(`QA-1867: ...and NOT ONE of the ten notations reaches ${label}`,
+          ok(`QA-1867: ...and NOT ONE of the twelve notations reaches ${label}`,
             r.status === 200 && !anyEv(JSON.stringify(r.data ?? {})),
             `status ${r.status} · ${JSON.stringify(r.data ?? {}).slice(0, 300)}`);
         }

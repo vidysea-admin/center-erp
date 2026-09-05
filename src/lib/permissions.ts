@@ -341,6 +341,14 @@ function stripMoneyKeys<T extends Record<string, unknown>>(obj: T): T {
 // It costs legibility (a date typed into a note loses its year) and that is the trade taken.
 const MONEY_ENTITIES: ReadonlySet<string> = new Set<string>(["CostEntry", "Invoice", "Closure", "ApprovalRequest"]);
 
+// A date shape is not a date. `4242-42-42` is a perfectly good `\d{4}-\d{2}-\d{2}` and month 42 is
+// not a month — checking the shape and not the values is what let a figure be waved through by the
+// rule whose whole job is to tell figures and dates apart (QA-1870).
+function plausibleDate(yy: string, mm: string, dd: string): boolean {
+  const y = Number(yy), mo = Number(mm), d = Number(dd);
+  return y >= 1900 && y <= 2199 && mo >= 1 && mo <= 12 && d >= 1 && d <= 31;
+}
+
 export function redactFiguresInText(text: string): string {
   // Dates are protected before anything else. This rule runs over AUDIT rows, whose entire job is
   // "which admin did what, and when" — a blunt figure rule that ate the year out of every timestamp
@@ -375,11 +383,24 @@ export function redactFiguresInText(text: string): string {
     // on the wire. A figure only has to LOOK like a date to be waved through by a rule that checks
     // the shape, so the rule checks the values: year 1900–2199, month 01–12, day 01–31. Anything
     // else is not a date, falls through to the digit rule, and is redacted like the figure it is.
-    .replace(/(?<!\d)\d{4}-\d{2}-\d{2}(?:T[\d:.]+Z?)?/g, (m) => {
-      const y = Number(m.slice(0, 4)), mo = Number(m.slice(5, 7)), d = Number(m.slice(8, 10));
-      if (y < 1900 || y > 2199 || mo < 1 || mo > 12 || d < 1 || d > 31) return m;
-      return `@@D${enc(kept.push(m) - 1)}D@@`;
-    });
+    //
+    // QA-1873 (checker, cycle 1): the TIME tail was `T[\d:.]+Z?` — a shape with no value check at
+    // all, so `2026-09-05T424242` parked WHOLE and a six-digit figure rode out inside a protected
+    // timestamp. Same fault as the date half, on the half that was not looked at. Measured leaking
+    // on both trees, so it was never a regression — just never asked. The tail now has to BE a
+    // time: two-digit fields, real colons, and hours/minutes/seconds that exist.
+    //
+    // Two passes, not one alternation, and the reason is over-redaction rather than leakage: with a
+    // single optional tail, a VALID date carrying a GARBAGE time (`2026-09-05T99:99:99`) failed the
+    // whole check and lost its year to the digit rule. The date had done nothing wrong. So the full
+    // datetime is parked first, and whatever bare dates remain are parked second — a bad tail costs
+    // the tail and nothing else.
+    .replace(/(?<!\d)(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?/g,
+      (m, yy, mm, dd, hh, mi, ss) => (plausibleDate(yy, mm, dd) && Number(hh) <= 23 && Number(mi) <= 59
+        && (ss === undefined || Number(ss) <= 59)
+        ? `@@D${enc(kept.push(m) - 1)}D@@` : m))
+    .replace(/(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)/g,
+      (m, yy, mm, dd) => (plausibleDate(yy, mm, dd) ? `@@D${enc(kept.push(m) - 1)}D@@` : m));
   // Then: any run of digits and separators holding three or more digits. Two-digit groups survive,
   // so a day, a month and a small count still read normally; 100 and up does not.
   // QA-1867 (checker, cycle 1 FAIL): this rule was described as "any run of three or more digits"
