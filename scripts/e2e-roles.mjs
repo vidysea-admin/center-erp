@@ -2579,7 +2579,13 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       ok(`QA-1834: ...but carries no money for ${label}`, noMoney(cl.data.invoice),
         JSON.stringify(cl.data.invoice ?? null));
       ok(`QA-1834: ...while Invoice.status SURVIVES for ${label} — "status sabko rehne do"`,
-        cl.data.invoice?.status === "Raised", JSON.stringify(cl.data.invoice?.status ?? null));
+        // Pinned as PRESENT-and-non-empty, not as a literal. The first version asserted
+        // `=== "Raised"` and broke the moment the suite was re-run against a database whose
+        // invoice another suite had already moved to Paid - a test that fails when the fixture
+        // legitimately advances is pinning the fixture, not the rule. The rule is that masking
+        // removes money and leaves status alone, whatever the status happens to be.
+        typeof cl.data.invoice?.status === "string" && cl.data.invoice.status.length > 0,
+        JSON.stringify(cl.data.invoice?.status ?? null));
 
       const hm = await req(who, "GET", "/api/home");
       const q = hm.data.queues?.invoices_pending ?? [];
