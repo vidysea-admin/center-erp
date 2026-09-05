@@ -2925,8 +2925,12 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
             delB.status !== 403, `got ${delB.status} · ${JSON.stringify(delB.data ?? {}).slice(0, 160)}`);
         }
 
-        // Positive control on the gate itself: with finance.approve granted, the erase goes through.
-        await req(admin, "PATCH", `/api/users/${mkLeak.data.item?._id}`, { extra_permissions: ["batches.delete_with_data", "finance.approve"] });
+        // Positive control on the gate itself: with the finance grant, the erase goes through.
+        // BOTH keys, because `requireFinance(user, "approve")` requires view AND approve — approving
+        // money you are not allowed to see is not a coherent permission. The first version of this
+        // control granted only `finance.approve`, got a 403 naming finance.view, and was wrong about
+        // the design rather than finding a defect in it.
+        await req(admin, "PATCH", `/api/users/${mkLeak.data.item?._id}`, { extra_permissions: ["batches.delete_with_data", "finance.view", "finance.approve"] });
         const granted = await login(emLeak, pw1825);
         const del2 = granted
           ? await req(granted, "DELETE", `/api/batches/${bat64._id}`, { reason: "QA-1864 probe: granted" })
