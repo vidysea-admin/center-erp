@@ -3,7 +3,12 @@
 // crashed at the second .replace, which is its own small lesson about harnesses.
 import fs from "node:fs";
 
-const src = fs.readFileSync(new URL("../../src/lib/permissions.ts", import.meta.url), "utf8");
+// Line endings are normalised on read. The worktree is CRLF and the `grab()` helper below anchors
+// on a bare "\n}\n", so without this the first committed version crashed in a fresh isolation copy
+// with `redactFiguresInText is not defined` — it had only ever been run where the file happened to
+// be LF.
+const src = fs.readFileSync(new URL("../../src/lib/permissions.ts", import.meta.url), "utf8")
+  .split("\r\n").join("\n");
 const grab = (sig) => {
   const i = src.indexOf(sig);
   if (i < 0) throw new Error(`not found: ${sig}`);

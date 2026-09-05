@@ -3,7 +3,12 @@
 // instrument rather than the finding.
 import fs from "node:fs";
 
-const src = fs.readFileSync(new URL("../../src/lib/permissions.ts", import.meta.url), "utf8");
+// Line endings are normalised on read. The worktree is CRLF and every anchor below is written with
+// a bare newline, so the FIRST committed version of this proof crashed the moment it ran in a fresh
+// isolation copy — a proof that runs only on the machine that wrote it is the same defect the
+// checker filed when it found this file was not in the tree at all, arriving a second time.
+const src = fs.readFileSync(new URL("../../src/lib/permissions.ts", import.meta.url), "utf8")
+  .split("\r\n").join("\n");
 const NEEDLE = ".replace(/(?<!" + String.fromCharCode(92) + "d)";
 const extract = (text) => text.split("\n")
   .filter((l) => l.includes(NEEDLE))
