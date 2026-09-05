@@ -11,8 +11,13 @@ export const GET = apiHandler(async (req: NextRequest) => {
   const status = req.nextUrl.searchParams.get("status") ?? "open";
   const countOnly = req.nextUrl.searchParams.get("count") === "1";
 
+  // QA-1827: an alert addressed to NAMED people belongs only to them. Without this clause a money
+  // approval assigned to three people would still ring for every Admin, because the alert also
+  // carries `role_target` so that role-only alerts keep working — so the rule is: if `user_target`
+  // is set, you must be in it; if it is absent or empty, the role decides exactly as before.
   const filter: Record<string, unknown> = {
     role_target: user.role,
+    $and: [{ $or: [{ user_target: { $exists: false } }, { user_target: { $size: 0 } }, { user_target: user.id }] }],
     ...(status === "all" ? {} : status === "open" ? { status: { $in: ["New", "Acknowledged"] } } : { status }),
   };
   // 2026-08-12: filter by alert type. The list is capped at 100 and sorted severity-first, so

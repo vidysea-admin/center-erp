@@ -5,7 +5,7 @@ import { ApprovalRequest, ApprovalRule, Notification } from "@/models";
 import { HttpError } from "@/lib/authz";
 import type { SessionUser } from "@/auth";
 import { audit } from "@/lib/audit";
-import { mailUsersByRole } from "@/lib/mailer";
+import { mailUsers, mailUsersByRole } from "@/lib/mailer";
 import { redactMoneyInText } from "@/lib/permissions";
 
 export type ApprovalAction =
@@ -39,6 +39,8 @@ export async function requireApproval(
   // Everyone parks now. The escape hatch that made this safe to ship in the first place — "with no
   // enabled rule nothing changes" — is untouched above: a disabled action still returns null.
 
+  // QA-1827: the named list, snapshotted. An empty list means the role decides, exactly as before.
+  const approverUsers = (rule.approver_users ?? []).map(String).filter(Boolean);
   const request = await ApprovalRequest.create({
     action,
     entity: ctx.entity, entity_id: ctx.entity_id,
@@ -46,6 +48,7 @@ export async function requireApproval(
     location: ctx.location,
     initiator: user.id,
     approver_role: rule.approver_role,
+    approver_users: approverUsers,
   });
 
   // Senior review of QA-1825 cycles 2-4: the queue was masked and then the SAME figure was
@@ -63,20 +66,33 @@ export async function requireApproval(
     message: `Approval needed: ${safeSummary} (requested by ${user.name})`,
     entity: "ApprovalRequest", entity_id: request._id,
     link: "/admin?tab=Approvals",
+    // QA-1827: addressed to the named people when there are any. `role_target` is left set either
+    // way so an existing rule with no named list behaves exactly as it did, and so the inbox query
+    // has something to match on for those.
     role_target: [rule.approver_role],
+    ...(approverUsers.length ? { user_target: approverUsers } : {}),
     location: ctx.location,
   });
   // QA-115: the approver hears about it in their inbox too — an approval that waits for
   // someone to open the bell is an approval that waits.
-  mailUsersByRole({
-    roles: [rule.approver_role], location: ctx.location,
-    subject: `Approval needed: ${safeSummary}`,
-    title: "An action is waiting for your approval",
-    // Mail leaves the building. A figure in a subject line survives in an inbox, on a phone
-    // lock-screen and in a forward, long after any permission check could reach it.
-    lines: [`${safeSummary}`, `Requested by ${user.name}.`],
-    link: "/admin?tab=Approvals", entity: "ApprovalRequest", entity_id: request._id,
-  }).catch(() => {});
+  (approverUsers.length
+    ? mailUsers({
+        userIds: approverUsers,
+        subject: `Approval needed: ${safeSummary}`,
+        title: "An action is waiting for your approval",
+        lines: [`${safeSummary}`, `Requested by ${user.name}.`],
+        link: "/admin?tab=Approvals", entity: "ApprovalRequest", entity_id: request._id,
+      })
+    : mailUsersByRole({
+        roles: [rule.approver_role], location: ctx.location,
+        subject: `Approval needed: ${safeSummary}`,
+        title: "An action is waiting for your approval",
+        // Mail leaves the building. A figure in a subject line survives in an inbox, on a phone
+        // lock-screen and in a forward, long after any permission check could reach it.
+        lines: [`${safeSummary}`, `Requested by ${user.name}.`],
+        link: "/admin?tab=Approvals", entity: "ApprovalRequest", entity_id: request._id,
+      })
+  ).catch(() => {});
 
   // QA-1850: the payload rides along so the READ-side mask can redact the sentence properly — a
   // bare string here can only have its ₹ figures taken, not a bare invoice number. Stored raw on
@@ -92,6 +108,13 @@ export async function decideApproval(requestId: string, user: SessionUser, decis
   if (request.status !== "Pending") throw new HttpError(409, `Already ${request.status}.`);
   if (user.role !== request.approver_role && user.role !== "Admin") {
     throw new HttpError(403, `Only ${request.approver_role} may decide this request.`);
+  }
+  // QA-1827: a named list NARROWS the role, never widens it — the role check above still had to
+  // pass. The list is the one snapshotted when the request was parked, so a rule edited afterwards
+  // cannot retroactively change who was entitled to decide something already in the queue.
+  const named = (request.approver_users ?? []).map(String).filter(Boolean);
+  if (named.length && !named.includes(String(user.id))) {
+    throw new HttpError(403, "This request is assigned to named approvers; you are not one of them.");
   }
   // RPL M24: an initiator can never approve their own request.
   if (String(request.initiator) === String(user.id)) {

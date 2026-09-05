@@ -701,12 +701,15 @@ function Approvals({ error, setError }: any) {
   const [status, setStatus] = useState("Pending");
   const [note, setNote] = useState<Record<string, string>>({});
 
+  // QA-1827: the named-approver picker needs people to pick. Fetched once; the list is small.
+  const [people, setPeople] = useState<any[]>([]);
   const load = () => api(`/api/approvals?status=${status}`).then((d) => { setConfig(d.config); setItems(d.items); })
     .catch((e: any) => setError(e.message));
   useEffect(() => { load(); }, [status]);
+  useEffect(() => { api("/api/users").then((d) => setPeople(d.items ?? [])).catch(() => {}); }, []);
 
-  async function toggle(action: string, enabled: boolean, approver_role?: string) {
-    try { await api("/api/approvals", { method: "PUT", json: { action, enabled, approver_role } }); load(); }
+  async function toggle(action: string, enabled: boolean, approver_role?: string, approver_users?: string[]) {
+    try { await api("/api/approvals", { method: "PUT", json: { action, enabled, approver_role, ...(approver_users ? { approver_users } : {}) } }); load(); }
     catch (e: any) { setError(e.message); }
   }
   async function decide(id: string, decision: string) {
@@ -723,7 +726,8 @@ function Approvals({ error, setError }: any) {
         </p>
         <ul className="divide-y">
           {config.map((c) => (
-            <li key={c.action} className="flex flex-wrap items-center justify-between gap-3 py-2.5">
+            <li key={c.action} className="py-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <span className="text-sm font-medium">{APPROVAL_LABELS[c.action] ?? c.action}</span>
               <div className="flex items-center gap-3">
                 <select className="rounded-lg border border-gray-300 px-2 py-1 text-sm" value={c.approver_role}
@@ -735,6 +739,36 @@ function Approvals({ error, setError }: any) {
                   {c.enabled ? "Approval required" : "Off"}
                 </label>
               </div>
+            </div>
+            {/* QA-1827 (Umesh): "admin mein name user list hogi". A role was the only granularity,
+                so "only these three may approve" could not be said. Named approvers NARROW the
+                role — tick nobody and the role decides exactly as it always did. */}
+            {c.enabled && (
+              <div className="mt-2 rounded-lg bg-gray-50 px-3 py-2">
+                <div className="mb-1 text-xs text-gray-500">
+                  {(c.approver_users ?? []).length
+                    ? `Only these ${(c.approver_users ?? []).length} may decide it — everyone else with the role is refused.`
+                    : `Anyone with the ${c.approver_role} role may decide it. Tick people to narrow it to them.`}
+                </div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1">
+                  {people.filter((u: any) => u.role === c.approver_role && u.active !== false && !u.dropped).map((u: any) => {
+                    const on = (c.approver_users ?? []).includes(String(u._id));
+                    return (
+                      <label key={u._id} className="flex items-center gap-1.5 text-sm">
+                        <input type="checkbox" checked={on}
+                          onChange={() => toggle(c.action, c.enabled, c.approver_role,
+                            on ? (c.approver_users ?? []).filter((x: string) => x !== String(u._id))
+                               : [...(c.approver_users ?? []), String(u._id)])} />
+                        {u.name}
+                      </label>
+                    );
+                  })}
+                  {!people.some((u: any) => u.role === c.approver_role) && (
+                    <span className="text-xs text-gray-400">No active {c.approver_role} accounts to name.</span>
+                  )}
+                </div>
+              </div>
+            )}
             </li>
           ))}
         </ul>

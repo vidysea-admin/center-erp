@@ -1290,6 +1290,12 @@ const ApprovalRuleSchema = new Schema({
   action: { type: String, enum: APPROVAL_ACTIONS, required: true, unique: true },
   enabled: { type: Boolean, default: false },
   approver_role: { type: String, enum: USER_ROLE, default: "Admin" },
+  // QA-1827 (Umesh, 2026-09-05, asked directly): *"admin mein name user list hogi, ki kaunsa wala
+  // admin aur kya kiya usne."* A ROLE was the only granularity, so "only these three may approve"
+  // could not be said at all — every Admin qualified. Named approvers NARROW the role: empty list
+  // means the role decides exactly as before (so every existing rule is unchanged), a non-empty one
+  // means only these people, and they must still hold the role.
+  approver_users: [oid("User")],
   note: String,
 }, { timestamps: true });
 
@@ -1301,6 +1307,11 @@ const ApprovalRequestSchema = new Schema({
   location: oid("Location"),
   initiator: oid("User", true),
   approver_role: { type: String, enum: USER_ROLE, required: true },
+  // Snapshotted at PARK time, deliberately: who was entitled to decide this request is a fact about
+  // the moment it was raised. Reading it live off the rule would let an edit made afterwards change
+  // who "could have" approved something already sitting in the queue, which is precisely the
+  // question an audit asks.
+  approver_users: [oid("User")],
   status: { type: String, enum: APPROVAL_REQUEST_STATUS, required: true, default: "Pending" },
   decided_by: oid("User"), decided_at: Date, decision_note: String,
 }, { timestamps: true });
@@ -1317,6 +1328,11 @@ const NotificationSchema = new Schema({
   entity: String, entity_id: Schema.Types.ObjectId,
   link: String,                                 // where the user should go to act
   role_target: [{ type: String, enum: USER_ROLE }],
+  // QA-1827 (CEO, 2026-09-05): a notification could only be addressed to a ROLE, so a money
+  // approval had to be broadcast to every Admin — the opposite of "keval Manish ji aur mere paas".
+  // An alert with `user_target` set goes to exactly those people and to nobody else; one with an
+  // empty list keeps the old role behaviour, so nothing existing changes.
+  user_target: [oid("User")],
   location: oid("Location"),                    // for Rule 38 scoping
   due_at: Date,
   status: { type: String, enum: NOTIFICATION_STATUS, required: true, default: "New" },

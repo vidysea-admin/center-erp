@@ -2649,7 +2649,14 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
   // receive it. Adding an endpoint here costs one line; that is the point.
   {
     // `-?\d` and not `\d`: a negative amount is still an amount (senior review of cycles 2-4).
-    const MONEY_ON_WIRE = /"amount":\s*-?\d|"invoice_no":\s*"|₹\s?[\d,]/;
+    // QA-1859 (checker, cycle 5): the first three clauses only see money in JSON KEYS or behind a
+    // rupee sign, and every leak this unit found after the fourth door was a figure sitting in
+    // PROSE. The fixture figures are therefore searched for literally, in every notation they can
+    // be written in — which is the same lesson QA-1861 taught the redactor, applied to the detector.
+    const FIXTURE_FIGURES = [987654, 876543].flatMap((n) => [String(n), n.toLocaleString("en-IN"), n.toLocaleString("en-US")]);
+    const MONEY_ON_WIRE = new RegExp(
+      ['"amount":\\s*-?\\d', '"invoice_no":\\s*"', "₹\\s?[\\d,]",
+       ...FIXTURE_FIGURES.map((s) => `(?<![\\w])${s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w])`)].join("|"));
     const bId2 = seededInv ? (seededInv.batch?._id ?? seededInv.batch) : null;
 
     // ---- PARK A REAL COST, or this probe proves nothing about the approvals queue ----
@@ -2757,8 +2764,77 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       !/987654|₹\s?[\d,]/.test(JSON.stringify(notif.data ?? {})),
       JSON.stringify(notif.data?.items?.slice?.(0, 2) ?? notif.data ?? {}).slice(0, 220));
 
-    // Put the switch back so the rest of the wall sees the shipped default (rule OFF).
-    await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
+    // ---- UNIT 2: QA-1844 + QA-1826 + QA-1827, the OTHER half of the CEO's sentence ----
+    // Unit 1 spent six cycles proving an ungranted Admin cannot SEE money. None of it stopped them
+    // APPROVING it, which is the half the Friday goal actually rests on.
+    {
+      const park = async (amount, note) => (catP && jprP)
+        ? req(ops, "POST", "/api/costs", { entry_date: "2026-09-05", location: jprP._id, category: catP._id, amount, note })
+        : { status: 0, data: {} };
+      const pendingCost = async () => ((await req(admin, "GET", "/api/approvals?status=Pending")).data.items ?? [])
+        .filter((i) => i.action === "cost.post");
+
+      // QA-1844: deciding money needs finance.approve, and REFUSING money is a money decision too.
+      await park(111222, "QA-1844 probe A");
+      let q = await pendingCost();
+      if (q.length && leakAdmin) {
+        const a = await req(leakAdmin, "POST", `/api/approvals/${q[0]._id}`, { decision: "Approved", note: "QA-1844" });
+        ok("QA-1844: an Admin without finance.approve cannot APPROVE a parked cost", a.status === 403, `got ${a.status}`);
+        const r = await req(leakAdmin, "POST", `/api/approvals/${q[0]._id}`, { decision: "Rejected", note: "QA-1844" });
+        ok("QA-1844: ...and cannot REJECT it either — refusing a payment is a money decision", r.status === 403, `got ${r.status}`);
+        const still = await pendingCost();
+        ok("QA-1844: ...and the request is genuinely untouched, not decided-then-refused",
+          still.some((i) => String(i._id) === String(q[0]._id)), `pending=${still.length}`);
+      } else ok("QA-1844 fixture: a parked cost was available", false, `pending=${q.length}`);
+
+      // A NON-money action stays on approvals.decide — narrowing it would take the queue away from
+      // the Operations users whose job it is.
+      const cfg = (await req(admin, "GET", "/api/approvals")).data.config ?? [];
+      ok("QA-1844: only the money actions are narrowed; the rest keep approvals.decide",
+        cfg.length > 0 && ["location.close", "batch.cancel", "location.edit"].every((a) => cfg.some((c) => c.action === a)),
+        JSON.stringify(cfg.map((c) => c.action)));
+
+      // QA-1826 (S1): an Admin who IS the configured approver used to skip parking entirely, which
+      // made the self-approval refusal unreachable for them — nothing had been parked to refuse.
+      const beforeAdminPost = (await pendingCost()).length;
+      const adminPost = await req(admin, "POST", "/api/costs", { entry_date: "2026-09-05", location: jprP?._id, category: catP?._id, amount: 333444, note: "QA-1826 admin self-post" });
+      ok("QA-1826: an Admin approver's OWN cost entry PARKS instead of writing the ledger",
+        adminPost.status === 202 && adminPost.data?.queued === true, `got ${adminPost.status}`);
+      const afterAdminPost = await pendingCost();
+      ok("QA-1826: ...and it is really in the queue", afterAdminPost.length === beforeAdminPost + 1,
+        `${beforeAdminPost} -> ${afterAdminPost.length}`);
+      const own = afterAdminPost.find((i) => i.summary?.includes("QA-1826 admin self-post"));
+      if (own) {
+        const selfDecide = await req(admin, "POST", `/api/approvals/${own._id}`, { decision: "Approved", note: "self" });
+        ok("QA-1826: ...and the initiator still cannot approve their own request — the refusal is REACHABLE now",
+          selfDecide.status === 403, `got ${selfDecide.status}`);
+      } else ok("QA-1826: the admin's own parked request is findable", false, JSON.stringify(afterAdminPost.map((i) => i.summary)));
+
+      // QA-1827: a named list NARROWS the role. Nobody named = role decides, as before.
+      const meAdmin = ((await req(admin, "GET", "/api/users")).data.items ?? []).find((u) => u.email === "admin@vidysea.com");
+      const putNamed = await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: true, approver_role: "Admin", approver_users: [String(meAdmin?._id)] });
+      ok("QA-1827: a named approver list can be set", putNamed.status === 200 && (putNamed.data.item?.approver_users ?? []).length === 1,
+        JSON.stringify(putNamed.data.item?.approver_users ?? null));
+      const cfg2 = (await req(admin, "GET", "/api/approvals")).data.config ?? [];
+      ok("QA-1827: ...and it reads back on the config the Admin screen renders",
+        (cfg2.find((c) => c.action === "cost.post")?.approver_users ?? []).length === 1);
+      await park(555666, "QA-1827 named probe");
+      const namedQ = (await pendingCost()).find((i) => i.summary?.includes("QA-1827 named probe"));
+      if (namedQ) {
+        ok("QA-1827: the parked request SNAPSHOTS the named list, so a later rule edit cannot rewrite who could decide it",
+          (namedQ.approver_users ?? []).length === 1, JSON.stringify(namedQ.approver_users ?? null));
+        // grant the leak admin finance.approve so ONLY the naming is left to refuse them
+        await req(admin, "PATCH", `/api/users/${mkLeak.data.item?._id}`, { extra_permissions: ["finance.view", "finance.approve"] });
+        const relogged = await login(emLeak, pw1825);
+        const notNamed = relogged ? await req(relogged, "POST", `/api/approvals/${namedQ._id}`, { decision: "Approved" }) : { status: 0 };
+        ok("QA-1827: an Admin WITH finance.approve but NOT on the named list is refused",
+          notNamed.status === 403, `got ${notNamed.status}`);
+        await req(admin, "PATCH", `/api/users/${mkLeak.data.item?._id}`, { extra_permissions: [] });
+      } else ok("QA-1827: the named-list request is findable", false, "not found");
+    }
+
+    // Put the switch back so the rest of the wall sees the shipped default (rule OFF, nobody named).
+    await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin", approver_users: [] });
   }
 
   // QA-1838: a right that gates nothing must not sit in the matrix pretending to.

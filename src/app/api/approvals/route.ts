@@ -36,7 +36,10 @@ export const GET = apiHandler(async (req: NextRequest) => {
   // Actions with no stored rule are simply off.
   const config = APPROVAL_ACTIONS.map((action) => {
     const r = rules.find((x: any) => x.action === action);
-    return { action, enabled: !!r?.enabled, approver_role: r?.approver_role ?? "Admin" };
+    return {
+      action, enabled: !!r?.enabled, approver_role: r?.approver_role ?? "Admin",
+      approver_users: (r?.approver_users ?? []).map(String), // QA-1827
+    };
   });
   // QA-1843: a parked cost carries its figure twice — `payload.amount` and the ₹ interpolated into
   // `summary`. Masked here rather than refused, for the same reason as Home and the closure tab:
@@ -52,13 +55,17 @@ export const PUT = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
   requireRole(user, "Admin");
-  const { action, enabled, approver_role } = await req.json();
+  const { action, enabled, approver_role, approver_users } = await req.json();
   if (!APPROVAL_ACTIONS.includes(action)) throw new Error("Unknown approval action: " + action);
+  // QA-1827: the named list. `undefined` leaves it alone (so an existing caller that only toggles
+  // `enabled` cannot silently clear it); an explicit `[]` clears it back to role-only, which is how
+  // the setting is switched off.
+  const named = approver_users === undefined ? undefined : (Array.isArray(approver_users) ? approver_users.filter(Boolean) : []);
   const rule = await ApprovalRule.findOneAndUpdate(
     { action },
-    { $set: { enabled: !!enabled, ...(approver_role ? { approver_role } : {}) } },
+    { $set: { enabled: !!enabled, ...(approver_role ? { approver_role } : {}), ...(named === undefined ? {} : { approver_users: named }) } },
     { upsert: true, new: true },
   );
-  await audit({ entity: "ApprovalRule", entityId: rule._id, field: action, newValue: { enabled: !!enabled, approver_role }, actor: user.id });
+  await audit({ entity: "ApprovalRule", entityId: rule._id, field: action, newValue: { enabled: !!enabled, approver_role, ...(named === undefined ? {} : { approver_users: named }) }, actor: user.id });
   return NextResponse.json({ item: rule });
 });

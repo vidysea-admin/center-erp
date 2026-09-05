@@ -124,6 +124,30 @@ export async function sendMail(m: MailAttempt): Promise<{ status: "sent" | "fail
 // approved accounts only, Rule-38 location scope respected (an unscoped user of a
 // targeted role always qualifies; a scoped one only if the location matches or none is
 // given). Trainer-role accounts are people who work at centres — included when targeted.
+// QA-1827: mail exactly these people. `mailUsersByRole` below is the broadcast form and stays the
+// fallback; this one exists because a money approval addressed to a role reaches everyone holding
+// it, which is the thing the CEO's instruction rules out. Same eligibility rules (active, not
+// dropped, not Pending) so a named-but-disabled account is still skipped rather than silently mailed.
+export async function mailUsers(opts: { userIds: unknown[]; subject: string; title: string; lines: string[]; link?: string; entity?: string; entity_id?: unknown }) {
+  const ids = (opts.userIds ?? []).filter(Boolean);
+  if (!ids.length) return 0;
+  const users = await User.find({
+    _id: { $in: ids }, active: true, dropped: { $ne: true }, approval_status: { $ne: "Pending" },
+  }).select("email").lean<any[]>();
+  const { html, text } = renderMail({
+    title: opts.title, lines: opts.lines,
+    cta: opts.link ? { label: "Open in the ERP", url: `https://www.vidysea.com/erp${opts.link}` } : undefined,
+  });
+  const seen = new Set<string>();
+  for (const u of users) {
+    const to = String(u.email ?? "").toLowerCase();
+    if (!to || seen.has(to)) continue;
+    seen.add(to);
+    await sendMail({ to, subject: opts.subject, html, text, entity: opts.entity, entity_id: opts.entity_id });
+  }
+  return seen.size;
+}
+
 export async function mailUsersByRole(opts: { roles: string[]; location?: unknown; subject: string; title: string; lines: string[]; link?: string; entity?: string; entity_id?: unknown }) {
   const users = await User.find({
     role: { $in: opts.roles }, active: true, dropped: { $ne: true },

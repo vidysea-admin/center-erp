@@ -3084,8 +3084,14 @@ for (const file of walk(root)) {
   // the file contradicts it: if an EXEMPT file calls a money masker, it is READING money, and its
   // exemption is stale by its own evidence.
   // (the check itself runs below, once `bad` exists — see staleExemptions)
+  // QA-1862 (checker, cycle 5): an unguarded readFileSync here means that DELETING an exempt route
+  // crashes the whole wall instead of reporting — the failure mode would arrive exactly when
+  // somebody is mid-refactor and least wants the tooling to be the problem. A missing file is
+  // itself a stale exemption: it names something that is not there.
   const staleExemptions = () => Object.keys(EXEMPT).filter((rel) => {
-    const raw = stripComments(fs.readFileSync(path.join(root, rel), "utf-8")).replace(/\s+/g, " ");
+    let raw;
+    try { raw = stripComments(fs.readFileSync(path.join(root, rel), "utf-8")).replace(/\s+/g, " "); }
+    catch { return true; }
     return MASKER_CALL_RE().test(raw) || /requireFinance\(/.test(raw);
   });
   // KNOWN LIMIT, stated rather than papered over: this population is "route files that NAME the
@@ -3165,7 +3171,10 @@ for (const file of walk(root)) {
         // `let flag = await hasPermission(…); flag = true;` — the declaration is impeccable and the
         // next line undoes it. Every assignment to the name counts, not just the one that created
         // it. (`\b` and a negative lookahead for `==` so a comparison is not read as an assignment.)
-        const assignments = [...raw.matchAll(new RegExp("(?:(?:const|let|var) )?\\b" + last + " ?= ?(?!=)([^;]+);", "g"))].map((m) => m[1]);
+        // QA-1858 (checker, cycle 5): the pattern read `name = …` and so missed COMPOUND
+        // assignment — `canSeeMoney ||= true` type-checks, leaves the wall green, and turns the
+        // mask off. Any operator that writes to the name counts: `=`, `||=`, `&&=`, `??=`.
+        const assignments = [...raw.matchAll(new RegExp("(?:(?:const|let|var) )?\\b" + last + " ?(?:\\|\\||&&|\\?\\?)?= ?(?!=)([^;]+);", "g"))].map((m) => m[1]);
         if (!assignments.length) {
           bad.push(rel + " passes the money-mask flag `" + last + "`, which is never assigned in this file");
         // Senior review of cycles 2-4: this was a SUBSTRING test, so
