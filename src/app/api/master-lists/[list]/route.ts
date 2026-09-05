@@ -107,6 +107,13 @@ export async function coerceExtras(list: string, body: Record<string, any>): Pro
     if (TEXT_FIELDS.has(f)) { extras[f] = String(body[f]).trim(); continue; }
     extras[f] = Number(body[f]);
     if (!Number.isFinite(extras[f] as number)) throw new HttpError(400, `${f} must be a number`);
+    // QA-1875 (checker on qa-1828a): consolidating two coercions into one DROPPED a guard the copy
+    // it replaced had — `[id]/route.ts`'s NUMERIC branch refuses `n < 0`, and this one did not, so a
+    // budget of −50,000 was accepted. That is the specific risk of removing a second copy: the
+    // copies are rarely identical, and the one being deleted may be the stricter of the two. Every
+    // money figure on a master is non-negative, exactly as `total_hours`, `min_required_hours` and
+    // `amount_received` already are in the same family.
+    if ((extras[f] as number) < 0) throw new HttpError(400, `${f} must be a non-negative number`);
   }
   // QA-1828: TWO LEVELS, and the API is where that is true rather than the form. A subhead of a
   // subhead is a taxonomy nobody asked for and a report nobody can read; a category that is its own

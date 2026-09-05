@@ -3246,11 +3246,29 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       // learn what they overwrote. Both doors are checked, because the create door and the edit
       // door are two different functions and this module has already shipped a guard on one of a
       // pair (QA-1857).
-      const setBudget = await req(leakAdmin, "PATCH", `/api/master-lists/cost-categories/${head._id}`, { budget: 1 });
-      ok("QA-1828: an ungranted Admin cannot WRITE a budget either — 403, not a silent overwrite",
-        setBudget.status === 403, `got ${setBudget.status}`);
-      const mkBudget = await req(leakAdmin, "POST", "/api/master-lists/cost-categories", { name: `QA1828 sneak ${s28}`, budget: 1 });
-      ok("QA-1828: ...and cannot create a head carrying one either", mkBudget.status === 403, `got ${mkBudget.status}`);
+      // QA-1876 (checker on qa-1828a): this asserted only `budget`, so a mutant that unguarded the
+      // OTHER two money fields passed the whole wall byte-identically. The shipped guard iterates
+      // the shared constant and was always correct — but a guard is only as good as the assertion
+      // that would notice it going, and one field of three is not that. Each field is now named.
+      for (const f of ["budget", "pre_approved_amount", "pre_approved_basis"]) {
+        const val = f === "pre_approved_basis" ? "₹1 per child" : 1;
+        const setIt = await req(leakAdmin, "PATCH", `/api/master-lists/cost-categories/${head._id}`, { [f]: val });
+        ok(`QA-1876: an ungranted Admin cannot WRITE ${f} — 403, not a silent overwrite`,
+          setIt.status === 403, `got ${setIt.status}`);
+        const mkIt = await req(leakAdmin, "POST", "/api/master-lists/cost-categories", { name: `QA1876 sneak ${f} ${s28}`, [f]: val });
+        ok(`QA-1876: ...and cannot create a head carrying ${f} either`, mkIt.status === 403, `got ${mkIt.status}`);
+      }
+
+      // QA-1875 (same checker): a money figure on a master is non-negative, the way total_hours,
+      // min_required_hours and amount_received already are. Consolidating two coercions dropped the
+      // guard the deleted copy had.
+      const negBudget = await req(admin, "PATCH", `/api/master-lists/cost-categories/${head._id}`, { budget: -50000 });
+      ok("QA-1875: a NEGATIVE budget is refused (400), even from a grant-holder", negBudget.status === 400, `got ${negBudget.status}`);
+      const negLimit = await req(admin, "POST", "/api/master-lists/cost-categories", { name: `QA1875 neg ${s28}`, pre_approved_amount: -1 });
+      ok("QA-1875: ...and a negative pre-approved limit cannot be created either", negLimit.status === 400, `got ${negLimit.status}`);
+      const stillBudget = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
+        .find((i) => String(i._id) === String(head._id))?.budget;
+      ok("QA-1875: ...and the refusal left the real budget alone", stillBudget === BUDGET, `budget now ${stillBudget}`);
       const unchanged = (await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [];
       ok("QA-1828: ...and the real budget is still what it was",
         unchanged.find((i) => String(i._id) === String(head._id))?.budget === BUDGET,
