@@ -3247,6 +3247,13 @@ for (const file of walk(root)) {
     if (/[+*]|\{\d+,\}/.test(noClasses)) {
       bad.push(`lib/permissions.ts: the date-parking pattern ${p.slice(0, 60)}… contains an UNBOUNDED quantifier. Every field of a timestamp has a fixed width; three cycles of this module were spent on sub-fields that did not (QA-1870 · QA-1873 · QA-1874).`);
     }
+    // QA-1879 (checker on qa-1874): the check above pins the SHAPE of the quantifier and not the
+    // WIDTH, so `\d{1,9}` passes it while reinstating QA-1874's defect verbatim — nine digits is not
+    // a millisecond. "Bounded" was the wrong property to assert; the fraction has ONE legal width,
+    // because `toISOString()` emits exactly three digits and nothing this system writes emits more.
+    if (p.includes("\\.") && !p.includes("\\.\\d{1,3}")) {
+      bad.push(`lib/permissions.ts: the date-parking pattern's fractional-seconds field is not \\d{1,3}. A fraction is milliseconds — a wider one is a figure wearing a timestamp (QA-1874, QA-1879).`);
+    }
   }
 
   // The field list itself must have exactly one statement, the way NO_ADMIN_BYPASS does for keys.
