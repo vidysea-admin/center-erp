@@ -335,6 +335,28 @@ export function maskMoneyInAuditRow<T extends Record<string, any>>(row: T, canSe
   return { ...row, old_value: scrub(row.old_value, row.field), new_value: scrub(row.new_value, row.field) };
 }
 
+// QA-1843 (checker, cycle 3): the FIFTH money door, and the one no model-name rule could ever have
+// reached. An `ApprovalRequest` names no money model at all — it carries the figure twice, in a
+// generic `payload` (`payload.amount`) and inside a human-readable `summary` string built at
+// `api/costs/route.ts` as `Cost entry ₹<amount> (<who>)`. So a parked cost showed an ungranted
+// Admin exactly what it was for and how much, while Operations was refused the queue outright.
+//
+// Two shapes, therefore two things to strip, and the summary is the one that would have been
+// forgotten: redacting a field but leaving the same number interpolated into a sentence beside it
+// is the mistake this whole unit keeps finding in itself.
+export function maskApprovalMoney<T extends Record<string, any>>(request: T, canSeeMoney: boolean): T {
+  if (canSeeMoney) return request;
+  const out: Record<string, any> = { ...request };
+  if (out.payload && typeof out.payload === "object" && !Array.isArray(out.payload)) {
+    out.payload = stripMoneyKeys(out.payload as Record<string, unknown>);
+  }
+  if (typeof out.summary === "string") {
+    // Any rupee figure, however it was spelled: ₹128500 · ₹1,28,500 · ₹ 128500.50
+    out.summary = out.summary.replace(/₹\s?[\d,]+(?:\.\d+)?/g, "₹—");
+  }
+  return out as T;
+}
+
 // QA-617 (-194): "may this user share a plan link?" — asked in two places that disagreed in BOTH
 // directions. `GET /api/batches/[id]/plan` used `hasPermission` (level >= view) plus its own
 // `can_edit !== false`, while `POST /api/public-tokens` uses `requireRole` + `requireEdit` +

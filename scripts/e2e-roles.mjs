@@ -2627,6 +2627,59 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       /"amount"/.test(JSON.stringify(buA.data.items ?? [])), `status ${buA.status} · rows ${(buA.data.items ?? []).length}`);
   }
 
+  // ---- QA-1843 / THE MONEY-LEAK PROBE (checker's recommendation, cycle 3) ----
+  // The honest history: FIVE money leaks were found in this unit, one per cycle, and every single
+  // one was found by a person poking a running server and grepping the wire. Not one was found by a
+  // structural pin — the pin was rewritten three times (four filenames -> "names Invoice or
+  // CostEntry" -> "+ AuditLog") and each rewrite was blind to the next door, because money travels
+  // in generic payloads (`ApprovalRequest.payload.amount`) and in interpolated sentences
+  // ("Cost entry ₹128500 …") that no model-name rule can reach.
+  //
+  // So this is the instrument that was missing: walk real endpoints as a real ungranted Admin and
+  // as Operations, and fail if a rupee figure comes back. It is deliberately DUMB and WIDE — it
+  // does not know which endpoints are supposed to carry money, it only knows who is not supposed to
+  // receive it. Adding an endpoint here costs one line; that is the point.
+  {
+    const MONEY_ON_WIRE = /"amount":\s*\d|"invoice_no":\s*"|₹\s?[\d,]/;
+    const bId2 = seededInv ? (seededInv.batch?._id ?? seededInv.batch) : null;
+    const doors = [
+      ["/api/costs", "the cost ledger"],
+      ["/api/invoices", "the invoice book"],
+      ["/api/home", "the Home dashboard"],
+      ["/api/approvals?status=all", "the approvals queue"],
+      ["/api/batches?limit=50", "the batch list"],
+      ["/api/notifications", "notifications"],
+      ["/api/reports/rollup", "the rollup report"],
+      ["/api/plan-tracker", "the plan tracker"],
+      ...(bId2 ? [
+        [`/api/batches/${bId2}`, "a batch detail"],
+        [`/api/batches/${bId2}/closure`, "the closure payload"],
+        [`/api/audit/Invoice/${seededInv._id}`, "the invoice audit trail"],
+      ] : []),
+      ...(adminUserId ? [[`/api/audit/by-user/${adminUserId}?limit=200`, "the per-person audit trail"]] : []),
+    ];
+    for (const [who, label] of [[leakAdmin, "an Admin without finance.view"], [ops, "Operations"]]) {
+      if (!who) continue;
+      for (const [path, name] of doors) {
+        const r = await req(who, "GET", path);
+        // A 403 is a pass: the door refused. A 200 with a rupee figure on it is the failure.
+        const wire = r.status === 200 ? JSON.stringify(r.data ?? {}) : "";
+        const hit = MONEY_ON_WIRE.exec(wire);
+        ok(`QA-1843 probe: ${name} gives no money to ${label}`, !hit,
+          `${path} -> ${r.status}${hit ? ` · leaked near: ${wire.slice(Math.max(0, hit.index - 60), hit.index + 60)}` : ""}`);
+      }
+    }
+    // The probe must be able to FAIL, or it is decoration. The granted admin is the control: the
+    // same walk, the same grep, and at least one of these endpoints MUST come back carrying money.
+    let moneySeenByGranted = 0;
+    for (const [path] of doors) {
+      const r = await req(admin, "GET", path);
+      if (r.status === 200 && MONEY_ON_WIRE.test(JSON.stringify(r.data ?? {}))) moneySeenByGranted++;
+    }
+    ok("QA-1843 probe: the SAME walk does return money to the granted admin — the probe can actually fail",
+      moneySeenByGranted > 0, `${moneySeenByGranted} of ${doors.length} endpoints carried a figure`);
+  }
+
   // QA-1838: a right that gates nothing must not sit in the matrix pretending to.
   const cat = await req(admin, "GET", "/api/permissions");
   ok("QA-1838: invoices.manage is gone from the permission catalog (it gated nothing after QA-1825)",

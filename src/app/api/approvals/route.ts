@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireRole, isScoped, locationFilter } from "@/lib/authz";
-import { requirePerm, requireView } from "@/lib/permissions";
+import { requirePerm, requireView, hasPermission, maskApprovalMoney, FINANCE_VIEW } from "@/lib/permissions";
 import { ApprovalRequest, ApprovalRule } from "@/models";
 import { APPROVAL_ACTIONS } from "@/models";
 import { audit } from "@/lib/audit";
@@ -38,7 +38,13 @@ export const GET = apiHandler(async (req: NextRequest) => {
     const r = rules.find((x: any) => x.action === action);
     return { action, enabled: !!r?.enabled, approver_role: r?.approver_role ?? "Admin" };
   });
-  return NextResponse.json({ items, config });
+  // QA-1843: a parked cost carries its figure twice — `payload.amount` and the ₹ interpolated into
+  // `summary`. Masked here rather than refused, for the same reason as Home and the closure tab:
+  // whoever holds `approvals.decide` needs to SEE the queue to work it. Note the `?mine=1` branch
+  // above is deliberately NOT masked — those are the caller's own submissions, they typed the
+  // amount, and R-E requires them to read the rejection note and repost.
+  const canSeeMoney = await hasPermission(user, FINANCE_VIEW);
+  return NextResponse.json({ items: items.map((r: any) => maskApprovalMoney(r, canSeeMoney)), config });
 });
 
 // PUT — Admin toggles which actions require approval (RPL M24, configurable by design).

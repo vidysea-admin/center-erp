@@ -633,11 +633,35 @@ cycles to get right, and each miss is worth remembering because they are differe
   a regex cannot reach it, because that call wraps a ternary containing
   `Invoice.find(...).populate(...)`, so `[^)]*` stops at the first inner paren.
 
-So: every `route.ts` under `src/app/api` naming `Invoice`, `CostEntry` **or `AuditLog`** must call
-`requireFinance`, **or** mask with a flag that came from `hasPermission(user, FINANCE_VIEW)`, **or**
-sit in a commented `EXEMPT` map with a written reason. **Known limit, stated in the pin rather than
-papered over:** a route obtaining money indirectly through `lib/` is not caught (`rules.ts` and
-`alerts.ts` are the two lib readers; both emit a status or a label, never a figure).
+- **Cycle 3** added `AuditLog` and was blind to `ApprovalRequest` — which names **no money model at
+  all**. A parked cost carries its figure twice: in a generic `payload.amount`, and interpolated
+  into a human sentence (`Cost entry ₹128500 (…)`) built at `api/costs/route.ts`. **No population
+  derived from model names can ever reach that.**
+
+So the current rule is: every `route.ts` under `src/app/api` naming `Invoice`, `CostEntry`,
+`AuditLog` or `ApprovalRequest` must call `requireFinance`, **or** mask with a flag that is a named
+identifier assigned only from `hasPermission(user, FINANCE_VIEW)`, **or** sit in a commented
+`EXEMPT` map with a written reason. `INVOICE_MONEY_FIELDS` is also pinned as genuinely single: no
+other file may declare a string-array whose element set is exactly those four (that claim was
+asserted here and was FALSE when written — `rules.ts` held its own copy).
+
+### The pin is a floor. The PROBE is the guarantee.
+
+**Five money leaks were found in this unit, one per cycle, and every one was found by poking a
+running server and grepping the wire. Not one was found by a structural pin.** Four cycles each
+bolted another noun onto the population after a leak, and each was blind to the next.
+
+So `scripts/e2e-roles.mjs` carries a **runtime money-leak probe**: a list of GET endpoints, walked
+as a genuine ungranted Admin and as Operations, failing if `"amount":`, `"invoice_no":` or a `₹`
+figure comes back. It is deliberately dumb and wide — it does not know which endpoints are supposed
+to carry money, only who must not receive it — and it has a positive control asserting the same walk
+*does* return money to a grant-holder, so it can actually fail. **Adding an endpoint to it is one
+line. If a sixth door appears, widen the probe, not the regex.**
+
+Known limit of the pin, stated rather than papered over: a route obtaining money indirectly through
+`lib/` is not caught (`rules.ts` and `alerts.ts` are the lib readers; both emit a status or a label,
+never a figure). The probe does not share that blind spot — it reads what actually goes over the
+wire, whatever produced it.
 
 ### 3.2c A comment does not enforce the rule it states — and the author is the least protected
 

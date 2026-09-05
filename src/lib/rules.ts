@@ -18,7 +18,7 @@ import { nameKey, normalizeCan, unresolvedPortalRowsByName } from "@/lib/govt-at
 import { HttpError, isScoped } from "@/lib/authz";
 // QA-1575: trainerDocsAccess() needs the permission level, not just the role. permissions.ts
 // imports authz.ts and models only, so this direction adds no cycle.
-import { hasEditLevel, requirePerm } from "@/lib/permissions";
+import { hasEditLevel, requirePerm, INVOICE_MONEY_FIELDS } from "@/lib/permissions";
 // QA-1074: which pending sheet changes can actually move the report's figures. IMPORTED, never
 // re-listed — this is the predicate the apply door and the Sync Inbox screen already share
 // (-242 / QA-946), and a third copy of "what is a target-row field" is exactly the ARCHITECTURE
@@ -2452,7 +2452,12 @@ export async function updateInvoiceChecked(batchId: string, patch: Record<string
   // invoice number or amount could be rewritten after the fact with nothing recording it.
   // They are now frozen once the invoice has left "Ready"; correcting one means moving the
   // invoice back deliberately, which is itself gated and audited.
-  const MONEY_FIELDS = ["amount", "invoice_no", "raised_on", "paid_on"];
+  // QA-1846 (checker, cycle 3): this was a SECOND, independent copy of the money field list, which
+  // made ARCHITECTURE 3.2d's claim that INVOICE_MONEY_FIELDS is "the single statement of what
+  // counts as money" untrue at the moment it was written. Two lists of the same four fields is the
+  // section-3 disease the unit was quoting while committing it. One list now; this file already
+  // imports from lib/permissions.ts, so nothing new is coupled.
+  const MONEY_FIELDS = INVOICE_MONEY_FIELDS;
   if (INVOICE_ORDER.indexOf(inv.status) >= INVOICE_ORDER.indexOf("Raised")) {
     const changed = MONEY_FIELDS.filter((f) => {
       if (patch[f] === undefined) return false;

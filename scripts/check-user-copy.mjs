@@ -3074,7 +3074,7 @@ for (const file of walk(root)) {
   // and neither emits a rupee value. `api/trainers/[id]/transition` is likewise absent because it
   // mentions CostEntry only in prose — its eligibility-fee write happens inside rules.ts. If it ever
   // touches the model directly it joins the population and must gate, mask, or argue an exemption.
-  const MASKERS = /maskInvoiceMoney\(|maskInvoiceMoneyList\(|maskMoneyInAuditRow\(/;
+  const MASKERS = /maskInvoiceMoney\(|maskInvoiceMoneyList\(|maskMoneyInAuditRow\(|maskApprovalMoney\(/;
   // QA-1840 (checker, cycle 2): `AuditLog` joins the population. Cycle 2 masked
   // `audit/[entity]/[id]` and missed its sibling `audit/by-user/[id]`, because the population was
   // "names Invoice or CostEntry" and the sibling names neither — it names `AuditLog`. The route
@@ -3083,7 +3083,17 @@ for (const file of walk(root)) {
   // part of the population, not a special case.
   const doors = [...walk(path.join(root, "app/api"))]
     .filter((f) => path.basename(f) === "route.ts")
-    .filter((f) => /\b(Invoice|CostEntry|AuditLog)\b/.test(stripComments(fs.readFileSync(f, "utf-8"))))
+    // QA-1843 adds `ApprovalRequest` — a parked cost carries the figure in a generic `payload` and
+    // in an interpolated summary string, so it names no money model at all.
+    //
+    // READ THIS BEFORE ADDING A SIXTH NOUN. Four cycles have each bolted one on after a leak, and
+    // the checker's judgement — which I accept — is that a population derived from MODEL NAMES can
+    // never be complete, because money travels in payloads and sentences too. This list is a
+    // FLOOR, not the guarantee. The guarantee is the runtime money-leak probe in
+    // `scripts/e2e-roles.mjs`, which walks real endpoints as an ungranted Admin and greps the wire:
+    // every one of the five leaks was found that way and none by a structural pin. If a sixth door
+    // appears, the right response is to widen the PROBE's endpoint list, not this regex.
+    .filter((f) => /\b(Invoice|CostEntry|AuditLog|ApprovalRequest)\b/.test(stripComments(fs.readFileSync(f, "utf-8"))))
     .map((f) => path.relative(root, f).split(path.sep).join("/"))
     .sort();
   const bad = [];
@@ -3111,10 +3121,23 @@ for (const file of walk(root)) {
       // check was exactly that regex, and the checker's own mutant walked past it — which is the
       // same lesson one level down: a test that looks like it covers the case is not the same as
       // one that does. Measured, not assumed.
+      // QA-1845 (checker, cycle 3): the cycle-3 version tested `/^(?:true|false|1|0)$/` — a
+      // BLACKLIST of ways to be wrong, which is the same shape mistake as the four-filename list and
+      // the model-name population, one level down. The checker defeated it five ways, all measured:
+      // `true as boolean`, `(true)`, `Boolean(1)`, a const assigned `true`, and a same-file helper.
+      // A whitelist has no such tail: the flag must be a bare identifier, and EVERY assignment to
+      // that identifier in this file must be an `await hasPermission(… FINANCE_VIEW …)` expression.
       for (const args of maskerArgLists(raw)) {
         const last = lastTopLevelArg(args);
-        if (/^(?:true|false|1|0)$/.test(last)) {
-          bad.push(rel + " calls a money masker with the HARDCODED flag `" + last + "` — the mask is inert");
+        if (!/^[A-Za-z_$][\w$]*$/.test(last)) {
+          bad.push(rel + " passes `" + last.slice(0, 40) + "` as a money-mask flag — it must be a named flag, not an expression");
+          continue;
+        }
+        const assignments = [...raw.matchAll(new RegExp("(?:const|let|var) " + last + " ?= ?([^;]+);", "g"))].map((m) => m[1]);
+        if (!assignments.length) {
+          bad.push(rel + " passes the money-mask flag `" + last + "`, which is never assigned in this file");
+        } else if (!assignments.every((a) => /hasPermission\([^)]*FINANCE_VIEW/.test(a))) {
+          bad.push(rel + " assigns the money-mask flag `" + last + "` from something other than hasPermission(user, FINANCE_VIEW)");
         }
       }
       if (!/hasPermission\([^)]*FINANCE_VIEW/.test(raw)) {
@@ -3135,6 +3158,33 @@ for (const file of walk(root)) {
   // The field list itself must have exactly one statement, the way NO_ADMIN_BYPASS does for keys.
   const permsForFields = stripComments(fs.readFileSync(path.join(root, "lib/permissions.ts"), "utf-8"));
   if (!/INVOICE_MONEY_FIELDS *= *\[/.test(permsForFields)) bad.push("lib/permissions.ts: INVOICE_MONEY_FIELDS is gone — the field rule has no single statement");
+  // QA-1846 (checker, cycle 3): "single statement" was asserted in ARCHITECTURE and was FALSE the
+  // day it was written — lib/rules.ts held its own copy of the same four fields. Saying it is one
+  // list does not make it one, so the claim is measured: no file other than the one that declares
+  // it may contain an array literal naming all four. Written as a population walk for the same
+  // reason as the doors above — naming the one file that was wrong would only catch that file.
+  //
+  // The match must be EXACT, and the first version of this check was not — it flagged any bracketed
+  // region containing the four names, which on a clean tree caught two innocents: the invoice
+  // PATCH's write-whitelist (`["amount","status","invoice_no","raised_on","paid_on","file"]` — a
+  // different concept that legitimately carries `status` and `file`) and a DataTable `columns={[…]}`
+  // block whose `key:` values happen to include all four. Neither is a copy of the money rule, and
+  // a pin that cries wolf is a pin the next person disarms. So: a STRING-ONLY array literal whose
+  // element set is exactly the four money fields — nothing more, nothing less.
+  const MONEY_SET = ["amount", "invoice_no", "paid_on", "raised_on"].join("|");
+  for (const f of [...walk(path.join(root, "lib")), ...walk(path.join(root, "app"))]) {
+    const rel2 = path.relative(root, f).split(path.sep).join("/");
+    if (rel2 === "lib/permissions.ts") continue;
+    const flat = stripComments(fs.readFileSync(f, "utf-8")).replace(/'/g, '"').replace(/\s+/g, " ");
+    for (const a of flat.match(/\[ ?"[^\]]*" ?\]/g) ?? []) {
+      const inner = a.slice(1, -1).trim();
+      if (!/^"[^"]*"( ?, ?"[^"]*")* ?,?$/.test(inner)) continue;      // string literals only
+      const els = [...inner.matchAll(/"([^"]*)"/g)].map((m) => m[1]).sort();
+      if (els.join("|") === MONEY_SET) {
+        bad.push(rel2 + " declares a SECOND copy of the money field list — import INVOICE_MONEY_FIELDS instead");
+      }
+    }
+  }
   for (const f of ["amount", "invoice_no", "raised_on", "paid_on"]) {
     if (!new RegExp('INVOICE_MONEY_FIELDS[^\\]]*"' + f + '"').test(permsForFields.replace(/\s+/g, " "))) {
       bad.push("lib/permissions.ts: INVOICE_MONEY_FIELDS no longer lists " + f);
