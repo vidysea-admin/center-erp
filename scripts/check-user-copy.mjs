@@ -3256,6 +3256,28 @@ for (const file of walk(root)) {
     }
   }
 
+  // QA-1880: the two halves of "a classifier belongs where the context is, not where the traffic is".
+  //
+  // A SyntaxError branch stood in `apiHandler` for a few hours and turned a rotated GCS credential
+  // into `400 The request body is not valid JSON.` on a perfectly good upload — a server fault
+  // reported as the caller's mistake and hidden from anything watching 5xx. The chokepoint sees all
+  // the traffic and none of the context, so a classifier put there is guessing by construction.
+  //
+  // Both pins are cheap and exact, which is the standard this file's deleted role-hardcode rule
+  // failed: they name one shape each, and neither can fire on correct code.
+  const authzRaw = stripComments(fs.readFileSync(path.join(root, "lib/authz.ts"), "utf-8"));
+  if (/instanceof SyntaxError/.test(authzRaw)) {
+    bad.push("lib/authz.ts: apiHandler is classifying a SyntaxError again. It cannot tell whose it is — a server-side JSON.parse throws the same shape, and that is QA-1880. The body read is classified at the read site, in readJson().");
+  }
+  if (!/export async function readJson/.test(authzRaw)) {
+    bad.push("lib/authz.ts: readJson() is gone — an unparseable request body goes back to answering 500 'something went wrong on our side' on every write route (QA-1878).");
+  }
+  for (const f of [...walk(path.join(root, "app/api"))].filter((f) => path.basename(f) === "route.ts")) {
+    if (/await req\.json\(\)/.test(stripComments(fs.readFileSync(f, "utf-8")))) {
+      bad.push(`${path.relative(root, f).replace(/\\/g, "/")}: reads the body with req.json() directly, so an unparseable body reaches apiHandler as a bare SyntaxError. Use readJson(req) — the read site is the only place that knows the string came off the wire (QA-1878 / QA-1880).`);
+    }
+  }
+
   // The field list itself must have exactly one statement, the way NO_ADMIN_BYPASS does for keys.
   const permsForFields = stripComments(fs.readFileSync(path.join(root, "lib/permissions.ts"), "utf-8"));
   if (!/INVOICE_MONEY_FIELDS *= *\[/.test(permsForFields)) bad.push("lib/permissions.ts: INVOICE_MONEY_FIELDS is gone — the field rule has no single statement");
