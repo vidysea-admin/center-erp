@@ -393,8 +393,21 @@ export function redactMoneyInText(text: string, payload?: unknown): string {
       // `₹${amount}` (api/costs/route.ts), which the regex above already took. What the
       // substitution exists for is the bare `invoice_no` interpolated with no rupee sign
       // (api/batches/[id]/invoice/route.ts), and an invoice number is long and distinctive.
-      if (typeof v !== "string" || v.trim().length < 4) continue;
-      out = out.split(v).join("—");
+      // QA-1855/QA-1856 (checker, cycle 5): the cycle-5 guard skipped numeric values and strings
+      // under four characters, which turned cycle 4's OVER-redaction into UNDER-redaction — a
+      // numeric `amount` echoed in the free-text note survived (`"advance 445566 for rent"`, two
+      // words after the same figure was correctly shown as `₹—`), and a short `invoice_no` like
+      // `Z9` survived in the invoice summary, where there is no `₹` for the regex and this
+      // substitution is the only control.
+      //
+      // The guard was the wrong instrument. A blunt `split/join` shredded prose because it matched
+      // INSIDE words (`20` in `20th`); a boundary-anchored replace does not, so it needs no guard
+      // and no exception for numbers. Coincidental collisions still redact — that is the safe
+      // direction for a rule about money.
+      if (v == null || v === "") continue;
+      const s = String(v);
+      if (s.length < 2) continue; // a single character is not a figure worth matching on
+      out = out.replace(new RegExp(`(?<![\\w])${s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w])`, "g"), "—");
     }
   }
   return out;

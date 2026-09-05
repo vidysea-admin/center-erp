@@ -29,9 +29,19 @@ function* walk(dir) {
 // QA-1841: extract each money-masker call's argument list by balancing parentheses, and read its
 // last top-level argument. Regexes cannot do this — the arguments contain their own calls — and the
 // pin that tried was satisfied by a constant, which is the defect it existed to catch.
+// QA-1857 (checker, cycle 5): this regex and the `MASKERS` regex 3,000 lines below were two lists
+// of the same four function names, and only one of them learned about `maskApprovalMoney` — so the
+// flag whitelist NEVER ran on either approvals route, the two routes this whole unit is about. Two
+// statements of one rule, inside the file whose job is catching exactly that. One list now; both
+// regexes are built from it.
+const MONEY_MASKERS = ["maskInvoiceMoney", "maskInvoiceMoneyList", "maskMoneyInAuditRow", "maskApprovalMoney"];
+// `g` only where the caller iterates. A global regex reused with `.test()` carries `lastIndex`
+// between calls and starts answering false on the second file — a stateful pin that looks fine.
+const MASKER_CALL_RE = (flags = "") => new RegExp("(?:" + MONEY_MASKERS.join("|") + ")\\(", flags);
+
 function maskerArgLists(src) {
   const out = [];
-  const re = /mask(?:InvoiceMoney|InvoiceMoneyList|MoneyInAuditRow)\(/g;
+  const re = MASKER_CALL_RE("g");
   let m;
   while ((m = re.exec(src))) {
     let i = m.index + m[0].length;
@@ -3063,10 +3073,21 @@ for (const file of walk(root)) {
     // `Invoice.status` (via settlementStage) and no rupee figure, which the ruling permits.
     "app/api/batches/route.ts": "status only via settlementStage, no money field (Umesh's field ruling 2026-09-05); its AuditLog read is .select('entity_id') — ids, never values",
     "app/api/batches/[id]/route.ts": "status only, no money field — Umesh's field ruling 2026-09-05",
-    // Write path: it CREATES a CostEntry on approval replay, it never renders one back. Posting a
-    // cost is `costs.manage` by this unit's own split (the form is open, the book is not).
-    "app/api/approvals/[id]/route.ts": "writes a CostEntry on approval replay; reads none back",
   };
+  // QA-1857 follow-on, found by mutation: `app/api/approvals/[id]/route.ts` used to sit in EXEMPT
+  // with the reason "writes a CostEntry on approval replay; reads none back". That was TRUE when it
+  // was written in cycle 3 and became FALSE in cycle 4, when the decide response started returning
+  // the request and had to mask it — and nothing noticed, so the whole file was skipped and its
+  // masker calls went unchecked for two cycles.
+  //
+  // An exemption is a claim with an expiry date nobody sets. So the pin now refuses one the moment
+  // the file contradicts it: if an EXEMPT file calls a money masker, it is READING money, and its
+  // exemption is stale by its own evidence.
+  // (the check itself runs below, once `bad` exists — see staleExemptions)
+  const staleExemptions = () => Object.keys(EXEMPT).filter((rel) => {
+    const raw = stripComments(fs.readFileSync(path.join(root, rel), "utf-8")).replace(/\s+/g, " ");
+    return MASKER_CALL_RE().test(raw) || /requireFinance\(/.test(raw);
+  });
   // KNOWN LIMIT, stated rather than papered over: this population is "route files that NAME the
   // model", so a route that obtains money indirectly through `lib/` would not appear. The two lib
   // readers are `lib/rules.ts` (settlementStage — status, no figure) and `lib/alerts.ts`
@@ -3074,7 +3095,7 @@ for (const file of walk(root)) {
   // and neither emits a rupee value. `api/trainers/[id]/transition` is likewise absent because it
   // mentions CostEntry only in prose — its eligibility-fee write happens inside rules.ts. If it ever
   // touches the model directly it joins the population and must gate, mask, or argue an exemption.
-  const MASKERS = /maskInvoiceMoney\(|maskInvoiceMoneyList\(|maskMoneyInAuditRow\(|maskApprovalMoney\(/;
+  const MASKERS = MASKER_CALL_RE(); // QA-1857: same single list as maskerArgLists, never retyped
   // QA-1840 (checker, cycle 2): `AuditLog` joins the population. Cycle 2 masked
   // `audit/[entity]/[id]` and missed its sibling `audit/by-user/[id]`, because the population was
   // "names Invoice or CostEntry" and the sibling names neither — it names `AuditLog`. The route
@@ -3097,6 +3118,13 @@ for (const file of walk(root)) {
     .map((f) => path.relative(root, f).split(path.sep).join("/"))
     .sort();
   const bad = [];
+  // QA-1857 follow-on: this ran ABOVE `bad` in its first draft, so the day it actually fired the
+  // whole wall would have crashed with `Cannot access 'bad' before initialization` instead of
+  // reporting — a pin that destroys the run it was meant to inform. Found by mutation, not by
+  // reading: the clean tree never reached the push.
+  for (const rel of staleExemptions()) {
+    bad.push(rel + " is in EXEMPT but masks or gates money — the exemption is stale by its own evidence; remove it so the file is checked");
+  }
   // A population pin that finds nothing has silently stopped pinning. Four gated + four exempt was
   // the count when this was written; refuse to pass if the walk suddenly returns a handful.
   if (doors.length < 8) bad.push("only " + doors.length + " Invoice/CostEntry route(s) found — the walk is broken, not the codebase");
