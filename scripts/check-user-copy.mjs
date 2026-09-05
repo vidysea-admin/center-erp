@@ -26,6 +26,39 @@ function* walk(dir) {
   }
 }
 
+// QA-1841: extract each money-masker call's argument list by balancing parentheses, and read its
+// last top-level argument. Regexes cannot do this — the arguments contain their own calls — and the
+// pin that tried was satisfied by a constant, which is the defect it existed to catch.
+function maskerArgLists(src) {
+  const out = [];
+  const re = /mask(?:InvoiceMoney|InvoiceMoneyList|MoneyInAuditRow)\(/g;
+  let m;
+  while ((m = re.exec(src))) {
+    let i = m.index + m[0].length;
+    const start = i;
+    let depth = 1;
+    while (i < src.length && depth > 0) {
+      const c = src[i];
+      if (c === "(") depth++;
+      else if (c === ")") depth--;
+      i++;
+    }
+    if (depth === 0) out.push(src.slice(start, i - 1));
+  }
+  return out;
+}
+function lastTopLevelArg(args) {
+  let depth = 0, last = "", cur = "";
+  for (const c of args) {
+    if (c === "(" || c === "[" || c === "{") depth++;
+    else if (c === ")" || c === "]" || c === "}") depth--;
+    if (c === "," && depth === 0) { last = cur; cur = ""; continue; }
+    cur += c;
+  }
+  const tail = cur.trim();
+  return (tail || last).trim().replace(/,$/, "").trim();
+}
+
 function stripComments(src) {
   // QA-1422 investigation found two independent corruption sources here, both fixed by doing
   // ALL of string-tracking + comment-stripping in ONE character pass instead of two:
@@ -3028,7 +3061,7 @@ for (const file of walk(root)) {
   const EXEMPT = {
     // Umesh, 2026-09-05: *"sirf paisa chhupao, status sabko rehne do."* These two ship
     // `Invoice.status` (via settlementStage) and no rupee figure, which the ruling permits.
-    "app/api/batches/route.ts": "status only, no money field — Umesh's field ruling 2026-09-05",
+    "app/api/batches/route.ts": "status only via settlementStage, no money field (Umesh's field ruling 2026-09-05); its AuditLog read is .select('entity_id') — ids, never values",
     "app/api/batches/[id]/route.ts": "status only, no money field — Umesh's field ruling 2026-09-05",
     // Write path: it CREATES a CostEntry on approval replay, it never renders one back. Posting a
     // cost is `costs.manage` by this unit's own split (the form is open, the book is not).
@@ -3042,9 +3075,15 @@ for (const file of walk(root)) {
   // mentions CostEntry only in prose — its eligibility-fee write happens inside rules.ts. If it ever
   // touches the model directly it joins the population and must gate, mask, or argue an exemption.
   const MASKERS = /maskInvoiceMoney\(|maskInvoiceMoneyList\(|maskMoneyInAuditRow\(/;
+  // QA-1840 (checker, cycle 2): `AuditLog` joins the population. Cycle 2 masked
+  // `audit/[entity]/[id]` and missed its sibling `audit/by-user/[id]`, because the population was
+  // "names Invoice or CostEntry" and the sibling names neither — it names `AuditLog`. The route
+  // that WAS caught only qualified by accident, importing `Invoice` for an unrelated scope map.
+  // Money reaches a reader through the trail as readily as through the document, so the trail is
+  // part of the population, not a special case.
   const doors = [...walk(path.join(root, "app/api"))]
     .filter((f) => path.basename(f) === "route.ts")
-    .filter((f) => /\b(Invoice|CostEntry)\b/.test(stripComments(fs.readFileSync(f, "utf-8"))))
+    .filter((f) => /\b(Invoice|CostEntry|AuditLog)\b/.test(stripComments(fs.readFileSync(f, "utf-8"))))
     .map((f) => path.relative(root, f).split(path.sep).join("/"))
     .sort();
   const bad = [];
@@ -3055,8 +3094,32 @@ for (const file of walk(root)) {
     if (rel in EXEMPT) continue;
     const raw = stripComments(fs.readFileSync(path.join(root, rel), "utf-8")).replace(/'/g, '"').replace(/\s+/g, " ");
     const gated = /requireFinance\(/.test(raw);
-    if (!gated && !MASKERS.test(raw)) {
-      bad.push(rel + " reads Invoice/CostEntry but neither calls requireFinance() nor masks the money out");
+    const masked = MASKERS.test(raw);
+    if (!gated && !masked) {
+      bad.push(rel + " reads Invoice/CostEntry/AuditLog but neither calls requireFinance() nor masks the money out");
+    }
+    // QA-1841 (checker, cycle 2, found with its OWN invented mutant): the cycle-2 pin asserted only
+    // that a masker NAME appeared. `maskInvoiceMoneyList(docs, true)` therefore restored the
+    // /api/home leak in full while the wall stayed green at 342/1 — a pin that checks a function is
+    // CALLED, not that it is called with a real decision, is a pin that can be satisfied by a
+    // constant. So the flag must come from an actual permission question in the same file, and a
+    // literal is refused outright.
+    if (masked) {
+      // The flag is the LAST argument, and finding it needs paren-balancing, not a regex: the
+      // /api/home call wraps a whole ternary with `Invoice.find(...).populate(...)` inside it, so
+      // `[^)]*` stops at the first inner `)` and never reaches the flag. The first version of this
+      // check was exactly that regex, and the checker's own mutant walked past it — which is the
+      // same lesson one level down: a test that looks like it covers the case is not the same as
+      // one that does. Measured, not assumed.
+      for (const args of maskerArgLists(raw)) {
+        const last = lastTopLevelArg(args);
+        if (/^(?:true|false|1|0)$/.test(last)) {
+          bad.push(rel + " calls a money masker with the HARDCODED flag `" + last + "` — the mask is inert");
+        }
+      }
+      if (!/hasPermission\([^)]*FINANCE_VIEW/.test(raw)) {
+        bad.push(rel + " masks money without asking hasPermission(user, FINANCE_VIEW) — where does the flag come from?");
+      }
     }
     // The role-hardcode check applies only to the DOOR-rule routes. On those, `requireFinance` IS
     // the control and a role name beside it is the QA-1825 defect returning. On a masked route the

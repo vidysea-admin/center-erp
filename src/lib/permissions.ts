@@ -170,12 +170,21 @@ export type PermLevel = "view" | "edit";
 const LEVEL_RANK: Record<PermLevel, number> = { view: 1, edit: 2 };
 
 export function parseLevel(entry: string): { key: string; level: PermLevel } {
-  const i = entry.lastIndexOf(":");
+  // QA-1842 (checker, cycle 2): an unreproducible `TypeError: e.lastIndexOf is not a function` was
+  // observed in this path, on the baseline as well as on HEAD, so it predates this unit. Its blast
+  // radius does NOT: cycle 2 made `/api/home` call `hasPermission`, so a single non-string entry in
+  // any role's stored `permissions` array — or in a `User.extra_permissions` / `revoked_permissions`
+  // list — now takes down the Home screen rather than one gate. The arrays are `[String]` in the
+  // schema but are written from request bodies, and Mongoose will not save a nested non-string it
+  // can cast, so a stray `null` or number is reachable. Coercing costs nothing and cannot change
+  // behaviour for a valid entry; throwing on the first screen after login costs a lot.
+  const s = typeof entry === "string" ? entry : String(entry ?? "");
+  const i = s.lastIndexOf(":");
   if (i > 0) {
-    const suffix = entry.slice(i + 1);
-    if (suffix === "view" || suffix === "edit") return { key: entry.slice(0, i), level: suffix };
+    const suffix = s.slice(i + 1);
+    if (suffix === "view" || suffix === "edit") return { key: s.slice(0, i), level: suffix };
   }
-  return { key: entry, level: "edit" };
+  return { key: s, level: "edit" };
 }
 
 // Effective level per key: max(role, grants) — a grant only ever UPGRADES (downgrade is what

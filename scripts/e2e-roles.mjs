@@ -2569,6 +2569,11 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       mkLeak.status === 201, `got ${mkLeak.status}`);
     const leakAdmin = await login(emLeak, pw1825);
     ok("QA-1834 fixture: that Admin signs in", !!leakAdmin);
+    // The invoice's audit rows were written by whoever moved it in seed-sample — the seeded admin.
+    const adminUserId = ((await req(admin, "GET", "/api/users")).data.items ?? [])
+      .find((u) => u.email === "admin@vidysea.com")?._id;
+    ok("QA-1840 fixture: the seeded admin's user id resolves (the actor whose trail carries the invoice)",
+      !!adminUserId, String(adminUserId));
 
     for (const [who, label] of [[leakAdmin, "an Admin without finance.view"], [ops, "Operations"]]) {
       if (!who) continue;
@@ -2596,6 +2601,16 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       ok(`QA-1835: the audit trail leaks no amount to ${label}`,
         au.status !== 200 || !/"amount"|"invoice_no"/.test(JSON.stringify(au.data.items ?? [])),
         `status ${au.status} · ${JSON.stringify(au.data.items ?? []).slice(0, 200)}`);
+
+      // QA-1840: the SIBLING trail, by actor rather than by entity. Cycle 2 masked one and missed
+      // this one, and this is the worse of the two: the route is Admin-only by construction, so
+      // "only an Admin may read it" is not a protection here — its whole audience IS the population
+      // the CEO's rule names. Operations is refused outright (403), which is also asserted, because
+      // a 200-with-no-money and a 403 are different products and only one of them is what shipped.
+      const byUser = await req(who, "GET", `/api/audit/by-user/${adminUserId}?limit=200`);
+      ok(`QA-1840: the per-person activity trail leaks no amount to ${label}`,
+        byUser.status !== 200 || !/"amount"|"invoice_no"/.test(JSON.stringify(byUser.data.items ?? [])),
+        `status ${byUser.status} · ${JSON.stringify(byUser.data.items ?? []).slice(0, 200)}`);
     }
 
     // The other half, and the half that makes masking dangerous if it is wrong: the three named
@@ -2607,6 +2622,9 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     const auA = await req(admin, "GET", `/api/audit/Invoice/${seededInv._id}`);
     ok("QA-1835: the granted admin still reads the amount in the audit trail — the row is masked on READ, not destroyed on write",
       /"amount"/.test(JSON.stringify(auA.data.items ?? [])), JSON.stringify(auA.data.items ?? []).slice(0, 200));
+    const buA = await req(admin, "GET", `/api/audit/by-user/${adminUserId}?limit=200`);
+    ok("QA-1840: ...and still reads it in the per-person trail — the mask follows the RIGHT, not the route",
+      /"amount"/.test(JSON.stringify(buA.data.items ?? [])), `status ${buA.status} · rows ${(buA.data.items ?? []).length}`);
   }
 
   // QA-1838: a right that gates nothing must not sit in the matrix pretending to.
