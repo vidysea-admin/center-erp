@@ -395,7 +395,26 @@ export function redactFiguresInText(text: string): string {
     // whole check and lost its year to the digit rule. The date had done nothing wrong. So the full
     // datetime is parked first, and whatever bare dates remain are parked second — a bad tail costs
     // the tail and nothing else.
-    .replace(/(?<!\d)(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?/g,
+    //
+    // QA-1874 (checker, cycle 2) — and read the pattern before reading the fix. This is the THIRD
+    // consecutive cycle whose finding was an unchecked sub-field of this one regex: first the date
+    // (shape but no values, QA-1870), then the time (shape but no values, QA-1873), now the
+    // FRACTIONAL SECONDS, which were `\.\d+` — unbounded, never value-checked, so
+    // `2026-09-05T10:00:00.424242` parked whole and carried a six-digit figure out. Patching a
+    // fourth sub-field would just book the fourth cycle.
+    //
+    // So the rule is stated as a rule instead: **no unbounded quantifier anywhere in this pattern.**
+    // Every field is a fixed width, because every field of a real timestamp is. A fraction is
+    // milliseconds — `toISOString()` emits exactly three digits and nothing this system writes emits
+    // more — so `\d{1,3}` is not a guess, it is the format. The `(?!\d)` after it matters as much as
+    // the bound: without it, `.424242` would park its first three digits AS the fraction and hand
+    // back `…:00.424—`, disclosing half the figure inside a timestamp that looked whole. With it, a
+    // fraction longer than milliseconds is not a fraction at all — the timestamp parks without one
+    // and the entire run falls to the digit rule, so the reader gets `…:00.—`: the whole date, none
+    // of the money. `scripts/check-user-copy.mjs` pins the
+    // rule (no `+`, `*` or open-ended `{n,}` outside a character class), so a future `\d+` added here
+    // fails the wall rather than waiting for a fourth checker to find what it let through.
+    .replace(/(?<!\d)(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,3}(?!\d))?)?(?:Z|[+-]\d{2}:\d{2})?/g,
       (m, yy, mm, dd, hh, mi, ss) => (plausibleDate(yy, mm, dd) && Number(hh) <= 23 && Number(mi) <= 59
         && (ss === undefined || Number(ss) <= 59)
         ? `@@D${enc(kept.push(m) - 1)}D@@` : m))

@@ -3011,9 +3011,9 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
         // existed that lookbehind was pinned by nothing at all. The fixture's own `424242-01-02` has
         // year 4242 and was already caught by the other half, which is exactly how a guard ends up
         // shipping untested beside a test that looks like it covers it.
-        const evilNote = `QA-1867 — ${ev} / ${ev.toLocaleString("en-IN")} / ₹${ev} / Rs.${ev} / ${ev}rs / _${ev}_ / (${ev}) / ref#${ev} / ${ev}-01-02 / 4242-42-42 / 422026-01-02 / 2026-09-05T424242`;
+        const evilNote = `QA-1867 — ${ev} / ${ev.toLocaleString("en-IN")} / ₹${ev} / Rs.${ev} / ${ev}rs / _${ev}_ / (${ev}) / ref#${ev} / ${ev}-01-02 / 4242-42-42 / 422026-01-02 / 2026-09-05T424242 / 2026-09-05T10:00:00.424242`;
         const ed2 = await req(admin, "PATCH", `/api/costs/${ledgerRow._id}`, { note: evilNote });
-        ok("QA-1867/QA-1870 fixture: a note carrying the figure in TWELVE notations is recorded", ed2.status === 200, `got ${ed2.status}`);
+        ok("QA-1867/QA-1870 fixture: a note carrying the figure in THIRTEEN notations is recorded", ed2.status === 200, `got ${ed2.status}`);
         const anyEv = (blob) => /424242|4,24,242|424,242|4242-42-42|422026/.test(blob);
         const gEv = await req(admin, "GET", `/api/audit/CostEntry/${ledgerRow._id}`);
         ok("QA-1867 control: the grant-holder sees them all — there is something to leak",
@@ -3023,7 +3023,7 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
           const r = await req(who, "GET", `/api/audit/CostEntry/${ledgerRow._id}`);
           ok(`QA-1867: ${label} READS that trail (200), so the redaction is genuinely exercised`,
             r.status === 200, `got ${r.status}`);
-          ok(`QA-1867: ...and NOT ONE of the twelve notations reaches ${label}`,
+          ok(`QA-1867: ...and NOT ONE of the thirteen notations reaches ${label}`,
             r.status === 200 && !anyEv(JSON.stringify(r.data ?? {})),
             `status ${r.status} · ${JSON.stringify(r.data ?? {}).slice(0, 300)}`);
         }

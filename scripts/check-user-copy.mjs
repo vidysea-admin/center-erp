@@ -3219,6 +3219,36 @@ for (const file of walk(root)) {
     // exactly what the runtime probe in `scripts/e2e-roles.mjs` measures on the wire, and every real
     // leak in this module was found there rather than here. Removed rather than tuned.
   }
+  // QA-1874: THREE CONSECUTIVE CYCLES were spent finding an unchecked sub-field of one regex — the
+  // date (shape, no values), then the time (shape, no values), then the fractional seconds
+  // (`\.\d+`, unbounded, so `2026-09-05T10:00:00.424242` parked whole and carried a six-digit figure
+  // to someone not allowed to see it). Each was fixed by hardening the field that had just been
+  // found, which is what booked the next cycle.
+  //
+  // This pins the RULE instead of the instance: inside `redactFiguresInText`'s date-parking
+  // patterns, **every field is a fixed width**, because every field of a real timestamp is. An
+  // unbounded quantifier there is a field nobody bounded, and it is the only shape all three of
+  // those defects had in common. `[+-]` is a character class, not a quantifier, so classes are
+  // stripped before looking — a check that flagged the timezone sign would be disarmed within a day.
+  // Extracted LINE-WISE on purpose. The first version of this pin used one clever regex to pull the
+  // patterns out of the function body, and it matched NOTHING — a green line that meant nothing,
+  // which is the exact failure this module has now recorded six times. A line that contains
+  // `.replace(/(?<!\d)` is unmistakable, and if the shape ever changes the `parkers.length === 0`
+  // branch below says so out loud instead of passing quietly.
+  const permsForDates = stripComments(fs.readFileSync(path.join(root, "lib/permissions.ts"), "utf-8"));
+  const parkers = permsForDates.split("\n")
+    .filter((l) => l.includes(".replace(/(?<!\\d)"))
+    .map((l) => l.slice(l.indexOf(".replace(/") + ".replace(".length, l.lastIndexOf("/g") + 2));
+  if (parkers.length !== 2) {
+    bad.push(`lib/permissions.ts: redactFiguresInText should park dates with exactly TWO \`(?<!\\d)\`-anchored patterns (the full datetime, then the bare date) — found ${parkers.length}. QA-1870's guard against a figure whose tail completes a date shape, or QA-1873's two-pass split that keeps a valid date when its time is garbage, has been changed.`);
+  }
+  for (const p of parkers) {
+    const noClasses = p.replace(/\[[^\]]*\]/g, "C");
+    if (/[+*]|\{\d+,\}/.test(noClasses)) {
+      bad.push(`lib/permissions.ts: the date-parking pattern ${p.slice(0, 60)}… contains an UNBOUNDED quantifier. Every field of a timestamp has a fixed width; three cycles of this module were spent on sub-fields that did not (QA-1870 · QA-1873 · QA-1874).`);
+    }
+  }
+
   // The field list itself must have exactly one statement, the way NO_ADMIN_BYPASS does for keys.
   const permsForFields = stripComments(fs.readFileSync(path.join(root, "lib/permissions.ts"), "utf-8"));
   if (!/INVOICE_MONEY_FIELDS *= *\[/.test(permsForFields)) bad.push("lib/permissions.ts: INVOICE_MONEY_FIELDS is gone — the field rule has no single statement");
