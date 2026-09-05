@@ -1270,8 +1270,21 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   ok("F-000: $-prefixed filter key rejected (400)", (await req(spoc, "GET", "/api/candidates?$where=1%3D%3D1")).status === 400);
   ok("F-000: dotted filter key rejected (400)", (await req(spoc, "GET", "/api/candidates?location.code=KOT02")).status === 400);
 
+  // QA-1871 (checker on qa-1865-1866, cycle 2): this row could not fail for the defect it names.
+  // Its third clause was `|| junk.status === 200`, which is true whenever the route answers at all
+  // — so an unknown key that DID reach Mongo and narrowed the result would have passed. Its second
+  // clause was no better: it compared a `/api/users` list length against `n0`, the SPOC's CANDIDATE
+  // count, two unrelated numbers that agreed only by luck.
+  //
+  // What the row is actually for: an unrecognised query key must be DROPPED, not passed to the
+  // driver — so the answer must be identical to the same request without it. That is measurable,
+  // so it is measured, against the right baseline.
+  const usersBase = await req(spoc, "GET", "/api/users?limit=5");
   const junk = await req(spoc, "GET", "/api/users?password_hash=x&limit=5");
-  ok("F-000: unknown filter key never reaches Mongo", junk.status === 403 || (junk.data.items?.length ?? 0) === n0 || junk.status === 200, `${junk.status}`);
+  ok("F-000: an unknown filter key is refused, or dropped so the answer is unchanged — never passed to Mongo",
+    junk.status === 400 || junk.status === 403
+      || (junk.status === usersBase.status && (junk.data.items?.length ?? -1) === (usersBase.data.items?.length ?? -2)),
+    `junk ${junk.status}/${junk.data.items?.length} vs base ${usersBase.status}/${usersBase.data.items?.length}`);
 
   // …while legitimate filtering must still work in both directions
   const narrowOwn = await req(spoc, "GET", `/api/candidates?location=${own._id}&limit=200`);
@@ -2965,10 +2978,14 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
         // route, because an offline check of the regex would not have caught the first version
         // either: the regex did what it said, the sentence describing it was wrong.
         const ev = 424242;
-        const evilNote = `QA-1867 — ${ev} / ${ev.toLocaleString("en-IN")} / ₹${ev} / Rs.${ev} / ${ev}rs / _${ev}_ / (${ev}) / ref#${ev}`;
+        // QA-1870 (checker, cycle 2) adds the last two: a figure whose TAIL completes a date shape,
+        // and a figure written entirely as an implausible one. Date-protection had become a way to
+        // smuggle money past the net that protects it — the shape was checked and the values were
+        // not, so `4242-42-42` was "a date" and month 42 went unremarked.
+        const evilNote = `QA-1867 — ${ev} / ${ev.toLocaleString("en-IN")} / ₹${ev} / Rs.${ev} / ${ev}rs / _${ev}_ / (${ev}) / ref#${ev} / ${ev}-01-02 / 4242-42-42`;
         const ed2 = await req(admin, "PATCH", `/api/costs/${ledgerRow._id}`, { note: evilNote });
-        ok("QA-1867 fixture: a note carrying the figure in eight notations is recorded", ed2.status === 200, `got ${ed2.status}`);
-        const anyEv = (blob) => /424242|4,24,242|424,242/.test(blob);
+        ok("QA-1867/QA-1870 fixture: a note carrying the figure in TEN notations is recorded", ed2.status === 200, `got ${ed2.status}`);
+        const anyEv = (blob) => /424242|4,24,242|424,242|4242-42-42/.test(blob);
         const gEv = await req(admin, "GET", `/api/audit/CostEntry/${ledgerRow._id}`);
         ok("QA-1867 control: the grant-holder sees them all — there is something to leak",
           gEv.status === 200 && anyEv(JSON.stringify(gEv.data ?? {})), `status ${gEv.status}`);
@@ -2977,7 +2994,7 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
           const r = await req(who, "GET", `/api/audit/CostEntry/${ledgerRow._id}`);
           ok(`QA-1867: ${label} READS that trail (200), so the redaction is genuinely exercised`,
             r.status === 200, `got ${r.status}`);
-          ok(`QA-1867: ...and NOT ONE of the eight notations reaches ${label}`,
+          ok(`QA-1867: ...and NOT ONE of the ten notations reaches ${label}`,
             r.status === 200 && !anyEv(JSON.stringify(r.data ?? {})),
             `status ${r.status} · ${JSON.stringify(r.data ?? {}).slice(0, 300)}`);
         }

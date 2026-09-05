@@ -347,15 +347,39 @@ export function redactFiguresInText(text: string): string {
   // would take away the half of the answer an ungranted Admin is entitled to, in the name of hiding
   // the half they are not. A date is not a figure anyone is hiding.
   //
-  // The placeholder is wrapped in LETTERS ("@@D<i>D@@") on purpose. The digit rule below is
-  // boundary-anchored with (?<![\w]), so an index sitting between two "D"s can never match it — a
-  // bare " <i> " placeholder would have been eaten the moment an index reached three digits, and
-  // restoring it with a loose / (\d+) / would have swallowed any small number the text legitimately
-  // had spaces around and replaced it with "undefined".
+  // THE PLACEHOLDER CARRIES NO DIGITS AT ALL, and that is load-bearing (QA-1869).
+  //
+  // It used to be "@@D<i>D@@" with a decimal index, safe because the digit rule was anchored and an
+  // index between two "D"s could not match. QA-1867 removed those anchors — correctly — and thereby
+  // made the index itself redactable: the hundred-and-first date in one string would have had its
+  // placeholder eaten and its date destroyed. Unreachable in practice, and beside the point: the
+  // COMMENT still promised a guarantee the code had stopped providing, which is the exact fault
+  // this whole unit is named for. A rule that depends on another rule's guard is a rule that breaks
+  // silently when that guard is right to go.
+  //
+  // So the index is encoded in letters A–J. Nothing about it can be a figure, whatever the digit
+  // rule becomes next.
+  const enc = (n: number) => String(n).replace(/\d/g, (d) => "ABCDEFGHIJ"[Number(d)]);
+  const dec = (s: string) => Number(s.replace(/[A-J]/g, (c) => String("ABCDEFGHIJ".indexOf(c))));
   const kept: string[] = [];
   const parked = text
-    .replace(/@@D\d+D@@/g, "") // so nothing in the input can impersonate a placeholder
-    .replace(/\d{4}-\d{2}-\d{2}(?:T[\d:.]+Z?)?/g, (m) => `@@D${kept.push(m) - 1}D@@`);
+    .replace(/@@D[A-J]+D@@/g, "") // so nothing in the input can impersonate a placeholder
+    // QA-1870 (checker, cycle 2): `(?<!\d)` is the whole fix for a figure whose TAIL completes a
+    // date shape. `424242-01-02` contains `4242-01-02`, which the date rule happily parked — and
+    // the leading `42` that was left behind is two digits, under the threshold, so the figure went
+    // out whole in a string that looked like a protected date. Date-protection had become a way to
+    // smuggle money past the net that protects it. A real date is never preceded by a digit.
+    //
+    // And the shape alone is not enough to earn protection. `4242-42-42` is a valid `\d{4}-\d{2}-\d{2}`
+    // and month 42 is not a month — cycle 1's verdict recorded that class and cycle 2 reproduced it
+    // on the wire. A figure only has to LOOK like a date to be waved through by a rule that checks
+    // the shape, so the rule checks the values: year 1900–2199, month 01–12, day 01–31. Anything
+    // else is not a date, falls through to the digit rule, and is redacted like the figure it is.
+    .replace(/(?<!\d)\d{4}-\d{2}-\d{2}(?:T[\d:.]+Z?)?/g, (m) => {
+      const y = Number(m.slice(0, 4)), mo = Number(m.slice(5, 7)), d = Number(m.slice(8, 10));
+      if (y < 1900 || y > 2199 || mo < 1 || mo > 12 || d < 1 || d > 31) return m;
+      return `@@D${enc(kept.push(m) - 1)}D@@`;
+    });
   // Then: any run of digits and separators holding three or more digits. Two-digit groups survive,
   // so a day, a month and a small count still read normally; 100 and up does not.
   // QA-1867 (checker, cycle 1 FAIL): this rule was described as "any run of three or more digits"
@@ -377,7 +401,7 @@ export function redactFiguresInText(text: string): string {
   const cut = parked
     .replace(/₹\s?[\d,]+(?:\.\d+)?/g, "₹—")
     .replace(/[\d,]{3,}/g, (m) => (m.replace(/\D/g, "").length >= 3 ? "—" : m));
-  return cut.replace(/@@D(\d+)D@@/g, (_, n) => kept[Number(n)] ?? "");
+  return cut.replace(/@@D([A-J]+)D@@/g, (_, n) => kept[dec(n)] ?? "");
 }
 
 // One Invoice-shaped document (or null/undefined) on its way out of a route.
