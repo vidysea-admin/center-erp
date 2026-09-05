@@ -2550,30 +2550,33 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
   ok("QA-1834 fixture: seed-sample's raised invoice (INV-2026-0456) is present with an amount",
     !!seededInv, JSON.stringify((invBook.data.items ?? []).map((i) => i.invoice_no ?? null)));
 
+  // Fixtures live OUT here, not inside `if (seededInv)`, because the money-leak probe below needs
+  // them too and does not depend on the seeded invoice. The first version declared them inside and
+  // the probe crashed with `adminUserId is not defined` — caught by my own run, and the reason the
+  // probe block now sits beside its fixtures rather than reaching into another scope for them.
+  const noMoney = (obj) => obj && typeof obj === "object" && MONEY.every((f) => obj[f] === undefined);
+  // A FRESH ungranted Admin, deliberately NOT `plainAdmin`: an assertion above grants `plainAdmin`
+  // `finance.view` in order to prove that granting works, so reusing it here would probe a persona
+  // that is supposed to see the money. The first version of this block did exactly that and
+  // reported three "leaks" that were the test contaminating itself; Operations passing the same
+  // three assertions in the same run is what showed the masking was fine and the persona was not.
+  const emLeak = `q1834.leak.${s1825}@vidysea-test.local`;
+  const mkLeak = await req(admin, "POST", "/api/users", {
+    name: "Q1834 Ungranted Admin", email: emLeak, password: pw1825, role: "Admin",
+    location_scope: [], can_edit: true,
+  });
+  ok("QA-1834 fixture: a second, never-granted Admin exists for the leak probes",
+    mkLeak.status === 201, `got ${mkLeak.status}`);
+  const leakAdmin = await login(emLeak, pw1825);
+  ok("QA-1834 fixture: that Admin signs in", !!leakAdmin);
+  // The invoice's audit rows were written by whoever moved it in seed-sample — the seeded admin.
+  const adminUserId = ((await req(admin, "GET", "/api/users")).data.items ?? [])
+    .find((u) => u.email === "admin@vidysea.com")?._id;
+  ok("QA-1840 fixture: the seeded admin's user id resolves (the actor whose trail carries the invoice)",
+    !!adminUserId, String(adminUserId));
+
   if (seededInv) {
     const bId = seededInv.batch?._id ?? seededInv.batch;
-    const noMoney = (obj) => obj && typeof obj === "object" && MONEY.every((f) => obj[f] === undefined);
-
-    // A FRESH ungranted Admin, deliberately not `plainAdmin`. `plainAdmin` was granted
-    // `finance.view` a few lines above, by the very assertion that proves granting works — so
-    // reusing it here would test a persona that is supposed to see the money, and the first run of
-    // this block did exactly that and reported three "leaks" that were my own test contaminating
-    // itself. Operations passed the same three assertions in that run, which is what showed the
-    // masking was fine and the persona was not.
-    const emLeak = `q1834.leak.${s1825}@vidysea-test.local`;
-    const mkLeak = await req(admin, "POST", "/api/users", {
-      name: "Q1834 Ungranted Admin", email: emLeak, password: pw1825, role: "Admin",
-      location_scope: [], can_edit: true,
-    });
-    ok("QA-1834 fixture: a second, never-granted Admin exists for the leak probes",
-      mkLeak.status === 201, `got ${mkLeak.status}`);
-    const leakAdmin = await login(emLeak, pw1825);
-    ok("QA-1834 fixture: that Admin signs in", !!leakAdmin);
-    // The invoice's audit rows were written by whoever moved it in seed-sample — the seeded admin.
-    const adminUserId = ((await req(admin, "GET", "/api/users")).data.items ?? [])
-      .find((u) => u.email === "admin@vidysea.com")?._id;
-    ok("QA-1840 fixture: the seeded admin's user id resolves (the actor whose trail carries the invoice)",
-      !!adminUserId, String(adminUserId));
 
     for (const [who, label] of [[leakAdmin, "an Admin without finance.view"], [ops, "Operations"]]) {
       if (!who) continue;
