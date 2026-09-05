@@ -95,7 +95,23 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
     // Gated only when the batch actually carries money rows: deleting a mistaken batch that has
     // members and logs but no costs stays exactly as it was, so this narrows nothing that was not
     // financial to begin with.
-    if (carried.costs > 0 || carried.invoices > 0) {
+    //
+    // QA-1865 (senior review): the counts above are taken at the top of the handler, several
+    // awaited round-trips before the deletes — `requirePerm`, the body parse, `requireFinance`'s
+    // own `User.findById`. The `deleteMany` calls below are UNCONDITIONAL, so a cost written to
+    // this batch inside that window would have been erased by an actor who never met the finance
+    // gate, because the gate was asked about a count from a few awaits ago rather than about what
+    // is on the point of being deleted. Re-counted here, as late as it can be.
+    //
+    // HONEST LIMIT: this narrows the window to `requireFinance`'s own `User.findById`; it does not
+    // close it, and only a transaction would. It is not widened to a second, non-throwing way of
+    // asking "does this user hold finance?" — two ways of asking one question is how one of them
+    // stops matching, which this codebase has paid for more than once.
+    const moneyNow = (await Promise.all([
+      CostEntry.countDocuments({ batch: id }),
+      Invoice.countDocuments({ batch: id }),
+    ])).reduce((a, n) => a + n, 0);
+    if (moneyNow > 0) {
       await requireFinance(user, "approve");
     }
     await Promise.all([

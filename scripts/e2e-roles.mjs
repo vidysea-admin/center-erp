@@ -2855,15 +2855,79 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       const grantedQ = await req(admin, "GET", "/api/approvals?status=all");
       ok("QA-1863 control: the grant-holder DOES get the typed figure — so there is something to leak",
         carriesFigure(JSON.stringify(grantedQ.data ?? {})), `status ${grantedQ.status}`);
-      for (const [who, label] of [[leakAdmin, "an Admin without finance.view"], [ops, "Operations"]]) {
-        if (!who) continue;
-        const r = await req(who, "GET", "/api/approvals?status=all");
-        ok(`QA-1863: the free-text note on a parked cost carries no figure to ${label}`,
-          r.status !== 200 || !carriesFigure(JSON.stringify(r.data ?? {})), `status ${r.status}`);
-      }
+      // QA-1866 (checker, cycle 1): the first version of this loop wrote `r.status !== 200 || ...`
+      // for BOTH personas. Operations is 403 on `/api/approvals`, so its arm short-circuited on the
+      // status and asserted nothing about masking — a vacuous pass, dressed as a masking test. The
+      // two personas are not interchangeable here and are no longer written as if they were: the
+      // Admin arm MUST get 200 (or the masking path was never exercised) and Operations MUST be
+      // refused outright. Either one changing is a finding.
+      const leakQ = leakAdmin ? await req(leakAdmin, "GET", "/api/approvals?status=all") : { status: 0 };
+      ok("QA-1863: an Admin without finance.view still READS the approvals queue (200) — so the masking path is genuinely exercised",
+        leakQ.status === 200, `got ${leakQ.status}`);
+      ok("QA-1863: ...and the free-text note on a parked cost carries them no figure",
+        leakQ.status === 200 && !carriesFigure(JSON.stringify(leakQ.data ?? {})), `status ${leakQ.status}`);
+      const opsQ = ops ? await req(ops, "GET", "/api/approvals?status=all") : { status: 0 };
+      ok("QA-1866: Operations is REFUSED the approvals queue outright (403) — stated as a refusal, not disguised as a masking pass",
+        opsQ.status === 403, `got ${opsQ.status}`);
       const trail = await req(leakAdmin ?? admin, "GET", `/api/audit/by-user/${opsUserId}?limit=200`);
       ok("QA-1863: ...nor through the audit trail, where the same note is stored raw and masked on read",
         trail.status !== 200 || !carriesFigure(JSON.stringify(trail.data ?? {})), `status ${trail.status}`);
+
+      // ---- QA-1865: the SAME field, reached by a different route, was still raw ----
+      // Found by senior review of the QA-1863 fix, not by these assertions — which is the point.
+      // The five rows above walk the CREATE-via-approval path, where the note travels inside a
+      // `payload` object and `stripMoneyKeys` reaches it. `auditDiff` writes ONE ROW PER CHANGED
+      // FIELD, so EDITING a cost's note stores a BARE STRING on a `CostEntry` row, and the bare-
+      // string branch of `maskMoneyInAuditRow` was gated to `entity === "ApprovalRequest"` and let
+      // it through untouched. A test that walks one path proves one path.
+      const q1865 = 787878;
+      const ledgerRow = ((await req(admin, "GET", "/api/costs")).data.items ?? [])[0];
+      if (ledgerRow) {
+        const edit = await req(admin, "PATCH", `/api/costs/${ledgerRow._id}`,
+          { note: `QA-1865 edited note — settled ${q1865} against ${q1865.toLocaleString("en-IN")}` });
+        ok("QA-1865 fixture: a cost's note is edited, which audits it as a bare per-field string",
+          edit.status === 200, `got ${edit.status}`);
+        const hasFig = (blob) => /(?<![\w])787878(?![\w])|(?<![\w])7,87,878(?![\w])|(?<![\w])787,878(?![\w])/.test(blob);
+        const granted = await req(admin, "GET", `/api/audit/CostEntry/${ledgerRow._id}`);
+        ok("QA-1865 control: the grant-holder DOES see the edited note's figure — there is something to leak",
+          hasFig(JSON.stringify(granted.data ?? {})), `status ${granted.status}`);
+        // Per QA-1866: each persona is asserted for the status it actually gets, so neither arm can
+        // pass by being refused. If a future change turns one of these into a 403 the row fails and
+        // says so, instead of quietly becoming decoration.
+        for (const [who, label] of [[leakAdmin, "an Admin without finance.view"], [ops, "Operations"]]) {
+          if (!who) continue;
+          const r = await req(who, "GET", `/api/audit/CostEntry/${ledgerRow._id}`);
+          ok(`QA-1865: ${label} still READS the cost's audit trail (200), so the masking path is exercised`,
+            r.status === 200, `got ${r.status}`);
+          ok(`QA-1865: ...and an EDITED cost note carries them no figure`,
+            r.status === 200 && !hasFig(JSON.stringify(r.data ?? {})), `status ${r.status}`);
+        }
+      } else ok("QA-1865 fixture: a ledger cost row exists to edit", false, "none visible");
+
+      // ---- QA-1865: Closure.dues_note, the field an allowlist of names could not have known ----
+      // Rule 52's no-dues attestation is free text about MONEY by definition, and it was not in the
+      // five names the first fix listed. Its audit row is an object with no `amount` in it, so the
+      // payload-driven redactor has nothing to key on either — both halves of this fix are needed.
+      if (bId2) {
+        const dn = await req(admin, "PUT", `/api/batches/${bId2}/closure`,
+          { dues_note: `QA-1865 dues — 656565 cleared, balance ${(656565).toLocaleString("en-IN")}` });
+        ok("QA-1865 fixture: a closure dues_note carrying a bare figure is recorded", dn.status === 200, `got ${dn.status}`);
+        const hasDues = (blob) => /(?<![\w])656565(?![\w])|(?<![\w])6,56,565(?![\w])/.test(blob);
+        const gr = await req(admin, "GET", `/api/audit/Closure/${bId2}`);
+        ok("QA-1865 control: the grant-holder DOES see the dues figure — there is something to leak",
+          gr.status === 200 && hasDues(JSON.stringify(gr.data ?? {})), `status ${gr.status}`);
+        // The Admin arm is the load-bearing one and is asserted on 200, per QA-1866.
+        const leakC = leakAdmin ? await req(leakAdmin, "GET", `/api/audit/Closure/${bId2}`) : { status: 0 };
+        ok("QA-1865: an Admin without finance.view still READS the closure audit trail (200)",
+          leakC.status === 200, `got ${leakC.status}`);
+        ok("QA-1865: ...and the closure's dues_note carries them no figure",
+          leakC.status === 200 && !hasDues(JSON.stringify(leakC.data ?? {})), `status ${leakC.status}`);
+        // Operations may be refused this trail outright; that is a fine outcome but a DIFFERENT
+        // guarantee, so it is named rather than folded into a masking assertion (QA-1866).
+        const opsC = ops ? await req(ops, "GET", `/api/audit/Closure/${bId2}`) : { status: 0 };
+        ok(`QA-1865: Operations is either refused the closure trail or gets it masked — actual: ${opsC.status}`,
+          opsC.status === 403 || (opsC.status === 200 && !hasDues(JSON.stringify(opsC.data ?? {}))), `status ${opsC.status}`);
+      }
     }
 
     // Put the switch back so the rest of the wall sees the shipped default (rule OFF, nobody named).

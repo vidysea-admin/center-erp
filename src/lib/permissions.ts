@@ -305,12 +305,63 @@ function stripMoneyKeys<T extends Record<string, unknown>>(obj: T): T {
   // QA-1863 (checker on qa-1826/1827): stripping the money KEYS left the free-text ones alone, so
   // `payload.note` shipped raw beside a summary that had been correctly redacted — the figure
   // removed from the sentence the product writes and left in the sentence the user typed, in the
-  // same object. Every free-text field in the payload is redacted with the payload's own values,
-  // which is the same rule the summary already gets.
-  for (const k of ["note", "reason", "issue_note", "decision_note", "status_reason"]) {
+  // same object.
+  //
+  // QA-1865 (senior review of the QA-1863 fix, same day): the first version of this listed the
+  // free-text field NAMES — `note`, `reason`, `issue_note`, `decision_note`, `status_reason` —
+  // derived by reading what exists today. It missed `Closure.dues_note`, a field that exists for
+  // precisely this purpose (Rule 52, "the MONEY story is over") and sits one model away from the
+  // ones it did list. An allowlist of field names needed a live-caught addition within hours of
+  // being written, which is the same shape as the four rewrites of the structural pin: a list of
+  // names cannot keep up with a codebase that keeps adding names.
+  //
+  // So: EVERY string value, not a named subset. The redaction is payload-driven and
+  // boundary-anchored, so running it over a string that holds no figure returns that string
+  // unchanged — the cost of widening is nil and the maintenance burden goes to zero.
+  for (const k of Object.keys(out)) {
     if (typeof out[k] === "string") out[k] = redactMoneyInText(out[k] as string, obj);
   }
   return out as T;
+}
+
+// ---- QA-1865: the figure with no rupee sign, on a row that carries no payload to key on ----
+//
+// `redactMoneyInText` needs a payload: with one it knows the exact figures to hunt in every
+// notation, and without one it can only take what wears a `₹`. That is enough for an
+// ApprovalRequest, whose summary always travels beside its payload. It is NOT enough for the shape
+// the senior review found: `auditDiff` (src/lib/audit.ts) writes ONE ROW PER CHANGED FIELD, so
+// editing a cost's note through `PATCH /api/costs/[id]` stores `{entity:"CostEntry", field:"note",
+// new_value:"advance of 424242 paid"}` — a BARE STRING, with no amount anywhere in the row to key
+// on. Nothing in this module could have redacted it, and the QA-1863 assertions did not see it
+// because they walked the create-via-approval path only.
+//
+// On an entity whose entire subject is money there is no need to know which figure is the secret:
+// every figure is. This is deliberately blunt, and blunt is the safe direction for a rule about
+// money — the module has already settled that "coincidental collisions still redact" is correct.
+// It costs legibility (a date typed into a note loses its year) and that is the trade taken.
+const MONEY_ENTITIES: ReadonlySet<string> = new Set<string>(["CostEntry", "Invoice", "Closure", "ApprovalRequest"]);
+
+export function redactFiguresInText(text: string): string {
+  // Dates are protected before anything else. This rule runs over AUDIT rows, whose entire job is
+  // "which admin did what, and when" — a blunt figure rule that ate the year out of every timestamp
+  // would take away the half of the answer an ungranted Admin is entitled to, in the name of hiding
+  // the half they are not. A date is not a figure anyone is hiding.
+  //
+  // The placeholder is wrapped in LETTERS ("@@D<i>D@@") on purpose. The digit rule below is
+  // boundary-anchored with (?<![\w]), so an index sitting between two "D"s can never match it — a
+  // bare " <i> " placeholder would have been eaten the moment an index reached three digits, and
+  // restoring it with a loose / (\d+) / would have swallowed any small number the text legitimately
+  // had spaces around and replaced it with "undefined".
+  const kept: string[] = [];
+  const parked = text
+    .replace(/@@D\d+D@@/g, "") // so nothing in the input can impersonate a placeholder
+    .replace(/\d{4}-\d{2}-\d{2}(?:T[\d:.]+Z?)?/g, (m) => `@@D${kept.push(m) - 1}D@@`);
+  // Then: any run of digits and separators holding three or more digits. Two-digit groups survive,
+  // so a day, a month and a small count still read normally; 100 and up does not.
+  const cut = parked
+    .replace(/₹\s?[\d,]+(?:\.\d+)?/g, "₹—")
+    .replace(/(?<![\w.])[\d,]{3,}(?![\w])/g, (m) => (m.replace(/\D/g, "").length >= 3 ? "—" : m));
+  return cut.replace(/@@D(\d+)D@@/g, (_, n) => kept[Number(n)] ?? "");
 }
 
 // One Invoice-shaped document (or null/undefined) on its way out of a route.
@@ -358,11 +409,35 @@ export function maskMoneyInAuditRow<T extends Record<string, any>>(row: T, canSe
         obj.payload = stripMoneyKeys(obj.payload as Record<string, unknown>);
       }
       if (typeof src.summary === "string") obj.summary = redactMoneyInText(src.summary, src.payload);
+      // QA-1865: a payload-driven redaction can only hunt figures the payload names. A Closure
+      // patch carries `dues_note` and no `amount`, so a settlement figure typed without a rupee
+      // sign has nothing to key on. On a money entity, take every figure.
+      if (MONEY_ENTITIES.has(row.entity)) {
+        for (const k of Object.keys(obj)) {
+          if (typeof obj[k] === "string") obj[k] = redactFiguresInText(obj[k] as string);
+        }
+        const p = obj.payload;
+        if (p && typeof p === "object" && !Array.isArray(p)) {
+          const pr = p as Record<string, unknown>;
+          for (const k of Object.keys(pr)) {
+            if (typeof pr[k] === "string") pr[k] = redactFiguresInText(pr[k] as string);
+          }
+        }
+      }
       return obj;
     }
     // A bare STRING value on an ApprovalRequest row is a summary sentence, and sentences carry
     // figures — which is exactly how this door stayed open past three cycles of key-stripping.
-    if (typeof v === "string" && row.entity === "ApprovalRequest") return redactMoneyInText(v);
+    //
+    // QA-1865 (senior review): the `row.entity === "ApprovalRequest"` condition was the whole bug.
+    // `auditDiff` writes one row per changed field, so a cost's edited `note` arrives here as a
+    // bare string on a `CostEntry` row and fell straight through this branch to `return v` — raw,
+    // to exactly the ungranted Admin this module exists to stop. Every money entity is covered now,
+    // and with `redactFiguresInText`, because a per-field row carries no payload to key on.
+    if (typeof v === "string") {
+      if (row.entity === "ApprovalRequest") return redactFiguresInText(redactMoneyInText(v));
+      if (MONEY_ENTITIES.has(row.entity)) return redactFiguresInText(v);
+    }
     return v;
   };
   return { ...row, old_value: scrub(row.old_value, row.field), new_value: scrub(row.new_value, row.field) };
