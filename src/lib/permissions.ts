@@ -358,9 +358,25 @@ export function redactFiguresInText(text: string): string {
     .replace(/\d{4}-\d{2}-\d{2}(?:T[\d:.]+Z?)?/g, (m) => `@@D${kept.push(m) - 1}D@@`);
   // Then: any run of digits and separators holding three or more digits. Two-digit groups survive,
   // so a day, a month and a small count still read normally; 100 and up does not.
+  // QA-1867 (checker, cycle 1 FAIL): this rule was described as "any run of three or more digits"
+  // and written as `(?<![\w.])[\d,]{3,}(?![\w])` — which is not that at all. A dot before the
+  // figure, a letter after it, or an underscore on either side defeated every one of the anchors:
+  // `Rs.424242`, `424242rs` and `_424242_` went out raw in the SAME string that redacted four other
+  // notations of the same figure, on the one surface where this is the only net. `_424242_` is
+  // already recorded in REQ-235a as a live escape from the other redactor — the new net reproduced
+  // a hole the contract names.
+  //
+  // The anchors were borrowed from `redactMoneyInText`, where they are correct: that rule
+  // substitutes SPECIFIC values into arbitrary prose and needs boundaries so `20` does not match
+  // inside `20th` (QA-1851). This rule substitutes nothing and hunts no particular figure — it runs
+  // only on entities whose whole subject is money, so every run of digits is fair game. Copying a
+  // guard along with a regex, into a place whose problem is the opposite one, is the same
+  // second-copy fault this module keeps paying for.
+  //
+  // Dates are already parked above, so they need no boundary to survive.
   const cut = parked
     .replace(/₹\s?[\d,]+(?:\.\d+)?/g, "₹—")
-    .replace(/(?<![\w.])[\d,]{3,}(?![\w])/g, (m) => (m.replace(/\D/g, "").length >= 3 ? "—" : m));
+    .replace(/[\d,]{3,}/g, (m) => (m.replace(/\D/g, "").length >= 3 ? "—" : m));
   return cut.replace(/@@D(\d+)D@@/g, (_, n) => kept[Number(n)] ?? "");
 }
 

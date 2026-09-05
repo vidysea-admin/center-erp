@@ -2616,6 +2616,26 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
         `status ${byUser.status} · ${JSON.stringify(byUser.data.items ?? []).slice(0, 200)}`);
     }
 
+    // QA-1868 (checker, cycle 1): the two loops above are written `status !== 200 || <no money>`,
+    // which is correct for the persona that is REFUSED and empty for the persona that is not — and
+    // the loop cannot tell you which one you got. Operations is refused the per-person trail
+    // outright, so that arm asserts nothing about masking, exactly the shape QA-1866 was filed for.
+    // Rather than rewrite two loops that also serve other purposes, the load-bearing persona is
+    // pinned explicitly here: the ungranted ADMIN must actually receive both trails, so the masking
+    // those two rows claim to test is genuinely exercised by at least one arm.
+    if (leakAdmin && seededInv && adminUserId) {
+      const a1 = await req(leakAdmin, "GET", `/api/audit/Invoice/${seededInv._id}`);
+      ok("QA-1868: the ungranted Admin really READS the invoice audit trail (200) — QA-1835's masking arm is not vacuous",
+        a1.status === 200, `got ${a1.status}`);
+      ok("QA-1868: ...and it carries them no money",
+        a1.status === 200 && !/"amount"|"invoice_no"/.test(JSON.stringify(a1.data.items ?? [])), `status ${a1.status}`);
+      const a2 = await req(leakAdmin, "GET", `/api/audit/by-user/${adminUserId}?limit=200`);
+      ok("QA-1868: the ungranted Admin really READS the per-person trail (200) — QA-1840's masking arm is not vacuous",
+        a2.status === 200, `got ${a2.status}`);
+      ok("QA-1868: ...and it carries them no money",
+        a2.status === 200 && !/"amount"|"invoice_no"/.test(JSON.stringify(a2.data.items ?? [])), `status ${a2.status}`);
+    }
+
     // The other half, and the half that makes masking dangerous if it is wrong: the three named
     // people must still see the real numbers. A mask that hides money from EVERYONE would pass
     // every assertion above and destroy the feature.
@@ -2752,9 +2772,16 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       const target = pendingNow[idx];
       if (!target || !leakAdmin) continue;
       const dec = await req(leakAdmin, "POST", `/api/approvals/${target._id}`, { decision, note: "QA-1843 probe" });
-      ok(`QA-1843 probe: the DECIDE response (${decision}) carries no money to an Admin without finance.view`,
-        dec.status !== 200 || !MONEY_ON_WIRE.test(JSON.stringify(dec.data ?? {})),
-        `status ${dec.status} · ${JSON.stringify(dec.data ?? {}).slice(0, 220)}`);
+      // QA-1868 (checker, cycle 1): this row was written in cycle 4 of the previous unit, when an
+      // ungranted Admin could still reach the decide route and the response's masking was the only
+      // control. QA-1844 then gated the route itself, so this persona now gets 403 every time and
+      // `dec.status !== 200 ||` short-circuits — the row has been green ever since without testing
+      // anything. Its subject genuinely no longer exists as a reachable state, so it asserts the
+      // refusal it actually gets and says the masking branch is unreachable for this persona rather
+      // than pretending to exercise it. (`maskApprovalMoney` stays in the route as depth: it is
+      // unreachable only because every caller who now passes the gate is entitled to the figure.)
+      ok(`QA-1843/QA-1844: the DECIDE route (${decision}) REFUSES an Admin without finance.approve — the response-masking branch is unreachable for them`,
+        dec.status === 403, `got ${dec.status} · ${JSON.stringify(dec.data ?? {}).slice(0, 220)}`);
     }
 
     // The notification the park created is broadcast to a ROLE, not to grant-holders, and is mailed.
@@ -2869,9 +2896,11 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       const opsQ = ops ? await req(ops, "GET", "/api/approvals?status=all") : { status: 0 };
       ok("QA-1866: Operations is REFUSED the approvals queue outright (403) — stated as a refusal, not disguised as a masking pass",
         opsQ.status === 403, `got ${opsQ.status}`);
-      const trail = await req(leakAdmin ?? admin, "GET", `/api/audit/by-user/${opsUserId}?limit=200`);
+      const trail = leakAdmin ? await req(leakAdmin, "GET", `/api/audit/by-user/${opsUserId}?limit=200`) : { status: 0 };
+      ok("QA-1868: the ungranted Admin really READS the initiator's trail (200) — the row below is not vacuous",
+        trail.status === 200, `got ${trail.status}`);
       ok("QA-1863: ...nor through the audit trail, where the same note is stored raw and masked on read",
-        trail.status !== 200 || !carriesFigure(JSON.stringify(trail.data ?? {})), `status ${trail.status}`);
+        trail.status === 200 && !carriesFigure(JSON.stringify(trail.data ?? {})), `status ${trail.status}`);
 
       // ---- QA-1865, first half: a field name NOBODY listed, because the payload is the body ----
       // The checker's row is exact about why the five-name list could not hold: `payload` is the
@@ -2924,6 +2953,35 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
         const granted = await req(admin, "GET", `/api/audit/CostEntry/${ledgerRow._id}`);
         ok("QA-1865 control: the grant-holder DOES see the edited note's figure — there is something to leak",
           hasFig(JSON.stringify(granted.data ?? {})), `status ${granted.status}`);
+        // ---- QA-1867 (checker, cycle 1 FAIL): the notations the "blunt" net let through ----
+        // The blunt rule was written with `redactMoneyInText`'s boundary anchors copied onto it,
+        // where they are correct and here they were not: a dot before the figure, a letter after
+        // it, or an underscore either side defeated all of them. The checker read back one string
+        // with four notations redacted and three raw — on the ONE surface where this is the only
+        // net. `_424242_` is named in REQ-235a as a live escape from the other redactor, so the new
+        // net had reproduced a hole the contract already records.
+        //
+        // Every one of those forms is written into a real note here and read back through the real
+        // route, because an offline check of the regex would not have caught the first version
+        // either: the regex did what it said, the sentence describing it was wrong.
+        const ev = 424242;
+        const evilNote = `QA-1867 — ${ev} / ${ev.toLocaleString("en-IN")} / ₹${ev} / Rs.${ev} / ${ev}rs / _${ev}_ / (${ev}) / ref#${ev}`;
+        const ed2 = await req(admin, "PATCH", `/api/costs/${ledgerRow._id}`, { note: evilNote });
+        ok("QA-1867 fixture: a note carrying the figure in eight notations is recorded", ed2.status === 200, `got ${ed2.status}`);
+        const anyEv = (blob) => /424242|4,24,242|424,242/.test(blob);
+        const gEv = await req(admin, "GET", `/api/audit/CostEntry/${ledgerRow._id}`);
+        ok("QA-1867 control: the grant-holder sees them all — there is something to leak",
+          gEv.status === 200 && anyEv(JSON.stringify(gEv.data ?? {})), `status ${gEv.status}`);
+        for (const [who, label] of [[leakAdmin, "an Admin without finance.view"], [ops, "Operations"]]) {
+          if (!who) continue;
+          const r = await req(who, "GET", `/api/audit/CostEntry/${ledgerRow._id}`);
+          ok(`QA-1867: ${label} READS that trail (200), so the redaction is genuinely exercised`,
+            r.status === 200, `got ${r.status}`);
+          ok(`QA-1867: ...and NOT ONE of the eight notations reaches ${label}`,
+            r.status === 200 && !anyEv(JSON.stringify(r.data ?? {})),
+            `status ${r.status} · ${JSON.stringify(r.data ?? {}).slice(0, 300)}`);
+        }
+
         // Per QA-1866: each persona is asserted for the status it actually gets, so neither arm can
         // pass by being refused. If a future change turns one of these into a 403 the row fails and
         // says so, instead of quietly becoming decoration.
