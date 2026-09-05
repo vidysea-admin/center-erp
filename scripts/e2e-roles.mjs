@@ -2625,7 +2625,12 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     const auA = await req(admin, "GET", `/api/audit/Invoice/${seededInv._id}`);
     ok("QA-1835: the granted admin still reads the amount in the audit trail — the row is masked on READ, not destroyed on write",
       /"amount"/.test(JSON.stringify(auA.data.items ?? [])), JSON.stringify(auA.data.items ?? []).slice(0, 200));
-    const buA = await req(admin, "GET", `/api/audit/by-user/${adminUserId}?limit=200`);
+    // `?entity=Invoice` is load-bearing, not tidiness: without it this asks for the 200 most recent
+    // rows of that actor's whole trail, and once the money-leak probe below started parking costs
+    // and toggling rules the invoice row fell off the first page — so the assertion failed on
+    // VOLUME, not on masking. An assertion whose truth depends on how much else happened first is
+    // pinning the fixture again.
+    const buA = await req(admin, "GET", `/api/audit/by-user/${adminUserId}?entity=Invoice&limit=200`);
     ok("QA-1840: ...and still reads it in the per-person trail — the mask follows the RIGHT, not the route",
       /"amount"/.test(JSON.stringify(buA.data.items ?? [])), `status ${buA.status} · rows ${(buA.data.items ?? []).length}`);
   }
@@ -2708,14 +2713,26 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     // The DECIDE response is a POST, so the GET walk above cannot reach it — and that is exactly
     // where the sixth leak was: the queue was masked and the button's own reply handed the figure
     // back. Deciding consumes the parked request, so this runs last.
-    const pendingNow = (await req(admin, "GET", "/api/approvals?status=Pending")).data.items ?? [];
-    const mine1843 = pendingNow.find((i) => i.action === "cost.post");
-    if (mine1843 && leakAdmin) {
-      const dec = await req(leakAdmin, "POST", `/api/approvals/${mine1843._id}`, { decision: "Rejected", note: "QA-1843 probe" });
-      ok("QA-1843 probe: the DECIDE response carries no money to an Admin without finance.view",
+    // BOTH decisions, because the route returns the document from TWO places — an early return for
+    // Reject and the replay path for Approve — and the first version of this probe exercised only
+    // Reject. When the Approve branch was mutated to prove the probe could catch it, the probe
+    // passed: the mutant and the test had never met. Two parked costs, one of each verb.
+    const parked2 = catP && jprP
+      ? await req(ops, "POST", "/api/costs", { entry_date: "2026-09-05", location: jprP._id, category: catP._id, amount: 876543, note: "QA-1843 probe fixture 2" })
+      : { status: 0 };
+    ok("QA-1843 fixture: a second cost parks, so both decide verbs can be probed",
+      parked2.status === 202, `got ${parked2.status}`);
+    const pendingNow = ((await req(admin, "GET", "/api/approvals?status=Pending")).data.items ?? [])
+      .filter((i) => i.action === "cost.post");
+    ok("QA-1843 probe: two parked cost requests are available to decide", pendingNow.length >= 2, `pending=${pendingNow.length}`);
+    for (const [idx, decision] of [[0, "Rejected"], [1, "Approved"]]) {
+      const target = pendingNow[idx];
+      if (!target || !leakAdmin) continue;
+      const dec = await req(leakAdmin, "POST", `/api/approvals/${target._id}`, { decision, note: "QA-1843 probe" });
+      ok(`QA-1843 probe: the DECIDE response (${decision}) carries no money to an Admin without finance.view`,
         dec.status !== 200 || !MONEY_ON_WIRE.test(JSON.stringify(dec.data ?? {})),
         `status ${dec.status} · ${JSON.stringify(dec.data ?? {}).slice(0, 220)}`);
-    } else ok("QA-1843 probe: a parked request was available to decide", false, `pending=${pendingNow.length}`);
+    }
 
     // The notification the park created is broadcast to a ROLE, not to grant-holders, and is mailed.
     // It must not carry the figure to anyone, which is why it is redacted unconditionally.
