@@ -1643,8 +1643,20 @@ ok("F-B17: a genuinely new name still creates (trimmed)", freshCat.data.item?.na
     const landed = (await req("GET", "/api/costs")).data.items.filter((c) => c.note === "R-E queue test " + stamp);
     ok("R-E: the approved entry lands exactly once, owned by the initiator",
       landed.length === 1 && !!landed[0].entered_by, JSON.stringify({ n: landed.length, by: landed[0]?.entered_by?.name }));
-    const direct = await req("POST", "/api/costs", { category: cats[0]._id, amount: 5, trainer: trainer._id, note: "R-E direct " + stamp }, 201);
-    ok("R-E: the Admin-approver's own post writes directly (201)", direct.status === 201);
+    // QA-1826 (S1, CEO 2026-09-05) REVERSES what this used to pin. It asserted that an Admin who is
+    // the configured approver posts STRAIGHT TO THE LEDGER (201) — and that escape hatch is exactly
+    // what defeated the two-point check for the one role that most needed it: nothing was parked,
+    // so the "an initiator can never approve their own request" refusal was unreachable for them.
+    // The CEO's words: "अगर कोई चीज़ मैंने डाली है तो वो अप्रूव मैं नहीं कर सकता, वो शुभी और मनीष जी
+    // होंगे।" So the pin is INVERTED, not deleted, and the refusal it exists to protect is asserted
+    // directly underneath — which is what the old shape could never reach.
+    const direct = await req("POST", "/api/costs", { category: cats[0]._id, amount: 5, trainer: trainer._id, note: "R-E direct " + stamp }, 202);
+    ok("QA-1826: the Admin-approver's own post PARKS too (202) — no escape hatch", direct.status === 202);
+    const ownId = direct.data?.item?._id;
+    if (ownId) {
+      const self = await req("POST", `/api/approvals/${ownId}`, { decision: "Approved" }, 403);
+      ok("QA-1826: ...and they cannot approve it themselves — the refusal is REACHABLE now", self.status === 403);
+    } else ok("QA-1826: the parked request came back with an id", false, JSON.stringify(direct.data).slice(0, 120));
     await req("PUT", "/api/approvals", { action: "cost.post", enabled: false }, 200);
   } else {
     ok("R-E skipped — ops login unavailable (run seed:sample)", true);
