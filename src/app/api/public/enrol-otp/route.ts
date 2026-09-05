@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, HttpError } from "@/lib/authz";
+import { apiHandler, HttpError, readJson } from "@/lib/authz";
 import { rateLimit, clientKey, phoneChallengeGate } from "@/lib/rate-limit";
 import { Candidate, EDUCATION_LEVEL, Location, Notification, Program, PublicToken } from "@/models";
 import { aadhaarError, canonicalAadhaar, canonicalPhone, emailError, phoneError } from "@/lib/validate";
@@ -43,7 +43,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
 
 export const POST = apiHandler(async (req: NextRequest) => {
   await dbConnect();
-  const body = await req.json();
+  const body = await readJson(req);
   if (body.website) throw new HttpError(400, "Invalid submission."); // honeypot
   const action = String(body.action ?? "");
 

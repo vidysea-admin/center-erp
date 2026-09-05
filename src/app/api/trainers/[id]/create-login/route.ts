@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, Trainer, User } from "@/models";
 import { assertTrainerDocInScope, trainerScopeTies } from "@/lib/rules";
@@ -39,7 +39,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   if (!email) throw new HttpError(400, "The trainer has no email — add one on the profile first; the email is the login.");
   const eErr = emailError(email);
   if (eErr) throw new HttpError(400, eErr);
-  const body = await req.json().catch(() => ({}));
+  const body = await readJson(req).catch(() => ({}));
   const password = String(body.password ?? "") || crypto.randomBytes(6).toString("base64url") + "!1";
   if (password.length < 8) throw new HttpError(400, "Password must be at least 8 characters.");
 

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Room } from "@/models";
 import { requireApproval } from "@/lib/approvals";
@@ -26,7 +26,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   await requirePerm(user, "locations.manage");
   const { id } = await ctx.params;
   assertLocationInScope(user, id);
-  const body = await req.json();
+  const body = await readJson(req);
   if (!body.name || !body.type) throw new HttpError(400, "name and type are required");
   // QA-075 (CEO [36:52-37:28]): a SPOC "should be able to add number of classrooms … number
   // of labs … once they do that, let us send it for the approval to the admin" — the same

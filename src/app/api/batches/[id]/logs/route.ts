@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { DailyLog } from "@/models";
 import { assertBatchInScope, createDailyLogChecked } from "@/lib/rules";
@@ -25,7 +25,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   await requirePerm(user, "batches.daily_log"); // togglable (2026-08-11) — the Trainer role's core right
   const { id } = await ctx.params;
   await assertBatchInScope(user, id); // Rule 38
-  const body = await req.json();
+  const body = await readJson(req);
   const doc = await createDailyLogChecked(user, id, body);
   return NextResponse.json({ item: doc }, { status: 201 });
 });

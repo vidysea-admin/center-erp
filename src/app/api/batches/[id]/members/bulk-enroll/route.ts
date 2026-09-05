@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { assertBatchInScope, updateEnrollment } from "@/lib/rules";
 import { BatchMember } from "@/models";
@@ -29,7 +29,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   await requirePerm(user, "candidates.assign"); // togglable (2026-08-11)
   const { id } = await ctx.params;
   await assertBatchInScope(user, id); // Rule 38
-  const body = await req.json().catch(() => ({}));
+  const body = await readJson(req).catch(() => ({}));
   const step = String(body.step ?? "");
   if (step !== "all" && !(STEPS as readonly string[]).includes(step)) {
     throw new HttpError(400, `step must be one of ${[...STEPS, "all"].join(", ")}.`);

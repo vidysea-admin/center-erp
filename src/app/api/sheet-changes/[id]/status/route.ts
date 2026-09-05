@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { FollowUpAction, SheetChange } from "@/models";
 import { audit } from "@/lib/audit";
@@ -33,7 +33,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   await requirePerm(user, "sheet.approve");
 
   const { id } = await ctx.params;
-  const body = await req.json().catch(() => ({}));
+  const body = await readJson(req).catch(() => ({}));
   const next = String(body.status ?? "").trim();
   const reason = String(body.reason ?? "").trim().slice(0, 200);
 

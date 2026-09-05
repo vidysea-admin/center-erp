@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, locationFilter } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, locationFilter, readJson } from "@/lib/authz";
 import { requirePerm, requireFinance } from "@/lib/permissions";
 import { CostEntry } from "@/models";
 import { assertCostEntryValid } from "@/lib/rules";
@@ -40,7 +40,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const user = await requireUser();
   await requirePerm(user, "costs.manage");
   requireEdit(user); // Rule 39: can_edit=false is view-only everywhere, including granted rights
-  const body = await req.json();
+  const body = await readJson(req);
   assertCostEntryValid(body); // Rule 37
   // R-E: when the cost.post approval rule is enabled, a non-approver's entry PARKS instead
   // of writing the ledger — the CostEntry is created only by the approval replay. Admin (as

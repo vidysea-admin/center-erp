@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, isScoped, locationFilter, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, isScoped, locationFilter, HttpError, readJson } from "@/lib/authz";
 import { requirePerm, requireView } from "@/lib/permissions";
 import { Batch, BatchMember, Candidate, GovtAttendanceImport, GovtAttendanceRow } from "@/models";
 import { normalizeCan, shiftSignature, storedCanIsUnreadable } from "@/lib/govt-attendance";
@@ -201,7 +201,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const user = await requireUser();
   requireEdit(user);
   await requirePerm(user, "candidates.manage");
-  const body = await req.json().catch(() => ({}));
+  const body = await readJson(req).catch(() => ({}));
   const pick = (k: string) => Array.isArray(body[k]) ? body[k].map(String) : [];
   const setNull = pick("set_null"), copy = pick("copy"), rematch = pick("rematch");
   if (!setNull.length && !copy.length && !rematch.length) {

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import crypto from "crypto";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { BASE_PATH } from "@/lib/base-path";
 import { Batch, BatchMember, CandidateResult, Closure, StoredFile } from "@/models";
@@ -76,7 +76,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
 
   // ---------------------------------------------------------------- step 2: confirm
   if (ct.includes("application/json")) {
-    const body = await req.json().catch(() => ({}));
+    const body = await readJson(req).catch(() => ({}));
     if (!body?.confirm) throw new HttpError(400, "Send confirm:true with pairs[] to attach, or post the files as multipart to preview them first.");
     const pairs: { url: string; member: string }[] = Array.isArray(body.pairs) ? body.pairs : [];
     if (!pairs.length) throw new HttpError(400, "pairs[] is required — each entry names one staged file and the candidate it belongs to.");

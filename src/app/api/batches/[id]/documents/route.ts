@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, BatchDocument, BATCH_DOC_TYPE } from "@/models";
 import { assertBatchInScope, batchDocSummary } from "@/lib/rules";
@@ -39,7 +39,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   if (!(await Batch.exists({ _id: id }))) throw new HttpError(404, "Batch not found");
   await assertBatchInScope(user, id); // Rule 38
 
-  const body = await req.json();
+  const body = await readJson(req);
   if (!body.doc_type || !BATCH_DOC_TYPE.includes(body.doc_type)) {
     throw new HttpError(400, `doc_type must be one of: ${BATCH_DOC_TYPE.join(", ")}`);
   }

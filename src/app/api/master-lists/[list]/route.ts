@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireRole, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireRole, HttpError, readJson } from "@/lib/authz";
 import { hasPermission, FINANCE_VIEW, maskCostCategoryMoneyList, requireFinance, COST_CATEGORY_MONEY_FIELDS } from "@/lib/permissions";
 import type { SessionUser } from "@/auth";
 import { CostCategory, DropReason, FailureReason, JobRole, Scheme, SCHEME } from "@/models";
@@ -65,7 +65,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   const { list } = await ctx.params;
   const Model = LISTS[list];
   if (!Model) throw new HttpError(404, "Unknown list");
-  const body = await req.json();
+  const body = await readJson(req);
   const name = String(body.name ?? "").trim();
   if (!name) throw new HttpError(400, "name required");
   // F-B17 (2026-08-14): "Trainer Fee" and "Trainer fee" both existed in production and

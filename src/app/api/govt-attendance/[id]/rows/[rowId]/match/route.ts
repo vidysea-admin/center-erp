@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, isScoped, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, isScoped, HttpError, readJson } from "@/lib/authz";
 import { requirePerm, requireView } from "@/lib/permissions";
 import { Batch, BatchMember, Candidate, DailyLog, GovtAttendanceImport, GovtAttendanceRow } from "@/models";
 import { audit } from "@/lib/audit";
@@ -156,7 +156,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     throw new HttpError(400, "That row is a trainer's attendance, not a candidate's - a trainer's hours are their own delivery record, so there is no student to link it to.");
   }
 
-  const { candidate, reason } = await req.json().catch(() => ({}));
+  const { candidate, reason } = await readJson(req).catch(() => ({}));
   if (!candidate) throw new HttpError(400, "Pick the candidate this portal row belongs to.");
 
   // The candidate must be on the roster this import covers — batch when the import is

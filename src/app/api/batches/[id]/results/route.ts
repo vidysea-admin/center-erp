@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { BatchMember, Candidate, CandidateResult } from "@/models";
 import { assertBatchInScope, bulkMarkResults, summarizeBatchResults } from "@/lib/rules";
@@ -47,7 +47,7 @@ export const PUT = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   await requirePerm(user, "closure.manage"); // togglable (2026-08-11)
   const { id } = await ctx.params;
   await assertBatchInScope(user, id); // Rule 38
-  const body = await req.json();
+  const body = await readJson(req);
   if (!Array.isArray(body.rows) || !body.rows.length) throw new HttpError(400, "rows[] is required");
 
   const allowed = ["member", "result", "score", "max_score", "assessed_on", "assessor", "failure_reason", "failure_note", "reassessment_required", "reassessment_date", "evidence_file",

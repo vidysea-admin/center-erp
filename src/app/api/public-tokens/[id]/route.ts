@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireRole, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireRole, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { PublicToken } from "@/models";
 import { audit } from "@/lib/audit";
 
@@ -11,7 +11,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   requireRole(user, "Admin", "Operations");
   requireEdit(user);
   const { id } = await ctx.params;
-  const body = await req.json();
+  const body = await readJson(req);
   const doc = await PublicToken.findById(id);
   if (!doc) throw new HttpError(404, "Token not found");
   doc.active = !!body.active;

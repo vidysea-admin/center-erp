@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, isScoped, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, isScoped, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Candidate } from "@/models";
 import { archiveCandidate } from "@/lib/candidate-archive";
@@ -13,7 +13,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const user = await requireUser();
   requireEdit(user);
   await requirePerm(user, "candidates.delete");
-  const body = await req.json();
+  const body = await readJson(req);
   const { candidate_ids, reason, confirm_batch_history } = body;
   if (!Array.isArray(candidate_ids) || !candidate_ids.length) {
     throw new HttpError(400, "candidate_ids is required");

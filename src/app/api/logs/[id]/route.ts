@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { DailyLog } from "@/models";
 import { assertBatchInScope, canEditDailyLog, planRosterGrowth, recordRosterGrowth, validateDailyLog } from "@/lib/rules";
@@ -23,7 +23,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   if (!(await canEditDailyLog(log, user.id, user.role))) {
     throw new HttpError(403, "Rule 27: edit window expired — only Operations/Admin may edit now.");
   }
-  const body = await req.json();
+  const body = await readJson(req);
   // QA-082: same strip as the create route — a Trainer never writes the govt figures.
   if (user.role === "Trainer") {
     delete body.govt_present; delete body.govt_source; delete body.govt_screenshot;

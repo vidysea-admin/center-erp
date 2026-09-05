@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, HttpError, readJson } from "@/lib/authz";
 import { requirePerm, parseLevel, PERMISSIONS, DEFAULT_ROLE_PERMISSIONS, invalidatePermissionCache } from "@/lib/permissions";
 import { RolePermission, USER_ROLE } from "@/models";
 import { audit } from "@/lib/audit";
@@ -30,7 +30,7 @@ export const PUT = apiHandler(async (req: NextRequest) => {
   // Security review 2026-08-11: editing the matrix is Admin-only, full stop — a granted
   // users.manage holder could otherwise inflate their OWN role's rights.
   if (user.role !== "Admin") throw new HttpError(403, "Only an Admin may change role permissions.");
-  const body = await req.json();
+  const body = await readJson(req);
   const role = String(body.role ?? "");
   if (!USER_ROLE.includes(role as any)) throw new HttpError(400, "Unknown role");
   if (role === "Admin") throw new HttpError(400, "Admin rights are fixed — Admin bypasses all checks.");

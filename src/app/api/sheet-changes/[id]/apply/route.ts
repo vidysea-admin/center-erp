@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { applySheetChange, isSecretSheetField, maskSheetChange } from "@/lib/sync";
 import { requireApproval } from "@/lib/approvals";
@@ -15,7 +15,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   await requirePerm(user, "sheet.approve");
   requireEdit(user); // Rule 39: can_edit=false is view-only everywhere, including granted rights
   const { id } = await ctx.params;
-  const { action, note } = await req.json();
+  const { action, note } = await readJson(req);
 
   // 2026-08-12 audit (sync S1-4): closing or stopping a centre from the Location screen goes
   // through the approval matrix, but the identical action taken from the Sync Inbox went

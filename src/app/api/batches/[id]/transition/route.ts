@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { assertBatchInScope, transitionBatch } from "@/lib/rules";
 import { requireApproval } from "@/lib/approvals";
@@ -25,7 +25,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   await requirePerm(user, "batches.manage"); // togglable (2026-08-11)
   const { id } = await ctx.params;
   await assertBatchInScope(user, id); // Rule 38
-  const { target, reason, actual_start, actual_end, backdate_override } = await req.json();
+  const { target, reason, actual_start, actual_end, backdate_override } = await readJson(req);
   // Kept on the ordinary batches.manage right on purpose (Umesh, 24/08, asked which door this
   // should sit behind and chose "jiske paas batches.manage hai"). In the default matrix that is
   // Admin and Operations - Location, Enrollment and Trainer do not carry it.

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, CandidateResult } from "@/models";
 import { assertResultInScope, recomputeClosureAggregates } from "@/lib/rules";
@@ -38,7 +38,7 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
     throw new HttpError(409, "The batch is closed — the certificate file is frozen (2026-08-13 decision: a Completed batch stays locked).");
   }
 
-  const body = await req.json().catch(() => ({}));
+  const body = await readJson(req).catch(() => ({}));
   const reason = String(body.reason ?? "").trim();
   if (!reason) throw new HttpError(400, "Say why this certificate file is being removed — it is audited evidence.");
 

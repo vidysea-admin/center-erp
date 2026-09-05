@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, BatchMember, Closure, LocationTarget, Program } from "@/models";
 import { capacitySummary, trainerCountsFor } from "@/lib/rules";
@@ -82,7 +82,7 @@ export const PUT = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   await requirePerm(user, "locations.manage");
   const { id } = await ctx.params;
   assertLocationInScope(user, id);
-  const body = await req.json();
+  const body = await readJson(req);
   if (!body.program) throw new HttpError(400, "program is required");
   const program = await Program.findById(body.program).lean<any>();
   if (!program) throw new HttpError(400, "Program not found");
@@ -142,7 +142,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   await requirePerm(user, "locations.manage");
   const { id } = await ctx.params;
   assertLocationInScope(user, id);
-  const body = await req.json();
+  const body = await readJson(req);
   const fromId = body.from_program, toId = body.to_program;
   const reason = String(body.reason ?? "").trim();
   if (!fromId || !toId) throw new HttpError(400, "from_program and to_program are both required.");

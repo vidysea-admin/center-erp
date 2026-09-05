@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, isScoped, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, isScoped, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { BatchMember, Candidate, CandidateResult } from "@/models";
 import { dropMemberChecked } from "@/lib/rules";
@@ -32,7 +32,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     const locId = cand.location ? String(cand.location) : null;
     if (!locId || !user.location_scope.map(String).includes(locId)) throw new HttpError(403, "Out of scope");
   }
-  const body = await req.json();
+  const body = await readJson(req);
 
   if (body.undo === true) {
     if (cand.lifecycle_status !== "Dropped") throw new HttpError(400, `${cand.name} is not dropped.`);

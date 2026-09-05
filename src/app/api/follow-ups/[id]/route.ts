@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireRole, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireRole, HttpError, readJson } from "@/lib/authz";
 import { FollowUpAction } from "@/models";
 import { settleChangeIfDone } from "@/lib/sync";
 import { audit } from "@/lib/audit";
@@ -11,7 +11,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   const user = await requireUser();
   requireRole(user, "Admin", "Operations"); // Rule 40 — resolving follow-ups is Admin/Ops only
   const { id } = await ctx.params;
-  const { status } = await req.json();
+  const { status } = await readJson(req);
   if (!["Done", "Skipped"].includes(status)) throw new HttpError(400, "status must be Done or Skipped");
   const fup = await FollowUpAction.findById(id);
   if (!fup) throw new HttpError(404, "Follow-up not found");

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, requireRole, HttpError, invalidateIdentity } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, requireRole, HttpError, invalidateIdentity, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { User } from "@/models";
 import { audit } from "@/lib/audit";
@@ -16,7 +16,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   const { id } = await ctx.params;
   const doc = await User.findById(id);
   if (!doc) throw new HttpError(404, "User not found");
-  const body = await req.json();
+  const body = await readJson(req);
 
   // Privilege escalation guards (security review 2026-08-11): users.manage is a GRANTABLE
   // right, so a non-Admin holder must never be able to raise anyone's privileges — role,

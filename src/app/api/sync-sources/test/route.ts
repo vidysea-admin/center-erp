@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { fetchWorkbook, normalizeSheetUrl, sourceAllowed } from "@/lib/workbook";
 
@@ -16,7 +16,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const user = await requireUser();
   await requirePerm(user, "sheet.sources");
 
-  const { source_url } = await req.json();
+  const { source_url } = await readJson(req);
   const raw = String(source_url ?? "").trim();
   if (!raw) throw new HttpError(400, "Paste the sheet link first.");
   if (!/^https?:\/\//i.test(raw)) throw new HttpError(400, "That does not look like a link — it should start with https://");

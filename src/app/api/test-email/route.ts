@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireRole, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireRole, HttpError, readJson } from "@/lib/authz";
 import { MailLog } from "@/models";
 import { getTransporter, mailConfigured, renderMail, sendMail } from "@/lib/mailer";
 import { storageHealth } from "@/lib/storage";
@@ -30,7 +30,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   if (!mailConfigured()) {
     throw new HttpError(400, "Mail is not configured on the server — the SES_SMTP_* environment variables are missing. Sending stays safely off until they are set.");
   }
-  const body = await req.json().catch(() => ({}));
+  const body = await readJson(req).catch(() => ({}));
   try {
     await getTransporter()!.verify();
   } catch (e) {

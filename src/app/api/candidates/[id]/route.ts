@@ -3,7 +3,7 @@ import { itemRoutes } from "@/lib/crud";
 import { Candidate } from "@/models";
 import { candidateEligibility } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
-import { HttpError, apiHandler, isScoped, requireEdit, requireUser } from "@/lib/authz";
+import { HttpError, apiHandler, isScoped, requireEdit, requireUser, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { dbConnect } from "@/lib/db";
 import { aadhaarError, canonicalAadhaar, apaarError, canonicalApaar, sameGovtNumber, emailError, canonicalPhone, phoneError } from "@/lib/validate";
@@ -244,7 +244,7 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
       throw new HttpError(403, "Out of scope");
     }
   }
-  const body = ((await req.json().catch(() => ({}))) as any) ?? {};
+  const body = ((await readJson(req).catch(() => ({}))) as any) ?? {};
   // QA-1792: THIS DOOR NO LONGER DESTROYS ANYTHING (it used to run `CandidateDocument.deleteMany`
   // + `c.deleteOne()`). QA-1800 widened it into a confirmation gate rather than an outright refusal
   // for a candidate with batch history. Logic lives in candidate-archive.ts now (candidates-bulk-

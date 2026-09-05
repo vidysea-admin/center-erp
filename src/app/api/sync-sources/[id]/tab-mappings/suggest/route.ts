@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Location, Program, SyncSource } from "@/models";
 import { fetchWorkbook } from "@/lib/workbook";
@@ -20,7 +20,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   const src = await SyncSource.findById(id).lean<any>();
   if (!src) throw new HttpError(404, "Sync source not found");
 
-  const body = await req.json();
+  const body = await readJson(req);
   const entity = String(body.entity_type ?? "Candidate") as CatalogEntity;
   if (!FIELD_CATALOG[entity]) throw new HttpError(400, `entity_type must be one of: ${Object.keys(FIELD_CATALOG).join(", ")}`);
 

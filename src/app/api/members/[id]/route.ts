@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, requireRole, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, requireRole, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { assertMemberInScope, updateEnrollment } from "@/lib/rules";
 import { BatchMember, Candidate, CandidateResult, DailyLog, GovtAttendanceRow } from "@/models";
@@ -22,7 +22,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   await requirePerm(user, "candidates.assign"); // togglable (2026-08-11)
   const { id } = await ctx.params;
   await assertMemberInScope(user, id); // Rule 38
-  const body = await req.json();
+  const body = await readJson(req);
   // Session users are always USER in the audit trail; the future Selenium bot gets its own
   // service credential and its own actor_type — never client-declared.
   delete body.source;
@@ -63,7 +63,7 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
   requireRole(user, "Admin");
   const { id } = await ctx.params;
   await assertMemberInScope(user, id); // Rule 38
-  const { reason } = await req.json().catch(() => ({}));
+  const { reason } = await readJson(req).catch(() => ({}));
   if (!reason || !String(reason).trim()) {
     throw new HttpError(400, "A reason is required — removing a roster row is audited, not silent. (To record a student who left, drop them instead.)");
   }

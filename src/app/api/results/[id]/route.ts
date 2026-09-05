@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, CandidateResult, Closure } from "@/models";
 import { assertResultInScope, recomputeClosureAggregates, upsertCandidateCertificate, upsertCandidateResult } from "@/lib/rules";
@@ -23,7 +23,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   const { id } = await ctx.params;
   await assertResultInScope(user, id); // Rule 38 — the easiest scoping hole to leave open
 
-  const body = await req.json();
+  const body = await readJson(req);
   const assessment = Object.fromEntries(Object.entries(body).filter(([k]) => ASSESSMENT_FIELDS.includes(k)));
   const certificate = Object.fromEntries(Object.entries(body).filter(([k]) => CERT_FIELDS.includes(k)));
 
@@ -70,7 +70,7 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
   const row = await CandidateResult.findById(id).populate("candidate", "name").lean<any>();
   if (!row) throw new HttpError(404, "Result not found");
 
-  const { reason } = await req.json().catch(() => ({}));
+  const { reason } = await readJson(req).catch(() => ({}));
   if (!reason || !String(reason).trim()) {
     throw new HttpError(400, "A reason is required — un-marking destroys the assessment history for this candidate, including any reassessment attempts.");
   }

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, HttpError } from "@/lib/authz";
+import { apiHandler, HttpError, readJson } from "@/lib/authz";
 import { MailLog } from "@/models";
 import { audit } from "@/lib/audit";
 
@@ -16,7 +16,7 @@ import { audit } from "@/lib/audit";
 export const POST = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   if (!req.headers.get("x-amz-sns-message-type")) throw new HttpError(400, "Not an SNS message.");
-  const body = await req.json().catch(() => null);
+  const body = await readJson(req).catch(() => null);
   if (!body?.Type) throw new HttpError(400, "Not an SNS message.");
   const expectArn = process.env.SES_SNS_TOPIC_ARN;
   if (expectArn && body.TopicArn !== expectArn) throw new HttpError(403, "Unknown topic.");

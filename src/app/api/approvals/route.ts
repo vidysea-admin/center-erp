@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireRole, isScoped, locationFilter } from "@/lib/authz";
+import { apiHandler, requireUser, requireRole, isScoped, locationFilter, readJson } from "@/lib/authz";
 import { requirePerm, requireView, hasPermission, maskApprovalMoney, FINANCE_VIEW } from "@/lib/permissions";
 import { ApprovalRequest, ApprovalRule } from "@/models";
 import { APPROVAL_ACTIONS } from "@/models";
@@ -55,7 +55,7 @@ export const PUT = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
   requireRole(user, "Admin");
-  const { action, enabled, approver_role, approver_users } = await req.json();
+  const { action, enabled, approver_role, approver_users } = await readJson(req);
   if (!APPROVAL_ACTIONS.includes(action)) throw new Error("Unknown approval action: " + action);
   // QA-1827: the named list. `undefined` leaves it alone (so an existing caller that only toggles
   // `enabled` cannot silently clear it); an explicit `[]` clears it back to role-only, which is how

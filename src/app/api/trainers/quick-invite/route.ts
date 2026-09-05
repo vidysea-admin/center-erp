@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError, isScoped } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, isScoped, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { PublicToken, Trainer } from "@/models";
 import { audit } from "@/lib/audit";
@@ -17,7 +17,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const user = await requireUser();
   requireEdit(user);
   await requirePerm(user, "trainers.manage"); // Admin/Ops — and the principal, per the role matrix
-  const body = await req.json();
+  const body = await readJson(req);
   const S = (v: unknown) => String(v ?? "").trim();
   const name = S(body.name), email = S(body.email);
   // QA-141: the old slice(-10) silently accepted a 15-digit keyboard-mash as its last ten.

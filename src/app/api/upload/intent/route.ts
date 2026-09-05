@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import crypto from "crypto";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { StoredFile } from "@/models";
 import { ALLOWED_UPLOAD_EXT as ALLOWED, createResumableSession, storageConfigured, storageHealth } from "@/lib/storage";
 import { BASE_PATH } from "@/lib/base-path";
@@ -21,7 +21,7 @@ const CHUNK_BYTES = 8 * 1024 * 1024; // multiple of 256 KiB, as Google requires
 export const POST = apiHandler(async (req: NextRequest) => {
   const user = await requireUser();
   requireEdit(user);
-  const body = await req.json().catch(() => ({}));
+  const body = await readJson(req).catch(() => ({}));
   const original = String(body.name ?? "").trim();
   const size = Number(body.size ?? 0);
   const mime = String(body.mime ?? "application/octet-stream");

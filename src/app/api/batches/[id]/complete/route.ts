@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, requireRole, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, requireRole, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, BatchMember, CandidateResult, Closure } from "@/models";
 import { assertBatchInScope, activeRoster, enrolledWithoutCan, isCertificateSettled, recomputeClosureAggregates, transitionBatch, upsertCandidateResult } from "@/lib/rules";
@@ -95,7 +95,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   const { id } = await ctx.params;
   await assertBatchInScope(user, id);
 
-  const body = await req.json().catch(() => ({}));
+  const body = await readJson(req).catch(() => ({}));
   const reason = String(body.reason ?? "").trim();
   if (!reason) throw new HttpError(400, "Say why this batch is being completed with rows still outstanding — it is recorded against every row this settles.");
 

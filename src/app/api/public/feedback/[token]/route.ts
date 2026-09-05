@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, HttpError } from "@/lib/authz";
+import { apiHandler, HttpError, readJson } from "@/lib/authz";
 import { Feedback, PublicToken } from "@/models";
 import { audit } from "@/lib/audit";
 
@@ -38,7 +38,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   await dbConnect();
   const { token } = await ctx.params;
   const t = await loadToken(token);
-  const body = await req.json();
+  const body = await readJson(req);
   if (body.website) throw new HttpError(400, "Invalid submission."); // honeypot
   const rating = Number(body.rating);
   if (!Number.isInteger(rating) || rating < 1 || rating > 5) throw new HttpError(400, "Rating must be 1–5.");

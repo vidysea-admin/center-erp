@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireRole, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireRole, HttpError, readJson } from "@/lib/authz";
 import { CostCategory, DropReason, FailureReason, JobRole, Scheme } from "@/models";
 import { audit } from "@/lib/audit";
 import { coerceExtras, assertMayWriteCategoryMoney } from "../route";
@@ -29,7 +29,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   if (!Model) throw new HttpError(404, "Unknown list");
   const doc = await Model.findById(id);
   if (!doc) throw new HttpError(404, "Entry not found");
-  const body = await req.json();
+  const body = await readJson(req);
   for (const f of FIELDS[list] ?? []) {
     if (body[f] === undefined) continue;
     if (f === "active") { doc.active = !!body[f]; continue; }

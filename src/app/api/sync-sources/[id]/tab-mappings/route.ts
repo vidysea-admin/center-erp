@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Location, Program, SyncSource, TabMapping } from "@/models";
 import { FIELD_CATALOG, fieldSpec, CatalogEntity } from "@/lib/field-catalog";
@@ -29,7 +29,7 @@ export const PUT = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   if (!src) throw new HttpError(404, "Sync source not found");
   if (src.mode !== "watch") throw new HttpError(400, "Tab mappings ride on watch sources — this source is in mapped mode.");
 
-  const body = await req.json();
+  const body = await readJson(req);
   const entity = String(body.entity_type ?? "") as CatalogEntity;
   if (!FIELD_CATALOG[entity]) throw new HttpError(400, `entity_type must be one of: ${Object.keys(FIELD_CATALOG).join(", ")}`);
   const tab = String(body.tab ?? "").trim();

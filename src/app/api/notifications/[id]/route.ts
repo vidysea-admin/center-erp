@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, HttpError, assertLocationInScope } from "@/lib/authz";
+import { apiHandler, requireUser, HttpError, assertLocationInScope, readJson } from "@/lib/authz";
 import { Notification } from "@/models";
 import { audit } from "@/lib/audit";
 
@@ -10,7 +10,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   await dbConnect();
   const user = await requireUser();
   const { id } = await ctx.params;
-  const { status } = await req.json();
+  const { status } = await readJson(req);
   if (!["Acknowledged", "Resolved"].includes(status)) throw new HttpError(400, "status must be Acknowledged or Resolved");
   if (status === "Resolved" && !["Admin", "Operations"].includes(user.role) && !user.can_edit) {
     throw new HttpError(403, "Read-only access");

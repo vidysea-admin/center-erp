@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { Trainer, TrainerDocument, TRAINER_DOC_TYPE } from "@/models";
 import { trainerDocSummary, trainerDocsAccess } from "@/lib/rules";
 import { audit } from "@/lib/audit";
@@ -38,7 +38,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // reopen it. `trainerDocsAccess` grants "self" only when trainerForLogin() resolves to THIS id.
   const access = await trainerDocsAccess(user, id);
 
-  const body = await req.json();
+  const body = await readJson(req);
   if (!body.doc_type || !TRAINER_DOC_TYPE.includes(body.doc_type)) {
     throw new HttpError(400, `doc_type must be one of: ${TRAINER_DOC_TYPE.join(", ")}`);
   }

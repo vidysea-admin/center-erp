@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, isScoped } from "@/lib/authz";
+import { apiHandler, requireUser, isScoped, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { findDuplicateCandidates } from "@/lib/duplicates";
 
@@ -14,7 +14,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // candidate. It is an aid to the Add Candidate form, so it answers to the same right, and
   // a scoped user only ever learns about their own centres.
   await requirePerm(user, "candidates.manage");
-  const { name, phone, dob, exclude } = await req.json();
+  const { name, phone, dob, exclude } = await readJson(req);
   const duplicates = await findDuplicateCandidates(
     { name, phone, dob }, exclude,
     isScoped(user) ? (user.location_scope ?? []).map(String) : undefined,

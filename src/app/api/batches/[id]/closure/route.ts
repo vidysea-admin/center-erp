@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, readJson } from "@/lib/authz";
 import { requirePerm, hasPermission, maskInvoiceMoney, FINANCE_VIEW } from "@/lib/permissions";
 import { CandidateResult, Closure, Invoice } from "@/models";
 import { assertBatchInScope, enrolledWithoutCan, summarizeBatchResults, upsertClosureChecked } from "@/lib/rules";
@@ -49,7 +49,7 @@ export const PUT = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   await requirePerm(user, "closure.manage"); // togglable (2026-08-11)
   const { id } = await ctx.params;
   await assertBatchInScope(user, id); // Rule 38
-  const body = await req.json();
+  const body = await readJson(req);
   const patch: Record<string, unknown> = {};
   for (const f of ["assessment_status", "assessment_date", "appeared", "passed", "result_file", "certification_status", "certification_date", "certificates_issued", "certificate_file", "ready_for_invoice",
     // -120 (M4-14): the chain's dates. Optional and independent — none of them gates anything.

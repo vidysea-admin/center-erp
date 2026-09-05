@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, requireRole, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, requireRole, HttpError, readJson } from "@/lib/authz";
 import { requirePerm, requireView } from "@/lib/permissions";
 import { User } from "@/models";
 import { linkTrainerLoginByEmail } from "@/lib/rules"; // QA-1578: one email-link rule, two callers
@@ -22,7 +22,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const user = await requireUser();
   await requirePerm(user, "users.manage"); // togglable (2026-08-11)
   requireEdit(user); // Rule 39: a view-only holder of a granted right still may not write
-  const body = await req.json();
+  const body = await readJson(req);
   if (!body.name || !body.email || !body.password || !body.role) {
     throw new HttpError(400, "name, email, password, role are required");
   }

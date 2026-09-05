@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm, requireFinance } from "@/lib/permissions";
 import { Batch, BatchMember, CandidateResult, Closure, CostEntry, DailyLog, GovtAttendanceRow, Invoice, Program, Trainer } from "@/models";
 import { assertBatchInScope, mergePlan, earliestPossibleStart, earliestStartNote, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, batchReadiness, govtBatchIdConflict, planBatchBackward, settlementStage, trainerBookingWarnings } from "@/lib/rules";
@@ -84,7 +84,7 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
         `A batch with history is cancelled, never deleted — use the Cancel transition instead.`);
     }
     let reason = "";
-    try { const body = await req.json(); reason = String(body?.reason ?? "").trim().slice(0, 500); } catch { /* no body */ }
+    try { const body = await readJson(req); reason = String(body?.reason ?? "").trim().slice(0, 500); } catch { /* no body */ }
     if (!reason) throw new HttpError(400, "Say why this batch is being force-deleted with recorded work still on it — it is recorded against every row this removes.");
     // QA-1864 (checker on qa-1826/1827, found by live probe): this branch runs `CostEntry.deleteMany`
     // and `Invoice.deleteMany` behind `batches.delete_with_data` — a key that is NOT in
@@ -143,7 +143,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   await assertBatchInScope(user, id); // Rule 38
   const batch = await Batch.findById(id);
   if (!batch) throw new HttpError(404, "Batch not found");
-  const body = await req.json();
+  const body = await readJson(req);
   // A closed batch is frozen - with ONE exception, and the portal's own timing is what demands it:
   // SIDH issues the batch ID at or after completion, so the single status in which that id actually
   // arrives was the one status in which this door refused to record it. The batch page has been

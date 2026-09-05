@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { assertBatchInScope, createDailyLogChecked } from "@/lib/rules";
 import { audit } from "@/lib/audit";
@@ -19,7 +19,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   await requirePerm(user, "batches.daily_log");
   const { id } = await ctx.params;
   await assertBatchInScope(user, id); // Rule 38
-  const body = await req.json();
+  const body = await readJson(req);
   const days: any[] = Array.isArray(body?.days) ? body.days : [];
   if (!days.length) throw new HttpError(400, "days[] is required");
   if (days.length > 62) throw new HttpError(400, "At most 62 days per call.");

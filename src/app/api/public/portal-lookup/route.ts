@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, HttpError } from "@/lib/authz";
+import { apiHandler, HttpError, readJson } from "@/lib/authz";
 import { BatchMember, Candidate, PublicToken } from "@/models";
 import { clientKey, rateLimit } from "@/lib/rate-limit";
 
@@ -20,7 +20,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   rateLimit(`portal-lookup:${clientKey(req)}`, 10, 60_000);
 
-  const body = await req.json().catch(() => ({}));
+  const body = await readJson(req).catch(() => ({}));
   const phone = String(body.phone ?? "").replace(/\D/g, "").slice(-10);
   const dob = String(body.dob ?? "").trim(); // yyyy-mm-dd from the date input
   // QA-057: the refusal stays GENERIC on purpose (anti-enumeration — it never confirms a

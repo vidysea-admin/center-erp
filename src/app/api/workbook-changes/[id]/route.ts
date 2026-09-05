@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { WorkbookChange, WORKBOOK_CHANGE_STATUS } from "@/models";
 import { audit } from "@/lib/audit";
@@ -14,7 +14,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   await requirePerm(user, "sheet.approve");
   requireEdit(user);
   const { id } = await ctx.params;
-  const body = await req.json();
+  const body = await readJson(req);
   const status = String(body.status ?? "");
   if (!WORKBOOK_CHANGE_STATUS.includes(status as any) || status === "New") {
     throw new HttpError(400, "status must be Seen or Accepted");

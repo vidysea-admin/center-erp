@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, DailyLog } from "@/models";
 import { assertBatchInScope } from "@/lib/rules";
@@ -43,7 +43,7 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
   const log = await DailyLog.findOne({ _id: logId, batch: id });
   if (!log) throw new HttpError(404, "Daily log not found on this batch.");
   let reason = "";
-  try { const b = await req.json(); reason = String(b?.reason ?? "").trim().slice(0, 300); } catch { /* no body is fine */ }
+  try { const b = await readJson(req); reason = String(b?.reason ?? "").trim().slice(0, 300); } catch { /* no body is fine */ }
   const snapshot = {
     log_date: log.log_date, present: (log.present_member_ids ?? []).length, govt_present: log.govt_present ?? null,
     photos: log.photos ?? [], videos: log.videos ?? [], attendance_sheet: log.attendance_sheet ?? [], govt_screenshot: log.govt_screenshot ?? null,

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireRole, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireRole, HttpError, readJson } from "@/lib/authz";
 import { fetchWorkbook } from "@/lib/workbook";
 import { Location } from "@/models";
 import { audit } from "@/lib/audit";
@@ -49,7 +49,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
   requireRole(user, "Admin");
-  const body = await req.json().catch(() => ({}));
+  const body = await readJson(req).catch(() => ({}));
   const APPLY = body?.apply === true;
 
   const wb = await fetchWorkbook(SHARE);

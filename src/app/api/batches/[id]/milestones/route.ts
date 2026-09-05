@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, Trainer } from "@/models";
 import { PLAN_CREATE_STATUSES, assertBatchInScope, dayKey, istToday, mergePlan, planBatchBackward } from "@/lib/rules";
@@ -22,7 +22,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   const batch = await Batch.findById(id);
   if (!batch) throw new HttpError(404, "Batch not found");
   if (["Completed", "Cancelled"].includes(batch.status)) throw new HttpError(409, "Batch is closed.");
-  const body = await req.json();
+  const body = await readJson(req);
 
   if (body.create || body.regenerate) {
     if (body.regenerate && !batch.plan_enabled) throw new HttpError(409, "This batch has no plan yet — create one first.");

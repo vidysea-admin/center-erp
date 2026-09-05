@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm, requireFinance, hasPermission, maskApprovalMoney, FINANCE_VIEW } from "@/lib/permissions";
 import { decideApproval } from "@/lib/approvals";
 import { assertCostEntryValid, transitionBatch, updateInvoiceChecked } from "@/lib/rules";
@@ -27,7 +27,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // narrowing them would take the queue away from the Operations users whose job it is.
   const MONEY_ACTIONS = new Set(["cost.post", "invoice.raise", "invoice.paid"]);
   const { id } = await ctx.params;
-  const { decision, note } = await req.json();
+  const { decision, note } = await readJson(req);
   if (!["Approved", "Rejected"].includes(decision)) throw new HttpError(400, "decision must be Approved or Rejected");
 
   // The gate has to run BEFORE decideApproval, which writes the decision. Gating after it would

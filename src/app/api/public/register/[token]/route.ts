@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, HttpError } from "@/lib/authz";
+import { apiHandler, HttpError, readJson } from "@/lib/authz";
 import { rateLimit, clientKey } from "@/lib/rate-limit";
 import { aadhaarError, canonicalAadhaar, canonicalPhone, emailError, phoneError } from "@/lib/validate";
 import { BatchMember, Candidate, EDUCATION_LEVEL, Program, PublicToken } from "@/models";
@@ -67,7 +67,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   const { token } = await ctx.params;
   const t = await loadToken(token);
   rateLimit(clientKey(req), 10, 10 * 60_000); // audit auth S2-14: right-most trusted hop
-  const body = await req.json();
+  const body = await readJson(req);
   if (body.website) throw new HttpError(400, "Invalid submission."); // honeypot — bots fill every field
 
   const name = String(body.name ?? "").trim();

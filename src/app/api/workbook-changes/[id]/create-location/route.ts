@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Location, WorkbookChange, WorkbookSnapshot } from "@/models";
 import { audit } from "@/lib/audit";
@@ -69,7 +69,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   requireEdit(user);
   const { id } = await ctx.params;
   const { change } = await loadRow(id);
-  const body = await req.json();
+  const body = await readJson(req);
   const name = String(body.name ?? "").trim();
   const code = String(body.code ?? "").trim();
   if (!name || !code) throw new HttpError(400, "name and code are required");

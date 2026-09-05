@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, readJson } from "@/lib/authz";
 import { requireFinance } from "@/lib/permissions";
 import { assertBatchInScope, updateInvoiceChecked } from "@/lib/rules";
 import { requireApproval } from "@/lib/approvals";
@@ -20,7 +20,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   // 2026-08-12 audit (auth S1-8): this was the only by-id batch route with no scope assertion,
   // so a scoped user could move another centre's invoice.
   await assertBatchInScope(user, id); // Rule 38
-  const body = await req.json();
+  const body = await readJson(req);
   const patch: Record<string, unknown> = {};
   for (const f of ["amount", "status", "invoice_no", "raised_on", "paid_on", "file"]) {
     if (body[f] !== undefined) patch[f] = body[f];

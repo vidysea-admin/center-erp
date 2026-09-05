@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Candidate, CandidateDocument, CANDIDATE_DOC_TYPE } from "@/models";
 import { audit } from "@/lib/audit";
@@ -37,7 +37,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   await requirePerm(user, "candidates.manage");
   const { id } = await ctx.params;
   await loadCandidateInScope(user, id);
-  const body = await req.json();
+  const body = await readJson(req);
   if (!body.doc_type || !CANDIDATE_DOC_TYPE.includes(body.doc_type)) {
     throw new HttpError(400, `doc_type must be one of: ${CANDIDATE_DOC_TYPE.join(", ")}`);
   }

@@ -10,6 +10,25 @@ export class HttpError extends Error {
   }
 }
 
+// QA-1878 / QA-1880: read a request body as JSON, and refuse an unparseable one AS A REFUSAL.
+//
+// A body that is not legal JSON used to reach `apiHandler` as a bare SyntaxError and be reported as
+// "Something went wrong on our side. Please try again." — untrue, unhelpful, and in the 5xx bucket
+// for anyone reading error rates. The first fix classified that error at the chokepoint, and the
+// chokepoint cannot tell whose SyntaxError it is: a rotated GCS credential produced the same shape
+// and a valid upload was answered "The request body is not valid JSON." (QA-1880).
+//
+// So the classification lives HERE, at the only place that knows the string came off the wire. The
+// body is not echoed, for the same reason the CastError and ValidationError branches do not echo
+// what was submitted.
+export async function readJson(req: { json: () => Promise<unknown> }): Promise<any> {
+  try {
+    return await req.json();
+  } catch {
+    throw new HttpError(400, "The request body is not valid JSON.");
+  }
+}
+
 // 2026-08-12 audit (auth S1-4): role, location_scope, can_edit, deactivation and rejection were
 // frozen into the JWT at sign-in and the session lasts 30 days, so none of them reached a live
 // session — an Admin could demote, rescope, deactivate or reject an account and that person kept
@@ -127,18 +146,22 @@ export function apiHandler<T extends unknown[]>(fn: (...args: T) => Promise<Resp
       if (e instanceof Error && e.name === "CastError" && (e as unknown as { kind?: string }).kind === "ObjectId") {
         return NextResponse.json({ error: "Not found — that is not a valid id." }, { status: 404 });
       }
-      // QA-1878 (checker on qa-1875-1876): a request body that is not legal JSON answered
-      // "Something went wrong on our side. Please try again." — on EVERY write route, since every
-      // one of them starts with `await req.json()`. Nothing had gone wrong on our side, retrying
-      // could never help, and the row landed in the 5xx bucket for anyone reading error rates, which
-      // is the part that costs more than the message: a 500 says the server is broken.
+      // QA-1880 (checker on qa-1877-1879): THERE IS NO SyntaxError BRANCH HERE, and that is
+      // deliberate — one stood here for a few hours and had to come out.
       //
-      // Exactly the argument the CastError and ValidationError branches below and above already
-      // make, on the one caller mistake that reaches this handler before any route code runs at all.
-      // The body is NOT echoed, for the same reason those two do not echo the submitted value.
-      if (e instanceof SyntaxError && /JSON/i.test(msg)) {
-        return NextResponse.json({ error: "The request body is not valid JSON." }, { status: 400 });
-      }
+      // QA-1878 was real: a body that is not legal JSON answered "Something went wrong on our side"
+      // on every write route. But fixing it *here* meant asking "is this SyntaxError about JSON?" at
+      // a chokepoint EVERY route passes through, and the handler cannot tell whose error it is. A
+      // rotated GCS credential made `storage.ts` throw exactly that shape, and a valid multipart
+      // upload came back 400 "The request body is not valid JSON." — a total upload outage reported
+      // as the caller's mistake and hidden from anything watching 5xx. My own argument for the fix,
+      // turned against it.
+      //
+      // The read site knows whose body it is; the chokepoint never can. So `readJson` below throws
+      // an HttpError(400) itself and this handler sees an ordinary refusal. The lesson is narrower
+      // than "don't sniff errors": a classifier belongs where the CONTEXT is, not where the traffic
+      // is. And it was found by the mutant I declined to write, calling it theatre.
+      //
       // A ValidationError is the CALLER's mistake, not ours, so it must not be masked as a 500.
       // The S2-15 masking below swept it up with genuine server faults, and the result actively
       // misled: sending an out-of-enum operational_status answered "Something went wrong on our

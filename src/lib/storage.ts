@@ -133,6 +133,24 @@ function wifFilePath(): string | null {
   for (const c of cands) { try { if (existsSync(c)) return c; } catch { /* ignore */ } }
   return null;
 }
+// QA-1880 (checker on qa-1877-1879): these two parses run on the SERVER's own configuration, inside
+// request handlers. A rotated or truncated credential made them throw a bare `SyntaxError` whose
+// message mentions JSON — which the caller-blame branch in `apiHandler` then reported to the client
+// as "The request body is not valid JSON.", 400. A total upload outage, announced as the caller's
+// mistake, invisible to anything watching 5xx.
+//
+// The branch was mine and it was wrong to sniff for a SyntaxError at a chokepoint every route passes
+// through. It is gone. This is the other half: a credential that will not parse says so, as a server
+// fault, naming which credential — the two parses above (`readWifJson`) already swallowed their own
+// failures deliberately, and these two never guarded anything at all.
+function parseCredential(raw: string, what: string): any {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new Error(`${what} is not valid JSON — check the value in the environment or the console field it came from.`);
+  }
+}
+
 function readWifJson(): { json: any; source: string } | null {
   const inline = readEnv(ENV_ALIASES.gcs_wif_json);
   if (inline) {
@@ -324,7 +342,7 @@ function gcs(): { bucket: any; name: string } {
     const { Storage } = require("@google-cloud/storage");
     if (cfg.kind === "sa") {
       const raw = cfg.raw!.trim().startsWith("{") ? cfg.raw! : Buffer.from(cfg.raw!, "base64").toString("utf8");
-      const credentials = JSON.parse(raw);
+      const credentials = parseCredential(raw, "the GCS service-account credential");
       cachedGcs = new Storage({ credentials, projectId: credentials.project_id });
       cachedGcsAuth = null;
     } else {
@@ -433,7 +451,7 @@ function drive(): drive_v3.Drive {
     const sa = saJson()!;
     // base64 OR raw JSON (a console field may hold the JSON itself)
     const raw = sa.raw.trim().startsWith("{") ? sa.raw : Buffer.from(sa.raw, "base64").toString("utf8");
-    const creds = JSON.parse(raw);
+    const creds = parseCredential(raw, "the Drive service-account credential");
     const auth = new google.auth.GoogleAuth({ credentials: creds, scopes: ["https://www.googleapis.com/auth/drive"] });
     cachedAuth = auth;
     cachedDrive = google.drive({ version: "v3", auth });

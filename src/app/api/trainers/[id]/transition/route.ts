@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { CORRECTABLE_TRAINER_DATES, assertTrainerInScope, correctTrainerDates, transitionTrainer } from "@/lib/rules";
 import { audit, auditDiff } from "@/lib/audit";
@@ -16,7 +16,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   await requirePerm(user, "trainers.manage");
   const { id } = await ctx.params;
   await assertTrainerInScope(user, id); // QA-125: moving a foreign trainer's pipeline is a foreign write
-  const { target, reason, remarks, date, payload, bypass } = await req.json();
+  const { target, reason, remarks, date, payload, bypass } = await readJson(req);
 
   // Rule T8 (Umesh 15/08): bypass = its own grantable right, confirmed in the UI, and the
   // audit row names it in as many words.
@@ -57,7 +57,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   await requirePerm(user, "trainers.manage");
   const { id } = await ctx.params;
   await assertTrainerInScope(user, id); // QA-125: correcting a foreign trainer is a foreign write
-  const body = await req.json();
+  const body = await readJson(req);
 
   // The ₹3250 entry in Costs carries its own date. Moving it is a cost write, so it happens only
   // for someone who already holds that right; for everyone else the mismatch is reported instead of

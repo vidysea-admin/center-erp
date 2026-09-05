@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, HttpError } from "@/lib/authz";
+import { apiHandler, HttpError, readJson } from "@/lib/authz";
 import { rateLimit, clientKey } from "@/lib/rate-limit";
 import { Notification, Program, PublicToken, Trainer } from "@/models";
 import { audit } from "@/lib/audit";
@@ -53,7 +53,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
 export const POST = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   await rateLimit(`trainer-apply:${clientKey(req)}`, 5, 60 * 60 * 1000); // 5/hour/IP
-  const body = await req.json();
+  const body = await readJson(req);
   // Honeypot: bots fill every field; humans never see this one. Fake success, no write.
   if (String(body.website ?? "").trim()) return NextResponse.json({ ok: true }, { status: 201 });
   const f = applicantFields(body);

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, HttpError } from "@/lib/authz";
+import { apiHandler, HttpError, readJson } from "@/lib/authz";
 import { Batch, PublicToken } from "@/models";
 import { planArtifact, planExportRows } from "@/lib/rules";
 import { rateLimit, clientKey } from "@/lib/rate-limit";
@@ -48,7 +48,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   const { token } = await ctx.params;
   const t = await resolve(token);
   if (!t.allow_updates) throw new HttpError(403, "This link is read-only — ask the person who shared it for a link that allows status updates.");
-  const body = await req.json().catch(() => ({}));
+  const body = await readJson(req).catch(() => ({}));
   const key = String(body.key ?? "");
   const batch = await Batch.findById(t.batch);
   if (!batch) throw new HttpError(404, "Batch not found");

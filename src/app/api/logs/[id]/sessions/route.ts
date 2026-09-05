@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { DailyLog } from "@/models";
 import { assertBatchInScope, dayKey, istToday, planRosterGrowth, recordRosterGrowth, validateDailyLog } from "@/lib/rules";
@@ -29,7 +29,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   if (istToday().getTime() !== dayKey(log.log_date).getTime() && user.role !== "Admin" && user.role !== "Operations") {
     throw new HttpError(403, "Marking rounds are same-day only — for an earlier date use Edit (Operations/Admin).");
   }
-  const body = await req.json();
+  const body = await readJson(req);
   const roundPresent: string[] = (body.present_member_ids ?? []).map(String);
   const roundBiometric: string[] = (body.biometric_member_ids ?? []).map(String);
   if (!roundPresent.length && !roundBiometric.length) {

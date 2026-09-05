@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError, readJson } from "@/lib/authz";
 import { MeetingNote } from "@/models";
 import { audit } from "@/lib/audit";
 
@@ -25,7 +25,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   requireEdit(user);
   const { id } = await ctx.params;
   assertLocationInScope(user, id);
-  const body = await req.json();
+  const body = await readJson(req);
   const note = String(body.note ?? "").trim();
   if (!note) throw new HttpError(400, "Note text is required.");
   const doc = await MeetingNote.create({

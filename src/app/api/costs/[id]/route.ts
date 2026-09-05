@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, isScoped, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, isScoped, HttpError, readJson } from "@/lib/authz";
 import { requireFinance } from "@/lib/permissions";
 import { CostEntry } from "@/models";
 import { assertCostEntryValid } from "@/lib/rules";
@@ -34,7 +34,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   requireEdit(user);
   const { id } = await ctx.params;
   const doc = await loadInScope(user, id);
-  const body = await req.json();
+  const body = await readJson(req);
   const patch: Record<string, unknown> = {};
   for (const f of ["entry_date", "location", "batch", "trainer", "category", "amount", "note"]) {
     if (body[f] !== undefined) patch[f] = body[f] === "" ? undefined : body[f];

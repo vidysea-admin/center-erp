@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, isScoped, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, isScoped, HttpError, readJson } from "@/lib/authz";
 import { requirePerm, requireView } from "@/lib/permissions";
 import { Batch, GovtAttendanceImport, GovtAttendanceRow } from "@/models";
 import { assessmentHoursBar, courseIsFinished, eligibilityVerdict, memberAttendedHours } from "@/lib/rules";
@@ -239,7 +239,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   await requirePerm(user, "attendance.govt");
   const { id } = await ctx.params;
   const imp = await loadInScope(id, user);
-  const body = await req.json().catch(() => ({}));
+  const body = await readJson(req).catch(() => ({}));
   const label = String(body.period_label ?? "").trim();
   if (!label) throw new HttpError(400, "Give the import a name — it is how this one is told apart from the others.");
   if (label === imp.period_label) return NextResponse.json({ item: imp });

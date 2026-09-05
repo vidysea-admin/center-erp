@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError, assertLocationInScope } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, assertLocationInScope, readJson } from "@/lib/authz";
 import { requirePerm, hasEditLevel } from "@/lib/permissions";
 
 // The fields the roster itself renders - the chip, both attendance pickers, the enrolment card.
@@ -114,7 +114,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   if (!batch) throw new HttpError(404, "Batch not found");
   if (["Completed", "Cancelled"].includes(batch.status)) throw new HttpError(409, "Batch is closed.");
   await assertLocationOperational(batch.location, "Adding a candidate"); // Rule 1
-  const body = await req.json();
+  const body = await readJson(req);
   if (!body.candidate) throw new HttpError(400, "candidate is required");
   const cand = await Candidate.findById(body.candidate).select("name location program").lean<any>();
   if (!cand) throw new HttpError(404, "Candidate not found");

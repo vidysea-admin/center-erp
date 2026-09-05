@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { assertMemberInScope, dropMemberChecked } from "@/lib/rules";
 import { audit } from "@/lib/audit";
@@ -15,7 +15,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   await requirePerm(user, "candidates.assign"); // togglable (2026-08-11)
   const { id } = await ctx.params;
   await assertMemberInScope(user, id); // Rule 38
-  const { left_on, drop_reason } = await req.json();
+  const { left_on, drop_reason } = await readJson(req);
   if (!left_on || !drop_reason) throw new HttpError(400, "Rule 25: left_on and drop_reason required");
   const m = await dropMemberChecked(id, new Date(left_on), drop_reason);
   await audit({ entity: "BatchMember", entityId: m._id, field: "dropped", newValue: { left_on, drop_reason }, actor: user.id });

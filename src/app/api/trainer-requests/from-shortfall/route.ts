@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, locationFilter, assertLocationInScope } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, locationFilter, assertLocationInScope, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Notification, TrainerRequest } from "@/models";
 import { mappingReadinessBulk, addDays, HALTED_LOCATION_STATUSES } from "@/lib/rules";
@@ -17,7 +17,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const user = await requireUser();
   requireEdit(user);
   await requirePerm(user, "trainers.manage");
-  const body = await req.json().catch(() => ({}));
+  const body = await readJson(req).catch(() => ({}));
 
   const filter: Record<string, unknown> = { ...locationFilter(user) }; // Rule 38
   if (body.location) {

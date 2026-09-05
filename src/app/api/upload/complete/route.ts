@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { StoredFile } from "@/models";
 import { finalizeDriveFile, finalizeGcsObject } from "@/lib/storage";
 import { BASE_PATH } from "@/lib/base-path";
@@ -12,7 +12,7 @@ import { BASE_PATH } from "@/lib/base-path";
 export const POST = apiHandler(async (req: NextRequest) => {
   const user = await requireUser();
   requireEdit(user);
-  const body = await req.json().catch(() => ({}));
+  const body = await readJson(req).catch(() => ({}));
   const name = String(body.name ?? "");
   const fileId = String(body.drive_file_id ?? "");
   if (!/^[a-f0-9]{32}\.[a-z0-9]+$/.test(name)) throw new HttpError(400, "Bad upload name");
