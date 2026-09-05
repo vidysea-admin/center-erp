@@ -2554,7 +2554,23 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     const bId = seededInv.batch?._id ?? seededInv.batch;
     const noMoney = (obj) => obj && typeof obj === "object" && MONEY.every((f) => obj[f] === undefined);
 
-    for (const [who, label] of [[plainAdmin, "an Admin without finance.view"], [ops, "Operations"]]) {
+    // A FRESH ungranted Admin, deliberately not `plainAdmin`. `plainAdmin` was granted
+    // `finance.view` a few lines above, by the very assertion that proves granting works — so
+    // reusing it here would test a persona that is supposed to see the money, and the first run of
+    // this block did exactly that and reported three "leaks" that were my own test contaminating
+    // itself. Operations passed the same three assertions in that run, which is what showed the
+    // masking was fine and the persona was not.
+    const emLeak = `q1834.leak.${s1825}@vidysea-test.local`;
+    const mkLeak = await req(admin, "POST", "/api/users", {
+      name: "Q1834 Ungranted Admin", email: emLeak, password: pw1825, role: "Admin",
+      location_scope: [], can_edit: true,
+    });
+    ok("QA-1834 fixture: a second, never-granted Admin exists for the leak probes",
+      mkLeak.status === 201, `got ${mkLeak.status}`);
+    const leakAdmin = await login(emLeak, pw1825);
+    ok("QA-1834 fixture: that Admin signs in", !!leakAdmin);
+
+    for (const [who, label] of [[leakAdmin, "an Admin without finance.view"], [ops, "Operations"]]) {
       if (!who) continue;
 
       const cl = await req(who, "GET", `/api/batches/${bId}/closure`);
