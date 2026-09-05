@@ -25,9 +25,19 @@ export async function requireApproval(
   const rule = await ApprovalRule.findOne({ action, enabled: true }).lean<any>();
   if (!rule) return null;
 
-  // An approver acting on their own initiation would defeat the control; Admins are the
-  // escape hatch only when they are themselves the configured approver.
-  if (user.role === rule.approver_role && user.role === "Admin") return null;
+  // QA-1826 (S1, filed 2026-09-05 on the CEO's own words): this line used to read
+  //   `if (user.role === rule.approver_role && user.role === "Admin") return null;`
+  // and it defeated the entire control for the one role that most needed it. An Admin who was the
+  // configured approver never PARKED their own entry — it went straight to the ledger, unchecked,
+  // so the self-approval refusal below (`decideApproval`, "an initiator can never approve their own
+  // request") was unreachable for them: nothing had been parked to refuse.
+  //
+  // The CEO put it plainly: *"अगर कोई चीज़ मैंने डाली है तो वो अप्रूव मैं नहीं कर सकता, वो शुभी और
+  // मनीष जी होंगे।"* — the person who raises it is never the person who clears it, and being the
+  // approver is exactly what makes that matter, not what excuses it.
+  //
+  // Everyone parks now. The escape hatch that made this safe to ship in the first place — "with no
+  // enabled rule nothing changes" — is untouched above: a disabled action still returns null.
 
   const request = await ApprovalRequest.create({
     action,

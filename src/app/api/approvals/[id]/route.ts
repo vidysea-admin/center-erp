@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
-import { requirePerm, hasPermission, maskApprovalMoney, FINANCE_VIEW } from "@/lib/permissions";
+import { requirePerm, requireFinance, hasPermission, maskApprovalMoney, FINANCE_VIEW } from "@/lib/permissions";
 import { decideApproval } from "@/lib/approvals";
 import { assertCostEntryValid, transitionBatch, updateInvoiceChecked } from "@/lib/rules";
-import { CostEntry, Location, LocationTarget, Room } from "@/models";
+import { ApprovalRequest, CostEntry, Location, LocationTarget, Room } from "@/models";
 import { audit } from "@/lib/audit";
 
 // POST { decision: "Approved" | "Rejected", note? }
@@ -15,9 +15,28 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   const user = await requireUser();
   requireEdit(user);
   await requirePerm(user, "approvals.decide"); // togglable (2026-08-11)
+  // QA-1844 (checker, qa-1825 cycle 3, confirmed live again in cycles 4-6): the CEO's sentence has
+  // TWO halves — *"कॉस्ट की **अप्रूवल** … और **विजिबिलिटी** …"* — and Unit 1 spent six cycles on the
+  // second one. An Admin with `finance.view: null` POSTed `{decision:"Approved"}` to a parked cost
+  // and it went through: 200, persisted, `decided_by` their name, no 403 anywhere. They could not
+  // SEE the figure by then, and approved it anyway.
+  //
+  // Which actions this covers is derived from the payload's own effect, not from a list of names:
+  // an action whose replay writes or moves money is a money decision. The others (location.close,
+  // location.stop, batch.cancel, batch.complete, location.edit) stay on `approvals.decide`, because
+  // narrowing them would take the queue away from the Operations users whose job it is.
+  const MONEY_ACTIONS = new Set(["cost.post", "invoice.raise", "invoice.paid"]);
   const { id } = await ctx.params;
   const { decision, note } = await req.json();
   if (!["Approved", "Rejected"].includes(decision)) throw new HttpError(400, "decision must be Approved or Rejected");
+
+  // The gate has to run BEFORE decideApproval, which writes the decision. Gating after it would
+  // refuse the caller AFTER their Rejected had already been persisted — the request would be closed
+  // by someone the product just said may not close it. So the action is read first, cheaply.
+  // A Rejected is gated too: refusing a payment is a money decision as much as allowing one.
+  const pending = await ApprovalRequest.findById(id).select("action").lean<any>();
+  if (!pending) throw new HttpError(404, "Approval request not found");
+  if (MONEY_ACTIONS.has(pending.action)) await requireFinance(user, "approve");
 
   const request = await decideApproval(id, user, decision, note);
   // The REJECT path hands back the same document and was the same leak; masked identically rather

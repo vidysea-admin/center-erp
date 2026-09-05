@@ -378,6 +378,22 @@ export function maskMoneyInAuditRow<T extends Record<string, any>>(row: T, canSe
 //
 // The values are taken FROM the payload rather than pattern-guessed, so this cannot be fooled by an
 // invoice number that does not look like one.
+// Every way this codebase or a human might write one money value. Numbers get their grouped forms
+// (Indian and Western) as well as the bare digits; a string value is only itself. Deduped, and
+// longest-first so `4,45,566` is consumed before a bare `566` inside it could be.
+function moneyNotations(v: unknown): string[] {
+  const out = new Set<string>();
+  if (typeof v === "number" && Number.isFinite(v)) {
+    out.add(String(v));
+    for (const loc of ["en-IN", "en-US"]) {
+      try { out.add(v.toLocaleString(loc)); } catch { /* locale unavailable — the bare form still applies */ }
+    }
+  } else if (v != null) {
+    out.add(String(v));
+  }
+  return [...out].filter(Boolean).sort((a, b) => b.length - a.length);
+}
+
 export function redactMoneyInText(text: string, payload?: unknown): string {
   let out = text.replace(/₹\s?[\d,]+(?:\.\d+)?/g, "₹—");
   if (payload && typeof payload === "object" && !Array.isArray(payload)) {
@@ -405,9 +421,15 @@ export function redactMoneyInText(text: string, payload?: unknown): string {
       // and no exception for numbers. Coincidental collisions still redact — that is the safe
       // direction for a rule about money.
       if (v == null || v === "") continue;
-      const s = String(v);
-      if (s.length < 2) continue; // a single character is not a figure worth matching on
-      out = out.replace(new RegExp(`(?<![\\w])${s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w])`, "g"), "—");
+      // QA-1861 (checker, cycle 6): substituting the value AS THE DATABASE STORES IT can only ever
+      // match one notation. `amount: 445566` was redacted where it appeared as `445566` and sailed
+      // through where a human had typed the same figure into the note as `4,45,566` — the form
+      // anyone in India actually writes, and the form `toLocaleString("en-IN")` produces two lines
+      // away in the UI. A figure is not one string; it is a small set of ways of writing itself.
+      for (const s of moneyNotations(v)) {
+        if (s.length < 2) continue; // a single character is not a figure worth matching on
+        out = out.replace(new RegExp(`(?<![\\w])${s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w])`, "g"), "—");
+      }
     }
   }
   return out;
