@@ -4292,12 +4292,20 @@ export function batchManagementBlockers(
   if (["Active", "Closing"].includes(status) && roster === 0) {
     push("empty_roster", "No students on the roster", "red");
   }
+  // QA-1921 (checker on cycle 2): this reason is NEW to `batchHealth`, which the Home dashboard and
+  // the batch page both read, and it fired on 22 of 22 overdue Planning/Ready batches - a
+  // fully-ready overdue batch went Green to RED overnight, under a manifest claim that the words
+  // were unchanged. AMBER, therefore: a slipped start date is a warning about scheduling, not a
+  // statement that the batch is broken, and `not_ready` already goes red when a batch is both
+  // overdue AND missing something. The KPI tile counts the blocker either way - severity decides
+  // the colour a person sees, not whether the CEO's fourth category gets filled.
+  //
   // A batch whose planned start has passed while it is still Planning/Ready is the CEO's own
   // question turned into a blocker — *"कितने बैचेस और चालू होने वाले हैं"*. It is scheduling, so it
   // belongs to the centre SPOC, and it is the reason this category exists at all.
   if (["Planning", "Ready"].includes(status) && batch.planned_start) {
     const start = dayKey(new Date(batch.planned_start as any));
-    if (start && today > start) push("start_passed", "Planned start date has passed and the batch has not started", "red");
+    if (start && today > start) push("start_passed", "Planned start date has passed and the batch has not started", "amber");
   }
   return out;
 }
@@ -5195,6 +5203,14 @@ export async function kpiRollup(scope: Record<string, unknown> = {}) {
   // trained count beside their own centre's everything else, and `?location=` moved three of the
   // four numbers. The batches are already loaded and already scoped; a Pass belongs to a batch, so
   // the same set is the filter. No new query, and no second idea of what "in scope" means.
+  // QA-1920 (checker on cycle 2). This exclusion is UNCONDITIONAL, and the closure screen's is not:
+  // `summarizeBatchResults` drops the exclusion when the Admin toggle `dropped_pass_is_billable` is
+  // on, so with that setting the two numbers part company by exactly the dropped-but-passed. That is
+  // deliberate and it is the right way round — the toggle answers "may we INVOICE for someone who
+  // passed and then left", which is a billing question. Whether they were TRAINED is not a billing
+  // question, and letting an invoicing switch move the CEO's headcount would be the "two numbers for
+  // one word" fault this report was built to avoid. The tile says so on screen: "a headcount, not
+  // the billable figure".
   const inScope = new Set(batches.map((b) => String(b._id)));
   const trained = passRows.filter((r) => inScope.has(String(r.batch))
     && !dropped.has(String(r.batch_member))).length;

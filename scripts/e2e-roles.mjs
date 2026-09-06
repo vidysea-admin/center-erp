@@ -3436,22 +3436,61 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       const adminAny = await req(admin, "GET", `/api/reports/kpi?location=${notMine._id}`);
       ok("QA-1898: ...and an unscoped Admin may still name any centre", adminAny.status === 200, `got ${adminAny.status}`);
 
-      // QA-1900 (checker on cycle 1). `trained` was the one figure on this payload that took no
-      // scope, so a centre principal read the org-wide total beside their own centre's everything
-      // else — and the cycle-1 assertion missed it because it checked a TYPE instead of sending a
-      // scope and comparing the number. This compares two numbers that must be equal, and a third
-      // that must not exceed the whole.
-      const ownL = (await req(admin, "GET", "/api/locations?limit=200")).data?.items?.find((l) => /JPR03/i.test(String(l.code ?? "")));
+      // QA-1919 (checker on cycle 2) — AND THIS IS THE SECOND TIME THE SAME MISTAKE WAS MADE HERE.
+      // Cycle 1's assertion checked a TYPE. Cycle 2's replacement compared a scoped user's `trained`
+      // against an Admin naming that same centre — but with the fix removed BOTH sides return the
+      // org-wide total, so the equality is true in the broken world too, and the `<=` beside it is
+      // true in every world. Two assertions, neither able to fail, cited in a manifest as the mutant
+      // that verified the fix.
+      //
+      // A comparison can only be a test if the two sides come apart when the code is wrong. So this
+      // is a DECOMPOSITION: the whole estate's `trained` must equal the sum of the per-centre
+      // figures. If `trained` ignores the scope, every per-centre call returns the whole, the sum is
+      // N x the whole, and it fails by a mile. There is no arrangement of the broken code that
+      // satisfies it.
+      const allLocs = (await req(admin, "GET", "/api/locations?limit=200")).data?.items ?? [];
+      const whole = await req(admin, "GET", "/api/reports/kpi");
+      const wholeTrained = whole.data?.trained ?? -1;
+      const perCentre = [];
+      for (const l of allLocs) {
+        const r = await req(admin, "GET", `/api/reports/kpi?location=${l._id}`);
+        perCentre.push({ code: l.code, trained: r.data?.trained ?? 0 });
+      }
+      const summed = perCentre.reduce((a, c) => a + c.trained, 0);
+      // The fixture assertion first, because the decomposition is only a test when there is more
+      // than one centre AND somebody has actually been trained — otherwise 0 === 0 passes in both
+      // worlds, which is exactly the vacuity this row was filed for.
+      ok("QA-1919 fixture: there are at least two centres and a non-zero trained count, so the sum below can actually disagree",
+        allLocs.length >= 2 && wholeTrained > 0, `centres=${allLocs.length} trained=${wholeTrained}`);
+      ok("QA-1919: the estate's `trained` equals the sum of the per-centre figures — a `trained` that ignores scope returns N x the whole and cannot satisfy this",
+        allLocs.length >= 2 && wholeTrained > 0 && summed === wholeTrained,
+        `sum=${summed} whole=${wholeTrained} over ${allLocs.length} centres: ${JSON.stringify(perCentre.slice(0, 6))}`);
+      // And the original equality is kept, because it still says something the decomposition does
+      // not: that the SCOPED USER'S OWN view agrees with the Admin's narrowed one. It is no longer
+      // carrying the weight of proving the fix.
+      const ownL = allLocs.find((l) => /JPR03/i.test(String(l.code ?? "")));
       if (ownL) {
         const asSpoc = await req(spoc, "GET", "/api/reports/kpi");
         const adminNarrowed = await req(admin, "GET", `/api/reports/kpi?location=${ownL._id}`);
-        const whole = await req(admin, "GET", "/api/reports/kpi");
-        ok("QA-1900: a scoped user's `trained` equals what an Admin sees when naming that same centre",
+        ok("QA-1900: a scoped user's `trained` agrees with an Admin naming that same centre",
           asSpoc.data?.trained === adminNarrowed.data?.trained,
           `spoc=${asSpoc.data?.trained} admin?location=${adminNarrowed.data?.trained}`);
-        ok("QA-1900: ...and it is not simply the org-wide number handed to everybody",
-          (asSpoc.data?.trained ?? 0) <= (whole.data?.trained ?? -1),
-          `scoped=${asSpoc.data?.trained} whole=${whole.data?.trained}`);
+      }
+      // QA-1921: `batchManagementBlockers` widened what `batchHealth` reports. That change is
+      // asserted HERE rather than left to be discovered, because it moves a score a person reads.
+      const planningB = ((await req(admin, "GET", "/api/batches?limit=100")).data?.items ?? [])
+        .find((b) => ["Planning", "Ready"].includes(String(b.status)));
+      if (planningB) {
+        const origStart = planningB.planned_start;
+        await req(admin, "PATCH", `/api/batches/${planningB._id}`, { planned_start: "2020-01-01" });
+        const h = await req(admin, "GET", `/api/batches/${planningB._id}`);
+        const reasons = (h.data?.item?.health?.reasons ?? h.data?.health?.reasons ?? []);
+        const startRow = reasons.find((r) => r.code === "start_passed");
+        ok("QA-1921: an overdue Planning batch reports a passed start date on the batch page too, not only in the KPI tile",
+          !!startRow, JSON.stringify(reasons.map((r) => r.code)));
+        ok("QA-1921: ...as AMBER, not red — a start date that has slipped is a warning, and turning 22 ready batches red overnight is a change nobody asked for",
+          !startRow || startRow.severity === "amber", JSON.stringify(startRow ?? null));
+        if (origStart) await req(admin, "PATCH", `/api/batches/${planningB._id}`, { planned_start: String(origStart).slice(0, 10) });
       }
     } else ok("QA-1898 fixture: a foreign centre exists to attack with", false, `spoc=${!!spoc} other=${!!notMine}`);
   }

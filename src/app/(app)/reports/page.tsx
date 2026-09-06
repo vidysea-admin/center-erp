@@ -735,7 +735,7 @@ function KpiPanel() {
         <span className="text-xs text-gray-500">as at {new Date(d.measured_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} IST</span>
       </div>
       <div className="grid gap-2 sm:grid-cols-3">
-        {tile("Trained", d.trained, "assessed and passed, dropouts excluded")}
+        {tile("Trained", d.trained, "assessed and passed, dropouts excluded — a headcount, not the billable figure")}
         {tile("In training", d.in_training, `${d.active_batches} batch${d.active_batches === 1 ? "" : "es"} running`)}
         {tile("Batches about to start", d.upcoming_batches,
           // The forward plan, with its own honesty: a batch with no planned intake is counted as a
