@@ -712,21 +712,48 @@ function BatchIdCell({ row, onSaved }: { row: any; onSaved: (warning?: string) =
 // was cost, and *"कॉस्ट से बिजनेस नहीं चलता"*. The first question he asks should be the first thing
 // on the page, not one click away behind something he did not ask for.
 function KpiPanel() {
+  const sp = useSearchParams();
+  const router = useRouter();
   const [d, setD] = useState<any>(null);
   const [err, setErr] = useState("");
-  const [openCat, setOpenCat] = useState<string | null>(null);
   useEffect(() => { api("/api/reports/kpi").then(setD).catch((e) => setErr(String(e?.message ?? e))); }, []);
+
+  // QA-1927 (Umesh): *"all KPI cards must be clickable to show the relevant information in tabula
+  // manner"*. The open card lives in the URL, exactly as the rollup's `?drill=` does — a KPI card is
+  // opened in order to send somebody what is inside it, and a link that does not carry which card
+  // was open is a link to a different screen. `?kpi=` rather than `?drill=` so the two panels on
+  // this page can be open at once and neither closes the other.
+  const openKey = sp.get("kpi") ?? "";
+  const setOpen = (k: string) => {
+    const next = new URLSearchParams(Array.from(sp.entries()));
+    if (k && k !== openKey) next.set("kpi", k); else next.delete("kpi");
+    router.push(`/reports${next.toString() ? `?${next}` : ""}`, { scroll: false });
+  };
 
   if (err) return <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">KPI: {err}</div>;
   if (!d) return <div className="rounded-lg border border-gray-200 p-3 text-sm text-gray-400">Loading KPIs…</div>;
 
-  const tile = (label: string, value: number | string, sub?: string) => (
-    <div className="rounded-lg border border-gray-200 bg-white p-3">
-      <div className="text-2xl font-semibold">{value}</div>
-      <div className="text-sm font-medium text-gray-700">{label}</div>
-      {sub ? <div className="mt-0.5 text-xs text-gray-500">{sub}</div> : null}
-    </div>
-  );
+  const detail: Record<string, any> = d.detail ?? {};
+  const open = openKey ? detail[openKey] : null;
+
+  // Every card is a button, and every button names a key that exists in `detail` — so a card can
+  // only open the table its own number was summed from. The count printed on the card is read from
+  // the same `detail` entry, not from a sibling field, which is what makes "the panel disagrees
+  // with the tile" unrepresentable rather than merely unlikely.
+  const card = (key: string, label: string, sub?: string) => {
+    const dd = detail[key];
+    const active = openKey === key;
+    return (
+      <button key={key} type="button" onClick={() => setOpen(key)}
+        aria-expanded={active} data-kpi-card={key}
+        className={`rounded-lg border p-3 text-left transition-colors ${active ? "border-blue-400 bg-white ring-1 ring-blue-200" : "border-gray-200 bg-white hover:border-blue-300"}`}>
+        <div className="text-2xl font-semibold">{dd ? dd.total : "—"}</div>
+        <div className="text-sm font-medium text-gray-700">{label}</div>
+        {sub ? <div className="mt-0.5 text-xs text-gray-500">{sub}</div> : null}
+        <div className="mt-1 text-[11px] font-medium text-blue-600">{active ? "Hide the list" : "Show the list"}</div>
+      </button>
+    );
+  };
 
   return (
     <div className="rounded-lg border border-blue-200 bg-blue-50/40 p-3">
@@ -735,9 +762,9 @@ function KpiPanel() {
         <span className="text-xs text-gray-500">as at {new Date(d.measured_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} IST</span>
       </div>
       <div className="grid gap-2 sm:grid-cols-3">
-        {tile("Trained", d.trained, "assessed and passed, dropouts excluded — a headcount, not the billable figure")}
-        {tile("In training", d.in_training, `${d.active_batches} batch${d.active_batches === 1 ? "" : "es"} running`)}
-        {tile("Batches about to start", d.upcoming_batches,
+        {card("trained", "Trained", "assessed and passed, dropouts excluded — a headcount, not the billable figure")}
+        {card("in_training", "In training", `${d.active_batches} batch${d.active_batches === 1 ? "" : "es"} running`)}
+        {card("upcoming_batches", "Batches about to start",
           // The forward plan, with its own honesty: a batch with no planned intake is counted as a
           // batch and contributes nothing to the student projection, and that is said rather than
           // buried, because a projection quietly missing rows is how a plan becomes a surprise.
@@ -749,32 +776,62 @@ function KpiPanel() {
       <div className="mt-3">
         <div className="mb-1 text-sm font-semibold">What is blocking the rest</div>
         <div className="grid gap-2 sm:grid-cols-4">
-          {(d.blocker_summary ?? []).map((c: any) => (
-            <button key={c.category} type="button"
-              onClick={() => setOpenCat(openCat === c.category ? null : c.category)}
-              className={`rounded-lg border p-2 text-left ${openCat === c.category ? "border-blue-400 bg-white" : "border-gray-200 bg-white/70 hover:bg-white"}`}>
-              <div className="text-xl font-semibold">{c.count}</div>
-              <div className="text-xs font-medium text-gray-700">{c.category}</div>
-              <div className="text-[11px] text-gray-500">owner: {c.owner}</div>
-              <div className="text-[11px] text-gray-400">{c.centres} centre{c.centres === 1 ? "" : "s"}</div>
-            </button>
-          ))}
+          {(d.blocker_summary ?? []).map((c: any) => {
+            const key = `blocker:${c.category}`;
+            const active = openKey === key;
+            return (
+              <button key={c.category} type="button" onClick={() => setOpen(key)}
+                aria-expanded={active} data-kpi-card={key}
+                className={`rounded-lg border p-2 text-left transition-colors ${active ? "border-blue-400 bg-white ring-1 ring-blue-200" : "border-gray-200 bg-white/70 hover:bg-white"}`}>
+                <div className="text-xl font-semibold">{c.count}</div>
+                <div className="text-xs font-medium text-gray-700">{c.category}</div>
+                <div className="text-[11px] text-gray-500">owner: {c.owner}</div>
+                <div className="text-[11px] text-gray-400">{c.centres} centre{c.centres === 1 ? "" : "s"}</div>
+              </button>
+            );
+          })}
         </div>
-        {openCat && (
-          <div className="mt-2 max-h-72 overflow-y-auto rounded-lg border border-gray-200 bg-white">
-            {(d.blockers ?? []).filter((b: any) => b.category === openCat).map((b: any, i: number) => (
-              <div key={i} className="flex flex-wrap gap-2 border-b border-gray-100 px-3 py-1.5 text-sm last:border-0">
-                <span className="min-w-[12rem] font-medium">{b.location}{b.location_code ? <span className="ml-1 text-xs text-gray-400">{b.location_code}</span> : null}</span>
-                <span className="min-w-[10rem] text-gray-600">{b.program}</span>
-                <span className="text-gray-700">{b.text}</span>
-              </div>
-            ))}
-            {!(d.blockers ?? []).some((b: any) => b.category === openCat) && (
-              <p className="px-3 py-2 text-xs text-gray-500">Nothing is blocked in this category.</p>
+      </div>
+
+      {/* ONE table, under whichever card is open. The columns travel in the payload beside the rows
+          (the REPORT_LABELS reason: a client component must not invent its own headers), so a card
+          that gains a column in `rules.ts` gains it here with no change to this file. */}
+      {open && (
+        <div className="mt-3 rounded-lg border border-gray-200 bg-white" data-kpi-table={openKey}>
+          <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-gray-100 px-3 py-2">
+            <span className="text-sm font-semibold">{open.label} — {open.total}</span>
+            <span className="text-xs text-gray-500">
+              {open.truncated
+                ? `showing the first ${open.shown} of ${open.total} — download or filter to see the rest`
+                : `${open.shown} row${open.shown === 1 ? "" : "s"}`}
+            </span>
+          </div>
+          <div className="max-h-80 overflow-auto">
+            {open.rows.length === 0 ? (
+              <p className="px-3 py-3 text-xs text-gray-500">Nothing in this list right now.</p>
+            ) : (
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
+                  <tr>{open.columns.map(([k, label]: [string, string]) => <th key={k} className="px-3 py-1.5 font-semibold">{label}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {open.rows.map((r: any, i: number) => (
+                    <tr key={i} className="border-t border-gray-100">
+                      {open.columns.map(([k]: [string, string]) => (
+                        <td key={k} className="px-3 py-1.5 text-gray-700">
+                          {r[k] === null || r[k] === undefined || r[k] === ""
+                            ? <span className="text-gray-300">—</span>
+                            : k === "planned_start" ? String(r[k]).slice(0, 10) : String(r[k])}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             )}
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

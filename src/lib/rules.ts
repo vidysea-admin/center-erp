@@ -5173,18 +5173,34 @@ export type KpiBlockerRow = {
   location: string; location_code?: string; program: string;
 };
 
+// QA-1927 (Umesh): *"all KPI cards must be clickable to show the relevant information in tabula
+// manner"*. Every card therefore ships the ROWS its number was summed from, built in the SAME pass
+// that produced the figure — the `reportRollup` discipline, where `sum(detail) === total` holds by
+// construction and the drawer cannot disagree with the tile that opened it.
+//
+// The cap exists because `in_training` is already 155 on production and only grows. A capped list
+// is honest ONLY if it says so, so the payload carries `shown`, `total` and `truncated`, and the
+// screen prints the sentence. A silently truncated table is a wrong answer with evidence under it.
+export const KPI_DRILL_CAP = 500;
+
 export async function kpiRollup(scope: Record<string, unknown> = {}) {
   const measured_at = new Date();
   const locFilter = (scope.location ? { location: scope.location } : {}) as Record<string, unknown>;
 
-  const [passRows, enrolled, batches, readiness] = await Promise.all([
+  const [passRows, enrolledRows, batches, readiness] = await Promise.all([
     // TRAINED. Counted from results, and DROPPED members are excluded the same way
     // `closureAggregates` excludes them — a dropout who happened to have a Pass row is not a
     // trained student, and counting them here while the closure screen does not would be the
     // "two numbers" problem this report exists to avoid.
     CandidateResult.find({ result: "Pass" }).select("batch batch_member candidate").lean<any[]>(),
-    Candidate.countDocuments({ ...locFilter, lifecycle_status: "Enrolled" }),
-    Batch.find({ ...locFilter }).select("status planned_start location program target_size")
+    // QA-1927: the ROWS, not a count. `in_training` is now `rows.length`, so the number on the card
+    // and the table it opens are the same arithmetic performed once — they cannot disagree, because
+    // there is nothing to disagree with. `countDocuments` is kept only as the fallback when the cap
+    // below actually bites, and the payload says so rather than showing a short list confidently.
+    Candidate.find({ ...locFilter, lifecycle_status: "Enrolled" })
+      .select("name location lifecycle_status").populate("location", "name code")
+      .limit(KPI_DRILL_CAP + 1).lean<any[]>(),
+    Batch.find({ ...locFilter }).select("code status planned_start location program target_size")
       .populate("location", "name code").populate("program", "name code").lean<any[]>(),
     mappingReadinessBulk(locFilter, 2000),
   ]);
@@ -5212,8 +5228,39 @@ export async function kpiRollup(scope: Record<string, unknown> = {}) {
   // one word" fault this report was built to avoid. The tile says so on screen: "a headcount, not
   // the billable figure".
   const inScope = new Set(batches.map((b) => String(b._id)));
-  const trained = passRows.filter((r) => inScope.has(String(r.batch))
-    && !dropped.has(String(r.batch_member))).length;
+  // QA-1927: the SAME filter now produces the rows and the number — `trained` is `trainedRows.length`,
+  // so the card and the table it opens are one arithmetic, not two.
+  const trainedRows = passRows.filter((r) => inScope.has(String(r.batch)) && !dropped.has(String(r.batch_member)));
+  const trained = trainedRows.length;
+
+  const batchById = new Map(batches.map((b) => [String(b._id), b]));
+  // Names for the drill table only. `select("name")` and nothing else: this report is on the
+  // money-leak probe's door list and must stay free of money, and a student's phone number is not
+  // "the relevant information" for a trained count either.
+  const trainedCands = await Candidate.find({ _id: { $in: trainedRows.slice(0, KPI_DRILL_CAP).map((r) => r.candidate) } })
+    .select("name").lean<any[]>();
+  const candName = new Map(trainedCands.map((c) => [String(c._id), c.name]));
+  const trainedDetail = trainedRows.slice(0, KPI_DRILL_CAP).map((r) => {
+    const b = batchById.get(String(r.batch));
+    return {
+      candidate: candName.get(String(r.candidate)) ?? "—",
+      batch: b?.code ?? "—",
+      location: b?.location?.name ?? "—",
+      program: b?.program?.name ?? "—",
+    };
+  });
+
+  // `in_training` is the length of the rows we actually hold, unless the cap bit — in which case
+  // the true number is counted and the shortfall is declared rather than hidden.
+  const enrolledTruncated = enrolledRows.length > KPI_DRILL_CAP;
+  const enrolledCount = enrolledTruncated
+    ? await Candidate.countDocuments({ ...locFilter, lifecycle_status: "Enrolled" })
+    : enrolledRows.length;
+  const inTrainingDetail = enrolledRows.slice(0, KPI_DRILL_CAP).map((c) => ({
+    candidate: c.name ?? "—",
+    location: c.location?.name ?? "—",
+    stage: c.lifecycle_status ?? "—",
+  }));
 
   const upcomingBatches = batches.filter((b) => ["Planning", "Ready"].includes(String(b.status)));
   const activeBatches = batches.filter((b) => String(b.status) === "Active");
@@ -5223,6 +5270,15 @@ export async function kpiRollup(scope: Record<string, unknown> = {}) {
   // and the count of such batches is reported so the number can be read honestly.
   const projected = upcomingBatches.reduce((n, b) => n + (Number(b.target_size) || 0), 0);
   const withoutTarget = upcomingBatches.filter((b) => !Number(b.target_size)).length;
+
+  // Sorted ONCE and read twice - by `upcoming` (kept for the existing panel) and by the drill
+  // table. Two `.map()` calls over the same source is how a list and its own count start to differ.
+  const upcomingSorted = upcomingBatches.map((b) => ({
+    batch: b.code ?? "—",
+    status: b.status, planned_start: b.planned_start,
+    location: b.location?.name ?? "—", program: b.program?.name ?? "—",
+    target_size: b.target_size ?? null,
+  })).sort((a, b) => String(a.planned_start ?? "").localeCompare(String(b.planned_start ?? "")));
 
   // The blockers, in the CEO's four categories, each carrying its owner. One row per
   // (centre × job role × blocker) so the table can be read either way round.
@@ -5267,7 +5323,7 @@ export async function kpiRollup(scope: Record<string, unknown> = {}) {
     measured_at,
     // The CEO's three, in his order.
     trained,
-    in_training: enrolled,
+    in_training: enrolledCount,
     upcoming_batches: upcomingBatches.length,
     // The context those three need to mean anything.
     active_batches: activeBatches.length,
@@ -5276,11 +5332,42 @@ export async function kpiRollup(scope: Record<string, unknown> = {}) {
     // His four, with owners.
     blocker_summary: byCategory,
     blockers,
-    upcoming: upcomingBatches.map((b) => ({
-      status: b.status, planned_start: b.planned_start,
-      location: b.location?.name ?? "—", program: b.program?.name ?? "—",
-      target_size: b.target_size ?? null,
-    })).sort((a, b) => String(a.planned_start ?? "").localeCompare(String(b.planned_start ?? ""))),
+    upcoming: upcomingSorted,
+    // QA-1927 — what each card opens. KEYED BY THE CARD, so the screen cannot open the wrong table:
+    // the tile reads `detail[k].total` for its number and `detail[k].rows` for its table, and both
+    // come from the same pass above. `columns` travels with the rows for the same reason
+    // `REPORT_LABELS` does — the screen is a client component and must not invent its own headers.
+    detail: {
+      trained: {
+        label: "Trained", total: trained, shown: trainedDetail.length,
+        truncated: trained > trainedDetail.length,
+        columns: [["candidate", "Student"], ["batch", "Batch"], ["location", "Centre"], ["program", "Job role"]],
+        rows: trainedDetail,
+      },
+      in_training: {
+        label: "In training", total: enrolledCount, shown: inTrainingDetail.length,
+        truncated: enrolledTruncated,
+        columns: [["candidate", "Student"], ["location", "Centre"], ["stage", "Stage"]],
+        rows: inTrainingDetail,
+      },
+      upcoming_batches: {
+        label: "Batches about to start", total: upcomingBatches.length, shown: upcomingSorted.length,
+        truncated: false,
+        columns: [["batch", "Batch"], ["location", "Centre"], ["program", "Job role"],
+                  ["planned_start", "Planned start"], ["target_size", "Planned seats"], ["status", "Status"]],
+        rows: upcomingSorted,
+      },
+      // One entry per blocker category, so each of the CEO's four cards opens its own table rather
+      // than a filtered view of one big list somebody has to re-filter by hand.
+      ...Object.fromEntries(BLOCKER_CATEGORY.map((c) => {
+        const rows = blockers.filter((b) => b.category === c);
+        return [`blocker:${c}`, {
+          label: c, total: rows.length, shown: rows.length, truncated: false,
+          columns: [["location", "Centre"], ["program", "Job role"], ["text", "What is blocking it"], ["owner", "Owner"]],
+          rows,
+        }];
+      })),
+    },
   };
 }
 

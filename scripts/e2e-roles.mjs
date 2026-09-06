@@ -3705,6 +3705,55 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     }
   }
 
+  // ---- QA-1927: every KPI card opens the rows its own number was summed from.
+  // The assertion that matters is NOT "a table appears" - it is that the card's number and the
+  // table's length are the same arithmetic. `reportRollup` holds exactly this between a tile and
+  // its drill-down (`sum(detail) === total`, pinned in e2e.mjs), and it is the reason that pattern
+  // was extracted: a drill-down assembled by a second query says 61 under a tile that says 57, and
+  // then neither is trusted.
+  {
+    const k = await req(admin, "GET", "/api/reports/kpi");
+    const d = k.data?.detail ?? {};
+    ok("QA-1927: the KPI payload ships a detail block keyed by card", Object.keys(d).length >= 7, JSON.stringify(Object.keys(d)));
+    for (const [key, num] of [["trained", k.data?.trained], ["in_training", k.data?.in_training], ["upcoming_batches", k.data?.upcoming_batches]]) {
+      const dd = d[key];
+      ok(`QA-1927: the "${key}" card's total IS the figure on the card`, dd && dd.total === num, `detail ${dd?.total} vs card ${num}`);
+      ok(`QA-1927: ...and its table holds exactly that many rows unless it says it is capped`,
+        dd && (dd.truncated ? dd.shown < dd.total && dd.shown > 0 : dd.rows.length === dd.total),
+        `rows=${dd?.rows?.length} shown=${dd?.shown} total=${dd?.total} truncated=${dd?.truncated}`);
+      ok(`QA-1927: ...and it names its own columns, so the screen invents no headers`,
+        Array.isArray(dd?.columns) && dd.columns.length > 0 && dd.columns.every((c) => Array.isArray(c) && c.length === 2),
+        JSON.stringify(dd?.columns));
+      ok(`QA-1927: ...and every row actually carries every column it declares`,
+        dd.rows.length === 0 || dd.columns.every(([col]) => dd.rows.every((r) => col in r)),
+        JSON.stringify(dd.rows[0] ?? {}).slice(0, 140));
+    }
+    // The four blocker cards, each opening ITS OWN category rather than one list to re-filter.
+    for (const c of (k.data?.blocker_summary ?? [])) {
+      const dd = d[`blocker:${c.category}`];
+      ok(`QA-1927: the "${c.category}" card opens its own rows, and only its own`,
+        dd && dd.total === c.count && dd.rows.every((r) => r.category === c.category),
+        `detail ${dd?.total} vs card ${c.count}`);
+    }
+    // Still money-free: this door is on the leak probe's list and says it carries none. Drill rows
+    // are the newest way that could stop being true.
+    ok("QA-1927: the drill rows carry no money either",
+      !/"amount":\s*-?\d|"budget":\s*\d|₹\s?[\d,]/.test(JSON.stringify(d)), "checked the whole detail block");
+
+    // Scoped exactly like the number they open - otherwise a card becomes a side door to a centre's
+    // students that the report itself refuses (the QA-1898 / QA-1900 shape, one layer in).
+    if (spoc) {
+      const sk = await req(spoc, "GET", "/api/reports/kpi");
+      const sd = sk.data?.detail ?? {};
+      const centres = new Set((sd.in_training?.rows ?? []).map((r) => r.location).filter((x) => x && x !== "—"));
+      ok("QA-1927: a scoped user's drill rows carry only their own centre",
+        centres.size <= 1, [...centres].join(","));
+      ok("QA-1927: ...and the scoped card total still equals its own row count",
+        sd.trained && (sd.trained.truncated || sd.trained.rows.length === sd.trained.total),
+        `rows=${sd.trained?.rows?.length} total=${sd.trained?.total}`);
+    }
+  }
+
   // QA-1902 (checker on qa-1832 cycle 1): the claim is that `blockers` IS `blockers_detailed`
   // mapped to its text, so the four categories can only be decided in one place. Nothing held them
   // together — a drifted second copy that silently dropped a sentence produced zero failures.

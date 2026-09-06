@@ -71,13 +71,51 @@ function FinanceInner() {
   const pctCell = (n: number | null) => (n === null ? <span className="text-gray-300">—</span> : `${n}%`);
   const sumCol = (pick: (r: any) => number) => (rs: any[]) => <b>{`₹${rs.reduce((a, r) => a + (pick(r) || 0), 0).toLocaleString("en-IN")}`}</b>;
 
-  const tile = (label: string, value: string, sub?: string) => (
-    <div key={label} className="rounded-xl border border-gray-200 bg-white p-3">
-      <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">{label}</div>
-      <div className="mt-1 text-2xl font-bold text-gray-900">{value}</div>
-      {sub && <div className="mt-0.5 text-[11px] text-gray-400">{sub}</div>}
-    </div>
-  );
+  // QA-1927 (Umesh): every KPI card opens the rows behind it, as a table. Each card names the array
+  // it was summed from — `by_head`, `register`, `unit_economics` — so it can only ever open the rows
+  // its own figure came from. Those arrays are already built in ONE pass in `costRollup`, which is
+  // what makes the table and the number the same arithmetic rather than two that agree today.
+  const openKey = sp.get("card") ?? "";
+  const openCard = (k: string) => {
+    const next = new URLSearchParams(qs);
+    if (k && k !== openKey) next.set("card", k); else next.delete("card");
+    router.push(`/finance${next.toString() ? `?${next}` : ""}`, { scroll: false });
+  };
+  const tile = (key: string, label: string, value: string, sub?: string) => {
+    const active = openKey === key;
+    return (
+      <button key={key} type="button" onClick={() => openCard(key)} aria-expanded={active} data-finance-card={key}
+        className={`rounded-xl border p-3 text-left transition-colors ${active ? "border-blue-400 bg-white ring-1 ring-blue-200" : "border-gray-200 bg-white hover:border-blue-300"}`}>
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">{label}</div>
+        <div className="mt-1 text-2xl font-bold text-gray-900">{value}</div>
+        {sub && <div className="mt-0.5 text-[11px] text-gray-400">{sub}</div>}
+        <div className="mt-1 text-[11px] font-medium text-blue-600">{active ? "Hide the list" : "Show the list"}</div>
+      </button>
+    );
+  };
+  // What each card opens, and the ONE array it is allowed to open.
+  const CARD_TABLES: Record<string, { label: string; rows: any[]; columns: [string, string][] }> = {
+    actual: { label: L.actual ?? "Actual spend", rows: data?.register ?? [],
+      columns: [["entry_date", "Date"], ["head", "Cost head"], ["subhead", "Subhead"], ["amount", "Amount"],
+                ["location", "Centre"], ["batch", "Batch"], ["job_role", "Job role"], ["entered_by", "Entered by"]] },
+    budget: { label: L.budget ?? "Budget", rows: (data?.by_head ?? []).filter((h: any) => h.budget),
+      columns: [["head", "Cost head"], ["budget", "Budget"], ["amount", "Actual"], ["budget_basis", "Budget taken from"]] },
+    variance: { label: L.variance ?? "Variance", rows: (data?.by_head ?? []).filter((h: any) => h.budget),
+      columns: [["head", "Cost head"], ["budget", "Budget"], ["amount", "Actual"], ["variance", "Variance"], ["pct_used", "% used"]] },
+    batches: { label: "Batches with spend", rows: (data?.unit_economics ?? []).filter((b: any) => b.key !== "none"),
+      columns: [["batch", "Batch"], ["location", "Centre"], ["job_role", "Job role"], ["amount", "Actual spend"],
+                ["enrolled", "Enrolled"], ["certified", "Certified"], ["cost_per_enrolled", "Cost / enrolled"]] },
+  };
+  const shown = openKey ? CARD_TABLES[openKey] : null;
+  const MONEY_COLS = new Set(["amount", "budget", "variance", "cost_per_enrolled", "cost_per_certified"]);
+  const cell = (r: any, k: string) => {
+    const v = r[k];
+    if (v === null || v === undefined || v === "") return <span className="text-gray-300">—</span>;
+    if (k === "entry_date") return String(v).slice(0, 10);
+    if (k === "pct_used") return `${v}%`;
+    if (MONEY_COLS.has(k)) return `₹${Number(v).toLocaleString("en-IN")}`;
+    return String(v);
+  };
 
   const simple = (nameLabel: string) => [
     { key: "label", label: nameLabel, sortable: true, filterable: true, minWidth: 200, render: (r: any) => r.label },
@@ -140,11 +178,38 @@ function FinanceInner() {
       </div>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {tile(L.actual ?? "Actual spend", `₹${Number(t.actual ?? 0).toLocaleString("en-IN")}`, `${t.entries ?? 0} entries · ${t.heads ?? 0} heads`)}
-        {tile(L.budget ?? "Budget", t.budget ? `₹${Number(t.budget).toLocaleString("en-IN")}` : "—", t.budget ? "from the cost head master" : "no budgets set yet")}
-        {tile(L.variance ?? "Variance", t.variance === null || t.variance === undefined ? "—" : `₹${Number(t.variance).toLocaleString("en-IN")}`, t.pct_used === null || t.pct_used === undefined ? "" : `${t.pct_used}% of budget used`)}
-        {tile("Batches with spend", String(t.batches ?? 0), "untagged costs sit in Unassigned")}
+        {tile("actual", L.actual ?? "Actual spend", `₹${Number(t.actual ?? 0).toLocaleString("en-IN")}`, `${t.entries ?? 0} entries · ${t.heads ?? 0} heads`)}
+        {tile("budget", L.budget ?? "Budget", t.budget ? `₹${Number(t.budget).toLocaleString("en-IN")}` : "—", t.budget ? "from the cost head master" : "no budgets set yet")}
+        {tile("variance", L.variance ?? "Variance", t.variance === null || t.variance === undefined ? "—" : `₹${Number(t.variance).toLocaleString("en-IN")}`, t.pct_used === null || t.pct_used === undefined ? "" : `${t.pct_used}% of budget used`)}
+        {tile("batches", "Batches with spend", String(t.batches ?? 0), "untagged costs sit in Unassigned")}
       </div>
+
+      {shown && (
+        <div className="rounded-xl border border-gray-200 bg-white" data-finance-table={openKey}>
+          <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-gray-100 px-3 py-2">
+            <span className="text-sm font-semibold">{shown.label}</span>
+            <span className="text-xs text-gray-500">{shown.rows.length} row{shown.rows.length === 1 ? "" : "s"}</span>
+          </div>
+          <div className="max-h-80 overflow-auto">
+            {shown.rows.length === 0 ? (
+              <p className="px-3 py-3 text-xs text-gray-500">Nothing in this list for the filters above.</p>
+            ) : (
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
+                  <tr>{shown.columns.map(([k, label]) => <th key={k} className="px-3 py-1.5 font-semibold">{label}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {shown.rows.map((r: any, i: number) => (
+                    <tr key={r.id ?? r.key ?? i} className="border-t border-gray-100">
+                      {shown.columns.map(([k]) => <td key={k} className="px-3 py-1.5 text-gray-700">{cell(r, k)}</td>)}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* QA-1830 live check: the "not here yet" line was inside the collapsed disclosure below, so a
           reader looking for a vendor or voucher column found neither the column nor the reason. The

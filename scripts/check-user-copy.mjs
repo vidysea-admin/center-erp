@@ -3312,6 +3312,45 @@ for (const file of walk(root)) {
   }
 
 
+  // QA-1927 (Umesh): *"all KPI cards must be clickable to show the relevant information in tabula
+  // manner"*. A card that stops being a button fails silently — it still renders, still shows the
+  // right number, and simply stops answering when clicked. Nothing else in the wall would see that:
+  // `e2e-roles` asserts the PAYLOAD carries the rows, and `e2e-rendered-candidates` does not cover
+  // these two screens at all. So the pin binds the property that the payload assertions cannot:
+  // the card is an interactive element, and it is tagged so a rendered-state suite can find it.
+  {
+    for (const [rel, marker, what] of [
+      ["app/(app)/reports/page.tsx", "data-kpi-card", "the Training KPI cards"],
+      ["app/(app)/finance/page.tsx", "data-finance-card", "the finance dashboard tiles"],
+    ]) {
+      const f = path.join(root, rel);
+      if (!fs.existsSync(f)) { bad.push(`${rel}: gone.`); continue; }
+      const src = stripComments(fs.readFileSync(f, "utf-8"));
+      if (!src.includes(marker)) {
+        bad.push(`${rel}: ${what} no longer carry ${marker}. Every KPI card must be a clickable element that opens its rows (QA-1927) - and it must be findable, or no rendered-state test can ever assert it.`);
+      }
+      // The tag alone is not the property: a <div data-kpi-card> renders identically and does
+      // nothing. The element carrying it has to be a button.
+      //
+      // The FIRST version of this check was `<(\w+)[^>]*${marker}` and it could not fire at all -
+      // an arrow function in the JSX props (`onClick={() => setOpen(key)}`) contains a `>`, so
+      // `[^>]*` stopped there and never reached the marker. A mutant that turned the card into a
+      // <div> passed it cleanly. That is the third pin in this file written against a shape its own
+      // subject does not have, so this one walks BACKWARDS from the marker to the tag that opens
+      // the element - which cannot be fooled by anything sitting between them.
+      let at = src.indexOf(marker);
+      while (at !== -1) {
+        const before = src.slice(0, at);
+        const lt = before.lastIndexOf("<");
+        const tag = lt === -1 ? "?" : (/^<([A-Za-z][\w.]*)/.exec(before.slice(lt)) ?? [])[1] ?? "?";
+        if (tag !== "button") {
+          bad.push(`${rel}: ${marker} sits on a <${tag}>, not a <button>. A card that is not an interactive element still renders and still shows the right number - it just stops answering when clicked (QA-1927).`);
+        }
+        at = src.indexOf(marker, at + 1);
+      }
+    }
+  }
+
   // QA-1830 — three properties of the finance report, each pinned as a shape rather than as an
   // example. The rule this file keeps relearning is that a pin written about the case somebody
   // happened to find binds only that case (QA-1882, QA-1887), so each of these names the property.
