@@ -3389,6 +3389,25 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     ok("QA-1832: ...and sees no blocker outside their own scope",
       (ks.data?.blockers ?? []).every((b) => /JPR03|Jaipur/i.test(`${b.location} ${b.location_code}`)) || (ks.data?.blockers ?? []).length === 0,
       JSON.stringify([...new Set((ks.data?.blockers ?? []).map((b) => b.location_code))]));
+    // QA-1898: the row above walks the path nobody attacks. The first version of this route wrote
+    // `?location=` straight over the authorisation clause — same key, so the parameter simply
+    // replaced it — and a scoped SPOC could name any centre and read it. The assertion passed
+    // because it never sent the parameter. Found by an automated security review of the commit,
+    // not by this suite, which is the honest record of it.
+    const foreign = (await req(admin, "GET", "/api/locations?limit=50")).data?.items ?? [];
+    const notMine = foreign.find((l) => !/JPR03/i.test(String(l.code ?? "")));
+    if (spoc && notMine) {
+      const attack = await req(spoc, "GET", `/api/reports/kpi?location=${notMine._id}`);
+      ok("QA-1898: a scoped user naming ANOTHER centre in ?location= is refused, not served",
+        attack.status === 403, `got ${attack.status} for ${notMine.code}`);
+      const own = (await req(admin, "GET", "/api/locations?limit=200")).data?.items?.find((l) => /JPR03/i.test(String(l.code ?? "")));
+      if (own) {
+        const narrow = await req(spoc, "GET", `/api/reports/kpi?location=${own._id}`);
+        ok("QA-1898: ...while naming their OWN centre still narrows and answers", narrow.status === 200, `got ${narrow.status}`);
+      }
+      const adminAny = await req(admin, "GET", `/api/reports/kpi?location=${notMine._id}`);
+      ok("QA-1898: ...and an unscoped Admin may still name any centre", adminAny.status === 200, `got ${adminAny.status}`);
+    } else ok("QA-1898 fixture: a foreign centre exists to attack with", false, `spoc=${!!spoc} other=${!!notMine}`);
   }
 
   // QA-1838: a right that gates nothing must not sit in the matrix pretending to.
