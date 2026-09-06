@@ -3348,6 +3348,29 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       ok("QA-1897: the door refuses someone without users.manage", opsTry.status === 403, `got ${opsTry.status}`);
       const missing = await req(admin, "GET", "/api/users/6a9c000000000000000000aa/rights");
       ok("QA-1897: an unknown user id is a 404, not a crash", missing.status === 404, `got ${missing.status}`);
+      // QA-1906 (checker on cycle 1, and it falsified this unit's OWN mutant step). Every
+      // assertion above targets an Admin with no personal grant — and `DEFAULT_ROLE_PERMISSIONS
+      // .Admin` is itself `PERMISSIONS.filter(!NO_ADMIN_BYPASS)`, so a route that returned the
+      // ROLE DEFAULTS instead of the person's effective levels passed all eight of them with zero
+      // delta. The claim being made is "this reads the real getEffectiveLevels", and only a
+      // PERSONAL grant on a NON-Admin can tell the two apart: role defaults cannot carry it.
+      const trainerU = ((await req(admin, "GET", "/api/users")).data.items ?? []).find((u) => u.role === "Trainer" && u.active !== false);
+      if (trainerU) {
+        const before = (await req(admin, "GET", `/api/users/${trainerU._id}/rights`)).data?.rights ?? [];
+        const key = "costs.manage";
+        ok("QA-1906 fixture: a Trainer does not hold costs.manage by role",
+          (before.find((r) => r.key === key) ?? {}).level === "none", JSON.stringify(before.find((r) => r.key === key) ?? null));
+        await req(admin, "PATCH", `/api/users/${trainerU._id}`, { extra_permissions: [key] });
+        const granted = ((await req(admin, "GET", `/api/users/${trainerU._id}/rights`)).data?.rights ?? []).find((r) => r.key === key);
+        ok("QA-1906: a personal grant to a NON-Admin is reported as held — role defaults cannot produce this, so the door really reads effective levels",
+          granted && granted.level !== "none", JSON.stringify(granted ?? null));
+        ok("QA-1906: ...and it says the right came from the PERSON, not from their role",
+          granted && /person|grant/i.test(String(granted.source ?? "")), String(granted?.source));
+        await req(admin, "PATCH", `/api/users/${trainerU._id}`, { extra_permissions: [] });
+        const back = ((await req(admin, "GET", `/api/users/${trainerU._id}/rights`)).data?.rights ?? []).find((r) => r.key === key);
+        ok("QA-1906: taking the grant back reads as 'none' again on a server re-read",
+          back && back.level === "none", JSON.stringify(back ?? null));
+      } else ok("QA-1906 fixture: an active Trainer exists to grant to", false, "none found");
     } else ok("QA-1897 fixture: the ungranted Admin's id resolves", false, "no id");
   }
 
@@ -3412,6 +3435,24 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       }
       const adminAny = await req(admin, "GET", `/api/reports/kpi?location=${notMine._id}`);
       ok("QA-1898: ...and an unscoped Admin may still name any centre", adminAny.status === 200, `got ${adminAny.status}`);
+
+      // QA-1900 (checker on cycle 1). `trained` was the one figure on this payload that took no
+      // scope, so a centre principal read the org-wide total beside their own centre's everything
+      // else — and the cycle-1 assertion missed it because it checked a TYPE instead of sending a
+      // scope and comparing the number. This compares two numbers that must be equal, and a third
+      // that must not exceed the whole.
+      const ownL = (await req(admin, "GET", "/api/locations?limit=200")).data?.items?.find((l) => /JPR03/i.test(String(l.code ?? "")));
+      if (ownL) {
+        const asSpoc = await req(spoc, "GET", "/api/reports/kpi");
+        const adminNarrowed = await req(admin, "GET", `/api/reports/kpi?location=${ownL._id}`);
+        const whole = await req(admin, "GET", "/api/reports/kpi");
+        ok("QA-1900: a scoped user's `trained` equals what an Admin sees when naming that same centre",
+          asSpoc.data?.trained === adminNarrowed.data?.trained,
+          `spoc=${asSpoc.data?.trained} admin?location=${adminNarrowed.data?.trained}`);
+        ok("QA-1900: ...and it is not simply the org-wide number handed to everybody",
+          (asSpoc.data?.trained ?? 0) <= (whole.data?.trained ?? -1),
+          `scoped=${asSpoc.data?.trained} whole=${whole.data?.trained}`);
+      }
     } else ok("QA-1898 fixture: a foreign centre exists to attack with", false, `spoc=${!!spoc} other=${!!notMine}`);
   }
 
@@ -3549,6 +3590,24 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     ok("QA-1830: an empty window still ties to zero rather than 500ing",
       (filtered.data?.totals?.actual ?? -1) === 0 && (filtered.data?.register ?? []).length === 0, JSON.stringify(filtered.data?.totals ?? {}));
 
+    // Budget is per HEAD and whole-project — there is no per-centre or per-period budget in the
+    // model. So under a narrowing filter, variance and "% used" would compare part of the spend
+    // against all of the budget and read as underspend that is not there. They must be withheld,
+    // with a reason, rather than shown confidently.
+    const narrowed = await req(admin, "GET", "/api/reports/costs?from=2020-01-01&to=2030-12-31");
+    ok("QA-1830: a narrowing filter withholds variance and % used rather than comparing a slice against the whole budget",
+      narrowed.status === 200 && narrowed.data?.totals?.budget_comparable === false
+      && narrowed.data.totals.variance === null && narrowed.data.totals.pct_used === null
+      && (narrowed.data.by_head ?? []).every((h) => h.variance === null && h.pct_used === null),
+      JSON.stringify({ comparable: narrowed.data?.totals?.budget_comparable, variance: narrowed.data?.totals?.variance }));
+    ok("QA-1830: ...and it says why, in the payload the screen and the .xlsx both read",
+      typeof narrowed.data?.totals?.budget_note === "string" && narrowed.data.totals.budget_note.length > 40,
+      String(narrowed.data?.totals?.budget_note).slice(0, 80));
+    const unfiltered = await req(admin, "GET", "/api/reports/costs");
+    ok("QA-1830: ...while the unfiltered view does compare, so the withholding is a rule and not a broken column",
+      unfiltered.data?.totals?.budget_comparable === true && unfiltered.data?.totals?.budget_note === null,
+      JSON.stringify({ comparable: unfiltered.data?.totals?.budget_comparable }));
+
     const xl = await req(admin, "GET", "/api/reports/costs/export");
     ok("QA-1830: the .xlsx export answers for the grant-holder", xl.status === 200, `got ${xl.status}`);
   }
@@ -3577,6 +3636,46 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
         (kAfter.data?.trained ?? -1) === (kBefore.data?.trained ?? -2) - 1,
         `${kBefore.data?.trained} -> ${kAfter.data?.trained}`);
       await req(admin, "POST", `/api/candidates/${victim.cand}/drop`, { undo: true });
+    }
+  }
+
+  // QA-1902 (checker on qa-1832 cycle 1): the claim is that `blockers` IS `blockers_detailed`
+  // mapped to its text, so the four categories can only be decided in one place. Nothing held them
+  // together — a drifted second copy that silently dropped a sentence produced zero failures.
+  {
+    const rr = await req(admin, "GET", "/api/mapping/readiness?limit=50");
+    const rows = (rr.data?.items ?? rr.data?.rows ?? []).filter((r) => Array.isArray(r.blockers));
+    ok("QA-1902 fixture: readiness rows carry both shapes", rows.length > 0, `${rows.length} rows`);
+    const drifted = rows.filter((r) => JSON.stringify(r.blockers) !== JSON.stringify((r.blockers_detailed ?? []).map((b) => b.text)));
+    ok("QA-1902: every row's blocker sentences ARE its detailed blockers' text, in the same order",
+      rows.length > 0 && drifted.length === 0,
+      drifted.length ? JSON.stringify(drifted[0]).slice(0, 220) : `${rows.length} rows agree`);
+  }
+
+  // QA-1903: the CEO named four categories and the fourth could never be non-zero, because the
+  // only source of blockers was centre readiness, which has no batch-management reason in it.
+  {
+    const k = await req(admin, "GET", "/api/reports/kpi");
+    const cats = (k.data?.blocker_summary ?? []).map((c) => c.category);
+    ok("QA-1903: all four of the CEO's categories are reported", cats.length === 4, JSON.stringify(cats));
+    // "Can it be non-zero" is the whole finding, so it is PROVEN rather than observed: a batch is
+    // pushed into the condition and the tile is read again. Observing a zero would have been the
+    // same evidence the cycle-1 assertion produced, which is none.
+    const planning = ((await req(admin, "GET", "/api/batches?limit=100")).data?.items ?? [])
+      .find((b) => ["Planning", "Ready"].includes(String(b.status)));
+    ok("QA-1903 fixture: a Planning/Ready batch exists to push past its start date", !!planning, String(planning?.code));
+    if (planning) {
+      const orig = planning.planned_start;
+      const moved = await req(admin, "PATCH", `/api/batches/${planning._id}`, { planned_start: "2020-01-01" });
+      ok("QA-1903 fixture: its planned start can be moved into the past", [200, 201].includes(moved.status), `got ${moved.status}`);
+      const k2 = await req(admin, "GET", "/api/reports/kpi");
+      const bm = (k2.data?.blocker_summary ?? []).find((c) => c.category === "Batch management");
+      ok("QA-1903: 'Batch management' now carries that batch — the category can actually be filled",
+        !!bm && bm.count > 0 && (k2.data?.blockers ?? []).some((b) => b.category === "Batch management" && /start/i.test(b.text)),
+        JSON.stringify(bm ?? null));
+      ok("QA-1903: ...and it names an owner, like the other three",
+        !!bm && typeof bm.owner === "string" && bm.owner.length > 2, String(bm?.owner));
+      if (orig) await req(admin, "PATCH", `/api/batches/${planning._id}`, { planned_start: String(orig).slice(0, 10) });
     }
   }
 

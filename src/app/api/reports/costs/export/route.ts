@@ -98,6 +98,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
     { Item: "Grand total", Detail: `${data.totals.actual} across ${data.totals.entries} entries` },
     { Item: "Untagged costs", Detail: `Entries with no batch or no centre are counted under "${COST_LABELS.unassigned}" — they are never dropped, so every sheet in this file sums to the grand total above.` },
     { Item: L.certified, Detail: "A Pass minus the dropped-but-passed — the same billable_passed the invoice bills on, so cost per certified and revenue share one denominator." },
+    ...(data.totals.budget_note ? [{ Item: "Budget columns", Detail: data.totals.budget_note }] : []),
     { Item: "Ratios", Detail: 'A batch with nobody enrolled shows "—" for cost per trainee, never 0 and never an error.' },
     { Item: "Counted at", Detail: `${data.measured_at} (UTC). A snapshot of that moment, not a live feed.` },
   ]), "where the numbers come from");

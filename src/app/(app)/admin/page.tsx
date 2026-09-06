@@ -237,6 +237,7 @@ function RolesOverview({ items, onOpen, setError }: { items: any[]; onOpen: (u?:
   // still LIST the inactive ones (with their badge) — hiding them would be the opposite mistake.
   const byRole = (r: string) => items.filter((u) => u.role === r);
   const activeInRole = (r: string) => byRole(r).filter((u) => u.active !== false).length;
+  const activeCount = items.filter((u: any) => u.active !== false).length;
 
   async function showRights(u: any) {
     setRightsFor(u); setRights([]);
@@ -267,7 +268,10 @@ function RolesOverview({ items, onOpen, setError }: { items: any[]; onOpen: (u?:
     <div className="mb-4 rounded-lg border border-gray-200 p-3">
       <div className="mb-2 flex items-center justify-between">
         <span className="text-sm font-semibold">Access by role</span>
-        <span className="text-xs text-gray-500">{items.length} active account{items.length === 1 ? "" : "s"}</span>
+        {/* QA-1908 (checker on cycle 1): this said "N active accounts" while N counted the
+            deactivated ones too — 7 shown, 6 actually active. The chips beside it were already
+            active-only, so the two numbers on one line disagreed by definition. */}
+        <span className="text-xs text-gray-500">{activeCount} active account{activeCount === 1 ? "" : "s"}</span>
       </div>
       <div className="flex flex-wrap gap-2">
         {roles.map((r) => (

@@ -1575,18 +1575,19 @@ export async function batchHealth(batchId: string): Promise<BatchHealth> {
   // QA-003 (checker): a batch that "Completed" with nobody on it was Health Green — the
   // dashboard's word for "all fine" on a row that is provably wrong. Completed stays Green
   // only when it actually had students.
+  // QA-1903: the roster-shaped reasons and the passed-start one live in `batchManagementBlockers`
+  // now, so this page and the KPI report's "Batch management" tile are ONE source. The words below
+  // are unchanged — the function returns them; nothing here restates them.
+  const asReasons = (bs: BatchBlocker[]) => bs.map((b) => ({ code: b.code, label: b.text, severity: b.severity }));
   if (batch.status === "Completed") {
     const rosterN = await BatchMember.countDocuments({ batch: batchId, left_on: null });
-    if (rosterN === 0) {
-      return { score: "Amber", reasons: [{ code: "empty_completed", label: "Completed with no students on the roster — upload the roster or remove the shell", severity: "amber" }] };
-    }
+    const mgmt = asReasons(batchManagementBlockers(batch, rosterN));
+    if (mgmt.length) return { score: "Amber", reasons: mgmt };
     return { score: "Green", reasons };
   }
-  // An Active/Closing batch with an empty roster is running for nobody — name it (the
-  // missing-logs streak already fires, but "why" matters more than "what").
-  if (["Active", "Closing"].includes(batch.status)) {
+  if (["Active", "Closing", "Planning", "Ready"].includes(batch.status)) {
     const rosterN = await BatchMember.countDocuments({ batch: batchId, left_on: null });
-    if (rosterN === 0) reasons.push({ code: "empty_roster", label: "No students on the roster", severity: "red" });
+    reasons.push(...asReasons(batchManagementBlockers(batch, rosterN)));
   }
 
   // 1. Missing daily logs (Rule 33) — a streak matters more than a single miss.
@@ -4265,6 +4266,42 @@ export function readinessBlockersDetailed(
   return blockers;
 }
 
+// QA-1903 (checker on qa-1832 cycle 1). The CEO named FOUR blocker categories and this report
+// showed four tiles — but `readinessBlockersDetailed` above can only ever emit three of them, so
+// "Batch management" rendered a permanent 0 beside an owner's name. A category that cannot be
+// non-zero is worse than a missing category: it reads as "nothing is wrong there".
+//
+// The reasons themselves already existed, inside `batchHealth` — which is per-batch and does five
+// queries, so an estate rollup cannot call it. This is that logic as a PURE function over facts the
+// caller already loaded, and `batchHealth` now calls it too, so the estate tile and the batch page
+// cannot drift into two answers. Same shape as `readinessBlockersDetailed`, for the same reason.
+export type BatchBlocker = Blocker & { code: string; severity: "amber" | "red" };
+export function batchManagementBlockers(
+  batch: { status?: string; planned_start?: Date | string | null },
+  roster: number,
+  today: Date = istToday(),
+): BatchBlocker[] {
+  const out: BatchBlocker[] = [];
+  const push = (code: string, text: string, severity: "amber" | "red") =>
+    out.push({ code, text, severity, category: "Batch management", owner: OWNER_OF["Batch management"] });
+  const status = String(batch.status ?? "");
+
+  if (status === "Completed" && roster === 0) {
+    push("empty_completed", "Completed with no students on the roster — upload the roster or remove the shell", "amber");
+  }
+  if (["Active", "Closing"].includes(status) && roster === 0) {
+    push("empty_roster", "No students on the roster", "red");
+  }
+  // A batch whose planned start has passed while it is still Planning/Ready is the CEO's own
+  // question turned into a blocker — *"कितने बैचेस और चालू होने वाले हैं"*. It is scheduling, so it
+  // belongs to the centre SPOC, and it is the reason this category exists at all.
+  if (["Planning", "Ready"].includes(status) && batch.planned_start) {
+    const start = dayKey(new Date(batch.planned_start as any));
+    if (start && today > start) push("start_passed", "Planned start date has passed and the batch has not started", "red");
+  }
+  return out;
+}
+
 // Bulk readiness for a whole estate. The first version looped mappingReadiness once per target and
 // awaited each in turn — about five queries per row, run sequentially, which measured 10.3s for 81
 // rows on a laptop. Home calls this on every load for every user, so that was a real outage in
@@ -5152,7 +5189,15 @@ export async function kpiRollup(scope: Record<string, unknown> = {}) {
   // exclusion set looks exactly like "there were no dropouts". The one definition of dropped in
   // this codebase is `left_on: { $ne: null }`, which is what `summarizeBatchResults` reads.
   const dropped = new Set((await BatchMember.find({ left_on: { $ne: null } }).select("_id").lean<any[]>()).map((m) => String(m._id)));
-  const trained = passRows.filter((r) => !dropped.has(String(r.batch_member))).length;
+  // QA-1900 (checker on cycle 1). `trained` was the ONLY figure on this payload that took no
+  // scope: `in_training`, `upcoming_batches` and every blocker were filtered, and the CEO's
+  // headline number was the org-wide total — so a centre principal read the whole estate's
+  // trained count beside their own centre's everything else, and `?location=` moved three of the
+  // four numbers. The batches are already loaded and already scoped; a Pass belongs to a batch, so
+  // the same set is the filter. No new query, and no second idea of what "in scope" means.
+  const inScope = new Set(batches.map((b) => String(b._id)));
+  const trained = passRows.filter((r) => inScope.has(String(r.batch))
+    && !dropped.has(String(r.batch_member))).length;
 
   const upcomingBatches = batches.filter((b) => ["Planning", "Ready"].includes(String(b.status)));
   const activeBatches = batches.filter((b) => String(b.status) === "Active");
@@ -5175,6 +5220,26 @@ export async function kpiRollup(scope: Record<string, unknown> = {}) {
       });
     }
   }
+  // QA-1903: the fourth category, from the same batches already loaded. One aggregate for the
+  // roster counts — ObjectIds lifted off documents in hand, never the scope filter (QA-302/347/
+  // 350/395) — and then the SAME pure function the batch page reads.
+  const bIds = batches.map((b) => b._id);
+  const rosterRows = bIds.length ? await BatchMember.aggregate([
+    { $match: { batch: { $in: bIds }, left_on: null } },
+    { $group: { _id: "$batch", n: { $sum: 1 } } },
+  ]) : [];
+  const rosterOf = new Map<string, number>((rosterRows as any[]).map((r) => [String(r._id), r.n]));
+  const today = istToday();
+  for (const b of batches as any[]) {
+    for (const mb of batchManagementBlockers(b, rosterOf.get(String(b._id)) ?? 0, today)) {
+      blockers.push({
+        category: mb.category, owner: mb.owner, text: mb.text,
+        location: b.location?.name ?? "—", location_code: b.location?.code,
+        program: b.program?.name ?? "—",
+      });
+    }
+  }
+
   const byCategory = BLOCKER_CATEGORY.map((c) => ({
     category: c,
     owner: OWNER_OF[c],
@@ -5420,6 +5485,19 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
 
   const pct = (amt: number) => (total > 0 ? Math.round((amt / total) * 1000) / 10 : 0);
 
+  // A trap worth refusing rather than documenting. `budget` lives on the cost head and is
+  // whole-project: there is no per-centre and no per-period budget in the model. So the moment a
+  // filter narrows the SPEND — a date window, one centre, one batch, one job role — the variance and
+  // the "% of budget used" beside it compare a slice of actuals against the whole budget, and read
+  // as underspend that is not there. That is a wrong number presented confidently, which is the one
+  // failure this whole report is built to avoid, so those two columns go to `null` ("—") and say
+  // why. Filtering by cost HEAD is the exception and stays comparable: the head's own budget and the
+  // head's own spend are both complete.
+  const narrows = !!(filters.from || filters.to || filters.location || filters.batch || filters.trainer || filters.program);
+  const budgetNote = narrows
+    ? "Budgets are set per cost head for the whole project, not per centre or per period. While a filter is applied, variance and % used would compare part of the spend against all of the budget, so they are not shown."
+    : null;
+
   // Budget vs actual. A head's budget is its OWN figure when it carries one, otherwise the sum of
   // its subheads' — stated in `budget_basis` rather than silently chosen, because the taxonomy
   // permits a budget at either level and the reader must be able to tell which one they are seeing.
@@ -5436,8 +5514,8 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
       amount: spent, entries: byHead.get(key)?.entries ?? 0, pct_of_total: pct(spent),
       budget: budget || null,
       budget_basis: ownBudget > 0 ? "head" : subBudget > 0 ? "subheads" : "none",
-      variance: budget > 0 ? budget - spent : null,
-      pct_used: budget > 0 ? Math.round((spent / budget) * 1000) / 10 : null,
+      variance: budget > 0 && !narrows ? budget - spent : null,
+      pct_used: budget > 0 && !narrows ? Math.round((spent / budget) * 1000) / 10 : null,
       subheads: subs.map((c) => ({
         key: String(c._id), subhead: c.name, code: c.code ?? null,
         amount: bySub.get(String(c._id))?.amount ?? 0,
@@ -5482,8 +5560,10 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
       actual: total,
       entries: entries.length,
       budget: budgetTotal || null,
-      variance: budgetTotal > 0 ? budgetTotal - total : null,
-      pct_used: budgetTotal > 0 ? Math.round((total / budgetTotal) * 1000) / 10 : null,
+      variance: budgetTotal > 0 && !narrows ? budgetTotal - total : null,
+      pct_used: budgetTotal > 0 && !narrows ? Math.round((total / budgetTotal) * 1000) / 10 : null,
+      budget_comparable: !narrows,
+      budget_note: budgetNote,
       heads: headRows.filter((h) => h.amount > 0).length,
       batches: batchRows.filter((b) => b.key !== "none").length,
     },

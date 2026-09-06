@@ -161,6 +161,14 @@ function FinanceInner() {
         </ul>
       </details>
 
+      {/* When a filter narrows the spend, the budget columns stop being a comparison and the report
+          says so where the columns are, not in a footnote nobody reads. */}
+      {t.budget_note && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-900" data-warning="budget-not-comparable">
+          {t.budget_note}
+        </div>
+      )}
+
       <Section title="Spend by cost head" hint="Click a head to see its subheads.">
         <DataTable storageKey="finance-by-head" rows={data?.by_head ?? []} loading={loading} searchable
           defaultSort={{ key: "amount", dir: "desc" }} cardTitle={(r: any) => r.head}
