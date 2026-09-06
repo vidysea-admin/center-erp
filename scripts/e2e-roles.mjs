@@ -3448,7 +3448,25 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       // figures. If `trained` ignores the scope, every per-centre call returns the whole, the sum is
       // N x the whole, and it fails by a mile. There is no arrangement of the broken code that
       // satisfies it.
+      // QA-1924 (checker on cycle 2): under `npm run test:roles` alone the seed carries ZERO Pass
+      // rows, so the decomposition would be 0 === 0 — vacuous — and its coverage would depend on
+      // `e2e.mjs` having run first. Measured: with mutant A applied, the block failed on its own
+      // fixture line rather than on the sum, which proves nothing about the mutant. So the block
+      // MAKES its own trained candidate instead of hoping one exists.
       const allLocs = (await req(admin, "GET", "/api/locations?limit=200")).data?.items ?? [];
+      const kpiBatches = (await req(admin, "GET", "/api/batches?limit=100")).data?.items ?? [];
+      let seededPass = false;
+      for (const b of kpiBatches) {
+        const roster = (await req(admin, "GET", `/api/batches/${b._id}/results`)).data?.items ?? [];
+        const live = roster.find((m) => !m.left_on && !m.result);
+        if (!live) continue;
+        const put = await req(admin, "PUT", `/api/batches/${b._id}/results`, {
+          rows: [{ member: live.member, result: "Pass", score: 71 }],
+        });
+        if ([200, 201].includes(put.status)) { seededPass = true; break; }
+      }
+      ok("QA-1924 fixture: this block seeds its own Pass, so the decomposition below never depends on which suite ran first",
+        seededPass, `${kpiBatches.length} batches offered a markable member: ${seededPass}`);
       const whole = await req(admin, "GET", "/api/reports/kpi");
       const wholeTrained = whole.data?.trained ?? -1;
       const perCentre = [];
