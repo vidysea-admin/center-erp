@@ -118,6 +118,22 @@ StoredFile, ApprovalRule, ApprovalRequest, AuditLog, Scheme, JobRole, CandidateD
 - **Reporting (Karunn sir's two, -170/-171/-174):** `reports/rollup` + `reports/rollup/export` (QA-398/QA-441) · `plan-tracker` + `plan-tracker/export` (QA-399/QA-526) · `plan-batch` (the standalone backward planner, `?start=&location=&program=&trainer=`).
   **Each screen and its export MUST read the same function** — `reportRollup` and `planTrackerRows` in `rules.ts`. An export that recomputes is an export that eventually disagrees, and then nobody can say which one is the report. If you change either function, both doors move together; there is no second copy to update, and there must never be one.
   **`reportRollup` ships four things beyond the rollup itself (QA-1074, -245):** `detail[]` — one entry per `LocationTarget` row, pushed inside the SAME loop that sums the cells, so `sum(detail[k]) === total[k]` holds by construction and the drill-down panel cannot disagree with the tile that opened it (pinned in `scripts/e2e.mjs`); `measured_at`, because the screen is a snapshot and used to render exactly like a live figure; `sync_gap`, which counts pending sheet changes **through `targetRowField()` imported from `lib/sync.ts`** — never a local list — so it reports what can actually move a figure rather than how full the inbox is; and `labels: REPORT_LABELS`. **`REPORT_LABELS` is the ONE place the seven measures are named** (`Total Target` · `Approved Target` · `Pending Target` · …). It travels in the payload because the report page is `"use client"` and cannot import `rules.ts`, and it is read by three surfaces: the tiles, the table's Grand Total headers, and the Excel workbook's info tab. **The Excel DATA sheet's headings are frozen** on Umesh's explicit instruction (the workbook is treated as a duplicate of the client's own sheet) — a `check-user-copy.mjs` pin fails if any of them is renamed, and the new vocabulary lives on the "where the numbers come from" tab instead. `centreVerdict()`'s words are untouched by that renaming, because they are written straight into that sheet's `Status` column.
+- **Finance reporting (QA-1830, the CEO's 2026-09-05 call + Manish sir's workbook):** `reports/costs` +
+  `reports/costs/export`, both thin doors on **`costRollup`** in `rules.ts` — the same screen-and-export
+  rule the rollup follows, for the same reason. Both call `requireFinance(user, "view")` (the DOOR rule:
+  this endpoint's entire purpose is money, so it 403s rather than masking fields) **and**
+  `locationFilter(user)` (whether vs whose). `costRollup` fills every grouping — by head/subhead, by
+  centre, by job role, by month, batch × head, unit economics and the register — in ONE pass over one
+  `find().populate().lean()`, so they sum to the same grand total by construction; its only pipelines
+  take ObjectId `$in` lists lifted off documents already loaded (QA-302/347/350/395). Columns come from
+  the live `CostCategory` master and join on id, so a head renamed today leaves every historical figure
+  where it was. Untagged costs land in `Unassigned` rather than being dropped, and every ratio with a
+  zero denominator is `null` (rendered "—"), never 0. Pinned in `check-user-copy.mjs` (the gate on both
+  doors, the export not recomputing, no pipeline over a scope filter) and in `e2e-roles.mjs` (the money
+  probe's door list, the totals tying, the rename, the scope narrowing).
+- **KPI reporting (QA-1832):** `reports/kpi` — `kpiRollup` in `rules.ts`, no finance gate by design (it
+  carries headcounts and blocker sentences, no money) and on the money probe's door list precisely so
+  that claim is measured. `?location=` NARROWS and never widens (QA-1898).
 - **PUBLIC (no session — a token IS the credential):** `public/register/[token]` · `public/enrol-otp` · `public/trainer-apply` · `public/attendance/[token]` · `public/feedback/[token]` · `public/plan/[token]` · `public/portal-lookup` · `public/geography` (LGD state/district/sub-district lists, bundled at `src/data/lgd-geography.json`) · `public/ses-notifications` · `public/version`.
 
 ### 1.5 `src/app/(app)/**` — authenticated screens
@@ -127,6 +143,7 @@ StoredFile, ApprovalRule, ApprovalRequest, AuditLog, Scheme, JobRole, CandidateD
 | `page.tsx` | 343 | Home / Action Center. **Structure pinned by `scripts/check-home-structure.mjs`** |
 | `batches/[id]/page.tsx` | **2,988** | The monster. Tab components: `Overview`(128) `EditDetails`(525) `Roster`(663) `Enrollment`(917) `AttendanceTab`(1001) `DailyExecution`(1266) `ClosureTab`(1844) `CandidateResults`(2109) `FeedbackTab`(2762) `CostsTab`(2831) |
 | `batches/page.tsx` | ~830 | List + create drawer + CSV import + **`PlanningTable`** (the Planning tab, QA-399) + the **"Plan a batch" drawer** (QA-501: it takes centre + job role and renders `earliest_possible_start`) |
+| `finance/page.tsx` | ~280 | QA-1830. Manish sir's dashboard: one URL-borne filter object applied server-side to every table and to the .xlsx. Gated on `finance.view`, which `NO_ADMIN_BYPASS` keeps closed to an ungranted Admin. Deliberately NOT a tab on `/costs` — Operations posts costs there and must never read totals here. |
 | `reports/page.tsx` | ~200 | Karunn sir's five-column report (QA-398). ONE table, `Approved` is a COLUMN — both readings sit together, decided by Umesh 2026-08-21 |
 | `candidates/page.tsx` | 878 | Pool, buckets, drawer (incl. the 9 government-portal fields), SIDH walk, docs, import |
 | `trainers/page.tsx` | 769 | Directory · availability tags (`availabilityTag` :22) · stage strip · Requests · Open Positions · quick-invite |

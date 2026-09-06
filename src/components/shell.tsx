@@ -73,6 +73,13 @@ const ROUTE_RULES: { prefix: string; roles?: string[]; perm?: string }[] = [
   // showed it, because every gate read the ROLE while the API read the PERMISSION.
   { prefix: "/govt-attendance", roles: ["Admin", "Operations", "Trainer"], perm: "attendance.govt" },
   { prefix: "/costs", roles: ["Admin", "Operations"], perm: "costs.manage" },
+  // QA-1830 — the finance dashboard. NO `roles` list, deliberately, and it is the only rule here
+  // without one: the CEO's control is IDENTITY, not job title (*"कॉस्ट की अप्रूवल केवल और केवल मनीष जी
+  // और मेरे पास होगी… चाहे सुपर एडमिन हो, सुपर एडमिन का काका हो"*). `finance.view` is in
+  // NO_ADMIN_BYPASS, so the Admin short-circuit two lines below does not open this door either.
+  // It is deliberately NOT a tab on /costs: Operations must keep posting costs (`costs.manage`)
+  // while never seeing the totals, and one route cannot answer both questions.
+  { prefix: "/finance", perm: "finance.view" },
   { prefix: "/admin", roles: ["Admin"] },
 ];
 export function routeAllowed(pathname: string, perms: Perms): boolean {
@@ -115,6 +122,9 @@ const NAV = [
   // 2026-08-13 (Umesh): attendance is OFF the principal/SPOC plate entirely — Location removed.
   { href: "/govt-attendance", label: "Govt Attendance", Icon: IconCap, roles: ["Admin", "Operations", "Trainer"], perm: "attendance.govt" },
   { href: "/costs", label: "Costs", Icon: IconWallet, roles: ["Admin", "Operations"], perm: "costs.manage" },
+  // QA-1830. `routeAllowed` decides this entry too, so a login without `finance.view` never sees
+  // the door — the same single statement of the rule the route gate reads, not a second copy.
+  { href: "/finance", label: "Finance", Icon: IconWallet, perm: "finance.view" },
   // -170 (QA-398): the high-level report. No new permission - Rule 38's location scope already
   // decides who sees which rows, so a centre login opening this sees its own centre and nothing
   // else. Everyone gets the entry; the report itself is what is scoped.

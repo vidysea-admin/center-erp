@@ -5144,7 +5144,14 @@ export async function kpiRollup(scope: Record<string, unknown> = {}) {
     mappingReadinessBulk(locFilter, 2000),
   ]);
 
-  const dropped = new Set((await BatchMember.find({ status: "Dropped" }).select("_id").lean<any[]>()).map((m) => String(m._id)));
+  // QA-1899. This line used to read `BatchMember.find({ status: "Dropped" })` and it was MINE,
+  // written one commit earlier with a comment claiming it excluded dropouts "the same way
+  // `closureAggregates` excludes them". BatchMember has no `status` field at all (`models/index.ts`
+  // - the drop is recorded as `left_on`), so the query matched nothing, the set was always empty,
+  // and every dropped-but-passed member was being counted as trained. Nothing failed: an empty
+  // exclusion set looks exactly like "there were no dropouts". The one definition of dropped in
+  // this codebase is `left_on: { $ne: null }`, which is what `summarizeBatchResults` reads.
+  const dropped = new Set((await BatchMember.find({ left_on: { $ne: null } }).select("_id").lean<any[]>()).map((m) => String(m._id)));
   const trained = passRows.filter((r) => !dropped.has(String(r.batch_member))).length;
 
   const upcomingBatches = batches.filter((b) => ["Planning", "Ready"].includes(String(b.status)));
@@ -5193,5 +5200,309 @@ export async function kpiRollup(scope: Record<string, unknown> = {}) {
       location: b.location?.name ?? "—", program: b.program?.name ?? "—",
       target_size: b.target_size ?? null,
     })).sort((a, b) => String(a.planned_start ?? "").localeCompare(String(b.planned_start ?? ""))),
+  };
+}
+
+// =================================================================================================
+// QA-1830 — the cost side of the CEO's 2026-09-05 call, and Manish sir's workbook, as ONE function.
+//
+// *"पर स्टूडेंट वाइज क्या कॉस्ट आ रही है, बैच वाइज क्या कॉस्ट आ रही है, लोकेशन वाइज क्या कॉस्ट आ रही है,
+// एक्टिविटी वाइज क्या कॉस्ट आ रही है।"*
+//
+// ONE function, because that is this file's settled rule for a report: `reportRollup` and
+// `planTrackerRows` each feed a screen AND an export, and the rollup export's own comment says why
+// — "an export that recomputes is an export that eventually disagrees, and then nobody can tell
+// which of the two is the report."
+//
+// Manish sir's eight developer notes are the acceptance criteria, and each is implemented HERE
+// rather than in the screen:
+//   1. no head is hard-coded — every column comes from the live `CostCategory` master;
+//   2. joins are on id, never on name, so renaming a head leaves history untouched;
+//   3. deletion is blocked once entries exist (that one lives in the master-list route, not here);
+//   4. ONE filter object, applied server-side, travelling back in the payload so the screen and the
+//      export can both state what was counted;
+//   5. untagged costs still reconcile — a null batch/location lands in `Unassigned`, never dropped,
+//      so every grouping sums to the same grand total as the register;
+//   6. every ratio guarded — `null` (rendered "—") when the denominator is zero, never a crash and
+//      never a confident 0;
+//   7. row-level scoping applied in the QUERY, not in the UI;
+//   8. reconcile to the rupee before go-live.
+// =================================================================================================
+
+// The ONE place the finance measures are named, shipped in the payload exactly as `REPORT_LABELS`
+// is — the screen is a client component and cannot import this file, and the xlsx must not invent
+// its own words for the same columns.
+export const COST_LABELS = {
+  actual: "Actual spend",
+  budget: "Budget",
+  variance: "Variance",
+  pct_used: "% of budget used",
+  pct_of_total: "% of total spend",
+  entries: "Entries",
+  enrolled: "Enrolled",
+  certified: "Certified (billable)",
+  cost_per_enrolled: "Cost per enrolled",
+  cost_per_certified: "Cost per certified",
+  unassigned: "Unassigned",
+} as const;
+
+export type CostFilters = {
+  from?: string; to?: string;
+  location?: string; batch?: string; trainer?: string; program?: string; category?: string;
+};
+
+const COST_UNASSIGNED = "Unassigned";
+
+// Guard every ratio (developer note #6). A batch with zero enrolled shows "—", not an error and not
+// a zero — a confident 0 is the same failure the money masker already refuses for the same reason.
+const perHead = (amount: number, n: number): number | null => (n > 0 ? Math.round((amount / n) * 100) / 100 : null);
+
+// An IST day boundary, stated explicitly rather than built from a node Date's local getters. Same
+// reasoning as `planTrackerRows`' `timezone: "+05:30"`: node's getters read the PROCESS zone, so the
+// identical filter would select different rows under TZ=UTC and TZ=IST (QA-1065).
+const istStart = (d: string) => new Date(`${d}T00:00:00.000+05:30`);
+const istEnd = (d: string) => new Date(`${d}T23:59:59.999+05:30`);
+
+export async function costRollup(scope: Record<string, unknown> = {}, filters: CostFilters = {}) {
+  const measured_at = new Date();
+
+  // The master first — it decides the columns (note #1) and it is how a head is resolved from a
+  // subhead, by id (note #2).
+  const cats = await CostCategory.find({}).select("name code parent head_type budget active").lean<any[]>();
+  const catById = new Map(cats.map((c) => [String(c._id), c]));
+  const heads = cats.filter((c) => !c.parent);
+  const subheadsOf = (headId: string) => cats.filter((c) => String(c.parent ?? "") === headId);
+
+  const q: Record<string, any> = { ...scope };
+  if (filters.from || filters.to) {
+    q.entry_date = {};
+    if (filters.from) q.entry_date.$gte = istStart(filters.from);
+    if (filters.to) q.entry_date.$lte = istEnd(filters.to);
+  }
+  // A named location/batch/trainer NARROWS and can never widen: `scope` is spread first, and
+  // `location` — the one key the authz filter also uses — is INTERSECTED rather than assigned.
+  // Writing straight over it is exactly what QA-1898 was, one commit ago, in a route I wrote.
+  if (filters.location) {
+    const allowed: string[] | null = Array.isArray((scope as any).location?.$in)
+      ? (scope as any).location.$in.map(String) : null;
+    if (allowed && !allowed.includes(String(filters.location))) {
+      throw new HttpError(403, "That centre is not in your scope.");
+    }
+    q.location = filters.location;
+  }
+  if (filters.trainer) q.trainer = filters.trainer;
+  if (filters.batch) q.batch = filters.batch;
+  // A cost entry carries no job role. A job role IS a programme here (`ProgramSchema.scheme`'s own
+  // comment: "a programme in this business is a JOB ROLE run under a SCHEME"), and it reaches a cost
+  // only through the batch — so the filter resolves to batch ids first, inside the same scope.
+  if (filters.program) {
+    const inRole = await Batch.find({ ...scope, program: filters.program }).select("_id").lean<any[]>();
+    const ids = inRole.map((b) => b._id);
+    q.batch = filters.batch ? { $in: ids.filter((i) => String(i) === String(filters.batch)) } : { $in: ids };
+  }
+  // Choosing a HEAD means the head and everything under it; choosing a subhead means that one only.
+  if (filters.category) {
+    const chosen = catById.get(String(filters.category));
+    q.category = chosen && !chosen.parent
+      ? { $in: [chosen._id, ...subheadsOf(String(chosen._id)).map((c) => c._id)] }
+      : filters.category;
+  }
+
+  // find() + populate, never an aggregation over the scope filter — authz builds its `$in` from
+  // `.map(String)`, mongoose casts strings inside find() but NOT inside a pipeline, and four live
+  // defects came from exactly that (QA-302, QA-347, QA-350, QA-395). The pipelines below only ever
+  // receive ObjectIds taken off documents loaded here.
+  const entries = await CostEntry.find(q)
+    .populate("location", "name code")
+    .populate({ path: "batch", select: "code program location", populate: { path: "program", select: "name code scheme" } })
+    .populate("trainer", "name")
+    .populate("category", "name code parent head_type")
+    .populate("entered_by", "name")
+    .sort({ entry_date: -1 })
+    .lean<any[]>();
+
+  const entryIds = entries.map((e) => e._id);
+  const batchIds = [...new Map(entries.filter((e) => e.batch?._id).map((e) => [String(e.batch._id), e.batch._id])).values()];
+
+  // The month bucket is computed with an explicit +05:30 INSIDE mongo and joined back per entry id,
+  // so the monthly table is filled in the SAME single pass as every other grouping and cannot
+  // disagree with them. A row whose date is not a Date costs that row its month, never the whole
+  // report — the `$type` guard is `planTrackerRows`', for the reason written there.
+  const monthRows = entryIds.length ? await CostEntry.aggregate([
+    { $match: { _id: { $in: entryIds } } },
+    { $project: { m: { $cond: [
+      { $eq: [{ $type: "$entry_date" }, "date"] },
+      { $dateToString: { format: "%Y-%m", date: "$entry_date", timezone: "+05:30" } },
+      null,
+    ] } } },
+  ]) : [];
+  const monthOf = new Map<string, string | null>((monthRows as any[]).map((r) => [String(r._id), r.m ?? null]));
+
+  const [enrolledRows, passRows, droppedRows] = await Promise.all([
+    batchIds.length ? BatchMember.aggregate([
+      { $match: { batch: { $in: batchIds }, left_on: null } },
+      { $group: { _id: "$batch", n: { $sum: 1 } } },
+    ]) : Promise.resolve([] as any[]),
+    batchIds.length ? CandidateResult.find({ batch: { $in: batchIds }, result: "Pass" }).select("batch batch_member").lean<any[]>() : Promise.resolve([] as any[]),
+    batchIds.length ? BatchMember.find({ batch: { $in: batchIds }, left_on: { $ne: null } }).select("_id").lean<any[]>() : Promise.resolve([] as any[]),
+  ]);
+  const enrolledBy = new Map<string, number>((enrolledRows as any[]).map((r) => [String(r._id), r.n]));
+  const droppedIds = new Set((droppedRows as any[]).map((m) => String(m._id)));
+  // "Certified" is `billable_passed` — a Pass minus the dropped-but-passed — because that is the
+  // number the invoice bills on (`summarizeResults`, DEC-4). A cost-per-certified measured against a
+  // different denominator than the revenue uses is a ratio nobody can act on.
+  const certifiedBy = new Map<string, number>();
+  for (const r of passRows as any[]) {
+    if (droppedIds.has(String(r.batch_member))) continue;
+    const k = String(r.batch);
+    certifiedBy.set(k, (certifiedBy.get(k) ?? 0) + 1);
+  }
+
+  // ---- ONE pass. Every grouping is filled from the same loop over the same rows, so each sums to
+  // `total` BY CONSTRUCTION rather than by a second query that can drift — the same invariant
+  // `reportRollup` holds between its drill-down and the tile that opens it.
+  type Bucket = { key: string; label: string; amount: number; entries: number };
+  const bump = (m: Map<string, any>, key: string, label: string, amt: number) => {
+    const b = m.get(key) ?? { key, label, amount: 0, entries: 0 };
+    b.amount += amt; b.entries += 1; m.set(key, b);
+    return b;
+  };
+  const byHead = new Map<string, Bucket>();
+  const bySub = new Map<string, Bucket & { head: string }>();
+  const byLocation = new Map<string, Bucket>();
+  const byRole = new Map<string, Bucket>();
+  const byMonth = new Map<string, Bucket>();
+  const byBatch = new Map<string, Bucket & { location: string; program: string }>();
+  const cross = new Map<string, number>();
+  const register: any[] = [];
+  let total = 0;
+
+  for (const e of entries) {
+    const amt = Number(e.amount) || 0;
+    total += amt;
+
+    const cat = e.category ? catById.get(String(e.category._id)) ?? e.category : null;
+    const head = cat?.parent ? catById.get(String(cat.parent)) ?? null : cat;
+    const headKey = head ? String(head._id) : "none";
+    const headLabel = head?.name ?? "Uncategorised";
+    const subLabel = cat && cat.parent ? cat.name : "—";
+    bump(byHead, headKey, headLabel, amt);
+    if (cat && cat.parent) bump(bySub, String(cat._id), cat.name, amt).head = headLabel;
+
+    bump(byLocation, e.location?._id ? String(e.location._id) : "none", e.location?.name ?? COST_UNASSIGNED, amt);
+
+    const prog = e.batch?.program;
+    bump(byRole, prog?._id ? String(prog._id) : "none", prog?.name ?? COST_UNASSIGNED, amt);
+
+    const m = monthOf.get(String(e._id)) ?? null;
+    bump(byMonth, m ?? "undated", m ?? "Undated", amt);
+
+    const batchKey = e.batch?._id ? String(e.batch._id) : "none";
+    const bb = bump(byBatch, batchKey, e.batch?.code ?? COST_UNASSIGNED, amt);
+    bb.location = e.location?.name ?? e.batch?.location?.name ?? COST_UNASSIGNED;
+    bb.program = prog?.name ?? COST_UNASSIGNED;
+    cross.set(`${batchKey}::${headKey}`, (cross.get(`${batchKey}::${headKey}`) ?? 0) + amt);
+
+    register.push({
+      id: String(e._id),
+      entry_date: e.entry_date ?? null,
+      head: headLabel, subhead: subLabel,
+      head_type: head?.head_type ?? null,
+      amount: amt,
+      location: e.location?.name ?? COST_UNASSIGNED,
+      batch: e.batch?.code ?? COST_UNASSIGNED,
+      job_role: prog?.name ?? COST_UNASSIGNED,
+      trainer: e.trainer?.name ?? "—",
+      note: e.note ?? "",
+      entered_by: e.entered_by?.name ?? "—",
+    });
+  }
+
+  const pct = (amt: number) => (total > 0 ? Math.round((amt / total) * 1000) / 10 : 0);
+
+  // Budget vs actual. A head's budget is its OWN figure when it carries one, otherwise the sum of
+  // its subheads' — stated in `budget_basis` rather than silently chosen, because the taxonomy
+  // permits a budget at either level and the reader must be able to tell which one they are seeing.
+  // A head with a budget and NO spend still appears: that is exactly the row a budget report is for.
+  const headRows: any[] = heads.map((h) => {
+    const key = String(h._id);
+    const spent = byHead.get(key)?.amount ?? 0;
+    const subs = subheadsOf(key);
+    const ownBudget = Number(h.budget) || 0;
+    const subBudget = subs.reduce((s, c) => s + (Number(c.budget) || 0), 0);
+    const budget = ownBudget > 0 ? ownBudget : subBudget;
+    return {
+      key, head: h.name, code: h.code ?? null, head_type: h.head_type ?? null, active: h.active !== false,
+      amount: spent, entries: byHead.get(key)?.entries ?? 0, pct_of_total: pct(spent),
+      budget: budget || null,
+      budget_basis: ownBudget > 0 ? "head" : subBudget > 0 ? "subheads" : "none",
+      variance: budget > 0 ? budget - spent : null,
+      pct_used: budget > 0 ? Math.round((spent / budget) * 1000) / 10 : null,
+      subheads: subs.map((c) => ({
+        key: String(c._id), subhead: c.name, code: c.code ?? null,
+        amount: bySub.get(String(c._id))?.amount ?? 0,
+        entries: bySub.get(String(c._id))?.entries ?? 0,
+        budget: Number(c.budget) || null,
+      })).sort((a, b) => b.amount - a.amount),
+    };
+  });
+  // Spend whose category was removed out from under it, or which sits directly on a head, still has
+  // to appear or the grand total stops tying to the register (note #5).
+  const uncategorised = byHead.get("none");
+  if (uncategorised) {
+    headRows.push({
+      key: "none", head: "Uncategorised", code: null, head_type: null, active: true,
+      amount: uncategorised.amount, entries: uncategorised.entries, pct_of_total: pct(uncategorised.amount),
+      budget: null, budget_basis: "none", variance: null, pct_used: null, subheads: [],
+    });
+  }
+  headRows.sort((a, b) => b.amount - a.amount);
+
+  const batchRows = [...byBatch.values()].map((b) => {
+    const enrolled = b.key === "none" ? null : enrolledBy.get(b.key) ?? 0;
+    const certified = b.key === "none" ? null : certifiedBy.get(b.key) ?? 0;
+    return {
+      key: b.key, batch: b.label, location: b.location, job_role: b.program,
+      amount: b.amount, entries: b.entries,
+      enrolled, certified,
+      cost_per_enrolled: enrolled === null ? null : perHead(b.amount, enrolled),
+      cost_per_certified: certified === null ? null : perHead(b.amount, certified),
+    };
+  }).sort((a, b) => b.amount - a.amount);
+
+  const budgetTotal = headRows.reduce((s, h) => s + (h.budget ?? 0), 0);
+
+  return {
+    measured_at,
+    labels: COST_LABELS,
+    // The filters travel back exactly as they were applied, so the screen, the export's header and
+    // anyone auditing a figure are all reading the same statement of what was counted (note #4).
+    filters_applied: filters,
+    totals: {
+      actual: total,
+      entries: entries.length,
+      budget: budgetTotal || null,
+      variance: budgetTotal > 0 ? budgetTotal - total : null,
+      pct_used: budgetTotal > 0 ? Math.round((total / budgetTotal) * 1000) / 10 : null,
+      heads: headRows.filter((h) => h.amount > 0).length,
+      batches: batchRows.filter((b) => b.key !== "none").length,
+    },
+    by_head: headRows,
+    by_location: [...byLocation.values()].map((b) => ({ ...b, pct_of_total: pct(b.amount) })).sort((a, b) => b.amount - a.amount),
+    by_job_role: [...byRole.values()].map((b) => ({ ...b, pct_of_total: pct(b.amount) })).sort((a, b) => b.amount - a.amount),
+    by_month: [...byMonth.values()].sort((a, b) => a.key.localeCompare(b.key)),
+    // The cross-tab's COLUMNS are the live master (note #1) — a new head becomes a new column with
+    // no deployment, and a head with no spend in the window is still a column, so the table's shape
+    // does not change under the reader as they move the date filter.
+    cross_tab: {
+      heads: headRows.map((h) => ({ key: h.key, head: h.head })),
+      rows: batchRows.map((b) => ({
+        key: b.key, batch: b.batch, location: b.location, job_role: b.job_role,
+        cells: Object.fromEntries(headRows.map((h) => [h.key, cross.get(`${b.key}::${h.key}`) ?? 0])),
+        total: b.amount,
+      })),
+    },
+    unit_economics: batchRows,
+    register,
   };
 }

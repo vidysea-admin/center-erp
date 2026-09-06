@@ -2757,6 +2757,11 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       // money at all — which is exactly the claim that has to be measured rather than asserted,
       // because every money door this module found was one somebody was sure carried none.
       ["/api/reports/kpi", "the KPI report"],
+      // QA-1830: the finance dashboard. Its entire purpose IS money, so unlike the two above it is
+      // expected to answer 403 here rather than 200-with-nothing-in-it. It is on the list anyway,
+      // because the failure this probe exists to catch is a door that answers 200 — and a door
+      // nobody listed is a door nobody measured.
+      ["/api/reports/costs", "the finance dashboard"],
       ["/api/plan-tracker", "the plan tracker"],
       ...(bId2 ? [
         [`/api/batches/${bId2}`, "a batch detail"],
@@ -3408,6 +3413,171 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       const adminAny = await req(admin, "GET", `/api/reports/kpi?location=${notMine._id}`);
       ok("QA-1898: ...and an unscoped Admin may still name any centre", adminAny.status === 200, `got ${adminAny.status}`);
     } else ok("QA-1898 fixture: a foreign centre exists to attack with", false, `spoc=${!!spoc} other=${!!notMine}`);
+  }
+
+
+  // ===========================================================================================
+  // QA-1830 — the finance dashboard, and QA-1899 — the dropout exclusion that excluded nothing.
+  // ===========================================================================================
+  {
+    // ---- the door. Its entire purpose is money, so it takes the 403, not a field mask. The
+    // export matters more than it looks: the money-leak probe greps JSON and CANNOT see inside a
+    // binary xlsx, so an export that skipped the gate would be the one leak the probe is
+    // structurally unable to find. It is asserted here by hand for exactly that reason.
+    for (const [who, label] of [[leakAdmin, "an Admin without finance.view"], [ops, "Operations"], [spoc, "a centre SPOC"]]) {
+      if (!who) continue;
+      const r = await req(who, "GET", "/api/reports/costs");
+      ok(`QA-1830: the finance dashboard refuses ${label}`, r.status === 403, `got ${r.status}`);
+      const x = await req(who, "GET", "/api/reports/costs/export");
+      ok(`QA-1830: ...and so does its .xlsx export, which no JSON probe can see inside (${label})`, x.status === 403, `got ${x.status}`);
+    }
+    const rep = await req(admin, "GET", "/api/reports/costs");
+    ok("QA-1830: the granted admin gets the dashboard", rep.status === 200, `got ${rep.status}`);
+    const d = rep.data ?? {};
+
+    // ---- every grouping is filled in ONE pass over the same rows, so each must sum to the same
+    // grand total BY CONSTRUCTION. A second query is how two tables on one screen start
+    // describing two different windows; this is the assertion that would catch that.
+    const sum = (rows, pick = (r) => r.amount) => (rows ?? []).reduce((a, r) => a + (pick(r) || 0), 0);
+    const total = d.totals?.actual ?? -1;
+    for (const [name, rows] of [["by head", d.by_head], ["by centre", d.by_location],
+                                ["by job role", d.by_job_role], ["by month", d.by_month],
+                                ["the register", d.register], ["unit economics", d.unit_economics]]) {
+      ok(`QA-1830: ${name} sums to the grand total`, sum(rows) === total, `${sum(rows)} vs ${total}`);
+    }
+    ok("QA-1830: the batch × head cross-tab sums to it too, cell by cell",
+      sum(d.cross_tab?.rows, (r) => Object.values(r.cells ?? {}).reduce((a, n) => a + (n || 0), 0)) === total,
+      `${sum(d.cross_tab?.rows, (r) => Object.values(r.cells ?? {}).reduce((a, n) => a + (n || 0), 0))} vs ${total}`);
+    ok("QA-1830: and the totals are not all zero, so the assertions above are not vacuous",
+      total > 0 && (d.totals?.entries ?? 0) > 0, `total=${total} entries=${d.totals?.entries}`);
+
+    // ---- developer note #5: untagged costs still reconcile. A cost with no batch must be
+    // COUNTED under Unassigned, never dropped — dropping it is how a grand total quietly stops
+    // tying to the register nobody re-adds by hand.
+    const catsF = (await req(admin, "GET", "/api/master-lists/cost-categories")).data.items ?? [];
+    const headF = catsF.find((c) => !c.parent);
+    const ruleOff = await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
+    ok("QA-1830 fixture: cost.post parking is switched off so the fixture lands in the ledger, not the queue",
+      ruleOff.status === 200, `got ${ruleOff.status}`);
+    const before = (await req(admin, "GET", "/api/reports/costs")).data?.totals?.actual ?? 0;
+    const untagged = headF
+      ? await req(admin, "POST", "/api/costs", { entry_date: "2026-09-06", category: headF._id, amount: 4242, note: "QA-1830 untagged fixture" })
+      : { status: 0 };
+    ok("QA-1830 fixture: a cost with no batch and no centre can be posted", untagged.status === 201, `got ${untagged.status}`);
+    const after = (await req(admin, "GET", "/api/reports/costs")).data ?? {};
+    ok("QA-1830: an untagged cost lands in Unassigned rather than being dropped",
+      (after.by_job_role ?? []).some((r) => r.label === "Unassigned" && r.amount >= 4242), JSON.stringify((after.by_job_role ?? []).map((r) => r.label)));
+    ok("QA-1830: ...and the grand total moves by exactly its amount, so the register still ties",
+      (after.totals?.actual ?? 0) === before + 4242, `${before} + 4242 vs ${after.totals?.actual}`);
+    ok("QA-1830: ...and every grouping still sums to the new total",
+      sum(after.by_head) === after.totals?.actual && sum(after.register) === after.totals?.actual,
+      `heads=${sum(after.by_head)} register=${sum(after.register)} total=${after.totals?.actual}`);
+
+    // ---- developer note #6: guard every ratio. A batch with nobody enrolled has no cost per
+    // trainee; it does not have a cost per trainee of zero. And the Unassigned row has no batch
+    // at all, so it has neither figure.
+    const noDenom = (after.unit_economics ?? []).filter((r) => !r.enrolled);
+    ok("QA-1830: a batch with no enrolment shows no cost-per-trainee rather than a confident 0",
+      noDenom.every((r) => r.cost_per_enrolled === null), JSON.stringify(noDenom.map((r) => [r.batch, r.enrolled, r.cost_per_enrolled])).slice(0, 200));
+    const unassignedRow = (after.unit_economics ?? []).find((r) => r.key === "none");
+    ok("QA-1830: the Unassigned bucket carries money but claims no enrolment or ratio",
+      !unassignedRow || (unassignedRow.enrolled === null && unassignedRow.cost_per_enrolled === null && unassignedRow.amount > 0),
+      JSON.stringify(unassignedRow ?? {}));
+
+    // ---- developer notes #1 and #2: no head is hard-coded, and the join is on id. A head created
+    // now must be a column with no deployment; a head RENAMED now must leave every historical
+    // figure exactly where it was. Renaming is the one that catches a name-join, and a name-join
+    // is what this codebase already shipped once (`rules.ts` upserts a category BY NAME).
+    const newHead = await req(admin, "POST", "/api/master-lists/cost-categories", { name: `QA1830 Head ${Date.now()}`, head_type: "Direct" });
+    ok("QA-1830 fixture: a new cost head can be created", newHead.status === 201, `got ${newHead.status}`);
+    const withNew = (await req(admin, "GET", "/api/reports/costs")).data ?? {};
+    ok("QA-1830: a head added a moment ago is already a column in the cross-tab, with no deployment",
+      (withNew.cross_tab?.heads ?? []).some((h) => h.key === String(newHead.data?.item?._id)),
+      `${(withNew.cross_tab?.heads ?? []).length} columns`);
+
+    const headWithSpend = (withNew.by_head ?? []).find((h) => h.amount > 0 && h.key !== "none");
+    if (headWithSpend) {
+      const renamed = `${headWithSpend.head} RENAMED`;
+      const rn = await req(admin, "PATCH", `/api/master-lists/cost-categories/${headWithSpend.key}`, { name: renamed });
+      ok("QA-1830 fixture: that head can be renamed", rn.status === 200, `got ${rn.status}`);
+      const afterRn = (await req(admin, "GET", "/api/reports/costs")).data ?? {};
+      const same = (afterRn.by_head ?? []).find((h) => h.key === headWithSpend.key);
+      ok("QA-1830: renaming a head leaves its historical figure untouched — the join is on id, not on name",
+        !!same && same.amount === headWithSpend.amount && same.head === renamed,
+        `${headWithSpend.amount} -> ${same?.amount} as "${same?.head}"`);
+      ok("QA-1830: ...and the grand total does not move because a head was renamed",
+        (afterRn.totals?.actual ?? 0) === (withNew.totals?.actual ?? -1), `${withNew.totals?.actual} -> ${afterRn.totals?.actual}`);
+      await req(admin, "PATCH", `/api/master-lists/cost-categories/${headWithSpend.key}`, { name: headWithSpend.head });
+    } else ok("QA-1830 fixture: a head with spend exists to rename", false, "none found");
+
+    // ---- developer note #7: row-level scoping in the QUERY. A scoped user who IS granted
+    // finance.view sees their own centre and no more, and a named ?location= NARROWS — it can
+    // never widen. That last clause is QA-1898, one release old, on a route I wrote; the same
+    // shape is refused here rather than trusted not to recur.
+    const spocId = ((await req(admin, "GET", "/api/users")).data.items ?? []).find((u) => u.email === "spoc.jpr03@vidysea.com")?._id;
+    if (spocId && spoc) {
+      const grant = await req(admin, "PATCH", `/api/users/${spocId}`, { extra_permissions: ["finance.view"] });
+      ok("QA-1830 fixture: a centre SPOC can be granted finance.view", grant.status === 200, `got ${grant.status}`);
+      const spoc2 = await login("spoc.jpr03@vidysea.com", PW);
+      const mine = await req(spoc2, "GET", "/api/reports/costs");
+      ok("QA-1830: a granted, scoped user now gets the dashboard", mine.status === 200, `got ${mine.status}`);
+      const centres = new Set((mine.data?.by_location ?? []).map((r) => r.label).filter((n) => n !== "Unassigned"));
+      ok("QA-1830: ...and it carries only their own centre",
+        centres.size <= 1, [...centres].join(","));
+      const others = (await req(admin, "GET", "/api/locations?limit=50")).data?.items ?? [];
+      const foreignL = others.find((l) => !/JPR03/i.test(String(l.code ?? "")));
+      if (foreignL) {
+        const attack = await req(spoc2, "GET", `/api/reports/costs?location=${foreignL._id}`);
+        ok("QA-1830: naming ANOTHER centre in ?location= is refused, not served (the QA-1898 shape)",
+          attack.status === 403, `got ${attack.status} for ${foreignL.code}`);
+        const admAny = await req(admin, "GET", `/api/reports/costs?location=${foreignL._id}`);
+        ok("QA-1830: ...while an unscoped grant-holder may still name any centre", admAny.status === 200, `got ${admAny.status}`);
+      }
+      await req(admin, "PATCH", `/api/users/${spocId}`, { extra_permissions: [] });
+      const revoked = await req(await login("spoc.jpr03@vidysea.com", PW), "GET", "/api/reports/costs");
+      ok("QA-1830: taking the grant back closes the door again", revoked.status === 403, `got ${revoked.status}`);
+    } else ok("QA-1830 fixture: the SPOC account resolves", false, String(spocId));
+
+    // ---- the filters are applied SERVER-side and travel back, so the screen, the export and
+    // anyone auditing a figure read the same statement of what was counted (note #4).
+    const filtered = await req(admin, "GET", "/api/reports/costs?from=2099-01-01&to=2099-12-31");
+    ok("QA-1830: the date filter is applied on the server, not in the UI",
+      filtered.status === 200 && (filtered.data?.totals?.entries ?? -1) === 0, `entries=${filtered.data?.totals?.entries}`);
+    ok("QA-1830: ...and the filters come back in the payload so the export can state them",
+      filtered.data?.filters_applied?.from === "2099-01-01" && filtered.data?.filters_applied?.to === "2099-12-31",
+      JSON.stringify(filtered.data?.filters_applied ?? {}));
+    ok("QA-1830: an empty window still ties to zero rather than 500ing",
+      (filtered.data?.totals?.actual ?? -1) === 0 && (filtered.data?.register ?? []).length === 0, JSON.stringify(filtered.data?.totals ?? {}));
+
+    const xl = await req(admin, "GET", "/api/reports/costs/export");
+    ok("QA-1830: the .xlsx export answers for the grant-holder", xl.status === 200, `got ${xl.status}`);
+  }
+
+  // ---- QA-1899. `kpiRollup` excluded dropouts from "trained" with
+  // `BatchMember.find({ status: "Dropped" })`, and BatchMember has no `status` field — the query
+  // matched nothing, the exclusion set was always empty, and every dropped-but-passed member was
+  // counted as trained. NOTHING FAILED: an empty exclusion set is indistinguishable from "there
+  // were no dropouts". So the pin is behavioural — drop somebody who has a Pass and watch the
+  // number move — because a pin on the field name would not have caught the original either.
+  {
+    const kBefore = await req(admin, "GET", "/api/reports/kpi");
+    const batches = (await req(admin, "GET", "/api/batches?limit=50")).data?.items ?? [];
+    let victim = null;
+    for (const b of batches) {
+      const res = (await req(admin, "GET", `/api/batches/${b._id}/results`)).data?.items ?? [];
+      const passed = res.find((r) => r.result === "Pass" && (r.candidate?._id ?? r.candidate));
+      if (passed) { victim = { batch: b, cand: passed.candidate?._id ?? passed.candidate }; break; }
+    }
+    ok("QA-1899 fixture: a candidate with a Pass result exists to drop", !!victim, JSON.stringify(victim?.cand ?? null));
+    if (victim) {
+      const dropped = await req(admin, "POST", `/api/candidates/${victim.cand}/drop`, { reason: "QA-1899 pin", date: "2026-09-06" });
+      ok("QA-1899 fixture: they can be dropped", [200, 201].includes(dropped.status), `got ${dropped.status}`);
+      const kAfter = await req(admin, "GET", "/api/reports/kpi");
+      ok("QA-1899: dropping a member who PASSED reduces `trained` by exactly one",
+        (kAfter.data?.trained ?? -1) === (kBefore.data?.trained ?? -2) - 1,
+        `${kBefore.data?.trained} -> ${kAfter.data?.trained}`);
+      await req(admin, "POST", `/api/candidates/${victim.cand}/drop`, { undo: true });
+    }
   }
 
   // QA-1838: a right that gates nothing must not sit in the matrix pretending to.

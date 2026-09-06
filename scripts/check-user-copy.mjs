@@ -3026,9 +3026,19 @@ for (const file of walk(root)) {
   // consult the one the server shipped — a local copy of those key strings in this client file is
   // the second-copy fault the whole payload trick exists to avoid, so the literals must not appear
   // here at all.
+  //
+  // QA-1830 WIDENED THE POPULATION THIS CLAUSE MEASURES, and the widening is the point rather than
+  // a concession. When it was written, no ROUTE_RULES entry gated on an exempt key, so "the literal
+  // appears anywhere in this file" and "this file restates the exempt SET" were the same sentence.
+  // `/finance` is gated on `finance.view`, which means a rule must now NAME an exempt key to do its
+  // job — the literal appears, and no second copy exists. So the search runs over the file with the
+  // rules' own `perm: "<key>"` fields removed: a key named as one rule's gate is that rule working;
+  // a key named ANYWHERE else is still the second copy the shipped payload exists to prevent, and
+  // still fails. A mutant that puts `["finance.view"]` in this file is caught exactly as before.
+  const srcNoGates = src.replace(/perm: ?"[^"]+"/g, "perm: __GATE__");
   const guardReadsExemptList = !declaresExempt
     || (/perms\.role ?=== ?"Admin" ?&&[^;]{0,200}noAdminBypass[^;]{0,80}return true/.test(src)
-        && ![...exempt].some((k) => src.includes("\"" + k + "\"")));
+        && ![...exempt].some((k) => srcNoGates.includes("\"" + k + "\"")));
   // A rule the parser could not read is a rule this pin did not check — that must FAIL, not pass
   // quietly. Silent under-counting is how the second-array mutation walked past the -220 pin.
   const parsedAll = rules.length === prefixCount;
@@ -3298,6 +3308,54 @@ for (const file of walk(root)) {
     // the pin covers both readers rather than the one that happened to be found first.
     if (/await (?:req|request)\.formData\(\)/.test(body)) {
       bad.push(`${rel}: reads a multipart body with .formData() directly, so a malformed upload answers 500 "something went wrong on our side". Use readFormData(req, message[, status]) — the message and status are parameters precisely so each door keeps its own (QA-1887).`);
+    }
+  }
+
+
+  // QA-1830 — three properties of the finance report, each pinned as a shape rather than as an
+  // example. The rule this file keeps relearning is that a pin written about the case somebody
+  // happened to find binds only that case (QA-1882, QA-1887), so each of these names the property.
+  {
+    const financeRoutes = ["app/api/reports/costs/route.ts", "app/api/reports/costs/export/route.ts"];
+    for (const rel of financeRoutes) {
+      const f = path.join(root, rel);
+      if (!fs.existsSync(f)) { bad.push(`${rel}: the finance dashboard route is gone.`); continue; }
+      const src = stripComments(fs.readFileSync(f, "utf-8"));
+      // The DOOR rule, not a field mask. `finance.view` is one of the two keys in NO_ADMIN_BYPASS,
+      // so this single call is what makes the CEO's sentence true — *"चाहे सुपर एडमिन हो, सुपर एडमिन
+      // का काका हो"*. The export is the one that cannot be measured any other way: the money-leak
+      // probe greps JSON and is structurally blind to a binary xlsx.
+      if (!/requireFinance\(\s*user\s*,\s*"view"\s*\)/.test(src)) {
+        bad.push(`${rel}: a finance report door with no requireFinance(user, "view"). The probe in e2e-roles.mjs cannot see inside an .xlsx, so an ungated export is the one leak nothing else can find (QA-1830).`);
+      }
+      if (!/locationFilter\(\s*user\s*\)/.test(src)) {
+        bad.push(`${rel}: requireFinance answers WHETHER, locationFilter answers WHOSE. A finance door needs both — a scoped finance user is a real thing (QA-1830).`);
+      }
+    }
+    // The export must READ the report, never recompute it. `reportRollup`'s export carries the
+    // sentence this pin enforces: "an export that recomputes is an export that eventually
+    // disagrees, and then nobody can tell which of the two is the report."
+    const exp = stripComments(fs.readFileSync(path.join(root, "app/api/reports/costs/export/route.ts"), "utf-8"));
+    if (!/costRollup\(/.test(exp)) {
+      bad.push("app/api/reports/costs/export/route.ts: the export no longer calls costRollup. A recomputed export eventually disagrees with the screen and then neither is the report (QA-1830).");
+    }
+    if (/CostEntry|\.aggregate\(|\$group/.test(exp)) {
+      bad.push("app/api/reports/costs/export/route.ts: the export is querying or aggregating on its own. Every figure belongs to costRollup so the screen and the file cannot drift (QA-1830).");
+    }
+    // The aggregation rule that four live defects were filed under (QA-302/347/350/395): authz
+    // builds its `$in` from `.map(String)`, mongoose casts inside find() but NOT inside a pipeline.
+    // So no pipeline in rules.ts may take the scope filter; the ones in costRollup take `_id`/
+    // `batch` `$in` lists lifted off documents already loaded.
+    const rules = stripComments(fs.readFileSync(path.join(root, "lib/rules.ts"), "utf-8"));
+    if (/\.aggregate\(\s*\[\s*\{\s*\$match:\s*\{\s*\.\.\.scope/.test(rules)) {
+      bad.push("lib/rules.ts: an aggregation is matching on the scope filter. Mongoose does not cast strings to ObjectId inside a pipeline, so the report silently returns nothing for a scoped user — QA-302/347/350/395, four times.");
+    }
+    // QA-1899. The exclusion that excluded nothing: `BatchMember.find({ status: "Dropped" })` on a
+    // model with no `status` field. It matched zero rows, the dropout set was always empty, and
+    // "trained" counted dropped-but-passed members — with nothing failing anywhere, because an
+    // empty exclusion set looks exactly like "there were no dropouts".
+    if (/BatchMember\.find\(\s*\{\s*status:/.test(rules)) {
+      bad.push('lib/rules.ts: querying BatchMember by `status`. That field does not exist on the model — a drop is `left_on` — so the filter matches nothing and every count built on it is silently wrong (QA-1899).');
     }
   }
 
