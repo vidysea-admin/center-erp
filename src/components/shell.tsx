@@ -318,6 +318,15 @@ export function AppShell({ children }: { children: ReactNode }) {
   const nav = NAV.filter((n) => user
     && (!n.roles || n.roles.includes(user.role))
     && routeAllowed(n.href.split("?")[0], { ...perms, role: user.role }));
+  // QA-1940 (live checker, on production): a denied user saw the finance screen's SKELETON for
+  // ~300 ms before the closed door replaced it. `routeAllowed` reads `perms.levels`, which is empty
+  // until `/api/permissions/me` answers - so for that window every gated route looks allowed and
+  // renders. Nothing sensitive leaks (the screen's own API call 403s), but a person is shown a
+  // screen that is not theirs and then has it taken away, which reads as a fault in the product.
+  // A route WITH a permission rule waits for the answer; every other route is unaffected, so no
+  // screen that was instant becomes slower.
+  const gatedRoute = ROUTE_RULES.some((r) => (pathname === r.prefix || pathname.startsWith(r.prefix + "/")) && r.perm);
+  const permsPending = !!user && gatedRoute && !perms.loaded;
   const allowedHere = !user || routeAllowed(pathname, { ...perms, role: user.role });
 
   const links = (
@@ -411,7 +420,10 @@ export function AppShell({ children }: { children: ReactNode }) {
         )}
         <main className="min-w-0 flex-1 p-4 md:p-6">
           <PermsContext.Provider value={{ ...perms, role: user?.role ?? perms.role }}>
-            {allowedHere ? children : (
+            {permsPending ? (
+              // Deliberately not a spinner pretending to be the screen: it says what is happening.
+              <div className="mx-auto mt-16 max-w-md text-center text-sm text-gray-400">Checking your access…</div>
+            ) : allowedHere ? children : (
               // QA-153: a plain closed door — no form, no chrome, no feature named.
               <div className="mx-auto mt-16 max-w-md rounded-xl border border-gray-200 bg-white p-6 text-center">
                 <p className="text-sm font-medium text-gray-800">This screen is not part of your role&apos;s work.</p>
