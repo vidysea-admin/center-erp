@@ -3501,10 +3501,15 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     ok("QA-1830 fixture: cost.post parking is switched off so the fixture lands in the ledger, not the queue",
       ruleOff.status === 200, `got ${ruleOff.status}`);
     const before = (await req(admin, "GET", "/api/reports/costs")).data?.totals?.actual ?? 0;
-    const untagged = headF
-      ? await req(admin, "POST", "/api/costs", { entry_date: "2026-09-06", category: headF._id, amount: 4242, note: "QA-1830 untagged fixture" })
+    // "Untagged" means no BATCH — Manish sir's note #5 is about `batch_id` being nullable. It does
+    // NOT mean no dimension at all: Rule 37 refuses an entry with no location, batch or trainer, and
+    // the first version of this fixture asked for exactly that and got a correct 400. A centre cost
+    // with no batch is the real shape, and it is the one that lands in Unassigned.
+    const locF = (await req(admin, "GET", "/api/locations?limit=1")).data?.items?.[0];
+    const untagged = headF && locF
+      ? await req(admin, "POST", "/api/costs", { entry_date: "2026-09-06", location: locF._id, category: headF._id, amount: 4242, note: "QA-1830 untagged fixture" })
       : { status: 0 };
-    ok("QA-1830 fixture: a cost with no batch and no centre can be posted", untagged.status === 201, `got ${untagged.status}`);
+    ok("QA-1830 fixture: a centre cost with no batch can be posted", untagged.status === 201, `got ${untagged.status}`);
     const after = (await req(admin, "GET", "/api/reports/costs")).data ?? {};
     ok("QA-1830: an untagged cost lands in Unassigned rather than being dropped",
       (after.by_job_role ?? []).some((r) => r.label === "Unassigned" && r.amount >= 4242), JSON.stringify((after.by_job_role ?? []).map((r) => r.label)));
@@ -3623,8 +3628,12 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     const batches = (await req(admin, "GET", "/api/batches?limit=50")).data?.items ?? [];
     let victim = null;
     for (const b of batches) {
+      // The route returns one row per MEMBER with the result nested — `items[].result` is the
+      // CandidateResult document or null, not the verdict string. The first version of this finder
+      // read `r.result === "Pass"` and found nobody, which is a fixture that fails loudly rather
+      // than a pin that passes on an empty set. It is worth the distinction.
       const res = (await req(admin, "GET", `/api/batches/${b._id}/results`)).data?.items ?? [];
-      const passed = res.find((r) => r.result === "Pass" && (r.candidate?._id ?? r.candidate));
+      const passed = res.find((r) => r.result?.result === "Pass" && !r.left_on && (r.candidate?._id ?? r.candidate));
       if (passed) { victim = { batch: b, cand: passed.candidate?._id ?? passed.candidate }; break; }
     }
     ok("QA-1899 fixture: a candidate with a Pass result exists to drop", !!victim, JSON.stringify(victim?.cand ?? null));
