@@ -3587,6 +3587,28 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       !unassignedRow || (unassignedRow.enrolled === null && unassignedRow.cost_per_enrolled === null && unassignedRow.amount > 0),
       JSON.stringify(unassignedRow ?? {}));
 
+    // QA-1928 (found by the LIVE checker on production, not by any local test). The batch bucket
+    // ASSIGNED its centre inside the per-entry loop, so it kept the last entry's - and `Unassigned`
+    // holds untagged spend from every centre, so it displayed one centre's name beside all of it.
+    // No arithmetic assertion could see this: the totals were right the whole time, only the label
+    // lied. So the assertion is about the LABEL, and it is built by making the bucket span two
+    // centres on purpose.
+    const twoCentres = (await req(admin, "GET", "/api/locations?limit=5")).data?.items ?? [];
+    if (twoCentres.length >= 2 && headF) {
+      const a1 = await req(admin, "POST", "/api/costs", { entry_date: "2026-09-06", location: twoCentres[0]._id, category: headF._id, amount: 111, note: "QA-1928 fixture A" });
+      const a2 = await req(admin, "POST", "/api/costs", { entry_date: "2026-09-06", location: twoCentres[1]._id, category: headF._id, amount: 222, note: "QA-1928 fixture B" });
+      ok("QA-1928 fixture: two untagged costs at two different centres", a1.status === 201 && a2.status === 201, `${a1.status}/${a2.status}`);
+      const rep2 = (await req(admin, "GET", "/api/reports/costs")).data ?? {};
+      const un = (rep2.unit_economics ?? []).find((r) => r.key === "none");
+      ok("QA-1928: a bucket spanning several centres says how many, instead of naming one of them",
+        un && /centres$/.test(String(un.location)), JSON.stringify({ location: un?.location, amount: un?.amount }));
+      ok("QA-1928: ...and it does not display any single centre's name beside everybody's money",
+        un && !twoCentres.some((l) => String(un.location) === String(l.name)), String(un?.location));
+      const one = (rep2.unit_economics ?? []).find((r) => r.key !== "none" && r.amount > 0);
+      ok("QA-1928: ...while a real batch, whose entries share one centre, still names that centre",
+        !one || !/\d+ centres$/.test(String(one.location)), JSON.stringify({ batch: one?.batch, location: one?.location }));
+    }
+
     // ---- developer notes #1 and #2: no head is hard-coded, and the join is on id. A head created
     // now must be a column with no deployment; a head RENAMED now must leave every historical
     // figure exactly where it was. Renaming is the one that catches a name-join, and a name-join

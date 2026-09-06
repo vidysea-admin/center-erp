@@ -5540,7 +5540,7 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
   const byLocation = new Map<string, Bucket>();
   const byRole = new Map<string, Bucket>();
   const byMonth = new Map<string, Bucket>();
-  const byBatch = new Map<string, Bucket & { location: string; program: string }>();
+  const byBatch = new Map<string, Bucket & { centres?: Set<string>; programs?: Set<string> }>();
   const cross = new Map<string, number>();
   const register: any[] = [];
   let total = 0;
@@ -5567,8 +5567,14 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
 
     const batchKey = e.batch?._id ? String(e.batch._id) : "none";
     const bb = bump(byBatch, batchKey, e.batch?.code ?? COST_UNASSIGNED, amt);
-    bb.location = e.location?.name ?? e.batch?.location?.name ?? COST_UNASSIGNED;
-    bb.program = prog?.name ?? COST_UNASSIGNED;
+    // QA-1928 (live checker, on production). This line used to ASSIGN, so the bucket kept whichever
+    // centre the LAST entry happened to carry. For a real batch that is invisible - every entry has
+    // the same centre - but the `Unassigned` bucket holds untagged spend from EVERY centre, so it
+    // rendered "Govt. ITI, Aurai - Rs 19,500" when Aurai's own share was Rs 3,250, on the CEO's
+    // screen and in the export. The totals were right the whole time; only the label lied, which is
+    // why no arithmetic assertion could see it and why it took a real screen to find.
+    (bb.centres ??= new Set()).add(e.location?.name ?? COST_UNASSIGNED);
+    (bb.programs ??= new Set()).add(prog?.name ?? COST_UNASSIGNED);
     cross.set(`${batchKey}::${headKey}`, (cross.get(`${batchKey}::${headKey}`) ?? 0) + amt);
 
     register.push({
@@ -5639,11 +5645,18 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
   }
   headRows.sort((a, b) => b.amount - a.amount);
 
+  // A bucket that spans more than one centre SAYS so rather than picking one of them. "5 centres"
+  // is a true answer a reader can act on; a single centre's name beside five centres' money is not.
+  const oneOf = (set: Set<string> | undefined, noun: string) => {
+    const v = [...(set ?? [])];
+    return v.length === 1 ? v[0] : v.length === 0 ? COST_UNASSIGNED : `${v.length} ${noun}`;
+  };
   const batchRows = [...byBatch.values()].map((b) => {
     const enrolled = b.key === "none" ? null : enrolledBy.get(b.key) ?? 0;
     const certified = b.key === "none" ? null : certifiedBy.get(b.key) ?? 0;
     return {
-      key: b.key, batch: b.label, location: b.location, job_role: b.program,
+      key: b.key, batch: b.label,
+      location: oneOf(b.centres, "centres"), job_role: oneOf(b.programs, "job roles"),
       amount: b.amount, entries: b.entries,
       enrolled, certified,
       cost_per_enrolled: enrolled === null ? null : perHead(b.amount, enrolled),
