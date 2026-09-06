@@ -385,6 +385,71 @@ if (bulkRowVisible) {
   }
 }
 
+// ================= QA-1933: "clickable" had no guard =================
+// The unit checker on qa-1927 proved it the only way that counts: it deleted `onClick` from BOTH
+// card helpers and the whole wall stayed at 347/1 while the panel went dead. Every assertion this
+// unit shipped was about the PAYLOAD — the rows exist, the totals match, the columns are named —
+// and not one of them touched the one word in Umesh's sentence the unit is named after:
+// *"all KPI cards must be CLICKABLE"*. `check-user-copy` only asks that the marker sits on a
+// <button>; a <button> with no handler is still a <button>.
+//
+// So the guard lives HERE, in the only suite that drives a real browser: click the card, and
+// require that a table appears carrying the number the card was showing. A payload assertion
+// cannot reach this, and a structural pin cannot either.
+{
+  await page.goto(`${BASE}/reports`, { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => /Training KPIs/i.test(document.body.innerText), undefined, { timeout: 45000 }).catch(() => {});
+  const cards = page.locator("[data-kpi-card]");
+  const n = await cards.count();
+  ok("QA-1933: the Training KPI panel renders its cards", n >= 7, `${n} cards found`);
+
+  let opened = 0, mismatched = [];
+  for (let i = 0; i < n; i++) {
+    const c = cards.nth(i);
+    const key = await c.getAttribute("data-kpi-card");
+    // The number the card is showing, read off the screen before the click — not from the API, so
+    // this compares what a PERSON sees with what they get when they act on it.
+    const shownNum = Number((await c.innerText()).trim().split(/\s+/)[0].replace(/,/g, ""));
+    await c.click();
+    // The card writes the open key into the URL and React re-renders on the navigation, so the
+    // table is not in the DOM in the same tick. The first version of this block counted immediately
+    // and reported "0 of 7 opened" while the reload assertion below PASSED on the same run - the
+    // control that proved the finding was my instrument and not the panel. Wait for the element,
+    // and let the timeout be the failure rather than a race.
+    const table = page.locator(`[data-kpi-table="${key}"]`);
+    const appeared = await table.waitFor({ state: "attached", timeout: 8000 }).then(() => true).catch(() => false);
+    if (!appeared) { mismatched.push(`${key}: nothing opened`); continue; }
+    opened++;
+    // Rows, or an explicit empty/capped statement. A card reading 0 legitimately opens nothing.
+    const rows = await table.locator("tbody tr").count();
+    const header = (await table.locator("div").first().innerText()).replace(/\s+/g, " ");
+    const capped = /showing the first/i.test(header);
+    if (!Number.isNaN(shownNum) && shownNum > 0 && !capped && rows !== shownNum) {
+      mismatched.push(`${key}: card says ${shownNum}, table has ${rows}`);
+    }
+    if (!Number.isNaN(shownNum) && shownNum === 0 && rows > 0) mismatched.push(`${key}: card says 0 but table has ${rows}`);
+    await c.click(); // and it closes again — a card that only opens is a card nobody can put away
+    const closed = await table.waitFor({ state: "detached", timeout: 8000 }).then(() => true).catch(() => false);
+    if (!closed) mismatched.push(`${key}: will not close`);
+  }
+  ok("QA-1933: EVERY KPI card actually responds to a click and opens its own table",
+    opened === n && n > 0, `${opened} of ${n} opened`);
+  ok("QA-1933: ...and the table it opens holds exactly the number the card is showing",
+    mismatched.length === 0, mismatched.slice(0, 4).join(" · "));
+  ok("QA-1933: ...and the open card survives a reload, so the link can be sent to somebody",
+    await (async () => {
+      const first = cards.first();
+      const key = await first.getAttribute("data-kpi-card");
+      await first.click();
+      await page.waitForTimeout(300);
+      const url = page.url();
+      if (!url.includes("kpi=")) return false;
+      await page.goto(url, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(() => /Training KPIs/i.test(document.body.innerText), undefined, { timeout: 45000 }).catch(() => {});
+      return await page.locator(`[data-kpi-table="${key}"]`).count() > 0;
+    })(), page.url());
+}
+
 // ================= QA-573's LITERAL ASK, on /reports =================
 // "open a <details>, close it, and read what is visible". REQ-367b: the warnings stay OUTSIDE the
 // disclosure card and stay visible in BOTH states.
