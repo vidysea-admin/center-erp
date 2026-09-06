@@ -146,6 +146,16 @@ function FinanceInner() {
         {tile("Batches with spend", String(t.batches ?? 0), "untagged costs sit in Unassigned")}
       </div>
 
+      {/* QA-1830 live check: the "not here yet" line was inside the collapsed disclosure below, so a
+          reader looking for a vendor or voucher column found neither the column nor the reason. The
+          rollup report already has this shape — an always-visible caveat line beside a collapsed
+          "where these numbers come from" — and it is the right one: what is MISSING has to be
+          readable without a click, or the register quietly looks complete. */}
+      <p className="text-[11px] leading-relaxed text-gray-500" data-warning="caveat">
+        A cost entry has no vendor / payee, voucher number or payment mode field yet, so the register
+        below cannot show those columns. Capturing them on an entry is separate work on the Costs form.
+      </p>
+
       {/* Where these numbers come from — the same disclosure idiom the rollup report uses. The
           honest half matters more than the flattering half: three columns Manish sir's mock has do
           not exist on a cost entry yet, and this says so rather than shipping empty columns. */}
