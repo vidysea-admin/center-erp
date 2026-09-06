@@ -3308,6 +3308,40 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     }
   }
 
+  // ---- QA-1897: "is role me kaun hai, aur is account ke paas kya hai" ----
+  // Umesh, 2026-09-06: the Admin screen could say what ROLE someone had and could toggle a role's
+  // rights, but could not answer the question an Admin actually asks about a PERSON. The new door
+  // answers it — and the reason it is a DOOR and not a browser-side calculation is money: a
+  // client-side "Admin gets everything" would have shown every Admin holding finance.view, which is
+  // precisely what NO_ADMIN_BYPASS exists to prevent. So the screen must be pinned against lying.
+  {
+    const leakAdminId = mkLeak.data.item?._id;
+    if (leakAdminId) {
+      const r = await req(admin, "GET", `/api/users/${leakAdminId}/rights`);
+      ok("QA-1897: the per-person rights door answers an Admin who may manage users", r.status === 200, `got ${r.status}`);
+      const rows = r.data?.rights ?? [];
+      const fv = rows.find((x) => x.key === "finance.view");
+      const fa = rows.find((x) => x.key === "finance.approve");
+      ok("QA-1897: it reports every right in the catalogue, not a subset",
+        rows.length > 0 && rows.some((x) => x.key === "users.manage"), `${rows.length} rights`);
+      // THE ONE THAT MATTERS. This Admin holds no finance grant. The screen must say so.
+      ok("QA-1897: an ungranted Admin's finance.view reads 'none' — the screen cannot claim the Admin role opens money",
+        fv?.level === "none", JSON.stringify(fv ?? null));
+      ok("QA-1897: ...and finance.approve likewise", fa?.level === "none", JSON.stringify(fa ?? null));
+      ok("QA-1897: ...and both are flagged as named-grant-only, so the Admin is told WHY",
+        fv?.no_admin_bypass === true && fa?.no_admin_bypass === true);
+      // A non-finance right the Admin role does open must still read as held — otherwise the screen
+      // would be useless in the other direction.
+      const um = rows.find((x) => x.key === "users.manage");
+      ok("QA-1897: a right the Admin role DOES open still reads as held", um && um.level !== "none", JSON.stringify(um ?? null));
+      // And the door is gated: Operations does not manage users.
+      const opsTry = ops ? await req(ops, "GET", `/api/users/${leakAdminId}/rights`) : { status: 0 };
+      ok("QA-1897: the door refuses someone without users.manage", opsTry.status === 403, `got ${opsTry.status}`);
+      const missing = await req(admin, "GET", "/api/users/6a9c000000000000000000aa/rights");
+      ok("QA-1897: an unknown user id is a 404, not a crash", missing.status === 404, `got ${missing.status}`);
+    } else ok("QA-1897 fixture: the ungranted Admin's id resolves", false, "no id");
+  }
+
   // QA-1838: a right that gates nothing must not sit in the matrix pretending to.
   const cat = await req(admin, "GET", "/api/permissions");
   ok("QA-1838: invoices.manage is gone from the permission catalog (it gated nothing after QA-1825)",

@@ -3301,6 +3301,26 @@ for (const file of walk(root)) {
     }
   }
 
+  // QA-1896: every approval action must have a human label on the Admin screen. `cost.post` and
+  // `location.edit` rendered as raw dotted identifiers for two releases — on the very screen where
+  // an Admin chooses who may approve money — and nothing broke, which is why nobody saw it. A
+  // missing label is invisible to types, to tests and to the person who added the action.
+  {
+    const models = stripComments(fs.readFileSync(path.join(root, "models/index.ts"), "utf-8"));
+    const adminPage = stripComments(fs.readFileSync(path.join(root, "app/(app)/admin/page.tsx"), "utf-8"));
+    const block = models.match(/APPROVAL_ACTIONS\s*=\s*\[([\s\S]*?)\]/)?.[1] ?? "";
+    const actions = [...block.matchAll(/"([a-z]+\.[a-z_]+)"/g)].map((m) => m[1]);
+    const labels = adminPage.match(/APPROVAL_LABELS[^=]*=\s*\{([\s\S]*?)\}/)?.[1] ?? "";
+    if (!actions.length) {
+      bad.push("scripts/check-user-copy.mjs: could not read APPROVAL_ACTIONS out of models/index.ts — this check is measuring nothing (say so rather than passing).");
+    }
+    for (const a of actions) {
+      if (!labels.includes(`"${a}"`)) {
+        bad.push(`app/(app)/admin/page.tsx: APPROVAL_LABELS has no entry for "${a}", so the Admin approvals screen renders the raw action id where a person needs a sentence (QA-1896).`);
+      }
+    }
+  }
+
   // The field list itself must have exactly one statement, the way NO_ADMIN_BYPASS does for keys.
   const permsForFields = stripComments(fs.readFileSync(path.join(root, "lib/permissions.ts"), "utf-8"));
   if (!/INVOICE_MONEY_FIELDS *= *\[/.test(permsForFields)) bad.push("lib/permissions.ts: INVOICE_MONEY_FIELDS is gone — the field rule has no single statement");

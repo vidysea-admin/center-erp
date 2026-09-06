@@ -7,6 +7,11 @@ import { usePerms } from "@/components/shell";
 
 const TABS = ["Programs", "Users & Access", "Permissions", "Sync Source", "Approvals", "Master Lists", "Defaults"];
 
+// QA-1896 (found in the browser on production, 2026-09-06, minutes after the release went live):
+// six of the eight actions had a human label and the two the CEO's own rule is about — `cost.post`
+// and `location.edit` — rendered as raw dotted identifiers on the screen an Admin uses to decide
+// who approves money. Every action in APPROVAL_ACTIONS needs a line here; a missing one does not
+// break anything, which is exactly why it survived two releases unnoticed.
 const APPROVAL_LABELS: Record<string, string> = {
   "location.close": "Close a location",
   "location.stop": "Stop a location",
@@ -14,6 +19,8 @@ const APPROVAL_LABELS: Record<string, string> = {
   "batch.complete": "Complete a batch",
   "invoice.raise": "Mark an invoice raised",
   "invoice.paid": "Mark an invoice paid",
+  "cost.post": "Post a cost / expense",
+  "location.edit": "Edit a location's details",
 };
 
 export default function AdminPage() {
@@ -211,6 +218,113 @@ function Programs({ error, setError }: any) {
   );
 }
 
+// QA-1897: role → the accounts in it → what each account can actually DO.
+//
+// The rights are fetched from `/api/users/<id>/rights`, which calls the SAME `getEffectiveLevels`
+// every gate calls. They are deliberately not recomputed here from the matrix plus the person's
+// extras: that would be a second copy of the one rule this module exists to defend, and it would
+// have been wrong on its first render — a browser-side "Admin gets everything" would show every
+// Admin holding finance.view, which is the exact thing NO_ADMIN_BYPASS was built to stop.
+function RolesOverview({ items, onOpen, setError }: { items: any[]; onOpen: (u?: any) => void; setError: (s: string) => void }) {
+  const [openRole, setOpenRole] = useState<string | null>(null);
+  const [rightsFor, setRightsFor] = useState<any>(null);
+  const [rights, setRights] = useState<any[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  const roles = ["Admin", "Operations", "Location", "Enrollment", "Trainer"];
+  const byRole = (r: string) => items.filter((u) => u.role === r);
+
+  async function showRights(u: any) {
+    setRightsFor(u); setRights([]);
+    try { const d = await api(`/api/users/${u._id}/rights`); setRights(d.rights ?? []); }
+    catch (e: any) { setError(e.message); }
+  }
+  // Grant or take back ONE right for ONE person, from the same screen that shows it. The write is
+  // the ordinary user PATCH — no new door, no second way of changing rights.
+  async function toggle(u: any, key: string, give: boolean) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const extra = new Set<string>((u.extra_permissions ?? []).map(String));
+      const revoked = new Set<string>((u.revoked_permissions ?? []).map(String));
+      if (give) { extra.add(key); revoked.delete(key); } else { extra.delete(key); revoked.add(key); }
+      await api(`/api/users/${u._id}`, { method: "PATCH", json: { extra_permissions: [...extra], revoked_permissions: [...revoked] } });
+      // Re-read from the server rather than assuming the write landed — a permissions change that
+      // is not read back is not a fact (QA-036, learned on this very module).
+      const fresh = (await api("/api/users")).items?.find((x: any) => x._id === u._id) ?? u;
+      setRightsFor(fresh);
+      const d = await api(`/api/users/${u._id}/rights`);
+      setRights(d.rights ?? []);
+    } catch (e: any) { setError(e.message); }
+    setBusy(false);
+  }
+
+  return (
+    <div className="mb-4 rounded-lg border border-gray-200 p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-sm font-semibold">Access by role</span>
+        <span className="text-xs text-gray-500">{items.length} active account{items.length === 1 ? "" : "s"}</span>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {roles.map((r) => (
+          <button key={r} onClick={() => setOpenRole(openRole === r ? null : r)}
+            className={`rounded-full border px-3 py-1 text-xs ${openRole === r ? "border-blue-400 bg-blue-50 text-blue-700" : "border-gray-200 bg-gray-50 text-gray-700"}`}>
+            {r} · {byRole(r).length}
+          </button>
+        ))}
+      </div>
+
+      {openRole && (
+        <div className="mt-3 rounded border border-gray-100 bg-gray-50 p-2">
+          {byRole(openRole).length === 0 && <p className="p-2 text-xs text-gray-500">Nobody holds the {openRole} role.</p>}
+          {byRole(openRole).map((u) => (
+            <div key={u._id} className="flex flex-wrap items-center gap-2 border-b border-gray-100 py-1.5 last:border-0">
+              <span className="min-w-[10rem] text-sm font-medium">{u.name}</span>
+              <span className="text-xs text-gray-500">{u.email}</span>
+              {u.active === false && <span className="rounded bg-gray-200 px-1.5 py-0.5 text-[11px] text-gray-600">inactive</span>}
+              {!u.can_edit && <span className="rounded bg-gray-200 px-1.5 py-0.5 text-[11px] text-gray-600">view only</span>}
+              <span className="ml-auto flex gap-1.5">
+                <Btn small kind="ghost" onClick={() => showRights(u)}>What can they do?</Btn>
+                <Btn small kind="ghost" onClick={() => onOpen(u)}>Edit</Btn>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {rightsFor && (
+        <div className="mt-3 rounded border border-blue-200 bg-white p-3">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-sm font-semibold">{rightsFor.name} — {rights.filter((r) => r.level !== "none").length} of {rights.length} rights</span>
+            <Btn small kind="ghost" onClick={() => setRightsFor(null)}>Close</Btn>
+          </div>
+          <div className="max-h-96 overflow-y-auto">
+            {Object.entries(rights.reduce((acc: any, r: any) => { (acc[r.group] ||= []).push(r); return acc; }, {})).map(([group, list]: any) => (
+              <div key={group} className="mb-2">
+                <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-400">{group}</div>
+                {list.map((r: any) => (
+                  <div key={r.key} className="flex flex-wrap items-center gap-2 py-1 text-sm">
+                    <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${r.level === "none" ? "bg-gray-300" : "bg-green-500"}`} />
+                    <span className="min-w-[16rem] flex-1">{r.label}</span>
+                    <span className="text-xs text-gray-400">{r.source}</span>
+                    {/* The two keys the Admin short-circuit does not open. An Admin who cannot find
+                        money among their own rights is told why, rather than left to guess. */}
+                    {r.no_admin_bypass && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-800" title="The Admin role does not open this — it must be granted to a person by name (the CEO's rule, 2026-09-05)">named grant only</span>}
+                    <Btn small kind={r.level === "none" ? undefined : "ghost"} onClick={() => toggle(rightsFor, r.key, r.level === "none")} disabled={busy}>
+                      {r.level === "none" ? "Grant" : "Take back"}
+                    </Btn>
+                  </div>
+                ))}
+              </div>
+            ))}
+            {!rights.length && <p className="py-2 text-xs text-gray-500">Loading…</p>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Users({ error, setError }: any) {
   const [items, setItems] = useState<any[]>([]);
   const [locations, setLocations] = useState<any[]>([]);
@@ -302,6 +416,13 @@ function Users({ error, setError }: any) {
           <p className="mt-2 text-xs text-amber-700">"Review &amp; edit…" lets you correct the role/scope before approving. Approval activates the account; the role's toggled rights (Permissions tab) apply immediately.</p>
         </div>
       )}
+      {/* QA-1897 (Umesh, 2026-09-06): *"admin waale me bas role dikh raha hai… role wise, jaise admin
+          role hai, admin role mein kaun se account hain, account mein kaun se access hain, woh
+          dikhna chahiye."* The table below is a flat list sorted by name — it can tell you a
+          person's role but never answers "who is in this role", which is the question an Admin
+          asks before granting anything. This is that answer, above the list rather than instead of
+          it: the list stays for editing one person, this is for seeing the shape of access. */}
+      <RolesOverview items={items.filter((u) => !u.dropped && u.approval_status !== "Pending")} onOpen={open} setError={setError} />
       {droppedCount > 0 && (
         <label className="mb-2 flex items-center gap-2 text-sm text-gray-600">
           <input type="checkbox" checked={showDropped} onChange={(e) => setShowDropped(e.target.checked)} />
