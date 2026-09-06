@@ -23,6 +23,12 @@
 // numbers back through the RUNNING SERVER's `/api/reports/costs` — which is the real `costRollup`,
 // behind the real finance door. Reconciling against the function in isolation would prove less.
 import { MongoClient, ObjectId } from "mongodb";
+// QA-510, and it caught THIS script on its first wall: a tool that deletes must ask the guard
+// before it touches a database. This one wipes `costentries` and `costcategories` so the ledger
+// holds the workbook's 18 rows and nothing else - pointed at `center_erp` by a forgotten
+// `--env-file`, that is the production cost ledger, erased. `requireSafeDb` refuses the production
+// name unless somebody says it out loud.
+import { requireSafeDb } from "./db-guard.mjs";
 
 const HEADS = [
   ["CH01", "Trainer Eligibility Fee"], ["CH02", "TOT Fee"], ["CH03", "Material & Consumables"],
@@ -89,7 +95,7 @@ const EXPECT = {
   byJobRoleHisTotal: 72585,
 };
 
-const uri = process.env.MONGODB_URL, dbName = process.env.MONGODB_DB, BASE = process.env.BASE_URL;
+const uri = process.env.MONGODB_URL, dbName = requireSafeDb("reconcile-workbook"), BASE = process.env.BASE_URL;
 const client = await new MongoClient(uri).connect();
 const db = client.db(dbName);
 console.log(`reconciling against ${dbName} via ${BASE}`);
