@@ -192,7 +192,11 @@ function FinanceInner() {
           </div>
           <div className="max-h-80 overflow-auto">
             {shown.rows.length === 0 ? (
-              <p className="px-3 py-3 text-xs text-gray-500">Nothing in this list for the filters above.</p>
+              // QA-1932 (live checker): opening a card from a shared link showed "Nothing in this
+              // list" for the second before the payload landed — an empty state announcing a fact
+              // nobody had checked yet, and the first thing the person you sent the link to reads.
+              // The /reports twin already said "Loading"; this one now does too.
+              <p className="px-3 py-3 text-xs text-gray-500">{loading ? "Loading…" : "Nothing in this list for the filters above."}</p>
             ) : (
               <table className="w-full text-sm">
                 <thead className="sticky top-0 bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
