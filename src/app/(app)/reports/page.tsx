@@ -322,6 +322,11 @@ function ReportsInner() {
 
   return (
     <div className="space-y-4">
+      {/* QA-1832. The CEO's verdict on everything that had been built for him was that it was all
+          cost: *"कॉस्ट से बिजनेस नहीं चलता।"* His own first question is three counts and four
+          blocker categories, so they sit ABOVE the target table rather than behind a tab — the
+          thing he asked for first should not need a click to find. */}
+      <KpiPanel />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">Reports</h1>
@@ -697,6 +702,79 @@ function BatchIdCell({ row, onSaved }: { row: any; onSaved: (warning?: string) =
         }}
       />
       {err && <div className="text-[10px] text-red-600">{err}</div>}
+    </div>
+  );
+}
+
+// QA-1832 — the CEO's three counts and his four blocker categories, each with an owner.
+//
+// It is a PANEL and not a tab because of what he said about the reporting he was shown: all of it
+// was cost, and *"कॉस्ट से बिजनेस नहीं चलता"*. The first question he asks should be the first thing
+// on the page, not one click away behind something he did not ask for.
+function KpiPanel() {
+  const [d, setD] = useState<any>(null);
+  const [err, setErr] = useState("");
+  const [openCat, setOpenCat] = useState<string | null>(null);
+  useEffect(() => { api("/api/reports/kpi").then(setD).catch((e) => setErr(String(e?.message ?? e))); }, []);
+
+  if (err) return <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">KPI: {err}</div>;
+  if (!d) return <div className="rounded-lg border border-gray-200 p-3 text-sm text-gray-400">Loading KPIs…</div>;
+
+  const tile = (label: string, value: number | string, sub?: string) => (
+    <div className="rounded-lg border border-gray-200 bg-white p-3">
+      <div className="text-2xl font-semibold">{value}</div>
+      <div className="text-sm font-medium text-gray-700">{label}</div>
+      {sub ? <div className="mt-0.5 text-xs text-gray-500">{sub}</div> : null}
+    </div>
+  );
+
+  return (
+    <div className="rounded-lg border border-blue-200 bg-blue-50/40 p-3">
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+        <span className="text-sm font-semibold">Training KPIs</span>
+        <span className="text-xs text-gray-500">as at {new Date(d.measured_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} IST</span>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-3">
+        {tile("Trained", d.trained, "assessed and passed, dropouts excluded")}
+        {tile("In training", d.in_training, `${d.active_batches} batch${d.active_batches === 1 ? "" : "es"} running`)}
+        {tile("Batches about to start", d.upcoming_batches,
+          // The forward plan, with its own honesty: a batch with no planned intake is counted as a
+          // batch and contributes nothing to the student projection, and that is said rather than
+          // buried, because a projection quietly missing rows is how a plan becomes a surprise.
+          d.projected_students
+            ? `${d.projected_students} students planned${d.upcoming_without_target ? ` · ${d.upcoming_without_target} batch(es) carry no planned size` : ""}`
+            : "no planned intake recorded on these yet")}
+      </div>
+
+      <div className="mt-3">
+        <div className="mb-1 text-sm font-semibold">What is blocking the rest</div>
+        <div className="grid gap-2 sm:grid-cols-4">
+          {(d.blocker_summary ?? []).map((c: any) => (
+            <button key={c.category} type="button"
+              onClick={() => setOpenCat(openCat === c.category ? null : c.category)}
+              className={`rounded-lg border p-2 text-left ${openCat === c.category ? "border-blue-400 bg-white" : "border-gray-200 bg-white/70 hover:bg-white"}`}>
+              <div className="text-xl font-semibold">{c.count}</div>
+              <div className="text-xs font-medium text-gray-700">{c.category}</div>
+              <div className="text-[11px] text-gray-500">owner: {c.owner}</div>
+              <div className="text-[11px] text-gray-400">{c.centres} centre{c.centres === 1 ? "" : "s"}</div>
+            </button>
+          ))}
+        </div>
+        {openCat && (
+          <div className="mt-2 max-h-72 overflow-y-auto rounded-lg border border-gray-200 bg-white">
+            {(d.blockers ?? []).filter((b: any) => b.category === openCat).map((b: any, i: number) => (
+              <div key={i} className="flex flex-wrap gap-2 border-b border-gray-100 px-3 py-1.5 text-sm last:border-0">
+                <span className="min-w-[12rem] font-medium">{b.location}{b.location_code ? <span className="ml-1 text-xs text-gray-400">{b.location_code}</span> : null}</span>
+                <span className="min-w-[10rem] text-gray-600">{b.program}</span>
+                <span className="text-gray-700">{b.text}</span>
+              </div>
+            ))}
+            {!(d.blockers ?? []).some((b: any) => b.category === openCat) && (
+              <p className="px-3 py-2 text-xs text-gray-500">Nothing is blocked in this category.</p>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

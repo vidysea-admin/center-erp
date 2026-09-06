@@ -232,7 +232,11 @@ function RolesOverview({ items, onOpen, setError }: { items: any[]; onOpen: (u?:
   const [busy, setBusy] = useState(false);
 
   const roles = ["Admin", "Operations", "Location", "Enrollment", "Trainer"];
+  // Only ACTIVE accounts are counted. A deactivated login cannot do anything, so counting it in
+  // "Admin · 4" tells an Admin they have four people with Admin powers when they have two. The rows
+  // still LIST the inactive ones (with their badge) — hiding them would be the opposite mistake.
   const byRole = (r: string) => items.filter((u) => u.role === r);
+  const activeInRole = (r: string) => byRole(r).filter((u) => u.active !== false).length;
 
   async function showRights(u: any) {
     setRightsFor(u); setRights([]);
@@ -269,7 +273,7 @@ function RolesOverview({ items, onOpen, setError }: { items: any[]; onOpen: (u?:
         {roles.map((r) => (
           <button key={r} onClick={() => setOpenRole(openRole === r ? null : r)}
             className={`rounded-full border px-3 py-1 text-xs ${openRole === r ? "border-blue-400 bg-blue-50 text-blue-700" : "border-gray-200 bg-gray-50 text-gray-700"}`}>
-            {r} · {byRole(r).length}
+            {r} · {activeInRole(r)}
           </button>
         ))}
       </div>

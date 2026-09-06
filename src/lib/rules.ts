@@ -4197,6 +4197,24 @@ export async function trainerCountsFor(locationId: unknown, programId: unknown) 
 // The one definition of "what is stopping this centre x job role", shared by the single-row
 // lookup below and the bulk listing. Two copies of this would drift, and a readiness screen that
 // disagrees with itself is worse than none.
+// QA-1832 (CEO, 2026-09-05): *"blockers kya hain — infrastructure ka issue hai, trainer ka issue
+// hai, organization ka issue hai, ya batch management ka issue hai… har ek ka owner ho."*
+//
+// The four categories are HIS four, not a taxonomy invented here, and the owner is the role whose
+// job it is to clear that class of blocker. Attached to the blocker at the one place blockers are
+// decided, so the KPI report cannot invent a fifth category or disagree about who owns one —
+// `readinessBlockers` stays the single source and every caller gets the category for free.
+export const BLOCKER_CATEGORY = ["Infrastructure", "Trainer", "Organization / mobilisation", "Batch management"] as const;
+export type BlockerCategory = (typeof BLOCKER_CATEGORY)[number];
+export type Blocker = { text: string; category: BlockerCategory; owner: string };
+
+const OWNER_OF: Record<BlockerCategory, string> = {
+  "Infrastructure": "Centre SPOC / principal",
+  "Trainer": "Trainer team",
+  "Organization / mobilisation": "Operations",
+  "Batch management": "Centre SPOC",
+};
+
 function readinessBlockers(
   loc: { tc_id?: string; tc_status?: string; approval_status?: string; operational_status?: string },
   counts: { certified: number; in_pipeline: number },
@@ -4204,26 +4222,46 @@ function readinessBlockers(
   needed: number,
   infra?: { rooms: number; labs: number; requires_lab?: boolean },
 ): string[] {
-  const blockers: string[] = [];
+  return readinessBlockersDetailed(loc, counts, registered, needed, infra).map((b) => b.text);
+}
+
+// The real one. `readinessBlockers` above is the string view of it, kept so that every existing
+// caller and every screen that renders a blocker sentence is byte-identical to before — the
+// category is additive, and a unit that changes what the readiness screen SAYS while adding a
+// report is a unit that broke something to build something.
+export function readinessBlockersDetailed(
+  loc: { tc_id?: string; tc_status?: string; approval_status?: string; operational_status?: string },
+  counts: { certified: number; in_pipeline: number },
+  registered: number,
+  needed: number,
+  infra?: { rooms: number; labs: number; requires_lab?: boolean },
+): Blocker[] {
+  const blockers: Blocker[] = [];
+  const add = (text: string, category: BlockerCategory) => blockers.push({ text, category, owner: OWNER_OF[category] });
+
   // A centre with no approved TC cannot enrol anyone on the portal at all, whatever else is ready.
-  if (!loc.tc_id) blockers.push("no TC ID on record");
-  else if (loc.tc_status && loc.tc_status !== "Approved") blockers.push(`TC status is "${loc.tc_status}"`);
-  if (loc.approval_status !== "Approved") blockers.push("centre not approved");
-  if (HALTED_LOCATION_STATUSES.includes(String(loc.operational_status))) blockers.push(`centre is ${loc.operational_status}`);
+  // The TC is the centre's registration with the government, so it is an ORGANISATION blocker: no
+  // amount of rooms, trainers or candidates moves it, and nobody at the centre can clear it.
+  if (!loc.tc_id) add("no TC ID on record", "Organization / mobilisation");
+  else if (loc.tc_status && loc.tc_status !== "Approved") add(`TC status is "${loc.tc_status}"`, "Organization / mobilisation");
+  if (loc.approval_status !== "Approved") add("centre not approved", "Organization / mobilisation");
+  if (HALTED_LOCATION_STATUSES.includes(String(loc.operational_status))) add(`centre is ${loc.operational_status}`, "Organization / mobilisation");
   if (counts.certified < 1) {
-    blockers.push(counts.in_pipeline > 0
+    add(counts.in_pipeline > 0
       ? `no certified trainer yet (${counts.in_pipeline} in the pipeline)`
-      : "no trainer nominated for this job role");
+      : "no trainer nominated for this job role", "Trainer");
   }
   // 2026-08-08: "teen trainer to rakh diye, classroom do hi hai, lab ek hi hai — can that be
   // managed or not?" The hard floor of that question: a centre with no usable room cannot run
   // any batch, and a lab job role with no lab cannot run either. Finer classroom-vs-parallel-
   // batch arithmetic stays in planning; readiness names only what makes a start impossible.
   if (infra) {
-    if (infra.rooms < 1) blockers.push("no room at the centre");
-    else if (infra.requires_lab && infra.labs < 1) blockers.push("no lab, and this job role needs one");
+    if (infra.rooms < 1) add("no room at the centre", "Infrastructure");
+    else if (infra.requires_lab && infra.labs < 1) add("no lab, and this job role needs one", "Infrastructure");
   }
-  if (registered < needed) blockers.push(`${registered} of ${needed} candidates registered on SIDH`);
+  // Candidates short of the number a batch needs is MOBILISATION — the thing the CEO separates
+  // from batch management, because the fix is recruiting in the field, not scheduling.
+  if (registered < needed) add(`${registered} of ${needed} candidates registered on SIDH`, "Organization / mobilisation");
   return blockers;
 }
 
@@ -4994,8 +5032,13 @@ export async function mappingReadinessBulk(targetFilter: Record<string, unknown>
       tc_id: String(t.tc_id ?? "").trim() || t.location.tc_id,
       tc_status: String(t.tc_status ?? "").trim() || t.location.tc_status,
     };
-    const blockers = readinessBlockers(tcView, counts, cc.registered, needed,
+    // QA-1832: computed ONCE, in its detailed form, and the string list is derived from it. The
+    // alternative — calling `readinessBlockers` for the screen and `readinessBlockersDetailed` for
+    // the KPI report — is two calls that could return different things the day someone edits one,
+    // which is the whole failure mode this file's own comment warns about six lines above.
+    const blockersDetailed = readinessBlockersDetailed(tcView, counts, cc.registered, needed,
       { rooms: rc.rooms, labs: rc.labs, requires_lab: !!t.program.requires_lab });
+    const blockers = blockersDetailed.map((b) => b.text);
     return {
       location: {
         _id: t.location._id, name: t.location.name, code: t.location.code,
@@ -5013,6 +5056,9 @@ export async function mappingReadinessBulk(targetFilter: Record<string, unknown>
       candidates: { pool: cc.pool, registered: cc.registered, needed },
       ready: blockers.length === 0,
       blockers,
+      // QA-1832: the same blockers, carrying the CEO's category and its owner. Additive - every
+      // existing consumer keeps reading `blockers` and sees byte-identical strings.
+      blockers_detailed: blockersDetailed,
       next_action: blockers[0] ?? "Ready to form a batch",
     };
   });
@@ -5058,5 +5104,94 @@ export async function mappingReadiness(locationId: string, programId: string) {
     ready: blockers.length === 0,
     blockers,
     next_action: blockers[0] ?? "Ready to form a batch",
+  };
+}
+
+// ---------- KPI reporting (QA-1832) — the CEO's own first question ----------
+//
+// Karunn, 2026-09-05: *"मेरे को सबसे बड़ी चिंता ये है कि मेरे कितने बच्चे ट्रेन हो गए, कितने ट्रेनिंग में हैं,
+// कितने बैचेस और चालू होने वाले हैं"* — and, on everything Manish had built: *"इन्होंने जितनी भी
+// रिपोर्टिंग दी है सब कॉस्ट की दी है… कॉस्ट से बिजनेस नहीं चलता।"*
+//
+// So this report answers HIS three counts plus his four blocker categories with an owner. It is
+// deliberately built out of the functions that already produce the substance — `mappingReadinessBulk`
+// for what is blocking each centre×job-role, and the same lifecycle values every other screen uses —
+// rather than a third derivation of "who is trained". A KPI report that disagrees with the batch
+// screen is worse than no KPI report, because two numbers make a reader stop trusting both.
+//
+// The three counts, and where each comes from (the codebase's own settled answers, not new ones):
+//   TRAINED      CandidateResult.result === "Pass"        — the same test `reportRollup` uses
+//   IN TRAINING  Candidate.lifecycle_status === "Enrolled" — set by the enrolment rule (Rule 21)
+//   UPCOMING     Batch.status ∈ {Planning, Ready}          — a batch that exists but has not started
+export type KpiBlockerRow = {
+  category: BlockerCategory; owner: string; text: string;
+  location: string; location_code?: string; program: string;
+};
+
+export async function kpiRollup(scope: Record<string, unknown> = {}) {
+  const measured_at = new Date();
+  const locFilter = (scope.location ? { location: scope.location } : {}) as Record<string, unknown>;
+
+  const [passRows, enrolled, batches, readiness] = await Promise.all([
+    // TRAINED. Counted from results, and DROPPED members are excluded the same way
+    // `closureAggregates` excludes them — a dropout who happened to have a Pass row is not a
+    // trained student, and counting them here while the closure screen does not would be the
+    // "two numbers" problem this report exists to avoid.
+    CandidateResult.find({ result: "Pass" }).select("batch batch_member candidate").lean<any[]>(),
+    Candidate.countDocuments({ ...locFilter, lifecycle_status: "Enrolled" }),
+    Batch.find({ ...locFilter }).select("status planned_start location program target_size")
+      .populate("location", "name code").populate("program", "name code").lean<any[]>(),
+    mappingReadinessBulk(locFilter, 2000),
+  ]);
+
+  const dropped = new Set((await BatchMember.find({ status: "Dropped" }).select("_id").lean<any[]>()).map((m) => String(m._id)));
+  const trained = passRows.filter((r) => !dropped.has(String(r.batch_member))).length;
+
+  const upcomingBatches = batches.filter((b) => ["Planning", "Ready"].includes(String(b.status)));
+  const activeBatches = batches.filter((b) => String(b.status) === "Active");
+
+  // The forward plan: what those upcoming batches are FOR, in students. `target_size` is the
+  // batch's own planned intake; a batch with none falls back to nothing rather than to a guess,
+  // and the count of such batches is reported so the number can be read honestly.
+  const projected = upcomingBatches.reduce((n, b) => n + (Number(b.target_size) || 0), 0);
+  const withoutTarget = upcomingBatches.filter((b) => !Number(b.target_size)).length;
+
+  // The blockers, in the CEO's four categories, each carrying its owner. One row per
+  // (centre × job role × blocker) so the table can be read either way round.
+  const blockers: KpiBlockerRow[] = [];
+  for (const r of readiness as any[]) {
+    for (const b of (r.blockers_detailed ?? []) as Blocker[]) {
+      blockers.push({
+        category: b.category, owner: b.owner, text: b.text,
+        location: r.location?.name ?? "—", location_code: r.location?.code,
+        program: r.program?.name ?? "—",
+      });
+    }
+  }
+  const byCategory = BLOCKER_CATEGORY.map((c) => ({
+    category: c,
+    owner: OWNER_OF[c],
+    count: blockers.filter((b) => b.category === c).length,
+    centres: new Set(blockers.filter((b) => b.category === c).map((b) => b.location)).size,
+  }));
+
+  return {
+    measured_at,
+    // The CEO's three, in his order.
+    trained,
+    in_training: enrolled,
+    upcoming_batches: upcomingBatches.length,
+    // The context those three need to mean anything.
+    active_batches: activeBatches.length,
+    projected_students: projected,
+    upcoming_without_target: withoutTarget,
+    // His four, with owners.
+    blocker_summary: byCategory,
+    blockers,
+    upcoming: upcomingBatches.map((b) => ({
+      status: b.status, planned_start: b.planned_start,
+      location: b.location?.name ?? "—", program: b.program?.name ?? "—",
+      target_size: b.target_size ?? null,
+    })).sort((a, b) => String(a.planned_start ?? "").localeCompare(String(b.planned_start ?? ""))),
   };
 }

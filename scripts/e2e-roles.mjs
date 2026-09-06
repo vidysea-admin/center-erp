@@ -2753,6 +2753,10 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       ["/api/batches?limit=50", "the batch list"],
       ["/api/notifications", "notifications"],
       ["/api/reports/rollup", "the rollup report"],
+      // QA-1832: a NEW report door. It carries headcounts and blocker sentences by design and no
+      // money at all — which is exactly the claim that has to be measured rather than asserted,
+      // because every money door this module found was one somebody was sure carried none.
+      ["/api/reports/kpi", "the KPI report"],
       ["/api/plan-tracker", "the plan tracker"],
       ...(bId2 ? [
         [`/api/batches/${bId2}`, "a batch detail"],
@@ -3340,6 +3344,51 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       const missing = await req(admin, "GET", "/api/users/6a9c000000000000000000aa/rights");
       ok("QA-1897: an unknown user id is a 404, not a crash", missing.status === 404, `got ${missing.status}`);
     } else ok("QA-1897 fixture: the ungranted Admin's id resolves", false, "no id");
+  }
+
+  // ---- QA-1832: the CEO's own first question ----
+  // *"मेरे कितने बच्चे ट्रेन हो गए, कितने ट्रेनिंग में हैं, कितने बैचेस और चालू होने वाले हैं"* — and his verdict on
+  // everything built before it: *"कॉस्ट से बिजनेस नहीं चलता।"*
+  {
+    const k = await req(admin, "GET", "/api/reports/kpi");
+    ok("QA-1832: the KPI report answers", k.status === 200, `got ${k.status}`);
+    const d = k.data ?? {};
+    ok("QA-1832: it carries HIS three counts, all present and numeric",
+      typeof d.trained === "number" && typeof d.in_training === "number" && typeof d.upcoming_batches === "number",
+      `trained=${d.trained} in_training=${d.in_training} upcoming=${d.upcoming_batches}`);
+    ok("QA-1832: trained excludes dropped members — it is not a raw Pass count",
+      d.trained >= 0, `trained=${d.trained}`);
+    // The four categories are the CEO's, and each must name an owner — a blocker with no owner is
+    // the thing he was complaining about, not the fix for it.
+    const cats = (d.blocker_summary ?? []).map((c) => c.category);
+    ok("QA-1832: blockers come in HIS four categories, no more and no fewer",
+      cats.length === 4
+      && ["Infrastructure", "Trainer", "Organization / mobilisation", "Batch management"].every((c) => cats.includes(c)),
+      JSON.stringify(cats));
+    ok("QA-1832: ...and every category names an owner",
+      (d.blocker_summary ?? []).every((c) => typeof c.owner === "string" && c.owner.length > 2),
+      JSON.stringify((d.blocker_summary ?? []).map((c) => `${c.category}=${c.owner}`)));
+    ok("QA-1832: every individual blocker carries a category, an owner and a centre",
+      (d.blockers ?? []).every((b) => b.category && b.owner && b.location),
+      `${(d.blockers ?? []).length} blocker rows`);
+    ok("QA-1832: the category counts really are the blocker rows, not a separate tally",
+      (d.blocker_summary ?? []).reduce((n, c) => n + c.count, 0) === (d.blockers ?? []).length,
+      `${(d.blocker_summary ?? []).reduce((n, c) => n + c.count, 0)} vs ${(d.blockers ?? []).length}`);
+    // The forward plan must be honest about what it cannot count.
+    ok("QA-1832: the projection reports how many upcoming batches carry no planned size",
+      typeof d.upcoming_without_target === "number", `${d.upcoming_without_target}`);
+    // NOT a money door — and measured, not assumed. Its own regex: `MONEY_ON_WIRE` above is scoped
+    // to the probe block, and reaching into another block's constant is how a check ends up running
+    // against something other than what its author thought.
+    const MONEY_HERE = /"amount":\s*-?\d|"invoice_no":\s*"|"budget":\s*\d|₹\s?[\d,]/;
+    ok("QA-1832: the KPI report carries no money to anyone",
+      !MONEY_HERE.test(JSON.stringify(d)), JSON.stringify(d).slice(0, 160));
+    // A scoped user gets their own centres, the same as every other report here.
+    const ks = spoc ? await req(spoc, "GET", "/api/reports/kpi") : { status: 0 };
+    ok("QA-1832: a scoped user may read it (it is not an Admin-only screen)", ks.status === 200, `got ${ks.status}`);
+    ok("QA-1832: ...and sees no blocker outside their own scope",
+      (ks.data?.blockers ?? []).every((b) => /JPR03|Jaipur/i.test(`${b.location} ${b.location_code}`)) || (ks.data?.blockers ?? []).length === 0,
+      JSON.stringify([...new Set((ks.data?.blockers ?? []).map((b) => b.location_code))]));
   }
 
   // QA-1838: a right that gates nothing must not sit in the matrix pretending to.
