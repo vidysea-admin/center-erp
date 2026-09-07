@@ -3860,7 +3860,15 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
         //
         // That 400 is what exposed the real defect: pnlRollup was populating `scheme` as if it were
         // a ref, which is silently a no-op, so every rate was null and the whole accrual was inert.
-        const schemeName = b.program?.scheme ? String(b.program.scheme) : null;
+        // NOT b.program.scheme. GET /api/batches populates program with only
+        // "name code duration_days" (batches/route.ts:54), so `scheme` is never in that payload and
+        // reading it there always yields undefined - which is how this fixture came to report
+        // "no scheme on the job role" for a batch that has one, while pnlRollup (which does its own
+        // populate) valued it correctly. The fixture was measuring the wrong endpoint and blaming
+        // the product; the programme itself is the source of truth for its own field.
+        const progId0 = String(b.program?._id ?? b.program ?? "");
+        const progDoc = progId0 ? (await req(admin, "GET", `/api/programs/${progId0}`)).data : null;
+        const schemeName = (progDoc?.item?.scheme ?? progDoc?.scheme) ? String(progDoc.item?.scheme ?? progDoc.scheme) : null;
         let rateStatus = "no scheme on the job role";
         if (schemeName) {
           const row = schemes.find((sc) => String(sc.name) === schemeName);
