@@ -460,8 +460,12 @@ if (bulkRowVisible) {
 // reasoning, different screen.
 {
   await page.goto(`${BASE}/finance/pnl`, { waitUntil: "domcontentloaded" });
-  await page.waitForFunction(() => /Revenue earned|Not valued|P&L/i.test(document.body.innerText), undefined, { timeout: 45000 }).catch(() => {});
+  // Wait for the THING BEING COUNTED, not for prose. The first version of this block waited on
+  // body text and swallowed the timeout, so an unhydrated page was counted as zero tiles and this
+  // guard reported "0 tiles found" against a screen a standalone probe measured at EIGHT. That is
+  // the QA-1933 instrument bug again, one cycle later: a control that fails on correct code.
   const cards = page.locator("[data-pnl-card]");
+  await cards.first().waitFor({ state: "attached", timeout: 45000 }).catch(() => {});
   const n = await cards.count();
   // The seeded admin carries FINANCE_GRANTS (scripts/seed.mjs:43), so a gated screen here is a
   // real failure and not an expected skip. Stated out loud because a suite that quietly skips
@@ -484,8 +488,10 @@ if (bulkRowVisible) {
   }
   ok("QA-1962: EVERY P&L tile responds to a click and opens its own list",
     opened === n && n > 0, `${opened} of ${n} opened${bad.length ? " · " + bad.slice(0, 4).join(" · ") : ""}`);
+  // n > 0 or this passes vacuously on the very failure above - the same empty-set trap the
+  // QA-1958 bucket pins needed a guard for.
   ok("QA-1962: ...and each one closes again, so a reader can put it away",
-    bad.length === 0, bad.slice(0, 4).join(" · "));
+    n > 0 && bad.length === 0, `tiles=${n} ${bad.slice(0, 4).join(" · ")}`);
   // QA-1958 on the RENDERED screen: the three causes must be three separate tiles a reader can
   // tell apart, not one heading that names the wrong master table.
   const tileKeys = await cards.evaluateAll((els) => els.map((e) => e.getAttribute("data-pnl-card")));

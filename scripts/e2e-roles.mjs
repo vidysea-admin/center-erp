@@ -3702,6 +3702,41 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
 
     const xl = await req(admin, "GET", "/api/reports/costs/export");
     ok("QA-1830: the .xlsx export answers for the grant-holder", xl.status === 200, `got ${xl.status}`);
+
+    // QA-1959. The cycle-2 checker measured 42 of 42 "by centre" Margin cells BLANK while the
+    // screen showed a withheld margin with its reason: the payload was right and the FILE was
+    // wrong, so every assertion on the payload passed over it. This pin therefore reads the
+    // WORKBOOK BYTES - opening the .xlsx as the zip it is and parsing the sheet - because that is
+    // the only surface the defect lived on.
+    {
+      const XLSX = await import("xlsx");
+      const res = await fetch(BASE + "/api/reports/pnl/export", { headers: { cookie: admin } });
+      ok("QA-1959: the P&L workbook downloads", res.status === 200, `got ${res.status}`);
+      if (res.status === 200) {
+        const wb = XLSX.read(new Uint8Array(await res.arrayBuffer()), { type: "array" });
+        const pnl = (await req(admin, "GET", "/api/reports/pnl")).data ?? {};
+        const withheld = (pnl.by_location ?? []).filter((r) => r.margin === null);
+        // defval:null MATTERS: without it sheet_to_json OMITS a missing cell entirely, the row
+        // simply has no Margin key, and a "is it blank?" test silently reads undefined on every
+        // row including the healthy ones - which is why the first version of the blank-cell
+        // assertion below SURVIVED its own mutant. With defval the missing cell materialises.
+        const sheet = XLSX.utils.sheet_to_json(wb.Sheets["by centre"] ?? {}, { defval: null });
+        const marginCol = Object.keys(sheet[0] ?? {}).find((k) => /margin/i.test(k)) ?? "Margin";
+        const blanks = sheet.filter((r) => r[marginCol] === undefined || r[marginCol] === null || r[marginCol] === "");
+        ok("QA-1959: no withheld margin reaches the workbook as a BLANK cell",
+          blanks.length === 0,
+          JSON.stringify({ rows: sheet.length, blank: blanks.length, col: marginCol }));
+        // The dash and the reason travel together: a "—" with no sentence beside it is still a
+        // number a reader cannot account for.
+        if (withheld.length > 0) {
+          const dashed = sheet.filter((r) => String(r[marginCol]) === "—");
+          const withReason = dashed.filter((r) => String(r["Why the margin is withheld"] ?? "").length > 20);
+          ok("QA-1959: every withheld margin shows a dash AND carries its reason in the file",
+            dashed.length === withheld.length && withReason.length === dashed.length,
+            JSON.stringify({ payloadWithheld: withheld.length, dashed: dashed.length, withReason: withReason.length }));
+        }
+      }
+    }
   }
 
   // ---- QA-1899. `kpiRollup` excluded dropouts from "trained" with
@@ -3981,6 +4016,13 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     for (const [key, cause] of [["unknown_rate", "no_rate"], ["no_scheme", "no_scheme"], ["scheme_missing", "scheme_missing"]]) {
       const rowsIn = d.detail?.[key]?.rows ?? [];
       const wrong = rowsIn.filter((r) => causeOf(r) !== cause);
+      // An EMPTY bucket satisfies "every row in it is the right cause" vacuously - measured, not
+      // assumed: under the conflated-predicate mutant the no_scheme and scheme_missing buckets went
+      // to zero rows and both purity assertions passed. So the bucket must also hold the RIGHT
+      // NUMBER, taken from the independent cause count rather than from the report.
+      ok(`QA-1958: the "${key}" bucket holds every row of that cause, not an empty list that passes vacuously`,
+        (d.detail?.[key]?.total ?? -1) === indep[cause],
+        JSON.stringify({ bucket: d.detail?.[key]?.total, independent: indep[cause] }));
       ok(`QA-1958: every row in the "${key}" bucket really is ${cause}, none borrowed from another cause`,
         (d.detail?.[key]?.total ?? -1) === rowsIn.length && wrong.length === 0,
         JSON.stringify({ total: d.detail?.[key]?.total, listed: rowsIn.length, misfiled: wrong.length,
