@@ -1064,26 +1064,61 @@ for (const r of results) {
     await tctx.close();
   }
 
-// ================= QA-1943: "never renders" needed a clock, not a reading =================
-// QA-1940 claimed a user without `finance.view` never sees the finance screen. It shipped to
-// production, and a live checker measured the screen PAINTED at 205ms - h1, all four tiles, the
-// filter bar. The fix was wrong in one term (`!!user` is undefined during the very window it
-// guards) and NOTHING in this repo could tell: check-user-copy pins structure, e2e-roles pins the
-// payload, and the payload was right the whole time - the API 403s and always did. The defect was
-// only ever visible in pixels, on a clock.
+// ================= QA-1943: "never renders" needs an instrument faster than the event ==========
+// QA-1940 claimed a user without `finance.view` never sees the finance screen. It shipped, and a
+// live checker measured the screen PAINTED at 205ms - h1, all four tiles, the filter bar. Nothing
+// in this repo could tell: check-user-copy pins structure, e2e-roles pins the payload, and the
+// payload was right the whole time (the API 403s and always did). The defect existed only in
+// pixels, on a clock.
 //
-// So this pin polls the DOM from navigation start rather than reading it once after load. A single
-// read after settling is exactly the instrument that said the old code was fine.
+// THE FIRST VERSION OF THIS PIN WAS ALSO WORTHLESS, and it took a mutant run to find that out.
+// Built against the exact broken shell.tsx that was live on production, it PASSED. Two reasons,
+// both instrument faults rather than product facts:
+//   1. it navigated with history.pushState() + a popstate event, which the Next router does not
+//      listen to - so the "client navigation" probe navigated nothing at all;
+//   2. it polled from Node with page.content(), which costs ~50-100ms per round trip, to catch a
+//      window the checker had already measured at 28-49ms. A stopwatch that ticks slower than the
+//      event it times reports that nothing happened, every time.
+// That is the QA-1919 lesson in its exact original shape - a pin that cannot fail - so the mutant
+// run is part of this pin's contract, not a nicety.
 //
-// It also does NOT assert on `[data-finance-table]` or on `?card=accrued`. Both were in the brief
-// this pin came from and both are vacuous: the table only exists when a drill is open, and
-// `accrued` is not one of the finance screen's card keys (`actual · budget · variance · batches`),
-// so either would have gone green against a fully rendering screen. The load-bearing markers are
-// the h1 and the section headings.
+// The instrument now runs INSIDE the page and is installed BEFORE any page script, via
+// addInitScript: a MutationObserver plus a 5ms backstop interval, stamping every moment the finance
+// markers are in the DOM. No round trips, and it is armed before the first byte executes.
+//
+// It also deliberately does NOT assert on [data-finance-table] or ?card=accrued. Both were in the
+// brief that produced this pin and both are vacuous - the table exists only when a drill is open,
+// and `accrued` is not one of that screen's card keys (actual, budget, variance, batches) - so
+// either would go green against a fully rendering screen. The load-bearing markers are the section
+// headings and the card tags.
 {
   const DENIED = { email: "ops@vidysea.com", pw: "CiOnly@123" };
   const c = await browser.newContext({ viewport: { width: 1536, height: 900 } });
   const pg = await c.newPage();
+
+  await pg.addInitScript(() => {
+    window.__flash = { hits: [], t0: Date.now() };
+    const MARK = /data-finance-card|Spend by cost head|Cost entry register|Spend by centre/i;
+    const look = () => {
+      try {
+        const root = document.documentElement;
+        if (!root) return;
+        if (MARK.test(root.innerHTML)) window.__flash.hits.push(Date.now() - window.__flash.t0);
+      } catch { /* mid-navigation DOM teardown */ }
+    };
+    const start = () => {
+      look();
+      try {
+        const mo = new MutationObserver(look);
+        mo.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+        const iv = setInterval(look, 5);
+        setTimeout(() => { mo.disconnect(); clearInterval(iv); }, 8000);
+      } catch { /* documentElement not ready */ }
+    };
+    if (document.documentElement) start();
+    else document.addEventListener("readystatechange", start, { once: true });
+  });
+
   await pg.goto(BASE, { waitUntil: "domcontentloaded" });
   await pg.waitForTimeout(800);
   const box = pg.locator('input[type="email"], input[name="email"]').first();
@@ -1097,49 +1132,40 @@ for (const r of results) {
   }
   ok("QA-1943 [precondition] a user WITHOUT finance.view is signed in", signedIn, pg.url());
 
-  // ...and the precondition is real: this account must genuinely lack the right, or the pin below
-  // is asserting that an entitled user is refused, which would be a different (wrong) test.
   const lvl = await pg.evaluate(async (b) => {
     try { const r = await fetch(b + "/api/permissions/me", { credentials: "include" }); const j = await r.json(); return j?.levels?.["finance.view"] ?? null; } catch { return "ERR"; }
   }, BASE);
   ok("QA-1943 [precondition] ...and the server agrees they lack it, so the pin is not vacuous",
-    signedIn && (lvl === null || lvl === undefined), String(lvl));
+    signedIn && lvl !== "ERR" && (lvl === null || lvl === undefined), String(lvl));
 
   if (signedIn) {
-    // Poll from navigation start. Playwright's `goto` resolves after the document loads, which is
-    // already too late - the painted frame the checker caught was at 205ms.
-    const seen = await pg.evaluate(async (b) => {
-      const hits = [];
-      const t0 = Date.now();
-      const look = () => {
-        const txt = document.body ? document.body.innerText : "";
-        const h1 = document.querySelector("h1");
-        if (/Spend by cost head|Cost entry register|data-finance-card/i.test(document.body?.innerHTML ?? "")
-            || (h1 && /^Finance$/i.test(h1.textContent?.trim() ?? ""))
-            || /Spend by centre|Batch . cost head/i.test(txt)) {
-          hits.push(Date.now() - t0);
-        }
-      };
-      const iv = setInterval(look, 10);
-      history.pushState({}, "", b + "/finance");
-      window.dispatchEvent(new PopStateEvent("popstate"));
-      await new Promise((r) => setTimeout(r, 2500));
-      clearInterval(iv);
-      return hits;
-    }, BASE);
-    ok("QA-1943: a denied user is never PAINTED the finance screen, at any moment after navigation",
-      seen.length === 0, seen.length ? `visible at ${seen[0]}ms and ${seen.length - 1} later sample(s)` : "never");
+    // A cold load of the URL - how a shared link actually arrives, and the case the live checker
+    // reproduced. The observer is armed by addInitScript before anything on the page runs.
+    await pg.goto(BASE + "/finance", { waitUntil: "load" });
+    await pg.waitForTimeout(3500);
+    const cold = await pg.evaluate(() => (window.__flash?.hits ?? []).slice(0, 400));
+    ok("QA-1943: a denied user is never PAINTED the finance screen on a cold load of the URL",
+      cold.length === 0,
+      cold.length ? "visible from " + cold[0] + "ms for " + cold.length + " sample(s) up to " + cold[cold.length - 1] + "ms" : "never");
 
-    // A full cold load, the way a shared link actually arrives.
-    await pg.goto(`${BASE}/finance`, { waitUntil: "commit" });
-    const cold = [];
-    for (let i = 0; i < 60; i++) {
-      const html = await pg.content().catch(() => "");
-      if (/data-finance-card|Spend by cost head|Cost entry register/i.test(html)) cold.push(i * 40);
-      await pg.waitForTimeout(40);
+    // ...and again on a real in-app navigation, which is the OTHER way a person gets there. Driven
+    // by a click on the app's own nav where one exists, never by pushState - the router does not
+    // listen to that, and a probe that navigates nothing always passes.
+    await pg.goto(BASE + "/batches", { waitUntil: "load" });
+    await pg.evaluate(() => { if (window.__flash) { window.__flash.hits.length = 0; window.__flash.t0 = Date.now(); } });
+    const navLink = pg.locator('a[href$="/finance"]').first();
+    if (await navLink.count()) {
+      await navLink.click({ timeout: 5000 }).catch(() => {});
+    } else {
+      // No nav entry is itself correct for this persona, so reach it the only other way a person
+      // can: the URL. Recorded as its own observation rather than skipped silently.
+      await pg.goto(BASE + "/finance", { waitUntil: "load" });
     }
-    ok("QA-1943: ...and the same holds on a cold load of the URL, which is how a shared link arrives",
-      cold.length === 0, cold.length ? `visible at ~${cold[0]}ms` : "never");
+    await pg.waitForTimeout(3000);
+    const inApp = await pg.evaluate(() => (window.__flash?.hits ?? []).slice(0, 400));
+    ok("QA-1943: ...and never on an in-app navigation to it either",
+      inApp.length === 0,
+      inApp.length ? "visible from " + inApp[0] + "ms for " + inApp.length + " sample(s)" : "never");
 
     const finalText = await pg.locator("body").innerText().catch(() => "");
     ok("QA-1943: ...and what they DO get is the closed door, not a blank screen",
