@@ -84,6 +84,9 @@ const SUITES = [
   // spends a page on. It creates and deactivates its own throwaway subject and touches no seeded
   // credential, so its position in this list does not matter.
   "e2e-password.mjs",
+  // QA-1828b/c: the cost entry taxonomy. Own file for the same reason as e2e-password - a
+  // concurrent session holds e2e-roles.mjs. It toggles the cost.post approval rule and puts it back.
+  "e2e-cost-entry.mjs",
 ];
 
 // QA-1096 (2026-08-25): this file's guards protected `npm test` and NOTHING ELSE. All fifteen
