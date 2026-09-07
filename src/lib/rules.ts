@@ -2454,7 +2454,7 @@ export async function updateInvoiceChecked(batchId: string, patch: Record<string
   if (patch.received_amount !== undefined && patch.received_amount !== null && !(Number(patch.received_amount) > 0)) {
     throw new HttpError(400, "Amount received must be a positive number (leave it blank if nothing has come in yet).");
   }
-  // QA-1943, caught by this unit's OWN pin on its first wall. The freeze further down only engages
+  // QA-1945, caught by this unit's OWN pin on its first wall. The freeze further down only engages
   // once the invoice has reached Raised, so BEFORE that these two fields were wide open: money could
   // be recorded as RECEIVED against an invoice nobody had issued. The P&L would then show a batch
   // paid against an invoice that does not exist - the precise opposite of what this unit is for.
@@ -5857,6 +5857,32 @@ export async function pnlRollup(scope: Record<string, unknown> = {}, filters: Pn
     CostEntry.find({ ...scope, batch: { $in: batchIds } }).select("batch amount").lean<any[]>(),
   ]);
   const closureOf = new Map(closures.map((c) => [String(c.batch), c]));
+
+  // "Certified" is derived the SAME WAY `costRollup` derives it - a Pass minus the dropped-but-passed,
+  // read live from CandidateResult - and not from the stored `closure.billable_passed`.
+  //
+  // The first version of this function read the stored field, and the unit's own pin caught it: every
+  // row came back "no closure figures yet" because `recomputeClosureAggregates` only writes that field
+  // for batches that have per-candidate rows. But the real objection is not that it was empty. It is
+  // that cost-per-certified and revenue-per-certified would have been TWO COMPUTATIONS of one number,
+  // and the whole argument for sharing `billable_passed` is that a margin is meaningless unless both
+  // halves count the same heads. Two sources agree until they don't, and then nobody can say which is
+  // the report.
+  const [passRows, droppedRows, resultRows] = await Promise.all([
+    batchIds.length ? CandidateResult.find({ batch: { $in: batchIds }, result: "Pass" }).select("batch batch_member").lean<any[]>() : Promise.resolve([] as any[]),
+    batchIds.length ? BatchMember.find({ batch: { $in: batchIds }, left_on: { $ne: null } }).select("_id").lean<any[]>() : Promise.resolve([] as any[]),
+    batchIds.length ? CandidateResult.find({ batch: { $in: batchIds } }).select("batch").lean<any[]>() : Promise.resolve([] as any[]),
+  ]);
+  const droppedIds = new Set((droppedRows as any[]).map((m) => String(m._id)));
+  const certifiedBy = new Map<string, number>();
+  for (const r of passRows as any[]) {
+    if (droppedIds.has(String(r.batch_member))) continue;
+    certifiedBy.set(String(r.batch), (certifiedBy.get(String(r.batch)) ?? 0) + 1);
+  }
+  // Rule 41's own definition of legacy: no per-candidate rows at all means the batch keeps its stored
+  // batch-level figures. Deriving 0 for those would not be a missing number, it would be a WRONG one -
+  // it would say a pre-portal paper batch earned nothing.
+  const hasRows = new Set((resultRows as any[]).map((r) => String(r.batch)));
   const invoiceOf = new Map(invoices.map((i) => [String(i.batch), i]));
   const costOf = new Map<string, number>();
   for (const c of costs) costOf.set(String(c.batch), (costOf.get(String(c.batch)) ?? 0) + (Number(c.amount) || 0));
@@ -5896,13 +5922,15 @@ export async function pnlRollup(scope: Record<string, unknown> = {}, filters: Pn
     // DEC-4: `billable_passed` excludes dropped-but-passed, and it is already the denominator
     // `costRollup` uses for cost-per-certified. Revenue and cost therefore share one definition of
     // "a certified head", which is the only way a margin means anything.
-    const billable: number | null = cl?.billable_passed ?? null;
+    const billable: number | null = hasRows.has(String(b._id))
+      ? (certifiedBy.get(String(b._id)) ?? 0)
+      : (cl?.billable_passed ?? cl?.passed ?? null);
     const rate: number | null = b.program?.scheme?.amount_received ?? null;
     const schemeName: string = b.program?.scheme?.name ?? PNL_LABELS.unassigned;
 
     let accrued: number | null = null;
     let accrual_note = "";
-    if (billable === null) accrual_note = "no closure figures yet";
+    if (billable === null) accrual_note = "no results and no closure figures yet, so there is nothing to bill for";
     else if (rate === null) accrual_note = `no rate on scheme "${schemeName}"`;
     else accrued = billable * rate;
 

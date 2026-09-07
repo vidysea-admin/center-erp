@@ -1064,6 +1064,91 @@ for (const r of results) {
     await tctx.close();
   }
 
+// ================= QA-1943: "never renders" needed a clock, not a reading =================
+// QA-1940 claimed a user without `finance.view` never sees the finance screen. It shipped to
+// production, and a live checker measured the screen PAINTED at 205ms - h1, all four tiles, the
+// filter bar. The fix was wrong in one term (`!!user` is undefined during the very window it
+// guards) and NOTHING in this repo could tell: check-user-copy pins structure, e2e-roles pins the
+// payload, and the payload was right the whole time - the API 403s and always did. The defect was
+// only ever visible in pixels, on a clock.
+//
+// So this pin polls the DOM from navigation start rather than reading it once after load. A single
+// read after settling is exactly the instrument that said the old code was fine.
+//
+// It also does NOT assert on `[data-finance-table]` or on `?card=accrued`. Both were in the brief
+// this pin came from and both are vacuous: the table only exists when a drill is open, and
+// `accrued` is not one of the finance screen's card keys (`actual · budget · variance · batches`),
+// so either would have gone green against a fully rendering screen. The load-bearing markers are
+// the h1 and the section headings.
+{
+  const DENIED = { email: "ops@vidysea.com", pw: "CiOnly@123" };
+  const c = await browser.newContext({ viewport: { width: 1536, height: 900 } });
+  const pg = await c.newPage();
+  await pg.goto(BASE, { waitUntil: "domcontentloaded" });
+  await pg.waitForTimeout(800);
+  const box = pg.locator('input[type="email"], input[name="email"]').first();
+  let signedIn = false;
+  if (await box.count()) {
+    await box.fill(DENIED.email);
+    await pg.locator('input[type="password"]').first().fill(DENIED.pw);
+    await pg.locator('button[type="submit"], button:has-text("Sign in"), button:has-text("Log in")').first().click();
+    await pg.waitForURL((u) => !/login/i.test(String(u)), { timeout: 30000 }).catch(() => {});
+    signedIn = !/login/i.test(pg.url());
+  }
+  ok("QA-1943 [precondition] a user WITHOUT finance.view is signed in", signedIn, pg.url());
+
+  // ...and the precondition is real: this account must genuinely lack the right, or the pin below
+  // is asserting that an entitled user is refused, which would be a different (wrong) test.
+  const lvl = await pg.evaluate(async (b) => {
+    try { const r = await fetch(b + "/api/permissions/me", { credentials: "include" }); const j = await r.json(); return j?.levels?.["finance.view"] ?? null; } catch { return "ERR"; }
+  }, BASE);
+  ok("QA-1943 [precondition] ...and the server agrees they lack it, so the pin is not vacuous",
+    signedIn && (lvl === null || lvl === undefined), String(lvl));
+
+  if (signedIn) {
+    // Poll from navigation start. Playwright's `goto` resolves after the document loads, which is
+    // already too late - the painted frame the checker caught was at 205ms.
+    const seen = await pg.evaluate(async (b) => {
+      const hits = [];
+      const t0 = Date.now();
+      const look = () => {
+        const txt = document.body ? document.body.innerText : "";
+        const h1 = document.querySelector("h1");
+        if (/Spend by cost head|Cost entry register|data-finance-card/i.test(document.body?.innerHTML ?? "")
+            || (h1 && /^Finance$/i.test(h1.textContent?.trim() ?? ""))
+            || /Spend by centre|Batch . cost head/i.test(txt)) {
+          hits.push(Date.now() - t0);
+        }
+      };
+      const iv = setInterval(look, 10);
+      history.pushState({}, "", b + "/finance");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+      await new Promise((r) => setTimeout(r, 2500));
+      clearInterval(iv);
+      return hits;
+    }, BASE);
+    ok("QA-1943: a denied user is never PAINTED the finance screen, at any moment after navigation",
+      seen.length === 0, seen.length ? `visible at ${seen[0]}ms and ${seen.length - 1} later sample(s)` : "never");
+
+    // A full cold load, the way a shared link actually arrives.
+    await pg.goto(`${BASE}/finance`, { waitUntil: "commit" });
+    const cold = [];
+    for (let i = 0; i < 60; i++) {
+      const html = await pg.content().catch(() => "");
+      if (/data-finance-card|Spend by cost head|Cost entry register/i.test(html)) cold.push(i * 40);
+      await pg.waitForTimeout(40);
+    }
+    ok("QA-1943: ...and the same holds on a cold load of the URL, which is how a shared link arrives",
+      cold.length === 0, cold.length ? `visible at ~${cold[0]}ms` : "never");
+
+    const finalText = await pg.locator("body").innerText().catch(() => "");
+    ok("QA-1943: ...and what they DO get is the closed door, not a blank screen",
+      /not part of your role|Checking your access/i.test(finalText), finalText.slice(0, 90).replace(/\n/g, " "));
+  }
+  await c.close();
+}
+
+
 await browser.close();
 }
 

@@ -3930,10 +3930,10 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       // The freeze, in both directions. Recording money received before it is Raised is refused;
       // recording it AT Paid is the whole point and must work.
       const early = await req(admin, "PATCH", `/api/batches/${bId}/invoice`, { received_amount: 500 });
-      // QA-1943: this pin FAILED on its own first wall (got 200) and that was a real product hole,
+      // QA-1945: this pin FAILED on its own first wall (got 200) and that was a real product hole,
       // not a bad expectation - the post-Raised freeze left both receipt fields wide open before
       // Raised, so money could be recorded as received against an invoice nobody had issued.
-      ok("QA-1943: money received cannot be recorded on an invoice that has not been raised",
+      ok("QA-1945: money received cannot be recorded on an invoice that has not been raised",
         early.status >= 400, `got ${early.status}`);
 
       const AMT = 10000;

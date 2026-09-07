@@ -22,7 +22,10 @@ import {
 // open (lib/permissions.ts NO_ADMIN_BYPASS), shipped in the /api/permissions/me payload so this
 // client file never keeps a second copy of it. Empty until the fetch lands, which is safe: with an
 // empty list `can()` behaves exactly as it did before this change.
-type Perms = { role: string; levels: Record<string, "view" | "edit">; noAdminBypass: string[]; loaded: boolean };
+// `failed` is deliberately NOT the same thing as `!loaded`: one means the permissions call came
+// back and said no, the other means it has not come back. A gate that waits cannot tell them apart
+// without this, and it would wait for ever (QA-1946).
+type Perms = { role: string; levels: Record<string, "view" | "edit">; noAdminBypass: string[]; loaded: boolean; failed?: boolean };
 const PermsContext = createContext<Perms>({ role: "", levels: {}, noAdminBypass: [], loaded: false });
 export function usePerms() {
   const p = useContext(PermsContext);
@@ -291,7 +294,7 @@ function Avatar({ name }: { name?: string }) {
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const { data: session } = useSession();
+  const { data: session, status: sessionStatus } = useSession();
   const user = session?.user as any;
   const [open, setOpen] = useState(false);
   const [userMenu, setUserMenu] = useState(false);
@@ -299,13 +302,18 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [watchCount, setWatchCount] = useState(0);
   const [alertCount, setAlertCount] = useState(0);
   // QA-153: effective rights, fetched once per session; role-only decisions until they land.
-  const [perms, setPerms] = useState<Perms>({ role: "", levels: {}, noAdminBypass: [], loaded: false });
+  const [perms, setPerms] = useState<Perms>({ role: "", levels: {}, noAdminBypass: [], loaded: false, failed: false });
   useEffect(() => {
     if (!user) return;
     setPerms((p) => ({ ...p, role: user.role }));
     api("/api/permissions/me")
       .then((d) => setPerms({ role: d.role ?? user.role, levels: d.levels ?? {}, noAdminBypass: d.no_admin_bypass ?? [], loaded: true }))
-      .catch(() => setPerms({ role: user.role, levels: {}, noAdminBypass: [], loaded: false }));
+      // QA-1946 (live checker, same pass): `loaded: false` here is indistinguishable from "the
+      // answer has not come back yet", and the gate below waits on exactly that - so a user whose
+      // permissions call FAILS would sit on "Checking your access..." for ever on a gated route,
+      // where before -293 they fell back to a role-only decision. `failed` separates the two: the
+      // gate stops waiting, and routeAllowed decides on the role alone, as it always did.
+      .catch(() => setPerms({ role: user.role, levels: {}, noAdminBypass: [], loaded: false, failed: true }));
   }, [user?.id, user?.role]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -330,8 +338,24 @@ export function AppShell({ children }: { children: ReactNode }) {
   // screen that is not theirs and then has it taken away, which reads as a fault in the product.
   // A route WITH a permission rule waits for the answer; every other route is unaffected, so no
   // screen that was instant becomes slower.
+  //
+  // QA-1943 (live checker, on production, -293): the guard ABOVE did not work, and the reason is
+  // one term. `!!user` reads `session?.user`, which is `undefined` while NextAuth is still
+  // resolving the session - which is exactly the window the guard exists to cover. So it closed the
+  // session-known-but-permissions-pending gap and left the session-unknown one wide open, and a
+  // denied user was still PAINTED the whole Finance screen: measured at 28-49ms, with a screencast
+  // frame at 205ms showing the h1, all four tiles and the filter bar. Nothing leaked (the screen's
+  // own API 403s and the tiles read zero), but the claim was "never", and it was not never.
+  //
+  // `status` is the term that was missing. It is "loading" precisely while `user` is undefined for
+  // a reason that is not "signed out", so pending on it covers the window `!!user` cannot see.
+  //
+  // QA-1944, same root cause and the opposite persona: an ENTITLED user got Finance at 27ms, had it
+  // blanked by the interstitial at 60-129ms, and got it back at 136ms. Waiting from the FIRST paint
+  // rather than from the moment the session resolves removes that too - the interstitial now
+  // precedes the screen instead of interrupting it.
   const gatedRoute = ROUTE_RULES.some((r) => (pathname === r.prefix || pathname.startsWith(r.prefix + "/")) && r.perm);
-  const permsPending = !!user && gatedRoute && !perms.loaded;
+  const permsPending = gatedRoute && (sessionStatus === "loading" || (!!user && !perms.loaded && !perms.failed));
   const allowedHere = !user || routeAllowed(pathname, { ...perms, role: user.role });
 
   const links = (
