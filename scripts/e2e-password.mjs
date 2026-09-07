@@ -182,20 +182,42 @@ if (admin && meRow) {
         survivors.length === 1 && String(survivors[0]._id) === String(a1),
         `${survivors.length} survivor(s): ${survivors.map((u) => u.email).join(",")}`);
 
-      // THE THREE PATHS. Each writes separately in the route, so each is asserted separately - a
-      // guard covering two of three is the exact failure this unit exists to prevent.
+      // THE THREE PATHS, and what this pin actually established - which is NOT what it was written
+      // to establish.
+      //
+      // It was written to prove the new 409 guard fires. It failed three times with the PRE-EXISTING
+      // self-edit 400, and following that failure showed the guard is UNREACHABLE. The enumeration:
+      // removing an Admin requires `changingPriv`, which 403s a non-Admin actor; `requireUser`
+      // (authz.ts:93) refuses an inactive or unapproved caller, so the actor is always a live Admin.
+      // Therefore either the actor is SOMEBODY ELSE - in which case they are themselves another
+      // active Admin and the target is not the last - or the actor is the target, and the self-edit
+      // refusal fires first. There is no third case.
+      //
+      // So the last Admin already could not be removed through this API, before the guard existed.
+      // The floor is one, and the self-edit refusal is what holds it. I told Umesh twice that the
+      // lockout was reachable and wrote a runbook step around it; that was wrong, and this pin is
+      // what corrected it.
+      //
+      // The pin therefore asserts the REAL invariant - the floor is one, whatever refusal enforces
+      // it - and separately records WHICH refusal is doing the work today. If a later change relaxes
+      // the self-edit rule, the second assertion flips to 409 and the first still holds, which is
+      // exactly the behaviour the guard exists for.
+      const refusals = [];
       for (const [label, body] of [
-        ["deactivating them", { active: false }],
-        ["demoting them to another role", { role: "Operations" }],
-        ["dropping them", { drop: true }],
+        ["deactivating", { active: false }],
+        ["demoting", { role: "Operations" }],
+        ["dropping", { drop: true }],
       ]) {
-        // Driven by a DIFFERENT Admin session would be ideal, but there is no other Admin left -
-        // that is the whole point of the state. T1 acts on T1, so the self-edit refusal (400) would
-        // also fire; the pin therefore requires 409 specifically, not merely "an error".
         const r = await req(sessT1, "PATCH", `/api/users/${a1}`, body);
-        ok(`QA-1912a: ${label} is refused when they are the last Admin who can sign in`,
-          r.status === 409, `got ${r.status} ${JSON.stringify(r.data?.error ?? "").slice(0, 90)}`);
+        refusals.push([label, r.status]);
+        ok(`QA-1912a: ${label} the last Admin who can sign in is REFUSED`,
+          r.status === 400 || r.status === 409,
+          `got ${r.status} ${JSON.stringify(r.data?.error ?? "").slice(0, 90)}`);
       }
+      // Not decoration: it names which lock is load-bearing, so a change that removes the self-edit
+      // rule and leans on the new guard instead is visible here rather than silent.
+      ok("QA-1912a: ...and today it is the self-edit rule doing that work, not the last-Admin guard - the guard is defence in depth for a route that does not yet exist",
+        refusals.every(([, st]) => st === 400), JSON.stringify(refusals));
 
       // ...and it is still true afterwards: a refusal that wrote half of itself is worse than none.
       const after = (await req(sessT1, "GET", `/api/users?limit=500`)).data?.items?.find((u) => String(u._id) === String(a1));

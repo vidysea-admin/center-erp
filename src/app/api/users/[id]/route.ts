@@ -40,14 +40,23 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   // and the audit trail keep their names), the login dies now (active=false +
   // invalidateIdentity below), and the email is renamed so the unique index frees up for a
   // fresh account. Nothing the person created is touched.
-  // QA-1912a — the last-Admin lockout. Nothing stopped the final Admin being demoted, deactivated
-  // or dropped, and `api/permissions/route.ts:36` refuses to edit the Admin role row, so there is no
-  // in-app path back: recovery would need direct database access. That is a one-click, unrecoverable
-  // mistake sitting on the screen an Admin uses every day.
+  // QA-1912a — DEFENCE IN DEPTH, and today it is UNREACHABLE. That correction is the point of this
+  // comment, because the code below reads like it is holding a door shut and it is not.
   //
-  // It is not hypothetical. Umesh is about to run a runbook whose steps 3-4 DEMOTE every Admin but
-  // three, on a production system that currently has exactly TWO active Admins - so the sequence
-  // passes within one demotion of zero. This guard is why that step is being held.
+  // I added it believing the last Admin could be removed, and said so twice. The unit's own
+  // behavioural pin then failed three times on the PRE-EXISTING self-edit refusal, and following
+  // that failure showed why nothing here can fire: removing an Admin needs `changingPriv`, which
+  // 403s a non-Admin actor, and `requireUser` (authz.ts:93) refuses an inactive or unapproved
+  // caller — so the actor is always a live Admin. Either they are somebody else, in which case they
+  // ARE the other active Admin that makes the target not-last; or they are the target, and the
+  // self-edit rule refuses first. There is no third case, so `others === 0` cannot be true here.
+  //
+  // It stays for two reasons. The thing it guards is UNRECOVERABLE — `permissions/route.ts:36` will
+  // not grant the Admin role back, so zero Admins means direct database access. And the lock that
+  // actually holds the floor today is a rule about SELF-EDITS: a different intention that happens to
+  // have this effect, which a future route, script, or relaxation would remove without anyone
+  // noticing what else it was doing. The pin records WHICH lock is load-bearing, so that change is
+  // visible rather than silent.
   //
   // THREE PATHS remove an Admin and each writes separately - `drop` returns early, `active: false`
   // and a `role` change both fall through to the field loop. One helper, called before any of them
