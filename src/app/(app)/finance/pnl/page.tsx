@@ -241,7 +241,13 @@ function PnlInner() {
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900" data-warning="not-valued">{t.accrued_note}</div>
       )}
       {t.cost_unattributed_note && (
-        <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs text-gray-600" data-warning="cost-unattributed-na">{t.cost_unattributed_note}</div>
+        <div
+          className={`rounded-lg border p-3 text-xs ${t.cost_unattributed_scoped === false ? "border-amber-200 bg-amber-50 text-amber-900" : "border-gray-200 bg-gray-50 text-gray-600"}`}
+          data-warning={t.cost_unattributed_scoped === false ? "cost-unattributed-out-of-window" : "cost-unattributed-na"}>
+          {t.cost_unattributed_scoped === false && t.cost_unattributed !== null ? (
+            <><b>{rupee(t.cost_unattributed)}</b> — {t.cost_unattributed_note}</>
+          ) : t.cost_unattributed_note}
+        </div>
       )}
       {t.cost_note && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900" data-warning="cost-unattributed">

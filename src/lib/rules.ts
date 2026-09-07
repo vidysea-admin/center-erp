@@ -5927,20 +5927,36 @@ export async function pnlRollup(scope: Record<string, unknown> = {}, filters: Pn
   // cost belongs to no batch, so the honest answer is not a smaller number - it is that the figure
   // does not apply. Returning 0 there would read as "nothing untagged", which is a claim; null with
   // a reason is the truth. Same shape as costRollup's `budget_comparable`.
-  const selectsBatches = !!(filters.batch || filters.program || filters.scheme || filters.from || filters.to);
+  // QA-1964, and this line is Umesh's call rather than mine (gates/qa-1831-untagged-cost-under-a-
+  // date-window.md, answered 2026-09-07). Cycle 3 put from/to in here, which made a dated P&L
+  // WITHHOLD this figure - and REQ-432 is the one criterion whose text is about a PERIOD, so a
+  // window that excludes nothing still refusing to account for cost the same function measures is
+  // the wrong reading. WITHHOLDING and CANNOT-BE-SCOPED are different facts: a batch, job-role or
+  // scheme filter selects batches, and untagged cost belongs to no batch, so the figure does not
+  // APPLY. A date window is different in kind - the cost exists in the period, it just cannot be
+  // placed inside the window, because it has no batch to carry a planned_start. So it is DISCLOSED
+  // with a label, the same move Judgement 3 already makes for this figure.
+  const selectsBatches = !!(filters.batch || filters.program || filters.scheme);
   let cost_unattributed: number | null = null;
   let cost_unattributed_note: string | null = null;
+  // false = the number is real but NOT scoped to the requested window. A reader must never have to
+  // infer that from the presence of a note; the screen, the workbook and the pins all key on it.
+  let cost_unattributed_scoped = true;
   if (selectsBatches) {
-    cost_unattributed_note = "Not applicable under a batch, job-role, scheme or DATE filter: all of those select batches - the date window by planned start - and untagged cost belongs to no batch. A figure here would be chosen by a different rule than the batches beside it.";
+    cost_unattributed_note = "Not applicable under a batch, job-role or scheme filter: those select batches, and untagged cost belongs to no batch.";
   } else {
-    // No date clause here on purpose: a from/to filter now selects BATCHES (see selectsBatches
-    // above), so this branch is only ever reached WITHOUT a date window. An entry_date narrowing
-    // here would be unreachable code that reads as if dates still narrow this figure - which is
-    // exactly the contradiction QA-1961 was raised about.
+    // Still NO entry_date clause, and now for a stated reason rather than by omission: narrowing
+    // untagged cost by its own entry_date is what QA-1961 objected to - it puts one month's spend
+    // beside a whole batch's revenue under a note saying that does not happen. A centre filter DOES
+    // narrow it, because a cost entry carries a location even when it carries no batch (QA-1952).
     const uq: Record<string, any> = { ...scope, $or: [{ batch: null }, { batch: { $exists: false } }] };
     if (filters.location) uq.location = filters.location;
     const unattributed = await CostEntry.find(uq).select("amount").lean<any[]>();
     cost_unattributed = unattributed.reduce((a, c) => a + (Number(c.amount) || 0), 0);
+    if (filters.from || filters.to) {
+      cost_unattributed_scoped = false;
+      cost_unattributed_note = "NOT scoped to the selected dates - this is the whole organisation's untagged cost" + (filters.location ? " for the selected centre" : "") + ". Untagged cost belongs to no batch, so it carries no planned start and cannot be placed inside a date window. It is shown rather than withheld so that nothing falls outside the period being reported.";
+    }
   }
 
   // ---- ONE pass. Every grouping and every drill row is filled from the same loop over the same
@@ -6102,7 +6118,7 @@ export async function pnlRollup(scope: Record<string, unknown> = {}, filters: Pn
     window_note: "A date filter selects BATCHES by their planned start; each batch brings all of its own cost and revenue with it, whenever those were recorded.",
     totals: {
       accrued: tAccrued, invoiced: tInvoiced, received: tReceived,
-      cost: tCost, cost_unattributed, cost_unattributed_note,
+      cost: tCost, cost_unattributed, cost_unattributed_note, cost_unattributed_scoped,
       // The grand total has the identical asymmetry as the groups, for the identical reason.
       margin: tUnknown > 0 ? null : tAccrued - tCost,
       margin_comparable: tUnknown === 0,

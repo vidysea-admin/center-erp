@@ -4200,6 +4200,53 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
             && typeof whole.totals?.cost_unattributed === "number"
             && narrowed.totals.cost_unattributed < whole.totals.cost_unattributed,
           JSON.stringify({ narrowed: narrowed.totals?.cost_unattributed, whole: whole.totals?.cost_unattributed }));
+        // ---- QA-1964. Umesh's ruling (qa/gates/qa-1831-untagged-cost-under-a-date-window.md,
+        // 2026-09-07): a DATED P&L discloses the organisation-wide untagged total with an explicit
+        // out-of-window label, rather than withholding it. REQ-432 is about a PERIOD and nothing may
+        // fall outside it. Cycle 3 shipped the opposite behaviour with NO assertion either way - the
+        // checker reverted it, the payload moved null -> 17,831,953, and nothing failed. So BOTH
+        // arms are pinned here, and the third assertion is the one that kills a re-added date
+        // narrowing: the dated figure must EQUAL the undated one, because it is the same total.
+        {
+          const undated = (await req(admin, "GET", "/api/reports/pnl")).data ?? {};
+          const wide = (await req(admin, "GET", "/api/reports/pnl?from=2020-01-01&to=2030-12-31")).data ?? {};
+          const narrow = (await req(admin, "GET", "/api/reports/pnl?from=2026-06-01&to=2026-06-30")).data ?? {};
+
+          ok("QA-1964: WITHOUT a date filter the untagged figure is a real number, scoped, and carries no caveat",
+            typeof undated.totals?.cost_unattributed === "number"
+              && undated.totals?.cost_unattributed_scoped !== false
+              && !undated.totals?.cost_unattributed_note,
+            JSON.stringify({ v: undated.totals?.cost_unattributed, scoped: undated.totals?.cost_unattributed_scoped, note: undated.totals?.cost_unattributed_note }));
+
+          ok("QA-1964: UNDER a date filter it is DISCLOSED, never null - nothing falls outside the period",
+            typeof wide.totals?.cost_unattributed === "number",
+            JSON.stringify({ v: wide.totals?.cost_unattributed }));
+
+          ok("QA-1964: ...and it is flagged NOT scoped to the window, with a reason a reader can act on",
+            wide.totals?.cost_unattributed_scoped === false
+              && /not scoped/i.test(String(wide.totals?.cost_unattributed_note ?? "")),
+            JSON.stringify({ scoped: wide.totals?.cost_unattributed_scoped, note: String(wide.totals?.cost_unattributed_note).slice(0, 80) }));
+
+          // The mutant-killer. If anyone re-narrows this figure by entry_date, a June-only window
+          // stops equalling the whole; if anyone reverts to withholding, both go null and the
+          // typeof assertions above fail first.
+          ok("QA-1964: the dated figure IS the organisation-wide total - a narrow window and a wide one and no window all agree",
+            typeof undated.totals?.cost_unattributed === "number"
+              && wide.totals?.cost_unattributed === undated.totals?.cost_unattributed
+              && narrow.totals?.cost_unattributed === undated.totals?.cost_unattributed,
+            JSON.stringify({ undated: undated.totals?.cost_unattributed, wide: wide.totals?.cost_unattributed, narrowJune: narrow.totals?.cost_unattributed }));
+
+          // The distinction the ruling turns on: does-not-APPLY still withholds. A batch filter is
+          // a different fact from a date window and must not be swept into the same behaviour.
+          const someBatchId = reg[0]?.key;
+          if (someBatchId) {
+            const byB = (await req(admin, "GET", `/api/reports/pnl?batch=${someBatchId}`)).data ?? {};
+            ok("QA-1964: a BATCH filter still WITHHOLDS - cannot-be-scoped and does-not-apply stay different facts",
+              byB.totals?.cost_unattributed === null && typeof byB.totals?.cost_unattributed_note === "string",
+              JSON.stringify({ v: byB.totals?.cost_unattributed }));
+          }
+        }
+
         ok("QA-1960: the OTHER centre's untagged cost is present in the whole and absent from this narrowing",
           typeof whole.totals?.cost_unattributed === "number"
             && whole.totals.cost_unattributed - narrowed.totals.cost_unattributed >= AMT_B,

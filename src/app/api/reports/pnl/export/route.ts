@@ -88,7 +88,16 @@ export const GET = apiHandler(async (req: NextRequest) => {
     // QA-1961: when the figure does not apply, the WORKBOOK has to say so too. It previously
     // carried neither the number nor the reason, so a reader of the file could not tell a
     // withheld figure from an absent one.
-    ...(data.totals.cost_unattributed_note ? [{ Item: "Cost not tagged to a batch (—)", Detail: String(data.totals.cost_unattributed_note) }] : []),
+    ...(data.totals.cost_unattributed_note
+      ? [{
+          Item: data.totals.cost_unattributed_scoped === false
+            ? "Cost not tagged to a batch (NOT scoped to the dates)"
+            : "Cost not tagged to a batch (—)",
+          Detail: (data.totals.cost_unattributed_scoped === false && data.totals.cost_unattributed !== null
+            ? `${data.totals.cost_unattributed}. `
+            : "") + String(data.totals.cost_unattributed_note),
+        }]
+      : []),
     { Item: "Earned but not invoiced", Detail: `${data.totals.not_invoiced} batch(es). Work that has been done and never billed for.` },
     { Item: L.shortfall, Detail: `${data.totals.shortfall}. Invoiced minus received, where less came in than was billed — a part payment or a deduction at source. An invoice can read "Paid" and still be short.` },
     { Item: L.margin, Detail: "Revenue EARNED minus cost — not revenue invoiced. A batch that earned and was never billed shows as unprofitable, because it is." },
