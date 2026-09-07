@@ -90,19 +90,37 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   // and the audit trail keep their names), the login dies now (active=false +
   // invalidateIdentity below), and the email is renamed so the unique index frees up for a
   // fresh account. Nothing the person created is touched.
-  // QA-1912a — DEFENCE IN DEPTH, and today it is UNREACHABLE. That correction is the point of this
-  // comment, because the code below reads like it is holding a door shut and it is not.
+  // QA-1912a / QA-1996 — THE LAST-ADMIN FLOOR. This comment used to say the guard below was
+  // UNREACHABLE. That was wrong, it was published, and it is worth keeping the record of how.
   //
-  // I added it believing the last Admin could be removed, and said so twice. The unit's own
-  // behavioural pin then failed three times on the PRE-EXISTING self-edit refusal, and following
-  // that failure showed why nothing here can fire: removing an Admin needs `changingPriv`, which
-  // 403s a non-Admin actor, and `requireUser` (authz.ts:93) refuses an inactive or unapproved
-  // caller — so the actor is always a live Admin. Either they are somebody else, in which case they
-  // ARE the other active Admin that makes the target not-last; or they are the target, and the
-  // self-edit rule refuses first. There is no third case, so `others === 0` cannot be true here.
+  // The argument was: removing an Admin needs `changingPriv`, which 403s a non-Admin actor, and
+  // `requireUser` (authz.ts:93) refuses an inactive or unapproved caller — so the actor is always a
+  // live Admin. Either they are somebody else, in which case they ARE the other active Admin that
+  // makes the target not-last; or they are the target, and the self-edit rule refuses first.
+  // "There is no third case."
   //
-  // It stays for two reasons. The thing it guards is UNRECOVERABLE — `permissions/route.ts:36` will
-  // not grant the Admin role back, so zero Admins means direct database access. And the lock that
+  // There is a third case, and it is TWO REQUESTS. Two live Admins each removing the other at the
+  // same instant both read `others === 1`, both pass, both write. Zero Admins, no way back. A
+  // checker reproduced it 3 of 3 rounds; its own cleanup then could not sign in and needed a
+  // direct collection write. Every sentence of the argument above is true of ONE request at a time,
+  // and the conclusion is false anyway — which is why it is left standing here rather than deleted.
+  // "I could not make it happen" is not "it cannot happen".
+  //
+  // So the guard is NOT decoration. `enforceAdminFloor` (above) re-checks AFTER the write, where
+  // the race is visible, and undoes a write that broke the floor. The cheap pre-check below is the
+  // fast path for the ordinary single request; it is not the guarantee.
+  //
+  // Residual, stated here and not only in a manifest: the fix is COMPENSATING, not atomic. There is
+  // no transaction on this route and mongod runs standalone in CI. If the undo write itself fails,
+  // the system is left as the race left it. A cycle-2 checker attacked this with three-way and
+  // mixed-door races and could not break it, but that is evidence, not a proof.
+  //
+  // It stays for two reasons. The thing it guards is UNRECOVERABLE — the Admin role cannot be
+  // granted back from the rights screen; the locks that actually hold it are `users/[id]/route.ts:31`
+  // (this file's own PRIV_FIELDS self-edit refusal) and `users/route.ts:38`. QA-2000: this used to
+  // cite `permissions/route.ts:36`, which governs the role-permission MATRIX and not who may hold
+  // the Admin role at all — a wrong citation sends the next reader to the wrong file to check
+  // whether recovery is possible. And the lock that
   // actually holds the floor today is a rule about SELF-EDITS: a different intention that happens to
   // have this effect, which a future route, script, or relaxation would remove without anyone
   // noticing what else it was doing. The pin records WHICH lock is load-bearing, so that change is

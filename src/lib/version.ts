@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-295";
+export const RELEASE = "2026.08.14-296";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -158,6 +158,20 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "about how a candidate is dropped from a batch has changed.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-296: a correction to what -295 said about itself, and the documents around it. -295 described " +
+  "one of its own repairs as protection against an administrator being removed by a single " +
+  "ordinary request. That overstated it. The flaw was real - the check counted only accounts " +
+  "explicitly marked approved, while the sign-in door admits accounts carrying no such mark, " +
+  "including the first administrator a fresh installation creates - but on the build that shipped, " +
+  "its effect was the opposite one: the system would have REFUSED a legitimate change and told an " +
+  "administrator nobody was left, while somebody was. Both readings are now the same reading, and " +
+  "the description above is the one the code actually supports. Nothing about who may be removed " +
+  "has changed in this release. Alongside it, the explanation sitting beside that check in the " +
+  "source still argued the situation could not arise at all, which had already been disproved, and " +
+  "the operator instructions still said the same; both now state what is true, that two " +
+  "administrators changing each other at the same moment IS possible and is what the check exists " +
+  "to refuse.";
+const RELEASE_NOTE_ARCHIVE_295 =
   "-295: a safety repair to who may be removed as an administrator, and a correction to what " +
   "-294 said about it. -294's note claimed the system refuses to remove its own last " +
   "administrator. It did not, in two ways. Two administrators switching each other off at the " +
@@ -1378,6 +1392,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -293: ARCHIVE_292 wired in here in the SAME bump that declared it, same discipline.
   // -294: ARCHIVE_293 wired in here in the SAME bump that declared it, same discipline.
   // -295: ARCHIVE_294 wired in here in the SAME bump that declared it, same discipline.
+  // -296: ARCHIVE_295 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_295 + " " +
   RELEASE_NOTE_ARCHIVE_294 + " " +
   RELEASE_NOTE_ARCHIVE_293 + " " +
   RELEASE_NOTE_ARCHIVE_292 + " " +

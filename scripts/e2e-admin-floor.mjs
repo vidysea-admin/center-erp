@@ -19,6 +19,8 @@
 // flaky, and a flaky pin gets deleted. What is asserted instead is the property that must hold
 // however the two requests interleave: after the dust settles, at least one Admin can still sign
 // in. That is true on the fixed code for every ordering, and it was false on the broken code.
+import { MongoClient } from "mongodb";
+import bcrypt from "bcryptjs";
 import { requireLocalBase } from "./db-guard.mjs";
 // This suite creates Admins and deactivates Admins. Pointed at a non-local address it would do both
 // on production — QA-1966 is the row for the suite that shipped without this line.
@@ -137,6 +139,83 @@ if (!sessA || !sessB) {
     } else {
       ok("QA-1997: the reject-door race had two Admins to race", false,
         `count=${before.length} - this pin measured nothing`);
+    }
+  }
+
+  // ---------------------------------------------------------------- QA-2018 / QA-2014
+  // THE PREVIOUS PIN FOR QA-2014 COULD NOT FAIL, AND A CHECKER MEASURED THAT: restoring the
+  // pre-QA-2014 route and rebuilding still gave 10 passed / 0 failed. The reason is subtle and
+  // worth writing down — every account this suite touches is created or changed through the API,
+  // and a Mongoose `save()` writes `approval_status` to its schema default. So the very population
+  // the bug is about (an Admin with NO approval_status, which is what `scripts/seed.mjs` creates
+  // through the raw driver) was being destroyed by the fixture before the assertion ran.
+  //
+  // WHICH DIRECTION ACTUALLY DISTINGUISHES THE TWO PREDICATES. Not the removal being allowed —
+  // both predicates allow that. The narrow one REFUSES A LEGITIMATE REMOVAL: with a raw-driver
+  // Admin R (no approval_status, signs in fine) and a normal Admin A as the only two, R removing A
+  // must SUCCEED, because R is still standing. Under `approval_status: "Approved"` the guard cannot
+  // see R, counts zero others, and answers 409 with a live Admin sitting right there.
+  //
+  // That is also the correction to something this unit published: the -295 note said QA-2014 let
+  // the last Admin be removed by an ordinary single request. On the build that shipped it does not
+  // — the post-write check counted with the same narrow predicate and undid the write. The defect
+  // is real; its consequence on the shipped build is over-refusal, not removal.
+  {
+    const dbUrl = process.env.MONGODB_URL;
+    const dbName = process.env.MONGODB_DB;
+    if (!dbUrl || !dbName) {
+      ok("QA-2014: the raw-driver fixture had a database to write to", false,
+        "MONGODB_URL/MONGODB_DB not set - this pin measured nothing");
+    } else {
+      const client = new MongoClient(dbUrl);
+      let R = null;
+      try {
+        await client.connect();
+        const users = client.db(dbName).collection("users");
+        const email = `zzraw.${stamp}@vidysea-test.local`;
+        // Inserted the way seed.mjs inserts the very first Admin: raw driver, so NO Mongoose
+        // default applies and `approval_status` is genuinely absent.
+        const ins = await users.insertOne({
+          name: `ZZ Raw ${stamp}`, email, password_hash: await bcrypt.hash(PW, 10), role: "Admin",
+          location_scope: [], can_edit: true, active: true, extra_permissions: [],
+          createdAt: new Date(), updatedAt: new Date(),
+        });
+        R = String(ins.insertedId);
+        const back = await users.findOne({ _id: ins.insertedId });
+        ok("QA-2014 [fixture] the raw-driver Admin genuinely has NO approval_status",
+          back && back.approval_status === undefined, `approval_status=${JSON.stringify(back?.approval_status)}`);
+
+        const sessR = await login(email, PW);
+        ok("QA-2014: an Admin with no approval_status CAN sign in - which is why the guard must count them",
+          !!sessR, "authorize() refuses only Pending and Rejected, so this must succeed");
+
+        if (sessR) {
+          // Make R and A the only two who can sign in.
+          const all = await effectiveAdmins(sessR);
+          for (const u of all.filter((u) => ![R, String(A.id)].includes(String(u._id)))) {
+            await req(sessR, "PATCH", `/api/users/${u._id}`, { active: false });
+          }
+          const two = await effectiveAdmins(sessR);
+          ok("QA-2014 [precondition] exactly the raw-driver Admin and one normal Admin hold the floor",
+            two.length === 2, `count=${two.length}`);
+
+          if (two.length === 2) {
+            const r = await req(sessR, "PATCH", `/api/users/${A.id}`, { active: false });
+            ok("QA-2014: the raw-driver Admin COUNTS - removing the other Admin is allowed, because R is still standing",
+              r.status === 200,
+              `got ${r.status} - a 409 here means the guard cannot see an Admin whose approval_status is absent, and is refusing a legitimate change`);
+            await req(sessR, "PATCH", `/api/users/${A.id}`, { active: true });
+          }
+          // hand the floor back before this block ends
+          for (const id of parked) await req(sessR, "PATCH", `/api/users/${id}`, { active: true, approval: "approve" });
+        }
+      } catch (e) {
+        ok("QA-2014: the raw-driver fixture ran without error", false, String(e && e.message || e));
+      } finally {
+        // The raw row never went through the API, so it is removed the same way it was made.
+        try { if (R) await client.db(dbName).collection("users").deleteOne({ _id: (await import("mongodb")).ObjectId.createFromHexString(R) }); } catch {}
+        try { await client.close(); } catch {}
+      }
     }
   }
 
