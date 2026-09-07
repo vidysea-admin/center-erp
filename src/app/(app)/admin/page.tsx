@@ -1,5 +1,6 @@
 "use client";
 import { Fragment, useEffect, useState } from "react";
+import { useSession } from "next-auth/react";
 import { api, fmtDT, fmtDate, offerable } from "@/lib/client";
 import { emailError } from "@/lib/validate";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
@@ -239,6 +240,20 @@ function RolesOverview({ items, onOpen, setError }: { items: any[]; onOpen: (u?:
   const activeInRole = (r: string) => byRole(r).filter((u) => u.active !== false).length;
   const activeCount = items.filter((u: any) => u.active !== false).length;
 
+  // The server owns every rule here. This deliberately does NOT pre-check whether the person is the
+  // last Admin: a browser-side copy of that rule is a second place it can be wrong, and the whole
+  // reason the rule exists is that the screen is where the mistake gets made. The refusal comes back
+  // as a sentence and is shown as one.
+  async function setActive(u: any, next: boolean) {
+    setBusy(true);
+    try {
+      await api(`/api/users/${u._id}`, { method: "PATCH", json: { active: next } });
+      u.active = next; // the list is the parent's; reflect it without a refetch
+      setError("");
+    } catch (e: any) { setError(e.message); }
+    setBusy(false);
+  }
+
   async function showRights(u: any) {
     setRightsFor(u); setRights([]);
     try { const d = await api(`/api/users/${u._id}/rights`); setRights(d.rights ?? []); }
@@ -294,6 +309,14 @@ function RolesOverview({ items, onOpen, setError }: { items: any[]; onOpen: (u?:
               <span className="ml-auto flex gap-1.5">
                 <Btn small kind="ghost" onClick={() => showRights(u)}>What can they do?</Btn>
                 <Btn small kind="ghost" onClick={() => onOpen(u)}>Edit</Btn>
+                {/* QA-1912: Umesh asked for this view AND for the ability to remove somebody from
+                    it; only the view shipped. It calls the SAME PATCH the main table calls - not a
+                    second write path - so every server guard applies unchanged, including the new
+                    last-Admin refusal, which a second path would have had to remember to repeat. */}
+                <Btn small kind={u.active === false ? "ghost" : "danger"} disabled={busy}
+                  onClick={() => setActive(u, u.active === false)}>
+                  {u.active === false ? "Reactivate" : "Stop access"}
+                </Btn>
               </span>
             </div>
           ))}
@@ -334,6 +357,12 @@ function RolesOverview({ items, onOpen, setError }: { items: any[]; onOpen: (u?:
 }
 
 function Users({ error, setError }: any) {
+  // QA-1912a: the row-action comment below claimed "the button only renders where it can succeed",
+  // and that was false for exactly one row - the actor's own. "Stop access" and "Drop" rendered
+  // there and returned the 400 self-edit refusal as a red banner. The page had no way to know which
+  // row was the reader's, which is WHY the claim was false rather than merely unchecked.
+  const { data: _session } = useSession();
+  const myId = String((_session?.user as any)?.id ?? "");
   const [items, setItems] = useState<any[]>([]);
   const [locations, setLocations] = useState<any[]>([]);
   const [drawer, setDrawer] = useState(false);
@@ -468,9 +497,12 @@ function Users({ error, setError }: any) {
           {
             // CEO 14/08 [35:13]: "we should be able to stop access to certain people if need
             // be … right away" — one click on the row, no drawer hunt. API guards apply
-            // (Admin-only, never yourself), so the button only renders where it can succeed.
+            // (Admin-only, never yourself), so the button only renders where it can succeed - which
+            // is true now that the actor's OWN row is filtered below. It was not true before
+            // QA-1912a: the buttons rendered on your own row and returned the self-edit refusal as
+            // a red banner, so the comment described an intention rather than the code.
             key: "_stop", label: "", mobile: false,
-            render: (r: any) => r.approval_status === "Pending" ? null : (
+            render: (r: any) => (r.approval_status === "Pending" || (myId && String(r._id) === myId)) ? null : (
               <span onClick={(e) => e.stopPropagation()} className="flex gap-1.5">
                 {!r.dropped && (
                   <>

@@ -40,6 +40,39 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   // and the audit trail keep their names), the login dies now (active=false +
   // invalidateIdentity below), and the email is renamed so the unique index frees up for a
   // fresh account. Nothing the person created is touched.
+  // QA-1912a — the last-Admin lockout. Nothing stopped the final Admin being demoted, deactivated
+  // or dropped, and `api/permissions/route.ts:36` refuses to edit the Admin role row, so there is no
+  // in-app path back: recovery would need direct database access. That is a one-click, unrecoverable
+  // mistake sitting on the screen an Admin uses every day.
+  //
+  // It is not hypothetical. Umesh is about to run a runbook whose steps 3-4 DEMOTE every Admin but
+  // three, on a production system that currently has exactly TWO active Admins - so the sequence
+  // passes within one demotion of zero. This guard is why that step is being held.
+  //
+  // THREE PATHS remove an Admin and each writes separately - `drop` returns early, `active: false`
+  // and a `role` change both fall through to the field loop. One helper, called before any of them
+  // writes, because a guard that covers two of three is the shape this repo keeps paying for.
+  const wouldRemoveAnAdmin =
+    body.drop === true
+    || (body.active === false && doc.active)
+    || (body.role !== undefined && body.role !== "Admin" && doc.role === "Admin");
+  if (wouldRemoveAnAdmin && doc.role === "Admin") {
+    // Count only Admins who can ACTUALLY sign in - `authorize()` refuses a Pending or Rejected
+    // account and refuses `active: false`, so counting rows that merely say "Admin" would let the
+    // system pass this check while nobody alive holds the role.
+    const isEffective = doc.active && !doc.dropped && doc.approval_status === "Approved";
+    if (isEffective) {
+      const others = await User.countDocuments({
+        _id: { $ne: doc._id }, role: "Admin", active: true,
+        dropped: { $ne: true }, approval_status: "Approved",
+      });
+      if (others === 0) {
+        throw new HttpError(409,
+          "This is the only Admin who can still sign in, and there is no way to make a new one from inside the app — the Admin role cannot be granted back from the rights screen. Create and confirm another Admin first, then change this one.");
+      }
+    }
+  }
+
   if (body.drop === true) {
     if (doc.dropped) throw new HttpError(400, `${doc.name} is already dropped.`);
     const original = doc.email;
