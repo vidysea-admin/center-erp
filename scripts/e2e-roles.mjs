@@ -4319,16 +4319,22 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
           const started = await req(admin, "POST", `/api/batches/${readyB._id}/transition`,
             { target: "Active", enrollment_override: true, reason: REASON });
           ok("QA-1971: with a real reason the batch STARTS below the threshold",
-            [200, 201].includes(started.status) && String(started.data?.status ?? started.data?.batch?.status ?? "") === "Active",
+            [200, 201].includes(started.status) && String(started.data?.item?.status ?? "") === "Active",
             `${started.status} ${JSON.stringify(started.data).slice(0, 90)}`);
 
           const auditRes = await req(admin, "GET", `/api/audit/Batch/${readyB._id}`);
           const acts = (auditRes.data?.items ?? auditRes.data?.rows ?? []);
           const row = acts.find((a) => String(a.field) === "enrollment_override");
+          const rowVal = String(row?.new_value ?? row?.newValue ?? "");
           ok("QA-1971: the audit row exists, names the shortfall, and carries the reason VERBATIM",
-            !!row && /below the enrolment threshold/i.test(String(row.newValue))
-              && String(row.newValue).includes(REASON),
-            JSON.stringify({ found: !!row, v: String(row?.newValue ?? "").slice(0, 120) }));
+            !!row && /below the enrolment threshold/i.test(rowVal) && rowVal.includes(REASON),
+            JSON.stringify({ found: !!row, v: rowVal.slice(0, 140) }));
+          // The number it was below must be IN the row, not merely implied by it (erp-af raised this:
+          // a reason explains why somebody overrode the gate, it does not say what they overrode, and
+          // if the global percentage moves later the row stops being interpretable without it).
+          ok("QA-1971: ...and it records the threshold it was below, so the row survives the default changing",
+            /d+ enrolled of d+ needed/.test(rowVal) && /% of a/.test(rowVal),
+            rowVal.slice(0, 140));
         }
 
         // ARM 4 - the hatch is refused anywhere it would be meaningless, rather than ignored.
