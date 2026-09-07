@@ -450,6 +450,50 @@ if (bulkRowVisible) {
     })(), page.url());
 }
 
+// ================= QA-1962: the SAME hole, one screen over =================
+// The cycle-2 checker measured it rather than accepting the maker's reasoning: it deleted
+// `onClick={() => setOpen(key)}` from the P&L `tile()` helper and re-ran the static suite -
+// 350 passed / 1 failed, identical to the unmutated run. All six P&L tiles stop answering and
+// nothing in 5,400+ assertions notices, because `e2e-roles` pins the PAYLOAD and this suite did
+// not cover /finance/pnl at all. Given that QA-1949 was a tile defect and QA-1958 is another one,
+// this was the coverage hole with the worst record in the unit. Same guard as QA-1933, same
+// reasoning, different screen.
+{
+  await page.goto(`${BASE}/finance/pnl`, { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => /Revenue earned|Not valued|P&L/i.test(document.body.innerText), undefined, { timeout: 45000 }).catch(() => {});
+  const cards = page.locator("[data-pnl-card]");
+  const n = await cards.count();
+  // The seeded admin carries FINANCE_GRANTS (scripts/seed.mjs:43), so a gated screen here is a
+  // real failure and not an expected skip. Stated out loud because a suite that quietly skips
+  // when it cannot see the screen is precisely the hole QA-1962 is about.
+  ok("QA-1962: the P&L screen renders its tiles for a finance-granted admin", n >= 6, `${n} tiles found at ${page.url()}`);
+
+  let opened = 0; const bad = [];
+  for (let i = 0; i < n; i++) {
+    const c = cards.nth(i);
+    const key = await c.getAttribute("data-pnl-card");
+    const shown = (await c.innerText()).replace(/s+/g, " ").trim();
+    await c.click();
+    const table = page.locator(`[data-pnl-table="${key}"]`);
+    const appeared = await table.waitFor({ state: "attached", timeout: 8000 }).then(() => true).catch(() => false);
+    if (!appeared) { bad.push(`${key}: nothing opened (shows "${shown.slice(0, 40)}")`); continue; }
+    opened++;
+    await c.click(); // and it closes again
+    const closed = await table.waitFor({ state: "detached", timeout: 8000 }).then(() => true).catch(() => false);
+    if (!closed) bad.push(`${key}: will not close`);
+  }
+  ok("QA-1962: EVERY P&L tile responds to a click and opens its own list",
+    opened === n && n > 0, `${opened} of ${n} opened${bad.length ? " · " + bad.slice(0, 4).join(" · ") : ""}`);
+  ok("QA-1962: ...and each one closes again, so a reader can put it away",
+    bad.length === 0, bad.slice(0, 4).join(" · "));
+  // QA-1958 on the RENDERED screen: the three causes must be three separate tiles a reader can
+  // tell apart, not one heading that names the wrong master table.
+  const tileKeys = await cards.evaluateAll((els) => els.map((e) => e.getAttribute("data-pnl-card")));
+  ok("QA-1958: the not-valued causes are three DISTINCT tiles on screen, not one conflated heading",
+    ["unknown_rate", "no_scheme", "scheme_missing"].every((k) => tileKeys.includes(k)),
+    JSON.stringify(tileKeys));
+}
+
 // ================= QA-573's LITERAL ASK, on /reports =================
 // "open a <details>, close it, and read what is visible". REQ-367b: the warnings stay OUTSIDE the
 // disclosure card and stay visible in BOTH states.

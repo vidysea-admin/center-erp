@@ -5818,7 +5818,17 @@ export const PNL_LABELS = {
   stage: "Stage",
   unassigned: "Unassigned",
   unknown_rate: "Rate not on the scheme",
+  // QA-1958: these three were ONE bucket labelled "Rate not on the scheme", and 27 of its 27 rows
+  // were the first of them - a different master table, a different owner, a different fix.
+  no_scheme: "Job role names no scheme",
+  scheme_missing: "Scheme not in the master",
 } as const;
+
+// The cause a batch could not be valued for. Set ONCE, in the same ladder that writes the
+// human sentence, so a counter, a tile and a note can never name different causes (QA-1958);
+// and read back from the row rather than re-tested from the inputs, so a pin asserting on it
+// is not re-running the product's own predicate (QA-1950's tautology).
+export type PnlAccrualGap = "none" | "no_closure" | "no_scheme" | "scheme_missing" | "no_rate";
 
 export type PnlFilters = {
   from?: string; to?: string;
@@ -5917,11 +5927,11 @@ export async function pnlRollup(scope: Record<string, unknown> = {}, filters: Pn
   // cost belongs to no batch, so the honest answer is not a smaller number - it is that the figure
   // does not apply. Returning 0 there would read as "nothing untagged", which is a claim; null with
   // a reason is the truth. Same shape as costRollup's `budget_comparable`.
-  const selectsBatches = !!(filters.batch || filters.program || filters.scheme);
+  const selectsBatches = !!(filters.batch || filters.program || filters.scheme || filters.from || filters.to);
   let cost_unattributed: number | null = null;
   let cost_unattributed_note: string | null = null;
   if (selectsBatches) {
-    cost_unattributed_note = "Not applicable under a batch, job-role or scheme filter: those select batches, and untagged cost belongs to no batch.";
+    cost_unattributed_note = "Not applicable under a batch, job-role, scheme or DATE filter: all of those select batches - the date window by planned start - and untagged cost belongs to no batch. A figure here would be chosen by a different rule than the batches beside it (QA-1961).";
   } else {
     const uq: Record<string, any> = { ...scope, $or: [{ batch: null }, { batch: { $exists: false } }] };
     if (filters.from || filters.to) {
@@ -5949,9 +5959,11 @@ export async function pnlRollup(scope: Record<string, unknown> = {}, filters: Pn
   const drill = {
     accrued: [] as any[], invoiced: [] as any[], received: [] as any[],
     not_invoiced: [] as any[], shortfall: [] as any[], unknown_rate: [] as any[],
+    no_scheme: [] as any[], scheme_missing: [] as any[],
   };
 
-  let tAccrued = 0, tInvoiced = 0, tReceived = 0, tCost = 0, tUnknown = 0, tNoClosure = 0, tNoRate = 0;
+  let tAccrued = 0, tInvoiced = 0, tReceived = 0, tCost = 0, tUnknown = 0;
+  const gapCount: Record<PnlAccrualGap, number> = { none: 0, no_closure: 0, no_scheme: 0, scheme_missing: 0, no_rate: 0 };
 
   for (const b of batches) {
     // The filter names a scheme the same way the programme does - by name. The screen's dropdown
@@ -5982,10 +5994,11 @@ export async function pnlRollup(scope: Record<string, unknown> = {}, filters: Pn
 
     let accrued: number | null = null;
     let accrual_note = "";
-    if (billable === null) accrual_note = "no results and no closure figures yet, so there is nothing to bill for";
-    else if (schemeKey === null) accrual_note = "this batch's job role names no scheme, so there is no rate to bill at";
-    else if (!rateByScheme.has(schemeKey)) accrual_note = `the job role names scheme "${schemeKey}", which is not in the scheme master - it may have been renamed`;
-    else if (rate === null) accrual_note = `the scheme "${schemeName}" carries no amount received per certified candidate`;
+    let accrual_gap: PnlAccrualGap = "none";
+    if (billable === null) { accrual_gap = "no_closure"; accrual_note = "no results and no closure figures yet, so there is nothing to bill for"; }
+    else if (schemeKey === null) { accrual_gap = "no_scheme"; accrual_note = "this batch's job role names no scheme, so there is no rate to bill at"; }
+    else if (!rateByScheme.has(schemeKey)) { accrual_gap = "scheme_missing"; accrual_note = `the job role names scheme "${schemeKey}", which is not in the scheme master - it may have been renamed`; }
+    else if (rate === null) { accrual_gap = "no_rate"; accrual_note = `the scheme "${schemeName}" carries no amount received per certified candidate`; }
     else accrued = billable * rate;
 
     const invoiced: number | null = inv?.amount ?? null;
@@ -6000,6 +6013,7 @@ export async function pnlRollup(scope: Record<string, unknown> = {}, filters: Pn
       scheme: schemeName,
       billable, rate, accrued,
       accrual_basis: accrued !== null ? `${billable} certified x ${rate}` : accrual_note,
+      accrual_gap,
       invoiced, received, shortfall,
       cost,
       // Margin is against EARNED revenue, not against what happens to have been invoiced - a batch
@@ -6014,9 +6028,10 @@ export async function pnlRollup(scope: Record<string, unknown> = {}, filters: Pn
     if (accrued !== null) tAccrued += accrued;
     else {
       tUnknown += 1;
-      // Counted by CAUSE, from the inputs, not from `accrued === null`. Deriving the breakdown
-      // from the same test that produced the null is how QA-1950's tautology happened.
-      if (billable === null) tNoClosure += 1; else tNoRate += 1;
+      // Counted by CAUSE, off the row's own `accrual_gap`, which the sentence ladder set. Deriving
+      // the breakdown from the same test that produced the null is how QA-1950's tautology
+      // happened; collapsing three causes into an `else` is how QA-1958 happened.
+      gapCount[accrual_gap] += 1;
     }
     if (invoiced !== null) tInvoiced += invoiced;
     if (received !== null) tReceived += received;
@@ -6035,7 +6050,11 @@ export async function pnlRollup(scope: Record<string, unknown> = {}, filters: Pn
     if (accrued !== null) drill.accrued.push(row);
     if (invoiced !== null) drill.invoiced.push(row);
     if (received !== null) drill.received.push(row);
-    if (rate === null && billable !== null) drill.unknown_rate.push(row);
+    // Each bucket holds exactly the rows whose OWN cause it names (QA-1958). The old predicate
+    // `rate === null && billable !== null` was true for all three causes at once.
+    if (accrual_gap === "no_scheme") drill.no_scheme.push(row);
+    if (accrual_gap === "scheme_missing") drill.scheme_missing.push(row);
+    if (accrual_gap === "no_rate") drill.unknown_rate.push(row);
     // "Earned it and never billed for it" - the leak the CEO opened the subject with.
     if (accrued !== null && invoiced === null) drill.not_invoiced.push(row);
     if (shortfall !== null && shortfall > 0) drill.shortfall.push(row);
@@ -6100,13 +6119,18 @@ export async function pnlRollup(scope: Record<string, unknown> = {}, filters: Pn
       // QA-1949: "no closure figures yet" and "the scheme carries no rate" are DIFFERENT facts with
       // different owners - the first is an operations gap, the second a master-data one - and
       // reporting their sum under either heading sends somebody to fix the wrong thing.
-      accrued_unknown_no_closure: tNoClosure,
-      accrued_unknown_no_rate: tNoRate,
+      accrued_unknown_no_closure: gapCount.no_closure,
+      accrued_unknown_no_rate: gapCount.no_rate,
+      // QA-1958: the two master-data causes the old `no_rate` counter silently absorbed.
+      accrued_unknown_no_scheme: gapCount.no_scheme,
+      accrued_unknown_scheme_missing: gapCount.scheme_missing,
       accrued_note: tUnknown > 0
         ? [
             `${tUnknown} batch(es) could not be valued, and they are NOT counted as zero.`,
-            tNoClosure ? `${tNoClosure} have no closure figures yet.` : "",
-            tNoRate ? `${tNoRate} are certified but their scheme carries no rate.` : "",
+            gapCount.no_closure ? `${gapCount.no_closure} have no closure figures yet.` : "",
+            gapCount.no_scheme ? `${gapCount.no_scheme} have a job role that names no scheme, so there is no rate to bill at - that is the JOB ROLE master, not the scheme master.` : "",
+            gapCount.scheme_missing ? `${gapCount.scheme_missing} name a scheme that is not in the scheme master, which is what a rename leaves behind.` : "",
+            gapCount.no_rate ? `${gapCount.no_rate} are certified but their scheme carries no rate.` : "",
           ].filter(Boolean).join(" ")
         : null,
       cost_note: (cost_unattributed ?? 0) > 0
@@ -6123,6 +6147,8 @@ export async function pnlRollup(scope: Record<string, unknown> = {}, filters: Pn
       not_invoiced: card("Earned but not invoiced", drill.not_invoiced, drill.not_invoiced.length),
       shortfall: card("Short received", drill.shortfall, shortfallTotal),
       unknown_rate: card(PNL_LABELS.unknown_rate, drill.unknown_rate, drill.unknown_rate.length),
+      no_scheme: card(PNL_LABELS.no_scheme, drill.no_scheme, drill.no_scheme.length),
+      scheme_missing: card(PNL_LABELS.scheme_missing, drill.scheme_missing, drill.scheme_missing.length),
     },
     register: rows,
   };

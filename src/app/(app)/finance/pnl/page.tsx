@@ -197,7 +197,9 @@ function PnlInner() {
         {/* The label says RATE, so the tile counts only the rate case. Batches with no closure
             figures are a different fact and are stated in the amber note below, which now names
             both causes separately instead of adding them together under one of them. */}
-        {tile("unknown_rate", L.unknown_rate ?? "No rate on the scheme", (n) => n ?? 0, "certified, but the scheme carries no rate", "warn")}
+        {tile("unknown_rate", L.unknown_rate ?? "Rate not on the scheme", (n) => n ?? 0, "certified, and the scheme exists but carries no rate — fix in the SCHEME master", "warn")}
+        {tile("no_scheme", L.no_scheme ?? "Job role names no scheme", (n) => n ?? 0, "certified, but the job role points at no scheme at all — fix in the JOB ROLE master", "warn")}
+        {tile("scheme_missing", L.scheme_missing ?? "Scheme not in the master", (n) => n ?? 0, "the job role names a scheme the master does not have — usually a rename", "warn")}
       </div>
 
       {open && (
@@ -289,7 +291,7 @@ function PnlInner() {
         <ul className="mt-2 list-disc space-y-1 pl-4">
           <li><b>{L.accrued ?? "Revenue earned"}</b> is the certified (billable) head-count times the scheme&apos;s amount received per certified candidate. It is what has been EARNED, whether or not anyone has billed for it.</li>
           <li><b>{L.billable ?? "Certified (billable)"}</b> is a Pass minus the dropped-but-passed — the same figure the cost report divides by, so cost and revenue share one definition of a certified head.</li>
-          <li><b>Not valued</b> means either the closure figures are not in yet or the scheme carries no rate. Those batches are never counted as zero, because a missing rate and a zero rate are different facts.</li>
+          <li><b>Not valued</b> has four different causes and they are counted and shown separately, because they have different owners and a single heading sends people to fix the wrong table: the closure figures are not in yet (operations); the job role names no scheme (job role master); the scheme named is not in the master, which is what a rename leaves behind; or the scheme is there and carries no rate (scheme master). Those batches are never counted as zero, because a missing rate and a zero rate are different facts.</li>
           <li><b>{L.received ?? "Received"}</b> can be less than <b>{L.invoiced ?? "Invoiced"}</b> — a part payment or a deduction at source. An invoice can read &quot;Paid&quot; and still be short, which is what the Short received tile counts.</li>
           <li>Cost tagged to a centre or a trainer but to no batch cannot enter a per-batch margin. It is shown separately rather than dropped, so the margins here are not flattered by leaving it out.</li>
           <li>The stage on each row is the same one the batch screen shows — it is read from one function, not worked out twice.</li>

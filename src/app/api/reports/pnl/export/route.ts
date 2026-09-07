@@ -47,7 +47,11 @@ export const GET = apiHandler(async (req: NextRequest) => {
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rowsIn.map((r) => ({
       [keyName]: r.label, Batches: r.batches,
       [L.accrued]: r.accrued, [L.invoiced]: r.invoiced, [L.received]: r.received,
-      [L.cost]: r.cost, [L.margin]: r.margin,
+      [L.cost]: r.cost, [L.margin]: n(r.margin),
+      // QA-1959: a withheld margin goes through n() like every other nullable in this file, and
+      // carries its reason with it. Writing r.margin raw put a BLANK where the screen shows a
+      // withholding, so the workbook and the screen disagreed about the same number.
+      "Why the margin is withheld": r.margin_note ?? "",
       "Batches that could not be valued": r.accrued_unknown,
     }))), sheet);
   }
@@ -56,6 +60,8 @@ export const GET = apiHandler(async (req: NextRequest) => {
     ["earned but not invoiced", "not_invoiced"],
     ["short received", "shortfall"],
     ["no rate on the scheme", "unknown_rate"],
+    ["job role names no scheme", "no_scheme"],
+    ["scheme not in the master", "scheme_missing"],
   ] as [string, keyof typeof data.detail][]) {
     const d = data.detail[key];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(d.rows.map((r: any) => ({
@@ -79,9 +85,15 @@ export const GET = apiHandler(async (req: NextRequest) => {
     { Item: L.billable, Detail: "A Pass minus the dropped-but-passed — the same billable_passed the cost report divides by, so cost and revenue share one denominator." },
     ...(data.totals.accrued_note ? [{ Item: "Batches with no value", Detail: data.totals.accrued_note }] : []),
     ...(data.totals.cost_note ? [{ Item: "Cost not tagged to a batch", Detail: `${data.totals.cost_unattributed}. ${data.totals.cost_note}` }] : []),
+    // QA-1961: when the figure does not apply, the WORKBOOK has to say so too. It previously
+    // carried neither the number nor the reason, so a reader of the file could not tell a
+    // withheld figure from an absent one.
+    ...(data.totals.cost_unattributed_note ? [{ Item: "Cost not tagged to a batch (—)", Detail: String(data.totals.cost_unattributed_note) }] : []),
     { Item: "Earned but not invoiced", Detail: `${data.totals.not_invoiced} batch(es). Work that has been done and never billed for.` },
     { Item: L.shortfall, Detail: `${data.totals.shortfall}. Invoiced minus received, where less came in than was billed — a part payment or a deduction at source. An invoice can read "Paid" and still be short.` },
     { Item: L.margin, Detail: "Revenue EARNED minus cost — not revenue invoiced. A batch that earned and was never billed shows as unprofitable, because it is." },
+    { Item: L.margin + " (—)", Detail: "A dash means the margin is WITHHELD, not zero: at least one batch in that group could not be valued, so its cost is counted and its revenue is not, and a subtraction would be understated by exactly that much. The reason is in the 'Why the margin is withheld' column beside it." },
+    { Item: "Batches that could not be valued", Detail: "Split by CAUSE across the sheets above, because the causes have different owners: 'job role names no scheme' is the job role master, 'scheme not in the master' is what a rename leaves behind, and 'no rate on the scheme' is the scheme master." },
     { Item: "Counted at", Detail: `${data.measured_at} (UTC). A snapshot of that moment, not a live feed.` },
   ]), "where the numbers come from");
 

@@ -3951,16 +3951,51 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     ok("QA-1831: the not-valued count is the number of rows missing a head-count or a rate",
       (d.totals?.accrued_unknown ?? -1) === expectUnknown,
       `totals=${d.totals?.accrued_unknown} independent=${expectUnknown}`);
-    // QA-1949: the two causes are counted separately, because they have different owners and
-    // reporting their sum under either heading sends somebody to fix the wrong thing.
-    ok("QA-1949: ...and it is split by CAUSE, no-closure apart from no-rate",
-      (d.totals?.accrued_unknown_no_closure ?? -1) === reg.filter((r) => r.billable === null).length
-        && (d.totals?.accrued_unknown_no_rate ?? -1) === unratedRows.length,
-      JSON.stringify({ noClosure: d.totals?.accrued_unknown_no_closure, noRate: d.totals?.accrued_unknown_no_rate }));
-    // QA-1949: and the tile that says RATE opens the rate list, not the sum of both causes.
-    ok("QA-1949: the 'no rate' card's total IS the length of the list it opens",
-      d.detail?.unknown_rate && d.detail.unknown_rate.total === unratedRows.length,
-      `card=${d.detail?.unknown_rate?.total} list=${unratedRows.length}`);
+    // QA-1958: the previous version of this assertion used `r.billable !== null && r.rate === null`
+    // - THE SAME CONFLATED PREDICATE THE PRODUCT USED - so it could not see that three causes were
+    // being reported as one, and it certified the mislabel instead of catching it (QA-1950's
+    // tautology, in the assertion written to close QA-1949). The causes are now derived from the
+    // SCHEME MASTER, a different source than the report, so the pin and the product can disagree.
+    const schemeMaster = ((await req(admin, "GET", "/api/master-lists/schemes")).data?.items ?? []);
+    const rateOf = new Map(schemeMaster.map((sc) => [String(sc.name), sc.amount_received ?? null]));
+    const causeOf = (r) => {
+      if (r.billable === null) return "no_closure";
+      if (!r.scheme || r.scheme === "Unassigned") return "no_scheme";   // the JOB ROLE master
+      if (!rateOf.has(r.scheme)) return "scheme_missing";               // what a rename leaves behind
+      if (rateOf.get(r.scheme) === null) return "no_rate";              // the SCHEME master
+      return "none";
+    };
+    const indep = { no_closure: 0, no_scheme: 0, scheme_missing: 0, no_rate: 0, none: 0 };
+    for (const r of reg) if (r.accrued === null) indep[causeOf(r)] += 1;
+    ok("QA-1958: the not-valued rows are split by their REAL cause, each counted from the scheme master",
+      (d.totals?.accrued_unknown_no_closure ?? -1) === indep.no_closure
+        && (d.totals?.accrued_unknown_no_scheme ?? -1) === indep.no_scheme
+        && (d.totals?.accrued_unknown_scheme_missing ?? -1) === indep.scheme_missing
+        && (d.totals?.accrued_unknown_no_rate ?? -1) === indep.no_rate,
+      JSON.stringify({ reported: {
+        no_closure: d.totals?.accrued_unknown_no_closure, no_scheme: d.totals?.accrued_unknown_no_scheme,
+        scheme_missing: d.totals?.accrued_unknown_scheme_missing, no_rate: d.totals?.accrued_unknown_no_rate },
+        independent: indep }));
+    // The bucket must hold ONLY rows whose own cause it names. This is the assertion that fails if
+    // the three causes are ever collapsed back into one `else`, whatever the counters say.
+    for (const [key, cause] of [["unknown_rate", "no_rate"], ["no_scheme", "no_scheme"], ["scheme_missing", "scheme_missing"]]) {
+      const rowsIn = d.detail?.[key]?.rows ?? [];
+      const wrong = rowsIn.filter((r) => causeOf(r) !== cause);
+      ok(`QA-1958: every row in the "${key}" bucket really is ${cause}, none borrowed from another cause`,
+        (d.detail?.[key]?.total ?? -1) === rowsIn.length && wrong.length === 0,
+        JSON.stringify({ total: d.detail?.[key]?.total, listed: rowsIn.length, misfiled: wrong.length,
+          sample: wrong.slice(0, 3).map((r) => ({ batch: r.batch, scheme: r.scheme, real: causeOf(r) })) }));
+    }
+    // And the sentence a reader acts on must name every cause it counted - the surface QA-1958 was
+    // actually reported against, since the counters could be right while the prose accuses one table.
+    if ((d.totals?.accrued_unknown ?? 0) > 0) {
+      const note = String(d.totals?.accrued_note ?? "");
+      ok("QA-1958: the not-valued sentence names each cause it counted, so it cannot accuse the wrong master",
+        (!indep.no_scheme || /names no scheme/i.test(note))
+          && (!indep.scheme_missing || /not in the scheme master/i.test(note))
+          && (!indep.no_rate || /carries no rate/i.test(note)),
+        JSON.stringify({ independent: indep, note: note.slice(0, 200) }));
+    }
     // ---- QA-1950, take two. The first attempt at this pin ALSO passed against the `(rate ?? 0)`
     // mutant, and the reason is worth writing down because it is subtle and general.
     //
@@ -4084,14 +4119,49 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     // QA-1952. `cost_unattributed` ignored EVERY filter, so a reader who narrowed to one centre
     // still saw the whole organisation's untagged spend under their narrowed report.
     {
-      const locId = (reg.find((r) => r.location && r.location !== "Unassigned") ? null : null);
-      const anyLoc = ((await req(admin, "GET", "/api/locations?limit=5")).data?.items ?? [])[0]?._id;
-      if (anyLoc) {
-        const narrowed = (await req(admin, "GET", `/api/reports/pnl?location=${anyLoc}`)).data ?? {};
-        ok("QA-1952: a centre filter narrows the untagged-cost figure instead of showing the whole organisation",
+      // QA-1960: the previous version of this pin asserted `narrowed <= whole`, and EQUALITY IS
+      // EXACTLY THE BUG - a checker reverted the QA-1952 fix in full, every centre reported the
+      // whole organisation's INR 54,177, and this assertion stayed green over it. Two changes, and
+      // the first is the one that matters: stop hunting for a condition and CREATE it (the QA-1950
+      // move). Untagged cost is seeded into TWO different centres, so a correct narrowing is
+      // necessarily STRICTLY less than the whole; then the narrowed figure is compared against an
+      // INDEPENDENT sum taken from the cost ledger, not against the report's own other number.
+      const locsAll = ((await req(admin, "GET", "/api/locations?limit=5")).data?.items ?? []);
+      const catsAll = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? []);
+      const leafCat = catsAll.find((c) => c.parent) ?? catsAll[0];
+      if (locsAll.length >= 2 && leafCat) {
+        // Distinctive amounts: a coincidental equality with pre-existing fixture data would make
+        // the strict-narrowing assertion pass for the wrong reason.
+        const AMT_A = 1234567, AMT_B = 7654321;
+        const mkCost = (loc, amount) => req(admin, "POST", "/api/costs", {
+          entry_date: "2026-06-15", location: loc._id, category: leafCat._id, amount,
+        });
+        const seedA = await mkCost(locsAll[0], AMT_A);
+        const seedB = await mkCost(locsAll[1], AMT_B);
+        // 201 explicitly, never "not an error": a parked entry answers 202 and writes NO ledger
+        // row, which would leave the fixture absent and the assertions below vacuously true.
+        ok("QA-1960 fixture: untagged cost written to TWO different centres (201, not parked)",
+          seedA.status === 201 && seedB.status === 201,
+          JSON.stringify({ a: seedA.status, b: seedB.status, cat: leafCat?.name }));
+
+        const whole = (await req(admin, "GET", "/api/reports/pnl")).data ?? {};
+        const narrowed = (await req(admin, "GET", `/api/reports/pnl?location=${locsAll[0]._id}`)).data ?? {};
+        // The independent figure: that centre's own untagged rows, summed from the LEDGER.
+        const ledger = ((await req(admin, "GET", `/api/costs?location=${locsAll[0]._id}`)).data?.items ?? []);
+        const expected = ledger.filter((x) => !x.batch).reduce((acc, x) => acc + (Number(x.amount) || 0), 0);
+
+        ok("QA-1960: the narrowed untagged-cost figure EQUALS that centre's own untagged ledger rows",
+          narrowed.totals?.cost_unattributed === expected,
+          JSON.stringify({ narrowed: narrowed.totals?.cost_unattributed, expected, rows: ledger.length }));
+        ok("QA-1960: ...and is STRICTLY less than the whole organisation's - the equality the old pin allowed",
           typeof narrowed.totals?.cost_unattributed === "number"
-            && narrowed.totals.cost_unattributed <= (d.totals?.cost_unattributed ?? Infinity),
-          `narrowed=${narrowed.totals?.cost_unattributed} whole=${d.totals?.cost_unattributed}`);
+            && typeof whole.totals?.cost_unattributed === "number"
+            && narrowed.totals.cost_unattributed < whole.totals.cost_unattributed,
+          JSON.stringify({ narrowed: narrowed.totals?.cost_unattributed, whole: whole.totals?.cost_unattributed }));
+        ok("QA-1960: the OTHER centre's untagged cost is present in the whole and absent from this narrowing",
+          typeof whole.totals?.cost_unattributed === "number"
+            && whole.totals.cost_unattributed - narrowed.totals.cost_unattributed >= AMT_B,
+          JSON.stringify({ diff: (whole.totals?.cost_unattributed ?? 0) - (narrowed.totals?.cost_unattributed ?? 0), atLeast: AMT_B }));
       }
       const someBatch = reg[0]?.key;
       if (someBatch) {
