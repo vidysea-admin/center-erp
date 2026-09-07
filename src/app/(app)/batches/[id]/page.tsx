@@ -5336,7 +5336,9 @@ function CostsTab({ batchId, batch, error, setError }: any) {
           { key: "entry_date", label: "Date", render: (r: any) => fmtDate(r.entry_date) },
           { key: "category", label: "Category", render: (r: any) => r.category?.name },
           { key: "amount", label: "Amount", render: (r: any) => `₹${(r.amount ?? 0).toLocaleString("en-IN")}` },
-          { key: "note", label: "Note" },
+          { key: "note", label: "Description", minWidth: 200 },
+          { key: "vendor_payee", label: "Paid to", render: (r: any) => r.vendor_payee || "—", mobile: false },
+          { key: "payment_mode", label: "Paid how", render: (r: any) => r.payment_mode || "—", mobile: false },
           { key: "entered_by", label: "By", render: (r: any) => r.entered_by?.name, mobile: false },
         ]} empty="No costs recorded." />
       <div className="mt-3 grid gap-3 md:grid-cols-5">
@@ -5348,8 +5350,25 @@ function CostsTab({ batchId, batch, error, setError }: any) {
           </select>
         </Field>
         <Field label="Amount (₹)" required><input type="number" className={inputCls} value={form.amount ?? ""} onChange={(e) => setForm({ ...form, amount: +e.target.value })} /></Field>
-        <Field label="Note"><input className={inputCls} value={form.note ?? ""} onChange={(e) => setForm({ ...form, note: e.target.value })} /></Field>
-        <div className="flex items-end"><Btn onClick={save} disabled={!form.category || !form.amount}>Add Cost</Btn></div>
+        {/* QA-1828b: this is the SECOND cost form in the product, and it was left behind when the
+            first one gained these fields — so a cost posted from a batch's Costs tab carried no
+            vendor, no voucher and no payment mode, while the same cost posted from /costs did. The
+            server requires a description on BOTH, so without this the button here would simply
+            start failing. That is the ARCHITECTURE section-3 shape: one concept, two screens, and
+            the fix applied to one of them. */}
+        <Field label="Paid to (vendor / payee)"><input className={inputCls} value={form.vendor_payee ?? ""} onChange={(e) => setForm({ ...form, vendor_payee: e.target.value })} /></Field>
+        <Field label="Voucher no"><input className={inputCls} value={form.voucher_no ?? ""} onChange={(e) => setForm({ ...form, voucher_no: e.target.value })} /></Field>
+        <Field label="Payment mode">
+          <select className={inputCls} value={form.payment_mode ?? ""} onChange={(e) => setForm({ ...form, payment_mode: e.target.value })}>
+            <option value="">—</option>
+            {["Cash", "Bank transfer", "UPI", "Cheque", "Card", "Adjustment", "Other"].map((m) => <option key={m} value={m}>{m}</option>)}
+          </select>
+        </Field>
+        <Field label="Description — what was this for?" required>
+          <input className={inputCls} value={form.note ?? ""} placeholder="e.g. venue hire for the assessment day"
+            onChange={(e) => setForm({ ...form, note: e.target.value })} />
+        </Field>
+        <div className="flex items-end"><Btn onClick={save} disabled={!form.category || !form.amount || !String(form.note ?? "").trim()}>Add Cost</Btn></div>
       </div>
     </Section>
   );

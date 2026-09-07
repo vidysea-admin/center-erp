@@ -3352,6 +3352,44 @@ for (const file of walk(root)) {
     }
   }
 
+  // QA-1828b — THERE ARE TWO COST FORMS, and this is the pin for that fact rather than for a field.
+  //
+  // `/costs` and the batch page's Costs tab both POST to /api/costs, and when the first gained
+  // vendor / voucher / payment mode the second was left behind: a cost posted from a batch carried
+  // none of them while the identical cost posted from /costs carried all three. Nothing in the wall
+  // could see it - the API pins pass because the API is fine, and the defect lives entirely in what
+  // one of the two screens chooses to send.
+  //
+  // It is the ARCHITECTURE section-3 shape ("the second copy did not get the fix"), which this
+  // codebase's own bug history is mostly made of. So the pin binds the PROPERTY - the two forms
+  // offer the same fields - rather than the presence of any particular one, and a field added to
+  // either screen tomorrow is covered without editing this.
+  {
+    const forms = ["app/(app)/costs/page.tsx", "app/(app)/batches/[id]/page.tsx"];
+    const src = forms.map((rel) => {
+      const f = path.join(root, rel);
+      return fs.existsSync(f) ? stripComments(fs.readFileSync(f, "utf-8")) : null;
+    });
+    if (src.some((x) => x === null)) {
+      pushStructural("QA-1828b: one of the two cost forms is gone - " + forms.join(" / "));
+    } else {
+      const missing = [];
+      for (const field of ["vendor_payee", "voucher_no", "payment_mode"]) {
+        const inA = src[0].includes(field), inB = src[1].includes(field);
+        if (inA !== inB) missing.push(`${field} is on ${inA ? forms[0] : forms[1]} but not ${inA ? forms[1] : forms[0]}`);
+      }
+      // The description is required by the SERVER on both, so a form that does not collect it has a
+      // button that can only fail.
+      for (const [i, rel] of forms.entries()) {
+        if (!/form\.note/.test(src[i])) missing.push(`${rel} does not collect a description, and the server requires one`);
+      }
+      if (missing.length) {
+        pushStructural("QA-1828b: the two cost forms have drifted apart - " + missing.join(" | ")
+          + ". One concept, two screens: a field added to one belongs on both, or neither.");
+      } else passed++;
+    }
+  }
+
   // QA-1830 — three properties of the finance report, each pinned as a shape rather than as an
   // example. The rule this file keeps relearning is that a pin written about the case somebody
   // happened to find binds only that case (QA-1882, QA-1887), so each of these names the property.
