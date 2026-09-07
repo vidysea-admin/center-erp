@@ -1612,7 +1612,7 @@ ok("Rule 12: trainer derived back to Available", t2.status === "Available", t2.s
 // ---- costs ----
 await req("POST", "/api/costs", { category: "000000000000000000000000", amount: 100 }, 400); // Rule 37: no anchor
 const cats = (await req("GET", "/api/master-lists/cost-categories")).data.items;
-await req("POST", "/api/costs", { category: cats[0]._id, amount: 5000, trainer: trainer._id }, 201); // trainer-only allowed
+await req("POST", "/api/costs", { category: cats[0]._id, amount: 5000, trainer: trainer._id, note: "trainer retainer" }, 201); // trainer-only allowed (QA-1828b: a description is required on every entry)
 
 // F-B17: list names are unique case-insensitively — "Trainer fee" beside "Trainer Fee"
 // broke the trainer-fee auto-suggest in production.

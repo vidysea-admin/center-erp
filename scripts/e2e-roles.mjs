@@ -2966,6 +2966,10 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
         const p2 = (catP && jprP)
           ? await req(ops, "POST", "/api/costs", {
               entry_date: "2026-09-05", location: jprP._id, category: catP._id, amount: q,
+              // QA-1828b made a description mandatory on every entry. This probe is about UNDECLARED
+              // keys reaching the audit trail, not about the description, so it carries one and goes
+              // on testing what it was written to test.
+              note: "QA-1865 undeclared-keys probe",
               remark: `QA-1865 remark — ${q} advanced`,
               justification: `QA-1865 justification — ${q.toLocaleString("en-IN")} approved verbally`,
             })
