@@ -133,7 +133,7 @@ function CostsInner() {
                 </select>
               </Field>
               <div className="flex items-end gap-2">
-                <Btn onClick={addCost} disabled={!form.category || !form.amount || !String(form.note ?? "").trim()}>{editId ? "Save" : "Add"}</Btn>
+                <Btn onClick={addCost} disabled={(!form.category && !String(form.new_subhead ?? "").trim()) || !form.amount || !String(form.note ?? "").trim()}>{editId ? "Save" : "Add"}</Btn>
                 {editId && <Btn kind="ghost" onClick={() => { setEditId(""); setForm({ entry_date: toInputDate(new Date()) }); }}>Cancel</Btn>}
                 {editId && <Btn kind="danger" onClick={deleteCost}>Delete</Btn>}
               </div>
@@ -144,6 +144,14 @@ function CostsInner() {
                 example is a sentence explaining a decision, which is exactly what is unrecoverable
                 afterwards if nobody wrote it down at the time. Required, and required on the server
                 too - a disabled button is a courtesy, not a rule. */}
+            {/* QA-1828c: without this the category dropdown is a dead end - the CEO's
+                *"सिस्टम पूरा बंद हो जाएगा"* is about people giving up when the head they need is not
+                offered, and the usual workaround is to file it under something close and wrong,
+                which is worse than not filing it. Naming one parks the whole entry for review. */}
+            <Field label="Cost head not in the list? Name the one you need">
+              <input className={inputCls + " mt-2"} value={form.new_subhead ?? ""} placeholder="e.g. Assessor travel — leave blank if you picked a head above"
+                onChange={(e) => setForm({ ...form, new_subhead: e.target.value })} />
+            </Field>
             <Field label="Description — what was this for?" required>
               <input className={inputCls + " mt-2"} value={form.note ?? ""} placeholder="e.g. emergency meal while travelling between centres — used this vendor because…"
                 onChange={(e) => setForm({ ...form, note: e.target.value })} />

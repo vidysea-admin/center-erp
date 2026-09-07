@@ -4,7 +4,7 @@ import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib
 import { requirePerm, requireFinance, hasPermission, maskApprovalMoney, FINANCE_VIEW } from "@/lib/permissions";
 import { decideApproval } from "@/lib/approvals";
 import { assertCostEntryValid, transitionBatch, updateInvoiceChecked } from "@/lib/rules";
-import { ApprovalRequest, CostEntry, Location, LocationTarget, Room } from "@/models";
+import { ApprovalRequest, CostEntry, Location, LocationTarget, Room, CostCategory } from "@/models";
 import { audit } from "@/lib/audit";
 
 // POST { decision: "Approved" | "Rejected", note? }
@@ -25,9 +25,17 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // an action whose replay writes or moves money is a money decision. The others (location.close,
   // location.stop, batch.cancel, batch.complete, location.edit) stay on `approvals.decide`, because
   // narrowing them would take the queue away from the Operations users whose job it is.
-  const MONEY_ACTIONS = new Set(["cost.post", "invoice.raise", "invoice.paid"]);
+  // QA-1828c: a new head carries `budget` and `pre_approved_amount`, and approving one also posts
+  // the cost entry that prompted it. Both halves write money, so it belongs here by this file's own
+  // stated criterion rather than as an exception to it.
+  const MONEY_ACTIONS = new Set(["cost.post", "invoice.raise", "invoice.paid", "costcategory.create"]);
   const { id } = await ctx.params;
-  const { decision, note } = await readJson(req);
+  // QA-1828c: `map_to_category` is the CEO's first option - *"एप्रोप्रियेट हेड सब हेड में डाल पाएं
+  // या फिर एक नया हेड और सब हेड क्रिएट करें"*. Approving WITHOUT it creates the head the poster
+  // proposed; approving WITH it files the cost under an existing head instead and creates nothing.
+  // Both are an approval, because in both cases the cost is real and belongs somewhere - only the
+  // taxonomy differs, and that is the approver's expertise, not the poster's.
+  const { decision, note, map_to_category } = await readJson(req);
   if (!["Approved", "Rejected"].includes(decision)) throw new HttpError(400, "decision must be Approved or Rejected");
 
   // The gate has to run BEFORE decideApproval, which writes the decision. Gating after it would
@@ -93,6 +101,44 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
       if (p.room?.name && p.room?.type) {
         await Room.create({ location: request.entity_id, name: p.room.name, type: p.room.type, capacity: p.room.capacity, active: true });
       }
+      break;
+    }
+    case "costcategory.create": {
+      // The WHOLE cost entry parked, not just the taxonomy request (Umesh, D8): nothing reaches the
+      // ledger until somebody has decided where it belongs. So this replay does both writes, in the
+      // order that makes the second possible.
+      let categoryId = map_to_category ? String(map_to_category) : "";
+      if (categoryId) {
+        const target = await CostCategory.findById(categoryId).select("_id active").lean<any>();
+        if (!target) throw new HttpError(400, "That cost head no longer exists — pick another, or approve the new one as proposed.");
+      } else {
+        const name = String(p.new_subhead ?? "").trim();
+        if (!name) throw new HttpError(400, "This request names no new head, and no existing head was chosen to file it under.");
+        // Deactivate-never-delete is the master-list rule, so a name that already exists is REUSED
+        // rather than duplicated — two heads with one name is how a report starts disagreeing with
+        // itself, and the uniqueness index would refuse the write anyway.
+        const existing = await CostCategory.findOne({ name }).select("_id").lean<any>();
+        if (existing) categoryId = String(existing._id);
+        else {
+          const parent = p.new_head_parent ? String(p.new_head_parent) : undefined;
+          const made = await CostCategory.create({ name, active: true, ...(parent ? { parent } : {}) });
+          categoryId = String(made._id);
+          await audit({ entity: "CostCategory", entityId: made._id, field: "created", newValue: `"${name}" created by approving ${request.initiator}'s cost entry`, actor: user.id });
+        }
+      }
+      await assertCostEntryValid({ ...p, category: categoryId });
+      const entry = await CostEntry.create({
+        entry_date: p.entry_date ?? request.createdAt,
+        location: p.location || undefined, batch: p.batch || undefined, trainer: p.trainer || undefined,
+        category: categoryId, amount: p.amount, note: p.note,
+        vendor_payee: p.vendor_payee || undefined,
+        voucher_no: p.voucher_no || undefined,
+        payment_mode: p.payment_mode || undefined,
+        // Decided by a person just now, so not pre-approved by a rule.
+        pre_approved_applied: false,
+        entered_by: request.initiator,
+      });
+      await audit({ entity: "CostEntry", entityId: entry._id, newValue: map_to_category ? "created (filed under an existing head by the approver)" : "created (new head approved)", actor: user.id });
       break;
     }
     case "cost.post": {

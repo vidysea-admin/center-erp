@@ -1328,6 +1328,12 @@ export const APPROVAL_ACTIONS = [
   // R-E (CEO 14/08 [25:20]): Operations posts an expense/revenue entry; it lands with the
   // Admin, and only an approval writes the ledger row.
   "cost.post",
+  // QA-1828c (CEO, 2026-09-05): *"अगर कोई नया है हेड या सब हेड, तो इनके पास इवैल्यूएशन होगी… ये उसको
+  // एप्रोप्रियेट हेड सब हेड में डाल पाएं या फिर एक नया हेड और सब हेड क्रिएट करें। तो हमारा सिस्टम
+  // पूरा बंद हो जाएगा अगर हम ये यूज़ नहीं करेंगे।"* Note the failure he is describing: not a wrong
+  // number, but people stopping using the system because the field they need does not exist. So the
+  // answer is a queue, not a refusal.
+  "costcategory.create",
   // R-F (CEO 14/08 [37:23]): a SPOC's centre-detail change is "sent for the approval to
   // the admin before we kind of change it".
   "location.edit",

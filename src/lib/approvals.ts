@@ -11,7 +11,11 @@ import { redactMoneyInText } from "@/lib/permissions";
 export type ApprovalAction =
   | "location.close" | "location.stop" | "batch.cancel"
   | "invoice.raise" | "invoice.paid" | "batch.complete"
-  | "cost.post" | "location.edit";
+  | "cost.post" | "location.edit"
+  // QA-1828c. This union is a SECOND copy of APPROVAL_ACTIONS in models/index.ts and nothing keeps
+  // them in step but a person remembering; tsc enforces this one and Mongoose the other, so an
+  // action missing here fails at compile and missing there fails at runtime.
+  | "costcategory.create";
 
 export type ApprovalOutcome = { request: any } | null;
 

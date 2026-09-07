@@ -21,6 +21,7 @@ const APPROVAL_LABELS: Record<string, string> = {
   "invoice.raise": "Mark an invoice raised",
   "invoice.paid": "Mark an invoice paid",
   "cost.post": "Post a cost / expense",
+  "costcategory.create": "Create a new cost head / subhead",
   "location.edit": "Edit a location's details",
 };
 

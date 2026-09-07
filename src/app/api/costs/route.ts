@@ -55,6 +55,26 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // Is it pre-approved, and can a machine tell? A cap can be checked; a free-text basis cannot, so
   // that entry parks WITH the basis quoted rather than being waved through on a flag. The CEO named
   // the failing case himself: *"अब अगर उसके 29 रह गए… तो वो एक बार अप्रूव होनी चाहिए।"*
+  // QA-1828c (CEO): *"अगर कोई नया है हेड या सब हेड, तो इनके पास इवैल्यूएशन होगी… तो हमारा सिस्टम
+  // पूरा बंद हो जाएगा अगर हम ये यूज़ नहीं करेंगे।"* The failure he named is not a wrong figure - it is
+  // people abandoning the system because the head they need is not in the list. So a missing head is
+  // a QUEUE, not a refusal, and the WHOLE entry parks: nothing reaches the ledger until somebody has
+  // decided where it belongs (Umesh, D8). `category` is therefore optional when `new_subhead` is
+  // given, and Rule 37 is checked on the replay against whichever head is finally chosen.
+  const proposed = String(body.new_subhead ?? "").trim();
+  if (proposed) {
+    const queued = await requireApproval("costcategory.create", user, {
+      entity: "CostCategory",
+      summary: `New cost head "${proposed}" for a ₹${body.amount} entry by ${user.name} — ${body.note}`,
+      payload: { ...body, new_subhead: proposed },
+      location: body.location || undefined,
+    });
+    // If nobody has enabled the rule there is no approver, and silently writing an unreviewed head
+    // would be the opposite of what was asked. Say so instead of inventing one.
+    if (!queued) throw new HttpError(409, "There is no approver set up for new cost heads yet, so this cannot be reviewed. Pick an existing head for now, or ask an Admin to turn that approval on.");
+    return NextResponse.json({ queued: true, item: queued.request, awaiting: "a new cost head" }, { status: 202 });
+  }
+
   const pre = await evaluatePreApproval(body.category, Number(body.amount));
 
   const parked = pre.applied ? null : await requireApproval("cost.post", user, {
