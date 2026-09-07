@@ -4271,14 +4271,26 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
 
     // ---- QA-1973. Umesh, 07/09, with a screenshot of AVP-GURU-RPLAVP-DST-03 on its own planned
     // start date: readiness 4/4 green, stopped solely by "Enrollment threshold not met: 37/43".
-    // The hatch he chose (qa/gates/qa-1966-start-below-enrolment-threshold.md) starts the batch but
-    // DEMANDS a reason and writes it to the audit row. Both arms are pinned, and the condition is
-    // CREATED rather than hunted for - the threshold is raised to 100% so a batch is guaranteed to
-    // be below it, then restored. Restoring in a finally, because a leaked 100% threshold would
-    // make every later start in this run fail for a reason nobody would connect to this block.
+    // He chose (qa/gates/qa-1973-start-below-enrolment-threshold.md) a per-batch hatch that starts
+    // the batch but DEMANDS a reason and writes it to the audit row, over lowering the GLOBAL
+    // threshold. Every arm is pinned, and the shortfall is CREATED rather than hunted for.
+    //
+    // Rewritten after a checker FAIL. Three things it found, all mine:
+    //   - /api/defaults returns { item: {...} }. Reading data.enrollment_threshold_pct gave
+    //     undefined, so the finally-restore was skipped by its own typeof guard and the global
+    //     threshold was LEFT AT 100 for every later suite. Its mutant then showed the
+    //     "threshold is restored" pin was inert: an actively wrong restore stayed green.
+    //   - the arms shared one batch, so once any arm started it the rest died on
+    //     "Transition Active -> Active" - a 409 unrelated to what they test.
+    //   - the refusal arms need a batch whose OTHER readiness holds, or they now trip the
+    //     readiness guard instead of the reason guard and measure the wrong refusal.
+    // So: ONE batch that is measured green, arms ordered refusals -> degraded -> success, and the
+    // destructive step last.
     {
       const defBefore = (await req(admin, "GET", "/api/defaults")).data ?? {};
-      const origPct = defBefore.enrollment_threshold_pct;
+      const origPct = (defBefore.item ?? defBefore).enrollment_threshold_pct;
+      ok("QA-1973 fixture: the current threshold default is READ, so it can be put back",
+        typeof origPct === "number", JSON.stringify({ origPct, shape: Object.keys(defBefore) }));
       try {
         const raised = await req(admin, "PUT", "/api/defaults", { enrollment_threshold_pct: 100 });
         ok("QA-1973 fixture: the enrolment threshold can be raised to 100% to create the shortfall",
@@ -4286,110 +4298,85 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
 
         const readyAll = ((await req(admin, "GET", "/api/batches?limit=100")).data?.items ?? [])
           .filter((b) => String(b.status) === "Ready");
-        const readyB = readyAll[0];          // the refusal arms live here and it is never started
-        // A second Ready batch if the fixture has one; otherwise the arms share, which is SAFE now
-        // for a specific reason worth stating: every refusal arm asserts its own error MESSAGE, so a
-        // shared batch going Active under a mutant makes them fail on "Transition Active -> Active"
-        // instead of passing on a 409 they never meant. The two-batch split is defence in depth, not
-        // the thing that makes this block honest.
-        // Read each candidate's real readiness and prefer one that is green apart from enrolment.
-        const readyWithChecks = [];
+        const withChecks = [];
         for (const b of readyAll.slice(0, 6)) {
           const rdb = ((await req(admin, "GET", `/api/batches/${b._id}`)).data ?? {}).readiness ?? {};
-          readyWithChecks.push({ b, checks: rdb.checks ?? {}, allGreen: Object.values(rdb.checks ?? {}).every(Boolean) });
+          withChecks.push({ b, checks: rdb.checks ?? {} });
         }
-        const greenOne = readyWithChecks.find((x) => x.allGreen);
-        const readyStart = (greenOne?.b) ?? readyAll[1] ?? readyAll[0];
-        ok("QA-1973 fixture: the success arm uses a batch whose OTHER readiness checks hold",
-          !!greenOne,
-          JSON.stringify(readyWithChecks.map((x) => ({ code: x.b.code, failing: Object.entries(x.checks).filter(([, v]) => !v).map(([k]) => k) }))));
-        ok("QA-1973 fixture: at least one Ready batch exists to work with",
-          !!readyB, JSON.stringify(readyAll.map((b) => b.code).slice(0, 4)));
+        const green = withChecks.find((x) => Object.values(x.checks).every(Boolean));
+        ok("QA-1973 fixture: a Ready batch exists whose OTHER readiness checks all hold",
+          !!green,
+          JSON.stringify(withChecks.map((x) => ({ code: x.b.code, failing: Object.entries(x.checks).filter(([, v]) => !v).map(([k]) => k) }))));
 
-        if (readyB && readyStart) {
-          const moved = await req(admin, "PATCH", `/api/batches/${readyB._id}`, { planned_start: "2026-06-01" });
-          ok("QA-1973 fixture: its planned start is moved into the past, so Rule 17 is not what refuses it",
+        if (green) {
+          const B = green.b;
+          const todayIso = new Date().toISOString().slice(0, 10);
+          const moved = await req(admin, "PATCH", `/api/batches/${B._id}`, { planned_start: todayIso });
+          ok("QA-1973 fixture: its planned start is today, so Rule 17 is not what refuses it",
             [200, 201].includes(moved.status), `got ${moved.status}`);
-          const rr = ((await req(admin, "GET", `/api/batches/${readyB._id}`)).data ?? {}).readiness ?? {};
-          // If this batch somehow still meets a 100% threshold the whole block proves nothing, so
-          // the precondition is asserted rather than assumed.
-          ok("QA-1973 fixture: it is genuinely BELOW the threshold now",
-            rr.enrollment_ok === false || rr.enrollment_ok === undefined,
+          const rr = ((await req(admin, "GET", `/api/batches/${B._id}`)).data ?? {}).readiness ?? {};
+          ok("QA-1973 fixture: and it is genuinely BELOW the enrolment threshold",
+            rr.enrollment_ok === false,
             JSON.stringify({ enrolled: rr.enrolled_count, needed: rr.enrollment_threshold, ok: rr.enrollment_ok }));
 
           // ARM 1 - the gate still bites without the override.
-          const plain = await req(admin, "POST", `/api/batches/${readyB._id}/transition`, { target: "Active" });
+          const plain = await req(admin, "POST", `/api/batches/${B._id}/transition`, { target: "Active" });
           ok("QA-1973: WITHOUT the override a below-threshold start is still refused",
             plain.status === 409 && /threshold not met/i.test(String(plain.data?.error ?? "")),
             `${plain.status} ${String(plain.data?.error ?? "").slice(0, 70)}`);
 
-          // ARM 2 - the override without a reason is refused. This is the arm that matters: an
-          // override that works with an empty reason is the gate deleted, wearing a flag.
-          const noReason = await req(admin, "POST", `/api/batches/${readyB._id}/transition`,
+          // ARM 2 - the reason is the whole price. Every arm asserts its own MESSAGE, because a
+          // bare 409 is shared by several unrelated refusals and one of them once made this pass.
+          const noReason = await req(admin, "POST", `/api/batches/${B._id}/transition`,
             { target: "Active", enrollment_override: true });
           ok("QA-1973: the override WITHOUT a reason is refused - the reason is the whole price",
             noReason.status === 409 && /needs a reason/i.test(String(noReason.data?.error ?? "")),
             `${noReason.status} ${String(noReason.data?.error ?? "").slice(0, 70)}`);
 
-          const shortReason = await req(admin, "POST", `/api/batches/${readyB._id}/transition`,
-            { target: "Active", enrollment_override: true, reason: "ok" });
-          ok("QA-1973: ...and a token reason is refused too, so the field cannot be satisfied with a keystroke",
+          const shortReason = await req(admin, "POST", `/api/batches/${B._id}/transition`,
+            { target: "Active", enrollment_override: true, reason: "  ok  " });
+          ok("QA-1973: ...and a padded token reason is refused too - trim runs before the length check",
             shortReason.status === 409 && /needs a reason/i.test(String(shortReason.data?.error ?? "")),
             `${shortReason.status} ${String(shortReason.data?.error ?? "").slice(0, 70)}`);
 
-          // ARM 3 - with a real reason it starts, AND the record carries it. On its OWN batch:
-          // under the "override not required" mutant ARM 1 actually starts `readyB`, and every
-          // later call then answers "Transition Active -> Active is not allowed" - a 409 that made
-          // the token-reason assertion above pass for a reason that had nothing to do with reasons.
-          const todayIso = new Date().toISOString().slice(0, 10);
-          const movedS = await req(admin, "PATCH", `/api/batches/${readyStart._id}`, { planned_start: todayIso });
-          ok("QA-1973 fixture: the start batch's planned start is moved into the past too",
-            [200, 201].includes(movedS.status), `got ${movedS.status}`);
+          // ARM 3 - THE BLOCK a senior review raised: the hatch waives ENROLMENT and nothing else.
+          // The claim used to live in the React component only, so a direct API call could start a
+          // batch whose trainer had gone. Degrade it, prove the refusal, then put it back.
+          const beforeTrainer = B.trainer ?? null;
+          const strip = await req(admin, "PATCH", `/api/batches/${B._id}`, { trainer: null });
+          ok("QA-1973 fixture: the trainer can be removed, so readiness really degrades",
+            [200, 201].includes(strip.status), `got ${strip.status}`);
+          const rdDeg = ((await req(admin, "GET", `/api/batches/${B._id}`)).data ?? {}).readiness ?? {};
+          ok("QA-1973 fixture: ...and the readiness payload says so",
+            rdDeg.checks?.trainer_ready === false, JSON.stringify({ checks: rdDeg.checks }));
+          const forced = await req(admin, "POST", `/api/batches/${B._id}/transition`,
+            { target: "Active", enrollment_override: true, reason: "trying to start a batch whose trainer is gone" });
+          ok("QA-1973: the override does NOT waive the other readiness checks - only enrolment is waivable",
+            forced.status === 409 && /not ready for other reasons/i.test(String(forced.data?.error ?? "")),
+            `${forced.status} ${String(forced.data?.error ?? "").slice(0, 90)}`);
+          const restore = await req(admin, "PATCH", `/api/batches/${B._id}`, { trainer: beforeTrainer });
+          ok("QA-1973 fixture: the trainer is put back before the success arm",
+            [200, 201].includes(restore.status) && !!beforeTrainer, `got ${restore.status}`);
+
+          // ARM 4 - with a real reason it starts, and the record carries what was overridden.
           const REASON = "client confirmed the start date; remaining candidates join in week 1";
-          const started = await req(admin, "POST", `/api/batches/${readyStart._id}/transition`,
+          const started = await req(admin, "POST", `/api/batches/${B._id}/transition`,
             { target: "Active", enrollment_override: true, reason: REASON });
           ok("QA-1973: with a real reason the batch STARTS below the threshold",
             [200, 201].includes(started.status) && String(started.data?.item?.status ?? "") === "Active",
             `${started.status} ${JSON.stringify(started.data).slice(0, 90)}`);
 
-          const auditRes = await req(admin, "GET", `/api/audit/Batch/${readyStart._id}`);
+          const auditRes = await req(admin, "GET", `/api/audit/Batch/${B._id}`);
           const acts = (auditRes.data?.items ?? auditRes.data?.rows ?? []);
           const row = acts.find((a) => String(a.field) === "enrollment_override");
           const rowVal = String(row?.new_value ?? row?.newValue ?? "");
-          ok("QA-1973: the audit row exists, names the shortfall, and carries the reason VERBATIM",
-            !!row && /below the enrolment threshold/i.test(rowVal) && rowVal.includes(REASON),
-            JSON.stringify({ found: !!row, v: rowVal.slice(0, 140) }));
-          // The number it was below must be IN the row, not merely implied by it (erp-af raised this:
-          // a reason explains why somebody overrode the gate, it does not say what they overrode, and
-          // if the global percentage moves later the row stops being interpretable without it).
-          ok("QA-1973: ...and it records the threshold it was below, so the row survives the default changing",
-            /\d+ enrolled of \d+ needed/.test(rowVal) && /% of a/.test(rowVal),
-            rowVal.slice(0, 140));
-
-          // ARM 3b - THE BLOCK. A senior review found this unit's stated safety claim ("the hatch
-          // is only offered when enrolment is the ONLY thing failing") lived in the React component
-          // and nowhere else, so a batches.manage caller could override-start a batch whose trainer
-          // or room had degraded after it reached Ready. The suite could not catch it because it
-          // never CONSTRUCTED a degraded-readiness Ready batch. It does now.
-          {
-            const degraded = readyAll.find((b) => String(b._id) !== String(readyStart._id)) ?? readyB;
-            const beforeTrainer = degraded.trainer ?? null;
-            const strip = await req(admin, "PATCH", `/api/batches/${degraded._id}`, { trainer: null });
-            ok("QA-1973 fixture: a Ready batch can have its trainer removed, so readiness really degrades",
-              [200, 201].includes(strip.status), `got ${strip.status}`);
-            const rd = ((await req(admin, "GET", `/api/batches/${degraded._id}`)).data ?? {}).readiness ?? {};
-            ok("QA-1973 fixture: ...and the readiness payload now says so",
-              !!rd.checks && rd.checks.trainer_ready === false, JSON.stringify({ checks: rd.checks }));
-            const forced = await req(admin, "POST", `/api/batches/${degraded._id}/transition`,
-              { target: "Active", enrollment_override: true, reason: "trying to start a batch whose trainer is gone" });
-            ok("QA-1973: the override does NOT waive the other readiness checks - only enrolment is waivable",
-              forced.status === 409 && /not ready for other reasons/i.test(String(forced.data?.error ?? "")),
-              `${forced.status} ${String(forced.data?.error ?? "").slice(0, 90)}`);
-            if (beforeTrainer) await req(admin, "PATCH", `/api/batches/${degraded._id}`, { trainer: beforeTrainer });
-          }
+          ok("QA-1973: the audit row exists and carries the reason VERBATIM",
+            !!row && rowVal.includes(REASON), JSON.stringify({ found: !!row, v: rowVal.slice(0, 140) }));
+          ok("QA-1973: ...and it records the threshold it was below, so the row survives the default moving",
+            /\d+ enrolled of \d+ needed/.test(rowVal) && /% of a/.test(rowVal), rowVal.slice(0, 140));
         }
 
-        // ARM 4 - the hatch is refused anywhere it would be meaningless, rather than ignored.
+        // ARM 5 - refused anywhere it would be meaningless, rather than silently ignored.
         const anyB2 = ((await req(admin, "GET", "/api/batches?limit=5")).data?.items ?? [])[0];
         if (anyB2) {
           const wrongTarget = await req(admin, "POST", `/api/batches/${anyB2._id}/transition`,
@@ -4402,10 +4389,14 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
           await req(admin, "PUT", "/api/defaults", { enrollment_threshold_pct: origPct });
         }
       }
+      // Read back and compare to the ORIGINAL, from the right shape. The previous version compared
+      // undefined to undefined and passed while the global threshold sat at 100 for the rest of the
+      // run - and a mutant that restored an actively wrong 7 also stayed green.
       const after = (await req(admin, "GET", "/api/defaults")).data ?? {};
-      ok("QA-1973: the threshold default is restored, so this block cannot poison the rest of the run",
-        after.enrollment_threshold_pct === origPct,
-        JSON.stringify({ before: origPct, after: after.enrollment_threshold_pct }));
+      const afterPct = (after.item ?? after).enrollment_threshold_pct;
+      ok("QA-1973: the threshold default is genuinely restored, so this block cannot poison the run",
+        typeof afterPct === "number" && afterPct === origPct,
+        JSON.stringify({ before: origPct, after: afterPct }));
     }
 
     // Scope, and the QA-1898 shape: a named ?location= NARROWS and can never widen.
