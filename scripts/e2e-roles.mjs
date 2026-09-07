@@ -3703,6 +3703,14 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
   // were no dropouts". So the pin is behavioural — drop somebody who has a Pass and watch the
   // number move — because a pin on the field name would not have caught the original either.
   {
+    // QA-1941: this pin shipped with the literal "2026-09-06" as the drop date - the day it was
+    // written - and went red the very next morning. Rule 25 refuses a left_on that precedes
+    // joined_on, and `seed-sample` dates its rosters RELATIVE to the run, so a frozen date walks
+    // backwards past them one day at a time. It cost two failures on a wall whose only two commits
+    // were a version bump and a CSS-level gate fix, which is the expensive part: a test that rots
+    // on a calendar makes the next real regression look like more of the same noise.
+    // IST, because the whole system is on Asia/Kolkata and Rule 25 compares in that footing.
+    const TODAY_IST = new Date(Date.now() + 5.5 * 3600_000).toISOString().slice(0, 10);
     const kBefore = await req(admin, "GET", "/api/reports/kpi");
     const batches = (await req(admin, "GET", "/api/batches?limit=50")).data?.items ?? [];
     let victim = null;
@@ -3712,12 +3720,18 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       // read `r.result === "Pass"` and found nobody, which is a fixture that fails loudly rather
       // than a pin that passes on an empty set. It is worth the distinction.
       const res = (await req(admin, "GET", `/api/batches/${b._id}/results`)).data?.items ?? [];
-      const passed = res.find((r) => r.result?.result === "Pass" && !r.left_on && (r.candidate?._id ?? r.candidate));
+      // ...and the member must have joined ON OR BEFORE today, or Rule 25 refuses the drop
+      // ("left_on cannot precede joined_on") and the pin fails on the fixture rather than on the
+      // thing it is measuring. `seed-sample` deliberately pre-registers members into batches that
+      // start LATER (QA-1024 - a real thing a centre does, and it is documented there as a fixture
+      // that must not be clamped), so on any given day some rosters are legitimately future-dated.
+      const passed = res.find((r) => r.result?.result === "Pass" && !r.left_on && (r.candidate?._id ?? r.candidate)
+        && (!r.joined_on || String(r.joined_on).slice(0, 10) <= TODAY_IST));
       if (passed) { victim = { batch: b, cand: passed.candidate?._id ?? passed.candidate }; break; }
     }
     ok("QA-1899 fixture: a candidate with a Pass result exists to drop", !!victim, JSON.stringify(victim?.cand ?? null));
     if (victim) {
-      const dropped = await req(admin, "POST", `/api/candidates/${victim.cand}/drop`, { reason: "QA-1899 pin", date: "2026-09-06" });
+      const dropped = await req(admin, "POST", `/api/candidates/${victim.cand}/drop`, { reason: "QA-1899 pin", date: TODAY_IST });
       ok("QA-1899 fixture: they can be dropped", [200, 201].includes(dropped.status), `got ${dropped.status}`);
       const kAfter = await req(admin, "GET", "/api/reports/kpi");
       ok("QA-1899: dropping a member who PASSED reduces `trained` by exactly one",
