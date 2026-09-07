@@ -4043,6 +4043,68 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     ok("QA-1831: the report states what a date filter actually selects",
       typeof d.window_note === "string" && /batch/i.test(d.window_note), String(d.window_note).slice(0, 60));
 
+
+    // ---- QA-1951 / QA-1952: the two things the cycle-1 checker raised and deliberately did NOT
+    // charge me for. Umesh asked for both to be fixed rather than carried as declared gaps.
+    //
+    // QA-1951. Judgement 2 ("a missing rate is never a zero") was true of ROWS and false of GROUPS:
+    // `finish()` folded `accrued ?? 0` into the group sum while counting the FULL cost of the same
+    // batches, so any centre holding an unvaluable batch reported a margin wrong in a KNOWN
+    // DIRECTION - too low, every time, by exactly the revenue nobody could compute. A number that is
+    // systematically wrong one way is worse than no number, because somebody acts on it.
+    //
+    // Both arms are asserted. A pin that only checks the withheld case passes on a payload with no
+    // incomparable groups at all; a pin that only checks the reported case passes on one that
+    // withholds everything. Neither alone distinguishes the fix from either failure mode.
+    {
+      const groups = [...(d.by_location ?? []), ...(d.by_job_role ?? []), ...(d.by_scheme ?? [])];
+      const incomparable = groups.filter((g) => (g.accrued_unknown ?? 0) > 0);
+      const comparable = groups.filter((g) => (g.accrued_unknown ?? 0) === 0);
+      ok("QA-1951 fixture: the payload holds groups of BOTH kinds, so neither arm below is vacuous",
+        incomparable.length > 0 && comparable.length > 0,
+        `${incomparable.length} incomparable, ${comparable.length} comparable`);
+      ok("QA-1951: a group holding an unvalued batch WITHHOLDS its margin rather than understating it",
+        incomparable.length > 0 && incomparable.every((g) => g.margin === null && typeof g.margin_note === "string"),
+        JSON.stringify(incomparable.slice(0, 2).map((g) => ({ k: g.label, u: g.accrued_unknown, m: g.margin }))));
+      ok("QA-1951: ...and a group where every batch IS valued still reports one",
+        comparable.length > 0 && comparable.every((g) => typeof g.margin === "number"),
+        JSON.stringify(comparable.slice(0, 2).map((g) => ({ k: g.label, m: g.margin }))));
+      // The partial `accrued` is still a true sum of what is known - only the subtraction is
+      // withheld - so it must NOT have been nulled along with the margin.
+      ok("QA-1951: ...and the partial revenue is still shown, because it is a true sum of what is known",
+        incomparable.every((g) => typeof g.accrued === "number"),
+        JSON.stringify(incomparable.slice(0, 2).map((g) => g.accrued)));
+      ok("QA-1951: the grand total obeys the same rule as the groups",
+        (d.totals?.accrued_unknown ?? 0) > 0
+          ? d.totals.margin === null && typeof d.totals.margin_note === "string"
+          : typeof d.totals.margin === "number",
+        JSON.stringify({ unknown: d.totals?.accrued_unknown, margin: d.totals?.margin }));
+    }
+
+    // QA-1952. `cost_unattributed` ignored EVERY filter, so a reader who narrowed to one centre
+    // still saw the whole organisation's untagged spend under their narrowed report.
+    {
+      const locId = (reg.find((r) => r.location && r.location !== "Unassigned") ? null : null);
+      const anyLoc = ((await req(admin, "GET", "/api/locations?limit=5")).data?.items ?? [])[0]?._id;
+      if (anyLoc) {
+        const narrowed = (await req(admin, "GET", `/api/reports/pnl?location=${anyLoc}`)).data ?? {};
+        ok("QA-1952: a centre filter narrows the untagged-cost figure instead of showing the whole organisation",
+          typeof narrowed.totals?.cost_unattributed === "number"
+            && narrowed.totals.cost_unattributed <= (d.totals?.cost_unattributed ?? Infinity),
+          `narrowed=${narrowed.totals?.cost_unattributed} whole=${d.totals?.cost_unattributed}`);
+      }
+      const someBatch = reg[0]?.key;
+      if (someBatch) {
+        const byBatch = (await req(admin, "GET", `/api/reports/pnl?batch=${someBatch}`)).data ?? {};
+        // A batch filter selects BATCHES, and untagged cost belongs to no batch - so the honest
+        // answer is "does not apply", never 0. A 0 would read as "nothing is untagged", which is a
+        // claim rather than an absence.
+        ok("QA-1952: under a batch filter the figure is withheld WITH A REASON, never zeroed",
+          byBatch.totals?.cost_unattributed === null && typeof byBatch.totals?.cost_unattributed_note === "string",
+          JSON.stringify({ v: byBatch.totals?.cost_unattributed, note: String(byBatch.totals?.cost_unattributed_note).slice(0, 60) }));
+      }
+    }
+
     // Scope, and the QA-1898 shape: a named ?location= NARROWS and can never widen.
     const narrowed = await req(admin, "GET", "/api/reports/pnl?from=2020-01-01&to=2020-12-31");
     ok("QA-1831: an empty window ties to zero rather than 500ing",

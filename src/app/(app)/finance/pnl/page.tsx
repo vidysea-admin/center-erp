@@ -126,7 +126,13 @@ function PnlInner() {
     { key: "invoiced", label: L.invoiced ?? "Invoiced", sortable: true, sortValue: (r: any) => r.invoiced, render: (r: any) => rupee(r.invoiced) },
     { key: "received", label: L.received ?? "Received", sortable: true, sortValue: (r: any) => r.received, render: (r: any) => rupee(r.received) },
     { key: "cost", label: L.cost ?? "Cost", sortable: true, sortValue: (r: any) => r.cost, render: (r: any) => rupee(r.cost) },
-    { key: "margin", label: L.margin ?? "Margin", sortable: true, sortValue: (r: any) => r.margin, render: (r: any) => rupee(r.margin) },
+    // A dash here is a WITHHELD figure, not a missing one, and the difference matters enough to say
+    // on the row: the group's cost is known and part of its revenue is not, so a margin would be
+    // understated by exactly the amount nobody can compute.
+    { key: "margin", label: L.margin ?? "Margin", sortable: true, sortValue: (r: any) => r.margin ?? -Infinity,
+      render: (r: any) => (r.margin === null || r.margin === undefined
+        ? <span className="text-amber-700" title={r.margin_note ?? "Some batches here could not be valued."}>—</span>
+        : rupee(r.margin)) },
     { key: "accrued_unknown", label: "Not valued", sortable: true, render: (r: any) => r.accrued_unknown || <span className="text-gray-300">—</span> },
   ];
 
@@ -232,6 +238,9 @@ function PnlInner() {
       {t.accrued_note && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900" data-warning="not-valued">{t.accrued_note}</div>
       )}
+      {t.cost_unattributed_note && (
+        <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs text-gray-600" data-warning="cost-unattributed-na">{t.cost_unattributed_note}</div>
+      )}
       {t.cost_note && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900" data-warning="cost-unattributed">
           {rupee(t.cost_unattributed)} of cost is tagged to a centre or a trainer but to no batch. {t.cost_note}
@@ -239,11 +248,18 @@ function PnlInner() {
       )}
 
       <Section title={`Margin — ${L.accrued ?? "revenue earned"} minus cost`} hint="Margin is measured against what was EARNED, not against what happened to be invoiced. A batch that earned and was never billed shows as unprofitable, because it is.">
+        {/* `margin` is NOT coerced with `?? 0`. The server withholds it (null) when some batch in
+            the group could not be valued, and printing 0 there would re-introduce on the screen the
+            exact claim the server just refused to make. Every other figure is a true sum and may
+            default; this one may not. */}
         <DataTable storageKey="pnl-total" rows={[{
           label: "All batches in this view", batches: t.batches ?? 0,
           accrued: t.accrued ?? 0, invoiced: t.invoiced ?? 0, received: t.received ?? 0,
-          cost: t.cost ?? 0, margin: t.margin ?? 0, accrued_unknown: t.accrued_unknown ?? 0,
+          cost: t.cost ?? 0, margin: t.margin ?? null, accrued_unknown: t.accrued_unknown ?? 0,
         }]} columns={rollup("Everything")} />
+        {t.margin_note && (
+          <p className="text-[11px] leading-relaxed text-amber-800" data-warning="margin-not-comparable">{t.margin_note}</p>
+        )}
       </Section>
 
       <Section title="By centre"><DataTable storageKey="pnl-by-centre" rows={data?.by_location ?? []} columns={rollup("Centre")} /></Section>

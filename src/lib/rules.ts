@@ -5908,9 +5908,31 @@ export async function pnlRollup(scope: Record<string, unknown> = {}, filters: Pn
 
   // Cost that belongs to no batch cannot enter a per-batch margin. Judgement 3: it is measured and
   // disclosed rather than quietly excluded.
-  const unattributed = await CostEntry.find({ ...scope, $or: [{ batch: null }, { batch: { $exists: false } }] })
-    .select("amount").lean<any[]>();
-  const cost_unattributed = unattributed.reduce((a, c) => a + (Number(c.amount) || 0), 0);
+  // (Checker, cycle 1, raised and deliberately not charged.) This query ignored EVERY filter, so a
+  // reader who narrowed to one centre or one month still saw the whole organisation's untagged
+  // spend sitting under their narrowed report. It now takes the same date and centre clauses the
+  // batches took.
+  //
+  // A batch or job-role filter is different in kind, not degree: those select BATCHES, and untagged
+  // cost belongs to no batch, so the honest answer is not a smaller number - it is that the figure
+  // does not apply. Returning 0 there would read as "nothing untagged", which is a claim; null with
+  // a reason is the truth. Same shape as costRollup's `budget_comparable`.
+  const selectsBatches = !!(filters.batch || filters.program || filters.scheme);
+  let cost_unattributed: number | null = null;
+  let cost_unattributed_note: string | null = null;
+  if (selectsBatches) {
+    cost_unattributed_note = "Not applicable under a batch, job-role or scheme filter: those select batches, and untagged cost belongs to no batch.";
+  } else {
+    const uq: Record<string, any> = { ...scope, $or: [{ batch: null }, { batch: { $exists: false } }] };
+    if (filters.from || filters.to) {
+      uq.entry_date = {};
+      if (filters.from) uq.entry_date.$gte = istStart(filters.from);
+      if (filters.to) uq.entry_date.$lte = istEnd(filters.to);
+    }
+    if (filters.location) uq.location = filters.location;
+    const unattributed = await CostEntry.find(uq).select("amount").lean<any[]>();
+    cost_unattributed = unattributed.reduce((a, c) => a + (Number(c.amount) || 0), 0);
+  }
 
   // ---- ONE pass. Every grouping and every drill row is filled from the same loop over the same
   // rows, so each sums to its total BY CONSTRUCTION rather than by a second query that can drift.
@@ -6029,8 +6051,26 @@ export async function pnlRollup(scope: Record<string, unknown> = {}, filters: Pn
     label, total, shown: Math.min(list.length, PNL_DRILL_CAP),
     truncated: list.length > PNL_DRILL_CAP, columns: COLS, rows: list.slice(0, PNL_DRILL_CAP),
   });
+  // (Checker, cycle 1, raised and deliberately not charged — and it was right.) Judgement 2 above
+  // says a missing rate is never a zero, and that was true of ROWS and false of GROUPS: this folded
+  // `accrued ?? 0` into the group sum while counting the full cost of the same batches, so a centre
+  // with three unvaluable batches showed a margin that was wrong in a KNOWN DIRECTION — too low,
+  // every time, by exactly the revenue nobody could compute.
+  //
+  // A number that is systematically wrong one way is worse than no number, because it is actionable.
+  // So a group whose batches are not all valued reports `margin: null` and says why — the same move
+  // `costRollup` already makes with `budget_comparable` when a filter narrows the window. The
+  // partial `accrued` is still shown, because it is a true sum of what IS known; only the
+  // subtraction is withheld.
   const finish = (m: Map<string, Roll>) => [...m.values()]
-    .map((r) => ({ ...r, margin: r.accrued - r.cost }))
+    .map((r) => ({
+      ...r,
+      margin: r.accrued_unknown > 0 ? null : r.accrued - r.cost,
+      margin_comparable: r.accrued_unknown === 0,
+      margin_note: r.accrued_unknown > 0
+        ? `${r.accrued_unknown} of ${r.batches} batch(es) could not be valued, so their cost is counted here and their revenue is not. A margin would be understated by exactly that much.`
+        : null,
+    }))
     .sort((a, b) => b.accrued - a.accrued);
 
   const shortfallTotal = drill.shortfall.reduce((a, r) => a + (r.shortfall || 0), 0);
@@ -6044,8 +6084,13 @@ export async function pnlRollup(scope: Record<string, unknown> = {}, filters: Pn
     window_note: "A date filter selects BATCHES by their planned start; each batch brings all of its own cost and revenue with it, whenever those were recorded.",
     totals: {
       accrued: tAccrued, invoiced: tInvoiced, received: tReceived,
-      cost: tCost, cost_unattributed,
-      margin: tAccrued - tCost,
+      cost: tCost, cost_unattributed, cost_unattributed_note,
+      // The grand total has the identical asymmetry as the groups, for the identical reason.
+      margin: tUnknown > 0 ? null : tAccrued - tCost,
+      margin_comparable: tUnknown === 0,
+      margin_note: tUnknown > 0
+        ? `${tUnknown} of ${rows.length} batch(es) could not be valued, so their cost is counted above and their revenue is not. A margin would be understated by exactly that much.`
+        : null,
       // Not invoiced yet, and short received: the two places money goes missing between "earned"
       // and "in the bank", which is the whole reason this report exists.
       not_invoiced: drill.not_invoiced.length,
@@ -6064,7 +6109,7 @@ export async function pnlRollup(scope: Record<string, unknown> = {}, filters: Pn
             tNoRate ? `${tNoRate} are certified but their scheme carries no rate.` : "",
           ].filter(Boolean).join(" ")
         : null,
-      cost_note: cost_unattributed > 0
+      cost_note: (cost_unattributed ?? 0) > 0
         ? "Cost not tagged to any batch is excluded from every per-batch margin above and shown separately, so the margins are not flattered by leaving it out."
         : null,
     },
